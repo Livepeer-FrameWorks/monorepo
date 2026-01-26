@@ -61,6 +61,12 @@ export interface PlayerOptions {
   onPlaying?: () => void;
   onCanPlay?: () => void;
   onDurationChange?: (duration: number) => void;
+  /** HLS.js configuration override (merged with defaults) */
+  hlsConfig?: Record<string, unknown>;
+  /** DASH.js configuration override (merged with defaults) */
+  dashConfig?: Record<string, unknown>;
+  /** Video.js VHS configuration override (merged with defaults) */
+  vhsConfig?: Record<string, unknown>;
 }
 
 export interface PlayerCapability {

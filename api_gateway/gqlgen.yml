@@ -26,16 +26,67 @@ autobind:
 # Map GraphQL types to existing Go models (comprehensive mapping)
 # NOTE: Using pb.* proto types for all analytics/streaming types
 models:
-  # Analytics types - bound to proto types
-  StreamAnalytics:
+  # Analytics root types - custom empty structs (force resolvers)
+  Analytics:
     model:
-      - frameworks/pkg/proto.StreamAnalytics
+      - frameworks/api_gateway/graph/markers.Analytics
+  AnalyticsUsage:
+    model:
+      - frameworks/api_gateway/graph/markers.AnalyticsUsage
+  StreamingUsage:
+    model:
+      - frameworks/api_gateway/graph/markers.StreamingUsage
+  StorageUsage:
+    model:
+      - frameworks/api_gateway/graph/markers.StorageUsage
+  ProcessingUsage:
+    model:
+      - frameworks/api_gateway/graph/markers.ProcessingUsage
+  APIUsage:
+    model:
+      - frameworks/api_gateway/graph/markers.APIUsage
+  AnalyticsHealth:
+    model:
+      - frameworks/api_gateway/graph/markers.AnalyticsHealth
+  AnalyticsLifecycle:
+    model:
+      - frameworks/api_gateway/graph/markers.AnalyticsLifecycle
+  AnalyticsInfra:
+    model:
+      - frameworks/api_gateway/graph/markers.AnalyticsInfra
+  TenantEvent:
+    model:
+      - frameworks/api_gateway/graph/model.TenantEvent
+  # Analytics types - bound to proto types
+  StreamAnalyticsSummary:
+    model:
+      - frameworks/pkg/proto.StreamAnalyticsSummary
+    fields:
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  QualityTierSummary:
+    model:
+      - frameworks/pkg/proto.QualityTierSummary
   RoutingEvent:
     model:
       - frameworks/pkg/proto.RoutingEvent
-  ViewerMetric:
+    fields:
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  ViewerSession:
     model:
       - frameworks/pkg/proto.ViewerSession
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   ViewerMetrics5m:
     model:
       - frameworks/pkg/proto.ViewerSession5M
@@ -43,14 +94,48 @@ models:
     model:
       - frameworks/pkg/proto.ConnectionEvent
     fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
       connectionAddr:
         resolver: true  # Redact client IP for privacy
+      stream:
+        resolver: true
   StreamHealthMetric:
     model:
       - frameworks/pkg/proto.StreamHealthMetric
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   ViewerCountBucket:
     model:
       - frameworks/pkg/proto.ViewerCountBucket
+    fields:
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  GeographicDistribution:
+    model:
+      - frameworks/api_gateway/graph/model.GeographicDistribution
+    fields:
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  RebufferingEvent:
+    model:
+      - frameworks/pkg/proto.RebufferingEvent
+    fields:
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   CountryMetric:
     model:
       - frameworks/pkg/proto.CountryMetric
@@ -67,64 +152,252 @@ models:
     model:
       - frameworks/pkg/proto.ConnectionEvent
     fields:
+      streamId:
+        resolver: true
       connectionAddr:
         resolver: true  # Redact client IP for privacy
+      stream:
+        resolver: true
   StreamEvent:
     model:
-      - frameworks/pkg/proto.StreamEvent
+      - frameworks/api_gateway/graph/model.StreamEvent
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      payload:
+        resolver: true
+      stream:
+        resolver: true
+  BufferEvent:
+    model:
+      - frameworks/pkg/proto.BufferEvent
+    fields:
+      id:
+        resolver: true
+      timestamp:
+        resolver: true
+      bufferState:
+        resolver: true
+      payload:
+        resolver: true
   # Query types - bound to periscope.proto types (analytics API responses)
   TrackListEvent:
     model:
       - frameworks/pkg/proto.TrackListEvent
-  ClipEvent:
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  ArtifactEvent:
     model:
       - frameworks/pkg/proto.ClipEvent
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      playbackId:
+        resolver: true
+      filePath:
+        resolver: true
+      s3Url:
+        resolver: true
+      stream:
+        resolver: true
   ArtifactState:
     model:
       - frameworks/pkg/proto.ArtifactState
+    fields:
+      streamId:
+        resolver: true
+      playbackId:
+        resolver: true
+      filePath:
+        resolver: true
+      s3Url:
+        resolver: true
+      manifestPath:
+        resolver: true
+      stream:
+        resolver: true
   StreamTrack:
     model:
       - frameworks/pkg/proto.StreamTrack
-
   # Pre-aggregated analytics types (Materialized Views)
   StreamConnectionHourly:
     model:
       - frameworks/pkg/proto.StreamConnectionHourly
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   ClientMetrics5m:
     model:
       - frameworks/pkg/proto.ClientMetrics5M
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   QualityTierDaily:
     model:
       - frameworks/pkg/proto.QualityTierDaily
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   QualityChangesHourly:
     model:
       - frameworks/pkg/proto.QualityChangesHourly
   StorageUsageRecord:
     model:
       - frameworks/pkg/proto.StorageUsageRecord
+    fields:
+      id:
+        resolver: true
+  StorageEvent:
+    model:
+      - frameworks/pkg/proto.StorageEvent
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  StorageSnapshot:
+    model:
+      - frameworks/pkg/proto.StorageSnapshot
+  TenantStorageUsage:
+    model:
+      - frameworks/pkg/proto.TenantStorageUsage
   StreamHealth5m:
     model:
       - frameworks/pkg/proto.StreamHealth5M
+    fields:
+      id:
+        resolver: true
   NodePerformance5m:
     model:
       - frameworks/pkg/proto.NodePerformance5M
+    fields:
+      id:
+        resolver: true
   ViewerHoursHourly:
     model:
       - frameworks/pkg/proto.ViewerHoursHourly
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   ViewerGeoHourly:
     model:
       - frameworks/pkg/proto.ViewerGeoHourly
+    fields:
+      id:
+        resolver: true
   TenantDailyStat:
     model:
       - frameworks/pkg/proto.TenantDailyStat
+    fields:
+      id:
+        resolver: true
+  StreamAnalyticsDaily:
+    model:
+      - frameworks/pkg/proto.StreamAnalyticsDaily
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  ProcessingUsageRecord:
+    model:
+      - frameworks/pkg/proto.ProcessingUsageRecord
+    fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+  APIUsageRecord:
+    model:
+      - frameworks/pkg/proto.APIUsageRecord
+    fields:
+      id:
+        resolver: true
+      timestamp:
+        resolver: true
+      requestCount:
+        resolver: true
+      errorCount:
+        resolver: true
+      totalDurationMs:
+        resolver: true
+      totalComplexity:
+        resolver: true
+      uniqueUsers:
+        resolver: true
+      uniqueTokens:
+        resolver: true
+  APIUsageSummary:
+    model:
+      - frameworks/pkg/proto.APIUsageSummary
+    fields:
+      date:
+        resolver: true
+      totalRequests:
+        resolver: true
+      totalErrors:
+        resolver: true
+      totalComplexity:
+        resolver: true
+      uniqueUsers:
+        resolver: true
+      uniqueTokens:
+        resolver: true
+  APIUsageOperationSummary:
+    model:
+      - frameworks/pkg/proto.APIUsageOperationSummary
+    fields:
+      totalRequests:
+        resolver: true
+      totalErrors:
+        resolver: true
+      uniqueOperations:
+        resolver: true
+      totalComplexity:
+        resolver: true
 
   # Real-time subscription types - bound to ipc.proto types (raw Kafka events via Signalman)
   ViewerMetrics:
     model:
       - frameworks/pkg/proto.ClientLifecycleUpdate
     fields:
+      streamId:
+        resolver: true
       host:
         resolver: true  # Redact client IP for privacy
+      stream:
+        resolver: true
   SystemHealthEvent:
     model:
       - frameworks/pkg/proto.NodeLifecycleUpdate
@@ -134,37 +407,52 @@ models:
   DVREvent:
     model:
       - frameworks/pkg/proto.DVRLifecycleData
+    fields:
+      playbackId:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   TrackListUpdate:
     model:
       - frameworks/pkg/proto.StreamTrackListTrigger
+    fields:
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   ClipLifecycle:
     model:
       - frameworks/pkg/proto.ClipLifecycleData
+    fields:
+      playbackId:
+        resolver: true
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
+      filePath:
+        resolver: true
+      s3Url:
+        resolver: true
 
   # Real-time stream subscription types - direct proto passthrough
-  # StreamLifecycleUpdate is now available via Signalman (added to EventData oneof)
-  StreamLifecycleUpdate:
-    model:
-      - frameworks/pkg/proto.StreamLifecycleUpdate
-    fields:
-      # Security: Don't expose internal identifiers
-      tenantId:
-        resolver: true  # Return nil - internal only
-  StreamEndEvent:
-    model:
-      - frameworks/pkg/proto.StreamEndTrigger
-  StreamBufferEvent:
-    model:
-      - frameworks/pkg/proto.StreamBufferTrigger
   VodLifecycle:
     model:
       - frameworks/pkg/proto.VodLifecycleData
     fields:
+      playbackId:
+        resolver: true
       # Security: Don't expose internal identifiers
       tenantId:
         resolver: true  # Return nil - internal only
       userId:
         resolver: true  # Return nil - internal only
+      filePath:
+        resolver: true
+      s3Url:
+        resolver: true
 
   # Stream management types - bound to proto types
   Stream:
@@ -176,6 +464,11 @@ models:
   StreamKey:
     model:
       - frameworks/pkg/proto.StreamKey
+    fields:
+      streamId:
+        resolver: true
+      stream:
+        resolver: true
   Recording:
     model:
       - frameworks/pkg/proto.Recording
@@ -183,6 +476,10 @@ models:
     model:
       - frameworks/pkg/proto.ClipInfo
     fields:
+      id:
+        resolver: true
+      streamId:
+        resolver: true
       # Lifecycle fields resolved from Periscope (batch lookup by clipHash)
       status:
         resolver: true
@@ -194,15 +491,14 @@ models:
         resolver: true
       storagePath:
         resolver: true
-      accessCount:
+      stream:
         resolver: true
-  ClipViewingUrls:
-    model:
-      - frameworks/pkg/proto.ClipViewingURLs
   DVRRequest:
     model:
       - frameworks/pkg/proto.DVRInfo
     fields:
+      streamId:
+        resolver: true
       # Lifecycle fields resolved from Periscope (batch lookup by dvrHash)
       status:
         resolver: true
@@ -232,6 +528,8 @@ models:
   # which proto types don't have. Let gqlgen generate them and convert in resolvers.
 
   # Viewer endpoint resolution types - bound to proto types
+      stream:
+        resolver: true
   ViewerEndpointResponse:
     model:
       - frameworks/pkg/proto.ViewerEndpointResponse
@@ -247,19 +545,16 @@ models:
   PlaybackInstance:
     model:
       - frameworks/pkg/proto.PlaybackInstance
-
-  # Stream meta types - bound to proto types
-  StreamMetaResponse:
+  IngestMetadata:
     model:
-      - frameworks/pkg/proto.StreamMetaResponse
-  MetaSummary:
-    model:
-      - frameworks/pkg/proto.MetaSummary
-  TrackSummary:
-    model:
-      - frameworks/pkg/proto.TrackSummary
+      - frameworks/pkg/proto.IngestMetadata
+    fields:
+      streamId:
+        resolver: true
 
   # Billing types - bound to proto types
+      stream:
+        resolver: true
   BillingStatus:
     model:
       - frameworks/pkg/proto.BillingStatusResponse
@@ -287,6 +582,9 @@ models:
   UsageSummary:
     model:
       - frameworks/pkg/proto.UsageSummary
+  LiveUsageSummary:
+    model:
+      - frameworks/pkg/proto.LiveUsageSummary
   # TenantUsage, UsageEntry, CostEntry remain as model types
   # because proto.TenantUsageResponse uses map<string, double>
   # which doesn't map directly to GraphQL arrays
@@ -298,18 +596,52 @@ models:
   ServiceInstanceHealth:
     model:
       - frameworks/pkg/proto.ServiceInstanceHealth
+    fields:
+      host:
+        resolver: true
+      healthEndpoint:
+        resolver: true
   NodeMetric:
     model:
       - frameworks/pkg/proto.NodeMetric
+    fields:
+      id:
+        resolver: true
+  NodeMetricHourly:
+    model:
+      - frameworks/pkg/proto.NodeMetricHourly
+    fields:
+      id:
+        resolver: true
+  NodeMetricsAggregated:
+    model:
+      - frameworks/pkg/proto.NodeMetricsAggregated
   TimeRange:
     model:
       - frameworks/pkg/proto.TimeRange
   Cluster:
     model:
       - frameworks/pkg/proto.InfrastructureCluster
+    fields:
+      id:
+        resolver: true
   Node:
     model:
+      - frameworks/api_gateway/graph/model.Node
+  InfrastructureNode:
+    model:
       - frameworks/pkg/proto.InfrastructureNode
+    fields:
+      id:
+        resolver: true
+      internalIp:
+        resolver: true
+      externalIp:
+        resolver: true
+      wireguardIp:
+        resolver: true
+      wireguardPublicKey:
+        resolver: true
 
   # Cluster Marketplace types - bound to proto types
   MarketplaceCluster:
@@ -329,6 +661,23 @@ models:
   User:
     model:
       - frameworks/pkg/proto.User
+  # WalletIdentity and WalletLoginPayload: NOT bound to proto.
+  # Because they're used in union types which require marker interface methods.
+  # Use manually created model types (graph/model/wallet.go).
+  WalletIdentity:
+    model:
+      - frameworks/api_gateway/graph/model.WalletIdentity
+  WalletLoginPayload:
+    model:
+      - frameworks/api_gateway/graph/model.WalletLoginPayload
+  # BalanceTransaction and PrepaidBalance: NOT bound to proto.
+  # Use manually created model types (graph/model/prepaid.go).
+  BalanceTransaction:
+    model:
+      - frameworks/api_gateway/graph/model.BalanceTransaction
+  PrepaidBalance:
+    model:
+      - frameworks/api_gateway/graph/model.PrepaidBalance
   DeveloperToken:
     model:
       - frameworks/pkg/proto.APITokenInfo
@@ -353,6 +702,19 @@ models:
   ClusterSubscriptionStatus:
     model:
       - frameworks/pkg/proto.ClusterSubscriptionStatus
+
+  # Crypto top-up enums - bound to proto types
+  CryptoAsset:
+    model:
+      - frameworks/pkg/proto.CryptoAsset
+
+  # Support messaging enums - bound to proto types
+  ConversationStatus:
+    model:
+      - frameworks/pkg/proto.ConversationStatus
+  MessageSender:
+    model:
+      - frameworks/pkg/proto.MessageSender
 
 
 # Skip generation for these types (we'll implement them manually)

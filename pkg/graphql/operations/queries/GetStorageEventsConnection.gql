@@ -1,0 +1,37 @@
+# Fetch storage lifecycle events (freeze/defrost)
+query GetStorageEventsConnection(
+  $streamId: ID
+  $assetType: String
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $after: String
+) {
+  analytics {
+    lifecycle {
+      storageEventsConnection(
+        streamId: $streamId
+        assetType: $assetType
+        timeRange: $timeRange
+        page: { first: $first, after: $after }
+      ) @paginate {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            assetHash
+            action
+            assetType
+            sizeBytes
+            nodeId
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

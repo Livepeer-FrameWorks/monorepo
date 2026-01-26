@@ -1,0 +1,21 @@
+query GetMessagesConnection($conversationId: ID!, $first: Int, $after: String) {
+  messagesConnection(conversationId: $conversationId, page: { first: $first, after: $after }) {
+    edges {
+      cursor
+      node {
+        id
+        conversationId
+        content
+        sender
+        createdAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

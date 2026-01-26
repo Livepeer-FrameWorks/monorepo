@@ -188,7 +188,7 @@ func main() {
 func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (*pb.SyncDNSResponse, error) {
 	s.Logger.WithField("service_type", req.GetServiceType()).Info("Received SyncDNS request")
 
-	if err := s.DNSManager.SyncService(ctx, req.GetServiceType()); err != nil {
+	if err := s.DNSManager.SyncService(ctx, req.GetServiceType(), req.GetRootDomain()); err != nil {
 		s.Logger.WithError(err).Error("DNS sync failed")
 		return &pb.SyncDNSResponse{
 			Success: false,

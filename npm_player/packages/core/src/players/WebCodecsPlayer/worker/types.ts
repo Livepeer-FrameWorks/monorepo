@@ -16,6 +16,8 @@ export interface CreateMessage {
   track: TrackInfo;
   opts: {
     optimizeForLatency: boolean;
+    /** Payload format: 'avcc' (length-prefixed) or 'annexb' (start-code delimited) */
+    payloadFormat?: 'avcc' | 'annexb';
   };
   uid: number;
 }
@@ -240,6 +242,8 @@ export interface PipelineState {
     lastChunkBytes: string;
   };
   optimizeForLatency: boolean;
+  /** Payload format: 'avcc' (length-prefixed) or 'annexb' (start-code delimited) */
+  payloadFormat: 'avcc' | 'annexb';
 }
 
 // ============================================================================

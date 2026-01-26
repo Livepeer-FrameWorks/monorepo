@@ -1,0 +1,17 @@
+mutation LinkEmail($input: LinkEmailInput!) {
+  linkEmail(input: $input) {
+    ... on LinkEmailPayload {
+      success
+      message
+      verificationSent
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

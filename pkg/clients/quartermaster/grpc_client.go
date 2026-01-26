@@ -154,6 +154,16 @@ func (c *GRPCClient) ResolveTenant(ctx context.Context, req *pb.ResolveTenantReq
 	return c.tenant.ResolveTenant(ctx, req)
 }
 
+// ListActiveTenants returns all active tenant IDs for billing batch processing.
+// Called by Purser billing job to avoid cross-service DB access.
+func (c *GRPCClient) ListActiveTenants(ctx context.Context) ([]string, error) {
+	resp, err := c.tenant.ListActiveTenants(ctx, &pb.ListActiveTenantsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.TenantIds, nil
+}
+
 // ============================================================================
 // CLUSTER OPERATIONS
 // ============================================================================
@@ -169,6 +179,14 @@ func (c *GRPCClient) GetCluster(ctx context.Context, clusterID string) (*pb.Clus
 func (c *GRPCClient) ListClusters(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListClustersResponse, error) {
 	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
 		Pagination: pagination,
+	})
+}
+
+// ListClustersByOwner lists clusters owned by a specific tenant.
+func (c *GRPCClient) ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListClustersResponse, error) {
+	return c.cluster.ListClusters(ctx, &pb.ListClustersRequest{
+		Pagination:    pagination,
+		OwnerTenantId: &ownerTenantID,
 	})
 }
 
@@ -235,6 +253,12 @@ func (c *GRPCClient) GetMarketplaceCluster(ctx context.Context, req *pb.GetMarke
 // UpdateClusterMarketplace updates cluster marketplace settings (owner only)
 func (c *GRPCClient) UpdateClusterMarketplace(ctx context.Context, req *pb.UpdateClusterMarketplaceRequest) (*pb.ClusterResponse, error) {
 	return c.cluster.UpdateClusterMarketplace(ctx, req)
+}
+
+// GetClusterMetadataBatch fetches cluster metadata for multiple clusters at once.
+// Used by Gateway to enrich marketplace pricing data from Purser with cluster details.
+func (c *GRPCClient) GetClusterMetadataBatch(ctx context.Context, req *pb.GetClusterMetadataBatchRequest) (*pb.GetClusterMetadataBatchResponse, error) {
+	return c.cluster.GetClusterMetadataBatch(ctx, req)
 }
 
 // CreatePrivateCluster creates a private cluster (self-hosted edge)
@@ -314,12 +338,6 @@ func (c *GRPCClient) CreateNode(ctx context.Context, req *pb.CreateNodeRequest) 
 	return c.node.CreateNode(ctx, req)
 }
 
-// UpdateNodeHealth updates node health status
-func (c *GRPCClient) UpdateNodeHealth(ctx context.Context, req *pb.UpdateNodeHealthRequest) error {
-	_, err := c.node.UpdateNodeHealth(ctx, req)
-	return err
-}
-
 // ResolveNodeFingerprint resolves a node fingerprint
 func (c *GRPCClient) ResolveNodeFingerprint(ctx context.Context, req *pb.ResolveNodeFingerprintRequest) (*pb.ResolveNodeFingerprintResponse, error) {
 	return c.node.ResolveNodeFingerprint(ctx, req)
@@ -359,6 +377,11 @@ func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeH
 // BootstrapEdgeNode bootstraps an edge node
 func (c *GRPCClient) BootstrapEdgeNode(ctx context.Context, req *pb.BootstrapEdgeNodeRequest) (*pb.BootstrapEdgeNodeResponse, error) {
 	return c.bootstrap.BootstrapEdgeNode(ctx, req)
+}
+
+// BootstrapInfrastructureNode bootstraps an infrastructure node
+func (c *GRPCClient) BootstrapInfrastructureNode(ctx context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error) {
+	return c.bootstrap.BootstrapInfrastructureNode(ctx, req)
 }
 
 // BootstrapService bootstraps a service

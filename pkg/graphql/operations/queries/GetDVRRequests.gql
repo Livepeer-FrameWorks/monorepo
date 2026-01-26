@@ -1,0 +1,41 @@
+# Fetch paginated list of DVR recordings with lifecycle status and storage paths
+# Returns DVR metadata from Commodore (use artifactStatesConnection for live status)
+query GetDVRRequests($streamId: ID, $first: Int = 50, $after: String) {
+  dvrRecordingsConnection(streamId: $streamId, page: { first: $first, after: $after }) @paginate {
+    edges {
+      cursor
+      node {
+        # Business metadata (from Commodore)
+        id
+        dvrHash
+        playbackId
+        streamId
+        stream {
+          streamId
+        }
+        title
+        createdAt
+        updatedAt
+        expiresAt
+        # Lifecycle data (null from Commodore, use artifactStatesConnection for live status)
+        storageNodeId
+        status
+        startedAt
+        endedAt
+        durationSeconds
+        sizeBytes
+        manifestPath
+        errorMessage
+        storageLocation
+        isFrozen
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

@@ -9,6 +9,10 @@ import (
 
 	pursergrpc "frameworks/api_billing/internal/grpc"
 	"frameworks/api_billing/internal/handlers"
+	"frameworks/api_billing/internal/mollie"
+	"frameworks/api_billing/internal/stripe"
+	commodoreclnt "frameworks/pkg/clients/commodore"
+	decklogclient "frameworks/pkg/clients/decklog"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
@@ -32,6 +36,12 @@ func main() {
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
+
+	// Payment provider credentials (optional - service works without them)
+	stripeSecretKey := config.GetEnv("STRIPE_SECRET_KEY", "")
+	stripeWebhookSecret := config.GetEnv("STRIPE_WEBHOOK_SECRET", "")
+	mollieAPIKey := config.GetEnv("MOLLIE_API_KEY", "")
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -82,11 +92,70 @@ func main() {
 	}
 	defer qmGRPCClient.Close()
 
+	// Create Commodore gRPC client for stream termination on suspension
+	commodoreClient, err := commodoreclnt.NewGRPCClient(commodoreclnt.GRPCConfig{
+		GRPCAddr:     commodoreGRPCAddr,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
+	}
+	defer commodoreClient.Close()
+
+	// Create Decklog gRPC client for service events
+	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
+	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
+		Target:        decklogGRPCAddr,
+		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		Timeout:       5 * time.Second,
+		Source:        "purser",
+		ServiceToken:  serviceToken,
+	}, logger)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
+		decklogClient = nil
+	} else {
+		defer decklogClient.Close()
+		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
+	}
+
+	// Create Stripe client (optional - service works without it)
+	var stripeClient *stripe.Client
+	if stripeSecretKey != "" {
+		stripeClient = stripe.NewClient(stripe.Config{
+			SecretKey:     stripeSecretKey,
+			WebhookSecret: stripeWebhookSecret,
+			Logger:        logger,
+		})
+		logger.Info("Stripe client initialized")
+	} else {
+		logger.Warn("STRIPE_SECRET_KEY not set - Stripe functionality disabled")
+	}
+
+	// Create Mollie client (optional - service works without it)
+	var mollieClient *mollie.Client
+	if mollieAPIKey != "" {
+		var err error
+		mollieClient, err = mollie.NewClient(mollie.Config{
+			APIKey: mollieAPIKey,
+			Logger: logger,
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create Mollie client - Mollie functionality disabled")
+		} else {
+			logger.Info("Mollie client initialized")
+		}
+	} else {
+		logger.Warn("MOLLIE_API_KEY not set - Mollie functionality disabled")
+	}
+
 	// Initialize handlers
-	handlers.Init(db, logger, handlerMetrics, qmGRPCClient)
+	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, decklogClient)
 
 	// Initialize and start JobManager for background billing tasks
-	jobManager := handlers.NewJobManager(db, logger)
+	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -99,12 +168,8 @@ func main() {
 	// NOTE: All billing/usage API routes removed - now handled via gRPC only.
 	// Gateway -> Purser gRPC for billing, tiers, invoices, payments, usage queries.
 	// Usage ingestion is via Kafka (Periscope -> billing.usage_reports -> JobManager)
+	// Webhooks are now routed through Gateway -> gRPC -> ProcessWebhook (keeps Purser internal)
 	router := server.SetupServiceRouter(logger, "purser", healthChecker, metricsCollector)
-
-	// Webhook endpoints for external payment providers (no auth - signature validation in handler)
-	// These MUST remain as HTTP endpoints since Stripe/Mollie send webhooks to URLs.
-	router.POST("/webhooks/mollie", handlers.HandleMollieWebhook)
-	router.POST("/webhooks/stripe", handlers.HandleStripeWebhook)
 
 	// Start gRPC server in a goroutine
 	grpcPort := config.GetEnv("GRPC_PORT", "19003")
@@ -116,11 +181,16 @@ func main() {
 		}
 
 		grpcServer := pursergrpc.NewGRPCServer(pursergrpc.GRPCServerConfig{
-			DB:           db,
-			Logger:       logger,
-			ServiceToken: serviceToken,
-			JWTSecret:    []byte(jwtSecret),
-			Metrics:      serverMetrics,
+			DB:                  db,
+			Logger:              logger,
+			ServiceToken:        serviceToken,
+			JWTSecret:           []byte(jwtSecret),
+			Metrics:             serverMetrics,
+			StripeClient:        stripeClient,
+			MollieClient:        mollieClient,
+			QuartermasterClient: qmGRPCClient,
+			CommodoreClient:     commodoreClient,
+			DecklogClient:       decklogClient,
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 
@@ -159,7 +229,12 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
 			AdvertiseHost:  &advertiseHost,
-			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (purser) failed")
 		} else {

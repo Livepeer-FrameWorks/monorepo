@@ -3,6 +3,7 @@ package logic
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"frameworks/api_dns/internal/provider/cloudflare"
@@ -16,6 +17,7 @@ type DNSManager struct {
 	qmClient *quartermaster.GRPCClient
 	logger   logging.Logger
 	domain   string // Root domain e.g. frameworks.network
+	proxy    map[string]bool
 }
 
 // NewDNSManager creates a new DNSManager
@@ -25,14 +27,40 @@ func NewDNSManager(cf *cloudflare.Client, qm *quartermaster.GRPCClient, logger l
 		qmClient: qm,
 		logger:   logger,
 		domain:   rootDomain,
+		proxy:    loadProxyServices(),
 	}
+}
+
+func loadProxyServices() map[string]bool {
+	env := strings.TrimSpace(os.Getenv("NAVIGATOR_PROXY_SERVICES"))
+	if env == "" {
+		return map[string]bool{
+			"app":     true,
+			"website": true,
+			"docs":    true,
+		}
+	}
+
+	proxy := make(map[string]bool)
+	for _, svc := range strings.Split(env, ",") {
+		name := strings.TrimSpace(svc)
+		if name == "" {
+			continue
+		}
+		proxy[name] = true
+	}
+	return proxy
+}
+
+func (m *DNSManager) shouldProxy(serviceType string) bool {
+	return m.proxy[serviceType]
 }
 
 // SyncService synchronizes DNS records for a specific service type (e.g. "edge", "gateway")
 // It implements the "Smart Record" logic:
 // - 1 healthy node -> A record (Direct IP)
 // - >1 healthy nodes -> Load Balancer Pool + CNAME
-func (m *DNSManager) SyncService(ctx context.Context, serviceType string) error {
+func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain string) error {
 	log := m.logger.WithField("service", serviceType)
 	log.Info("Starting DNS sync")
 
@@ -43,11 +71,12 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType string) error 
 		return fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
 
-	// 2. Filter for Healthy/Active Nodes and Extract IPs
+	// 2. Filter for Nodes with External IPs
 	var activeIPs []string
 	for _, node := range nodesResp.Nodes {
-		// We only want active nodes with external IPs
-		if node.Status == "active" && node.ExternalIp != nil && *node.ExternalIp != "" {
+		// We only want nodes with external IPs
+		// Note: Status field was removed - all returned nodes are considered active
+		if node.ExternalIp != nil && *node.ExternalIp != "" {
 			activeIPs = append(activeIPs, *node.ExternalIp)
 		}
 	}
@@ -77,9 +106,14 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType string) error 
 		return fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
 	}
 
-	fqdn := fmt.Sprintf("%s.%s", subdomain, m.domain)
+	domain := m.domain
+	if rootDomain != "" {
+		domain = rootDomain
+	}
+
+	fqdn := fmt.Sprintf("%s.%s", subdomain, domain)
 	if subdomain == "@" {
-		fqdn = m.domain
+		fqdn = domain
 	}
 
 	// 4. Apply "Smart Record" Logic
@@ -92,16 +126,16 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType string) error 
 	if len(activeIPs) == 1 {
 		// === Single Node: Direct A Record ===
 		log.Info("Single node detected, using A record")
-		return m.applySingleNodeConfig(ctx, fqdn, activeIPs[0])
+		return m.applySingleNodeConfig(ctx, fqdn, activeIPs[0], m.shouldProxy(serviceType))
 	}
 
 	// === Multi Node: Load Balancer Pool ===
 	log.Info("Multiple nodes detected, using Load Balancer")
-	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, activeIPs)
+	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, activeIPs, m.shouldProxy(serviceType))
 }
 
 // applySingleNodeConfig ensures an A record exists and cleans up any LB config
-func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string) error {
+func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string, proxied bool) error {
 	// Cleanup LB/Pools if they exist to avoid conflicts
 	// Check if LB exists for this hostname
 	lbs, err := m.cfClient.ListLoadBalancers()
@@ -110,7 +144,7 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string)
 	} else {
 		for _, lb := range lbs {
 			// Cloudflare LBs are matched by hostname (subdomain.domain.com)
-			if lb.Name == fqdn || strings.Contains(lb.Name, fqdn) { // Simple match
+			if lb.Name == fqdn {
 				m.logger.WithField("lb_id", lb.ID).Info("Deleting conflicting Load Balancer for Single Node mode")
 				if err := m.cfClient.DeleteLoadBalancer(lb.ID); err != nil {
 					m.logger.WithError(err).Error("Failed to delete conflicting LB")
@@ -130,9 +164,10 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string)
 	if len(records) > 0 {
 		// Update existing
 		record := records[0]
-		if record.Content != ip {
+		if record.Content != ip || record.Proxied != proxied {
 			m.logger.WithFields(logging.Fields{"fqdn": fqdn, "old_ip": record.Content, "new_ip": ip}).Info("Updating A record")
 			record.Content = ip
+			record.Proxied = proxied
 			if _, err := m.cfClient.UpdateDNSRecord(record.ID, record); err != nil {
 				return fmt.Errorf("failed to update A record: %w", err)
 			}
@@ -140,7 +175,7 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string)
 	} else {
 		// Create new
 		m.logger.WithFields(logging.Fields{"fqdn": fqdn, "ip": ip}).Info("Creating A record")
-		if _, err := m.cfClient.CreateARecord(fqdn, ip, true); err != nil { // Proxied=true by default
+		if _, err := m.cfClient.CreateARecord(fqdn, ip, proxied); err != nil {
 			return fmt.Errorf("failed to create A record: %w", err)
 		}
 	}
@@ -149,10 +184,10 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string)
 }
 
 // applyLoadBalancerConfig ensures an LB Pool exists and updates origins
-func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName string, ips []string) error {
+func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName string, ips []string, proxied bool) error {
 	// 1. Find or Create Pool
 	// We use the serviceType (e.g. "edge") as the pool name
-	poolID, err := m.ensurePool(poolName)
+	poolID, err := m.ensurePool(poolName, ips)
 	if err != nil {
 		return err
 	}
@@ -232,7 +267,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			FallbackPool:   poolID,
 			DefaultPools:   []string{poolID},
 			RegionPools:    make(map[string][]string), // Empty for now
-			Proxied:        true,
+			Proxied:        proxied,
 			Enabled:        true,
 			SteeringPolicy: "geo",
 		}
@@ -263,7 +298,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 }
 
 // ensurePool finds a pool by name or creates it
-func (m *DNSManager) ensurePool(name string) (string, error) {
+func (m *DNSManager) ensurePool(name string, ips []string) (string, error) {
 	pools, err := m.cfClient.ListPools()
 	if err != nil {
 		return "", fmt.Errorf("failed to list pools: %w", err)
@@ -277,11 +312,22 @@ func (m *DNSManager) ensurePool(name string) (string, error) {
 
 	// Not found, create
 	m.logger.WithField("name", name).Info("Creating new Load Balancer Pool")
+	origins := make([]cloudflare.Origin, 0, len(ips))
+	for _, ip := range ips {
+		origins = append(origins, cloudflare.Origin{
+			Name:    strings.ReplaceAll(ip, ".", "-"),
+			Address: ip,
+			Enabled: true,
+			Weight:  1.0,
+		})
+	}
+
 	newPool := cloudflare.Pool{
 		Name:           name,
 		Description:    "Managed by Navigator",
 		Enabled:        true,
 		MinimumOrigins: 1,
+		Origins:        origins,
 	}
 	created, err := m.cfClient.CreatePool(newPool)
 	if err != nil {

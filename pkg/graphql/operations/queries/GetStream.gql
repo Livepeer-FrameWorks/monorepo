@@ -1,0 +1,20 @@
+# Fetch stream with core fields, operational metrics, analytics, and current health
+query GetStream($id: ID!, $streamId: ID!, $timeRange: TimeRangeInput) {
+  stream(id: $id) {
+    ...StreamCoreFields
+    metrics {
+      ...StreamMetricsFields
+    }
+  }
+  analytics {
+    health {
+      streamHealthConnection(streamId: $streamId, timeRange: $timeRange, page: { first: 1 }) {
+        edges {
+          node {
+            ...StreamHealthFields
+          }
+        }
+      }
+    }
+  }
+}

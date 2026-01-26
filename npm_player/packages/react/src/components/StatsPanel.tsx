@@ -1,24 +1,16 @@
 import React from "react";
-import { cn, type ContentMetadata, type PlaybackQuality } from "@livepeer-frameworks/player-core";
-
-interface StreamStateInfo {
-  status?: string;
-  viewers?: number;
-  tracks?: Array<{
-    type: string;
-    codec: string;
-    width?: number;
-    height?: number;
-    bps?: number;
-    channels?: number;
-  }>;
-}
+import {
+  cn,
+  type ContentMetadata,
+  type PlaybackQuality,
+  type StreamState,
+} from "@livepeer-frameworks/player-core";
 
 interface StatsPanelProps {
   isOpen: boolean;
   onClose: () => void;
   metadata?: ContentMetadata | null;
-  streamState?: StreamStateInfo | null;
+  streamState?: StreamState | null;
   quality?: PlaybackQuality | null;
   videoElement?: HTMLVideoElement | null;
   protocol?: string;
@@ -61,19 +53,45 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
   const latency = quality?.latency ? `${Math.round(quality.latency)} ms` : "—";
 
   // Stream state stats
-  const viewers = streamState?.viewers ?? metadata?.viewers ?? "—";
+  const viewers = metadata?.viewers ?? "—";
   const streamStatus = streamState?.status ?? metadata?.status ?? "—";
+
+  const mistInfo = metadata?.mist ?? streamState?.streamInfo;
+
+  const deriveTracksFromMist = () => {
+    const mistTracks = mistInfo?.meta?.tracks;
+    if (!mistTracks) return undefined;
+    return Object.values(mistTracks).map(t => ({
+      type: t.type,
+      codec: t.codec,
+      width: t.width,
+      height: t.height,
+      bitrate: typeof t.bps === "number" ? Math.round(t.bps) : undefined,
+      fps: typeof t.fpks === "number" ? t.fpks / 1000 : undefined,
+      channels: t.channels,
+      sampleRate: t.rate,
+    }));
+  };
 
   // Format track info from metadata
   const formatTracks = () => {
-    if (!streamState?.tracks?.length) return "—";
-    return streamState.tracks.map(t => {
+    const tracks = metadata?.tracks ?? deriveTracksFromMist();
+    if (!tracks?.length) return "—";
+    return tracks.map(t => {
       if (t.type === "video") {
-        return `${t.codec} ${t.width}x${t.height}@${t.bps ? Math.round(t.bps / 1000) + "kbps" : "?"}`;
+        const resolution = t.width && t.height ? `${t.width}x${t.height}` : "?";
+        const bitrate = t.bitrate ? `${Math.round(t.bitrate / 1000)}kbps` : "?";
+        return `${t.codec ?? "?"} ${resolution}@${bitrate}`;
       }
-      return `${t.codec} ${t.channels}ch`;
+      const channels = t.channels ? `${t.channels}ch` : "?";
+      return `${t.codec ?? "?"} ${channels}`;
     }).join(", ");
   };
+
+  const mistType = mistInfo?.type ?? "—";
+  const mistBufferWindow = mistInfo?.meta?.buffer_window;
+  const mistLastMs = mistInfo?.lastms;
+  const mistUnixOffset = mistInfo?.unixoffset;
 
   const stats = [
     { label: "Resolution", value: currentRes },
@@ -90,6 +108,10 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
     { label: "Viewers", value: String(viewers) },
     { label: "Status", value: streamStatus },
     { label: "Tracks", value: formatTracks() },
+    { label: "Mist Type", value: mistType },
+    { label: "Mist Buffer Window", value: mistBufferWindow != null ? String(mistBufferWindow) : "—" },
+    { label: "Mist Lastms", value: mistLastMs != null ? String(mistLastMs) : "—" },
+    { label: "Mist Unixoffset", value: mistUnixOffset != null ? String(mistUnixOffset) : "—" },
   ];
 
   // Add metadata fields if available

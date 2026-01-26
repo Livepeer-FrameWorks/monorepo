@@ -60,6 +60,11 @@ service TenantService {
 
   // Get tenants assigned to a cluster
   rpc GetTenantsByCluster(GetTenantsByClusterRequest) returns (GetTenantsByClusterResponse);
+
+  // ===== CROSS-SERVICE: BILLING BATCH PROCESSING =====
+  // List all active tenant IDs for billing job iteration.
+  // Called by Purser billing job to avoid cross-service DB access.
+  rpc ListActiveTenants(ListActiveTenantsRequest) returns (ListActiveTenantsResponse);
 }
 
 // ClusterService handles infrastructure cluster management
@@ -119,6 +124,9 @@ service ClusterService {
   rpc ListPendingSubscriptions(ListPendingSubscriptionsRequest) returns (ListPendingSubscriptionsResponse);
   rpc ApproveClusterSubscription(ApproveClusterSubscriptionRequest) returns (ClusterSubscription);
   rpc RejectClusterSubscription(RejectClusterSubscriptionRequest) returns (ClusterSubscription);
+
+  // Batch metadata lookup for Gateway enrichment (used by Purser marketplace flow)
+  rpc GetClusterMetadataBatch(GetClusterMetadataBatchRequest) returns (GetClusterMetadataBatchResponse);
 }
 
 // NodeService handles infrastructure node management
@@ -126,7 +134,7 @@ service NodeService {
   rpc GetNode(GetNodeRequest) returns (NodeResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
   rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
-  rpc UpdateNodeHealth(UpdateNodeHealthRequest) returns (google.protobuf.Empty);
+  // UpdateNodeHealth RPC removed - health tracking moved to Lookout
 
   // Resolve node fingerprint for identity binding
   // Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
@@ -150,6 +158,8 @@ service BootstrapService {
   // Bootstrap an edge node with enrollment token
   // Source: pkg/api/quartermaster/types.go:BootstrapEdgeNodeRequest
   rpc BootstrapEdgeNode(BootstrapEdgeNodeRequest) returns (BootstrapEdgeNodeResponse);
+  // Bootstrap a general infrastructure node with enrollment token
+  rpc BootstrapInfrastructureNode(BootstrapInfrastructureNodeRequest) returns (BootstrapInfrastructureNodeResponse);
 
   // Bootstrap a core service
   // Source: pkg/api/quartermaster/types.go:BootstrapServiceRequest
@@ -199,6 +209,25 @@ message ValidateTenantResponse {
   string tenant_name = 3;   // tenants.name
   string error = 4;
   bool is_active = 5;       // tenants.is_active
+
+  // ===== API RATE LIMITING =====
+  int32 rate_limit_per_minute = 10;   // Requests per minute limit
+  int32 rate_limit_burst = 11;        // Burst allowance above limit
+
+  // ===== BILLING MODEL & SUSPENSION =====
+  // billing_model: "postpaid" (default, invoice-based) or "prepaid" (balance-based)
+  // Used by Foghorn to determine cache TTL (1 min for prepaid, 10 min for postpaid)
+  string billing_model = 12;
+
+  // is_suspended: true if tenant is suspended due to negative prepaid balance (< -$10)
+  // When true, Commodore should reject CreateStream/StartDVR
+  // Foghorn should reject new stream ingests (but allow existing streams)
+  bool is_suspended = 13;
+
+  // is_balance_negative: true if prepaid balance <= 0 (but not yet suspended)
+  // When true, services should return HTTP 402 for new billable operations
+  // Existing operations continue until hard suspension at -$10
+  bool is_balance_negative = 14;
 }
 
 // Matches pkg/api/quartermaster/types.go:TenantInfo (lines 29-35)
@@ -229,6 +258,10 @@ message Tenant {
   bool is_active = 16;                  // json:"is_active"
   google.protobuf.Timestamp created_at = 17; // json:"created_at"
   google.protobuf.Timestamp updated_at = 18; // json:"updated_at"
+
+  // ===== API RATE LIMITING =====
+  int32 rate_limit_per_minute = 25;     // Requests per minute limit (default: 100)
+  int32 rate_limit_burst = 26;          // Burst allowance above limit (default: 20)
 }
 
 message ListTenantsRequest {
@@ -303,6 +336,21 @@ message GetTenantsByClusterResponse {
   string cluster_id = 1;
   repeated Tenant tenants = 2;
   common.CursorPaginationResponse pagination = 3;
+}
+
+// ============================================================================
+// CROSS-SERVICE: LIST ACTIVE TENANTS (for billing batch processing)
+// ============================================================================
+
+// Request to list all active tenant IDs (for billing job iteration)
+message ListActiveTenantsRequest {
+  // Empty for now - returns all active tenants
+  // Could add filters in future (e.g., billing_model, last_activity)
+}
+
+// Response with tenant IDs for batch processing
+message ListActiveTenantsResponse {
+  repeated string tenant_ids = 1;       // List of active tenant UUIDs
 }
 
 // ============================================================================
@@ -398,11 +446,9 @@ message InfrastructureCluster {
   ClusterVisibility visibility = 30;    // Marketplace visibility
   ClusterPricingModel pricing_model = 31; // Pricing model (from Purser)
   int32 monthly_price_cents = 32;       // Monthly price in cents (from Purser)
-  optional string required_billing_tier = 33; // Required tier (from Purser)
   bool requires_approval = 35;          // Subscription requires owner approval
   optional string short_description = 36; // Marketplace listing description
-  optional string long_description = 37;  // Detailed terms
-  bool is_platform_cluster = 38;        // Platform-operated cluster
+  // Field numbers 33, 34, 37, 38 removed (required_billing_tier, long_description, is_platform_cluster)
 }
 
 message ClusterResponse {
@@ -415,6 +461,7 @@ message ListClustersRequest {
   string cluster_name = 3;
   string cluster_type = 4;
   string deployment_model = 5;
+  optional string owner_tenant_id = 6;
 }
 
 message ListClustersResponse {
@@ -516,15 +563,18 @@ message MarketplaceClusterEntry {
   // Pricing fields (populated by Gateway from Purser, not Quartermaster)
   ClusterPricingModel pricing_model = 5;
   int32 monthly_price_cents = 6;
-  optional string required_billing_tier = 7;
+  // Field 7 removed (required_billing_tier)
   bool requires_approval = 8;
   optional string owner_name = 9;  // Operator tenant name (not ID)
-  bool is_platform_cluster = 10;
+  // Field 10 removed (is_platform_cluster)
   int32 max_concurrent_streams = 11;
   int32 max_concurrent_viewers = 12;
   optional double current_utilization = 13;  // Percentage
   bool is_subscribed = 14;  // Current tenant subscribed?
   ClusterSubscriptionStatus subscription_status = 15;
+  bool is_eligible = 16;  // Tenant eligible to subscribe (billing tier)
+  optional string denial_reason = 17;
+  google.protobuf.Timestamp created_at = 18;
 }
 
 message ListMarketplaceClustersRequest {
@@ -553,10 +603,36 @@ message UpdateClusterMarketplaceRequest {
   // Pricing fields (routed to Purser by Gateway)
   optional ClusterPricingModel pricing_model = 4;
   optional int32 monthly_price_cents = 5;
-  optional string required_billing_tier = 6;
+  // Field 6 removed (required_billing_tier)
   optional bool requires_approval = 7;
   optional string short_description = 8;
-  optional string long_description = 9;
+  // Field 9 removed (long_description)
+}
+
+// Batch metadata lookup for Gateway enrichment
+// Returns cluster operational data (name, capacity, subscription status)
+// Used by Gateway to enrich Purser's marketplace pricing data
+message GetClusterMetadataBatchRequest {
+  repeated string cluster_ids = 1;
+  string requesting_tenant_id = 2;  // For subscription status lookup
+}
+
+message GetClusterMetadataBatchResponse {
+  map<string, ClusterMetadata> clusters = 1;
+}
+
+message ClusterMetadata {
+  string cluster_id = 1;
+  string cluster_name = 2;
+  optional string short_description = 3;
+  string visibility = 4;              // public, unlisted, private
+  bool requires_approval = 5;
+  optional string owner_name = 6;     // Operator tenant name
+  int32 max_concurrent_streams = 7;
+  int32 max_concurrent_viewers = 8;
+  optional double current_utilization = 9;  // Percentage
+  bool is_subscribed = 10;            // Requesting tenant subscribed?
+  string subscription_status = 11;    // none, pending, active, cancelled
 }
 
 // Private cluster creation (self-hosted edge)
@@ -699,8 +775,7 @@ message InfrastructureNode {
   optional int32 cpu_cores = 14;        // json:"cpu_cores,omitempty"
   optional int32 memory_gb = 15;        // json:"memory_gb,omitempty"
   optional int32 disk_gb = 16;          // json:"disk_gb,omitempty"
-  string status = 17;                   // json:"status"
-  // REMOVED: health_score = 18 (no data source - derive from status/heartbeat if needed)
+  // Field 17 removed (status) - Field 18 was already removed (health_score)
   optional google.protobuf.Timestamp last_heartbeat = 19; // json:"last_heartbeat,omitempty"
   google.protobuf.Struct tags = 20;     // json:"tags,omitempty"
   google.protobuf.Struct metadata = 21; // json:"metadata,omitempty"
@@ -748,16 +823,7 @@ message CreateNodeRequest {
   google.protobuf.Struct metadata = 17; // json:"metadata,omitempty"
 }
 
-// Matches pkg/api/quartermaster/types.go:UpdateNodeHealthRequest (lines 414-421)
-message UpdateNodeHealthRequest {
-  string node_id = 1;                   // target node
-  // REMOVED: health_score = 2 (no data source - use status instead)
-  optional string status = 3;           // json:"status,omitempty"
-  optional double cpu_usage = 4;        // json:"cpu_usage,omitempty"
-  optional double memory_usage = 5;     // json:"memory_usage,omitempty"
-  optional double disk_usage = 6;       // json:"disk_usage,omitempty"
-  google.protobuf.Struct metadata = 7;  // json:"metadata,omitempty"
-}
+// UpdateNodeHealthRequest removed - health tracking moved to Lookout
 
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
 message ResolveNodeFingerprintRequest {
@@ -830,6 +896,23 @@ message BootstrapEdgeNodeResponse {
   string cluster_id = 3;                // json:"cluster_id"
 }
 
+// BootstrapInfrastructureNodeRequest registers a non-edge infrastructure node using a bootstrap token.
+message BootstrapInfrastructureNodeRequest {
+  string token = 1;                     // json:"token" required
+  string node_type = 2;                 // json:"node_type" required (e.g., "edge", "gateway", "api")
+  optional string node_id = 3;          // json:"node_id,omitempty" - client-supplied stable ID
+  string hostname = 4;                  // json:"hostname"
+  optional string external_ip = 5;      // json:"external_ip,omitempty"
+  optional string internal_ip = 6;      // json:"internal_ip,omitempty"
+  optional string target_cluster_id = 7; // Target cluster (must match token binding if token has cluster_id)
+}
+
+message BootstrapInfrastructureNodeResponse {
+  string node_id = 1;                   // json:"node_id"
+  optional string tenant_id = 2;        // json:"tenant_id,omitempty"
+  string cluster_id = 3;                // json:"cluster_id"
+}
+
 // Matches pkg/api/quartermaster/types.go:BootstrapServiceRequest (lines 254-265)
 message BootstrapServiceRequest {
   optional string token = 1;            // json:"token,omitempty"
@@ -884,8 +967,7 @@ message ServiceInstance {
   optional google.protobuf.Timestamp started_at = 12;
   optional google.protobuf.Timestamp stopped_at = 13;
   optional google.protobuf.Timestamp last_health_check = 14;
-  optional double cpu_usage_percent = 15;
-  optional int32 memory_usage_mb = 16;
+  // Fields 15-16 removed (cpu_usage_percent, memory_usage_mb)
   google.protobuf.Timestamp created_at = 17;
   google.protobuf.Timestamp updated_at = 18;
   // Additional fields for service discovery

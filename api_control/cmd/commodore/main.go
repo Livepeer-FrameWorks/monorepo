@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	commodoregrpc "frameworks/api_control/internal/grpc"
+	decklogclient "frameworks/pkg/clients/decklog"
 	foghornclient "frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/listmonk"
 	purserclient "frameworks/pkg/clients/purser"
@@ -57,7 +58,6 @@ func main() {
 	serverMetrics := &commodoregrpc.ServerMetrics{
 		AuthOperations:   metricsCollector.NewCounter("auth_operations_total", "Authentication operations", []string{"operation", "status"}),
 		AuthDuration:     metricsCollector.NewHistogram("auth_operation_duration_seconds", "Authentication operation duration", []string{"operation"}, nil),
-		ActiveSessions:   metricsCollector.NewGauge("active_sessions_count", "Active user sessions", []string{}),
 		StreamOperations: metricsCollector.NewCounter("stream_operations_total", "Stream CRUD operations", []string{"operation", "status"}),
 	}
 
@@ -115,6 +115,23 @@ func main() {
 		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
+	// Create Decklog gRPC client for service events
+	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
+	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
+		Target:        decklogGRPCAddr,
+		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		Timeout:       5 * time.Second,
+		Source:        "commodore",
+		ServiceToken:  serviceToken,
+	}, logger)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
+		decklogClient = nil
+	} else {
+		defer decklogClient.Close()
+		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
+	}
+
 	// Create Listmonk client for newsletter subscription
 	var listmonkClient *listmonk.Client
 	defaultMailingListID := 1
@@ -149,11 +166,13 @@ func main() {
 			QuartermasterClient:  quartermasterGRPCClient,
 			PurserClient:         purserGRPCClient,
 			ListmonkClient:       listmonkClient,
+			DecklogClient:        decklogClient,
 			DefaultMailingListID: defaultMailingListID,
 			Metrics:              serverMetrics,
 			ServiceToken:         serviceToken,
 			JWTSecret:            []byte(jwtSecret),
 			TurnstileSecretKey:   config.GetEnv("TURNSTILE_AUTH_SECRET_KEY", ""),
+			TurnstileFailOpen:    config.GetEnvBool("TURNSTILE_FAIL_OPEN", false),
 			PasswordResetSecret:  []byte(config.GetEnv("PASSWORD_RESET_SECRET", "")),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
@@ -186,7 +205,12 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
 			AdvertiseHost:  &advertiseHost,
-			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (commodore) failed")
 		} else {

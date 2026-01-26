@@ -11,15 +11,19 @@ Consumes analytics events from Kafka and writes time‑series data exclusively t
 ## Responsibilities
 - Consume `analytics_events` topic with tenant headers
 - Validate/normalize event payloads (Decklog already validates)
-- Insert into ClickHouse tables: `stream_events`, `connection_events`, `stream_health_metrics`, `track_list_events`, `node_metrics`, `live_streams`, `live_nodes`, `live_artifacts`
+- Insert into ClickHouse tables: `stream_event_log`, `viewer_connection_events`, `stream_health_samples`, `track_list_events`, `client_qoe_samples`, `node_metrics_samples`, `stream_state_current`, `node_state_current`, `artifact_state_current`, `artifact_events`, `routing_decisions`, `storage_snapshots`, `processing_events`
 
 ## Event → table mapping
-- `stream-ingest`, `stream-view`, `stream-lifecycle`, `stream-buffer`, `stream-end` → `stream_events`
-- `user-connection` → `connection_events`
-- `client-lifecycle` → `stream_health_metrics`
-- `node-lifecycle` → `node_metrics`
-- `track-list` → `track_list_events`
-- `recording-lifecycle` → `stream_events` (used in billing queries)
+- `viewer_connect` / `viewer_disconnect` → `viewer_connection_events`
+- `stream_buffer`, `stream_end`, `push_rewrite`, `play_rewrite`, `stream_source`, `push_end`, `push_out_start`, `recording_complete` → `stream_event_log`
+- `stream_track_list` → `track_list_events`
+- `stream_lifecycle_update` → `stream_state_current` + `stream_event_log`
+- `node_lifecycle_update` → `node_state_current` + `node_metrics_samples`
+- `client_lifecycle_update` → `client_qoe_samples`
+- `load_balancing` → `routing_decisions`
+- `clip_lifecycle`, `dvr_lifecycle` → `artifact_state_current` + `artifact_events`
+- `storage_snapshot` → `storage_snapshots`
+- `process_billing` → `processing_events`
 
 ## Run (dev)
 - Start the full stack from repo root: `docker-compose up -d`

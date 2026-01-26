@@ -273,6 +273,7 @@ export function usePlayerController(
       setState(prev => ({
         ...prev,
         streamState,
+        metadata: controller.getMetadata(),
         isEffectivelyLive: controller.isEffectivelyLive(),
         shouldShowIdleScreen: controller.shouldShowIdleScreen(),
       }));

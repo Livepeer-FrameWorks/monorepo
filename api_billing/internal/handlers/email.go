@@ -33,6 +33,7 @@ type EmailData struct {
 	PaidAt        *time.Time
 	PaymentMethod string
 	DaysPastDue   int
+	Balance       float64
 	LoginURL      string
 	UsageDetails  map[string]interface{}
 }
@@ -162,6 +163,30 @@ func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoic
 	body, err := es.renderTemplate("overdue_reminder", data)
 	if err != nil {
 		return fmt.Errorf("failed to render overdue reminder template: %w", err)
+	}
+
+	return es.sendEmail(tenantEmail, subject, body)
+}
+
+// SendAccountSuspendedEmail sends notification when a tenant is suspended for negative balance
+func (es *EmailService) SendAccountSuspendedEmail(tenantEmail, tenantName string, balance float64, currency string) error {
+	if !es.IsConfigured() {
+		es.logger.Warn("Email service not configured, skipping account suspended email")
+		return nil
+	}
+
+	subject := "Account Suspended - Negative Balance"
+
+	data := EmailData{
+		TenantName: tenantName,
+		Balance:    balance,
+		Currency:   currency,
+		LoginURL:   os.Getenv("WEBAPP_PUBLIC_URL") + "/account/billing",
+	}
+
+	body, err := es.renderTemplate("account_suspended", data)
+	if err != nil {
+		return fmt.Errorf("failed to render account suspended template: %w", err)
 	}
 
 	return es.sendEmail(tenantEmail, subject, body)
@@ -467,6 +492,37 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
         
         <p>If you have any questions or need assistance, please contact our support team.</p>
         
+        <p>Best regards,<br>The FrameWorks Team</p>
+    </div>
+</body>
+</html>`,
+		"account_suspended": `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Account Suspended</title>
+</head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #e74c3c;">Account Suspended</h2>
+
+        <p>Hello {{.TenantName}},</p>
+
+        <p>Your account has been suspended because your prepaid balance is negative.</p>
+
+        <div style="background-color: #f8d7da; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #e74c3c;">
+            <p><strong>Current Balance:</strong> {{.Balance}} {{.Currency}}</p>
+        </div>
+
+        <p>Please top up your balance to restore access and continue creating new resources.</p>
+
+        <p style="text-align: center; margin: 30px 0;">
+            <a href="{{.LoginURL}}" style="background-color: #e74c3c; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Go to Billing</a>
+        </p>
+
+        <p>If you believe this is a mistake, contact our support team.</p>
+
         <p>Best regards,<br>The FrameWorks Team</p>
     </div>
 </body>

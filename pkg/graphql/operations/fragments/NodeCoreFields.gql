@@ -1,0 +1,38 @@
+fragment NodeCoreFields on InfrastructureNode {
+  id
+  nodeId
+  nodeName
+  clusterId
+  nodeType
+  region
+  externalIp
+  internalIp
+  wireguardIp
+  wireguardPublicKey
+  availabilityZone
+  cpuCores
+  memoryGb
+  diskGb
+  lastHeartbeat
+  createdAt
+  updatedAt
+  latitude
+  longitude
+  tags
+  metadata
+  # Real-time state from live_nodes (ClickHouse ReplacingMergeTree)
+  liveState {
+    nodeId
+    cpuPercent
+    ramUsedBytes
+    ramTotalBytes
+    diskUsedBytes
+    diskTotalBytes
+    upSpeed
+    downSpeed
+    activeStreams
+    isHealthy
+    location
+    updatedAt
+  }
+}

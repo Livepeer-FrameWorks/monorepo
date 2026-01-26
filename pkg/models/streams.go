@@ -65,7 +65,8 @@ type Stream struct {
 	UserID             string     `json:"-"`    // User ID - internal only, not exposed via API
 	Title              string     `json:"name"` // Map to GraphQL 'name' field
 	Description        string     `json:"description"`
-	InternalName       string     `json:"id"` // This becomes the public ID
+	StreamID           string     `json:"id"` // Public UUID
+	InternalName       string     `json:"-"`  // Internal-only Mist identifier
 	StreamKey          string     `json:"streamKey"`
 	PlaybackID         string     `json:"playbackId"` // Public playback identifier
 	IsLive             bool       `json:"is_live"`

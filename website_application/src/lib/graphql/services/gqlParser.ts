@@ -216,10 +216,25 @@ export function generateDefaultVariables(
       continue;
     }
 
-    defaults[v.name] = getDefaultForType(v.type);
+    const namedDefault = getDefaultForVariableName(v.name, v.type);
+    defaults[v.name] = namedDefault ?? getDefaultForType(v.type);
   }
 
   return defaults;
+}
+
+function getDefaultForVariableName(name: string, type: string): unknown | null {
+  if (name === "streamId") return "stream_global_id";
+  if (name === "nodeId") return "node_id";
+  if (name === "clusterId") return "cluster_id";
+  if (name === "id" && type.includes("ID")) return "id";
+  if (name === "page") return { first: 50 };
+  if (name === "timeRange") {
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    return { start: oneDayAgo.toISOString(), end: now.toISOString() };
+  }
+  return null;
 }
 
 /**
@@ -267,39 +282,55 @@ function getDefaultForInputType(typeName: string): unknown {
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
   switch (typeName) {
+    case "ConnectionInput":
+      return {
+        first: 50,
+        after: null,
+      };
+
     case "TimeRangeInput":
       return {
         start: oneDayAgo.toISOString(),
         end: now.toISOString(),
       };
 
-    case "PaginationInput":
-      return {
-        limit: 50,
-        offset: 0,
-      };
-
     case "CreateStreamInput":
       return {
-        name: "my-stream",
-        description: "Stream description",
+        name: "example-live-stream",
+        description: "Example stream description",
         record: false,
       };
 
     case "UpdateStreamInput":
       return {
-        name: "updated-stream-name",
-        description: "Updated description",
+        name: "example-live-stream-updated",
+        description: "Updated stream description",
         record: false,
       };
 
     case "CreateClipInput":
       return {
-        stream: "stream-name",
-        title: "My Clip",
-        description: "Clip description",
-        startTime: 0,
-        endTime: 30,
+        streamId: "stream_global_id",
+        title: "Example Clip",
+        description: "Example clip description",
+        mode: "ABSOLUTE",
+        startUnix: 0,
+        stopUnix: 30,
+      };
+
+    case "CreateVodUploadInput":
+      return {
+        filename: "example.mp4",
+        sizeBytes: 1024 * 1024,
+        contentType: "video/mp4",
+        title: "Example VOD",
+        description: "Example VOD upload",
+      };
+
+    case "CompleteVodUploadInput":
+      return {
+        uploadId: "upload_id",
+        parts: [{ partNumber: 1, etag: "etag-value" }],
       };
 
     case "CreateStreamKeyInput":
@@ -309,26 +340,84 @@ function getDefaultForInputType(typeName: string): unknown {
 
     case "CreateDeveloperTokenInput":
       return {
-        name: "my-api-token",
+        name: "example-api-token",
         permissions: "read,write",
+        expiresIn: null,
+      };
+
+    case "CreateBootstrapTokenInput":
+      return {
+        name: "bootstrap-token",
+        kind: "cluster",
         expiresIn: null,
       };
 
     case "StartDvrInput":
       return {
-        streamId: "your-stream-id",
+        streamId: "stream_global_id",
       };
 
     case "StopDvrInput":
       return {
-        streamId: "your-stream-id",
+        streamId: "stream_global_id",
       };
 
-    case "PaymentInput":
+    case "CreatePaymentInput":
       return {
         amount: 1000,
         currency: "USD",
         method: "CARD",
+      };
+
+    case "CreatePrivateClusterInput":
+      return {
+        name: "My Private Cluster",
+        region: "us-east",
+        deploymentModel: "hybrid",
+      };
+
+    case "UpdateClusterMarketplaceInput":
+      return {
+        shortDescription: "Low latency premium cluster",
+        pricingModel: "SUBSCRIPTION",
+        monthlyPriceCents: 5000,
+      };
+
+    case "CreateClusterInviteInput":
+      return {
+        email: "operator@example.com",
+      };
+
+    case "UpdateSubscriptionCustomTermsInput":
+      return {
+        monthlyPriceCents: 5000,
+        billingCycle: "monthly",
+      };
+
+    case "CustomPricingInput":
+      return {
+        monthlyPriceCents: 5000,
+        billingCycle: "monthly",
+      };
+
+    case "OverageRatesInput":
+      return {
+        bandwidth: { unit: "GB", unitPrice: 0.01 },
+        storage: { unit: "GB", unitPrice: 0.02 },
+        compute: { unit: "hour", unitPrice: 0.05 },
+      };
+
+    case "AllocationDetailsInput":
+      return {
+        unit: "GB",
+        included: 100,
+        unitPrice: 0.02,
+      };
+
+    case "BillingFeaturesInput":
+      return {
+        analytics: true,
+        prioritySupport: false,
       };
 
     case "UpdateTenantInput":
@@ -441,6 +530,9 @@ export function getVariableHint(
   if (name === "before" && type.includes("String")) {
     return "Cursor from pageInfo.startCursor";
   }
+  if (name === "page") {
+    return "ConnectionInput: { first, after, last, before }";
+  }
 
   // Common ID patterns
   if (name === "id" && type.includes("ID")) {
@@ -448,6 +540,15 @@ export function getVariableHint(
   }
   if (name.endsWith("Id") && type.includes("ID")) {
     return `${name.replace(/Id$/, "")} identifier`;
+  }
+  if (name === "streamId") {
+    return "Public stream identifier (safe to expose)";
+  }
+  if (name === "nodeId") {
+    return "Infrastructure node identifier";
+  }
+  if (name === "clusterId") {
+    return "Cluster identifier";
   }
 
   // Time range
@@ -457,7 +558,7 @@ export function getVariableHint(
 
   // Common filters
   if (name === "stream" && type.includes("String")) {
-    return "Stream internal name filter";
+    return "Stream internal name filter (avoid exposing)";
   }
   if (name === "status") {
     return "Filter by status";
@@ -485,7 +586,7 @@ export function formatOperationForTemplate(op: ParsedOperation): {
 
 /**
  * Convert operation name to human-readable format
- * GetStreamAnalytics -> Get Stream Analytics
+ * GetStreamAnalyticsSummary -> Get Stream Analytics Summary
  */
 function formatOperationName(name: string): string {
   return name

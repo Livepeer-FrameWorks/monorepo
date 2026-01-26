@@ -6,13 +6,13 @@
 	interface NodeCardData {
 		id: string;
 		nodeName: string;
-		status: string;
 		region?: string | null;
 		nodeType?: string | null;
 		externalIp?: string | null;
 		latitude?: number | null;
 		longitude?: number | null;
 		lastHeartbeat?: string | null;
+		liveState?: { isHealthy?: boolean | null } | null;
 	}
 
 	let {
@@ -25,8 +25,13 @@
 		[key: string]: unknown;
 	} = $props();
 
-	const isHealthy = $derived(node.status === "HEALTHY");
-	const statusTone = $derived(isHealthy ? "green" : "red");
+	// Derive status from liveState or fall back to "UNKNOWN"
+	const status = $derived(
+		node.liveState?.isHealthy === true ? "HEALTHY" :
+		node.liveState?.isHealthy === false ? "UNHEALTHY" : "UNKNOWN"
+	);
+	const isHealthy = $derived(status === "HEALTHY");
+	const statusTone = $derived(isHealthy ? "green" : status === "UNKNOWN" ? "neutral" : "red");
 </script>
 
 <div class={cn("slab slab--compact", className)} {...restProps}>
@@ -34,7 +39,7 @@
 		<div class="flex items-center justify-between w-full">
 			<h3 class="font-semibold text-foreground">{node.nodeName}</h3>
 			<Badge tone={statusTone} class="text-xs">
-				{node.status}
+				{status}
 			</Badge>
 		</div>
 	</div>

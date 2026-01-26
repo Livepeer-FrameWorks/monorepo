@@ -5,12 +5,17 @@
   import {
     fragment,
     GetUsageRecordsStore,
+    GetUsageAggregatesStore,
     GetBillingStatusStore,
     GetStorageUsageStore,
     GetViewerHoursHourlyStore,
     GetTenantAnalyticsDailyConnectionStore,
+    GetStreamAnalyticsDailyConnectionStore,
+    GetProcessingUsageStore,
+    GetAPIUsageConnectionStore,
     BillingTierFieldsStore,
     UsageSummaryFieldsStore,
+    LiveUsageSummaryFieldsStore,
     AllocationFieldsStore
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
@@ -30,23 +35,34 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { getCountryName } from "$lib/utils/country-names";
   import { goto } from "$app/navigation";
+  import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
 
   // Houdini stores
   const usageRecordsStore = new GetUsageRecordsStore();
+  const usageAggregatesStore = new GetUsageAggregatesStore();
   const billingStatusStore = new GetBillingStatusStore();
   const storageUsageStore = new GetStorageUsageStore();
   const viewerHoursHourlyStore = new GetViewerHoursHourlyStore();
   const tenantDailyStore = new GetTenantAnalyticsDailyConnectionStore();
+  const streamAnalyticsStore = new GetStreamAnalyticsDailyConnectionStore();
+  const processingUsageStore = new GetProcessingUsageStore();
+  const apiUsageStore = new GetAPIUsageConnectionStore();
 
   // Fragment stores for unmasking nested data
   const tierFragmentStore = new BillingTierFieldsStore();
   const usageSummaryFragmentStore = new UsageSummaryFieldsStore();
+  const liveUsageFragmentStore = new LiveUsageSummaryFieldsStore();
   const allocationFragmentStore = new AllocationFieldsStore();
 
   // Types from Houdini
   type UsageRecord = NonNullable<NonNullable<NonNullable<typeof $usageRecordsStore.data>["usageRecordsConnection"]>["edges"]>[0]["node"];
 
-  let loading = $derived($usageRecordsStore.fetching || $billingStatusStore.fetching || $viewerHoursHourlyStore.fetching);
+  let loading = $derived(
+    $usageRecordsStore.fetching ||
+    $usageAggregatesStore.fetching ||
+    $billingStatusStore.fetching ||
+    $viewerHoursHourlyStore.fetching
+  );
   let error = $state<string | null>(null);
 
   interface AggregatedUsage {
@@ -58,6 +74,11 @@
     total_viewers: number;
     peak_viewers: number;
     period: string;
+  }
+
+  interface UsageTrendPoint {
+    timestamp: string | Date;
+    viewers: number;
   }
 
   let usageData = $state<AggregatedUsage>({
@@ -80,10 +101,19 @@
       : null
   );
 
-  // Unmask fragment data for usageSummary using get() pattern
+  let invoicePreview = $derived(billingData?.invoicePreview ?? null);
+
+  // Unmask fragment data for usageSummary using get() pattern (from invoice preview)
   let usageSummary = $derived(
-    billingData?.usageSummary
-      ? get(fragment(billingData.usageSummary, usageSummaryFragmentStore))
+    billingData?.invoicePreview?.usageSummary
+      ? get(fragment(billingData.invoicePreview.usageSummary, usageSummaryFragmentStore))
+      : null
+  );
+
+  // Unmask live usage summary
+  let liveUsage = $derived(
+    billingData?.liveUsage
+      ? get(fragment(billingData.liveUsage, liveUsageFragmentStore))
       : null
   );
 
@@ -95,7 +125,7 @@
 
   // Aggregate storage data from edges
   let storageData = $derived.by(() => {
-    const edges = $storageUsageStore.data?.storageUsageConnection?.edges ?? [];
+    const edges = $storageUsageStore.data?.analytics?.usage?.storage?.storageUsageConnection?.edges ?? [];
     if (edges.length === 0) return null;
     // Get the most recent snapshot or aggregate
     const latest = edges[0]?.node;
@@ -108,29 +138,107 @@
     };
   });
 
-  // Transform viewer hours hourly data for trend chart
-  let viewerHoursTrendData = $derived.by(() => {
-    const edges = $viewerHoursHourlyStore.data?.viewerHoursHourlyConnection?.edges ?? [];
-    if (edges.length === 0) return [];
+  // Processing events (detailed records) - collapsed by default
+  let processingEventsExpanded = $state(false);
+  let processingEvents = $derived(
+    $processingUsageStore.data?.analytics?.usage?.processing?.processingUsageConnection?.edges?.map(e => e.node) ?? []
+  );
+  let processingEventsTotalCount = $derived(
+    $processingUsageStore.data?.analytics?.usage?.processing?.processingUsageConnection?.totalCount ?? 0
+  );
 
-    // Aggregate by hour across all streams/countries
-    const hourlyMap = new Map<string, number>();
-    for (const edge of edges) {
-      const node = edge.node;
-      if (!node?.hour) continue;
-      const hour = node.hour;
-      const existing = hourlyMap.get(hour) || 0;
-      hourlyMap.set(hour, existing + (node.uniqueViewers || 0));
+  // API usage data
+  let apiUsageExpanded = $state(false);
+  let apiUsageRecords = $derived(
+    $apiUsageStore.data?.analytics?.usage?.api?.apiUsageConnection?.edges?.map(e => e.node) ?? []
+  );
+  let apiUsageSummaries = $derived(
+    $apiUsageStore.data?.analytics?.usage?.api?.apiUsageConnection?.summaries ?? []
+  );
+  let apiUsageOperationSummaries = $derived(
+    $apiUsageStore.data?.analytics?.usage?.api?.apiUsageConnection?.operationSummaries ?? []
+  );
+  let apiUsageTotalCount = $derived(
+    $apiUsageStore.data?.analytics?.usage?.api?.apiUsageConnection?.totalCount ?? 0
+  );
+
+  // Aggregate API usage by auth type
+  let apiUsageByAuthType = $derived.by(() => {
+    const summaries = apiUsageSummaries;
+    const byAuth = new Map<string, { requests: number; errors: number; avgDuration: number; complexity: number; users: number; tokens: number }>();
+
+    for (const s of summaries) {
+      const existing = byAuth.get(s.authType) || { requests: 0, errors: 0, avgDuration: 0, complexity: 0, users: 0, tokens: 0 };
+      existing.requests += s.totalRequests;
+      existing.errors += s.totalErrors;
+      existing.complexity += s.totalComplexity;
+      existing.users = Math.max(existing.users, s.uniqueUsers);
+      existing.tokens = Math.max(existing.tokens, s.uniqueTokens);
+      byAuth.set(s.authType, existing);
     }
 
-    return Array.from(hourlyMap.entries())
-      .map(([hour, viewers]) => ({ timestamp: hour, viewers }))
+    // Calculate weighted average duration
+    for (const [auth, data] of byAuth) {
+      const authSummaries = summaries.filter(s => s.authType === auth);
+      const totalRequests = authSummaries.reduce((sum, s) => sum + s.totalRequests, 0);
+      const weightedDuration = authSummaries.reduce((sum, s) => sum + s.avgDurationMs * s.totalRequests, 0);
+      data.avgDuration = totalRequests > 0 ? weightedDuration / totalRequests : 0;
+    }
+
+    return Array.from(byAuth.entries()).map(([authType, data]) => ({
+      authType,
+      ...data
+    }));
+  });
+
+  // Aggregate API usage by operation type
+  let apiUsageByOpType = $derived.by(() => {
+    const summaries = apiUsageOperationSummaries;
+    return summaries.map((s) => ({
+      opType: s.operationType,
+      requests: s.totalRequests,
+      errors: s.totalErrors,
+      uniqueOperations: s.uniqueOperations
+    }));
+  });
+
+  // Total API requests
+  let apiTotalRequests = $derived(
+    apiUsageByAuthType.reduce((sum, a) => sum + a.requests, 0)
+  );
+  let apiTotalErrors = $derived(
+    apiUsageByAuthType.reduce((sum, a) => sum + a.errors, 0)
+  );
+
+  // Transform viewer hours hourly data for trend chart
+  let viewerTrendData = $derived.by(() => {
+    if (useHourlyTrend) {
+      const edges = $viewerHoursHourlyStore.data?.analytics?.usage?.streaming?.viewerHoursHourlyConnection?.edges ?? [];
+      if (edges.length === 0) return [];
+
+      // Aggregate by hour across all streams/countries
+      const hourlyMap = new Map<string, number>();
+      for (const edge of edges) {
+        const node = edge.node;
+        if (!node?.hour) continue;
+        const hour = node.hour;
+        const existing = hourlyMap.get(hour) || 0;
+        hourlyMap.set(hour, existing + (node.uniqueViewers || 0));
+      }
+
+      return Array.from(hourlyMap.entries())
+        .map(([hour, viewers]) => ({ timestamp: hour, viewers }))
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    }
+
+    return tenantDailyTrendData
+      .map((d) => ({ timestamp: d.day, viewers: d.uniqueViewers }))
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   });
 
   // Transform tenant daily analytics for trend chart
   let tenantDailyTrendData = $derived.by(() => {
-    const edges = $tenantDailyStore.data?.tenantAnalyticsDailyConnection?.edges ?? [];
+    const edges = $tenantDailyStore.data?.analytics?.usage?.streaming?.tenantAnalyticsDailyConnection?.edges ?? [];
     if (edges.length === 0) return [];
 
     return edges
@@ -155,14 +263,87 @@
     }), { streams: 0, views: 0, viewers: 0, egress: 0 });
   });
 
+  // Top streams by usage (cost attribution)
+  let topStreamsByUsage = $derived.by(() => {
+    const edges = $streamAnalyticsStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ?? [];
+    if (edges.length === 0) return [];
+
+    // Aggregate by stream
+    const streamMap = new Map<string, {
+      streamId: string;
+      displayStreamId: string;
+      totalViews: number;
+      uniqueViewers: number;
+      egressBytes: number;
+      uniqueCountries: number;
+      uniqueCities: number;
+    }>();
+
+    for (const edge of edges) {
+      const node = edge.node;
+      if (!node?.streamId) continue;
+
+      const displayStreamId = node.stream?.streamId ?? node.streamId;
+      const existing = streamMap.get(node.streamId);
+      if (existing) {
+        existing.totalViews += node.totalViews ?? 0;
+        existing.uniqueViewers = Math.max(existing.uniqueViewers, node.uniqueViewers ?? 0);
+        existing.egressBytes += node.egressBytes ?? 0;
+        existing.uniqueCountries = Math.max(existing.uniqueCountries, node.uniqueCountries ?? 0);
+        existing.uniqueCities = Math.max(existing.uniqueCities, node.uniqueCities ?? 0);
+        if (!existing.displayStreamId) {
+          existing.displayStreamId = displayStreamId;
+        }
+      } else {
+        streamMap.set(node.streamId, {
+          streamId: node.streamId,
+          displayStreamId,
+          totalViews: node.totalViews ?? 0,
+          uniqueViewers: node.uniqueViewers ?? 0,
+          egressBytes: node.egressBytes ?? 0,
+          uniqueCountries: node.uniqueCountries ?? 0,
+          uniqueCities: node.uniqueCities ?? 0,
+        });
+      }
+    }
+
+    // Sort by egress (cost driver) and take top 10
+    const totalEgress = Array.from(streamMap.values()).reduce((sum, s) => sum + s.egressBytes, 0);
+    return Array.from(streamMap.values())
+      .map(s => ({
+        ...s,
+        egressGb: s.egressBytes / (1024 * 1024 * 1024),
+        percentage: totalEgress > 0 ? (s.egressBytes / totalEgress) * 100 : 0,
+      }))
+      .sort((a, b) => b.egressBytes - a.egressBytes)
+      .slice(0, 10);
+  });
+
+  let usageAggregateSeries = $derived.by(() => {
+    const aggregates = $usageAggregatesStore.data?.usageAggregates ?? [];
+
+    const buildSeries = (usageType: string): UsageTrendPoint[] => {
+      return aggregates
+        .filter((entry) => entry.usageType === usageType)
+        .map((entry) => ({
+          timestamp: entry.periodStart ?? entry.periodEnd ?? "",
+          viewers: entry.usageValue ?? 0,
+        }))
+        .filter((entry) => entry.timestamp)
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    };
+
+    return {
+      streamHours: buildSeries("stream_hours"),
+      egressGb: buildSeries("egress_gb"),
+      recordingGb: buildSeries("recording_gb"),
+    };
+  });
+
   let timeRange = $state("7d");
-  const timeRangeLabels: Record<string, string> = {
-    "7d": "Last 7 days",
-    "30d": "Last 30 days",
-    "90d": "Last 90 days",
-  };
-  let startTime = "";
-  let endTime = "";
+  let currentRange = $derived(resolveTimeRange(timeRange));
+  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) => ["24h", "7d", "30d", "90d"].includes(option.value));
+  const useHourlyTrend = $derived(currentRange.days <= 7);
 
   onMount(async () => {
     await loadUsageAndCosts();
@@ -172,22 +353,83 @@
     error = null;
 
     try {
-      const now = new Date();
-      const days = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90;
-      startTime = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
-      endTime = now.toISOString();
+      const range = resolveTimeRange(timeRange);
+      const shouldUseHourly = range.days <= 7;
+      const aggregateGranularity = range.days <= 7 ? "hourly" : range.days <= 90 ? "daily" : "monthly";
+      currentRange = range;
 
       await Promise.all([
-        usageRecordsStore.fetch({ variables: { timeRange: { start: startTime, end: endTime } } }),
+        usageRecordsStore.fetch({ variables: { timeRange: { start: range.start, end: range.end } } }),
+        usageAggregatesStore.fetch({
+          variables: {
+            timeRange: { start: range.start, end: range.end },
+            granularity: aggregateGranularity,
+            usageTypes: [
+              "stream_hours",
+              "egress_gb",
+              "recording_gb",
+              "peak_bandwidth_mbps",
+              "total_streams",
+              "total_viewers",
+              "peak_viewers"
+            ]
+          }
+        }),
         billingStatusStore.fetch(),
-        storageUsageStore.fetch({ variables: { timeRange: { start: startTime, end: endTime }, first: 1 } }).catch(() => null),
-        viewerHoursHourlyStore.fetch({ variables: { timeRange: { start: startTime, end: endTime }, first: 500 } }).catch(() => null),
-        tenantDailyStore.fetch({ variables: { timeRange: { start: startTime, end: endTime }, first: 100 } }).catch(() => null),
+        storageUsageStore.fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 1 } }).catch(() => null),
+        shouldUseHourly
+          ? viewerHoursHourlyStore.fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 500 } }).catch(() => null)
+          : Promise.resolve(),
+        tenantDailyStore.fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: Math.min(range.days, 120) } }).catch(() => null),
+        streamAnalyticsStore.fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 500 } }).catch(() => null),
+        processingUsageStore.fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 50 } }).catch(() => null),
+        apiUsageStore.fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 100 } }).catch(() => null),
       ]);
 
+      const aggregates = $usageAggregatesStore.data?.usageAggregates ?? [];
       const usageRecords = $usageRecordsStore.data?.usageRecordsConnection?.edges?.map(e => e.node) ?? [];
 
-      if (usageRecords.length > 0) {
+      if (aggregates.length > 0) {
+        const aggregated = aggregates.reduce(
+          (acc: AggregatedUsage, entry) => {
+            switch (entry.usageType) {
+              case "stream_hours":
+                acc.stream_hours += entry.usageValue;
+                break;
+              case "egress_gb":
+                acc.egress_gb += entry.usageValue;
+                break;
+              case "recording_gb":
+                acc.recording_gb += entry.usageValue;
+                break;
+              case "peak_bandwidth_mbps":
+                acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, entry.usageValue);
+                break;
+              case "total_streams":
+                acc.total_streams = Math.max(acc.total_streams, entry.usageValue);
+                break;
+              case "peak_viewers":
+                acc.peak_viewers = Math.max(acc.peak_viewers, entry.usageValue);
+                break;
+              case "total_viewers":
+                acc.total_viewers = Math.max(acc.total_viewers, entry.usageValue);
+                break;
+            }
+            return acc;
+          },
+          {
+            stream_hours: 0,
+            egress_gb: 0,
+            recording_gb: 0,
+            peak_bandwidth_mbps: 0,
+            total_streams: 0,
+            total_viewers: 0,
+            peak_viewers: 0,
+            period: `${range.days} days`,
+          },
+        );
+        usageData = aggregated;
+      } else if (usageRecords.length > 0) {
         const aggregated = usageRecords.reduce(
           (acc: AggregatedUsage, record: UsageRecord) => {
             switch (record.usageType) {
@@ -220,14 +462,17 @@
             total_streams: 0,
             total_viewers: 0,
             peak_viewers: 0,
-            period: `${days} days`,
+            period: `${range.days} days`,
           },
         );
         usageData = aggregated;
       }
 
-      if ($usageRecordsStore.errors?.length || $billingStatusStore.errors?.length) {
-        error = $usageRecordsStore.errors?.[0]?.message || $billingStatusStore.errors?.[0]?.message || "Failed to load data";
+      if ($usageRecordsStore.errors?.length || $usageAggregatesStore.errors?.length || $billingStatusStore.errors?.length) {
+        error = $usageRecordsStore.errors?.[0]?.message ||
+          $usageAggregatesStore.errors?.[0]?.message ||
+          $billingStatusStore.errors?.[0]?.message ||
+          "Failed to load data";
       }
     } catch (err: any) {
       error = err?.response?.data?.error || err?.message || "Failed to load usage and costs data";
@@ -270,6 +515,35 @@
     return new Intl.NumberFormat().format(Math.round(num));
   }
 
+  function formatTimestamp(value: string | null | undefined) {
+    if (!value) return "—";
+    return new Date(value).toLocaleString();
+  }
+
+  let recentUsageRecords = $derived(
+    $usageRecordsStore.data?.usageRecordsConnection?.edges?.map(e => e.node) ?? []
+  );
+
+  let usageRecordPreview = $derived(recentUsageRecords.slice(0, 20));
+
+  function formatUsageValue(value: number | null | undefined) {
+    if (value == null || Number.isNaN(value)) return "0";
+    if (Number.isInteger(value)) return formatNumber(value);
+    if (Math.abs(value) >= 1000) return formatNumber(value);
+    return value.toFixed(2);
+  }
+
+  function formatUsagePeriod(record: UsageRecord | null | undefined) {
+    if (!record) return "—";
+    const start = record.periodStart ?? record.createdAt;
+    const end = record.periodEnd ?? record.createdAt;
+    if (!start && !end) return "—";
+    if (start && end && start !== end) {
+      return `${formatTimestamp(start)} – ${formatTimestamp(end)}`;
+    }
+    return formatTimestamp(start ?? end);
+  }
+
   function formatBytes(bytes: number): string {
     if (bytes === 0) return "0 B";
     const k = 1024;
@@ -300,6 +574,9 @@
   const CpuIcon = getIconComponent("Cpu");
   const ActivityIcon = getIconComponent("Activity");
   const CalendarIcon = getIconComponent("Calendar");
+  const CodeIcon = getIconComponent("Code");
+  const KeyIcon = getIconComponent("Key");
+  const WalletIcon = getIconComponent("Wallet");
 
   function formatViewerHours(hours: number | null | undefined): string {
     if (hours == null) return '0';
@@ -316,15 +593,20 @@
     return `${hours.toFixed(1)}h`;
   }
 
-  function formatBillingMonth(yyyymm: string) {
-    if (!yyyymm) return "";
-    try {
-      const [year, month] = yyyymm.split("-");
-      const date = new Date(parseInt(year), parseInt(month) - 1, 1);
-      return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
-    } catch (e) {
-      return yyyymm;
-    }
+  function toDate(value: Date | string | null | undefined): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  }
+
+  function formatPeriodRange(start: Date | string | null | undefined, end: Date | string | null | undefined) {
+    const startDate = toDate(start);
+    const endDate = toDate(end);
+    if (!startDate || !endDate) return "";
+    const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return `${fmt.format(startDate)} – ${fmt.format(endDate)}`;
   }
 </script>
 
@@ -348,12 +630,12 @@
       <div class="flex items-center gap-3">
         <Select value={timeRange} onValueChange={handleTimeRangeChange} type="single">
           <SelectTrigger class="min-w-[140px]">
-            {timeRangeLabels[timeRange] ?? "Last 7 days"}
+            {currentRange.label}
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="7d">Last 7 days</SelectItem>
-            <SelectItem value="30d">Last 30 days</SelectItem>
-            <SelectItem value="90d">Last 90 days</SelectItem>
+            {#each timeRangeOptions as option (option.value)}
+              <SelectItem value={option.value}>{option.label}</SelectItem>
+            {/each}
           </SelectContent>
         </Select>
         <Button variant="outline" size="sm" onclick={loadUsageAndCosts}>
@@ -424,18 +706,68 @@
         </div>
       </GridSeam>
 
-      <!-- Viewer Hours Trend Chart -->
-      {#if viewerHoursTrendData.length > 0}
+      <!-- Usage Trends -->
+      {#if usageAggregateSeries.streamHours.length > 0 || usageAggregateSeries.egressGb.length > 0 || usageAggregateSeries.recordingGb.length > 0}
         <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
           <div class="slab-header">
             <div class="flex items-center gap-2">
               <TrendingUpIcon class="w-4 h-4 text-primary" />
-              <h3>Viewer Trend (Hourly)</h3>
+              <h3>Usage Trends</h3>
             </div>
-            <span class="text-xs text-muted-foreground">{timeRangeLabels[timeRange]}</span>
+            <span class="text-xs text-muted-foreground">{currentRange.label}</span>
           </div>
           <div class="slab-body--padded">
-            <ViewerTrendChart data={viewerHoursTrendData} height={200} />
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {#if usageAggregateSeries.streamHours.length > 0}
+                <div class="border border-border/30 bg-muted/10 p-3">
+                  <div class="text-xs text-muted-foreground mb-2">Stream Hours</div>
+                  <ViewerTrendChart
+                    data={usageAggregateSeries.streamHours}
+                    height={180}
+                    seriesLabel="Stream Hours"
+                    valueFormatter={(value) => `${value.toFixed(1)} h`}
+                  />
+                </div>
+              {/if}
+              {#if usageAggregateSeries.egressGb.length > 0}
+                <div class="border border-border/30 bg-muted/10 p-3">
+                  <div class="text-xs text-muted-foreground mb-2">Bandwidth (GB)</div>
+                  <ViewerTrendChart
+                    data={usageAggregateSeries.egressGb}
+                    height={180}
+                    seriesLabel="Bandwidth (GB)"
+                    valueFormatter={(value) => `${value.toFixed(1)} GB`}
+                  />
+                </div>
+              {/if}
+              {#if usageAggregateSeries.recordingGb.length > 0}
+                <div class="border border-border/30 bg-muted/10 p-3">
+                  <div class="text-xs text-muted-foreground mb-2">Recording Storage (GB)</div>
+                  <ViewerTrendChart
+                    data={usageAggregateSeries.recordingGb}
+                    height={180}
+                    seriesLabel="Recording (GB)"
+                    valueFormatter={(value) => `${value.toFixed(1)} GB`}
+                  />
+                </div>
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Viewer Hours Trend Chart -->
+      {#if viewerTrendData.length > 0}
+        <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <TrendingUpIcon class="w-4 h-4 text-primary" />
+              <h3>{useHourlyTrend ? "Viewer Trend (Hourly)" : "Viewer Trend (Daily)"}</h3>
+            </div>
+            <span class="text-xs text-muted-foreground">{currentRange.label}</span>
+          </div>
+          <div class="slab-body--padded">
+            <ViewerTrendChart data={viewerTrendData} height={200} />
           </div>
         </div>
       {/if}
@@ -448,7 +780,7 @@
               <CalendarIcon class="w-4 h-4 text-info" />
               <h3>Daily Activity</h3>
             </div>
-            <span class="text-xs text-muted-foreground">{timeRangeLabels[timeRange]}</span>
+            <span class="text-xs text-muted-foreground">{currentRange.label}</span>
           </div>
           <div class="slab-body--padded">
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
@@ -482,7 +814,7 @@
                   </tr>
                 </thead>
                 <tbody>
-                  {#each tenantDailyTrendData.slice().reverse() as day (day.day)}
+                  {#each tenantDailyTrendData.slice().reverse() as day, i (`${day.day}-${i}`)}
                     <tr class="border-b border-border/30 hover:bg-muted/30">
                       <td class="py-2 px-2 font-mono text-muted-foreground">
                         {new Date(day.day).toLocaleDateString()}
@@ -515,7 +847,7 @@
               <div class="flex items-center justify-between">
                 <span class="text-muted-foreground">Plan</span>
                 <span class="font-semibold text-foreground">
-                  {currentTier?.name || "Free"}
+                  {currentTier?.displayName || "Free"}
                 </span>
               </div>
               <div class="flex items-center justify-between">
@@ -594,14 +926,17 @@
                 <h3>Billing Period Engagement</h3>
               </div>
               <span class="text-xs text-muted-foreground font-medium bg-muted/50 px-2 py-1 rounded">
-                Current period: {formatBillingMonth(usageSummary.billingMonth)}
+                Current period: {formatPeriodRange(invoicePreview?.periodStart ?? liveUsage?.periodStart, invoicePreview?.periodEnd ?? liveUsage?.periodEnd)}
               </span>
+              {#if billingData && billingData.usageReconciled === false}
+                <span class="text-xs text-warning">Live usage syncing…</span>
+              {/if}
             </div>
             <div class="slab-body--padded">
               <div class="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <div class="flex items-center justify-between">
                   <span class="text-muted-foreground">Viewer Hours</span>
-                  <span class="font-medium text-foreground">{formatViewerHours(usageSummary.viewerHours)}h</span>
+                  <span class="font-medium text-foreground">{formatViewerHours(liveUsage?.viewerHours ?? usageSummary.viewerHours)}h</span>
                 </div>
                 <div class="flex items-center justify-between">
                   <span class="text-muted-foreground">Total Viewers</span>
@@ -620,15 +955,19 @@
                   <span class="font-medium text-foreground">{usageSummary.avgViewers?.toFixed(1) ?? '—'}</span>
                 </div>
                 <div class="flex items-center justify-between">
-                  <span class="text-muted-foreground">Unique Users</span>
-                  <span class="font-medium text-foreground">{formatNumber(usageSummary.uniqueUsers ?? 0)}</span>
+                  <span class="text-muted-foreground">Unique Users (Period)</span>
+                  <span class="font-medium text-foreground">
+                    {formatNumber(liveUsage?.uniqueViewers ?? usageSummary.uniqueUsersPeriod ?? usageSummary.uniqueUsers ?? 0)}
+                  </span>
                 </div>
               </div>
             </div>
           </div>
 
           <!-- Processing Usage Slab -->
-          {@const hasProcessingUsage = (usageSummary.livepeerSeconds ?? 0) > 0 || (usageSummary.nativeAvSeconds ?? 0) > 0}
+          {@const livepeerSeconds = liveUsage?.livepeerSeconds ?? usageSummary.livepeerSeconds ?? 0}
+          {@const nativeAvSeconds = liveUsage?.nativeAvSeconds ?? usageSummary.nativeAvSeconds ?? 0}
+          {@const hasProcessingUsage = livepeerSeconds > 0 || nativeAvSeconds > 0}
           {#if hasProcessingUsage}
           <div class="slab">
             <div class="slab-header">
@@ -640,7 +979,7 @@
             <div class="slab-body--padded">
               <div class="space-y-4 text-sm">
                 <!-- Livepeer Gateway transcoding -->
-                {#if (usageSummary.livepeerSeconds ?? 0) > 0}
+                {#if livepeerSeconds > 0}
                 <div class="border-b border-border/30 pb-3">
                   <div class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                     <span class="flex items-center gap-1">
@@ -652,7 +991,7 @@
                     <div>
                       <div class="text-muted-foreground text-xs">Time</div>
                       <div class="font-medium text-tokyo-night-magenta">
-                        {formatProcessingTime(usageSummary.livepeerSeconds)}
+                        {formatProcessingTime(livepeerSeconds)}
                       </div>
                     </div>
                     <div>
@@ -672,7 +1011,7 @@
                 {/if}
 
                 <!-- Native AV processing -->
-                {#if (usageSummary.nativeAvSeconds ?? 0) > 0}
+                {#if nativeAvSeconds > 0}
                 <div>
                   <div class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                     <span class="flex items-center gap-1">
@@ -684,7 +1023,7 @@
                     <div>
                       <div class="text-muted-foreground text-xs">Time</div>
                       <div class="font-medium text-info">
-                        {formatProcessingTime(usageSummary.nativeAvSeconds)}
+                        {formatProcessingTime(nativeAvSeconds)}
                       </div>
                     </div>
                     <div>
@@ -702,9 +1041,283 @@
                   </div>
                 </div>
                 {/if}
+
+                <!-- Per-codec breakdown -->
+                {#if usageSummary}
+                {@const codecData = [
+                  { codec: 'H.264', seconds: (usageSummary.livepeerH264Seconds ?? 0) + (usageSummary.nativeAvH264Seconds ?? 0), color: 'bg-blue-500' },
+                  { codec: 'VP9', seconds: (usageSummary.livepeerVp9Seconds ?? 0) + (usageSummary.nativeAvVp9Seconds ?? 0), color: 'bg-purple-500' },
+                  { codec: 'AV1', seconds: (usageSummary.livepeerAv1Seconds ?? 0) + (usageSummary.nativeAvAv1Seconds ?? 0), color: 'bg-green-500' },
+                  { codec: 'HEVC', seconds: (usageSummary.livepeerHevcSeconds ?? 0) + (usageSummary.nativeAvHevcSeconds ?? 0), color: 'bg-orange-500' },
+                  { codec: 'AAC', seconds: usageSummary.nativeAvAacSeconds ?? 0, color: 'bg-pink-500' },
+                  { codec: 'Opus', seconds: usageSummary.nativeAvOpusSeconds ?? 0, color: 'bg-cyan-500' },
+                ].filter(c => c.seconds > 0)}
+                {@const codecTotal = codecData.reduce((sum, c) => sum + c.seconds, 0)}
+                {#if codecData.length > 0}
+                <div class="border-t border-border/30 pt-3 mt-3">
+                  <div class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-3">Codec Distribution</div>
+                  <div class="space-y-2">
+                    {#each codecData as codec (codec.codec)}
+                      {@const pct = codecTotal > 0 ? (codec.seconds / codecTotal) * 100 : 0}
+                      <div class="flex items-center gap-3">
+                        <span class="text-xs text-muted-foreground w-12">{codec.codec}</span>
+                        <div class="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                          <div class="{codec.color} h-full" style="width: {pct}%"></div>
+                        </div>
+                        <span class="text-xs font-mono w-16 text-right">{formatProcessingTime(codec.seconds)}</span>
+                        <span class="text-xs text-muted-foreground w-12 text-right">{pct.toFixed(1)}%</span>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+                {/if}
+                {/if}
               </div>
             </div>
           </div>
+          {/if}
+
+          <!-- Processing Events Detail (Collapsed by default) -->
+          {#if processingEvents.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <button
+                class="flex items-center gap-2 w-full text-left"
+                onclick={() => processingEventsExpanded = !processingEventsExpanded}
+              >
+                <CpuIcon class="w-4 h-4 text-muted-foreground" />
+                <h3>Processing Events Detail</h3>
+                <span class="text-xs text-muted-foreground ml-2">
+                  ({processingEventsTotalCount} records)
+                </span>
+                <span class="ml-auto text-xs text-muted-foreground">
+                  {processingEventsExpanded ? '▼' : '▶'}
+                </span>
+              </button>
+            </div>
+            {#if processingEventsExpanded}
+            <div class="slab-body--flush overflow-x-auto max-h-96">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-background">
+                  <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
+                    <th class="text-left py-2 px-4">Time</th>
+                    <th class="text-left py-2 px-4">Type</th>
+                    <th class="text-left py-2 px-4">Stream</th>
+                    <th class="text-left py-2 px-4">Input</th>
+                    <th class="text-left py-2 px-4">Output</th>
+                    <th class="text-right py-2 px-4">Duration</th>
+                    <th class="text-right py-2 px-4">RTF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each processingEvents as evt (evt.id)}
+                    {@const displayStreamId = evt.stream?.streamId ?? evt.streamId}
+                    <tr class="border-b border-border/30 hover:bg-muted/10">
+                      <td class="py-2 px-4 text-xs text-muted-foreground">
+                        {new Date(evt.timestamp).toLocaleTimeString()}
+                      </td>
+                      <td class="py-2 px-4">
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-mono {evt.processType === 'livepeer_gateway' ? 'bg-tokyo-night-magenta/20 text-tokyo-night-magenta' : 'bg-info/20 text-info'}">
+                          {evt.processType === 'livepeer_gateway' ? 'LP' : 'Local'}
+                        </span>
+                      </td>
+                      <td class="py-2 px-4">
+                        <a href={resolve(`/streams/${evt.streamId}`)} class="font-mono text-xs text-primary hover:underline">
+                          {displayStreamId?.slice(0, 8)}...
+                        </a>
+                      </td>
+                      <td class="py-2 px-4 text-xs">
+                        <span class="text-muted-foreground">{evt.inputCodec || '-'}</span>
+                        {#if evt.width && evt.height}
+                          <span class="text-muted-foreground ml-1">({evt.width}×{evt.height})</span>
+                        {/if}
+                      </td>
+                      <td class="py-2 px-4 text-xs">
+                        <span class="text-foreground">{evt.outputCodec || '-'}</span>
+                        {#if evt.outputWidth && evt.outputHeight}
+                          <span class="text-muted-foreground ml-1">({evt.outputWidth}×{evt.outputHeight})</span>
+                        {/if}
+                      </td>
+                      <td class="py-2 px-4 text-right font-mono text-xs">
+                        {evt.durationMs ? `${(evt.durationMs / 1000).toFixed(1)}s` : '-'}
+                      </td>
+                      <td class="py-2 px-4 text-right">
+                        {#if evt.rtfOut}
+                          <span class="font-mono text-xs {evt.rtfOut < 1 ? 'text-success' : evt.rtfOut < 2 ? 'text-warning' : 'text-destructive'}">
+                            {evt.rtfOut.toFixed(2)}x
+                          </span>
+                        {:else}
+                          <span class="text-muted-foreground text-xs">-</span>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            {:else}
+            <div class="slab-body--padded text-sm text-muted-foreground">
+              Click to expand detailed processing event log
+            </div>
+            {/if}
+          </div>
+          {/if}
+
+          <!-- API Usage Slab -->
+          {#if apiTotalRequests > 0 || apiUsageRecords.length > 0}
+          <div class="slab">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <CodeIcon class="w-4 h-4 text-tokyo-night-cyan" />
+                <h3>API Usage</h3>
+              </div>
+              <span class="text-xs text-muted-foreground">
+                {formatNumber(apiTotalRequests)} requests
+              </span>
+            </div>
+            <div class="slab-body--padded">
+              <div class="space-y-4 text-sm">
+                <!-- Summary Stats -->
+                <div class="grid grid-cols-3 gap-4">
+                  <div class="text-center p-2 border border-border/50 bg-background/50">
+                    <p class="text-[10px] text-muted-foreground uppercase">Total Requests</p>
+                    <p class="text-lg font-semibold text-primary">{formatNumber(apiTotalRequests)}</p>
+                  </div>
+                  <div class="text-center p-2 border border-border/50 bg-background/50">
+                    <p class="text-[10px] text-muted-foreground uppercase">Errors</p>
+                    <p class="text-lg font-semibold {apiTotalErrors > 0 ? 'text-destructive' : 'text-success'}">{formatNumber(apiTotalErrors)}</p>
+                  </div>
+                  <div class="text-center p-2 border border-border/50 bg-background/50">
+                    <p class="text-[10px] text-muted-foreground uppercase">Error Rate</p>
+                    <p class="text-lg font-semibold {apiTotalRequests > 0 && (apiTotalErrors / apiTotalRequests) > 0.05 ? 'text-warning' : 'text-success'}">
+                      {apiTotalRequests > 0 ? ((apiTotalErrors / apiTotalRequests) * 100).toFixed(2) : '0'}%
+                    </p>
+                  </div>
+                </div>
+
+                <!-- By Auth Type -->
+                {#if apiUsageByAuthType.length > 0}
+                <div class="border-t border-border/30 pt-3">
+                  <div class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">By Authentication</div>
+                  <div class="space-y-2">
+                    {#each apiUsageByAuthType as auth (auth.authType)}
+                      {@const pct = apiTotalRequests > 0 ? (auth.requests / apiTotalRequests) * 100 : 0}
+                      <div class="flex items-center gap-3">
+                        <span class="flex items-center gap-1.5 text-xs w-20">
+                          {#if auth.authType === 'jwt'}
+                            <UsersIcon class="w-3 h-3 text-primary" />
+                          {:else if auth.authType === 'api_token'}
+                            <KeyIcon class="w-3 h-3 text-warning" />
+                          {:else if auth.authType === 'wallet'}
+                            <WalletIcon class="w-3 h-3 text-accent-purple" />
+                          {:else}
+                            <CodeIcon class="w-3 h-3 text-muted-foreground" />
+                          {/if}
+                          <span class="capitalize">{auth.authType.replace('_', ' ')}</span>
+                        </span>
+                        <div class="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                          <div class="h-full {auth.authType === 'jwt' ? 'bg-primary' : auth.authType === 'api_token' ? 'bg-warning' : 'bg-accent-purple'}" style="width: {pct}%"></div>
+                        </div>
+                        <span class="text-xs font-mono w-20 text-right">{formatNumber(auth.requests)}</span>
+                        <span class="text-xs text-muted-foreground w-12 text-right">{pct.toFixed(1)}%</span>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+                {/if}
+
+                <!-- By Operation Type -->
+                {#if apiUsageByOpType.length > 0}
+                <div class="border-t border-border/30 pt-3">
+                  <div class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">By Operation Type</div>
+                  <div class="grid grid-cols-3 gap-3">
+                    {#each apiUsageByOpType as op (op.opType)}
+                      <div class="p-2 border border-border/30 bg-muted/10">
+                        <div class="text-xs text-muted-foreground capitalize">{op.opType}</div>
+                        <div class="text-lg font-semibold text-foreground">{formatNumber(op.requests)}</div>
+                        <div class="text-[10px] text-muted-foreground">{op.uniqueOperations} unique ops</div>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+                {/if}
+              </div>
+            </div>
+          </div>
+
+          <!-- API Usage Details (Expandable) -->
+          {#if apiUsageRecords.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <button
+                class="flex items-center gap-2 w-full text-left"
+                onclick={() => apiUsageExpanded = !apiUsageExpanded}
+              >
+                <CodeIcon class="w-4 h-4 text-muted-foreground" />
+                <h3>API Request Details</h3>
+                <span class="text-xs text-muted-foreground ml-2">
+                  ({apiUsageTotalCount} records)
+                </span>
+                <span class="ml-auto text-xs text-muted-foreground">
+                  {apiUsageExpanded ? '▼' : '▶'}
+                </span>
+              </button>
+            </div>
+            {#if apiUsageExpanded}
+            <div class="slab-body--flush overflow-x-auto max-h-96">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-background">
+                  <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
+                    <th class="text-left py-2 px-4">Time</th>
+                    <th class="text-left py-2 px-4">Auth</th>
+                    <th class="text-left py-2 px-4">Type</th>
+                    <th class="text-left py-2 px-4">Operation</th>
+                    <th class="text-right py-2 px-4">Requests</th>
+                    <th class="text-right py-2 px-4">Errors</th>
+                    <th class="text-right py-2 px-4">Avg Duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each apiUsageRecords as record (record.id)}
+                    {@const avgDuration = record.requestCount > 0 ? record.totalDurationMs / record.requestCount : 0}
+                    <tr class="border-b border-border/30 hover:bg-muted/10">
+                      <td class="py-2 px-4 text-xs text-muted-foreground">
+                        {new Date(record.timestamp).toLocaleString()}
+                      </td>
+                      <td class="py-2 px-4">
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-mono {record.authType === 'jwt' ? 'bg-primary/20 text-primary' : record.authType === 'api_token' ? 'bg-warning/20 text-warning' : 'bg-accent-purple/20 text-accent-purple'}">
+                          {record.authType}
+                        </span>
+                      </td>
+                      <td class="py-2 px-4">
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-mono {record.operationType === 'query' ? 'bg-info/20 text-info' : record.operationType === 'mutation' ? 'bg-success/20 text-success' : 'bg-tokyo-night-magenta/20 text-tokyo-night-magenta'}">
+                          {record.operationType}
+                        </span>
+                      </td>
+                      <td class="py-2 px-4 font-mono text-xs">
+                        {record.operationName}
+                      </td>
+                      <td class="py-2 px-4 text-right font-mono">
+                        {formatNumber(record.requestCount)}
+                      </td>
+                      <td class="py-2 px-4 text-right font-mono {record.errorCount > 0 ? 'text-destructive' : 'text-muted-foreground'}">
+                        {record.errorCount}
+                      </td>
+                      <td class="py-2 px-4 text-right font-mono text-xs">
+                        {avgDuration.toFixed(1)}ms
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            {:else}
+            <div class="slab-body--padded text-sm text-muted-foreground">
+              Click to expand detailed API usage log
+            </div>
+            {/if}
+          </div>
+          {/if}
           {/if}
 
           <!-- Storage Lifecycle Slab -->
@@ -892,6 +1505,123 @@
           </div>
         </div>
 
+        <!-- Latest Usage Records Slab -->
+        {#if usageRecordPreview.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <ActivityIcon class="w-4 h-4 text-primary" />
+                <h3>Latest Usage Records</h3>
+              </div>
+              <span class="text-xs text-muted-foreground">
+                Showing {usageRecordPreview.length} of {recentUsageRecords.length}
+              </span>
+            </div>
+            <div class="slab-body--flush overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
+                    <th class="text-left py-3 px-4">Type</th>
+                    <th class="text-right py-3 px-4">Value</th>
+                    <th class="text-right py-3 px-4">Granularity</th>
+                    <th class="text-right py-3 px-4">Period</th>
+                    <th class="text-right py-3 px-4">Recorded</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each usageRecordPreview as record (record.id)}
+                    <tr class="border-b border-border/30 hover:bg-muted/10">
+                      <td class="py-3 px-4 font-mono text-muted-foreground">
+                        {record.usageType}
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {formatUsageValue(record.usageValue)}
+                      </td>
+                      <td class="py-3 px-4 text-right">
+                        {record.granularity ?? "—"}
+                      </td>
+                      <td class="py-3 px-4 text-right text-muted-foreground">
+                        {formatUsagePeriod(record)}
+                      </td>
+                      <td class="py-3 px-4 text-right text-muted-foreground">
+                        {formatTimestamp(record.createdAt)}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Top Streams by Usage (Cost Attribution) -->
+        {#if topStreamsByUsage.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <TrendingUpIcon class="w-4 h-4 text-warning" />
+                <h3>Top Streams by Usage</h3>
+              </div>
+              <span class="text-xs text-muted-foreground">
+                {topStreamsByUsage.length} streams driving costs
+              </span>
+            </div>
+            <div class="slab-body--flush overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
+                    <th class="text-left py-3 px-4">Stream</th>
+                    <th class="text-right py-3 px-4">Views</th>
+                    <th class="text-right py-3 px-4">Viewers</th>
+                    <th class="text-right py-3 px-4">Bandwidth</th>
+                    <th class="text-right py-3 px-4">Cost Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each topStreamsByUsage as stream (stream.streamId)}
+                    {@const displayStreamId = stream.displayStreamId}
+                    <tr class="border-b border-border/30 hover:bg-muted/10">
+                      <td class="py-3 px-4">
+                        <a
+                          href={resolve(`/streams/${stream.streamId}`)}
+                          class="group flex items-center gap-2"
+                        >
+                          <span class="font-mono text-xs text-primary group-hover:underline">
+                            {displayStreamId}
+                          </span>
+                          <span class="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
+                            →
+                          </span>
+                        </a>
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {stream.totalViews.toLocaleString()}
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {stream.uniqueViewers.toLocaleString()}
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {stream.egressGb.toFixed(2)} GB
+                      </td>
+                      <td class="py-3 px-4 text-right">
+                        <div class="flex items-center justify-end gap-2">
+                          <div class="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div
+                              class="h-full bg-warning"
+                              style="width: {Math.min(stream.percentage, 100)}%"
+                            ></div>
+                          </div>
+                          <span class="font-mono text-xs w-12 text-right">{stream.percentage.toFixed(1)}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {/if}
+
         <!-- Geographic Distribution Slab (Full Table) -->
         {#if usageSummary?.geoBreakdown && usageSummary.geoBreakdown.length > 0}
           <div class="slab col-span-full">
@@ -948,9 +1678,9 @@
               </table>
             </div>
             <div class="slab-actions">
-              <Button href={resolve("/analytics/geographic")} variant="ghost" class="gap-2">
+              <Button href={resolve("/analytics/audience")} variant="ghost" class="gap-2">
                 <GlobeIcon class="w-4 h-4" />
-                Full Geographic Analytics
+                Full Audience Analytics
               </Button>
             </div>
           </div>

@@ -35,6 +35,7 @@ import type {
   ContentEndpoints,
   ContentMetadata,
   EndpointInfo,
+  MistStreamInfo,
   OutputEndpoint,
   OutputCapabilities,
   PlayerState,
@@ -51,7 +52,7 @@ export interface PlayerControllerConfig {
   /** Content identifier (stream name) */
   contentId: string;
   /** Content type */
-  contentType: ContentType;
+  contentType?: ContentType;
 
   /** Pre-resolved endpoints (skip gateway) */
   endpoints?: ContentEndpoints;
@@ -183,6 +184,10 @@ export interface PlayerControllerEvents {
 }
 
 // ============================================================================
+// Content Type Resolution Helpers
+// ============================================================================
+
+// ============================================================================
 // MistServer Source Type Mapping
 // ============================================================================
 
@@ -206,6 +211,8 @@ export const MIST_SOURCE_TYPES: Record<string, { hrn: string; player: string; su
   // ===== WEBSOCKET STREAMING =====
   'ws/video/mp4': { hrn: 'MP4 WebSocket', player: 'mews', supported: true },
   'wss/video/mp4': { hrn: 'MP4 WebSocket (SSL)', player: 'mews', supported: true },
+  'ws/video/webm': { hrn: 'WebM WebSocket', player: 'mews', supported: true },
+  'wss/video/webm': { hrn: 'WebM WebSocket (SSL)', player: 'mews', supported: true },
   'ws/video/raw': { hrn: 'Raw WebSocket', player: 'webcodecs', supported: true },
   'wss/video/raw': { hrn: 'Raw WebSocket (SSL)', player: 'webcodecs', supported: true },
   'ws/video/h264': { hrn: 'Annex B WebSocket', player: 'webcodecs', supported: true },
@@ -214,6 +221,7 @@ export const MIST_SOURCE_TYPES: Record<string, { hrn: string; player: string; su
   // ===== WEBRTC =====
   'whep': { hrn: 'WebRTC (WHEP)', player: 'native', supported: true },
   'webrtc': { hrn: 'WebRTC (WebSocket)', player: 'mist-webrtc', supported: true },
+  'mist/webrtc': { hrn: 'MistServer WebRTC', player: 'mist-webrtc', supported: true },
 
   // ===== AUDIO ONLY =====
   'html5/audio/aac': { hrn: 'AAC progressive', player: 'native', supported: true },
@@ -259,13 +267,18 @@ export const PROTOCOL_TO_MIME: Record<string, string> = {
   'WEBM': 'html5/video/webm',
   'WHEP': 'whep',
   'WebRTC': 'webrtc',
+  'MIST_WEBRTC': 'mist/webrtc',  // MistServer native WebRTC signaling
 
   // WebSocket variants
   'MEWS': 'ws/video/mp4',
   'MEWS_WS': 'ws/video/mp4',
   'MEWS_WSS': 'wss/video/mp4',
+  'MEWS_WEBM': 'ws/video/webm',
+  'MEWS_WEBM_SSL': 'wss/video/webm',
   'RAW_WS': 'ws/video/raw',
   'RAW_WSS': 'wss/video/raw',
+  'H264_WS': 'ws/video/h264',
+  'H264_WSS': 'wss/video/h264',
 
   // Audio
   'AAC': 'html5/audio/aac',
@@ -367,7 +380,6 @@ export function buildStreamInfoFromEndpoints(
   const sources: StreamSource[] = [];
   const oKeys = Object.keys(outputs);
 
-  // Helper to attach MistServer sources
   const attachMistSource = (html?: string, playerJs?: string) => {
     if (!html && !playerJs) return;
     const src: StreamSource = {
@@ -473,7 +485,7 @@ export function buildStreamInfoFromEndpoints(
  * @example
  * ```typescript
  * const controller = new PlayerController({
- *   contentId: 'my-stream',
+ *   contentId: 'pk_...', // playbackId (view key)
  *   contentType: 'live',
  *   gatewayUrl: 'https://gateway.example.com/graphql',
  * });
@@ -493,7 +505,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private state: PlayerState = 'booting';
   private lastEmittedState: PlayerState | null = null;
   private suppressPlayPauseEventsUntil = 0;
-  private suppressPlayPauseEventsUntil = 0;
 
   private gatewayClient: GatewayClient | null = null;
   private streamStateClient: StreamStateClient | null = null;
@@ -508,6 +519,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private streamState: StreamState | null = null;
   /** Tracks parsed from MistServer JSON response (used for direct MistServer mode) */
   private mistTracks: StreamTrack[] | null = null;
+  /** Gateway-seeded metadata (used as base for Mist enrichment) */
+  private metadataSeed: ContentMetadata | null = null;
+  /** Merged metadata (gateway seed + Mist enrichment) */
+  private metadata: ContentMetadata | null = null;
 
   private cleanupFns: Array<() => void> = [];
   private isDestroyed: boolean = false;
@@ -698,6 +713,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.endpoints = null;
     this.streamInfo = null;
     this.streamState = null;
+    this.metadataSeed = null;
+    this.metadata = null;
     this.videoElement = null;
     this.currentPlayer = null;
     this.lastEmittedState = null;
@@ -738,7 +755,130 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Get content metadata (title, description, duration, etc.) */
   getMetadata(): ContentMetadata | null {
-    return this.endpoints?.metadata ?? null;
+    return this.metadata ?? null;
+  }
+
+  // ============================================================================
+  // Metadata Merge (Gateway seed + Mist enrichment)
+  // ============================================================================
+
+  private setMetadataSeed(seed: ContentMetadata | null | undefined): void {
+    this.metadataSeed = seed ? { ...seed } : null;
+    this.refreshMergedMetadata();
+  }
+
+  private refreshMergedMetadata(): void {
+    const seed = this.metadataSeed ? { ...this.metadataSeed } : null;
+    const mist = this.streamState?.streamInfo;
+    const streamStatus = this.streamState?.status;
+
+    if (!seed && !mist) {
+      this.metadata = null;
+      return;
+    }
+
+    const merged: ContentMetadata = seed ? { ...seed } : {};
+
+    if (mist) {
+      merged.mist = this.sanitizeMistInfo(mist);
+      if (mist.type) {
+        merged.contentType = mist.type;
+        merged.isLive = mist.type === 'live';
+      }
+      if (streamStatus) {
+        merged.status = streamStatus;
+      }
+      if (mist.meta?.duration && (!merged.durationSeconds || merged.durationSeconds <= 0)) {
+        merged.durationSeconds = Math.round(mist.meta.duration);
+      }
+      if (mist.meta?.tracks) {
+        merged.tracks = this.buildMetadataTracks(mist.meta.tracks);
+      }
+    }
+
+    this.metadata = merged;
+  }
+
+  private buildMetadataTracks(tracksObj: Record<string, unknown>): ContentMetadata['tracks'] {
+    const tracks: NonNullable<ContentMetadata['tracks']> = [];
+    for (const [, trackData] of Object.entries(tracksObj)) {
+      const t = trackData as Record<string, unknown>;
+      const trackType = t.type as string;
+      if (trackType !== 'video' && trackType !== 'audio' && trackType !== 'meta') {
+        continue;
+      }
+
+      const bitrate = typeof t.bps === 'number' ? Math.round(t.bps) : undefined;
+      const fps = typeof t.fpks === 'number' ? t.fpks / 1000 : undefined;
+
+      tracks.push({
+        type: trackType,
+        codec: t.codec as string | undefined,
+        width: t.width as number | undefined,
+        height: t.height as number | undefined,
+        bitrate,
+        fps,
+        channels: t.channels as number | undefined,
+        sampleRate: t.rate as number | undefined,
+      });
+    }
+    return tracks.length ? tracks : undefined;
+  }
+
+  private sanitizeMistInfo(info: MistStreamInfo): MistStreamInfo {
+    const sanitized: MistStreamInfo = {
+      error: info.error,
+      on_error: info.on_error,
+      perc: info.perc,
+      type: info.type,
+      hasVideo: info.hasVideo,
+      hasAudio: info.hasAudio,
+      unixoffset: info.unixoffset,
+      lastms: info.lastms,
+    };
+
+    if (info.source) {
+      sanitized.source = info.source.map((src) => ({
+        url: src.url,
+        type: src.type,
+        priority: src.priority,
+        simul_tracks: src.simul_tracks,
+        relurl: src.relurl,
+      }));
+    }
+
+    if (info.meta) {
+      sanitized.meta = {
+        buffer_window: info.meta.buffer_window,
+        duration: info.meta.duration,
+        mistUrl: info.meta.mistUrl,
+      };
+
+      if (info.meta.tracks) {
+        const tracks: Record<string, any> = {};
+        for (const [key, track] of Object.entries(info.meta.tracks)) {
+          tracks[key] = {
+            type: track.type,
+            codec: track.codec,
+            width: track.width,
+            height: track.height,
+            bps: track.bps,
+            fpks: track.fpks,
+            codecstring: track.codecstring,
+            firstms: track.firstms,
+            lastms: track.lastms,
+            lang: track.lang,
+            idx: track.idx,
+            channels: track.channels,
+            rate: track.rate,
+            size: track.size,
+          };
+        }
+        sanitized.meta.tracks = tracks;
+      }
+    }
+
+    return sanitized;
   }
 
   /** Get stream info (sources + tracks for player selection) */
@@ -905,6 +1045,29 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return this._supportsPlaybackRate;
   }
 
+  /** Resolve content type from config override or Gateway metadata */
+  private getResolvedContentType(): ContentType | null {
+    if (this.config.contentType) {
+      return this.config.contentType;
+    }
+    const metadata = this.getMetadata();
+    const metaType = metadata?.contentType?.toLowerCase();
+    if (metaType === 'live' || metaType === 'clip' || metaType === 'dvr' || metaType === 'vod') {
+      return metaType as ContentType;
+    }
+    const mistType = this.streamState?.streamInfo?.type;
+    if (mistType === 'live' || mistType === 'vod') {
+      return mistType;
+    }
+    if (metadata?.isLive === true) {
+      return 'live';
+    }
+    if (metadata?.isLive === false) {
+      return 'vod';
+    }
+    return null;
+  }
+
   /** Check if source is WebRTC/MediaStream */
   isWebRTCSource(): boolean {
     return this._isWebRTC;
@@ -918,14 +1081,33 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Check if content is effectively live (live or DVR still recording) */
   isEffectivelyLive(): boolean {
-    const { contentType } = this.config;
+    const contentType = this.getResolvedContentType() ?? 'live';
     const metadata = this.getMetadata();
-    return contentType === 'live' || (contentType === 'dvr' && metadata?.dvrStatus === 'recording');
+
+    // Explicit VOD content types are never live
+    if (contentType === 'vod' || contentType === 'clip') {
+      return false;
+    }
+
+    // If Gateway metadata says it's not live, trust it
+    if (metadata?.isLive === false) {
+      return false;
+    }
+
+    // DVR that's finished recording is not live
+    if (contentType === 'dvr' && metadata?.dvrStatus === 'completed') {
+      return false;
+    }
+
+    // Default: trust contentType or duration-based detection
+    return contentType === 'live' ||
+           (contentType === 'dvr' && metadata?.dvrStatus === 'recording') ||
+           !Number.isFinite(this.getDuration());
   }
 
   /** Check if content is strictly live (not DVR/clip/vod) */
   isLive(): boolean {
-    return this.config.contentType === 'live';
+    return (this.getResolvedContentType() ?? 'live') === 'live';
   }
 
   /**
@@ -935,7 +1117,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * DVR-while-recording needs cold start because MistServer may not be serving the VOD yet
    */
   needsColdStart(): boolean {
-    return this.config.contentType !== 'live';
+    const contentType = this.getResolvedContentType();
+    if (!contentType) return true;
+    return contentType !== 'live';
   }
 
   /**
@@ -1933,11 +2117,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   // ============================================================================
 
   private async resolveEndpoints(): Promise<void> {
-    const { endpoints, gatewayUrl, mistUrl, contentType, contentId, authToken } = this.config;
+    const { endpoints, gatewayUrl, mistUrl, contentId, authToken } = this.config;
 
     // Priority 1: Use pre-resolved endpoints if provided
     if (endpoints?.primary) {
       this.endpoints = endpoints;
+      this.setMetadataSeed(endpoints.metadata ?? null);
       this.setState('gateway_ready', { gatewayStatus: 'ready' });
       return;
     }
@@ -1950,7 +2135,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Priority 3: Gateway resolution
     if (gatewayUrl) {
-      await this.resolveFromGateway(gatewayUrl, contentType, contentId, authToken);
+      await this.resolveFromGateway(gatewayUrl, contentId, authToken);
       return;
     }
 
@@ -1973,7 +2158,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         throw new Error(`MistServer HTTP ${response.status}`);
       }
 
-      const data = await response.json();
+      // MistServer can return JSONP: callback({...}); - strip wrapper if present
+      let text = await response.text();
+      const jsonpMatch = text.match(/^[^(]+\(([\s\S]*)\);?$/);
+      if (jsonpMatch) {
+        text = jsonpMatch[1];
+      }
+      const data = JSON.parse(text);
 
       if (data.error) {
         throw new Error(data.error);
@@ -2008,6 +2199,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       };
 
       this.endpoints = { primary, fallbacks: [] };
+      this.setMetadataSeed(null);
 
       // Parse track metadata from MistServer response
       if (data.meta?.tracks && typeof data.meta.tracks === 'object') {
@@ -2031,11 +2223,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   private mapMistTypeToProtocol(mistType: string): string {
     // WebCodecs raw streams - check BEFORE generic ws/ catch-all
-    // MistServer rawws.js uses 'ws/video/raw', mews.js uses 'ws/video/mp4' and 'ws/video/webm'
     if (mistType === 'ws/video/raw') return 'RAW_WS';
     if (mistType === 'wss/video/raw') return 'RAW_WSS';
-    // MEWS (MP4/WebM over WebSocket) - catches remaining ws/* types
-    if (mistType.startsWith('ws/') || mistType.startsWith('wss/')) return 'MEWS_WS';
+    // Annex B H264 over WebSocket (video-only, uses same 12-byte header as raw)
+    if (mistType === 'ws/video/h264') return 'H264_WS';
+    if (mistType === 'wss/video/h264') return 'H264_WSS';
+    // WebM over WebSocket - check BEFORE generic ws/ catch-all
+    if (mistType === 'ws/video/webm') return 'MEWS_WEBM';
+    if (mistType === 'wss/video/webm') return 'MEWS_WEBM_SSL';
+    // MEWS MP4 over WebSocket - catch remaining ws/* types (defaults to mp4)
+    if (mistType.startsWith('ws/')) return 'MEWS_WS';
+    if (mistType.startsWith('wss/')) return 'MEWS_WSS';
     if (mistType.includes('webrtc')) return 'MIST_WEBRTC';
     if (mistType.includes('mpegurl') || mistType.includes('m3u8')) return 'HLS';
     if (mistType.includes('dash') || mistType.includes('mpd')) return 'DASH';
@@ -2064,7 +2262,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   private async resolveFromGateway(
     gatewayUrl: string,
-    contentType: ContentType,
     contentId: string,
     authToken?: string
   ): Promise<void> {
@@ -2072,7 +2269,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this.gatewayClient = new GatewayClient({
       gatewayUrl,
-      contentType,
       contentId,
       authToken,
     });
@@ -2088,6 +2284,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     try {
       this.endpoints = await this.gatewayClient.resolve();
+      this.setMetadataSeed(this.endpoints?.metadata ?? null);
       this.setState('gateway_ready', { gatewayStatus: 'ready' });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Gateway resolution failed';
@@ -2097,10 +2294,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private startStreamStatePolling(): void {
-    const { contentType, contentId, mistUrl } = this.config;
+    const { contentId, mistUrl } = this.config;
+    const contentType = this.getResolvedContentType();
 
     // Only poll for live-like content. DVR should only poll while recording.
-    if (contentType !== 'live' && contentType !== 'dvr') return;
+    // If contentType is unknown but mistUrl is provided, still poll so we can
+    // detect when a stream comes online and initialize playback.
+    if (contentType == null) {
+      if (!mistUrl) return;
+    } else if (contentType !== 'live' && contentType !== 'dvr') {
+      return;
+    }
     if (contentType === 'dvr') {
       const dvrStatus = this.getMetadata()?.dvrStatus;
       if (dvrStatus && dvrStatus !== 'recording') return;
@@ -2144,6 +2348,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           this.log(`[stateChange] Updated ${mistTracks.length} tracks from MistServer`);
         }
       }
+
+      // Merge Mist metadata into the unified metadata surface
+      this.refreshMergedMetadata();
 
       this.emit('streamStateChange', { state });
 
@@ -2213,6 +2420,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       };
 
       this.endpoints = { primary, fallbacks: [] };
+      this.setMetadataSeed(this.endpoints.metadata ?? null);
 
       // Parse track metadata from stream info
       if (streamInfo.meta?.tracks && typeof streamInfo.meta.tracks === 'object') {

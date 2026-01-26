@@ -379,7 +379,6 @@ func (c *Client) authenticate() error {
 		return fmt.Errorf("MISTSERVER_URL not configured")
 	}
 
-	// Step 1: Get the challenge
 	challengeReq := map[string]interface{}{
 		"authorize": map[string]interface{}{
 			"username": c.Username,
@@ -430,10 +429,9 @@ func (c *Client) authenticate() error {
 		"challenge": challenge,
 	}).Debug("Got MistServer challenge")
 
-	// Step 2: Calculate password hash using MD5(MD5(password) + challenge)
+	// MistServer uses MD5(MD5(password) + challenge) for auth
 	passwordHash := c.calculatePasswordHash(c.Password, challenge)
 
-	// Step 3: Send authentication
 	authReq := map[string]interface{}{
 		"authorize": map[string]interface{}{
 			"username": c.Username,
@@ -548,7 +546,6 @@ func (c *Client) GetClients() (map[string]interface{}, error) {
 	return response, nil
 }
 
-// Helper function for min operation
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -683,6 +680,30 @@ func (c *Client) DeleteStreams(names []string) error {
 func (c *Client) Save() error {
 	command := map[string]interface{}{
 		"save": true,
+	}
+	_, err := c.makeAPIRequest(command)
+	return err
+}
+
+// StopSessions stops all sessions for a single stream
+func (c *Client) StopSessions(streamName string) error {
+	if strings.TrimSpace(streamName) == "" {
+		return nil
+	}
+	command := map[string]interface{}{
+		"stop_sessions": streamName,
+	}
+	_, err := c.makeAPIRequest(command)
+	return err
+}
+
+// StopSessionsMultiple stops all sessions for multiple streams
+func (c *Client) StopSessionsMultiple(streamNames []string) error {
+	if len(streamNames) == 0 {
+		return nil
+	}
+	command := map[string]interface{}{
+		"stop_sessions": streamNames,
 	}
 	_, err := c.makeAPIRequest(command)
 	return err

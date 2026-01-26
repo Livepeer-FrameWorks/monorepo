@@ -7,32 +7,46 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAML file that tells the CLI exactly how to provision your infrastructure, services, and interfaces.
+The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAML file that tells the CLI how to provision infrastructure, services, and interfaces.
 
 <Aside type="tip">
-FrameWorks uses a GitOps-friendly approach. We recommend committing your `cluster.yaml` to a private repository to track changes to your infrastructure over time.
+FrameWorks uses a GitOps-friendly approach. We recommend committing your `cluster.yaml` to a private repository to track changes over time.
 </Aside>
 
 ## File Structure
 
 ```yaml
-type: central              # Cluster type
-profile: production        # Deployment profile
-hosts: {}                  # Host definitions
-infrastructure: {}         # Infrastructure components
-services: {}               # Application services
-interfaces: {}             # User-facing interfaces
+version: v1
+type: cluster
+profile: production
+hosts: {}
+wireguard: {}
+infrastructure: {}
+services: {}
+interfaces: {}
+observability: {}
 ```
 
 ## Top-Level Fields
 
+### version
+
+Manifest schema version (required).
+
+**Example:**
+```yaml
+version: v1
+```
+
+---
+
 ### type
 
-Defines the deployment mode.
+Cluster manifest type (required).
 
 **Values:**
-- `cluster` - Full infrastructure cluster (used for both Central and Regional tiers).
-- `edge` - Single edge node deployment.
+- `cluster` - Full multi-service deployment.
+- `edge` - Single edge node deployment (use `edges.yaml` for multi-node edge fleets; see below).
 
 **Example:**
 ```yaml
@@ -43,12 +57,9 @@ type: cluster
 
 ### profile
 
-Deployment environment identifier.
+Environment/profile name. This is used to form the default cluster ID during provisioning (`{type}-{profile}`), so choose a stable slug (e.g., `production`, `eu-1`).
 
-**Values:**
-- `production`
-- `staging`
-- `development`
+**Common values:** `development`, `staging`, `production`.
 
 **Example:**
 ```yaml
@@ -66,33 +77,47 @@ Map of host definitions for SSH access.
 hosts:
   <hostname>:
     address: <ip-or-hostname>
+    external_ip: <public-ip>           # optional
     user: <ssh-user>
-    ssh_key: <path-to-private-key>
-```
-
-**Example:**
-```yaml
-hosts:
-  central-01:
-    address: 10.0.1.10
-    user: admin
-    ssh_key: ~/.ssh/id_ed25519
-
-  central-02:
-    address: 10.0.1.11
-    user: admin
-    ssh_key: ~/.ssh/id_ed25519
-
-  regional-eu-01:
-    address: 10.1.1.10
-    user: admin
-    ssh_key: ~/.ssh/id_ed25519
+    ssh_key: <path-to-private-key>    # optional
+    roles: [infrastructure, services]  # optional
+    labels:                            # optional
+      environment: prod
 ```
 
 **Fields:**
 - `address` (required) - IP address or hostname
+- `external_ip` (optional) - Public IP used for DNS registration
 - `user` (required) - SSH username
-- `ssh_key` (required) - Path to SSH private key
+- `ssh_key` (optional) - Path to SSH private key
+- `roles` (optional) - Arbitrary tags used for human grouping
+- `labels` (optional) - Free-form metadata
+
+---
+
+### wireguard
+
+WireGuard mesh configuration for backend infrastructure nodes. Managed by Privateer (`api_mesh`).
+
+**Format:**
+```yaml
+wireguard:
+  enabled: true
+  interface: wg0
+  manage_hosts_file: true
+  peers:
+    - name: central-01
+      public_key: <pubkey>
+      endpoint: 1.2.3.4:51820
+      allowed_ips: ["10.18.0.10/32"]
+```
+
+**Fields:**
+- `enabled` (required)
+- `interface` (optional, default `wg0`)
+- `manage_hosts_file` (optional) - Write WireGuard hostnames into `/etc/hosts`
+- `peers` (optional) - Static peers (manual mesh only)
+> Edge nodes do not join the mesh.
 
 ---
 
@@ -100,7 +125,7 @@ hosts:
 
 Database and messaging infrastructure.
 
-> **Version Reference:** See `config/infrastructure.yaml` in the monorepo for tested and recommended versions of all infrastructure components.
+> **Version Reference:** See `config/infrastructure.yaml` in the monorepo for tested/recommended versions.
 
 ### postgres
 
@@ -111,33 +136,23 @@ PostgreSQL or YugabyteDB configuration.
 infrastructure:
   postgres:
     enabled: true
+    mode: native
+    version: "15.14"
     host: central-01
     port: 5432
-    version: "15.2"
+    databases:
+      - name: quartermaster
+        owner: quartermaster_user
 ```
 
 **Fields:**
-- `enabled` (required) - Enable Postgres
-- `host` (required) - Host name from `hosts` section
-- `port` (required) - Database port
-- `version` (optional) - PostgreSQL version
-
-**Example (YugabyteDB Cluster):**
-```yaml
-infrastructure:
-  postgres:
-    enabled: true
-    host: central-01
-    port: 5433
-    version: "2.19"
-    cluster:
-      enabled: true
-      nodes:
-        - central-01
-        - central-02
-        - central-03
-      replication_factor: 3
-```
+- `enabled` (required)
+- `mode` (required) - `native`
+- `version` (required)
+- `host` (required) - Host name from `hosts`
+- `port` (required)
+- `databases` (optional)
+- `tuning` (optional) - key/value overrides for server tuning
 
 ---
 
@@ -150,16 +165,20 @@ ClickHouse analytics database.
 infrastructure:
   clickhouse:
     enabled: true
+    mode: native
+    version: "25.9.2.1"
     host: central-01
     port: 9000
-    version: "23.8"
+    databases: [periscope]
 ```
 
 **Fields:**
-- `enabled` (required) - Enable ClickHouse
-- `host` (required) - Host name
-- `port` (required) - Native protocol port (9000)
-- `version` (optional) - ClickHouse version
+- `enabled` (required)
+- `mode` (required) - `native`
+- `version` (required)
+- `host` (required)
+- `port` (required)
+- `databases` (optional)
 
 ---
 
@@ -172,358 +191,140 @@ Apache Kafka message broker.
 infrastructure:
   kafka:
     enabled: true
+    mode: native
+    version: "7.4.0"
     brokers:
-      - id: 1
-        host: central-01
+      - host: central-01
+        id: 1
         port: 9092
-      - id: 2
-        host: central-02
-        port: 9092
+    zookeeper_connect: central-01:2181
+    topics:
+      - name: analytics_events
+        partitions: 10
+        replication_factor: 3
 ```
 
 **Fields:**
-- `enabled` (required) - Enable Kafka
-- `brokers` (required) - List of broker configurations
-  - `id` - Broker ID
-  - `host` - Host name
-  - `port` - Kafka port (usually 9092)
+- `enabled` (required)
+- `mode` (required) - `native`
+- `version` (required)
+- `brokers` (required)
+- `zookeeper_connect` (required)
+- `topics` (optional)
 
 ---
 
 ### zookeeper
 
-Zookeeper ensemble for Kafka coordination.
+Zookeeper ensemble (Kafka coordination).
 
 **Format:**
 ```yaml
 infrastructure:
   zookeeper:
     enabled: true
+    mode: native
+    version: "7.4.0"
     ensemble:
-      - id: 1
-        host: central-01
-        port: 2181
-      - id: 2
-        host: central-02
-        port: 2181
-      - id: 3
-        host: central-03
+      - host: central-01
+        id: 1
         port: 2181
 ```
 
 **Fields:**
-- `enabled` (required) - Enable Zookeeper
-- `ensemble` (required) - List of Zookeeper nodes
-  - `id` - Server ID
-  - `host` - Host name
-  - `port` - Client port (usually 2181)
+- `enabled` (required)
+- `mode` (required) - `native`
+- `version` (required)
+- `ensemble` (required)
 
 ---
 
-## Services Section
+## Services / Interfaces / Observability
 
-Application services.
+All three sections share the same shape. Use them to define application services, public interfaces (reverse proxy + web surfaces), and observability stack (Prometheus, Grafana, etc.).
 
 ### Service Definition
 
 **Format:**
 ```yaml
 services:
-  <service-name>:
+  commodore:
     enabled: true
-    host: <hostname>        # Single instance
-    # OR
-    hosts:                  # Multiple instances
-      - <hostname1>
-      - <hostname2>
-    port: <port>
-    version: <version>
-    environment:
-      KEY: value
+    mode: docker
+    version: v0.0.1
+    image: livepeerframeworks/frameworks-commodore:latest
+    host: central-01
+    port: 18001
+    grpc_port: 19001
+    env_file: /etc/frameworks/commodore.env
+    depends_on: [postgres, kafka]
+    config:
+      EXAMPLE_KEY: value
 ```
 
 **Fields:**
-- `enabled` (required) - Enable service
-- `host` (optional) - Single host for deployment
-- `hosts` (optional) - Multiple hosts for distributed deployment
-- `port` (required) - Service port
-- `version` (optional) - Version to deploy
-- `environment` (optional) - Environment variables
-
-**Example Services:**
-```yaml
-services:
-  commodore:
-    enabled: true
-    host: central-01
-    port: 18001
-    environment:
-      POSTGRES_HOST: postgres
-      KAFKA_BROKERS: kafka:9092
-
-  signalman:
-    enabled: true
-    hosts:
-      - regional-eu-01
-      - regional-us-01
-    port: 18009
-    environment:
-      REDIS_URL: redis://redis:6379
-
-  decklog:
-    enabled: true
-    host: regional-eu-01
-    port: 18006
-    environment:
-      KAFKA_BROKERS: kafka:9092
-```
+- `enabled` (required)
+- `mode` (required) - `docker` or `native`
+- `version` (required)
+- `image` (optional) - Docker image (docker mode)
+- `binary_url` (optional) - Binary download URL (native mode)
+- `deploy` (optional) - Override deploy slug (container/binary name)
+- `host` (optional) - Single host
+- `hosts` (optional) - Multiple hosts for replicas
+- `replicas` (optional) - Replica count
+- `port` (optional)
+- `grpc_port` (optional)
+- `env_file` (optional)
+- `depends_on` (optional)
+- `config` (optional) - Service-specific settings
 
 ---
 
-### Standard Services
+## Edge Manifest (edges.yaml)
 
-**Central/Regional Services:**
-- `bridge` - GraphQL gateway (port 18000)
-- `commodore` - Control plane API (port 18001)
-- `quartermaster` - Tenant management (port 18002)
-- `purser` - Billing service (port 18003)
-- `periscope-query` - Analytics query API (port 18004)
-- `periscope-ingest` - Analytics ingestion (port 18005)
-- `decklog` - Event ingestion (port 18006)
-- `foghorn` - Load balancer (port 18008, gRPC control 18019)
-- `signalman` - WebSocket gateway (port 18009)
-- `navigator` - DNS management (port 18010)
-
-**Edge Services:**
-- `helmsman` - MistServer sidecar (port 18007)
-- `mistserver` - Media server (port 8080, 1935 for RTMP)
-
----
-
-## Interfaces Section
-
-User-facing interfaces.
+For multi-node edge fleets, use a dedicated **edge manifest** (`edges.yaml`).
 
 **Format:**
 ```yaml
-interfaces:
-  nginx:
-    enabled: true
-    host: central-01
-    port: 80
-    tls: true
-    cert_path: /etc/ssl/certs/fullchain.pem
-    key_path: /etc/ssl/private/privkey.pem
-
-  webapp:
-    enabled: true
-    host: central-01
-    port: 18030
-
-  website:
-    enabled: true
-    host: central-01
-    port: 18031
-
-  forms:
-    enabled: true
-    host: central-01
-    port: 18032
+version: v1
+root_domain: example.com
+pool_domain: edge.example.com
+email: ops@example.com
+cluster_id: regional-production
+fetch_cert: true
+nodes:
+  - name: edge-us-east-1
+    ssh: admin@203.0.113.10
+    ssh_key: ~/.ssh/id_ed25519
+    subdomain: edge-us-east-1
+    region: us-east
+    apply_tune: true
+    register_qm: true
 ```
 
-**Standard Interfaces:**
-- `nginx` - Reverse proxy (port 80/443)
-- `webapp` - Application frontend (port 18030)
-- `website` - Marketing site (port 18031)
-- `website_docs` - Documentation site (port 18033)
-- `forms` - Forms service (port 18032)
+**Fields:**
+- `root_domain` or `pool_domain` (at least one required)
+- `email` (ACME)
+- `cluster_id` (required when `register_qm: true`)
+- `fetch_cert` (optional) - Fetch certs from Navigator
+- `nodes` (required)
 
-**Support Services:**
-- `prometheus` - Metrics collection (port 9091)
-- `grafana` - Metrics visualization (port 3000)
-- `listmonk` - Newsletter/mailing list manager (port 9001)
+**Node fields:**
+- `name` (required)
+- `ssh` (required) - `user@host`
+- `ssh_key` (optional)
+- `subdomain` (optional)
+- `region` (optional)
+- `apply_tune` (optional)
+- `register_qm` (optional)
+- `labels` (optional)
 
 ---
 
-## Complete Example
+## Validation Notes
 
-### Central Tier Example
+The CLI validates:
+- Required fields (`version`, `type`, hosts)
+- Host references used by infrastructure/services/interfaces
 
-```yaml
-type: cluster
-profile: production
-
-hosts:
-  central-01:
-    address: 10.0.1.10
-    user: admin
-    ssh_key: ~/.ssh/frameworks_ed25519
-
-  central-02:
-    address: 10.0.1.11
-    user: admin
-    ssh_key: ~/.ssh/frameworks_ed25519
-
-  central-03:
-    address: 10.0.1.12
-    user: admin
-    ssh_key: ~/.ssh/frameworks_ed25519
-
-infrastructure:
-  postgres:
-    enabled: true
-    host: central-01
-    port: 5433
-    cluster:
-      enabled: true
-      nodes:
-        - central-01
-        - central-02
-        - central-03
-      replication_factor: 3
-
-  clickhouse:
-    enabled: true
-    host: central-01
-    port: 9000
-
-  kafka:
-    enabled: true
-    brokers:
-      - id: 1
-        host: central-01
-        port: 9092
-      - id: 2
-        host: central-02
-        port: 9092
-
-  zookeeper:
-    enabled: true
-    ensemble:
-      - id: 1
-        host: central-01
-        port: 2181
-      - id: 2
-        host: central-02
-        port: 2181
-      - id: 3
-        host: central-03
-        port: 2181
-
-services:
-  bridge:
-    enabled: true
-    host: central-01
-    port: 18000
-
-  commodore:
-    enabled: true
-    host: central-01
-    port: 18001
-
-  quartermaster:
-    enabled: true
-    host: central-01
-    port: 18002
-
-  purser:
-    enabled: true
-    host: central-01
-    port: 18003
-
-  periscope-query:
-    enabled: true
-    host: central-01
-    port: 18004
-
-  periscope-ingest:
-    enabled: true
-    host: central-01
-    port: 18005
-
-interfaces:
-  nginx:
-    enabled: true
-    host: central-01
-    port: 80
-
-  webapp:
-    enabled: true
-    host: central-01
-    port: 18030
-```
-
-### Regional Tier Example
-
-```yaml
-type: cluster
-profile: production
-
-hosts:
-  regional-eu-01:
-    address: 10.1.1.10
-    user: admin
-    ssh_key: ~/.ssh/frameworks_ed25519
-
-infrastructure:
-  kafka:
-    enabled: true
-    brokers:
-      - id: 1
-        host: regional-eu-01
-        port: 9092
-
-services:
-  decklog:
-    enabled: true
-    host: regional-eu-01
-    port: 18006
-
-  foghorn:
-    enabled: true
-    host: regional-eu-01
-    port: 18008
-
-  signalman:
-    enabled: true
-    host: regional-eu-01
-    port: 18009
-```
-
-### Edge Tier Example
-
-```yaml
-type: edge
-profile: production
-
-hosts:
-  edge-eu-01:
-    address: 10.2.1.10
-    user: admin
-    ssh_key: ~/.ssh/frameworks_ed25519
-
-services:
-  mistserver:
-    enabled: true
-    host: edge-eu-01
-    port: 8080
-    environment:
-      RTMP_PORT: 1935
-```
-
----
-
-## Validation
-
-Use `detect` to check current state against your manifest:
-
-```bash
-# Detect current state against manifest
-frameworks cluster detect --manifest cluster.yaml
-```
-
-Common validation errors:
-- Missing required fields (`enabled`, `host`, `port`)
-- Invalid host references (host not in `hosts` section)
-- Port conflicts (same port on same host)
-- SSH connectivity issues
+Unknown keys are ignored by the parser, but it’s best to keep manifests minimal and aligned with the schema above.

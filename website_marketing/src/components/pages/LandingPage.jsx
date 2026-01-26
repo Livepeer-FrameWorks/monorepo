@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
+import SdkCodePreview from './SdkCodePreview'
 // Demo player wrapper with status/health integration
 import { Player as FrameworksPlayer } from '@livepeer-frameworks/player-react'
-import StatusTag from '../shared/StatusTag'
 import {
   MarketingIconBadge,
   MarketingFinalCTA,
@@ -23,13 +23,9 @@ import { Section, SectionContainer } from '@/components/ui/section'
 import { useState, useEffect } from 'react'
 import config from '../../config'
 import {
-  VideoCameraIcon,
-  FilmIcon,
-  GlobeAltIcon,
-  LockOpenIcon,
-  CloudIcon,
   ServerStackIcon,
-  ArrowPathIcon,
+  CodeBracketIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline'
 
 const LandingPage = () => {
@@ -65,61 +61,43 @@ const LandingPage = () => {
     }
   }, [])
 
-  const uniqueFeatures = [
+  const corePillars = [
     {
-      title: 'Drop-in AV Device Discovery',
+      title: 'Developer-First Platform',
       description:
-        'Our binary automatically discovers and connects IP cameras, USB webcams, HDMI inputs, and other AV devices. Zero configuration required.',
-      icon: VideoCameraIcon,
+        'Relay-style GraphQL API with typed SDKs. MCP server for AI agents. x402 for machine-to-machine payments. Build with confidence.',
+      icon: CodeBracketIcon,
       tone: 'accent',
-      badge: 'Industry First',
-      status: 'soon',
-      statusNote: 'In pipeline: shipping to alpha cohorts; discovery matrix still expanding.',
+      badge: 'Core',
     },
     {
-      title: 'Multi-stream Compositing',
+      title: 'Unmatched Analytics',
       description:
-        'Combine multiple input streams into one composite output with picture-in-picture, overlays, and OBS-style mixing capabilities.',
-      icon: FilmIcon,
-      tone: 'purple',
-      badge: 'Advanced Feature',
-      status: 'soon',
-      statusNote: 'In pipeline: limited internal demos; capacity and UX hardening underway.',
-    },
-    {
-      title: 'Hybrid Cloud + Self-hosted',
-      description:
-        'Combine our hosted service with your own nodes. One console to manage all your edge nodes worldwide.',
-      icon: GlobeAltIcon,
+        'Routing decisions, QoE metrics, player telemetry. See exactly why viewer X connected to edge Y.',
+      icon: ChartBarIcon,
       tone: 'green',
-      badge: 'Unique Model',
-      status: 'soon',
-      statusNote: 'Invite-only: attaching your own edge nodes is being rolled out to pilots.',
+      badge: 'Core',
     },
     {
-      title: 'Public Domain Licensed',
+      title: 'Sovereignty Without Pain',
       description:
-        "No attribution required, no copyleft restrictions. Unlike typical 'open source' licenses, you truly own what you deploy.",
-      icon: LockOpenIcon,
-      tone: 'yellow',
-      badge: 'Open Source',
+        'Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.',
+      icon: ServerStackIcon,
+      tone: 'purple',
+      badge: 'Core',
     },
   ]
 
-  const featureCards = uniqueFeatures.map((feature) => ({
-    icon: feature.icon,
-    iconTone: feature.tone,
-    tone: feature.tone,
-    badge: feature.badge,
-    title: feature.title,
-    description: feature.description,
-    meta: feature.status ? (
-      <StatusTag status={feature.status} note={feature.statusNote} className="justify-end" />
-    ) : null,
+  const pillarCards = corePillars.map((pillar) => ({
+    icon: pillar.icon,
+    iconTone: pillar.tone,
+    tone: pillar.tone,
+    badge: pillar.badge,
+    title: pillar.title,
+    description: pillar.description,
     hover: 'subtle',
     stripe: true,
     flush: true,
-    metaAlign: 'end',
   }))
 
   const freeTierFeatures = [
@@ -171,48 +149,7 @@ const LandingPage = () => {
     },
   ]
 
-  const hybridBenefits = [
-    {
-      title: 'One Console for Everything',
-      description:
-        'Manage self-hosted nodes, hosted processing, and hybrid deployments from a single dashboard.',
-      tone: 'accent',
-    },
-    {
-      title: 'Seamless Failover',
-      description:
-        'Automatic failover between your nodes and FrameWorks hosted services keeps streams resilient.',
-      tone: 'green',
-    },
-    {
-      title: 'Cost Optimization',
-      description: 'Run base load on your hardware and burst into our network—or Livepeer’s—for peak demand.',
-      tone: 'yellow',
-    },
-  ]
-
-  const deploymentOptions = [
-    {
-      title: 'Fully Hosted',
-      description:
-        'Use our global infrastructure with generous free tier capacity and turnkey operations.',
-      tone: 'accent',
-      icon: CloudIcon,
-    },
-    {
-      title: 'Self-Hosted',
-      description:
-        'Deploy FrameWorks on your own infrastructure and manage everything through one console.',
-      tone: 'green',
-      icon: ServerStackIcon,
-    },
-    {
-      title: 'Hybrid',
-      description: 'Blend hosted processing with your nodes for optimal cost, performance, and redundancy.',
-      tone: 'yellow',
-      icon: ArrowPathIcon,
-    },
-  ]
+  const docsBase = (config.docsUrl ?? '/docs').replace(/\/+$/, '')
 
   const landingHeroAccents = [
     {
@@ -260,7 +197,7 @@ const LandingPage = () => {
         accents={landingHeroAccents}
         title="Sovereign Video Infrastructure"
         description="Most streaming platforms lock you into their ecosystem. We give you the keys."
-        support="Self-hosted or cloud • No vendor lock-in • Public domain licensed • True ownership"
+        support="SaaS → Hybrid (self-hosted edge) → Fully self-hosted • One platform, three modes • Public domain licensed."
         primaryAction={{
           label: 'Start Free',
           href: config.appUrl,
@@ -584,21 +521,85 @@ const LandingPage = () => {
             <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
               <HeadlineStack
                 eyebrow="Platform"
-                title="Key Platform Features"
-                subtitle="Advanced streaming capabilities with hybrid deployment and full self-hosting support."
+                title="Built Different"
+                subtitle="Great DX. Deep analytics. Total sovereignty."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
                 actions={
                   <CTACluster align="end">
-                    <MarketingCTAButton intent="secondary" to="/about" label="Explore More" />
+                    <MarketingCTAButton intent="secondary" to="/about" label="Learn More" />
                   </CTACluster>
                 }
               />
               <MarketingFeatureWall
-                items={featureCards}
-                columns={2}
+                items={pillarCards}
+                columns={3}
               />
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
+        <Section className="bg-brand-surface">
+          <SectionContainer>
+            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+              <MarketingGridSplit align="stretch" stackAt="lg" seam>
+                {/* Left: Text slab with header/body/actions zones */}
+                <div className="slab-zone">
+                  <div className="slab-zone__header">
+                    <HeadlineStack
+                      eyebrow="Developer First"
+                      title="Code is the Content"
+                      subtitle="Stop fighting with FFmpeg flags. Our SDKs give you drop-in components and hooks for playback and broadcast."
+                      align="left"
+                      underlineAlign="start"
+                    />
+                  </div>
+
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={[
+                        {
+                          title: 'Universal Playback',
+                          description: 'One player, every device. Auto-selects the best transport for the browser and network conditions.',
+                        },
+                        {
+                          title: 'OBS in the Browser',
+                          description: 'StreamCrafter gives you compositing, encoding, and multi-source mixing. Drop in and go live.',
+                        },
+                        {
+                          title: 'WebRTC-First',
+                          description: 'Sub-second latency by default. Real-time streaming without the complexity.',
+                        },
+                      ]}
+                      variant="list"
+                      indicator="check"
+                      gap="md"
+                    />
+                  </div>
+
+                  <div className="slab-zone__actions">
+                    <MarketingCTAButton
+                      intent="primary"
+                      href={`${docsBase}/streamers/playback`}
+                      label="Read the Docs"
+                      icon="book"
+                    />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href="https://github.com/livepeer/frameworks"
+                      label="View on GitHub"
+                      icon="github"
+                      external
+                    />
+                  </div>
+                </div>
+
+                {/* Right: Code zone - full bleed */}
+                <SdkCodePreview variant="flush" className="min-h-[400px] lg:min-h-[500px]" />
+              </MarketingGridSplit>
             </MarketingBand>
           </SectionContainer>
         </Section>
@@ -672,59 +673,6 @@ const LandingPage = () => {
                   </motion.div>
                 )}
               />
-            </MarketingBand>
-          </SectionContainer>
-        </Section>
-
-        <SectionDivider />
-
-        {/* Hybrid Deployment */}
-        <Section className="bg-brand-surface-soft">
-          <SectionContainer>
-            <MarketingBand surface="none" contentClassName="marketing-band__inner--flush">
-              <MarketingGridSplit align="start" stackAt="lg" gap="lg">
-                <motion.div
-                  initial={{ opacity: 0, x: -26 }}
-                  whileInView={{ opacity: 1, x: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.55 }}
-                >
-                  <HeadlineStack
-                    title="Hybrid: Cloud + Self-Hosted"
-                    subtitle="Why choose between cloud and self-hosted? Operate on your own terms and shift workloads whenever it makes sense."
-                    align="left"
-                  />
-                  <IconList
-                    items={hybridBenefits}
-                    variant="list"
-                    indicator="dot"
-                  />
-                </motion.div>
-
-                <motion.div
-                  initial={{ opacity: 0, x: 26 }}
-                  whileInView={{ opacity: 1, x: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.55, delay: 0.1 }}
-                >
-                  <MarketingBand surface="panel" className="deployment-panel">
-                    <div className="deployment-panel__header">
-                      <h3 className="deployment-panel__title">Deployment Options</h3>
-                    </div>
-                    <MarketingFeatureWall
-                      items={deploymentOptions.map((option) => ({
-                        title: option.title,
-                        description: option.description,
-                        icon: option.icon,
-                        tone: option.tone,
-                        iconTone: option.tone,
-                      }))}
-                      columns={1}
-                      className="marketing-feature-wall--single marketing-feature-wall--deployment"
-                    />
-                  </MarketingBand>
-                </motion.div>
-              </MarketingGridSplit>
             </MarketingBand>
           </SectionContainer>
         </Section>

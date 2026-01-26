@@ -16,6 +16,7 @@ import { getMarketingSiteUrl } from "$lib/config";
   import ErrorBoundary from "$lib/components/ErrorBoundary.svelte";
   import BetaBadge from "$lib/components/BetaBadge.svelte";
   import { Button } from "$lib/components/ui/button";
+  import { TooltipProvider } from "$lib/components/ui/tooltip";
   interface User {
     id: string;
     email: string;
@@ -143,6 +144,7 @@ function openExternal(url: string) {
     </div>
   </div>
 {:else}
+  <TooltipProvider>
   <div class="min-h-screen bg-background text-foreground">
     {#if isAuthenticated}
       <!-- Authenticated Layout with Sidebar -->
@@ -425,6 +427,7 @@ function openExternal(url: string) {
       </div>
     {/if}
   </div>
+  </TooltipProvider>
 {/if}
 
 <!-- Coming Soon Modal -->

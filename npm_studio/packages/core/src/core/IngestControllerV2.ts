@@ -56,6 +56,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private useWebCodecs: boolean;
   private statsInterval: ReturnType<typeof setInterval> | null = null;
   private lastStats: IngestStats | null = null;
+  private statsInFlight = false;
 
   // Phase 3: Compositor
   private sceneManager: SceneManager | null = null;
@@ -387,6 +388,13 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       this.updateWhipTracks();
     }
 
+    // Update EncoderManager input stream if WebCodecs is active
+    if (this.encoderManager && this.outputStream) {
+      this.encoderManager.updateInputStream(this.outputStream).catch((err) => {
+        this.log('Failed to update encoder input stream', err);
+      });
+    }
+
     this.log('Output stream updated', {
       videoTracks: this.outputStream?.getVideoTracks().length ?? 0,
       audioTracks: this.outputStream?.getAudioTracks().length ?? 0,
@@ -406,18 +414,18 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       const senders = pc.getSenders();
 
-      // Update video track
+      // Update video track (replaceTrack(null) properly stops sending)
       const newVideoTrack = this.outputStream.getVideoTracks()[0];
       const videoSender = senders.find((s) => s.track?.kind === 'video');
-      if (videoSender && newVideoTrack) {
-        await videoSender.replaceTrack(newVideoTrack);
+      if (videoSender) {
+        await videoSender.replaceTrack(newVideoTrack ?? null);
       }
 
-      // Update audio track
+      // Update audio track (replaceTrack(null) properly stops sending)
       const newAudioTrack = this.outputStream.getAudioTracks()[0];
       const audioSender = senders.find((s) => s.track?.kind === 'audio');
-      if (audioSender && newAudioTrack) {
-        await audioSender.replaceTrack(newAudioTrack);
+      if (audioSender) {
+        await audioSender.replaceTrack(newAudioTrack ?? null);
       }
     } catch (error) {
       this.log('Error updating WHIP tracks', error);
@@ -680,6 +688,77 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   /**
+   * Set up permanent event handlers on the WhipClient.
+   * Called after initial connection and after reconnection.
+   */
+  private setupWhipClientHandlers(): void {
+    if (!this.whipClient) return;
+
+    this.whipClient.on('stateChange', (event) => {
+      this.log('WHIP state changed', event);
+      this.stateContext = {
+        ...this.stateContext,
+        connectionState: event.state,
+      };
+
+      if (event.state === 'connected') {
+        this.setState('streaming');
+        this.startStatsPolling();
+        this.reconnectionManager.reset();
+
+        // Attach WebCodecs encoder transform if supported and codecs are aligned
+        // This must happen AFTER connection is established (senders exist)
+        if (this.useWebCodecs && this.encoderManager && this.whipClient) {
+          this.log('Attempting to attach WebCodecs encoder transform');
+          // Check if codec alignment allows encoded frame insertion
+          const canUseEncoded = this.whipClient.canUseEncodedInsertion();
+          this.log('canUseEncodedInsertion result:', canUseEncoded);
+          if (canUseEncoded) {
+            try {
+              this.whipClient.attachEncoderTransform(this.encoderManager);
+              this.encoderManager.start();
+              this.log('WebCodecs encoder transform attached', {
+                videoCodec: this.whipClient.getNegotiatedVideoCodec(),
+                audioCodec: this.whipClient.getNegotiatedAudioCodec(),
+              });
+              // Emit event so UI can update
+              this.emit('webCodecsActive', { active: true });
+            } catch (err) {
+              this.log('Failed to attach encoder transform, continuing with browser encoding', err);
+              // Clean up encoder on failure
+              if (this.encoderManager) {
+                this.encoderManager.destroy();
+                this.encoderManager = null;
+              }
+            }
+          } else {
+            this.log('Codec alignment check failed, using browser encoding', {
+              videoCodec: this.whipClient.getNegotiatedVideoCodec(),
+              audioCodec: this.whipClient.getNegotiatedAudioCodec(),
+            });
+            // Clean up encoder since we won't use it
+            if (this.encoderManager) {
+              this.encoderManager.destroy();
+              this.encoderManager = null;
+            }
+          }
+        }
+      } else if (event.state === 'failed' || event.state === 'disconnected') {
+        if (this.state === 'streaming' && this.config.reconnection?.enabled !== false) {
+          this.handleConnectionLost();
+        } else if (event.state === 'failed') {
+          this.setState('error', { error: 'Connection failed' });
+          this.stopStatsPolling();
+        }
+      }
+    });
+
+    this.whipClient.on('error', (event) => {
+      this.emit('error', { error: event.message, recoverable: false });
+    });
+  }
+
+  /**
    * Start streaming to WHIP endpoint
    */
   async startStreaming(): Promise<void> {
@@ -699,68 +778,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       });
 
       // Set up WHIP event handlers
-      this.whipClient.on('stateChange', (event) => {
-        this.log('WHIP state changed', event);
-        this.stateContext = {
-          ...this.stateContext,
-          connectionState: event.state,
-        };
-
-        if (event.state === 'connected') {
-          this.setState('streaming');
-          this.startStatsPolling();
-          this.reconnectionManager.reset();
-
-          // Attach WebCodecs encoder transform if supported and codecs are aligned
-          // This must happen AFTER connection is established (senders exist)
-          if (this.useWebCodecs && this.encoderManager && this.whipClient) {
-            this.log('Attempting to attach WebCodecs encoder transform');
-            // Check if codec alignment allows encoded frame insertion
-            const canUseEncoded = this.whipClient.canUseEncodedInsertion();
-            this.log('canUseEncodedInsertion result:', canUseEncoded);
-            if (canUseEncoded) {
-              try {
-                this.whipClient.attachEncoderTransform(this.encoderManager);
-                this.encoderManager.start();
-                this.log('WebCodecs encoder transform attached', {
-                  videoCodec: this.whipClient.getNegotiatedVideoCodec(),
-                  audioCodec: this.whipClient.getNegotiatedAudioCodec(),
-                });
-                // Emit event so UI can update
-                this.emit('webCodecsActive', { active: true });
-              } catch (err) {
-                this.log('Failed to attach encoder transform, continuing with browser encoding', err);
-                // Clean up encoder on failure
-                if (this.encoderManager) {
-                  this.encoderManager.destroy();
-                  this.encoderManager = null;
-                }
-              }
-            } else {
-              this.log('Codec alignment check failed, using browser encoding', {
-                videoCodec: this.whipClient.getNegotiatedVideoCodec(),
-                audioCodec: this.whipClient.getNegotiatedAudioCodec(),
-              });
-              // Clean up encoder since we won't use it
-              if (this.encoderManager) {
-                this.encoderManager.destroy();
-                this.encoderManager = null;
-              }
-            }
-          }
-        } else if (event.state === 'failed' || event.state === 'disconnected') {
-          if (this.state === 'streaming' && this.config.reconnection?.enabled !== false) {
-            this.handleConnectionLost();
-          } else if (event.state === 'failed') {
-            this.setState('error', { error: 'Connection failed' });
-            this.stopStatsPolling();
-          }
-        }
-      });
-
-      this.whipClient.on('error', (event) => {
-        this.emit('error', { error: event.message, recoverable: false });
-      });
+      this.setupWhipClientHandlers();
 
       // Resume audio context if needed
       if (this.config.audioMixing) {
@@ -859,24 +877,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         debug: this.config.debug,
       });
 
-      // Set up simplified event handlers (no WebCodecs attachment)
-      this.whipClient.on('stateChange', (event) => {
-        if (event.state === 'connected') {
-          this.setState('streaming');
-          this.startStatsPolling();
-          this.log('Reconnected without WebCodecs (browser encoding)');
-        } else if (event.state === 'failed' || event.state === 'disconnected') {
-          if (this.state === 'streaming' && this.config.reconnection?.enabled !== false) {
-            this.handleConnectionLost();
-          } else if (event.state === 'failed') {
-            this.setState('error', { error: 'Reconnection failed' });
-          }
-        }
-      });
-
-      this.whipClient.on('error', (event) => {
-        this.emit('error', { error: event.message, recoverable: false });
-      });
+      // Set up event handlers (will use browser encoding since useWebCodecs is now false)
+      this.setupWhipClientHandlers();
 
       await this.whipClient.connect(this.outputStream);
     } catch (error) {
@@ -912,22 +914,29 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         debug: this.config.debug,
       });
 
-      // Wait for connection
+      // Set up permanent event handlers (includes WebCodecs re-attachment)
+      this.setupWhipClientHandlers();
+
+      // Wait for connection to complete
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error('Connection timeout'));
         }, 30000);
 
-        this.whipClient!.on('stateChange', (event) => {
+        // One-time listener just to signal reconnection success/failure
+        const onStateChange = (event: { state: string }) => {
           if (event.state === 'connected') {
             clearTimeout(timeout);
+            this.whipClient?.off('stateChange', onStateChange);
             resolve();
           } else if (event.state === 'failed') {
             clearTimeout(timeout);
+            this.whipClient?.off('stateChange', onStateChange);
             reject(new Error('Connection failed'));
           }
-        });
+        };
 
+        this.whipClient!.on('stateChange', onStateChange);
         this.whipClient!.connect(this.outputStream!).catch(reject);
       });
     });
@@ -1007,10 +1016,18 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (this.statsInterval) return;
 
     this.statsInterval = setInterval(async () => {
-      const stats = await this.getStats();
-      if (stats) {
-        this.lastStats = stats;
-        this.emit('statsUpdate', stats);
+      // Guard against overlapping async calls
+      if (this.statsInFlight) return;
+      this.statsInFlight = true;
+
+      try {
+        const stats = await this.getStats();
+        if (stats) {
+          this.lastStats = stats;
+          this.emit('statsUpdate', stats);
+        }
+      } finally {
+        this.statsInFlight = false;
       }
     }, 1000);
   }

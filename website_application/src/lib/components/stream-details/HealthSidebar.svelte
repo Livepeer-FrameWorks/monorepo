@@ -29,7 +29,7 @@
     trackCount?: number | null;
   }
 
-  interface StreamAnalytics {
+  interface StreamSummaryMetrics {
     packetsSent?: number | null;
     packetsLost?: number | null;
     packetsRetrans?: number | null;
@@ -41,7 +41,7 @@
     streamName: string;
     isLive: boolean;
     health: StreamHealth | null;
-    analytics?: StreamAnalytics | null;
+    analytics?: StreamSummaryMetrics | null;
     collapsed?: boolean;
     onToggle?: () => void;
   }

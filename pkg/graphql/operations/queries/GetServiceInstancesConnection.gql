@@ -1,0 +1,36 @@
+# Fetch paginated service instances with filtering by cluster, node, and status
+# Returns running service instances with health and process details
+query GetServiceInstancesConnection($clusterId: String, $nodeId: String, $status: InstanceStatus, $first: Int = 50, $after: String) {
+  analytics {
+    infra {
+      serviceInstancesConnection(clusterId: $clusterId, nodeId: $nodeId, status: $status, page: { first: $first, after: $after }) @paginate {
+        edges {
+          cursor
+          node {
+            id
+            instanceId
+            clusterId
+            nodeId
+            serviceId
+            version
+            port
+            processId
+            containerId
+            status
+            healthStatus
+            startedAt
+            stoppedAt
+            lastHealthCheck
+          }
+        }
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

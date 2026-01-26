@@ -3,17 +3,19 @@ package main
 import (
 	"context"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
-	"fmt"
 
 	"frameworks/api_gateway/graph"
 	"frameworks/api_gateway/graph/generated"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/handlers"
+	mcpserver "frameworks/api_gateway/internal/mcp"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/api_gateway/internal/webhooks"
 	pkgauth "frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
@@ -54,6 +56,22 @@ func main() {
 
 	// Initialize auth handlers (gRPC-based)
 	authHandlers := handlers.NewAuthHandlers(serviceClients.Commodore, logger)
+
+	// Initialize rate limiter with tenant cache (fetches limits from Quartermaster)
+	rateLimiter := middleware.NewRateLimiter(middleware.RateLimitConfig{
+		Logger: logger,
+	})
+	defer rateLimiter.Stop()
+
+	tenantCache := middleware.NewTenantCache(serviceClients.Quartermaster, logger)
+
+	// Initialize usage tracker for API request analytics
+	usageTracker := middleware.NewUsageTracker(middleware.UsageTrackerConfig{
+		Decklog:    serviceClients.Decklog,
+		Logger:     logger,
+		SourceNode: config.GetEnv("HOSTNAME", "bridge"),
+	})
+	defer usageTracker.Stop()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
@@ -106,6 +124,43 @@ func main() {
 		logger.WithField("max_depth", maxDepth).Info("GraphQL depth limit enabled")
 	}
 
+	gqlHandler.AroundResponses(func(ctx context.Context, next graphql.ResponseHandler) *graphql.Response {
+		resp := next(ctx)
+		if resp != nil {
+			if ginCtx, ok := ctx.Value("GinContext").(*gin.Context); ok && ginCtx != nil {
+				ginCtx.Set("graphql_error_count", len(resp.Errors))
+				if opCtx := graphql.GetOperationContext(ctx); opCtx != nil && opCtx.Operation != nil {
+					ginCtx.Set("graphql_operation_type", string(opCtx.Operation.Operation))
+					ginCtx.Set("graphql_operation_name", opCtx.Operation.Name)
+				}
+				if stats := extension.GetComplexityStats(ctx); stats != nil {
+					ginCtx.Set("graphql_complexity", stats.Complexity)
+				}
+			}
+		}
+		return resp
+	})
+
+	gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+		opCtx := graphql.GetOperationContext(ctx)
+		if opCtx != nil && opCtx.Operation != nil && opCtx.Operation.Operation == ast.Subscription {
+			start := time.Now()
+			tenantID, authType, userID, tokenHash := extractUsageContext(ctx)
+			opName := opCtx.Operation.Name
+			opType := string(opCtx.Operation.Operation)
+			complexity := uint32(0)
+			if stats := extension.GetComplexityStats(ctx); stats != nil {
+				complexity = uint32(stats.Complexity)
+			}
+			go func(subCtx context.Context) {
+				<-subCtx.Done()
+				durationMs := time.Since(start).Milliseconds()
+				usageTracker.Record(tenantID, authType, opType, opName, userID, tokenHash, uint64(durationMs), complexity, 0)
+			}(ctx)
+		}
+		return next(ctx)
+	})
+
 	// Add transport options
 	gqlHandler.AddTransport(transport.POST{})
 	gqlHandler.AddTransport(transport.GET{})
@@ -146,6 +201,7 @@ func main() {
 					ctx = context.WithValue(ctx, "email", claims.Email)
 					ctx = context.WithValue(ctx, "role", claims.Role)
 					ctx = context.WithValue(ctx, "jwt_token", token)
+					ctx = context.WithValue(ctx, "auth_type", "jwt")
 
 					user := &middleware.UserContext{
 						UserID:   claims.UserID,
@@ -162,6 +218,12 @@ func main() {
 						ctx = context.WithValue(ctx, "tenant_id", resp.TenantId)
 						ctx = context.WithValue(ctx, "email", resp.Email)
 						ctx = context.WithValue(ctx, "role", resp.Role)
+						ctx = context.WithValue(ctx, "auth_type", "api_token")
+						if resp.TokenId != "" {
+							ctx = context.WithValue(ctx, "api_token_hash", middleware.HashIdentifier(resp.TokenId))
+						} else {
+							ctx = context.WithValue(ctx, "api_token_hash", middleware.HashIdentifier(token))
+						}
 
 						user := &middleware.UserContext{
 							UserID:   resp.UserId,
@@ -190,6 +252,34 @@ func main() {
 				"message": "GraphQL Gateway - Ready",
 			})
 		})
+
+		// MCP discovery endpoint (SEP-1649)
+		app.GET("/.well-known/mcp.json", func(c *gin.Context) {
+			c.Header("Access-Control-Allow-Origin", "*")
+			docsURL := strings.TrimSpace(os.Getenv("DOCS_PUBLIC_URL"))
+			docsURLValue := ""
+			if docsURL != "" {
+				docsURLValue = docsURL + "/streamers/mcp"
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"name":         "frameworks",
+				"version":      version.Version,
+				"title":        config.GetEnv("BRAND_NAME", "FrameWorks"),
+				"description":  "Sovereign SaaS for live video",
+				"mcp_endpoint": "/mcp",
+				"transports":   []string{"streamable-http"},
+				"auth": gin.H{
+					"schemes":  []string{"bearer", "wallet"},
+					"required": true,
+				},
+				"capabilities": gin.H{
+					"tools":     true,
+					"resources": true,
+					"prompts":   true,
+				},
+				"docs_url": docsURLValue,
+			})
+		})
 	}
 
 	// Auth endpoints (gRPC to Commodore)
@@ -197,6 +287,7 @@ func main() {
 	{
 		// Public auth endpoints (no auth required)
 		auth.POST("/login", authHandlers.Login())
+		auth.POST("/wallet-login", authHandlers.WalletLogin())
 		auth.POST("/register", authHandlers.Register())
 		auth.GET("/verify/:token", authHandlers.VerifyEmail())
 		auth.POST("/resend-verification", authHandlers.ResendVerification())
@@ -212,29 +303,26 @@ func main() {
 		authProtected.POST("/me/newsletter", authHandlers.UpdateNewsletter())
 	}
 
-	// Token validator for API tokens (calls Commodore)
-	tokenValidator := func(token string) (*middleware.UserContext, error) {
-		resp, err := serviceClients.Commodore.ValidateAPIToken(context.Background(), token)
-		if err != nil {
-			return nil, err
-		}
-		if resp == nil || !resp.Valid {
-			return nil, fmt.Errorf("invalid API token")
-		}
-		return &middleware.UserContext{
-			UserID:   resp.UserId,
-			TenantID: resp.TenantId,
-			Email:    resp.Email,
-			Role:     resp.Role,
-		}, nil
+	// Webhook routing - external payment provider webhooks forwarded to internal services via gRPC.
+	// No auth middleware - signature verification happens in the target service.
+	// Route pattern: /webhooks/{service}/{provider}
+	webhookRouter := webhooks.NewRouter(logger)
+	webhookRouter.RegisterService("billing", serviceClients.Purser) // Stripe, Mollie webhooks
+	{
+		app.POST("/webhooks/:service/:provider", webhookRouter.Handle)
+		app.GET("/webhooks/health", webhookRouter.HandleHealth)
+		logger.Info("Webhook router enabled at /webhooks/:service/:provider")
 	}
 
 	// GraphQL endpoint (single route group)
 	graphqlGroup := app.Group("/graphql")
-	graphqlGroup.Use(middleware.DemoMode(logger))                                   // Demo mode detection (must be before auth)
-	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), tokenValidator)) // Allowlist public queries or require auth
-	graphqlGroup.Use(middleware.GraphQLContextMiddleware())                         // Bridge user context to GraphQL
+	graphqlGroup.Use(middleware.DemoMode(logger))                                                                                                                 // Demo mode detection (must be before auth)
+	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients))                                                                               // Allowlist public queries or require auth
+	graphqlGroup.Use(middleware.ViewerX402Middleware(serviceClients, logger))                                                                                     // Resolve viewer x402 before GraphQL executes
+	graphqlGroup.Use(middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore)) // Rate limiting + 402 for prepaid with x402 support (after auth, needs tenant_id)
+	graphqlGroup.Use(middleware.GraphQLContextMiddleware())                                                                                                       // Bridge user context to GraphQL
 	graphqlGroup.Use(middleware.GraphQLAttachLoaders(serviceClients))
+	graphqlGroup.Use(middleware.UsageTrackerMiddleware(usageTracker)) // API usage analytics (after auth, records after response)
 	{
 		graphqlGroup.POST("/", gin.WrapH(gqlHandler))
 		// Enable playground based on explicit config or GIN_MODE (default: enabled in non-release mode)
@@ -259,6 +347,22 @@ func main() {
 		gqlHandler.ServeHTTP(c.Writer, c.Request)
 	})
 
+	// MCP (Model Context Protocol) endpoint for AI agent access
+	// Auth is handled inside the MCP server via request headers
+	mcpServer := mcpserver.NewServer(mcpserver.Config{
+		ServiceClients: serviceClients,
+		Resolver:       resolver.Resolver,
+		Logger:         logger,
+		JWTSecret:      []byte(jwtSecret),
+		ServiceToken:   serviceToken,
+		RateLimiter:    rateLimiter,
+		TenantCache:    tenantCache,
+		UsageTracker:   usageTracker,
+	})
+	app.Any("/mcp", gin.WrapH(mcpServer.HTTPHandler()))
+	app.Any("/mcp/*path", gin.WrapH(mcpServer.HTTPHandler()))
+	logger.Info("MCP endpoint enabled at /mcp")
+
 	// Use standard server startup with graceful shutdown
 	serverConfig := server.DefaultConfig("bridge", "18000")
 
@@ -270,17 +374,26 @@ func main() {
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if _, err := serviceClients.Quartermaster.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		if resp, err := serviceClients.Quartermaster.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "gateway",
 			Version:        version.Version,
 			Protocol:       "http",
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(port),
 			AdvertiseHost:  &advertiseHost,
-			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
 		} else {
+			if resp != nil && resp.GetOwnerTenantId() != "" {
+				usageTracker.SetServiceTenantID(resp.GetOwnerTenantId())
+				logger.WithField("tenant_id", resp.GetOwnerTenantId()).Info("Usage tracker tenant owner set")
+			}
 			logger.Info("Quartermaster bootstrap (gateway) ok")
 		}
 	}()
@@ -294,6 +407,47 @@ func main() {
 	if err := resolver.Shutdown(); err != nil {
 		logger.Error("Error shutting down resolver: " + err.Error())
 	}
+}
+
+func extractUsageContext(ctx context.Context) (tenantID, authType, userID string, tokenHash uint64) {
+	if v := ctx.Value("tenant_id"); v != nil {
+		if s, ok := v.(string); ok {
+			tenantID = s
+		}
+	}
+	if tenantID == "" {
+		tenantID = "anonymous"
+	}
+	if v := ctx.Value("auth_type"); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			authType = s
+		}
+	}
+	if authType == "" {
+		authType = "anonymous"
+	}
+	if v := ctx.Value("user_id"); v != nil {
+		if s, ok := v.(string); ok {
+			userID = s
+		}
+	}
+	if v := ctx.Value("api_token_hash"); v != nil {
+		switch t := v.(type) {
+		case uint64:
+			tokenHash = t
+		case uint32:
+			tokenHash = uint64(t)
+		case int64:
+			if t > 0 {
+				tokenHash = uint64(t)
+			}
+		case int:
+			if t > 0 {
+				tokenHash = uint64(t)
+			}
+		}
+	}
+	return tenantID, authType, userID, tokenHash
 }
 
 // calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.

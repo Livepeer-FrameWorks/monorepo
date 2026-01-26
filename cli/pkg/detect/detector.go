@@ -266,7 +266,8 @@ func getDefaultPort(serviceName string) int {
 		"nginx":            18090,
 		"prometheus":       9090,
 		"grafana":          3000,
-		"privateer":        5353,
+		"metabase":         3001,
+		"privateer":        18012,
 	}
 	return ports[serviceName]
 }

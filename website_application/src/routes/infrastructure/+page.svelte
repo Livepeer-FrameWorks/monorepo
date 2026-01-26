@@ -2,7 +2,7 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { get } from "svelte/store";
   import { auth } from "$lib/stores/auth";
-  import { fragment, GetInfrastructureOverviewStore, SystemHealthStore, GetServiceInstancesConnectionStore, NodeCoreFieldsStore } from "$houdini";
+  import { fragment, GetInfrastructureOverviewStore, SystemHealthStore, GetServiceInstancesConnectionStore, GetServiceInstancesHealthStore, NodeCoreFieldsStore } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -15,6 +15,18 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Band } from "$lib/components/layout";
   import { getIconComponent } from "$lib/iconUtils";
+  import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+  } from "$lib/components/ui/select";
+  import {
+    Tooltip,
+    TooltipContent,
+    TooltipTrigger,
+  } from "$lib/components/ui/tooltip";
 
   // Icons
   const ServerIcon = getIconComponent("Server");
@@ -23,11 +35,13 @@
   const NetworkIcon = getIconComponent("Globe");
   const BuildingIcon = getIconComponent("Building2");
   const PackageIcon = getIconComponent("Package");
+  const CalendarIcon = getIconComponent("Calendar");
 
   // Houdini stores
   const infrastructureStore = new GetInfrastructureOverviewStore();
   const systemHealthSub = new SystemHealthStore();
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
+  const serviceInstancesHealthStore = new GetServiceInstancesHealthStore();
 
   // Fragment stores for unmasking nested data
   const nodeCoreStore = new NodeCoreFieldsStore();
@@ -38,7 +52,8 @@
   let isAuthenticated = false;
 
   // Derived state from Houdini stores
-  let loading = $derived($infrastructureStore.fetching);
+  let hasInfrastructureData = $derived(!!$infrastructureStore.data);
+  let loading = $derived($infrastructureStore.fetching && !hasInfrastructureData);
   let tenant = $derived($infrastructureStore.data?.tenant ?? null);
   let clusters = $derived($infrastructureStore.data?.clustersConnection?.edges?.map(e => e.node) ?? []);
 
@@ -52,17 +67,20 @@
     maskedNodes.map(node => get(fragment(node, nodeCoreStore)))
   );
   let serviceInstances = $derived(
-    $serviceInstancesStore.data?.serviceInstancesConnection?.edges?.map(e => e.node) ?? []
+    $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.edges?.map(e => e.node) ?? []
+  );
+  let serviceHealth = $derived(
+    $serviceInstancesHealthStore.data?.analytics?.infra?.serviceInstancesHealth ?? []
   );
   let hasMoreInstances = $derived(
-    $serviceInstancesStore.data?.serviceInstancesConnection?.pageInfo?.hasNextPage ?? false
+    $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.pageInfo?.hasNextPage ?? false
   );
   let totalInstanceCount = $derived(
-    $serviceInstancesStore.data?.serviceInstancesConnection?.totalCount ?? 0
+    $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.totalCount ?? 0
   );
 
   // Real-time system health data
-  type SystemHealthEvent = NonNullable<SystemHealth$result["systemHealth"]>;
+  type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
   let systemHealth = $state<Record<string, { event: SystemHealthEvent; ts: Date }>>({});
 
   // Recent system health events (for the live feed)
@@ -83,69 +101,33 @@
     totalBandwidthOut: number;
   }
 
-  // Type for node metrics edge from the store
-  type NodeMetricsEdgeType = NonNullable<NonNullable<NonNullable<typeof $infrastructureStore.data>["nodeMetrics1hConnection"]>["edges"]>[0];
+  // Type for node metrics edge from the store (used for fallback health data)
+  type NodeMetrics1hConnection = NonNullable<
+    NonNullable<NonNullable<typeof $infrastructureStore.data>["analytics"]>["infra"]
+  >["nodeMetrics1hConnection"];
+  type NodeMetricsEdgeType = NonNullable<NodeMetrics1hConnection["edges"]>[0];
 
   // Derived performance metrics from the store data
   let nodePerformanceMetrics = $derived.by(() => {
-    const nodeMetricsData = ($infrastructureStore.data?.nodeMetrics1hConnection?.edges || []).filter(
-      (edge): edge is NonNullable<NodeMetricsEdgeType> => edge?.node !== undefined
-    );
-    if (nodeMetricsData.length === 0) return [] as NodePerformanceMetric[];
-
-    // Group by nodeId and calculate averages
-    const nodeMetricsByNode = new Map<string, typeof nodeMetricsData>();
-    for (const edge of nodeMetricsData) {
-      const nodeId = edge.node!.nodeId;
-      if (!nodeMetricsByNode.has(nodeId)) {
-        nodeMetricsByNode.set(nodeId, []);
-      }
-      nodeMetricsByNode.get(nodeId)!.push(edge);
-    }
-
-    const metrics: NodePerformanceMetric[] = [];
-    for (const [nodeId, nodeEdges] of nodeMetricsByNode) {
-      const avgCpu = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgCpu || 0), 0) / nodeEdges.length;
-      const avgMemory = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgMemory || 0), 0) / nodeEdges.length;
-      const avgDisk = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgDisk || 0), 0) / nodeEdges.length;
-      const avgShm = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgShm || 0), 0) / nodeEdges.length;
-      metrics.push({
-        nodeId,
-        avgCpuUsage: avgCpu,
-        avgMemoryUsage: avgMemory,
-        avgDiskUsage: avgDisk,
-        avgShmUsage: avgShm,
-      });
-    }
-    return metrics;
+    const aggregated = $infrastructureStore.data?.analytics?.infra?.nodeMetricsAggregated ?? [];
+    if (aggregated.length === 0) return [] as NodePerformanceMetric[];
+    return aggregated.map((metric) => ({
+      nodeId: metric.nodeId,
+      avgCpuUsage: metric.avgCpu ?? 0,
+      avgMemoryUsage: metric.avgMemory ?? 0,
+      avgDiskUsage: metric.avgDisk ?? 0,
+      avgShmUsage: metric.avgShm ?? 0,
+    }));
   });
 
   let networkIOMetrics = $derived.by(() => {
-    const nodeMetricsData = ($infrastructureStore.data?.nodeMetrics1hConnection?.edges || []).filter(
-      (edge): edge is NonNullable<NodeMetricsEdgeType> => edge?.node !== undefined
-    );
-    if (nodeMetricsData.length === 0) return [] as NetworkIOMetric[];
-
-    const nodeMetricsByNode = new Map<string, typeof nodeMetricsData>();
-    for (const edge of nodeMetricsData) {
-      const nodeId = edge.node!.nodeId;
-      if (!nodeMetricsByNode.has(nodeId)) {
-        nodeMetricsByNode.set(nodeId, []);
-      }
-      nodeMetricsByNode.get(nodeId)!.push(edge);
-    }
-
-    const networkMetrics: NetworkIOMetric[] = [];
-    for (const [nodeId, nodeEdges] of nodeMetricsByNode) {
-      const totalIn = nodeEdges.reduce((sum: number, e) => sum + (e.node!.totalBandwidthIn || 0), 0);
-      const totalOut = nodeEdges.reduce((sum: number, e) => sum + (e.node!.totalBandwidthOut || 0), 0);
-      networkMetrics.push({
-        nodeId,
-        totalBandwidthIn: totalIn,
-        totalBandwidthOut: totalOut,
-      });
-    }
-    return networkMetrics;
+    const aggregated = $infrastructureStore.data?.analytics?.infra?.nodeMetricsAggregated ?? [];
+    if (aggregated.length === 0) return [] as NetworkIOMetric[];
+    return aggregated.map((metric) => ({
+      nodeId: metric.nodeId,
+      totalBandwidthIn: metric.totalBandwidthIn ?? 0,
+      totalBandwidthOut: metric.totalBandwidthOut ?? 0,
+    }));
   });
 
   let platformMetrics = $derived.by(() => {
@@ -158,11 +140,27 @@
     };
   });
 
-  // Time range for performance metrics (last 24 hours)
-  const timeRange = {
-    start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    end: new Date().toISOString(),
-  };
+  let serviceHealthSummary = $derived.by(() => {
+    const summary = {
+      healthy: 0,
+      degraded: 0,
+      unhealthy: 0,
+      unknown: 0,
+    };
+    for (const item of serviceHealth) {
+      const status = item?.status?.toLowerCase() ?? "unknown";
+      if (status === "healthy") summary.healthy += 1;
+      else if (status === "degraded") summary.degraded += 1;
+      else if (status === "unhealthy") summary.unhealthy += 1;
+      else summary.unknown += 1;
+    }
+    return summary;
+  });
+
+  // Time range for performance metrics
+  let timeRange = $state("24h");
+  let currentRange = $derived(resolveTimeRange(timeRange));
+  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) => ["24h", "7d", "30d"].includes(option.value));
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -184,12 +182,17 @@
 
   async function loadInfrastructureData() {
     try {
+      const range = resolveTimeRange(timeRange);
+      currentRange = range;
+      const metricsFirst = Math.min(range.days * 24, 720);
+      const timeRangeInput = { start: range.start, end: range.end };
       // Fetch infrastructure overview and service instances in parallel
       await Promise.all([
         infrastructureStore.fetch({
-          variables: { timeRange, first: 100, noCache: false }
+          variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false }
         }),
-        serviceInstancesStore.fetch()
+        serviceInstancesStore.fetch(),
+        serviceInstancesHealthStore.fetch().catch(() => null),
       ]);
 
       if ($infrastructureStore.errors?.length) {
@@ -237,7 +240,7 @@
       }
 
       // Second: Fall back to historical metrics for nodes without liveState
-      const metricsData = $infrastructureStore.data?.nodeMetrics1hConnection?.edges ?? [];
+      const metricsData = $infrastructureStore.data?.analytics?.infra?.nodeMetrics1hConnection?.edges ?? [];
       if (metricsData.length > 0) {
         // Get most recent metric for each node
         const latestByNode = new Map<string, (typeof metricsData)[0]>();
@@ -297,6 +300,11 @@
     }
   }
 
+  function handleTimeRangeChange(value: string) {
+    timeRange = value;
+    loadInfrastructureData();
+  }
+
   function startSystemHealthSubscription() {
     systemHealthSub.listen();
   }
@@ -327,7 +335,7 @@
   // Effect to handle system health subscription updates
   // Use untrack to prevent effect loops when mutating state
   $effect(() => {
-    const healthData = $systemHealthSub.data?.systemHealth;
+    const healthData = $systemHealthSub.data?.liveSystemHealth;
     if (healthData) {
       // Untrack the state mutations to prevent effect loops
       untrack(() => {
@@ -488,14 +496,27 @@
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
-    <div class="flex items-center gap-3">
-      <ServerIcon class="w-5 h-5 text-primary" />
-      <div>
-        <h1 class="text-xl font-bold text-foreground">Infrastructure</h1>
-        <p class="text-sm text-muted-foreground">
-          Monitor your clusters, nodes, and system health in real-time
-        </p>
+    <div class="flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <ServerIcon class="w-5 h-5 text-primary" />
+        <div>
+          <h1 class="text-xl font-bold text-foreground">Infrastructure</h1>
+          <p class="text-sm text-muted-foreground">
+            Monitor your clusters, nodes, and system health in real-time
+          </p>
+        </div>
       </div>
+      <Select value={timeRange} onValueChange={handleTimeRangeChange} type="single">
+        <SelectTrigger class="min-w-[150px]">
+          <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
+          {currentRange.label}
+        </SelectTrigger>
+        <SelectContent>
+          {#each timeRangeOptions as option (option.value)}
+            <SelectItem value={option.value}>{option.label}</SelectItem>
+          {/each}
+        </SelectContent>
+      </Select>
     </div>
   </div>
 
@@ -592,7 +613,7 @@
         <div class="slab-header">
           <div class="flex items-center gap-2">
             <ActivityIcon class="w-4 h-4 text-info" />
-            <h3>Platform Performance (Last 24 Hours)</h3>
+            <h3>Platform Performance ({currentRange.label})</h3>
           </div>
           <p class="text-sm text-muted-foreground mt-1">
             Snapshot of capacity and health across your deployed nodes.
@@ -608,6 +629,67 @@
               />
             {/each}
           </div>
+        </div>
+      </div>
+
+      <!-- Service Health -->
+      <div class="slab col-span-full">
+        <div class="slab-header flex items-start justify-between gap-4">
+          <div>
+            <div class="flex items-center gap-2">
+              <PackageIcon class="w-4 h-4 text-info" />
+              <h3>Service Health</h3>
+            </div>
+            <p class="text-sm text-muted-foreground mt-1">
+              Live health checks for Periscope, Signalman, and core services.
+            </p>
+          </div>
+          <Tooltip>
+            <TooltipTrigger class="text-[10px] uppercase tracking-wide text-muted-foreground border border-border/50 px-2 py-1">
+              Admin/Owner
+            </TooltipTrigger>
+            <TooltipContent>
+              Host and health endpoint details are visible only to cluster owners or admins.
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <div class="slab-body--padded">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            <InfrastructureMetricCard label="Healthy" value={serviceHealthSummary.healthy} tone="text-success" />
+            <InfrastructureMetricCard label="Degraded" value={serviceHealthSummary.degraded} tone="text-warning" />
+            <InfrastructureMetricCard label="Unhealthy" value={serviceHealthSummary.unhealthy} tone="text-destructive" />
+            <InfrastructureMetricCard label="Unknown" value={serviceHealthSummary.unknown} tone="text-muted-foreground" />
+          </div>
+
+          {#if serviceHealth.length > 0}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {#each serviceHealth.slice(0, 12) as instance (instance.instanceId)}
+                <div class="p-3 border border-border/50">
+                  <div class="flex items-center justify-between mb-2">
+                    <div>
+                      <p class="text-sm font-medium text-foreground">{instance.serviceId}</p>
+                      <p class="text-xs text-muted-foreground">{instance.clusterId}</p>
+                    </div>
+                    <Badge variant="outline" class="uppercase text-[0.6rem] {instance.status?.toLowerCase() === 'healthy' ? 'text-success' : instance.status?.toLowerCase() === 'degraded' ? 'text-warning' : instance.status?.toLowerCase() === 'unhealthy' ? 'text-destructive' : 'text-muted-foreground'}">
+                      {instance.status ?? "unknown"}
+                    </Badge>
+                  </div>
+                  {#if instance.host}
+                    <div class="text-xs text-muted-foreground font-mono">
+                      {instance.host}:{instance.port}
+                    </div>
+                  {/if}
+                  {#if instance.lastHealthCheck}
+                    <p class="text-[10px] text-muted-foreground mt-2">
+                      Last check: {new Date(instance.lastHealthCheck).toLocaleTimeString()}
+                    </p>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-sm text-muted-foreground">No service health data available.</p>
+          {/if}
         </div>
       </div>
 
@@ -640,7 +722,7 @@
           <div class="slab-header">
             <div class="flex items-center gap-2">
               <NetworkIcon class="w-4 h-4 text-info" />
-              <h3>Network I/O (Last 24 Hours)</h3>
+              <h3>Network I/O ({currentRange.label})</h3>
             </div>
             <p class="text-sm text-muted-foreground mt-1">
               Total bandwidth usage per node - ingest and egress traffic

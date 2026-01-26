@@ -7,6 +7,8 @@
     fragment,
     GetStreamStore,
     GetStreamHealthStore,
+    GetViewerSessionsConnectionStore,
+    GetRoutingEventsStore,
     TrackListUpdatesStore,
     StreamCoreFieldsStore,
     StreamMetricsFieldsStore,
@@ -21,10 +23,27 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { GridSeam } from "$lib/components/layout";
   import { Button } from "$lib/components/ui/button";
+  import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+  } from "$lib/components/ui/table";
+  import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+  } from "$lib/components/ui/select";
 
   // Houdini stores
   const streamStore = new GetStreamStore();
   const healthStore = new GetStreamHealthStore();
+  const viewerSessionsStore = new GetViewerSessionsConnectionStore();
+  const routingEventsStore = new GetRoutingEventsStore();
   const trackListSub = new TrackListUpdatesStore();
 
   // Fragment stores for unmasking nested data
@@ -33,10 +52,23 @@
 
   // Types from Houdini - derive from the new healthStore
   type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
-  type HealthMetricType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["healthConnection"]>["edges"]>[0]["node"];
-  type TrackListEventType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["trackListConnection"]>["edges"]>[0]["node"];
-  type RebufferingEventType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["rebufferingEventsConnection"]>["edges"]>[0]["node"];
-  type ClientMetric5mType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["clientMetricsConnection"]>["edges"]>[0]["node"];
+  type HealthAnalytics = NonNullable<
+    NonNullable<NonNullable<typeof $healthStore.data>["analytics"]>["health"]
+  >;
+  type LifecycleAnalytics = NonNullable<
+    NonNullable<NonNullable<typeof $healthStore.data>["analytics"]>["lifecycle"]
+  >;
+  type HealthMetricType = NonNullable<HealthAnalytics["streamHealthConnection"]["edges"]>[0]["node"];
+  type TrackListEventType = NonNullable<LifecycleAnalytics["trackListConnection"]["edges"]>[0]["node"];
+  type BufferEventType = NonNullable<LifecycleAnalytics["bufferEventsConnection"]["edges"]>[0]["node"];
+  type RebufferingEventType = NonNullable<HealthAnalytics["rebufferingEventsConnection"]["edges"]>[0]["node"];
+  type ClientMetric5mType = NonNullable<HealthAnalytics["clientQoeConnection"]["edges"]>[0]["node"];
+  type ViewerSessionType = NonNullable<
+    NonNullable<NonNullable<typeof $viewerSessionsStore.data>["analytics"]>["lifecycle"]
+  >["viewerSessionsConnection"]["edges"][0]["node"];
+  type RoutingEventType = NonNullable<
+    NonNullable<NonNullable<typeof $routingEventsStore.data>["analytics"]>["infra"]
+  >["routingEventsConnection"]["edges"][0]["node"];
 
   // page is a store; derive the current param value so it updates on navigation
   let streamId = $derived(page?.params?.id as string ?? "");
@@ -65,15 +97,14 @@
         }
       : null
   );
-  let currentHealth = $derived($healthStore.data?.stream?.currentHealth ?? null);
   // Real-time metrics from STREAM_BUFFER subscription
   let realtimeMetrics = $derived(stream?.id ? $realtimeStreamMetrics[stream.id] : null);
-  let streamAnalytics = $derived($healthStore.data?.stream?.analytics ?? null);
   let healthMetrics = $derived(
-    ($healthStore.data?.stream?.healthConnection?.edges ?? [])
+    ($healthStore.data?.analytics?.health?.streamHealthConnection?.edges ?? [])
       .map((e: { node: HealthMetricType }) => e?.node)
       .filter((n: HealthMetricType | null | undefined): n is HealthMetricType => n !== null && n !== undefined)
   );
+  let currentHealth = $derived(healthMetrics.length > 0 ? healthMetrics[0] : null);
 
   // Extract buffer health values for histogram (convert 0-1 ratio to 0-100 percentage)
   let bufferHealthValues = $derived(
@@ -85,7 +116,7 @@
 
   // Client metrics (viewer/connection quality)
   let clientMetrics = $derived(
-    ($healthStore.data?.stream?.clientMetricsConnection?.edges ?? [])
+    ($healthStore.data?.analytics?.health?.clientQoeConnection?.edges ?? [])
       .map((e: { node: ClientMetric5mType }) => e?.node)
       .filter((n: ClientMetric5mType | null | undefined): n is ClientMetric5mType => n !== null && n !== undefined)
   );
@@ -113,17 +144,18 @@
 
   // Per-node breakdown from client metrics
   let nodeBreakdown = $derived(() => {
-    const nodeMap = new Map<string, { sessions: number; packetLoss: number[] }>();
+    const nodeMap = new Map<string, { sessions: number; packetLoss: number[]; quality: number[] }>();
 
     for (const metric of clientMetrics) {
       const nodeId = metric.nodeId ?? 'unknown';
       if (!nodeMap.has(nodeId)) {
-        nodeMap.set(nodeId, { sessions: 0, packetLoss: [] });
+        nodeMap.set(nodeId, { sessions: 0, packetLoss: [], quality: [] });
       }
       const node = nodeMap.get(nodeId)!;
       node.sessions += metric.activeSessions ?? 0;
       if (metric.packetLossRate !== null && metric.packetLossRate !== undefined) {
         node.packetLoss.push(metric.packetLossRate);
+        node.quality.push(1 - metric.packetLossRate);
       }
     }
 
@@ -140,31 +172,137 @@
   });
 
   let trackListEvents = $state<TrackListEventType[]>([]);
-  let rebufferingEvents = $derived($healthStore.data?.stream?.rebufferingEventsConnection?.edges?.map(e => e.node) ?? []);
-  let loading = $derived($streamStore.fetching || $healthStore.fetching);
+  let bufferEvents = $derived.by(() => {
+    const edges = $healthStore.data?.analytics?.lifecycle?.bufferEventsConnection?.edges ?? [];
+    return edges
+      .map((e: { node: BufferEventType }) => e?.node)
+      .filter((n: BufferEventType | null | undefined): n is BufferEventType => n !== null && n !== undefined)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  });
+  let rebufferingEvents = $derived($healthStore.data?.analytics?.health?.rebufferingEventsConnection?.edges?.map(e => e.node) ?? []);
+
+  // 5-minute health aggregates
+  let health5mData = $derived(
+    ($healthStore.data?.analytics?.health?.streamHealth5mConnection?.edges ?? [])
+      .map(e => e.node)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+  );
+
+  // Aggregate stats from 5m data
+  let health5mSummary = $derived.by(() => {
+    if (!health5mData.length) return null;
+    const totalRebuffers = health5mData.reduce((sum, d) => sum + (d.rebufferCount ?? 0), 0);
+    const totalIssues = health5mData.reduce((sum, d) => sum + (d.issueCount ?? 0), 0);
+    const totalBufferDry = health5mData.reduce((sum, d) => sum + (d.bufferDryCount ?? 0), 0);
+    const avgBitrate = health5mData.reduce((sum, d) => sum + (d.avgBitrate ?? 0), 0) / health5mData.length;
+    const avgFps = health5mData.reduce((sum, d) => sum + (d.avgFps ?? 0), 0) / health5mData.length;
+    return { totalRebuffers, totalIssues, totalBufferDry, avgBitrate, avgFps };
+  });
+
+  let viewerSessions = $derived(
+    $viewerSessionsStore.data?.analytics?.lifecycle?.viewerSessionsConnection?.edges?.map(e => e.node) ?? []
+  );
+  let routingEvents = $derived(
+    ($routingEventsStore.data?.analytics?.infra?.routingEventsConnection?.edges ?? []).map(e => e.node)
+  );
+  let loading = $derived($streamStore.fetching || $healthStore.fetching || $viewerSessionsStore.fetching || $routingEventsStore.fetching);
+
+  // Aggregate viewer geography from viewer sessions
+  let viewerGeography = $derived.by(() => {
+    const countryMap = new Map<string, { count: number; cities: Map<string, number> }>();
+
+    for (const session of viewerSessions) {
+      const country = session.countryCode || 'Unknown';
+      const city = session.city || 'Unknown';
+
+      if (!countryMap.has(country)) {
+        countryMap.set(country, { count: 0, cities: new Map() });
+      }
+      const countryData = countryMap.get(country)!;
+      countryData.count++;
+      countryData.cities.set(city, (countryData.cities.get(city) || 0) + 1);
+    }
+
+    const countries = Array.from(countryMap.entries())
+      .map(([code, data]) => ({
+        countryCode: code,
+        viewerCount: data.count,
+        topCities: Array.from(data.cities.entries())
+          .map(([city, count]) => ({ city, count }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 3)
+      }))
+      .sort((a, b) => b.viewerCount - a.viewerCount);
+
+    return {
+      totalCountries: countries.length,
+      countries: countries.slice(0, 5),
+    };
+  });
+
+  // Routing efficiency for this stream
+  let streamRoutingEfficiency = $derived.by(() => {
+    if (routingEvents.length === 0) return null;
+
+    let successCount = 0;
+    let totalDistance = 0;
+    let distanceCount = 0;
+
+    for (const event of routingEvents) {
+      if (event.selectedNode) successCount++;
+      if (event.routingDistance) {
+        totalDistance += event.routingDistance;
+        distanceCount++;
+      }
+    }
+
+    return {
+      totalDecisions: routingEvents.length,
+      successRate: (successCount / routingEvents.length) * 100,
+      avgDistance: distanceCount > 0 ? totalDistance / distanceCount : 0,
+    };
+  });
   let error = $state<string | null>(null);
+  let timeRange = $state("24h");
+  let currentRange = $derived(resolveTimeRange(timeRange));
+  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) => ["24h", "7d", "30d"].includes(option.value));
 
   // Pagination state
   let healthMetricsDisplayCount = $state(10);
   let trackListDisplayCount = $state(10);
+  let viewerSessionsDisplayCount = $state(10);
   let hasMoreHealthMetrics = $derived(healthMetrics.length > healthMetricsDisplayCount);
   let hasMoreTrackListEvents = $derived(trackListEvents.length > trackListDisplayCount);
+  let hasMoreViewerSessions = $derived(viewerSessions.length > viewerSessionsDisplayCount);
   let loadingMoreHealthMetrics = $state(false);
   let loadingMoreTrackListEvents = $state(false);
+  let loadingMoreViewerSessions = $state(false);
 
   // Check if there are more pages to load from server
   let healthMetricsHasNextPage = $derived(
-    $healthStore.data?.stream?.healthConnection?.pageInfo?.hasNextPage ?? false
+    $healthStore.data?.analytics?.health?.streamHealthConnection?.pageInfo?.hasNextPage ?? false
   );
   let trackListEventsHasNextPage = $derived(
-    $healthStore.data?.stream?.trackListConnection?.pageInfo?.hasNextPage ?? false
+    $healthStore.data?.analytics?.lifecycle?.trackListConnection?.pageInfo?.hasNextPage ?? false
+  );
+  let viewerSessionsHasNextPage = $derived(
+    $viewerSessionsStore.data?.analytics?.lifecycle?.viewerSessionsConnection?.pageInfo?.hasNextPage ?? false
   );
 
-  // Time range for historical data (last 24 hours)
-  const getTimeRange = () => ({
-    start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    end: new Date().toISOString(),
-  });
+  const getTimeRange = () => {
+    const range = resolveTimeRange(timeRange);
+    currentRange = range;
+    return { start: range.start, end: range.end };
+  };
+
+  const getMetricsFirst = () => {
+    const range = resolveTimeRange(timeRange);
+    currentRange = range;
+    if (range.days <= 7) {
+      return Math.min(range.days * 24 * 12, 1000);
+    }
+    return 288;
+  };
 
   // Auto-refresh interval
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
@@ -180,7 +318,7 @@
 
   // Effect to handle track list subscription updates
   $effect(() => {
-    const update = $trackListSub.data?.trackListUpdates;
+    const update = $trackListSub.data?.liveTrackListUpdates;
     if (update) {
       untrack(() => handleTrackListUpdate(update));
     }
@@ -190,7 +328,7 @@
   // IMPORTANT: The length check must be INSIDE untrack() to avoid creating a reactive dependency
   // on trackListEvents, which would cause an effect loop
   $effect(() => {
-    const edges = $healthStore.data?.stream?.trackListConnection?.edges;
+    const edges = $healthStore.data?.analytics?.lifecycle?.trackListConnection?.edges;
     if (edges) {
       untrack(() => {
         // Only sync if we haven't populated yet (check inside untrack to avoid dependency)
@@ -214,9 +352,11 @@
     // Set up auto-refresh every 30 seconds for current health
     refreshInterval = setInterval(async () => {
       try {
-        // Use streamId (route param) which is the same as the internal UUID
         if (streamId) {
-          await healthStore.fetch({ variables: { id: streamId, timeRange: getTimeRange(), metricsFirst: 100 } });
+          const analyticsStreamId = stream?.id ?? streamId;
+          await healthStore.fetch({
+            variables: { id: streamId, streamId: analyticsStreamId, timeRange: getTimeRange(), metricsFirst: getMetricsFirst() }
+          });
         }
       } catch (err) {
         console.error("Failed to refresh health data:", err);
@@ -233,8 +373,7 @@
 
   function startTrackListSubscription() {
     if (!stream) return;
-    // Use stream.id (internal UUID) for subscriptions - this is the canonical identifier
-    trackListSub.listen({ stream: stream.id });
+    trackListSub.listen({ streamId: stream.id });
   }
 
 
@@ -253,7 +392,8 @@
   async function loadStreamData() {
     if (!streamId) return;
     try {
-      const result = await streamStore.fetch({ variables: { id: streamId } });
+      const analyticsStreamId = stream?.id ?? streamId;
+      const result = await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
 
       if (!result.data?.stream) {
         error = "Stream not found";
@@ -272,15 +412,32 @@
   async function loadHealthData() {
     if (!streamId) return;
     try {
-      // Use streamId (route param) which is the same as the internal UUID
       // Load all health data in a single query via Stream edges
+      const analyticsStreamId = stream?.id ?? streamId;
       await healthStore.fetch({
         variables: {
           id: streamId,
+          streamId: analyticsStreamId,
           timeRange: getTimeRange(),
-          metricsFirst: 100, // Combined for both health and client metrics
+          metricsFirst: getMetricsFirst(), // Combined for both health and client metrics
         },
       });
+      // Fetch viewer sessions and routing events in parallel
+      await Promise.all([
+        viewerSessionsStore.fetch({
+          variables: {
+            streamId: analyticsStreamId,
+            timeRange: getTimeRange(),
+            first: 200,
+          },
+        }).catch(() => null),
+        routingEventsStore.fetch({
+          variables: {
+            streamId: analyticsStreamId,
+            timeRange: getTimeRange(),
+          },
+        }).catch(() => null),
+      ]);
     } catch (err: any) {
       // Ignore AbortErrors which happen on navigation/cancellation
       if (err.name === 'AbortError' || err.message === 'aborted' || err.message === 'Aborted') {
@@ -291,11 +448,11 @@
     }
   }
 
-  function handleTrackListUpdate(event: NonNullable<TrackListUpdates$result["trackListUpdates"]>) {
+  function handleTrackListUpdate(event: NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>) {
     // Add the new track list event to the list
     const newEvent: TrackListEventType = {
       timestamp: new Date().toISOString(),
-      stream: event.streamName ?? "",
+      streamId: event.streamId ?? "",
       trackList: (event.tracks ?? []).map(t => t?.trackName).filter(Boolean).join(", "),
       trackCount: event.totalTracks || 0,
       tracks: event.tracks ?? [],
@@ -312,6 +469,21 @@
 
   function formatTimestamp(timestamp: string) {
     return new Date(timestamp).toLocaleString();
+  }
+
+  function parseBufferPayload(payload: unknown): Record<string, unknown> | null {
+    if (!payload) return null;
+    if (typeof payload === "string") {
+      try {
+        return JSON.parse(payload) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    }
+    if (typeof payload === "object") {
+      return payload as Record<string, unknown>;
+    }
+    return null;
   }
 
   // Parse tracks from trackList JSON string if tracks array is empty/malformed
@@ -352,10 +524,39 @@
     }
   }
 
+  async function loadMoreViewerSessions() {
+    if (viewerSessions.length > viewerSessionsDisplayCount) {
+      viewerSessionsDisplayCount = Math.min(viewerSessionsDisplayCount + 10, viewerSessions.length);
+      return;
+    }
+    if (!viewerSessionsHasNextPage || loadingMoreViewerSessions) return;
+    try {
+      loadingMoreViewerSessions = true;
+      await viewerSessionsStore.loadNextPage();
+    } catch (err) {
+      console.error("Failed to load more viewer sessions:", err);
+    } finally {
+      loadingMoreViewerSessions = false;
+    }
+  }
+
+  function handleTimeRangeChange(value: string) {
+    timeRange = value;
+    trackListEvents = [];
+    healthMetricsDisplayCount = 10;
+    trackListDisplayCount = 10;
+    viewerSessionsDisplayCount = 10;
+    loadHealthData();
+  }
+
   const ArrowLeftIcon = getIconComponent("ArrowLeft");
   const AlertTriangleIcon = getIconComponent("AlertTriangle");
   const PauseIcon = getIconComponent("Pause");
   const InfoIcon = getIconComponent("Info");
+  const CalendarIcon = getIconComponent("Calendar");
+  const GlobeIcon = getIconComponent("Globe2");
+  const ActivityIcon = getIconComponent("Activity");
+  const MapPinIcon = getIconComponent("MapPin");
 
   // Protocol hint tooltip text for packet loss N/A values
   const packetLossHint = "Packet statistics are available for UDP-based protocols (SRT, WebRTC) which prioritize low latency. HTTP-based protocols (HLS, DASH) use TCP which guarantees delivery but adds latency through retransmission.";
@@ -368,21 +569,34 @@
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
-    <div class="flex items-center gap-4">
-      <Button
-        variant="ghost"
-        size="icon"
-        class="rounded-full"
-        onclick={navigateBack}
-      >
-        <ArrowLeftIcon class="w-5 h-5" />
-      </Button>
-      <div>
-        <h1 class="text-xl font-bold text-foreground">Stream Health</h1>
-        <p class="text-sm text-muted-foreground mt-0.5">
-          {#if stream}{stream.name} • {/if}Last 24 hours
-        </p>
+    <div class="flex items-center justify-between gap-4">
+      <div class="flex items-center gap-4">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="rounded-full"
+          onclick={navigateBack}
+        >
+          <ArrowLeftIcon class="w-5 h-5" />
+        </Button>
+        <div>
+          <h1 class="text-xl font-bold text-foreground">Stream Health</h1>
+          <p class="text-sm text-muted-foreground mt-0.5">
+            {#if stream}{stream.name} • {/if}{currentRange.label}
+          </p>
+        </div>
       </div>
+      <Select value={timeRange} onValueChange={handleTimeRangeChange} type="single">
+        <SelectTrigger class="min-w-[150px]">
+          <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
+          {currentRange.label}
+        </SelectTrigger>
+        <SelectContent>
+          {#each timeRangeOptions as option (option.value)}
+            <SelectItem value={option.value}>{option.label}</SelectItem>
+          {/each}
+        </SelectContent>
+      </Select>
     </div>
   </div>
 
@@ -577,85 +791,6 @@
           </div>
         {/if}
 
-        <!-- Audio Details -->
-        {#if currentHealth.audioCodec || currentHealth.audioChannels || currentHealth.audioSampleRate}
-          <div class="slab border-t-0">
-            <div class="slab-header">
-              <h3>Audio Details</h3>
-            </div>
-            <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
-              {#if currentHealth.audioCodec}
-                <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Audio Codec</p>
-                  <p class="font-mono text-lg text-accent-purple">{currentHealth.audioCodec}</p>
-                </div>
-              {/if}
-              {#if currentHealth.audioChannels}
-                <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Channels</p>
-                  <p class="font-mono text-lg text-info">{currentHealth.audioChannels}</p>
-                </div>
-              {/if}
-              {#if currentHealth.audioSampleRate}
-                <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Sample Rate</p>
-                  <p class="font-mono text-lg text-primary">{(currentHealth.audioSampleRate / 1000).toFixed(1)} kHz</p>
-                </div>
-              {/if}
-              {#if currentHealth.audioBitrate}
-                <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Audio Bitrate</p>
-                  <p class="font-mono text-lg text-warning-alt">{currentHealth.audioBitrate} kbps</p>
-                </div>
-              {/if}
-            </GridSeam>
-          </div>
-        {/if}
-      {/if}
-
-      <!-- Ingest Network Stats (from live_streams) -->
-      {#if streamAnalytics && (streamAnalytics.packetsSent || streamAnalytics.packetsLost)}
-        <div class="slab">
-          <div class="slab-header">
-            <h2>Ingest Network Stats</h2>
-            <span class="text-xs text-muted-foreground font-normal normal-case ml-2">
-              Stream-level packet statistics
-            </span>
-          </div>
-          <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
-            <div class="p-4">
-              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packets Sent</p>
-              <p class="font-mono text-lg text-info">
-                {streamAnalytics.packetsSent?.toLocaleString() ?? 'N/A'}
-              </p>
-            </div>
-            <div class="p-4">
-              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packets Lost</p>
-              <p class="font-mono text-lg {(streamAnalytics.packetsLost ?? 0) > 0 ? 'text-warning' : 'text-success'}">
-                {streamAnalytics.packetsLost?.toLocaleString() ?? '0'}
-              </p>
-            </div>
-            <div class="p-4">
-              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packets Retransmitted</p>
-              <p class="font-mono text-lg text-muted-foreground">
-                {streamAnalytics.packetsRetrans?.toLocaleString() ?? '0'}
-              </p>
-            </div>
-            <div class="p-4">
-              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packet Loss Rate</p>
-              <p class="font-mono text-lg {(streamAnalytics.packetLossRate ?? 0) > 0.01 ? 'text-warning' : 'text-success'} flex items-center gap-1">
-                {streamAnalytics.packetLossRate !== null && streamAnalytics.packetLossRate !== undefined
-                  ? `${(streamAnalytics.packetLossRate * 100).toFixed(3)}%`
-                  : 'N/A'}
-                {#if streamAnalytics.packetLossRate === null || streamAnalytics.packetLossRate === undefined}
-                  <span title={packetLossHint}>
-                    <InfoIcon class="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-                  </span>
-                {/if}
-              </p>
-            </div>
-          </GridSeam>
-        </div>
       {/if}
 
       <!-- Client Quality Section -->
@@ -760,6 +895,100 @@
         </div>
       {/if}
 
+      <!-- Viewer Geography & Routing Section -->
+      {#if viewerGeography.countries.length > 0 || routingEvents.length > 0}
+        <div class="dashboard-grid">
+          <!-- Viewer Geography -->
+          {#if viewerGeography.countries.length > 0}
+            <div class="slab">
+              <div class="slab-header">
+                <div class="flex items-center gap-2">
+                  <GlobeIcon class="w-4 h-4 text-primary" />
+                  <h3>Viewer Geography</h3>
+                </div>
+                <span class="text-xs text-muted-foreground font-normal normal-case ml-2">
+                  {viewerGeography.totalCountries} countries
+                </span>
+              </div>
+              <div class="slab-body--padded">
+                <div class="space-y-3">
+                  {#each viewerGeography.countries as country (country.countryCode)}
+                    <div class="p-3 border border-border/30 bg-muted/10">
+                      <div class="flex items-center justify-between mb-2">
+                        <span class="font-medium text-foreground">{country.countryCode}</span>
+                        <span class="text-sm font-mono text-primary">{country.viewerCount} sessions</span>
+                      </div>
+                      {#if country.topCities.length > 0}
+                        <div class="flex flex-wrap gap-2">
+                          {#each country.topCities as city (city.city)}
+                            <span class="px-2 py-0.5 bg-muted/50 text-xs text-muted-foreground rounded">
+                              <MapPinIcon class="w-3 h-3 inline mr-1" />{city.city} ({city.count})
+                            </span>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Routing Efficiency -->
+          {#if streamRoutingEfficiency}
+            <div class="slab">
+              <div class="slab-header">
+                <div class="flex items-center gap-2">
+                  <ActivityIcon class="w-4 h-4 text-success" />
+                  <h3>Routing Efficiency</h3>
+                </div>
+              </div>
+              <div class="slab-body--padded">
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                  <div class="text-center p-3 border border-border/30 bg-muted/10">
+                    <p class="text-xs text-muted-foreground uppercase mb-1">Decisions</p>
+                    <p class="text-xl font-bold text-primary">{streamRoutingEfficiency.totalDecisions}</p>
+                  </div>
+                  <div class="text-center p-3 border border-border/30 bg-muted/10">
+                    <p class="text-xs text-muted-foreground uppercase mb-1">Success Rate</p>
+                    <p class="text-xl font-bold text-success">{streamRoutingEfficiency.successRate.toFixed(1)}%</p>
+                  </div>
+                  <div class="text-center p-3 border border-border/30 bg-muted/10">
+                    <p class="text-xs text-muted-foreground uppercase mb-1">Avg Distance</p>
+                    <p class="text-xl font-bold text-warning">{streamRoutingEfficiency.avgDistance.toFixed(0)}km</p>
+                  </div>
+                </div>
+
+                <!-- Recent Routing Decisions -->
+                {#if routingEvents.length > 0}
+                  <div class="border-t border-border/30 pt-3">
+                    <p class="text-xs text-muted-foreground uppercase tracking-wide mb-2">Recent Decisions</p>
+                    <div class="space-y-2 max-h-48 overflow-y-auto">
+                      {#each routingEvents.slice(0, 5) as evt, i (i)}
+                        <div class="flex items-center justify-between p-2 bg-muted/20 text-xs">
+                          <div class="flex items-center gap-2">
+                            <span class="px-1.5 py-0.5 rounded {evt.status === 'success' || evt.status === 'SUCCESS' ? 'bg-success/20 text-success' : 'bg-destructive/20 text-destructive'} font-mono">
+                              {evt.status}
+                            </span>
+                            <span class="text-muted-foreground">→</span>
+                            <span class="font-mono text-foreground">{evt.selectedNode || 'N/A'}</span>
+                          </div>
+                          <div class="text-right text-muted-foreground">
+                            {#if evt.routingDistance}
+                              <span class="font-mono">{evt.routingDistance.toFixed(0)}km</span>
+                            {/if}
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       <!-- Two-column grid: Health Metrics + Track List -->
       <div class="dashboard-grid">
         <!-- Recent Health Metrics -->
@@ -774,7 +1003,7 @@
           </div>
           {#if healthMetrics.length > 0}
             <div class="slab-body--flush max-h-96 overflow-y-auto">
-              {#each healthMetrics.slice(0, healthMetricsDisplayCount) as metric (metric.timestamp)}
+              {#each healthMetrics.slice(0, healthMetricsDisplayCount) as metric (metric.timestamp + metric.nodeId)}
                 <div class="p-3 border-b border-border/30 last:border-b-0">
                   <div class="flex justify-between items-start mb-2">
                     <span class="text-xs text-muted-foreground">{formatTimestamp(metric.timestamp)}</span>
@@ -817,7 +1046,7 @@
             {/if}
           {:else}
             <div class="slab-body--padded text-center">
-              <p class="text-muted-foreground py-8">No health data in the last 24 hours</p>
+              <p class="text-muted-foreground py-8">No health data in {currentRange.label.toLowerCase()}</p>
             </div>
           {/if}
         </div>
@@ -938,6 +1167,78 @@
         </div>
       </div>
 
+      <!-- Buffer Events -->
+      {#if bufferEvents.length > 0}
+        <div class="slab">
+          <div class="slab-header flex items-center justify-between">
+            <h3>Buffer Events</h3>
+            <span class="text-xs text-muted-foreground font-normal normal-case">
+              {Math.min(10, bufferEvents.length)} of {bufferEvents.length}
+            </span>
+          </div>
+          <div class="slab-body--flush max-h-72 overflow-y-auto">
+            {#each bufferEvents.slice(0, 10) as event (event.eventId)}
+              {@const payload = parseBufferPayload(event.payload)}
+              {@const health = payload?.health as Record<string, unknown> | undefined}
+              {@const trackCount = Array.isArray(health?.tracks) ? health?.tracks?.length : null}
+              <div class="p-3 border-b border-border/30 last:border-b-0">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="flex items-center gap-2">
+                    <BufferStateIndicator bufferState={event.bufferState} size="sm" compact />
+                    <div>
+                      <p class="font-medium text-foreground">Buffer {event.bufferState}</p>
+                      {#if event.nodeId}
+                        <p class="text-xs text-muted-foreground">Node: {event.nodeId}</p>
+                      {/if}
+                    </div>
+                  </div>
+                  <span class="text-xs text-muted-foreground">{formatTimestamp(event.timestamp)}</span>
+                </div>
+
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-xs">
+                  <div>
+                    <span class="text-muted-foreground">Buffer</span>
+                    <p class="font-mono text-foreground">
+                      {typeof health?.buffer === "number" ? `${health?.buffer}ms` : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <span class="text-muted-foreground">Jitter</span>
+                    <p class="font-mono text-foreground">
+                      {typeof health?.jitter === "number" ? `${health?.jitter}ms` : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <span class="text-muted-foreground">Max Keepaway</span>
+                    <p class="font-mono text-foreground">
+                      {typeof health?.maxkeepaway === "number" ? `${health?.maxkeepaway}ms` : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <span class="text-muted-foreground">Tracks</span>
+                    <p class="font-mono text-foreground">{trackCount ?? "—"}</p>
+                  </div>
+                </div>
+
+                {#if typeof health?.issues === "string" && health?.issues.length > 0}
+                  <div class="mt-3 p-2 bg-warning/10 border border-warning/30 flex items-start gap-2">
+                    <AlertTriangleIcon class="w-4 h-4 text-warning mt-0.5 shrink-0" />
+                    <p class="text-sm text-warning">{health?.issues}</p>
+                  </div>
+                {/if}
+
+                {#if !health && event.eventData}
+                  <div class="mt-3 p-2 bg-muted/30 border border-border/30">
+                    <p class="text-xs text-muted-foreground">Event Data</p>
+                    <p class="text-xs font-mono text-foreground break-all">{event.eventData}</p>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <!-- Rebuffering Events -->
       {#if rebufferingEvents.length > 0}
         <div class="slab">
@@ -945,7 +1246,7 @@
             <h3>Rebuffering Events</h3>
           </div>
           <div class="slab-body--flush max-h-64 overflow-y-auto">
-            {#each rebufferingEvents.slice(0, 10) as event (event.timestamp)}
+            {#each rebufferingEvents.slice(0, 10) as event, i (`${event.timestamp}-${event.nodeId}-${event.rebufferStart}-${i}`)}
               <div class="p-3 border-b border-border/30 last:border-b-0">
                 <div class="flex justify-between items-start">
                   <div class="flex items-center gap-2">
@@ -965,6 +1266,74 @@
           </div>
         </div>
       {/if}
+
+      <!-- Viewer Sessions -->
+      <div class="slab">
+        <div class="slab-header flex items-center justify-between">
+          <h3>Viewer Sessions</h3>
+          {#if viewerSessions.length > 0}
+            <span class="text-xs text-muted-foreground font-normal normal-case">
+              {Math.min(viewerSessionsDisplayCount, viewerSessions.length)} of {viewerSessions.length}{#if viewerSessionsHasNextPage}+{/if}
+            </span>
+          {/if}
+        </div>
+        {#if viewerSessions.length > 0}
+          <div class="slab-body--flush">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Session</TableHead>
+                  <TableHead>Protocol</TableHead>
+                  <TableHead>Location</TableHead>
+                  <TableHead class="text-right">Duration</TableHead>
+                  <TableHead class="text-right">Quality</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {#each viewerSessions.slice(0, viewerSessionsDisplayCount) as session (session.id)}
+                  <TableRow>
+                    <TableCell class="text-xs text-muted-foreground font-mono">
+                      {formatTimestamp(session.timestamp)}
+                    </TableCell>
+                    <TableCell class="font-mono text-xs">
+                      {session.sessionId?.slice(0, 8) ?? "—"}
+                    </TableCell>
+                    <TableCell class="text-xs">
+                      {session.connector ?? "—"}
+                    </TableCell>
+                    <TableCell class="text-xs">
+                      {session.city || "Unknown"}{session.countryCode ? `, ${session.countryCode}` : ""}
+                    </TableCell>
+                    <TableCell class="text-xs text-right">
+                      {session.durationSeconds ? `${Math.round(session.durationSeconds)}s` : "—"}
+                    </TableCell>
+                    <TableCell class="text-xs text-right">
+                      {session.connectionQuality != null ? `${(session.connectionQuality * 100).toFixed(1)}%` : "—"}
+                    </TableCell>
+                  </TableRow>
+                {/each}
+              </TableBody>
+            </Table>
+          </div>
+          {#if hasMoreViewerSessions || viewerSessionsHasNextPage}
+            <div class="slab-actions">
+              <Button
+                variant="ghost"
+                class="w-full"
+                onclick={loadMoreViewerSessions}
+                disabled={loadingMoreViewerSessions}
+              >
+                {loadingMoreViewerSessions ? "Loading..." : "Load More Sessions"}
+              </Button>
+            </div>
+          {/if}
+        {:else}
+          <div class="slab-body--padded text-center">
+            <p class="text-muted-foreground py-6">No viewer sessions in {currentRange.label.toLowerCase()}</p>
+          </div>
+        {/if}
+      </div>
 
       <!-- Buffer Health Histogram -->
       {#if bufferHealthValues.length > 0}
@@ -1010,6 +1379,94 @@
           </div>
         {/if}
       </div>
+
+      <!-- 5-Minute Health Aggregates -->
+      {#if health5mData.length > 0}
+      <div class="slab">
+        <div class="slab-header flex items-center justify-between">
+          <h3>5-Minute Aggregates</h3>
+          {#if health5mSummary}
+            <div class="flex items-center gap-4 text-xs">
+              <span class="text-muted-foreground">
+                Rebuffers: <span class="font-semibold {health5mSummary.totalRebuffers === 0 ? 'text-success' : 'text-warning'}">{health5mSummary.totalRebuffers}</span>
+              </span>
+              <span class="text-muted-foreground">
+                Issues: <span class="font-semibold {health5mSummary.totalIssues === 0 ? 'text-success' : 'text-destructive'}">{health5mSummary.totalIssues}</span>
+              </span>
+              <span class="text-muted-foreground">
+                Buffer Dry: <span class="font-semibold {health5mSummary.totalBufferDry === 0 ? 'text-success' : 'text-warning'}">{health5mSummary.totalBufferDry}</span>
+              </span>
+            </div>
+          {/if}
+        </div>
+        <div class="slab-body--padded">
+          <!-- 5m Trend Bars -->
+          <div class="space-y-4">
+            <!-- Rebuffer Count Trend -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-muted-foreground uppercase tracking-wide">Rebuffers Over Time</span>
+                <span class="text-xs text-muted-foreground">{health5mData.length} intervals</span>
+              </div>
+              <div class="flex items-end gap-px h-12">
+                {#each health5mData as point}
+                  {@const maxRebuffers = Math.max(...health5mData.map(d => d.rebufferCount ?? 0), 1)}
+                  {@const heightPct = (point.rebufferCount ?? 0) / maxRebuffers * 100}
+                  <div
+                    class="flex-1 transition-all {point.rebufferCount ? 'bg-warning' : 'bg-success/30'}"
+                    style="height: {Math.max(heightPct, 4)}%"
+                    title="{new Date(point.timestamp).toLocaleTimeString()}: {point.rebufferCount ?? 0} rebuffers"
+                  ></div>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Issue Count Trend -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-muted-foreground uppercase tracking-wide">Issues Over Time</span>
+              </div>
+              <div class="flex items-end gap-px h-12">
+                {#each health5mData as point}
+                  {@const maxIssues = Math.max(...health5mData.map(d => d.issueCount ?? 0), 1)}
+                  {@const heightPct = (point.issueCount ?? 0) / maxIssues * 100}
+                  <div
+                    class="flex-1 transition-all {point.issueCount ? 'bg-destructive' : 'bg-success/30'}"
+                    style="height: {Math.max(heightPct, 4)}%"
+                    title="{new Date(point.timestamp).toLocaleTimeString()}: {point.issueCount ?? 0} issues{point.sampleIssues ? ` (${point.sampleIssues})` : ''}"
+                  ></div>
+                {/each}
+              </div>
+            </div>
+
+            <!-- Avg Bitrate Trend -->
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-muted-foreground uppercase tracking-wide">Avg Bitrate</span>
+                <span class="text-xs text-info font-mono">{health5mSummary ? (health5mSummary.avgBitrate / 1000).toFixed(1) : 0} kbps avg</span>
+              </div>
+              <div class="flex items-end gap-px h-12">
+                {#each health5mData as point}
+                  {@const maxBitrate = Math.max(...health5mData.map(d => d.avgBitrate ?? 0), 1)}
+                  {@const heightPct = (point.avgBitrate ?? 0) / maxBitrate * 100}
+                  <div
+                    class="flex-1 bg-info/60 transition-all"
+                    style="height: {Math.max(heightPct, 4)}%"
+                    title="{new Date(point.timestamp).toLocaleTimeString()}: {((point.avgBitrate ?? 0) / 1000).toFixed(1)} kbps"
+                  ></div>
+                {/each}
+              </div>
+            </div>
+          </div>
+
+          <!-- Time Range Labels -->
+          <div class="flex justify-between text-[10px] text-muted-foreground mt-2 pt-2 border-t border-border/30">
+            <span>{health5mData[0] ? new Date(health5mData[0].timestamp).toLocaleTimeString() : ''}</span>
+            <span>{health5mData.length > 0 ? new Date(health5mData[health5mData.length - 1].timestamp).toLocaleTimeString() : ''}</span>
+          </div>
+        </div>
+      </div>
+      {/if}
     {/if}
   </div>
 </div>

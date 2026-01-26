@@ -11,7 +11,7 @@ var ErrNotFound = errors.New("record not found")
 
 type Certificate struct {
 	ID        string
-	TenantID  sql.NullString // NULL for platform certificates, set for tenant custom domains
+	TenantID  sql.NullString // NULL for platform certificates, set for tenant subdomains (platform-managed)
 	Domain    string
 	CertPEM   string
 	KeyPEM    string

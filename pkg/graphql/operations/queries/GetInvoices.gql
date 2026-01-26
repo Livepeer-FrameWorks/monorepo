@@ -1,0 +1,29 @@
+# Fetch paginated list of invoices with line items and payment status
+query GetInvoices($first: Int = 50, $after: String) {
+  invoicesConnection(page: { first: $first, after: $after }) @paginate {
+    edges {
+      cursor
+      node {
+        id
+        amount
+        currency
+        status
+        dueDate
+        createdAt
+        lineItems {
+          description
+          quantity
+          unitPrice
+          total
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

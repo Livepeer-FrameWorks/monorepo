@@ -31,6 +31,7 @@ type AssetType string
 const (
 	AssetTypeClip AssetType = "clip"
 	AssetTypeDVR  AssetType = "dvr"
+	AssetTypeVOD  AssetType = "vod"
 )
 
 // FreezeCandidate holds information about an asset candidate for freezing
@@ -167,6 +168,8 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 			_, _ = storageManager.DefrostClip(ctx, req)
 		} else if req.GetAssetType() == "dvr" {
 			_, _ = storageManager.DefrostDVR(ctx, req)
+		} else if req.GetAssetType() == "vod" || req.GetAssetType() == "upload" {
+			_, _ = storageManager.DefrostVOD(ctx, req)
 		}
 	})
 
@@ -711,10 +714,9 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	return nil
 }
 
-// DefrostClip downloads a clip from S3 back to local storage using presigned GET URL
-func (sm *StorageManager) DefrostClip(ctx context.Context, req *pb.DefrostRequest) (*pb.DefrostComplete, error) {
+func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.DefrostRequest, assetType AssetType) (*pb.DefrostComplete, error) {
 	// Check if already defrosting
-	job, shouldInitiate := sm.getOrCreateDefrostJob(req.AssetHash, AssetTypeClip, req.RequestId)
+	job, shouldInitiate := sm.getOrCreateDefrostJob(req.AssetHash, assetType, req.RequestId)
 	if !shouldInitiate {
 		// Wait for existing defrost
 		select {
@@ -755,18 +757,23 @@ func (sm *StorageManager) DefrostClip(ctx context.Context, req *pb.DefrostReques
 		return nil, err
 	}
 
+	// Ensure destination directory exists
+	if err := os.MkdirAll(filepath.Dir(req.LocalPath), 0755); err != nil {
+		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		return nil, fmt.Errorf("failed to create directory: %w", err)
+	}
+
 	// Notify cache refill started
 	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:    pb.StorageLifecycleData_ACTION_CACHE_STARTED,
-		AssetType: string(AssetTypeClip),
+		AssetType: string(assetType),
 		AssetHash: req.AssetHash,
 	})
 
 	startTime := time.Now()
 
 	// Download .dtsh if available (check SegmentUrls)
-	// Clip filenames are typically hash.ext. .dtsh is hash.ext.dtsh
-	// We might not know the exact extension here if not provided, but req.LocalPath has it.
+	// Filenames are typically hash.ext. .dtsh is hash.ext.dtsh
 	dtshName := filepath.Base(req.LocalPath) + ".dtsh"
 	if url, ok := req.SegmentUrls[dtshName]; ok {
 		dtshPath := req.LocalPath + ".dtsh"
@@ -802,7 +809,7 @@ func (sm *StorageManager) DefrostClip(ctx context.Context, req *pb.DefrostReques
 	durationMs := duration.Milliseconds()
 	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:     pb.StorageLifecycleData_ACTION_CACHED,
-		AssetType:  string(AssetTypeClip),
+		AssetType:  string(assetType),
 		AssetHash:  req.AssetHash,
 		SizeBytes:  sizeBytes,
 		LocalPath:  &req.LocalPath,
@@ -822,7 +829,7 @@ func (sm *StorageManager) DefrostClip(ctx context.Context, req *pb.DefrostReques
 		"asset_hash": req.AssetHash,
 		"size_mb":    float64(sizeBytes) / (1024 * 1024),
 		"duration":   duration,
-	}).Info("Clip defrosted from S3")
+	}).Info("Asset defrosted from S3")
 
 	return &pb.DefrostComplete{
 		RequestId: req.RequestId,
@@ -831,6 +838,16 @@ func (sm *StorageManager) DefrostClip(ctx context.Context, req *pb.DefrostReques
 		LocalPath: req.LocalPath,
 		SizeBytes: sizeBytes,
 	}, nil
+}
+
+// DefrostClip downloads a clip from S3 back to local storage using presigned GET URL
+func (sm *StorageManager) DefrostClip(ctx context.Context, req *pb.DefrostRequest) (*pb.DefrostComplete, error) {
+	return sm.defrostSingleFile(ctx, req, AssetTypeClip)
+}
+
+// DefrostVOD downloads a VOD asset from S3 back to local storage using presigned GET URL
+func (sm *StorageManager) DefrostVOD(ctx context.Context, req *pb.DefrostRequest) (*pb.DefrostComplete, error) {
+	return sm.defrostSingleFile(ctx, req, AssetTypeVOD)
 }
 
 // DefrostDVR downloads a DVR recording from S3 using streaming defrost (HLS live mode)

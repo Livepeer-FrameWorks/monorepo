@@ -1,0 +1,14 @@
+mutation GetCryptoTopupStatus($topupId: ID!) {
+  cryptoTopupStatus(topupId: $topupId) {
+    id
+    depositAddress
+    asset
+    status
+    txHash
+    confirmations
+    receivedAmountWei
+    creditedAmountCents
+    expiresAt
+    detectedAt
+  }
+}

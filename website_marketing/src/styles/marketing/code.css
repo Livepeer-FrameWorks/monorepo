@@ -15,6 +15,23 @@
     box-shadow: none;
   }
 
+  /* Flush variant: full-bleed, square corners, structural slab feel */
+  .marketing-code-panel--flush {
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+    background: linear-gradient(150deg, rgba(20, 24, 40, 0.96), rgba(12, 16, 28, 0.92));
+  }
+
+  .marketing-code-panel--flush .marketing-code-panel__header {
+    border-radius: 0;
+    border-bottom: 1px solid var(--feature-seam-color-soft, rgba(125, 207, 255, 0.14));
+  }
+
+  .marketing-code-panel--flush .marketing-code-panel__body {
+    background: transparent;
+  }
+
   .marketing-code-panel__header {
     display: flex;
     align-items: center;

@@ -14,14 +14,13 @@ The Bridge is the GraphQL API Gateway that provides a unified interface for all 
 - Service aggregation from Commodore, Periscope, Purser, Signalman
 - Authentication and authorization layer
 - Query optimization with DataLoader pattern
-- REST compatibility layer for gradual migration
 
 ## Architecture
 - Framework: gqlgen (Go GraphQL server)
 - Caching: optional Redis for query results
-- Auth: JWT or service token; minimal public allowlist (status, player endpoint resolve); WebSocket authenticates on init
+- Auth: JWT or service token; minimal public allowlist (status, viewer endpoint resolve, ingest endpoint resolve); WebSocket authenticates on init
 - Subscriptions: WebSocket via Signalman
-- Service calls: HTTP to internal services
+- Service calls: gRPC (primary) with a few HTTP integrations where needed
 
 ## Run (dev)
 - Start the full stack from repo root: `docker-compose up -d`

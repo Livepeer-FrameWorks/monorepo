@@ -6,6 +6,7 @@
   import { createEventDispatcher, untrack } from "svelte";
   import { getIconComponent } from "../iconUtils";
   import { sidebarStore } from "../stores/sidebar.svelte";
+  import { getMarketingSiteUrl } from "$lib/config";
 
   interface Props {
     collapsed?: boolean;
@@ -14,6 +15,7 @@
   let { collapsed = false }: Props = $props();
 
   const dispatch = createEventDispatcher();
+  const marketingSiteUrl = getMarketingSiteUrl().replace(/\/$/, "");
 
   // Track current child index for cycling when collapsed
   let sectionChildIndex: Record<string, number> = {};
@@ -136,7 +138,7 @@
     if (item.external) {
       // Handle external links - use actual contact page
       if (item.name === "Community") {
-        window.open("https://frameworks.network/contact", "_blank");
+        window.open(`${marketingSiteUrl}/contact`, "_blank");
       }
       return;
     }

@@ -13,39 +13,43 @@ CREATE SCHEMA IF NOT EXISTS commodore;
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "citext";
 
 -- ============================================================================
 -- USER MANAGEMENT & AUTHENTICATION
 -- ============================================================================
 
 -- User accounts with authentication and profile information
+-- Supports both email/password and wallet-based authentication
 CREATE TABLE IF NOT EXISTS commodore.users (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
-    email VARCHAR(255) NOT NULL,
-    
+    email CITEXT,                                 -- NULL for wallet-only accounts
+
     -- ===== AUTHENTICATION =====
-    password_hash VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255),                   -- NULL for wallet-only accounts
     verified BOOLEAN DEFAULT FALSE,
     verification_token VARCHAR(255),
     token_expires_at TIMESTAMP,
-    
+    reset_token VARCHAR(255),
+    reset_token_expires TIMESTAMP,
+
     -- ===== PROFILE =====
     first_name VARCHAR(100),
     last_name VARCHAR(100),
-    
+
     -- ===== AUTHORIZATION =====
     role VARCHAR(50) DEFAULT 'member',
     permissions TEXT[] DEFAULT ARRAY['streams:read'],
-    
+
     -- ===== STATUS & ACTIVITY =====
     is_active BOOLEAN DEFAULT TRUE,
     newsletter_subscribed BOOLEAN DEFAULT TRUE,
     last_login_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(tenant_id, email)
+    UNIQUE(email)
 );
 
 -- Secure refresh tokens for session management
@@ -71,7 +75,7 @@ CREATE TABLE IF NOT EXISTS commodore.api_tokens (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
-    token_value VARCHAR(100) UNIQUE NOT NULL,  -- "fw_" + 64 hex chars = 67 chars
+    token_value VARCHAR(100) UNIQUE NOT NULL,  -- SHA-256 hash of token ("fw_" + 64 hex chars input)
     token_name VARCHAR(255) NOT NULL,
 
     -- ===== AUTHORIZATION =====
@@ -88,6 +92,41 @@ CREATE TABLE IF NOT EXISTS commodore.api_tokens (
 CREATE INDEX IF NOT EXISTS idx_commodore_users_tenant_id ON commodore.users(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_refresh_tokens_tenant_id ON commodore.refresh_tokens(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_api_tokens_tenant_id ON commodore.api_tokens(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_commodore_users_reset_token ON commodore.users(reset_token) WHERE reset_token IS NOT NULL;
+
+-- ============================================================================
+-- WALLET-BASED IDENTITY (Agent Access / x402)
+-- ============================================================================
+-- Enables wallet-based authentication as alternative to email/password.
+-- Supports multiple blockchain types (Ethereum, Solana, Bitcoin, etc.)
+-- See: docs/rfcs/agent-access.md
+-- ============================================================================
+
+-- Wallet identities linked to users (chain-agnostic design)
+CREATE TABLE IF NOT EXISTS commodore.wallet_identities (
+    -- ===== IDENTITY =====
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wallet_address VARCHAR(128) NOT NULL,        -- Chain-specific format (e.g., 0x... for Ethereum)
+    chain_type VARCHAR(20) NOT NULL,             -- 'ethereum', 'solana', 'bitcoin', etc.
+
+    -- ===== OWNERSHIP =====
+    tenant_id UUID NOT NULL,
+    user_id UUID NOT NULL REFERENCES commodore.users(id) ON DELETE CASCADE,
+
+    -- ===== LIFECYCLE =====
+    created_at TIMESTAMP DEFAULT NOW(),
+    last_auth_at TIMESTAMP,
+
+    -- Composite unique: same address can exist on different chains
+    UNIQUE(chain_type, wallet_address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_commodore_wallet_chain_address
+    ON commodore.wallet_identities(chain_type, wallet_address);
+CREATE INDEX IF NOT EXISTS idx_commodore_wallet_tenant
+    ON commodore.wallet_identities(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_commodore_wallet_user
+    ON commodore.wallet_identities(user_id);
 
 -- ============================================================================
 -- STREAM MANAGEMENT
@@ -101,8 +140,8 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     user_id UUID NOT NULL,
     
     -- ===== STREAM IDENTIFIERS =====
-    stream_key VARCHAR(255) UNIQUE NOT NULL,    -- For RTMP ingest
-    playback_id VARCHAR(255) UNIQUE NOT NULL,   -- For HLS/DASH playback
+    stream_key CITEXT UNIQUE NOT NULL,          -- For RTMP ingest
+    playback_id CITEXT UNIQUE NOT NULL,         -- For HLS/DASH playback
     internal_name VARCHAR(255) UNIQUE NOT NULL, -- MistServer internal reference
     
     -- ===== CONTENT METADATA =====
@@ -145,6 +184,8 @@ CREATE TABLE IF NOT EXISTS commodore.stream_keys (
 
 CREATE INDEX IF NOT EXISTS idx_commodore_streams_tenant_id ON commodore.streams(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_streams_internal_name ON commodore.streams(internal_name);
+CREATE INDEX IF NOT EXISTS idx_commodore_streams_tenant_user_created_internal
+    ON commodore.streams(tenant_id, user_id, created_at, internal_name);
 CREATE INDEX IF NOT EXISTS idx_commodore_stream_keys_stream_id ON commodore.stream_keys(stream_id);
 
 -- ============================================================================
@@ -166,7 +207,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create a new stream with generated keys and identifiers
-CREATE OR REPLACE FUNCTION commodore.create_user_stream(p_tenant_id UUID, p_user_id UUID, p_title VARCHAR DEFAULT 'My Stream') 
+CREATE OR REPLACE FUNCTION commodore.create_user_stream(p_tenant_id UUID, p_user_id UUID, p_title VARCHAR DEFAULT 'My Stream')
 RETURNS TABLE(stream_id UUID, stream_key VARCHAR, playback_id VARCHAR, internal_name VARCHAR) AS $$
 DECLARE
     new_stream_id UUID;
@@ -178,7 +219,7 @@ BEGIN
     new_stream_id := gen_random_uuid();
     new_stream_key := 'sk_' || commodore.generate_random_string(28);
     new_playback_id := commodore.generate_random_string(16);
-    new_internal_name := new_stream_id::TEXT;
+    new_internal_name := commodore.generate_random_string(32);  -- Independent random string (not derivable from stream_id)
 
     -- Create stream record
     INSERT INTO commodore.streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title)
@@ -208,6 +249,8 @@ CREATE TABLE IF NOT EXISTS commodore.clips (
     user_id UUID NOT NULL,
     stream_id UUID NOT NULL,
     clip_hash VARCHAR(32) UNIQUE NOT NULL,  -- Generated by Commodore
+    artifact_internal_name VARCHAR(64) UNIQUE NOT NULL, -- Opaque routing name (not stream internal_name)
+    playback_id CITEXT UNIQUE NOT NULL,     -- Public view key (artifact playback ID)
 
     -- ===== METADATA =====
     title VARCHAR(255),
@@ -229,6 +272,8 @@ CREATE INDEX IF NOT EXISTS idx_commodore_clips_tenant ON commodore.clips(tenant_
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_stream ON commodore.clips(stream_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_user ON commodore.clips(user_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_hash ON commodore.clips(clip_hash);
+CREATE INDEX IF NOT EXISTS idx_commodore_clips_internal ON commodore.clips(artifact_internal_name);
+CREATE INDEX IF NOT EXISTS idx_commodore_clips_playback ON commodore.clips(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_clips_created ON commodore.clips(created_at);
 
 -- DVR recording business registry (metadata only, lifecycle in Foghorn)
@@ -239,6 +284,8 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
     user_id UUID NOT NULL,
     stream_id UUID,
     dvr_hash VARCHAR(32) UNIQUE NOT NULL,   -- Generated by Commodore
+    artifact_internal_name VARCHAR(64) UNIQUE NOT NULL, -- Opaque routing name (not stream internal_name)
+    playback_id CITEXT UNIQUE NOT NULL,     -- Public view key (artifact playback ID)
 
     -- ===== METADATA =====
     internal_name VARCHAR(255) NOT NULL,    -- Stream name for MistServer
@@ -254,6 +301,8 @@ CREATE INDEX IF NOT EXISTS idx_commodore_dvr_stream ON commodore.dvr_recordings(
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_user ON commodore.dvr_recordings(user_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_hash ON commodore.dvr_recordings(dvr_hash);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_internal ON commodore.dvr_recordings(internal_name);
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_artifact_internal ON commodore.dvr_recordings(artifact_internal_name);
+CREATE INDEX IF NOT EXISTS idx_commodore_dvr_playback ON commodore.dvr_recordings(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_dvr_created ON commodore.dvr_recordings(created_at);
 
 -- Generate clip hash (deterministic based on stream + timing)
@@ -304,6 +353,8 @@ CREATE TABLE IF NOT EXISTS commodore.vod_assets (
     tenant_id UUID NOT NULL,
     user_id UUID NOT NULL,
     vod_hash VARCHAR(32) UNIQUE NOT NULL,   -- Generated by Commodore
+    artifact_internal_name VARCHAR(64) UNIQUE NOT NULL, -- Opaque routing name (not stream internal_name)
+    playback_id CITEXT UNIQUE NOT NULL,     -- Public view key (artifact playback ID)
 
     -- ===== METADATA =====
     title VARCHAR(255),
@@ -323,6 +374,8 @@ CREATE TABLE IF NOT EXISTS commodore.vod_assets (
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_tenant ON commodore.vod_assets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_user ON commodore.vod_assets(user_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_hash ON commodore.vod_assets(vod_hash);
+CREATE INDEX IF NOT EXISTS idx_commodore_vod_internal ON commodore.vod_assets(artifact_internal_name);
+CREATE INDEX IF NOT EXISTS idx_commodore_vod_playback ON commodore.vod_assets(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_created ON commodore.vod_assets(created_at);
 
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
@@ -341,3 +394,4 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql;
+

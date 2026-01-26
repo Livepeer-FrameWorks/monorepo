@@ -41,12 +41,9 @@ type InfrastructureCluster struct {
 	Visibility          string                 `json:"visibility" db:"visibility"`                       // public, unlisted, private
 	PricingModel        string                 `json:"pricing_model" db:"pricing_model"`                 // free_unmetered, metered, monthly, custom, tier_inherit
 	MonthlyPriceCents   int                    `json:"monthly_price_cents" db:"monthly_price_cents"`     // For monthly pricing
-	MeteredRateConfig   map[string]interface{} `json:"metered_rate_config,omitempty" db:"metered_rate_config"`
-	RequiredBillingTier *string                `json:"required_billing_tier,omitempty" db:"required_billing_tier"`
-	RequiresApproval    bool                   `json:"requires_approval" db:"requires_approval"`
-	ShortDescription    *string                `json:"short_description,omitempty" db:"short_description"`
-	LongDescription     *string                `json:"long_description,omitempty" db:"long_description"`
-	IsPlatformCluster   bool                   `json:"is_platform_cluster" db:"is_platform_cluster"`
+	MeteredRateConfig map[string]interface{} `json:"metered_rate_config,omitempty" db:"metered_rate_config"`
+	RequiresApproval  bool                   `json:"requires_approval" db:"requires_approval"`
+	ShortDescription  *string                `json:"short_description,omitempty" db:"short_description"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
@@ -70,7 +67,6 @@ type InfrastructureNode struct {
 	CPUCores           *int                   `json:"cpu_cores,omitempty" db:"cpu_cores"`
 	MemoryGB           *int                   `json:"memory_gb,omitempty" db:"memory_gb"`
 	DiskGB             *int                   `json:"disk_gb,omitempty" db:"disk_gb"`
-	Status             string                 `json:"status" db:"status"`
 	LastHeartbeat      *time.Time             `json:"last_heartbeat,omitempty" db:"last_heartbeat"`
 	Tags               map[string]interface{} `json:"tags,omitempty" db:"tags"`
 	Metadata           map[string]interface{} `json:"metadata,omitempty" db:"metadata"`
@@ -134,8 +130,6 @@ type ServiceInstance struct {
 	StartedAt       *time.Time `json:"started_at,omitempty" db:"started_at"`
 	StoppedAt       *time.Time `json:"stopped_at,omitempty" db:"stopped_at"`
 	LastHealthCheck *time.Time `json:"last_health_check,omitempty" db:"last_health_check"`
-	CPUUsagePercent *float64   `json:"cpu_usage_percent,omitempty" db:"cpu_usage_percent"`
-	MemoryUsageMB   *int       `json:"memory_usage_mb,omitempty" db:"memory_usage_mb"`
 	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
 }

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	"frameworks/pkg/globalid"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
@@ -19,20 +21,6 @@ import (
 // timestamppbNew is a helper to create timestamppb.Timestamp from time.Time
 func timestamppbNew(t time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(t)
-}
-
-// convertStringToNodeStatus converts a string status to NodeStatus enum
-func convertStringToNodeStatus(status string) model.NodeStatus {
-	switch status {
-	case "healthy", "online", "active":
-		return model.NodeStatusHealthy
-	case "degraded", "warning":
-		return model.NodeStatusDegraded
-	case "unhealthy", "offline", "error", "failed":
-		return model.NodeStatusUnhealthy
-	default:
-		return model.NodeStatusUnhealthy // Default to unhealthy for unknown statuses
-	}
 }
 
 // Infrastructure pagination constants
@@ -118,25 +106,7 @@ func (r *Resolver) DoGetTenant(ctx context.Context) (*pb.Tenant, error) {
 func (r *Resolver) DoGetClusters(ctx context.Context, first *int, after *string) ([]*pb.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo cluster data")
-		now := time.Now()
-		return []*pb.InfrastructureCluster{
-			{
-				Id:           "cluster_demo_us_west",
-				ClusterId:    "cluster_demo_us_west",
-				ClusterName:  "US West (Oregon)",
-				ClusterType:  "us-west-2",
-				HealthStatus: "HEALTHY",
-				CreatedAt:    timestamppbNew(now.Add(-30 * 24 * time.Hour)),
-			},
-			{
-				Id:           "cluster_demo_eu_west",
-				ClusterId:    "cluster_demo_eu_west",
-				ClusterName:  "EU West (Ireland)",
-				ClusterType:  "eu-west-1",
-				HealthStatus: "HEALTHY",
-				CreatedAt:    timestamppbNew(now.Add(-45 * 24 * time.Hour)),
-			},
-		}, nil
+		return demo.GenerateInfrastructureClusters(), nil
 	}
 
 	r.Logger.Info("Getting clusters")
@@ -180,37 +150,7 @@ func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*pb.Infrastruct
 func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *model.NodeStatus, typeArg *string, tag *string, first *int, after *string) ([]*pb.InfrastructureNode, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo node data")
-		now := time.Now()
-		region1 := "us-west-2a"
-		region2 := "us-west-2b"
-		ip1 := "10.0.1.15"
-		ip2 := "10.0.2.23"
-		return []*pb.InfrastructureNode{
-			{
-				Id:            "node_demo_us_west_01",
-				NodeId:        "node_demo_us_west_01",
-				ClusterId:     "cluster_demo_us_west",
-				NodeName:      "streaming-node-01",
-				NodeType:      "streaming",
-				Status:        "HEALTHY",
-				Region:        &region1,
-				InternalIp:    &ip1,
-				LastHeartbeat: timestamppbNew(now.Add(-2 * time.Minute)),
-				CreatedAt:     timestamppbNew(now.Add(-30 * 24 * time.Hour)),
-			},
-			{
-				Id:            "node_demo_us_west_02",
-				NodeId:        "node_demo_us_west_02",
-				ClusterId:     "cluster_demo_us_west",
-				NodeName:      "transcoding-node-01",
-				NodeType:      "transcoding",
-				Status:        "HEALTHY",
-				Region:        &region2,
-				InternalIp:    &ip2,
-				LastHeartbeat: timestamppbNew(now.Add(-1 * time.Minute)),
-				CreatedAt:     timestamppbNew(now.Add(-25 * time.Hour)),
-			},
-		}, nil
+		return demo.GenerateInfrastructureNodes(), nil
 	}
 
 	r.Logger.Info("Getting nodes")
@@ -218,7 +158,11 @@ func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *mo
 	// Build filter parameters for gRPC
 	clusterFilter := ""
 	if clusterID != nil {
-		clusterFilter = *clusterID
+		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
+		if err != nil {
+			return nil, err
+		}
+		clusterFilter = rawID
 	}
 	typeFilter := ""
 	if typeArg != nil {
@@ -246,7 +190,11 @@ func (r *Resolver) DoGetServiceInstances(ctx context.Context, clusterID *string,
 	// Build filter parameters for gRPC
 	clusterFilter := ""
 	if clusterID != nil {
-		clusterFilter = *clusterID
+		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
+		if err != nil {
+			return nil, err
+		}
+		clusterFilter = rawID
 	}
 	nodeFilter := ""
 	if nodeID != nil {
@@ -351,8 +299,16 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 			pageInfo.StartCursor = &edges[0].Cursor
 			pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 		}
+		edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+		for _, edge := range edges {
+			if edge != nil {
+				edgeNodes = append(edgeNodes, edge.Node)
+			}
+		}
+
 		return &model.ServiceInstancesConnection{
 			Edges:      edges,
+			Nodes:      edgeNodes,
 			PageInfo:   pageInfo,
 			TotalCount: len(filtered),
 		}, nil
@@ -405,8 +361,16 @@ func (r *Resolver) DoGetDiscoverServicesConnection(ctx context.Context, serviceT
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.ServiceInstancesConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
 		TotalCount: len(instances),
 	}, nil
@@ -513,12 +477,14 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		TenantId: tenantID,
 	}
 	updates := 0
+	changedFields := []string{}
 
 	if input.Name != nil {
 		trimmed := strings.TrimSpace(*input.Name)
 		if trimmed != "" {
 			updateReq.Name = &trimmed
 			updates++
+			changedFields = append(changedFields, "name")
 		}
 	}
 
@@ -533,6 +499,7 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 				clusterID := strings.TrimSpace(val)
 				updateReq.PrimaryClusterId = &clusterID
 				updates++
+				changedFields = append(changedFields, "primary_cluster_id")
 			}
 		}
 
@@ -541,6 +508,7 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 				deployModel := strings.TrimSpace(val)
 				updateReq.DeploymentModel = &deployModel
 				updates++
+				changedFields = append(changedFields, "deployment_model")
 			}
 		}
 	}
@@ -556,6 +524,18 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		return nil, fmt.Errorf("failed to update tenant: %w", err)
 	}
 
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventTenantUpdated,
+		ResourceType: "tenant",
+		ResourceId:   tenantID,
+		Payload: &pb.ServiceEvent_TenantEvent{
+			TenantEvent: &pb.TenantEvent{
+				TenantId:      tenantID,
+				ChangedFields: changedFields,
+			},
+		},
+	})
+
 	return r.DoGetTenant(ctx)
 }
 
@@ -565,7 +545,7 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		r.Logger.Debug("Returning demo stream update")
 		streams := demo.GenerateStreams()
 		for _, stream := range streams {
-			if stream.InternalName == id {
+			if stream.StreamId == id {
 				// Apply updates to demo stream
 				if input.Name != nil {
 					stream.Title = *input.Name
@@ -614,26 +594,55 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		return nil, fmt.Errorf("failed to update stream: %w", err)
 	}
 
+	changedFields := []string{}
+	if input.Name != nil {
+		changedFields = append(changedFields, "title")
+	}
+	if input.Description != nil {
+		changedFields = append(changedFields, "description")
+	}
+	if input.Record != nil {
+		changedFields = append(changedFields, "is_recording")
+	}
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventStreamUpdated,
+		ResourceType: "stream",
+		ResourceId:   id,
+		Payload: &pb.ServiceEvent_StreamChangeEvent{
+			StreamChangeEvent: &pb.StreamChangeEvent{
+				StreamId:      id,
+				ChangedFields: changedFields,
+			},
+		},
+	})
+
 	return stream, nil
 }
 
 // DoGetClustersConnection returns a Relay-style connection for clusters
 func (r *Resolver) DoGetClustersConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.ClustersConnection, error) {
-	// TODO: Implement bidirectional keyset pagination once Quartermaster supports it
-	_ = last
-	_ = before
-
-	limit := pagination.DefaultLimit
-	if first != nil {
-		limit = pagination.ClampLimit(*first)
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo clusters connection")
+		clusters, _ := r.DoGetClusters(ctx, nil, nil)
+		return r.buildClustersConnectionFromSlice(clusters, first, after, last, before), nil
 	}
 
-	clusters, err := r.DoGetClusters(ctx, &limit, after)
+	// Build bidirectional pagination request
+	paginationReq := buildCursorPagination(first, after, last, before)
+
+	// Call Quartermaster with pagination
+	resp, err := r.Clients.Quartermaster.ListClusters(ctx, paginationReq)
 	if err != nil {
-		return nil, err
+		r.Logger.WithError(err).Error("Failed to get clusters")
+		return nil, fmt.Errorf("failed to get clusters: %w", err)
 	}
 
-	// Build edges with keyset cursors (timestamp + ID for stable pagination)
+	return r.buildClustersConnectionFromResponse(resp), nil
+}
+
+// buildClustersConnectionFromResponse constructs a connection from gRPC response
+func (r *Resolver) buildClustersConnectionFromResponse(resp *pb.ListClustersResponse) *model.ClustersConnection {
+	clusters := resp.GetClusters()
 	edges := make([]*model.ClusterEdge, len(clusters))
 	for i, cluster := range clusters {
 		cursor := pagination.EncodeCursor(cluster.CreatedAt.AsTime(), cluster.Id)
@@ -643,42 +652,133 @@ func (r *Resolver) DoGetClustersConnection(ctx context.Context, first *int, afte
 		}
 	}
 
-	// Determine hasNextPage (if we got a full page, there might be more)
-	hasMore := len(clusters) == limit
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	edgeNodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
+	return &model.ClustersConnection{
+		Edges:      edges,
+		Nodes:      edgeNodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildClustersConnectionFromSlice constructs a connection from a slice (demo mode)
+func (r *Resolver) buildClustersConnectionFromSlice(clusters []*pb.InfrastructureCluster, first *int, after *string, last *int, before *string) *model.ClustersConnection {
+	total := len(clusters)
+
+	limit := infraDefaultLimit
+	if first != nil {
+		limit = *first
+		if limit > infraMaxLimit {
+			limit = infraMaxLimit
+		}
+	} else if last != nil {
+		limit = *last
+		if limit > infraMaxLimit {
+			limit = infraMaxLimit
+		}
+	}
+
+	if limit > total {
+		limit = total
+	}
+
+	paginatedClusters := clusters
+	if len(clusters) > limit {
+		paginatedClusters = clusters[:limit]
+	}
+
+	edges := make([]*model.ClusterEdge, len(paginatedClusters))
+	for i, cluster := range paginatedClusters {
+		cursor := pagination.EncodeCursor(cluster.CreatedAt.AsTime(), cluster.Id)
+		edges[i] = &model.ClusterEdge{
+			Cursor: cursor,
+			Node:   cluster,
+		}
+	}
 
 	pageInfo := &model.PageInfo{
 		HasPreviousPage: after != nil && *after != "",
-		HasNextPage:     hasMore,
+		HasNextPage:     len(clusters) > limit,
 	}
 	if len(edges) > 0 {
 		pageInfo.StartCursor = &edges[0].Cursor
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.ClustersConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
-		TotalCount: len(clusters),
-	}, nil
+		TotalCount: total,
+	}
 }
 
 // DoGetNodesConnection returns a Relay-style connection for nodes
 func (r *Resolver) DoGetNodesConnection(ctx context.Context, clusterID *string, status *model.NodeStatus, typeArg *string, first *int, after *string, last *int, before *string) (*model.NodesConnection, error) {
-	// TODO: Implement bidirectional keyset pagination once Quartermaster supports it
-	_ = last
-	_ = before
-
-	limit := pagination.DefaultLimit
-	if first != nil {
-		limit = pagination.ClampLimit(*first)
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo nodes connection")
+		nodes, _ := r.DoGetNodes(ctx, nil, nil, nil, nil, nil, nil)
+		return r.buildNodesConnectionFromSlice(nodes, first, after, last, before), nil
 	}
 
-	nodes, err := r.DoGetNodes(ctx, clusterID, status, typeArg, nil, &limit, after)
+	// Decode global IDs
+	decodedClusterID := ""
+	if clusterID != nil {
+		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
+		if err != nil {
+			return nil, err
+		}
+		decodedClusterID = rawID
+	}
+
+	nodeType := ""
+	if typeArg != nil {
+		nodeType = *typeArg
+	}
+
+	// Build bidirectional pagination request
+	paginationReq := buildCursorPagination(first, after, last, before)
+
+	// Call Quartermaster with pagination
+	resp, err := r.Clients.Quartermaster.ListNodes(ctx, decodedClusterID, nodeType, "", paginationReq)
 	if err != nil {
-		return nil, err
+		r.Logger.WithError(err).Error("Failed to get nodes")
+		return nil, fmt.Errorf("failed to get nodes: %w", err)
 	}
 
-	// Build edges with keyset cursors (timestamp + ID for stable pagination)
+	return r.buildNodesConnectionFromResponse(resp), nil
+}
+
+// buildNodesConnectionFromResponse constructs a connection from gRPC response
+func (r *Resolver) buildNodesConnectionFromResponse(resp *pb.ListNodesResponse) *model.NodesConnection {
+	nodes := resp.GetNodes()
 	edges := make([]*model.NodeEdge, len(nodes))
 	for i, node := range nodes {
 		cursor := pagination.EncodeCursor(node.CreatedAt.AsTime(), node.Id)
@@ -688,45 +788,138 @@ func (r *Resolver) DoGetNodesConnection(ctx context.Context, clusterID *string, 
 		}
 	}
 
-	// Determine hasNextPage
-	hasMore := len(nodes) == limit
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	edgeNodes := make([]*pb.InfrastructureNode, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
+	return &model.NodesConnection{
+		Edges:      edges,
+		Nodes:      edgeNodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildNodesConnectionFromSlice constructs a connection from a slice (demo mode)
+func (r *Resolver) buildNodesConnectionFromSlice(nodes []*pb.InfrastructureNode, first *int, after *string, last *int, before *string) *model.NodesConnection {
+	total := len(nodes)
+
+	limit := infraDefaultLimit
+	if first != nil {
+		limit = *first
+		if limit > infraMaxLimit {
+			limit = infraMaxLimit
+		}
+	} else if last != nil {
+		limit = *last
+		if limit > infraMaxLimit {
+			limit = infraMaxLimit
+		}
+	}
+
+	if limit > total {
+		limit = total
+	}
+
+	paginatedNodes := nodes
+	if len(nodes) > limit {
+		paginatedNodes = nodes[:limit]
+	}
+
+	edges := make([]*model.NodeEdge, len(paginatedNodes))
+	for i, node := range paginatedNodes {
+		cursor := pagination.EncodeCursor(node.CreatedAt.AsTime(), node.Id)
+		edges[i] = &model.NodeEdge{
+			Cursor: cursor,
+			Node:   node,
+		}
+	}
 
 	pageInfo := &model.PageInfo{
 		HasPreviousPage: after != nil && *after != "",
-		HasNextPage:     hasMore,
+		HasNextPage:     len(nodes) > limit,
 	}
 	if len(edges) > 0 {
 		pageInfo.StartCursor = &edges[0].Cursor
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.InfrastructureNode, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.NodesConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
-		TotalCount: len(nodes),
-	}, nil
+		TotalCount: total,
+	}
 }
 
 // DoGetServiceInstancesConnection returns a Relay-style connection for service instances
 func (r *Resolver) DoGetServiceInstancesConnection(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, first *int, after *string, last *int, before *string) (*model.ServiceInstancesConnection, error) {
-	// TODO: Implement bidirectional keyset pagination once Quartermaster supports it
-	_ = last
-	_ = before
-
-	limit := pagination.DefaultLimit
-	if first != nil {
-		limit = pagination.ClampLimit(*first)
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo service instances connection")
+		instances, _ := r.DoGetServiceInstances(ctx, nil, nil, nil, nil, nil)
+		return r.buildServiceInstancesConnectionFromSlice(instances, first, after, last, before), nil
 	}
 
-	instances, err := r.DoGetServiceInstances(ctx, clusterID, nodeID, status, &limit, after)
+	// Decode global IDs
+	decodedClusterID := ""
+	if clusterID != nil {
+		rawID, err := globalid.DecodeExpected(*clusterID, globalid.TypeCluster)
+		if err != nil {
+			return nil, err
+		}
+		decodedClusterID = rawID
+	}
+	decodedNodeID := ""
+	if nodeID != nil {
+		rawID, err := globalid.DecodeExpected(*nodeID, globalid.TypeInfrastructureNode)
+		if err != nil {
+			return nil, err
+		}
+		decodedNodeID = rawID
+	}
+
+	// Build bidirectional pagination request
+	paginationReq := buildCursorPagination(first, after, last, before)
+
+	// Call Quartermaster with pagination
+	resp, err := r.Clients.Quartermaster.ListServiceInstances(ctx, decodedClusterID, "", decodedNodeID, paginationReq)
 	if err != nil {
-		return nil, err
+		r.Logger.WithError(err).Error("Failed to get service instances")
+		return nil, fmt.Errorf("failed to get service instances: %w", err)
 	}
 
-	// Build edges with keyset cursors (timestamp + ID for stable pagination)
+	return r.buildServiceInstancesConnectionFromResponse(resp), nil
+}
+
+// buildServiceInstancesConnectionFromResponse constructs a connection from gRPC response
+func (r *Resolver) buildServiceInstancesConnectionFromResponse(resp *pb.ListServiceInstancesResponse) *model.ServiceInstancesConnection {
+	instances := resp.GetInstances()
 	edges := make([]*model.ServiceInstanceEdge, len(instances))
 	for i, instance := range instances {
-		// Use StartedAt if available, otherwise use a zero time
 		ts := time.Time{}
 		if instance.StartedAt != nil {
 			ts = instance.StartedAt.AsTime()
@@ -738,23 +931,96 @@ func (r *Resolver) DoGetServiceInstancesConnection(ctx context.Context, clusterI
 		}
 	}
 
-	// Determine hasNextPage
-	hasMore := len(instances) == limit
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
+	return &model.ServiceInstancesConnection{
+		Edges:      edges,
+		Nodes:      edgeNodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildServiceInstancesConnectionFromSlice constructs a connection from a slice (demo mode)
+func (r *Resolver) buildServiceInstancesConnectionFromSlice(instances []*pb.ServiceInstance, first *int, after *string, last *int, before *string) *model.ServiceInstancesConnection {
+	total := len(instances)
+
+	limit := infraDefaultLimit
+	if first != nil {
+		limit = *first
+		if limit > infraMaxLimit {
+			limit = infraMaxLimit
+		}
+	} else if last != nil {
+		limit = *last
+		if limit > infraMaxLimit {
+			limit = infraMaxLimit
+		}
+	}
+
+	if limit > total {
+		limit = total
+	}
+
+	paginatedInstances := instances
+	if len(instances) > limit {
+		paginatedInstances = instances[:limit]
+	}
+
+	edges := make([]*model.ServiceInstanceEdge, len(paginatedInstances))
+	for i, instance := range paginatedInstances {
+		ts := time.Time{}
+		if instance.StartedAt != nil {
+			ts = instance.StartedAt.AsTime()
+		}
+		cursor := pagination.EncodeCursor(ts, instance.InstanceId)
+		edges[i] = &model.ServiceInstanceEdge{
+			Cursor: cursor,
+			Node:   instance,
+		}
+	}
 
 	pageInfo := &model.PageInfo{
 		HasPreviousPage: after != nil && *after != "",
-		HasNextPage:     hasMore,
+		HasNextPage:     len(instances) > limit,
 	}
 	if len(edges) > 0 {
 		pageInfo.StartCursor = &edges[0].Cursor
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.ServiceInstance, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.ServiceInstancesConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
-		TotalCount: len(instances),
-	}, nil
+		TotalCount: total,
+	}
 }
 
 // DoSubscribeToCluster subscribes a tenant to a cluster
@@ -774,6 +1040,18 @@ func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (
 	if err != nil {
 		return false, fmt.Errorf("failed to subscribe: %w", err)
 	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventTenantClusterAssigned,
+		ResourceType: "cluster",
+		ResourceId:   clusterID,
+		Payload: &pb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &pb.ClusterEvent{
+				ClusterId: clusterID,
+				TenantId:  tenantID,
+			},
+		},
+	})
 	return true, nil
 }
 
@@ -794,6 +1072,18 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 	if err != nil {
 		return false, fmt.Errorf("failed to unsubscribe: %w", err)
 	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventTenantClusterUnassigned,
+		ResourceType: "cluster",
+		ResourceId:   clusterID,
+		Payload: &pb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &pb.ClusterEvent{
+				ClusterId: clusterID,
+				TenantId:  tenantID,
+			},
+		},
+	})
 	return true, nil
 }
 
@@ -845,126 +1135,18 @@ func (r *Resolver) DoCheckIsSubscribed(ctx context.Context, cluster *pb.Infrastr
 // CLUSTER MARKETPLACE OPERATIONS
 // ============================================================================
 
-// DoListMarketplaceClusters lists clusters in the marketplace
-// Merges operational data from Quartermaster with pricing data from Purser
-// Applies tier visibility filtering - only shows clusters the tenant can access
-func (r *Resolver) DoListMarketplaceClusters(ctx context.Context, pricingModel *pb.ClusterPricingModel, first *int, after *string) ([]*pb.MarketplaceClusterEntry, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo marketplace clusters")
-		return demo.GenerateMarketplaceClusters(), nil
-	}
-
-	tenantID := ""
-	if user := middleware.GetUserFromContext(ctx); user != nil {
-		tenantID = user.TenantID
-	}
-
-	// Get tenant's tier level for visibility filtering
-	// Uses tier sort_order as the tier level (0=free, 1=supporter, etc.)
-	var tenantTierLevel int32 = 0
-	if tenantID != "" {
-		subResp, err := r.Clients.Purser.GetSubscription(ctx, tenantID)
-		if err == nil && subResp.Subscription != nil && subResp.Subscription.TierId != "" {
-			tier, err := r.Clients.Purser.GetBillingTier(ctx, subResp.Subscription.TierId)
-			if err == nil && tier != nil {
-				// Use sort_order as proxy for tier level, or map tier_name
-				tenantTierLevel = tier.SortOrder
-				// Fallback: map tier_name to level if sort_order is 0
-				if tenantTierLevel == 0 && tier.TierName != "" {
-					tenantTierLevel = tierNameToLevel(tier.TierName)
-				}
-			}
-		}
-	}
-
-	req := &pb.ListMarketplaceClustersRequest{
-		TenantId: tenantID,
-	}
-	// Note: pricingModel filter is now handled client-side after merging with Purser data
-	if first != nil {
-		req.Pagination = &pb.CursorPaginationRequest{
-			First: int32(*first),
-		}
-		if after != nil {
-			req.Pagination.After = after
-		}
-	}
-
-	resp, err := r.Clients.Quartermaster.ListMarketplaceClusters(ctx, req)
+// DoListMarketplaceClusters lists clusters in the marketplace.
+// Delegates to DoGetMarketplaceClustersConnection and extracts nodes.
+func (r *Resolver) DoListMarketplaceClusters(ctx context.Context, first *int, after *string) ([]*pb.MarketplaceClusterEntry, error) {
+	conn, err := r.DoGetMarketplaceClustersConnection(ctx, first, after, nil, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list marketplace clusters")
-		return nil, fmt.Errorf("failed to list marketplace clusters: %w", err)
+		return nil, err
 	}
-
-	// Collect cluster IDs for batch pricing fetch
-	clusterIDs := make([]string, len(resp.Clusters))
-	for i, cluster := range resp.Clusters {
-		clusterIDs[i] = cluster.ClusterId
-	}
-
-	// Batch fetch all pricing data from Purser
-	pricings, err := r.Clients.Purser.GetClustersPricingBatch(ctx, clusterIDs)
-	if err != nil {
-		r.Logger.WithError(err).Warn("Failed to batch fetch cluster pricing, using defaults")
-		pricings = make(map[string]*pb.ClusterPricing)
-	}
-
-	// Enrich clusters with pricing data from Purser and apply tier visibility filter
-	type enrichedCluster struct {
-		cluster           *pb.MarketplaceClusterEntry
-		requiredTierLevel int32
-	}
-	enrichedClusters := make([]enrichedCluster, 0, len(resp.Clusters))
-
-	for _, cluster := range resp.Clusters {
-		pricing, hasPricing := pricings[cluster.ClusterId]
-		var requiredLevel int32 = 0
-		if !hasPricing || pricing == nil {
-			// Use defaults
-			cluster.PricingModel = pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED
-		} else {
-			// Map pricing data to cluster entry
-			cluster.PricingModel = pricingModelStringToProto(pricing.PricingModel)
-			if pricing.BasePrice != "" {
-				// Parse base_price string to cents
-				var basePrice float64
-				fmt.Sscanf(pricing.BasePrice, "%f", &basePrice)
-				cluster.MonthlyPriceCents = int32(basePrice * 100)
-			}
-			requiredLevel = pricing.RequiredTierLevel
-			if requiredLevel > 0 {
-				tierName := tierLevelToName(requiredLevel)
-				cluster.RequiredBillingTier = &tierName
-			}
-		}
-
-		enrichedClusters = append(enrichedClusters, enrichedCluster{
-			cluster:           cluster,
-			requiredTierLevel: requiredLevel,
-		})
-	}
-
-	// Apply tier visibility filter and pricing model filter
-	result := make([]*pb.MarketplaceClusterEntry, 0)
-	for _, ec := range enrichedClusters {
-		// Skip clusters that require a higher tier than the tenant has
-		if ec.requiredTierLevel > tenantTierLevel {
-			continue
-		}
-		// Apply pricing model filter if specified
-		if pricingModel != nil && *pricingModel != pb.ClusterPricingModel_CLUSTER_PRICING_UNSPECIFIED {
-			if ec.cluster.PricingModel != *pricingModel {
-				continue
-			}
-		}
-		result = append(result, ec.cluster)
-	}
-
-	return result, nil
+	return conn.Nodes, nil
 }
 
-// DoGetMarketplaceCluster gets a marketplace cluster
-// Merges operational data from Quartermaster with pricing data from Purser
+// DoGetMarketplaceCluster gets a marketplace cluster.
+// Uses Purser for pricing and Quartermaster for metadata (consistent with connection method).
 func (r *Resolver) DoGetMarketplaceCluster(ctx context.Context, clusterID string, inviteToken *string) (*pb.MarketplaceClusterEntry, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo marketplace cluster")
@@ -982,38 +1164,46 @@ func (r *Resolver) DoGetMarketplaceCluster(ctx context.Context, clusterID string
 		tenantID = user.TenantID
 	}
 
-	req := &pb.GetMarketplaceClusterRequest{
+	// 1. Get visibility-filtered cluster from Quartermaster
+	cluster, err := r.Clients.Quartermaster.GetMarketplaceCluster(ctx, &pb.GetMarketplaceClusterRequest{
 		ClusterId: clusterID,
 		TenantId:  tenantID,
-	}
-	if inviteToken != nil {
-		req.InviteToken = inviteToken
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cluster not found or not available: %w", err)
 	}
 
-	cluster, err := r.Clients.Quartermaster.GetMarketplaceCluster(ctx, req)
+	// 2. Enrich with pricing + eligibility from Purser
+	pricingResp, err := r.Clients.Purser.GetClustersPricingBatch(ctx, tenantID, []string{clusterID})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get cluster pricing: %w", err)
 	}
 
-	// Enrich with pricing data from Purser
-	pricing, err := r.Clients.Purser.GetClusterPricing(ctx, cluster.ClusterId)
-	if err != nil {
-		r.Logger.WithError(err).Warn("Failed to get cluster pricing, using defaults", "cluster", cluster.ClusterId)
-		cluster.PricingModel = pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED
-	} else {
-		cluster.PricingModel = pricingModelStringToProto(pricing.PricingModel)
-		if pricing.BasePrice != "" {
-			var basePrice float64
-			fmt.Sscanf(pricing.BasePrice, "%f", &basePrice)
-			cluster.MonthlyPriceCents = int32(basePrice * 100)
+	pricingInfo := pricingResp[clusterID]
+	cluster.IsEligible = true
+	if pricingInfo != nil {
+		cluster.PricingModel = pricingModelStringToProto(pricingInfo.PricingModel)
+		if pricingInfo.BasePrice != "" {
+			cluster.MonthlyPriceCents = int32(parsePriceToCents(pricingInfo.BasePrice))
 		}
-		if pricing.RequiredTierLevel > 0 {
-			tierName := tierLevelToName(pricing.RequiredTierLevel)
-			cluster.RequiredBillingTier = &tierName
+		cluster.IsEligible = pricingInfo.IsEligible
+		if !pricingInfo.IsEligible && pricingInfo.DenialReason != nil && *pricingInfo.DenialReason != "" {
+			denial := *pricingInfo.DenialReason
+			cluster.DenialReason = &denial
 		}
 	}
 
 	return cluster, nil
+}
+
+// parsePriceToCents converts a price string (e.g., "9.99") to cents.
+func parsePriceToCents(price string) int {
+	if price == "" {
+		return 0
+	}
+	var f float64
+	fmt.Sscanf(price, "%f", &f)
+	return int(math.Round(f * 100))
 }
 
 // pricingModelStringToProto converts Purser pricing model string to proto enum
@@ -1031,42 +1221,6 @@ func pricingModelStringToProto(s string) pb.ClusterPricingModel {
 		return pb.ClusterPricingModel_CLUSTER_PRICING_CUSTOM
 	default:
 		return pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED
-	}
-}
-
-// tierLevelToName converts tier level int to display name
-func tierLevelToName(level int32) string {
-	switch level {
-	case 0:
-		return "free"
-	case 1:
-		return "supporter"
-	case 2:
-		return "developer"
-	case 3:
-		return "production"
-	case 4:
-		return "enterprise"
-	default:
-		return fmt.Sprintf("tier_%d", level)
-	}
-}
-
-// tierNameToLevel converts tier display name to level int
-func tierNameToLevel(name string) int32 {
-	switch name {
-	case "free":
-		return 0
-	case "supporter":
-		return 1
-	case "developer":
-		return 2
-	case "production":
-		return 3
-	case "enterprise":
-		return 4
-	default:
-		return 0
 	}
 }
 
@@ -1123,6 +1277,24 @@ func (r *Resolver) DoCreatePrivateCluster(ctx context.Context, input model.Creat
 		}, nil
 	}
 
+	if resp != nil && resp.Cluster != nil {
+		clusterID := resp.Cluster.ClusterId
+		if clusterID == "" {
+			clusterID = resp.Cluster.Id
+		}
+		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+			EventType:    apiEventClusterCreated,
+			ResourceType: "cluster",
+			ResourceId:   clusterID,
+			Payload: &pb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &pb.ClusterEvent{
+					ClusterId: clusterID,
+					TenantId:  tenantID,
+				},
+			},
+		})
+	}
+
 	return resp, nil
 }
 
@@ -1146,7 +1318,7 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 	}
 
 	// Update pricing in Purser if any pricing fields are set
-	hasPricingUpdate := input.PricingModel != nil || input.MonthlyPriceCents != nil || input.RequiredBillingTier != nil
+	hasPricingUpdate := input.PricingModel != nil || input.MonthlyPriceCents != nil
 	if hasPricingUpdate {
 		pricingReq := &pb.SetClusterPricingRequest{
 			ClusterId: clusterID,
@@ -1157,10 +1329,6 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 		if input.MonthlyPriceCents != nil {
 			basePrice := fmt.Sprintf("%.2f", float64(*input.MonthlyPriceCents)/100)
 			pricingReq.BasePrice = &basePrice
-		}
-		if input.RequiredBillingTier != nil {
-			tierLevel := tierNameToLevel(*input.RequiredBillingTier)
-			pricingReq.RequiredTierLevel = &tierLevel
 		}
 
 		_, err := r.Clients.Purser.SetClusterPricing(ctx, pricingReq)
@@ -1195,6 +1363,18 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 		}, nil
 	}
 
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventClusterUpdated,
+		ResourceType: "cluster",
+		ResourceId:   clusterID,
+		Payload: &pb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &pb.ClusterEvent{
+				ClusterId: clusterID,
+				TenantId:  tenantID,
+			},
+		},
+	})
+
 	// Enrich with pricing from Purser before returning
 	cluster := resp.Cluster
 	pricing, err := r.Clients.Purser.GetClusterPricing(ctx, clusterID)
@@ -1204,10 +1384,6 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 			var basePrice float64
 			fmt.Sscanf(pricing.BasePrice, "%f", &basePrice)
 			cluster.MonthlyPriceCents = int32(basePrice * 100)
-		}
-		if pricing.RequiredTierLevel > 0 {
-			tierName := tierLevelToName(pricing.RequiredTierLevel)
-			cluster.RequiredBillingTier = &tierName
 		}
 	}
 
@@ -1253,6 +1429,21 @@ func (r *Resolver) DoCreateClusterInvite(ctx context.Context, input model.Create
 		}, nil
 	}
 
+	if invite != nil {
+		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+			EventType:    apiEventClusterInviteCreated,
+			ResourceType: "cluster_invite",
+			ResourceId:   invite.Id,
+			Payload: &pb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &pb.ClusterEvent{
+					ClusterId: invite.ClusterId,
+					TenantId:  tenantID,
+					InviteId:  invite.Id,
+				},
+			},
+		})
+	}
+
 	return invite, nil
 }
 
@@ -1282,6 +1473,18 @@ func (r *Resolver) DoRevokeClusterInvite(ctx context.Context, inviteID string) (
 			Message: fmt.Sprintf("Failed to revoke invite: %v", err),
 		}, nil
 	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventClusterInviteRevoked,
+		ResourceType: "cluster_invite",
+		ResourceId:   inviteID,
+		Payload: &pb.ServiceEvent_ClusterEvent{
+			ClusterEvent: &pb.ClusterEvent{
+				TenantId: tenantID,
+				InviteId: inviteID,
+			},
+		},
+	})
 
 	return &model.DeleteSuccess{Success: true}, nil
 }
@@ -1366,6 +1569,21 @@ func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID s
 		}, nil
 	}
 
+	if sub != nil {
+		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+			EventType:    apiEventClusterSubscriptionRequested,
+			ResourceType: "cluster_subscription",
+			ResourceId:   sub.Id,
+			Payload: &pb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &pb.ClusterEvent{
+					ClusterId:      sub.ClusterId,
+					TenantId:       tenantID,
+					SubscriptionId: sub.Id,
+				},
+			},
+		})
+	}
+
 	return sub, nil
 }
 
@@ -1394,6 +1612,21 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to accept invite: %v", err),
 		}, nil
+	}
+
+	if sub != nil {
+		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+			EventType:    apiEventClusterSubscriptionApproved,
+			ResourceType: "cluster_subscription",
+			ResourceId:   sub.Id,
+			Payload: &pb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &pb.ClusterEvent{
+					ClusterId:      sub.ClusterId,
+					TenantId:       tenantID,
+					SubscriptionId: sub.Id,
+				},
+			},
+		})
 	}
 
 	return sub, nil
@@ -1450,6 +1683,21 @@ func (r *Resolver) DoApproveClusterSubscription(ctx context.Context, subscriptio
 		}, nil
 	}
 
+	if sub != nil {
+		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+			EventType:    apiEventClusterSubscriptionApproved,
+			ResourceType: "cluster_subscription",
+			ResourceId:   sub.Id,
+			Payload: &pb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &pb.ClusterEvent{
+					ClusterId:      sub.ClusterId,
+					TenantId:       tenantID,
+					SubscriptionId: sub.Id,
+				},
+			},
+		})
+	}
+
 	return sub, nil
 }
 
@@ -1483,6 +1731,26 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 		}, nil
 	}
 
+	if sub != nil {
+		eventReason := ""
+		if reason != nil {
+			eventReason = *reason
+		}
+		r.sendServiceEvent(ctx, &pb.ServiceEvent{
+			EventType:    apiEventClusterSubscriptionRejected,
+			ResourceType: "cluster_subscription",
+			ResourceId:   sub.Id,
+			Payload: &pb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &pb.ClusterEvent{
+					ClusterId:      sub.ClusterId,
+					TenantId:       tenantID,
+					SubscriptionId: sub.Id,
+					Reason:         eventReason,
+				},
+			},
+		})
+	}
+
 	return sub, nil
 }
 
@@ -1492,13 +1760,79 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 
 // DoGetClustersAccessConnection returns a Relay-style connection for cluster access.
 func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.ClusterAccessConnection, error) {
-	// Use existing method to fetch data
-	items, err := r.DoGetClustersAccess(ctx, first, after)
-	if err != nil {
-		return nil, err
+	if middleware.IsDemoMode(ctx) {
+		items := []*model.ClusterAccess{
+			{ClusterID: "cluster_demo_us_west", ClusterName: "US West (Oregon)", AccessLevel: "shared"},
+		}
+		return buildClustersAccessConnectionFromSlice(items, first, after, last, before), nil
 	}
 
-	totalCount := len(items)
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	resp, err := r.Clients.Quartermaster.ListClustersForTenant(ctx, tenantID, buildCursorPagination(first, after, last, before))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clusters access: %w", err)
+	}
+	if resp == nil {
+		return &model.ClusterAccessConnection{
+			Edges:      []*model.ClusterAccessEdge{},
+			Nodes:      []*model.ClusterAccess{},
+			PageInfo:   &model.PageInfo{},
+			TotalCount: 0,
+		}, nil
+	}
+
+	return buildClustersAccessConnectionFromResponse(resp), nil
+}
+
+// buildClustersAccessConnectionFromResponse builds a connection from a ClustersAccessResponse.
+func buildClustersAccessConnectionFromResponse(resp *pb.ClustersAccessResponse) *model.ClusterAccessConnection {
+	edges := make([]*model.ClusterAccessEdge, len(resp.Clusters))
+	nodes := make([]*model.ClusterAccess, len(resp.Clusters))
+	for i, c := range resp.Clusters {
+		item := &model.ClusterAccess{
+			ClusterID:   c.ClusterId,
+			ClusterName: c.ClusterName,
+			AccessLevel: c.AccessLevel,
+		}
+		cursor := pagination.EncodeCursor(time.Now(), c.ClusterId) // Backend doesn't expose created_at for this type
+		edges[i] = &model.ClusterAccessEdge{
+			Cursor: cursor,
+			Node:   item,
+		}
+		nodes[i] = item
+	}
+
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	return &model.ClusterAccessConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildClustersAccessConnectionFromSlice builds a connection from a slice (for demo mode).
+func buildClustersAccessConnectionFromSlice(items []*model.ClusterAccess, first *int, after *string, last *int, before *string) *model.ClusterAccessConnection {
 	edges := make([]*model.ClusterAccessEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(time.Now(), item.ClusterID)
@@ -1510,7 +1844,7 @@ func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int
 
 	pageInfo := &model.PageInfo{
 		HasPreviousPage: after != nil && *after != "",
-		HasNextPage:     false, // Single-page result from underlying method
+		HasNextPage:     false,
 	}
 	if len(edges) > 0 {
 		pageInfo.StartCursor = &edges[0].Cursor
@@ -1519,19 +1853,80 @@ func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int
 
 	return &model.ClusterAccessConnection{
 		Edges:      edges,
+		Nodes:      items,
 		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
+		TotalCount: len(items),
+	}
 }
 
 // DoGetClustersAvailableConnection returns a Relay-style connection for available clusters.
 func (r *Resolver) DoGetClustersAvailableConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.AvailableClusterConnection, error) {
-	items, err := r.DoGetClustersAvailable(ctx, first, after)
-	if err != nil {
-		return nil, err
+	if middleware.IsDemoMode(ctx) {
+		items := []*model.AvailableCluster{
+			{ClusterID: "cluster_demo_us_west", ClusterName: "US West (Oregon)", Tiers: []string{"free"}, AutoEnroll: true},
+		}
+		return buildClustersAvailableConnectionFromSlice(items, first, after, last, before), nil
 	}
 
-	totalCount := len(items)
+	resp, err := r.Clients.Quartermaster.ListClustersAvailable(ctx, buildCursorPagination(first, after, last, before))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clusters available: %w", err)
+	}
+	if resp == nil {
+		return &model.AvailableClusterConnection{
+			Edges:      []*model.AvailableClusterEdge{},
+			Nodes:      []*model.AvailableCluster{},
+			PageInfo:   &model.PageInfo{},
+			TotalCount: 0,
+		}, nil
+	}
+
+	return buildClustersAvailableConnectionFromResponse(resp), nil
+}
+
+// buildClustersAvailableConnectionFromResponse builds a connection from a ClustersAvailableResponse.
+func buildClustersAvailableConnectionFromResponse(resp *pb.ClustersAvailableResponse) *model.AvailableClusterConnection {
+	edges := make([]*model.AvailableClusterEdge, len(resp.Clusters))
+	nodes := make([]*model.AvailableCluster, len(resp.Clusters))
+	for i, c := range resp.Clusters {
+		item := &model.AvailableCluster{
+			ClusterID:   c.ClusterId,
+			ClusterName: c.ClusterName,
+			Tiers:       c.Tiers,
+			AutoEnroll:  c.AutoEnroll,
+		}
+		cursor := pagination.EncodeCursor(time.Now(), c.ClusterId)
+		edges[i] = &model.AvailableClusterEdge{
+			Cursor: cursor,
+			Node:   item,
+		}
+		nodes[i] = item
+	}
+
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	return &model.AvailableClusterConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildClustersAvailableConnectionFromSlice builds a connection from a slice (for demo mode).
+func buildClustersAvailableConnectionFromSlice(items []*model.AvailableCluster, first *int, after *string, last *int, before *string) *model.AvailableClusterConnection {
 	edges := make([]*model.AvailableClusterEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(time.Now(), item.ClusterID)
@@ -1552,22 +1947,84 @@ func (r *Resolver) DoGetClustersAvailableConnection(ctx context.Context, first *
 
 	return &model.AvailableClusterConnection{
 		Edges:      edges,
+		Nodes:      items,
 		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
+		TotalCount: len(items),
+	}
 }
 
 // DoGetMySubscriptionsConnection returns a Relay-style connection for user subscriptions.
 func (r *Resolver) DoGetMySubscriptionsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.MySubscriptionsConnection, error) {
-	items, err := r.DoListMySubscriptions(ctx, first, after)
-	if err != nil {
-		return nil, err
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning demo subscribed clusters connection")
+		items := demo.GenerateMySubscriptions()
+		return buildMySubscriptionsConnectionFromSlice(items, first, after, last, before), nil
 	}
 
-	totalCount := len(items)
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	resp, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+		TenantId:   tenantID,
+		Pagination: buildCursorPagination(first, after, last, before),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list subscriptions: %w", err)
+	}
+
+	return buildMySubscriptionsConnectionFromResponse(resp), nil
+}
+
+// buildMySubscriptionsConnectionFromResponse builds a connection from a ListClustersResponse.
+func buildMySubscriptionsConnectionFromResponse(resp *pb.ListClustersResponse) *model.MySubscriptionsConnection {
+	edges := make([]*model.MySubscriptionEdge, len(resp.Clusters))
+	for i, item := range resp.Clusters {
+		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.ClusterId)
+		edges[i] = &model.MySubscriptionEdge{
+			Cursor: cursor,
+			Node:   item,
+		}
+	}
+
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	nodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			nodes = append(nodes, edge.Node)
+		}
+	}
+
+	return &model.MySubscriptionsConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildMySubscriptionsConnectionFromSlice builds a connection from a slice (for demo mode).
+func buildMySubscriptionsConnectionFromSlice(items []*pb.InfrastructureCluster, first *int, after *string, last *int, before *string) *model.MySubscriptionsConnection {
 	edges := make([]*model.MySubscriptionEdge, len(items))
 	for i, item := range items {
-		cursor := pagination.EncodeCursor(time.Now(), item.ClusterId)
+		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.ClusterId)
 		edges[i] = &model.MySubscriptionEdge{
 			Cursor: cursor,
 			Node:   item,
@@ -1583,27 +2040,124 @@ func (r *Resolver) DoGetMySubscriptionsConnection(ctx context.Context, first *in
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	nodes := make([]*pb.InfrastructureCluster, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			nodes = append(nodes, edge.Node)
+		}
+	}
+
 	return &model.MySubscriptionsConnection{
 		Edges:      edges,
+		Nodes:      nodes,
 		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
+		TotalCount: len(items),
+	}
 }
 
 // DoGetMarketplaceClustersConnection returns a Relay-style connection for marketplace clusters.
-func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, pricingModel *pb.ClusterPricingModel, first *int, after *string, last *int, before *string) (*model.MarketplaceClusterConnection, error) {
-	items, err := r.DoListMarketplaceClusters(ctx, pricingModel, first, after)
-	if err != nil {
-		return nil, err
+// Uses Quartermaster for paginated visibility/access and Purser for pricing enrichment.
+func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.MarketplaceClusterConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo marketplace clusters connection")
+		items := demo.GenerateMarketplaceClusters()
+		return buildMarketplaceClustersConnectionFromSlice(items, first, after, last, before), nil
 	}
 
-	totalCount := len(items)
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+
+	// 1. Get paginated clusters from Quartermaster (visibility/access)
+	qmResp, err := r.Clients.Quartermaster.ListMarketplaceClusters(ctx, &pb.ListMarketplaceClustersRequest{
+		TenantId:   tenantID,
+		Pagination: buildCursorPagination(first, after, last, before),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list marketplace clusters: %w", err)
+	}
+
+	clusters := qmResp.GetClusters()
+	if len(clusters) == 0 {
+		return &model.MarketplaceClusterConnection{
+			Edges:      []*model.MarketplaceClusterEdge{},
+			Nodes:      []*pb.MarketplaceClusterEntry{},
+			PageInfo:   &model.PageInfo{HasPreviousPage: false, HasNextPage: false},
+			TotalCount: int(qmResp.GetPagination().GetTotalCount()),
+		}, nil
+	}
+
+	// 2. Batch fetch pricing + eligibility from Purser
+	clusterIDs := make([]string, len(clusters))
+	for i, c := range clusters {
+		clusterIDs[i] = c.ClusterId
+	}
+
+	pricingResp, err := r.Clients.Purser.GetClustersPricingBatch(ctx, tenantID, clusterIDs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster pricing: %w", err)
+	}
+
+	edges := make([]*model.MarketplaceClusterEdge, 0, len(clusters))
+	nodes := make([]*pb.MarketplaceClusterEntry, 0, len(clusters))
+
+	for _, cluster := range clusters {
+		cluster.IsEligible = true
+		pricingInfo := pricingResp[cluster.ClusterId]
+		if pricingInfo != nil {
+			cluster.PricingModel = pricingModelStringToProto(pricingInfo.PricingModel)
+			if pricingInfo.BasePrice != "" {
+				cluster.MonthlyPriceCents = int32(parsePriceToCents(pricingInfo.BasePrice))
+			}
+			cluster.IsEligible = pricingInfo.IsEligible
+			if !pricingInfo.IsEligible && pricingInfo.DenialReason != nil && *pricingInfo.DenialReason != "" {
+				denial := *pricingInfo.DenialReason
+				cluster.DenialReason = &denial
+			}
+		}
+
+		var cursor string
+		if cluster.CreatedAt != nil {
+			cursor = pagination.EncodeCursor(cluster.CreatedAt.AsTime(), cluster.ClusterId)
+		} else {
+			cursor = pagination.EncodeCursor(time.Now(), cluster.ClusterId)
+		}
+
+		edges = append(edges, &model.MarketplaceClusterEdge{Cursor: cursor, Node: cluster})
+		nodes = append(nodes, cluster)
+	}
+
+	pag := qmResp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	return &model.MarketplaceClusterConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}, nil
+}
+
+// buildMarketplaceClustersConnectionFromSlice builds a connection from a slice (demo mode).
+func buildMarketplaceClustersConnectionFromSlice(items []*pb.MarketplaceClusterEntry, first *int, after *string, last *int, before *string) *model.MarketplaceClusterConnection {
 	edges := make([]*model.MarketplaceClusterEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(time.Now(), item.ClusterId)
 		edges[i] = &model.MarketplaceClusterEdge{
 			Cursor: cursor,
-			Node:   item, // item is already *pb.MarketplaceClusterEntry which maps to MarketplaceCluster
+			Node:   item,
 		}
 	}
 
@@ -1618,19 +2172,74 @@ func (r *Resolver) DoGetMarketplaceClustersConnection(ctx context.Context, prici
 
 	return &model.MarketplaceClusterConnection{
 		Edges:      edges,
+		Nodes:      items,
 		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
+		TotalCount: len(items),
+	}
 }
 
 // DoGetPendingSubscriptionsConnection returns a Relay-style connection for pending subscriptions.
 func (r *Resolver) DoGetPendingSubscriptionsConnection(ctx context.Context, clusterID string, first *int, after *string, last *int, before *string) (*model.ClusterSubscriptionConnection, error) {
-	items, err := r.DoListPendingSubscriptions(ctx, clusterID)
-	if err != nil {
-		return nil, err
+	if middleware.IsDemoMode(ctx) {
+		items := demo.GeneratePendingSubscriptions()
+		return buildPendingSubscriptionsConnectionFromSlice(items, first, after, last, before), nil
 	}
 
-	totalCount := len(items)
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+
+	resp, err := r.Clients.Quartermaster.ListPendingSubscriptions(ctx, &pb.ListPendingSubscriptionsRequest{
+		ClusterId:     clusterID,
+		OwnerTenantId: tenantID,
+		Pagination:    buildCursorPagination(first, after, last, before),
+	})
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to list pending subscriptions")
+		return nil, fmt.Errorf("failed to list pending subscriptions: %w", err)
+	}
+
+	return buildPendingSubscriptionsConnectionFromResponse(resp), nil
+}
+
+// buildPendingSubscriptionsConnectionFromResponse builds a connection from a ListPendingSubscriptionsResponse.
+func buildPendingSubscriptionsConnectionFromResponse(resp *pb.ListPendingSubscriptionsResponse) *model.ClusterSubscriptionConnection {
+	edges := make([]*model.ClusterSubscriptionEdge, len(resp.Subscriptions))
+	nodes := make([]*pb.ClusterSubscription, len(resp.Subscriptions))
+	for i, item := range resp.Subscriptions {
+		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
+		edges[i] = &model.ClusterSubscriptionEdge{
+			Cursor: cursor,
+			Node:   item,
+		}
+		nodes[i] = item
+	}
+
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	return &model.ClusterSubscriptionConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildPendingSubscriptionsConnectionFromSlice builds a connection from a slice (for demo mode).
+func buildPendingSubscriptionsConnectionFromSlice(items []*pb.ClusterSubscription, first *int, after *string, last *int, before *string) *model.ClusterSubscriptionConnection {
 	edges := make([]*model.ClusterSubscriptionEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
@@ -1651,19 +2260,74 @@ func (r *Resolver) DoGetPendingSubscriptionsConnection(ctx context.Context, clus
 
 	return &model.ClusterSubscriptionConnection{
 		Edges:      edges,
+		Nodes:      items,
 		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
+		TotalCount: len(items),
+	}
 }
 
 // DoGetClusterInvitesConnection returns a Relay-style connection for cluster invites.
 func (r *Resolver) DoGetClusterInvitesConnection(ctx context.Context, clusterID string, first *int, after *string, last *int, before *string) (*model.ClusterInviteConnection, error) {
-	items, err := r.DoListClusterInvites(ctx, clusterID)
-	if err != nil {
-		return nil, err
+	if middleware.IsDemoMode(ctx) {
+		items := demo.GenerateClusterInvites()
+		return buildClusterInvitesConnectionFromSlice(items, first, after, last, before), nil
 	}
 
-	totalCount := len(items)
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+
+	resp, err := r.Clients.Quartermaster.ListClusterInvites(ctx, &pb.ListClusterInvitesRequest{
+		ClusterId:     clusterID,
+		OwnerTenantId: tenantID,
+		Pagination:    buildCursorPagination(first, after, last, before),
+	})
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to list cluster invites")
+		return nil, fmt.Errorf("failed to list cluster invites: %w", err)
+	}
+
+	return buildClusterInvitesConnectionFromResponse(resp), nil
+}
+
+// buildClusterInvitesConnectionFromResponse builds a connection from a ListClusterInvitesResponse.
+func buildClusterInvitesConnectionFromResponse(resp *pb.ListClusterInvitesResponse) *model.ClusterInviteConnection {
+	edges := make([]*model.ClusterInviteEdge, len(resp.Invites))
+	nodes := make([]*pb.ClusterInvite, len(resp.Invites))
+	for i, item := range resp.Invites {
+		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
+		edges[i] = &model.ClusterInviteEdge{
+			Cursor: cursor,
+			Node:   item,
+		}
+		nodes[i] = item
+	}
+
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	return &model.ClusterInviteConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}
+}
+
+// buildClusterInvitesConnectionFromSlice builds a connection from a slice (for demo mode).
+func buildClusterInvitesConnectionFromSlice(items []*pb.ClusterInvite, first *int, after *string, last *int, before *string) *model.ClusterInviteConnection {
 	edges := make([]*model.ClusterInviteEdge, len(items))
 	for i, item := range items {
 		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
@@ -1684,41 +2348,32 @@ func (r *Resolver) DoGetClusterInvitesConnection(ctx context.Context, clusterID 
 
 	return &model.ClusterInviteConnection{
 		Edges:      edges,
+		Nodes:      items,
 		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
+		TotalCount: len(items),
+	}
 }
 
 // DoGetMyClusterInvitesConnection returns a Relay-style connection for the user's cluster invites.
 func (r *Resolver) DoGetMyClusterInvitesConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.ClusterInviteConnection, error) {
-	items, err := r.DoListMyClusterInvites(ctx)
+	if middleware.IsDemoMode(ctx) {
+		items := demo.GenerateMyClusterInvites()
+		return buildClusterInvitesConnectionFromSlice(items, first, after, last, before), nil
+	}
+
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+
+	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &pb.ListMyClusterInvitesRequest{
+		TenantId:   tenantID,
+		Pagination: buildCursorPagination(first, after, last, before),
+	})
 	if err != nil {
-		return nil, err
+		r.Logger.WithError(err).Error("Failed to list my cluster invites")
+		return nil, fmt.Errorf("failed to list my cluster invites: %w", err)
 	}
 
-	totalCount := len(items)
-	edges := make([]*model.ClusterInviteEdge, len(items))
-	for i, item := range items {
-		cursor := pagination.EncodeCursor(item.CreatedAt.AsTime(), item.Id)
-		edges[i] = &model.ClusterInviteEdge{
-			Cursor: cursor,
-			Node:   item,
-		}
-	}
-
-	pageInfo := &model.PageInfo{
-		HasPreviousPage: after != nil && *after != "",
-		HasNextPage:     false,
-	}
-	if len(edges) > 0 {
-		pageInfo.StartCursor = &edges[0].Cursor
-		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
-	}
-
-	return &model.ClusterInviteConnection{
-		Edges:      edges,
-		PageInfo:   pageInfo,
-		TotalCount: totalCount,
-	}, nil
+	return buildClusterInvitesConnectionFromResponse(resp), nil
 }
-

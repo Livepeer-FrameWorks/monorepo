@@ -259,6 +259,7 @@ function handleCreate(msg: MainToWorkerMessage & { type: 'create' }): void {
       lastChunkBytes: '' as string,
     },
     optimizeForLatency: opts.optimizeForLatency,
+    payloadFormat: opts.payloadFormat || 'avcc',
   };
 
   pipelines.set(idx, pipeline);
@@ -349,7 +350,10 @@ function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array
   };
 
   // Pass description directly from WebSocket INIT data (per reference rawws.js line 1052)
-  if (description && description.byteLength > 0) {
+  // For Annex B format (ws/video/h264), SPS/PPS comes inline in the bitstream - skip description
+  if (pipeline.payloadFormat === 'annexb') {
+    log(`Annex B mode - SPS/PPS inline in bitstream, no description needed`);
+  } else if (description && description.byteLength > 0) {
     config.description = description;
     log(`Configuring with description (${description.byteLength} bytes)`);
   } else {

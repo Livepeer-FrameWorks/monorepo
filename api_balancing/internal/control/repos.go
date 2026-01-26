@@ -323,12 +323,18 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 		// First, ensure the artifact exists in foghorn.artifacts (lifecycle table)
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifacts
-				(artifact_hash, artifact_type, internal_name, status, created_at, updated_at)
-			VALUES ($1, $2, $3, 'ready', to_timestamp($4), NOW())
+				(artifact_hash, artifact_type, internal_name, status, created_at, updated_at, access_count, last_accessed_at)
+			VALUES ($1, $2, $3, 'ready', to_timestamp($4), NOW(), $5, CASE WHEN $6 > 0 THEN to_timestamp($6) ELSE NULL END)
 			ON CONFLICT (artifact_hash) DO UPDATE SET
 				internal_name = COALESCE(foghorn.artifacts.internal_name, EXCLUDED.internal_name),
+				access_count = GREATEST(COALESCE(foghorn.artifacts.access_count, 0), EXCLUDED.access_count),
+				last_accessed_at = CASE
+					WHEN EXCLUDED.last_accessed_at IS NULL THEN foghorn.artifacts.last_accessed_at
+					WHEN foghorn.artifacts.last_accessed_at IS NULL THEN EXCLUDED.last_accessed_at
+					ELSE GREATEST(foghorn.artifacts.last_accessed_at, EXCLUDED.last_accessed_at)
+				END,
 				updated_at = NOW()
-		`, a.ArtifactHash, a.ArtifactType, a.StreamName, a.CreatedAt)
+		`, a.ArtifactHash, a.ArtifactType, a.StreamName, a.CreatedAt, a.AccessCount, a.LastAccessed)
 		if err != nil {
 			return err
 		}
@@ -336,16 +342,22 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 		// Then, upsert into artifact_nodes (warm storage tracking)
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifact_nodes
-				(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, last_seen_at, is_orphaned, cached_at)
-			VALUES ($1, $2, $3, $4, $5, $6, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW()))
+				(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW()))
 			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
 				file_path = EXCLUDED.file_path,
 				size_bytes = EXCLUDED.size_bytes,
 				segment_count = EXCLUDED.segment_count,
 				segment_bytes = EXCLUDED.segment_bytes,
+				access_count = GREATEST(COALESCE(foghorn.artifact_nodes.access_count, 0), EXCLUDED.access_count),
+				last_accessed = CASE
+					WHEN EXCLUDED.last_accessed IS NULL THEN foghorn.artifact_nodes.last_accessed
+					WHEN foghorn.artifact_nodes.last_accessed IS NULL THEN EXCLUDED.last_accessed
+					ELSE GREATEST(foghorn.artifact_nodes.last_accessed, EXCLUDED.last_accessed)
+				END,
 				last_seen_at = NOW(),
 				is_orphaned = false
-		`, a.ArtifactHash, nodeID, a.FilePath, a.SizeBytes, a.SegmentCount, a.SegmentBytes)
+		`, a.ArtifactHash, nodeID, a.FilePath, a.SizeBytes, a.SegmentCount, a.SegmentBytes, a.AccessCount, a.LastAccessed)
 		if err != nil {
 			return err
 		}

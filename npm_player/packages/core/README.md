@@ -18,7 +18,7 @@ npm i @livepeer-frameworks/player-core
 import { PlayerController } from '@livepeer-frameworks/player-core';
 
 const controller = new PlayerController({
-  contentId: 'my-stream',
+  contentId: 'pk_...', // playbackId
   contentType: 'live',
   gatewayUrl: 'https://your-bridge/graphql',
   debug: true,
@@ -26,6 +26,19 @@ const controller = new PlayerController({
 
 const container = document.getElementById('player')!;
 await controller.attach(container);
+```
+
+Notes:
+- There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
+
+### Direct MistServer Node (mistUrl)
+
+```ts
+const controller = new PlayerController({
+  contentId: 'pk_...',
+  contentType: 'live',
+  mistUrl: 'https://edge.example.com',
+});
 ```
 
 ### Styles

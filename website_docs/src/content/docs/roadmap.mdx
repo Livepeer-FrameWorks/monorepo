@@ -5,100 +5,127 @@ sidebar:
   order: 100
 ---
 
+import { Aside, Badge } from '@astrojs/starlight/components';
+
+This document outlines the development trajectory for Frameworks. We believe in building in the open, giving you full visibility into what is live, what is currently being built, and what we plan to tackle next.
+
+Please note that while we strive for accuracy, priorities can evolve based on user feedback and technical discovery. If a specific feature is critical to your deployment, please reach out to the team.
+
+For full context, history, and status updates, see GitHub Projects (public): https://github.com/orgs/Livepeer-FrameWorks/projects
+
+<Aside type="note" title="Status Key">
+- **Done**: Live in production.
+- **In Progress**: Work is underway; may have rough edges.
+- **In the Pipeline**: In design or early prototype.
+- **Planned**: On the backlog.
+</Aside>
+
 ## Done
 
-These features are fully implemented, tested, and deployed in the current production release.
+*Rotating highlight of recently shipped, production‑ready capabilities. For full history, use GitHub Projects.*
 
-### Media Plane
-- [x] Multi-protocol ingest: RTMP, SRT, WHIP
-- [x] Multi-protocol delivery: HLS, WebRTC, DASH
-- [x] Stream CRUD, multiple keys per stream, playback IDs
-- [x] DVR recording with retention policies
-- [x] Server-side clipping
+### Video Engine
+- **Ingest**: RTMP, SRT, and WHIP support.
+- **Delivery**: Low-latency HLS, WebRTC, and DASH.
+- **Stream Control**: Stream CRUD, multiple keys per stream, and playback IDs.
+- **Media**: DVR recording (with retention policies), server-side clipping, and VOD uploads.
 
-### Control Plane
-- [x] GraphQL API with subscriptions
-- [x] JWT and API token authentication
-- [x] Multi-tenant isolation
+### Core Platform
+- **Tenancy**: Native multi-tenant isolation.
+- **Auth**: JWT and API Token management.
+- **Billing**: Usage tracking, cost breakdowns, and invoice generation.
+- **Infrastructure**: Geo-aware load balancing, Cloudflare DNS automation, and ACME certificates.
+- **Reliability**: Service health endpoints are internal only; a public status page is not yet implemented (tracked in GitHub Projects).
 
-### Data Plane
-- [x] Kafka → ClickHouse analytics pipeline
-- [x] Real-time viewer counts via WebSocket
-- [x] Geographic breakdowns (country/city)
-- [x] Stream health metrics (buffer state, packet loss, quality)
-- [x] Node performance metrics
+### Data & Analytics
+- **Real-time**: Viewer counts and stream health metrics (buffer, packet loss).
+- **Insights**: Geographic breakdowns (Country/City).
+- **Pipeline**: Kafka → ClickHouse analytics pipeline.
+- **System**: Node performance metrics.
 
-### Billing
-- [x] Usage tracking & breakdowns
-- [x] Invoice generation and history
-
-### Infrastructure
-- [x] Geo-aware load balancing
-- [x] CLI for cluster provisioning
-- [x] WireGuard mesh for internal networking
-- [x] DNS automation with Cloudflare (self-hosted anycast DNS planned)
-- [x] ACME certificate issuance
-
-### Developer Tools
-- [x] Web player NPM package
-- [x] GraphQL explorer in dashboard
+### Developer Experience
+- **API**: GraphQL API with subscriptions and dashboard Explorer.
+- **Components**: Web Player (NPM) and StreamCrafter (Broadcasting) SDKs.
+- **MCP Server**: AI agent integration via Model Context Protocol.
+  - Account, billing, stream, and analytics resources
+  - Stream management tools (create, configure, playback)
+  - Onboarding and troubleshooting prompts
+- **MCP Video Consultant (Phase 1)**: Expert-level video streaming diagnostics via MCP. [RFC: MCP Consultant]
+  - Knowledge sources (curated doc site indexes for FrameWorks, MistServer, FFmpeg, OBS)
+  - QoE diagnostic tools (rebuffering, buffer health, routing, anomaly detection)
+  - Support history access and search
+  - `video_consultant` and `diagnose_quality_issue` prompts
+- **Support Messaging**: Deckhand integration with Chatwoot for in-app support.
+- **Protocols**: x402 for machine-to-machine payments.
 
 ---
 
 ## In Progress
 
-These features are currently being actively developed. Core functionality may be present but is not yet fully integrated into the user interface or public API.
+*Active development. Core functionality is established; work is focused on full integration, UI exposure, and production hardening.*
 
-### Custom Domains
-DNS and SSL work. Missing: tenant UI and automatic triggers.
+### Platform & Infrastructure
+- **Cloud Federation**: Hardening edge node connectivity and production-grade subdomain routing.
+- **Cluster Provisioning**: Finalizing end-to-end validation for CLI-based deployment workflows, including on-demand control-plane services (Foghorn).
 
-### Payment Processing
-Stripe and Mollie webhook endpoints exist. Missing: wiring to actually process payments.
-
-### Livepeer Gateway Integration
-Transcoding works via Livepeer network works, but we want a more native integration. Also need to add tracking for transcoded minutes...
+### Product & Services
+- **Livepeer Gateway**: Transcoding is active. Work is focused on native integration and exposed controls.
 
 ---
 
 ## In the Pipeline
 
-These items are in the design or early prototype phase. Some features may be available for early access testing.
+*Design and prototype phase. Early access may be available.*
 
-### AV Device Discovery
-Auto-detect IP cameras, webcams, HDMI inputs. Code lives in MistServer fork, needs merge and standalone binary packaging.
+### Product
+- **Interactive (Parlor)**: XMTP-based chat rooms. <Badge text="Q1 2026" variant="note" /> [RFC: Parlor], [RFC: XMPT Chattins]
+- **Stream Provenance**: Arweave-backed chain of custody for stream integrity and dispute resolution. <Badge text="Q1 2026" variant="note" />
+- **Orchestration**: Unified processing for Live + VOD. [RFC: Processing Orchestration], [RFC: Stream Replication], [RFC: VOD Optimization]
+- **Marketplace**: Cluster capacity sharing. [RFC: Marketplace]
+- **AV Device Discovery**: Auto-detect IP cameras and HDMI inputs.
+- **Compositing**: Server-side PiP, overlays, and mixing.
+- **Transcription**: Live speech-to-text for streams.
+- **Video Analysis**: Object detection, classification, automated clipping, and camera-driven automation.
+- **Live Daydream V2V**: Real-time video-to-video processing.
 
-### Multi-stream Compositing
-PiP, overlays, mixing. Media server supports it, needs processing node orchestration and UI.
+### Platform & Infrastructure
+- **Mesh Networking** (RFC phase): WireGuard mesh with per-tenant isolation, OSPF routing, and gRPC TLS. [RFC: Mesh Isolation], [RFC: WireGuard OSPF], [RFC: Service Identity], [RFC: gRPC TLS Mesh]
+- **Scaling & HA** (RFC phase): Horizontal scaling strategies and node maintenance (drain) workflows. [RFC: Horizontal Scaling], [RFC: Node Drain]
+- **Tenant Subdomains (Platform‑Managed)** (RFC phase): Subdomain provisioning and SSL automation for self‑hosted edge clusters (no BYO domains yet).
+- **Object Storage**: S3-compatible storage for edge clusters. [RFC: S3 Storage]
 
-### Hybrid Cloud
-Connect your own edge nodes. Software ready, needs customer subdomain routing.
+### Analytics
+- **QoE**: Comprehensive Quality of Experience metrics. [RFC: QoE Analytics]
 
-### AI Processing
-Video analysis and inference. Early experiments, needs orchestration layer.
+### Developer Experience
+- **MCP Video Consultant (Phase 2)**: Background monitoring and semantic knowledge search. [RFC: MCP Consultant]
+  - RAG knowledge base with pgvector for semantic doc search
+  - Background monitor service ("Lookout") polling for QoE anomalies
+  - SSE push notifications for proactive alerts
+  - `search_knowledge` tool with context-aware retrieval
 
 ---
 
 ## Planned
 
-These features are on our backlog for future development cycles.
+*Backlog items for future development cycles.*
 
-### Streaming
-- Browser-based streaming (WebRTC from dashboard)
-- Per-stream transcoding/recording settings
+### Product
+- **Advanced Controls**: Per-stream transcoding targets.
+- **Teams**: Multi-user accounts, role-based permissions (RBAC), and audit logs.
+- **Help Center**: Integrated documentation and support hub.
+- **Mobile Apps**: Native iOS and Android applications.
 
-### Teams
-- Multi-user accounts
-- Role-based permissions
-- Audit logs
+### Platform & Infrastructure
+- **DNS**: Self-hosted anycast DNS. [RFC: Anycast DNS]
+- **Security**: Vault secrets management. [RFC: Vault Secrets Management]
+- **Refactoring**: Large-file strategy to reduce repo churn. [RFC: Large File Refactor]
 
-### Developer Tools
-- Outbound webhooks
-- Client SDKs (JS/TS)
-
-### Other
-- Live transcription
-- Network status page
-- Help center
-- Support tickets
-- VOD management
-- Mobile apps
+### Developer Experience
+- **Webhooks**: Outbound event notifications.
+- **SDKs**: Official JS/TS clients.
+- **Status Page**: Public incident tracking (Lookout). [RFC: Lookout Incidents]
+- **MCP Video Consultant (Phase 3)**: Server-side AI agent for autonomous diagnostics. [RFC: MCP Consultant]
+  - Local LLM (ollama with qwen2.5) for server-side reasoning
+  - Proactive issue detection and automated recommendations
+  - AI-generated insights (not template-based)

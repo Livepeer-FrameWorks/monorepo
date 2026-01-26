@@ -1,0 +1,82 @@
+{
+  "$schema": "https://unpkg.com/knip@latest/schema.json",
+  "workspaces": {
+    "website_application": {
+      "entry": [
+        "src/routes/**/+*.{ts,svelte}",
+        "src/hooks.server.ts",
+        "src/hooks.client.ts",
+        "src/app.d.ts"
+      ],
+      "project": ["src/**/*.{ts,svelte}"],
+      "ignore": [
+        "src/lib/components/ui/**",
+        "$houdini/**",
+        ".svelte-kit/**",
+        "src/lib/graphql/generated/**"
+      ],
+      "ignoreDependencies": [
+        "@sveltejs/adapter-auto",
+        "@sveltejs/adapter-node",
+        "postcss-import",
+        "autoprefixer"
+      ]
+    },
+    "website_marketing": {
+      "entry": ["src/main.jsx", "src/App.jsx"],
+      "project": ["src/**/*.{js,jsx,ts,tsx}"],
+      "ignore": ["dist/**"]
+    },
+    "website_docs": {
+      "entry": [
+        "src/content/**/*.{md,mdx}",
+        "astro.config.mjs"
+      ],
+      "project": ["src/**/*.{ts,astro,md,mdx}"],
+      "ignore": ["dist/**", ".astro/**"]
+    },
+    "npm_player/packages/core": {
+      "entry": ["src/index.ts", "src/vanilla/index.ts"],
+      "project": ["src/**/*.ts"],
+      "ignore": ["dist/**"],
+      "includeEntryExports": true
+    },
+    "npm_player/packages/react": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.{ts,tsx}"],
+      "ignore": ["dist/**"],
+      "includeEntryExports": true
+    },
+    "npm_player/packages/svelte": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.{ts,svelte}"],
+      "ignore": ["dist/**"],
+      "includeEntryExports": true
+    },
+    "npm_studio/packages/core": {
+      "entry": ["src/index.ts", "src/vanilla/index.ts"],
+      "project": ["src/**/*.ts"],
+      "ignore": ["dist/**"],
+      "includeEntryExports": true
+    },
+    "npm_studio/packages/react": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.{ts,tsx}"],
+      "ignore": ["dist/**"],
+      "includeEntryExports": true
+    },
+    "npm_studio/packages/svelte": {
+      "entry": ["src/index.ts"],
+      "project": ["src/**/*.{ts,svelte}"],
+      "ignore": ["dist/**"],
+      "includeEntryExports": true
+    }
+  },
+  "exclude": [
+    "unlisted",
+    "binaries"
+  ],
+  "ignoreWorkspaces": [
+    "npm_player/playground"
+  ]
+}

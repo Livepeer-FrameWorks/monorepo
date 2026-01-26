@@ -1,10 +1,11 @@
 <script lang="ts">
   import { Player } from "@livepeer-frameworks/player-svelte";
   import type { PlayerState, PlayerStateContext, PlayerOptions as CorePlayerOptions, PlayerMetadata } from "@livepeer-frameworks/player-svelte";
+  import { getGraphqlHttpUrl } from "$lib/config";
 
   interface Props {
     contentId: string;
-    contentType: "live" | "clip" | "dvr";
+    contentType?: "live" | "clip" | "dvr" | "vod";
     thumbnailUrl?: string | null;
     options?: Partial<CorePlayerOptions>;
     onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
@@ -22,11 +23,18 @@
 
   // Resolve gateway URL with dev environment handling
   const resolveGatewayUrl = (url?: string) => {
-    if (!url) return "http://localhost:18090/graphql";
+    const fallbackUrl = getGraphqlHttpUrl();
+    if (!url) return fallbackUrl;
 
     // In dev, if using relative path, force Nginx port
     if (import.meta.env.DEV && url.startsWith("/")) {
-      return `http://localhost:18090${url}`;
+      if (!fallbackUrl) return url;
+      try {
+        const base = new URL(fallbackUrl);
+        return `${base.protocol}//${base.host}${url}`;
+      } catch {
+        return url;
+      }
     }
 
     return url;

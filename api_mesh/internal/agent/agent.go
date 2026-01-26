@@ -18,6 +18,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Metrics holds Prometheus metrics for the agent
@@ -34,7 +36,15 @@ type Agent struct {
 	wgManager        wireguard.Manager
 	dnsServer        *dns.Server
 	nodeID           string
+	nodeName         string
+	nodeType         string
+	enrollmentToken  string
+	externalIP       string
+	internalIP       string
 	interfaceName    string
+	listenPort       int
+	syncInterval     time.Duration
+	syncTimeout      time.Duration
 	stopChan         chan struct{}
 	metrics          *Metrics
 	healthy          atomic.Bool
@@ -45,9 +55,16 @@ type Agent struct {
 type Config struct {
 	QuartermasterGRPCAddr string
 	ServiceToken          string // Or EnrollmentToken
+	EnrollmentToken       string // Bootstrap token for initial registration (optional)
 	NodeIDPath            string
 	InterfaceName         string
+	NodeType              string
+	NodeName              string
+	ExternalIP            string
+	InternalIP            string
+	ListenPort            int
 	SyncInterval          time.Duration
+	SyncTimeout           time.Duration
 	DNSPort               int
 	Logger                logging.Logger
 	Metrics               *Metrics
@@ -57,11 +74,25 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.SyncInterval == 0 {
 		cfg.SyncInterval = 30 * time.Second
 	}
+	if cfg.SyncTimeout == 0 {
+		cfg.SyncTimeout = 10 * time.Second
+	}
 	if cfg.InterfaceName == "" {
 		cfg.InterfaceName = "wg0"
 	}
 	if cfg.NodeIDPath == "" {
 		cfg.NodeIDPath = "/etc/privateer/node_id"
+	}
+	if cfg.ListenPort == 0 {
+		cfg.ListenPort = 51820
+	}
+	if cfg.NodeType == "" {
+		cfg.NodeType = "edge"
+	}
+	if cfg.NodeName == "" {
+		if hostname, err := os.Hostname(); err == nil && hostname != "" {
+			cfg.NodeName = hostname
+		}
 	}
 
 	// Initialize WireGuard Manager
@@ -85,14 +116,22 @@ func New(cfg Config) (*Agent, error) {
 	dnsSrv := dns.NewServer(cfg.Logger, cfg.DNSPort)
 
 	return &Agent{
-		logger:        cfg.Logger,
-		client:        client,
-		wgManager:     wg,
-		dnsServer:     dnsSrv,
-		interfaceName: cfg.InterfaceName,
-		stopChan:      make(chan struct{}),
-		nodeID:        loadOrGenerateNodeID(cfg.NodeIDPath, cfg.Logger),
-		metrics:       cfg.Metrics,
+		logger:          cfg.Logger,
+		client:          client,
+		wgManager:       wg,
+		dnsServer:       dnsSrv,
+		interfaceName:   cfg.InterfaceName,
+		enrollmentToken: cfg.EnrollmentToken,
+		nodeType:        cfg.NodeType,
+		nodeName:        cfg.NodeName,
+		externalIP:      cfg.ExternalIP,
+		internalIP:      cfg.InternalIP,
+		listenPort:      cfg.ListenPort,
+		syncInterval:    cfg.SyncInterval,
+		syncTimeout:     cfg.SyncTimeout,
+		stopChan:        make(chan struct{}),
+		nodeID:          loadOrGenerateNodeID(cfg.NodeIDPath, cfg.Logger),
+		metrics:         cfg.Metrics,
 	}, nil
 }
 
@@ -148,7 +187,7 @@ func (a *Agent) Stop() {
 }
 
 func (a *Agent) runLoop() {
-	ticker := time.NewTicker(30 * time.Second) // Configurable?
+	ticker := time.NewTicker(a.syncInterval)
 	defer ticker.Stop()
 
 	// Initial sync
@@ -190,15 +229,40 @@ func (a *Agent) sync() {
 
 	// 2. Call Quartermaster via gRPC
 	req := &pb.InfrastructureSyncRequest{
-		NodeId:    a.nodeID,
-		PublicKey: pubKey,
+		NodeId:     a.nodeID,
+		PublicKey:  pubKey,
+		ListenPort: int32(a.listenPort),
 	}
 
-	resp, err := a.client.SyncMesh(context.Background(), req)
+	syncCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+	resp, err := a.client.SyncMesh(syncCtx, req)
+	cancel()
 	if err != nil {
-		a.logger.WithError(err).Error("Failed to sync infrastructure")
-		a.syncFailed()
-		return
+		if status.Code(err) == codes.NotFound && a.enrollmentToken != "" {
+			a.logger.WithError(err).Warn("Node not registered. Attempting bootstrap...")
+			bootCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+			bootErr := a.bootstrapNode(bootCtx)
+			cancel()
+			if bootErr != nil {
+				a.logger.WithError(bootErr).Error("Bootstrap failed")
+				a.syncFailed()
+				return
+			}
+
+			// Retry sync after successful bootstrap
+			retryCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
+			resp, err = a.client.SyncMesh(retryCtx, req)
+			cancel()
+			if err != nil {
+				a.logger.WithError(err).Error("Failed to sync after bootstrap")
+				a.syncFailed()
+				return
+			}
+		} else {
+			a.logger.WithError(err).Error("Failed to sync infrastructure")
+			a.syncFailed()
+			return
+		}
 	}
 
 	// Get Private Key
@@ -259,6 +323,42 @@ func (a *Agent) sync() {
 
 	a.syncSucceeded()
 	a.logger.Info("Successfully applied wireguard config")
+}
+
+func (a *Agent) bootstrapNode(ctx context.Context) error {
+	nodeID := a.nodeID
+	req := &pb.BootstrapInfrastructureNodeRequest{
+		Token:    a.enrollmentToken,
+		NodeType: a.nodeType,
+		NodeId:   &nodeID,
+		Hostname: a.nodeName,
+	}
+	if a.externalIP != "" {
+		req.ExternalIp = &a.externalIP
+	}
+	if a.internalIP != "" {
+		req.InternalIp = &a.internalIP
+	}
+
+	resp, err := a.client.BootstrapInfrastructureNode(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp.GetNodeId() != "" && resp.GetNodeId() != a.nodeID {
+		a.logger.WithFields(logging.Fields{
+			"requested": a.nodeID,
+			"assigned":  resp.GetNodeId(),
+		}).Warn("Bootstrap returned a different node_id; continuing with assigned value")
+		a.nodeID = resp.GetNodeId()
+	}
+
+	a.logger.WithFields(logging.Fields{
+		"node_id":    resp.GetNodeId(),
+		"cluster_id": resp.GetClusterId(),
+	}).Info("Node bootstrapped successfully")
+
+	return nil
 }
 
 func loadOrGenerateNodeID(path string, logger logging.Logger) string {

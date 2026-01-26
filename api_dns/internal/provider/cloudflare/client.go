@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -186,23 +187,34 @@ func (c *Client) UpdatePool(poolID string, pool Pool) (*Pool, error) {
 
 // ListPools lists all load balancer pools
 func (c *Client) ListPools() ([]Pool, error) {
-	path := fmt.Sprintf("/accounts/%s/load_balancers/pools", c.accountID)
-	resp, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, err
+	basePath := fmt.Sprintf("/accounts/%s/load_balancers/pools", c.accountID)
+	var all []Pool
+	page := 1
+	for {
+		path := addQueryParam(addQueryParam(basePath, fmt.Sprintf("page=%d", page)), "per_page=100")
+		resp, err := c.doRequest("GET", path, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		resultJSON, err := json.Marshal(resp.Result)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal result: %w", err)
+		}
+
+		var pools []Pool
+		if err := json.Unmarshal(resultJSON, &pools); err != nil {
+			return nil, fmt.Errorf("failed to parse pools: %w", err)
+		}
+		all = append(all, pools...)
+
+		if resp.ResultInfo == nil || resp.ResultInfo.TotalPages <= page {
+			break
+		}
+		page++
 	}
 
-	resultJSON, err := json.Marshal(resp.Result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal result: %w", err)
-	}
-
-	var pools []Pool
-	if err := json.Unmarshal(resultJSON, &pools); err != nil {
-		return nil, fmt.Errorf("failed to parse pools: %w", err)
-	}
-
-	return pools, nil
+	return all, nil
 }
 
 // GetPool retrieves a specific pool by ID
@@ -318,23 +330,34 @@ func (c *Client) UpdateLoadBalancer(lbID string, lb LoadBalancer) (*LoadBalancer
 
 // ListLoadBalancers lists all load balancers in the zone
 func (c *Client) ListLoadBalancers() ([]LoadBalancer, error) {
-	path := fmt.Sprintf("/zones/%s/load_balancers", c.zoneID)
-	resp, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, err
+	basePath := fmt.Sprintf("/zones/%s/load_balancers", c.zoneID)
+	var all []LoadBalancer
+	page := 1
+	for {
+		path := addQueryParam(addQueryParam(basePath, fmt.Sprintf("page=%d", page)), "per_page=100")
+		resp, err := c.doRequest("GET", path, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		resultJSON, err := json.Marshal(resp.Result)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal result: %w", err)
+		}
+
+		var lbs []LoadBalancer
+		if err := json.Unmarshal(resultJSON, &lbs); err != nil {
+			return nil, fmt.Errorf("failed to parse load balancers: %w", err)
+		}
+		all = append(all, lbs...)
+
+		if resp.ResultInfo == nil || resp.ResultInfo.TotalPages <= page {
+			break
+		}
+		page++
 	}
 
-	resultJSON, err := json.Marshal(resp.Result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal result: %w", err)
-	}
-
-	var lbs []LoadBalancer
-	if err := json.Unmarshal(resultJSON, &lbs); err != nil {
-		return nil, fmt.Errorf("failed to parse load balancers: %w", err)
-	}
-
-	return lbs, nil
+	return all, nil
 }
 
 // DeleteLoadBalancer deletes a load balancer
@@ -404,22 +427,40 @@ func (c *Client) ListDNSRecords(recordType, name string) ([]DNSRecord, error) {
 		}
 	}
 
-	resp, err := c.doRequest("GET", path, nil)
-	if err != nil {
-		return nil, err
+	var all []DNSRecord
+	page := 1
+	for {
+		pagePath := addQueryParam(addQueryParam(path, fmt.Sprintf("page=%d", page)), "per_page=100")
+		resp, err := c.doRequest("GET", pagePath, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		resultJSON, err := json.Marshal(resp.Result)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal result: %w", err)
+		}
+
+		var records []DNSRecord
+		if err := json.Unmarshal(resultJSON, &records); err != nil {
+			return nil, fmt.Errorf("failed to parse DNS records: %w", err)
+		}
+		all = append(all, records...)
+
+		if resp.ResultInfo == nil || resp.ResultInfo.TotalPages <= page {
+			break
+		}
+		page++
 	}
 
-	resultJSON, err := json.Marshal(resp.Result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal result: %w", err)
-	}
+	return all, nil
+}
 
-	var records []DNSRecord
-	if err := json.Unmarshal(resultJSON, &records); err != nil {
-		return nil, fmt.Errorf("failed to parse DNS records: %w", err)
+func addQueryParam(path, param string) string {
+	if strings.Contains(path, "?") {
+		return path + "&" + param
 	}
-
-	return records, nil
+	return path + "?" + param
 }
 
 // DeleteDNSRecord deletes a DNS record

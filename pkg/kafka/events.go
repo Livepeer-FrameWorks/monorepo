@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -27,6 +28,19 @@ type AnalyticsEvent struct {
 	Source    string                 `json:"source"`
 	TenantID  string                 `json:"tenant_id,omitempty"`
 	Data      map[string]interface{} `json:"data"` // Transparent protobuf message as JSON
+}
+
+// ServiceEvent represents a service-plane event published to the service_events topic.
+type ServiceEvent struct {
+	EventID      string                 `json:"event_id"`
+	EventType    string                 `json:"event_type"`
+	Timestamp    time.Time              `json:"timestamp"`
+	Source       string                 `json:"source"`
+	TenantID     string                 `json:"tenant_id,omitempty"`
+	UserID       string                 `json:"user_id,omitempty"`
+	ResourceType string                 `json:"resource_type,omitempty"`
+	ResourceID   string                 `json:"resource_id,omitempty"`
+	Data         map[string]interface{} `json:"data"`
 }
 
 // EventHandler interface for handling Kafka events
@@ -61,7 +75,7 @@ func (h *AnalyticsEventHandler) HandleMessage(ctx context.Context, msg Message) 
 	// Note: In a high-throughput scenario, we might want to reuse a decoder.
 	if err := json.Unmarshal(msg.Value, &event); err != nil {
 		h.logger.WithError(err).Error("failed to unmarshal analytics event")
-		return nil // Return nil to avoid retrying malformed messages indefinitely
+		return fmt.Errorf("unmarshal analytics event: %w", err)
 	}
 
 	// Map headers to event fields if they exist and aren't already set

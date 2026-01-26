@@ -1,0 +1,26 @@
+# Live viewer connection and playback quality metrics
+# Includes bandwidth, packet loss, geographic location, and connection statistics
+subscription ViewerMetricsStream($streamId: ID!) {
+  liveViewerMetrics(streamId: $streamId) {
+    nodeId
+    streamId
+    action
+    protocol
+    host
+    sessionId
+    connectionTime
+    position
+    bandwidthInBps
+    bandwidthOutBps
+    bytesDownloaded
+    bytesUploaded
+    packetsSent
+    packetsLost
+    packetsRetransmitted
+    # GeoIP enriched fields
+    clientCity
+    clientCountry
+    clientLatitude
+    clientLongitude
+  }
+}

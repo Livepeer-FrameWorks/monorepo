@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"net/url"
 	"os"
 	"strconv"
@@ -29,11 +28,15 @@ import (
 
 // streamContext holds cached tenant and user information for a stream
 type streamContext struct {
-	TenantID  string
-	UserID    string
-	Source    string
-	UpdatedAt time.Time
-	LastError string
+	TenantID          string
+	UserID            string
+	StreamID          string
+	Source            string
+	UpdatedAt         time.Time
+	LastError         string
+	BillingModel      string // "postpaid" or "prepaid" - affects cache TTL
+	IsSuspended       bool   // true if tenant is suspended (balance < -$10)
+	IsBalanceNegative bool   // true if prepaid balance <= 0 (should return 402)
 }
 
 // DVRStarter handles DVR recording orchestration.
@@ -55,9 +58,11 @@ type Processor struct {
 	metrics             *ProcessorMetrics
 	nodeID              string
 	region              string
+	clusterID           string
+	ownerTenantID       string
 
-	streamCache        map[string]streamContext // Cache stream context (tenant + user)
-	streamCacheMu      sync.RWMutex
+	streamCache        *cache.Cache // Cache stream context (tenant + user)
+	streamCacheMetaMu  sync.Mutex
 	streamCacheHits    uint64
 	streamCacheMisses  uint64
 	streamCacheResInt  uint64
@@ -66,20 +71,12 @@ type Processor struct {
 	streamCacheLastAt  time.Time
 	streamCacheLastErr string
 
-	nodeUUIDCache   map[string]string // Cache node_id (logical) -> UUID
-	nodeUUIDCacheMu sync.RWMutex
-}
-
-// hash generates a simple hash for string input
-func hash(s string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(s))
-	return h.Sum32()
+	nodeUUIDCache *cache.Cache // Cache node_id (logical) -> UUID
 }
 
 // NewProcessor creates a new MistServer trigger processor
 func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, decklogClient *decklog.BatchedClient, loadBalancer *balancer.LoadBalancer, geoipClient *geoip.Reader) *Processor {
-	return &Processor{
+	p := &Processor{
 		logger:          logger,
 		commodoreClient: commodoreClient,
 		decklogClient:   decklogClient,
@@ -87,9 +84,27 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		geoipClient:     geoipClient,
 		nodeID:          os.Getenv("NODE_ID"),
 		region:          os.Getenv("REGION"),
-		streamCache:     make(map[string]streamContext),
-		nodeUUIDCache:   make(map[string]string),
+		clusterID:       os.Getenv("CLUSTER_ID"),
 	}
+
+	p.streamCache = cache.New(cache.Options{
+		TTL:                  10 * time.Minute,
+		StaleWhileRevalidate: 2 * time.Minute,
+		NegativeTTL:          0,
+		MaxEntries:           50000,
+	}, cache.MetricsHooks{
+		OnHit:  func(_ map[string]string) { atomic.AddUint64(&p.streamCacheHits, 1) },
+		OnMiss: func(_ map[string]string) { atomic.AddUint64(&p.streamCacheMisses, 1) },
+	})
+
+	p.nodeUUIDCache = cache.New(cache.Options{
+		TTL:                  1 * time.Hour,
+		StaleWhileRevalidate: 15 * time.Minute,
+		NegativeTTL:          0,
+		MaxEntries:           50000,
+	}, cache.MetricsHooks{})
+
+	return p
 }
 
 // StreamContextCacheEntry is a single cached mapping used for tenant/user enrichment.
@@ -97,6 +112,7 @@ type StreamContextCacheEntry struct {
 	Key       string    `json:"key"`
 	TenantID  string    `json:"tenant_id"`
 	UserID    string    `json:"user_id"`
+	StreamID  string    `json:"stream_id"`
 	Source    string    `json:"source"`
 	UpdatedAt time.Time `json:"updated_at"`
 	LastError string    `json:"last_error,omitempty"`
@@ -117,21 +133,33 @@ type StreamContextCacheSnapshot struct {
 }
 
 func (p *Processor) StreamContextCacheSnapshot() StreamContextCacheSnapshot {
-	p.streamCacheMu.RLock()
-	entries := make([]StreamContextCacheEntry, 0, len(p.streamCache))
-	for k, v := range p.streamCache {
-		entries = append(entries, StreamContextCacheEntry{
-			Key:       k,
-			TenantID:  v.TenantID,
-			UserID:    v.UserID,
-			Source:    v.Source,
-			UpdatedAt: v.UpdatedAt,
-			LastError: v.LastError,
-		})
+	var entries []StreamContextCacheEntry
+	if p.streamCache != nil {
+		for _, e := range p.streamCache.Snapshot() {
+			info, ok := e.Value.(streamContext)
+			if !ok {
+				continue
+			}
+			lastErr := info.LastError
+			if lastErr == "" && e.Err != nil {
+				lastErr = e.Err.Error()
+			}
+			entries = append(entries, StreamContextCacheEntry{
+				Key:       e.Key,
+				TenantID:  info.TenantID,
+				UserID:    info.UserID,
+				StreamID:  info.StreamID,
+				Source:    info.Source,
+				UpdatedAt: info.UpdatedAt,
+				LastError: lastErr,
+			})
+		}
 	}
+
+	p.streamCacheMetaMu.Lock()
 	lastAt := p.streamCacheLastAt
 	lastErr := p.streamCacheLastErr
-	p.streamCacheMu.RUnlock()
+	p.streamCacheMetaMu.Unlock()
 
 	return StreamContextCacheSnapshot{
 		GeneratedAt: time.Now(),
@@ -145,6 +173,86 @@ func (p *Processor) StreamContextCacheSnapshot() StreamContextCacheSnapshot {
 		LastError:   lastErr,
 		Entries:     entries,
 	}
+}
+
+// BillingStatus contains billing status for enforcement decisions
+type BillingStatus struct {
+	TenantID          string
+	BillingModel      string // "postpaid" or "prepaid"
+	IsSuspended       bool   // true if balance < -$10 (hard block)
+	IsBalanceNegative bool   // true if balance <= 0 (402 warning)
+	FromCache         bool   // true if status came from cache
+}
+
+// GetBillingStatus looks up billing status for a stream/artifact owner.
+// First checks the stream cache (populated during ingest), then falls back to Quartermaster.
+// Parameters:
+//   - internalName: stream's internal name (e.g., "abc123-def456") - used for cache lookup
+//   - tenantID: tenant ID - used for Quartermaster fallback if not in cache
+//
+// Returns nil if status cannot be determined (fail-open).
+func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID string) *BillingStatus {
+	// Try cache first (keyed by internal name)
+	if p.streamCache != nil && internalName != "" {
+		if cached, ok := p.streamCache.Peek(internalName); ok {
+			info := cached.(streamContext)
+			return &BillingStatus{
+				TenantID:          info.TenantID,
+				BillingModel:      info.BillingModel,
+				IsSuspended:       info.IsSuspended,
+				IsBalanceNegative: info.IsBalanceNegative,
+				FromCache:         true,
+			}
+		}
+	}
+
+	// Fallback to Quartermaster if we have tenant ID
+	if p.quartermasterClient != nil && tenantID != "" {
+		resp, err := p.quartermasterClient.ValidateTenant(ctx, tenantID, "")
+		if err == nil && resp != nil && resp.Valid {
+			return &BillingStatus{
+				TenantID:          tenantID,
+				BillingModel:      resp.BillingModel,
+				IsSuspended:       resp.IsSuspended,
+				IsBalanceNegative: resp.IsBalanceNegative,
+				FromCache:         false,
+			}
+		}
+	}
+
+	return nil // Fail-open
+}
+
+// InvalidateTenantCache evicts all cache entries for a specific tenant.
+// Called when tenant suspension status changes (e.g., after payment).
+// Returns the number of entries invalidated.
+func (p *Processor) InvalidateTenantCache(tenantID string) int {
+	if p.streamCache == nil || tenantID == "" {
+		return 0
+	}
+
+	// Get all cache entries and find those belonging to this tenant
+	var keysToEvict []string
+	for _, e := range p.streamCache.Snapshot() {
+		info, ok := e.Value.(streamContext)
+		if ok && info.TenantID == tenantID {
+			keysToEvict = append(keysToEvict, e.Key)
+		}
+	}
+
+	// Evict each matching entry
+	for _, key := range keysToEvict {
+		p.streamCache.Delete(key)
+	}
+
+	if len(keysToEvict) > 0 {
+		p.logger.WithFields(logging.Fields{
+			"tenant_id":          tenantID,
+			"entries_invalidated": len(keysToEvict),
+		}).Info("Invalidated tenant cache entries")
+	}
+
+	return len(keysToEvict)
 }
 
 // SetQuartermasterClient configures the Quartermaster client for node UUID lookups
@@ -167,9 +275,29 @@ func (p *Processor) SetMetrics(m *ProcessorMetrics) {
 	p.metrics = m
 }
 
+// SetClusterID sets the emitting cluster identifier for trigger enrichment.
+func (p *Processor) SetClusterID(clusterID string) {
+	if strings.TrimSpace(clusterID) == "" {
+		return
+	}
+	p.clusterID = clusterID
+}
+
+// SetOwnerTenantID sets the cluster owner tenant for infra event attribution.
+func (p *Processor) SetOwnerTenantID(tenantID string) {
+	if strings.TrimSpace(tenantID) == "" {
+		return
+	}
+	p.ownerTenantID = tenantID
+}
+
 func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 	if trigger == nil {
 		return fmt.Errorf("nil trigger")
+	}
+
+	if trigger.ClusterId == nil && p.clusterID != "" {
+		trigger.ClusterId = &p.clusterID
 	}
 
 	if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
@@ -250,17 +378,17 @@ func (p *Processor) handleProcessBilling(trigger *pb.MistTrigger) (string, bool,
 
 	// Enrich tenant context if not already present
 	if pbill.TenantId == nil {
-		ctx := context.Background()
-		info := p.getStreamContext(ctx, internalName)
+		info := p.applyStreamContext(trigger, internalName)
 		if info.TenantID != "" {
-			trigger.TenantId = &info.TenantID
 			pbill.TenantId = &info.TenantID
-		}
-		if info.UserID != "" {
-			trigger.UserId = &info.UserID
 		}
 	} else if *pbill.TenantId != "" {
 		trigger.TenantId = pbill.TenantId
+	}
+	if pbill.StreamId == nil || *pbill.StreamId == "" {
+		if streamID := trigger.GetStreamId(); streamID != "" {
+			pbill.StreamId = &streamID
+		}
 	}
 
 	p.logger.WithFields(logging.Fields{
@@ -292,6 +420,14 @@ func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string,
 	if sld.TenantId != nil {
 		trigger.TenantId = sld.TenantId
 	}
+	if sld.InternalName != nil && *sld.InternalName != "" {
+		p.applyStreamContext(trigger, *sld.InternalName)
+	}
+	if sld.StreamId == nil || *sld.StreamId == "" {
+		if streamID := trigger.GetStreamId(); streamID != "" {
+			sld.StreamId = &streamID
+		}
+	}
 
 	// Forward to Decklog
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
@@ -309,6 +445,14 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 	// Enrich tenant context if available in the payload
 	if dld.TenantId != nil && *dld.TenantId != "" {
 		trigger.TenantId = dld.TenantId
+	}
+	if dld.InternalName != nil && *dld.InternalName != "" {
+		p.applyStreamContext(trigger, *dld.InternalName)
+	}
+	if dld.StreamId == nil || *dld.StreamId == "" {
+		if streamID := trigger.GetStreamId(); streamID != "" {
+			dld.StreamId = &streamID
+		}
 	}
 
 	// Forward to Decklog
@@ -342,22 +486,62 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		return "", true, err
 	}
 
-	// Cache stream context (tenant + user)
-	p.streamCacheMu.Lock()
-	p.streamCache[streamValidation.InternalName] = streamContext{
-		TenantID:  streamValidation.TenantId,
-		UserID:    streamValidation.UserId,
-		Source:    "validate_stream_key",
-		UpdatedAt: time.Now(),
+	// Check if tenant is suspended (prepaid balance < -$10)
+	// Reject new ingests for suspended tenants
+	if streamValidation.IsSuspended {
+		p.logger.WithFields(logging.Fields{
+			"stream_key": pushRewrite.GetStreamName(),
+			"tenant_id":  streamValidation.TenantId,
+		}).Warn("Rejecting ingest: tenant suspended due to negative balance")
+		return "", true, fmt.Errorf("account suspended - please top up your balance")
 	}
-	p.streamCacheLastAt = time.Now()
-	p.streamCacheLastErr = ""
-	p.streamCacheMu.Unlock()
+
+	// Check if balance is negative (balance <= 0, but not yet suspended)
+	// Return 402-style error for new ingests requiring payment
+	if streamValidation.IsBalanceNegative {
+		p.logger.WithFields(logging.Fields{
+			"stream_key": pushRewrite.GetStreamName(),
+			"tenant_id":  streamValidation.TenantId,
+		}).Warn("Rejecting ingest: insufficient balance (402 Payment Required)")
+		return "", true, fmt.Errorf("payment required - please top up your balance")
+	}
+
+	// Cache stream context (tenant + user + billing info)
+	if p.streamCache != nil {
+		info := streamContext{
+			TenantID:          streamValidation.TenantId,
+			UserID:            streamValidation.UserId,
+			StreamID:          streamValidation.StreamId,
+			Source:            "validate_stream_key",
+			UpdatedAt:         time.Now(),
+			BillingModel:      streamValidation.BillingModel,
+			IsSuspended:       streamValidation.IsSuspended,
+			IsBalanceNegative: streamValidation.IsBalanceNegative,
+		}
+		// Use shorter cache TTL for prepaid tenants (1 min vs 10 min)
+		// This ensures faster enforcement of balance changes
+		cacheTTL := 10 * time.Minute
+		if streamValidation.BillingModel == "prepaid" {
+			cacheTTL = 1 * time.Minute
+		}
+		p.streamCache.Set(streamValidation.InternalName, info, cacheTTL)
+		p.streamCacheMetaMu.Lock()
+		p.streamCacheLastAt = info.UpdatedAt
+		p.streamCacheLastErr = ""
+		p.streamCacheMetaMu.Unlock()
+	}
 	if streamValidation.TenantId != "" {
 		trigger.TenantId = &streamValidation.TenantId
 	}
 	if streamValidation.UserId != "" {
 		trigger.UserId = &streamValidation.UserId
+	}
+	if streamValidation.StreamId != "" {
+		trigger.StreamId = &streamValidation.StreamId
+	}
+	if streamValidation.StreamId != "" {
+		streamID := streamValidation.StreamId
+		pushRewrite.StreamId = &streamID
 	}
 
 	// Detect protocol from push URL
@@ -491,6 +675,31 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 	// Resolve the playback ID to its canonical internal name (e.g. "live+uuid" or "vod+hash").
 	target, _ := control.ResolveStream(context.Background(), playbackID)
 
+	// Check stream owner's billing status from cache (set during PUSH_REWRITE)
+	// For live streams, the cache is populated when ingest starts
+	// For VOD, we may need to fetch from Quartermaster
+	if p.streamCache != nil && target.InternalName != "" {
+		if cached, ok := p.streamCache.Peek(target.InternalName); ok {
+			info := cached.(streamContext)
+			// Reject viewers if stream owner is suspended
+			if info.IsSuspended {
+				p.logger.WithFields(logging.Fields{
+					"playback_id": playbackID,
+					"tenant_id":   info.TenantID,
+				}).Warn("Rejecting viewer: stream owner suspended")
+				return "", true, fmt.Errorf("stream unavailable - owner account suspended")
+			}
+			// Reject viewers if stream owner's balance is negative (402)
+			if info.IsBalanceNegative {
+				p.logger.WithFields(logging.Fields{
+					"playback_id": playbackID,
+					"tenant_id":   info.TenantID,
+				}).Warn("Rejecting viewer: stream owner balance exhausted (402)")
+				return "", true, fmt.Errorf("payment required - stream owner needs to top up balance")
+			}
+		}
+	}
+
 	// Enrich with resolved internal name (UUID without prefix) for analytics correlation.
 	// This ensures analytics can correlate viewer events with infrastructure events.
 	resolvedName := mist.ExtractInternalName(target.InternalName)
@@ -524,12 +733,20 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 	if target.TenantID != "" {
 		trigger.TenantId = &target.TenantID
 	}
+	if target.StreamID != "" {
+		trigger.StreamId = &target.StreamID
+		defaultStream.StreamId = &target.StreamID
+	}
 
-	// NOTE: play_rewrite events are NOT forwarded to Decklog/ClickHouse.
-	// Viewer analytics are already captured via:
-	// - connection_events (USER_NEW/USER_END) - actual session start/stop with duration, bytes
-	// - routing_events - load balancer decisions with node selection
-	// play_rewrite is only needed for its blocking purpose (resolving playback ID to stream name).
+	go func(tr *pb.MistTrigger, requested string) {
+		if err := p.sendTriggerToDecklog(tr); err != nil {
+			p.logger.WithFields(logging.Fields{
+				"requested_stream": requested,
+				"trigger_type":     tr.GetTriggerType(),
+				"error":            err,
+			}).Error("Failed to send play_rewrite trigger to Decklog")
+		}
+	}(trigger, playbackID)
 
 	// Return the resolved fully-qualified stream name (e.g. "live+uuid") to MistServer.
 	return target.InternalName, false, nil
@@ -545,13 +762,42 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		"node_id":     trigger.GetNodeId(),
 	}).Debug("Processing STREAM_SOURCE trigger")
 
-	// Extract artifact hash - either from vod+ prefix or raw hash (viewer requests)
-	var artifactHash string
-	if strings.HasPrefix(streamName, "vod+") {
-		artifactHash = strings.TrimPrefix(streamName, "vod+")
-	} else {
-		// Viewers request raw hash, not "vod+hash"
-		artifactHash = streamName
+	// STREAM_SOURCE is for VOD artifacts only. Live streams have no static source -
+	// they're push streams that MistServer receives from encoders.
+	if strings.HasPrefix(streamName, "live+") {
+		p.logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+			"node_id":     trigger.GetNodeId(),
+		}).Debug("STREAM_SOURCE not applicable for live streams; aborting")
+		return "", true, nil
+	}
+
+	// Extract artifact internal name (strips vod+ or any other prefix)
+	artifactInternal := mist.ExtractInternalName(streamName)
+
+	artifactHash := ""
+	if control.CommodoreClient != nil && artifactInternal != "" {
+		if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
+			artifactHash = resp.ArtifactHash
+		}
+	}
+	if artifactHash == "" {
+		p.logger.WithFields(logging.Fields{
+			"artifact_internal_name": artifactInternal,
+			"stream_name":            streamName,
+		}).Warn("Artifact internal name not found; cannot resolve stream source")
+		return "", true, nil
+	}
+
+	target, _ := control.ResolveStream(context.Background(), streamName)
+	if target != nil {
+		if target.TenantID != "" {
+			trigger.TenantId = &target.TenantID
+		}
+		if target.StreamID != "" {
+			trigger.StreamId = &target.StreamID
+			streamSource.StreamId = &target.StreamID
+		}
 	}
 
 	// Resolve artifact from in-memory state (populated by Helmsman with correct paths)
@@ -565,6 +811,16 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 			"size_bytes":    artifactInfo.GetSizeBytes(),
 		}).Info("VOD artifact resolved from in-memory state")
 
+		go func(tr *pb.MistTrigger, name string) {
+			if err := p.sendTriggerToDecklog(tr); err != nil {
+				p.logger.WithFields(logging.Fields{
+					"stream_name":  name,
+					"trigger_type": tr.GetTriggerType(),
+					"error":        err,
+				}).Error("Failed to send stream_source trigger to Decklog")
+			}
+		}(trigger, streamName)
+
 		// Return file path with shouldAbort=false to tell Helmsman to use this source
 		return artifactInfo.GetFilePath(), false, nil
 	}
@@ -573,6 +829,16 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		"artifact_hash": artifactHash,
 		"stream_name":   streamName,
 	}).Warn("Artifact not found")
+
+	go func(tr *pb.MistTrigger, name string) {
+		if err := p.sendTriggerToDecklog(tr); err != nil {
+			p.logger.WithFields(logging.Fields{
+				"stream_name":  name,
+				"trigger_type": tr.GetTriggerType(),
+				"error":        err,
+			}).Error("Failed to send stream_source trigger to Decklog")
+		}
+	}(trigger, streamName)
 
 	// Return empty to let MistServer use default source (will fail for VOD)
 	return "", true, nil
@@ -583,13 +849,9 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 	pushEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_PushEnd).PushEnd
 	internalName := mist.ExtractInternalName(pushEnd.GetStreamName())
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internalName)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	p.applyStreamContext(trigger, internalName)
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		pushEnd.StreamId = &streamID
 	}
 
 	// Send enriched trigger to Decklog
@@ -611,13 +873,9 @@ func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, e
 	// nodeID is available via trigger.GetNodeId() and flows to Decklog with the full trigger
 	internalName := mist.ExtractInternalName(pushOutStart.GetStreamName())
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internalName)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	p.applyStreamContext(trigger, internalName)
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		pushOutStart.StreamId = &streamID
 	}
 
 	// NOTE: push_out_start event no longer forwarded to Commodore (Control Plane separation)
@@ -645,13 +903,9 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 		"node_id":         trigger.GetNodeId(),
 	}).Debug("Processing USER_NEW trigger")
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, userNew.GetStreamName())
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	info := p.applyStreamContext(trigger, userNew.GetStreamName())
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		userNew.StreamId = &streamID
 	}
 
 	// Enrich ViewerConnect payload directly
@@ -734,13 +988,9 @@ func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, e
 	// NOTE: stream-status event no longer forwarded to Commodore (Control Plane separation)
 	// Events flow through Decklog to Periscope for tracking
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, streamBuffer.GetStreamName())
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	info := p.applyStreamContext(trigger, streamBuffer.GetStreamName())
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		streamBuffer.StreamId = &streamID
 	}
 
 	// Update state from buffer first (this sets StartedAt on first buffer event)
@@ -785,15 +1035,11 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 	// NOTE: stream-end event no longer forwarded to Commodore (Control Plane separation)
 	// Events flow through Decklog to Periscope for tracking
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internalName)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
-	}
+	_ = p.applyStreamContext(trigger, internalName)
 	streamEnd.NodeId = &nodeID
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		streamEnd.StreamId = &streamID
+	}
 
 	// Send enriched trigger to Decklog
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
@@ -826,13 +1072,9 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		"node_id":           trigger.GetNodeId(),
 	}).Debug("Processing USER_END trigger")
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, userEnd.GetStreamName())
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	info := p.applyStreamContext(trigger, userEnd.GetStreamName())
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		userEnd.StreamId = &streamID
 	}
 
 	userEnd.NodeId = func() *string { s := trigger.GetNodeId(); return &s }()
@@ -907,13 +1149,9 @@ func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, 
 
 	// Quality metrics are available but we send raw trackListJSON to protobuf
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internalName)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	info := p.applyStreamContext(trigger, internalName)
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		liveTrackList.StreamId = &streamID
 	}
 
 	// Send enriched trigger to Decklog
@@ -953,13 +1191,9 @@ func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, e
 	// NOTE: recording-status event no longer forwarded to Commodore (Control Plane separation)
 	// Events flow through Decklog to Periscope for tracking
 
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internalName)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	_ = p.applyStreamContext(trigger, internalName)
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		recordingEnd.StreamId = &streamID
 	}
 
 	// Send enriched trigger to Decklog
@@ -981,13 +1215,9 @@ func (p *Processor) handleRecordingSegment(trigger *pb.MistTrigger) (string, boo
 	internalName := mist.ExtractInternalName(seg.GetStreamName())
 
 	// Enrich tenant context before forwarding
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internalName)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
-	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	info := p.applyStreamContext(trigger, internalName)
+	if streamID := trigger.GetStreamId(); streamID != "" {
+		seg.StreamId = &streamID
 	}
 
 	p.logger.WithFields(logging.Fields{
@@ -1016,14 +1246,20 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 	nodeID := slu.GetNodeId()
 
 	// Enrich tenant context before forwarding (same pattern as handleStreamEnd)
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internal)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
+	info := p.applyStreamContext(trigger, internal)
+	if info.TenantID != "" && slu.TenantId == nil {
 		slu.TenantId = &info.TenantID
 	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	if slu.StreamId == nil || *slu.StreamId == "" {
+		if streamID := trigger.GetStreamId(); streamID != "" {
+			slu.StreamId = &streamID
+		}
+	}
+	if slu.StreamId == nil || *slu.StreamId == "" {
+		p.logger.WithFields(logging.Fields{
+			"internal_name": internal,
+			"trigger_type":  trigger.GetTriggerType(),
+		}).Warn("StreamLifecycleUpdate missing stream_id")
 	}
 
 	// Enrich with StartedAt from state manager (for duration calculation)
@@ -1036,7 +1272,13 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 	}
 
 	// Forward the enriched StreamLifecycleUpdate to Decklog
-	_ = p.sendTriggerToDecklog(trigger)
+	if err := p.sendTriggerToDecklog(trigger); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"internal_name": internal,
+			"trigger_type":  trigger.GetTriggerType(),
+			"error":         err,
+		}).Error("Failed to send stream lifecycle update to Decklog")
+	}
 
 	if slu.GetStatus() == "offline" {
 		state.DefaultManager().SetOffline(internal, nodeID)
@@ -1059,18 +1301,30 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string
 	internal := clu.GetInternalName()
 
 	// Enrich tenant context before forwarding (same pattern as handleUserNew/handleUserEnd)
-	ctx := context.Background()
-	info := p.getStreamContext(ctx, internal)
-	if info.TenantID != "" {
-		trigger.TenantId = &info.TenantID
+	info := p.applyStreamContext(trigger, internal)
+	if info.TenantID != "" && clu.TenantId == nil {
 		clu.TenantId = &info.TenantID
 	}
-	if info.UserID != "" {
-		trigger.UserId = &info.UserID
+	if clu.StreamId == nil || *clu.StreamId == "" {
+		if streamID := trigger.GetStreamId(); streamID != "" {
+			clu.StreamId = &streamID
+		}
+	}
+	if clu.StreamId == nil || *clu.StreamId == "" {
+		p.logger.WithFields(logging.Fields{
+			"internal_name": internal,
+			"trigger_type":  trigger.GetTriggerType(),
+		}).Warn("ClientLifecycleUpdate missing stream_id")
 	}
 
 	// Forward the enriched ClientLifecycleUpdate to Decklog
-	_ = p.sendTriggerToDecklog(trigger)
+	if err := p.sendTriggerToDecklog(trigger); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"internal_name": internal,
+			"trigger_type":  trigger.GetTriggerType(),
+			"error":         err,
+		}).Error("Failed to send client lifecycle update to Decklog")
+	}
 	return "", false, nil
 }
 
@@ -1079,10 +1333,11 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	nu := trigger.GetTriggerPayload().(*pb.MistTrigger_NodeLifecycleUpdate).NodeLifecycleUpdate
 
 	p.logger.WithFields(logging.Fields{
-		"node_id":  nu.GetNodeId(),
-		"bw_limit": nu.GetBwLimit(),
-		"ram_max":  nu.GetRamMax(),
-		"location": nu.GetLocation(),
+		"node_id":    nu.GetNodeId(),
+		"is_healthy": nu.GetIsHealthy(),
+		"bw_limit":   nu.GetBwLimit(),
+		"ram_max":    nu.GetRamMax(),
+		"location":   nu.GetLocation(),
 	}).Info("Received NodeLifecycleUpdate from Helmsman")
 
 	// Parse latitude/longitude for state manager
@@ -1194,10 +1449,24 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 		nu.NodeUuid = &uuid
 	}
 
+	// Attribute infra events to the cluster owner tenant (not a stream tenant).
+	if (trigger.TenantId == nil || *trigger.TenantId == "") && p.ownerTenantID != "" {
+		trigger.TenantId = &p.ownerTenantID
+	}
+	if (nu.TenantId == nil || *nu.TenantId == "") && p.ownerTenantID != "" {
+		nu.TenantId = &p.ownerTenantID
+	}
+
 	// Forward complete node lifecycle event to Decklog using protobuf directly
 	// CRITICAL: Strip artifacts before sending to Decklog/Analytics to avoid excessive data
 	nu.Artifacts = nil
-	_ = p.sendTriggerToDecklog(trigger)
+	if err := p.sendTriggerToDecklog(trigger); err != nil {
+		p.logger.WithFields(logging.Fields{
+			"node_id":      nu.GetNodeId(),
+			"trigger_type": trigger.GetTriggerType(),
+			"error":        err,
+		}).Error("Failed to send node lifecycle update to Decklog")
+	}
 
 	return "", false, nil
 }
@@ -1245,43 +1514,41 @@ func (p *Processor) resolveNodeUUID(nodeID string) string {
 		return ""
 	}
 
-	// Check local cache first
-	p.nodeUUIDCacheMu.RLock()
-	if uuid, ok := p.nodeUUIDCache[nodeID]; ok {
-		p.nodeUUIDCacheMu.RUnlock()
-		return uuid
+	if p.nodeUUIDCache == nil {
+		return ""
 	}
-	p.nodeUUIDCacheMu.RUnlock()
 
 	// Lookup from Quartermaster if client available
 	if p.quartermasterClient == nil {
 		return ""
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	val, ok, _ := p.nodeUUIDCache.Get(context.Background(), nodeID, func(ctx context.Context, key string) (interface{}, bool, error) {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
 
-	node, err := p.quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
-	if err != nil {
-		p.logger.WithFields(logging.Fields{
-			"node_id": nodeID,
-			"error":   err,
-		}).Debug("Failed to resolve node UUID from Quartermaster")
+		node, err := p.quartermasterClient.GetNodeByLogicalName(ctx, key)
+		if err != nil {
+			p.logger.WithFields(logging.Fields{
+				"node_id": key,
+				"error":   err,
+			}).Debug("Failed to resolve node UUID from Quartermaster")
+			return nil, false, err
+		}
+
+		if node == nil || node.GetId() == "" {
+			return nil, false, fmt.Errorf("node not found")
+		}
+
+		return node.GetId(), true, nil
+	})
+	if !ok {
 		return ""
 	}
-
-	if node == nil || node.GetId() == "" {
-		return ""
+	if uuid, ok := val.(string); ok {
+		return uuid
 	}
-
-	uuid := node.GetId()
-
-	// Cache the result (node UUID rarely changes)
-	p.nodeUUIDCacheMu.Lock()
-	p.nodeUUIDCache[nodeID] = uuid
-	p.nodeUUIDCacheMu.Unlock()
-
-	return uuid
+	return ""
 }
 
 // GenerateAndSendStorageSnapshots generates and sends an hourly storage snapshot to Decklog
@@ -1292,9 +1559,6 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		p.logger.Warn("Balancer snapshot is empty, skipping storage snapshot generation")
 		return nil
 	}
-
-	// Map to store aggregated usage per tenant
-	tenantUsageMap := make(map[string]*pb.TenantStorageUsage)
 
 	for _, nodeSnap := range snapshot.Nodes {
 		// Skip non-storage nodes or unhealthy nodes
@@ -1322,13 +1586,16 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			Roles:      nodeState.Roles,
 		}
 
+		// Map to store aggregated usage per tenant for this node
+		tenantUsageMap := make(map[string]*pb.TenantStorageUsage)
+
 		// Iterate through artifacts to sum up usage per tenant
 		for _, artifact := range nodeState.Artifacts {
 			var tenantID string
 			var contentType string
 
 			// Resolve tenant and content type from artifact hash using unified resolver
-			if target, err := control.ResolveStream(context.Background(), artifact.GetClipHash()); err == nil {
+			if target, err := control.ResolveArtifactByHash(context.Background(), artifact.GetClipHash()); err == nil {
 				tenantID = target.TenantID
 				contentType = target.ContentType
 			} else {
@@ -1380,6 +1647,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			Location:     func() *string { s := nodeLocation; return &s }(),
 			Capabilities: nodeCapabilities,
 			Usage:        tenantUsages,
+			StorageScope: stringPtr("hot"),
 		}
 
 		// Send to Decklog
@@ -1399,7 +1667,59 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			p.logger.WithField("node_id", nodeSnap.NodeID).Info("Successfully sent StorageSnapshot to Decklog")
 		}
 	}
+
+	// Emit a cold-storage snapshot (S3 authoritative) aggregated across artifacts table.
+	coldUsageMap, err := control.GetColdStorageUsage(context.Background())
+	if err != nil {
+		p.logger.WithError(err).Warn("Failed to compute cold storage usage")
+		return nil
+	}
+	if len(coldUsageMap) == 0 {
+		return nil
+	}
+
+	var coldUsages []*pb.TenantStorageUsage
+	for _, usage := range coldUsageMap {
+		totalBytes := usage.DvrBytes + usage.ClipBytes + usage.VodBytes
+		coldUsages = append(coldUsages, &pb.TenantStorageUsage{
+			TenantId:        usage.TenantID,
+			TotalBytes:      totalBytes,
+			FileCount:       usage.FileCount,
+			DvrBytes:        usage.DvrBytes,
+			ClipBytes:       usage.ClipBytes,
+			VodBytes:        usage.VodBytes,
+			FrozenDvrBytes:  usage.DvrBytes,
+			FrozenClipBytes: usage.ClipBytes,
+			FrozenVodBytes:  usage.VodBytes,
+		})
+	}
+
+	coldSnapshot := &pb.StorageSnapshot{
+		NodeId:       "s3",
+		Timestamp:    time.Now().Unix(),
+		Usage:        coldUsages,
+		StorageScope: stringPtr("cold"),
+	}
+
+	coldTrigger := &pb.MistTrigger{
+		TriggerType: "STORAGE_SNAPSHOT",
+		NodeId:      "s3",
+		Timestamp:   time.Now().Unix(),
+		TriggerPayload: &pb.MistTrigger_StorageSnapshot{
+			StorageSnapshot: coldSnapshot,
+		},
+	}
+
+	if err := p.sendTriggerToDecklog(coldTrigger); err != nil {
+		p.logger.WithError(err).Warn("Failed to send cold storage snapshot to Decklog")
+	} else {
+		p.logger.Info("Successfully sent cold storage snapshot to Decklog")
+	}
 	return nil
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 // extractInt64Field extracts an int64 field from the raw payload
@@ -1414,109 +1734,131 @@ func (p *Processor) extractInt64Field(payload []byte, field string) int64 {
 
 // getStreamContext gets tenant and user IDs from cache, with fallback to Commodore
 func (p *Processor) getStreamContext(ctx context.Context, streamName string) streamContext {
-	if streamName == "" {
+	if streamName == "" || p.streamCache == nil {
 		return streamContext{}
 	}
 
-	// Extract internal name from MistServer stream name (e.g., "live+demo_stream" -> "demo_stream")
-	// This handles both wildcard streams (live+X, vod+X) and plain stream names
 	internalName := mist.ExtractInternalName(streamName)
+	val, ok, _ := p.streamCache.Get(ctx, internalName, func(ctx context.Context, key string) (interface{}, bool, error) {
+		// For artifact hashes (VOD playback), check in-memory state first.
+		// This avoids Commodore calls for artifacts we already know about.
+		_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(key)
+		if artifactInfo != nil && artifactInfo.GetStreamName() != "" {
+			parentStream := artifactInfo.GetStreamName()
+			if v, ok := p.streamCache.Peek(parentStream); ok {
+				if parentInfo, ok := v.(streamContext); ok && parentInfo.TenantID != "" {
+					info := streamContext{
+						TenantID:  parentInfo.TenantID,
+						UserID:    parentInfo.UserID,
+						StreamID:  parentInfo.StreamID,
+						Source:    "artifact_parent_cache",
+						UpdatedAt: time.Now(),
+					}
+					p.streamCacheMetaMu.Lock()
+					p.streamCacheLastAt = info.UpdatedAt
+					p.streamCacheLastErr = ""
+					p.streamCacheMetaMu.Unlock()
+					return info, true, nil
+				}
+			}
+		}
 
-	// Check cache first
-	p.streamCacheMu.RLock()
-	info, exists := p.streamCache[internalName]
-	p.streamCacheMu.RUnlock()
-	if exists {
-		atomic.AddUint64(&p.streamCacheHits, 1)
+		// Fallback: call Commodore's unified resolver (single call checks all registries)
+		if p.commodoreClient == nil {
+			err := fmt.Errorf("commodore client not configured")
+			atomic.AddUint64(&p.streamCacheResErr, 1)
+			p.streamCacheMetaMu.Lock()
+			p.streamCacheLastAt = time.Now()
+			p.streamCacheLastErr = err.Error()
+			p.streamCacheMetaMu.Unlock()
+			return nil, false, err
+		}
+
+		resp, err := p.commodoreClient.ResolveIdentifier(ctx, key)
+		if err != nil {
+			atomic.AddUint64(&p.streamCacheResErr, 1)
+			p.streamCacheMetaMu.Lock()
+			p.streamCacheLastAt = time.Now()
+			p.streamCacheLastErr = err.Error()
+			p.streamCacheMetaMu.Unlock()
+			p.logger.WithFields(logging.Fields{
+				"identifier": key,
+				"error":      err,
+			}).Warn("Failed to resolve identifier from Commodore")
+			return nil, false, err
+		}
+
+		if !resp.GetFound() {
+			atomic.AddUint64(&p.streamCacheResErr, 1)
+			p.streamCacheMetaMu.Lock()
+			p.streamCacheLastAt = time.Now()
+			p.streamCacheLastErr = "not found"
+			p.streamCacheMetaMu.Unlock()
+			p.logger.WithFields(logging.Fields{
+				"identifier": key,
+			}).Warn("Identifier not found in any Commodore registry")
+			return nil, false, fmt.Errorf("identifier not found")
+		}
+
+		// Cache the result
+		now := time.Now()
+		info := streamContext{
+			TenantID:  resp.GetTenantId(),
+			UserID:    resp.GetUserId(),
+			StreamID:  resp.GetStreamId(),
+			Source:    "resolve_" + resp.GetIdentifierType(),
+			UpdatedAt: now,
+		}
+
+		if resp.GetIdentifierType() == "playback_id" {
+			atomic.AddUint64(&p.streamCacheResPb, 1)
+		} else {
+			atomic.AddUint64(&p.streamCacheResInt, 1)
+		}
+
+		p.streamCacheMetaMu.Lock()
+		p.streamCacheLastAt = now
+		p.streamCacheLastErr = ""
+		p.streamCacheMetaMu.Unlock()
+
+		// If this was a playback_id, also cache by the canonical internal_name
+		if resp.GetIdentifierType() == "playback_id" && resp.GetInternalName() != "" {
+			p.streamCache.Set(resp.GetInternalName(), info, 10*time.Minute)
+		}
+
+		p.logger.WithFields(logging.Fields{
+			"identifier":      key,
+			"identifier_type": resp.GetIdentifierType(),
+			"tenant_id":       info.TenantID,
+		}).Debug("Resolved identifier from Commodore")
+
+		return info, true, nil
+	})
+
+	if !ok {
+		return streamContext{}
+	}
+	if info, ok := val.(streamContext); ok {
 		return info
 	}
-	atomic.AddUint64(&p.streamCacheMisses, 1)
+	return streamContext{}
+}
 
-	// For artifact hashes (VOD playback), check in-memory state first.
-	// This avoids Commodore calls for artifacts we already know about.
-	_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(internalName)
-	if artifactInfo != nil && artifactInfo.GetStreamName() != "" {
-		parentStream := artifactInfo.GetStreamName()
-
-		// Check if we have the parent stream's tenant context cached
-		p.streamCacheMu.RLock()
-		parentInfo, parentExists := p.streamCache[parentStream]
-		p.streamCacheMu.RUnlock()
-
-		if parentExists && parentInfo.TenantID != "" {
-			// Cache the artifact hash with the parent's tenant context
-			now := time.Now()
-			info := streamContext{
-				TenantID:  parentInfo.TenantID,
-				UserID:    parentInfo.UserID,
-				Source:    "artifact_parent_cache",
-				UpdatedAt: now,
-			}
-			p.streamCacheMu.Lock()
-			p.streamCache[internalName] = info
-			p.streamCacheLastAt = now
-			p.streamCacheMu.Unlock()
-			return info
-		}
+// applyStreamContext enriches trigger with tenant/user/stream IDs if available.
+func (p *Processor) applyStreamContext(trigger *pb.MistTrigger, streamName string) streamContext {
+	info := p.getStreamContext(context.Background(), streamName)
+	if trigger == nil {
+		return info
 	}
-
-	// Fallback: call Commodore's unified resolver (single call checks all registries)
-	if p.commodoreClient == nil {
-		return streamContext{}
+	if info.TenantID != "" && (trigger.TenantId == nil || *trigger.TenantId == "") {
+		trigger.TenantId = &info.TenantID
 	}
-
-	resp, err := p.commodoreClient.ResolveIdentifier(ctx, internalName)
-	if err != nil {
-		atomic.AddUint64(&p.streamCacheResErr, 1)
-		p.streamCacheMu.Lock()
-		p.streamCacheLastAt = time.Now()
-		p.streamCacheLastErr = err.Error()
-		p.streamCacheMu.Unlock()
-		p.logger.WithFields(logging.Fields{
-			"identifier": internalName,
-			"error":      err,
-		}).Warn("Failed to resolve identifier from Commodore")
-		return streamContext{}
+	if info.UserID != "" && (trigger.UserId == nil || *trigger.UserId == "") {
+		trigger.UserId = &info.UserID
 	}
-
-	if !resp.GetFound() {
-		atomic.AddUint64(&p.streamCacheResErr, 1)
-		p.streamCacheMu.Lock()
-		p.streamCacheLastAt = time.Now()
-		p.streamCacheLastErr = "not found"
-		p.streamCacheMu.Unlock()
-		p.logger.WithFields(logging.Fields{
-			"identifier": internalName,
-		}).Warn("Identifier not found in any Commodore registry")
-		return streamContext{}
+	if info.StreamID != "" && (trigger.StreamId == nil || *trigger.StreamId == "") {
+		trigger.StreamId = &info.StreamID
 	}
-
-	// Cache the result
-	atomic.AddUint64(&p.streamCacheResInt, 1)
-	now := time.Now()
-	info = streamContext{
-		TenantID:  resp.GetTenantId(),
-		UserID:    resp.GetUserId(),
-		Source:    "resolve_" + resp.GetIdentifierType(),
-		UpdatedAt: now,
-	}
-
-	p.streamCacheMu.Lock()
-	p.streamCache[internalName] = info
-	// If this was a playback_id, also cache by the canonical internal_name
-	if resp.GetIdentifierType() == "playback_id" && resp.GetInternalName() != "" {
-		p.streamCache[resp.GetInternalName()] = info
-	}
-	p.streamCacheLastAt = now
-	p.streamCacheLastErr = ""
-	p.streamCacheMu.Unlock()
-
-	p.logger.WithFields(logging.Fields{
-		"identifier":      internalName,
-		"identifier_type": resp.GetIdentifierType(),
-		"tenant_id":       info.TenantID,
-	}).Debug("Resolved identifier from Commodore")
-
 	return info
 }
 
@@ -1567,217 +1909,4 @@ func (p *Processor) getNodeConfig(nodeID string) *NodeConfig {
 	}
 
 	return config
-}
-
-// Legacy helper functions - no longer needed with structured protobuf data
-
-// extractStreamHealthMetrics parses MistServer stream details JSON and extracts health metrics
-func (p *Processor) extractStreamHealthMetrics(details map[string]interface{}) map[string]interface{} {
-	metrics := make(map[string]interface{})
-	var tracks []map[string]interface{}
-
-	// Extract issues string if present
-	if issues, ok := details["issues"].(string); ok {
-		metrics["issues_description"] = issues
-		metrics["has_issues"] = true
-	} else {
-		metrics["has_issues"] = false
-	}
-
-	// Process each track to extract codec, quality, and jitter metrics
-	for trackID, trackData := range details {
-		if trackID == "issues" {
-			continue // Skip issues field
-		}
-
-		if track, ok := trackData.(map[string]interface{}); ok {
-			trackInfo := map[string]interface{}{
-				"track_id": trackID,
-			}
-
-			// Extract basic track info
-			if codec, ok := track["codec"].(string); ok {
-				trackInfo["codec"] = codec
-			}
-			if kbits, ok := track["kbits"].(float64); ok {
-				trackInfo["bitrate"] = int(kbits)
-			}
-			if fpks, ok := track["fpks"].(float64); ok {
-				trackInfo["fps"] = fpks / 1000.0 // Convert from fpks to fps
-			}
-			if height, ok := track["height"].(float64); ok {
-				trackInfo["height"] = int(height)
-			}
-			if width, ok := track["width"].(float64); ok {
-				trackInfo["width"] = int(width)
-			}
-			if channels, ok := track["channels"].(float64); ok {
-				trackInfo["channels"] = int(channels)
-			}
-			if rate, ok := track["rate"].(float64); ok {
-				trackInfo["sample_rate"] = int(rate)
-			}
-
-			// Extract frame stability metrics from keys
-			if keys, ok := track["keys"].(map[string]interface{}); ok {
-				if frameMax, ok := keys["frame_ms_max"].(float64); ok {
-					trackInfo["frame_ms_max"] = frameMax
-				}
-				if frameMin, ok := keys["frame_ms_min"].(float64); ok {
-					trackInfo["frame_ms_min"] = frameMin
-				}
-				if framesMax, ok := keys["frames_max"].(float64); ok {
-					trackInfo["frames_max"] = int(framesMax)
-				}
-				if framesMin, ok := keys["frames_min"].(float64); ok {
-					trackInfo["frames_min"] = int(framesMin)
-				}
-				if msMax, ok := keys["ms_max"].(float64); ok {
-					trackInfo["keyframe_ms_max"] = msMax
-				}
-				if msMin, ok := keys["ms_min"].(float64); ok {
-					trackInfo["keyframe_ms_min"] = msMin
-				}
-
-				// Calculate jitter metrics
-				if frameMax, okMax := keys["frame_ms_max"].(float64); okMax {
-					if frameMin, okMin := keys["frame_ms_min"].(float64); okMin {
-						jitter := frameMax - frameMin
-						trackInfo["frame_jitter_ms"] = jitter
-					}
-				}
-
-				if msMax, okMax := keys["ms_max"].(float64); okMax {
-					if msMin, okMin := keys["ms_min"].(float64); okMin {
-						keyframeStability := msMax - msMin
-						trackInfo["keyframe_stability_ms"] = keyframeStability
-					}
-				}
-			}
-
-			tracks = append(tracks, trackInfo)
-		}
-	}
-
-	metrics["tracks"] = tracks
-	metrics["track_count"] = len(tracks)
-
-	return metrics
-}
-
-// extractTrackQualityMetrics parses LIVE_TRACK_LIST JSON and extracts quality metrics
-func (p *Processor) extractTrackQualityMetrics(tracks []map[string]interface{}) map[string]interface{} {
-	metrics := make(map[string]interface{})
-	var videoTracks, audioTracks []map[string]interface{}
-
-	// Process each track in the list
-	for i, track := range tracks {
-		trackInfo := map[string]interface{}{
-			"track_index": i,
-		}
-
-		// Extract track ID if present
-		if trackID, ok := track["trackid"].(float64); ok {
-			trackInfo["track_id"] = int(trackID)
-		}
-
-		// Extract track type (video/audio)
-		trackType := ""
-		if typeVal, ok := track["type"].(string); ok {
-			trackType = typeVal
-			trackInfo["type"] = typeVal
-		}
-
-		// Extract codec
-		if codec, ok := track["codec"].(string); ok {
-			trackInfo["codec"] = codec
-		}
-
-		// Extract video-specific fields
-		if width, ok := track["width"].(float64); ok {
-			trackInfo["width"] = int(width)
-		}
-		if height, ok := track["height"].(float64); ok {
-			trackInfo["height"] = int(height)
-		}
-		if fpks, ok := track["fpks"].(float64); ok {
-			trackInfo["fps"] = fpks / 1000.0 // Convert from fpks to fps
-		}
-
-		// Extract audio-specific fields
-		if channels, ok := track["channels"].(float64); ok {
-			trackInfo["channels"] = int(channels)
-		}
-		if rate, ok := track["rate"].(float64); ok {
-			trackInfo["sample_rate"] = int(rate)
-		}
-
-		// Extract bitrate if present
-		if bps, ok := track["bps"].(float64); ok {
-			trackInfo["bitrate"] = int(bps)
-		}
-
-		// Categorize by type
-		if trackType == "video" {
-			videoTracks = append(videoTracks, trackInfo)
-		} else if trackType == "audio" {
-			audioTracks = append(audioTracks, trackInfo)
-		}
-	}
-
-	metrics["video_tracks"] = videoTracks
-	metrics["audio_tracks"] = audioTracks
-	metrics["total_tracks"] = len(tracks)
-	metrics["video_track_count"] = len(videoTracks)
-	metrics["audio_track_count"] = len(audioTracks)
-
-	// Extract primary video quality if available
-	if len(videoTracks) > 0 {
-		primaryVideo := videoTracks[0]
-		if width, ok := primaryVideo["width"].(int); ok {
-			metrics["primary_width"] = width
-		}
-		if height, ok := primaryVideo["height"].(int); ok {
-			metrics["primary_height"] = height
-
-			// Calculate quality tier
-			if height >= 1080 {
-				metrics["quality_tier"] = "1080p+"
-			} else if height >= 720 {
-				metrics["quality_tier"] = "720p"
-			} else if height >= 480 {
-				metrics["quality_tier"] = "480p"
-			} else {
-				metrics["quality_tier"] = "SD"
-			}
-		}
-		if fps, ok := primaryVideo["fps"].(float64); ok {
-			metrics["primary_fps"] = fps
-		}
-		if codec, ok := primaryVideo["codec"].(string); ok {
-			metrics["primary_video_codec"] = codec
-		}
-		if bitrate, ok := primaryVideo["bitrate"].(int); ok {
-			metrics["primary_video_bitrate"] = bitrate
-		}
-	}
-
-	// Extract primary audio info if available
-	if len(audioTracks) > 0 {
-		primaryAudio := audioTracks[0]
-		if channels, ok := primaryAudio["channels"].(int); ok {
-			metrics["primary_audio_channels"] = channels
-		}
-		if sampleRate, ok := primaryAudio["sample_rate"].(int); ok {
-			metrics["primary_audio_sample_rate"] = sampleRate
-		}
-		if codec, ok := primaryAudio["codec"].(string); ok {
-			metrics["primary_audio_codec"] = codec
-		}
-		if bitrate, ok := primaryAudio["bitrate"].(int); ok {
-			metrics["primary_audio_bitrate"] = bitrate
-		}
-	}
-
-	return metrics
 }

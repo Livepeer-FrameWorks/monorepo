@@ -1,0 +1,88 @@
+# Fetch stream session/analytics data including hourly aggregates, quality metrics, and viewer sessions
+# Used for analytics expansion and session details
+query GetStreamSessions(
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+) {
+  analytics {
+    usage {
+      streaming {
+        # Hourly connection aggregates (bandwidth, viewers per hour)
+        streamConnectionHourlyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+          edges {
+            cursor
+            node {
+              id
+              hour
+              streamId
+              totalBytes
+              uniqueViewers
+              totalSessions
+            }
+          }
+          pageInfo {
+            ...PageInfoFields
+          }
+          totalCount
+        }
+      }
+    }
+    lifecycle {
+      # Individual viewer sessions (geo, quality, duration)
+      viewerSessionsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            streamId
+            nodeId
+            sessionId
+            connector
+            countryCode
+            city
+            latitude
+            longitude
+            durationSeconds
+            bytesUp
+            bytesDown
+            connectionQuality
+            bufferHealth
+            clientBucket {
+              h3Index
+              resolution
+            }
+          }
+        }
+        pageInfo {
+          ...PageInfoFields
+        }
+        totalCount
+      }
+    }
+    health {
+      # Client/viewer quality metrics (5m aggregates)
+      clientQoeConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            streamId
+            nodeId
+            activeSessions
+            avgBandwidthIn
+            avgBandwidthOut
+            avgConnectionTime
+            packetLossRate
+          }
+        }
+        pageInfo {
+          ...PageInfoFields
+        }
+        totalCount
+      }
+    }
+  }
+}

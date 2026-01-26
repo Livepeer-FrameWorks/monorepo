@@ -48,6 +48,7 @@ const ingestPortPart = ingest.port ? `:${ingest.port}` : '';
 const envVarMap = {
 	APP_URL: env.WEBAPP_PUBLIC_URL,
 	MARKETING_URL: env.MARKETING_PUBLIC_URL,
+	GATEWAY_URL: env.GATEWAY_PUBLIC_URL,
 	API_URL: env.GATEWAY_PUBLIC_URL,
 	// Streaming - constructed URLs for protocol-specific examples
 	RTMP_URL: `${rtmpProto}://${ingest.hostname}:${rtmpPort}${rtmpPath}`,

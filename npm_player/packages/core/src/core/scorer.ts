@@ -182,6 +182,9 @@ export const PROTOCOL_PENALTIES: Record<string, number> = {
   // MEWS - heavy penalty, prefer HLS/WebRTC (reference mews.js has issues)
   'ws/video/mp4': 0.50,
   'wss/video/mp4': 0.50,
+  // Native Mist WebRTC signaling - treat like MEWS (legacy/less stable than WHEP)
+  'webrtc': 0.50,
+  'mist/webrtc': 0.50,
   // DASH - heavy penalty, broken implementation
   'dash/video/mp4': 0.90,  // Below legacy
   'dash/video/webm': 0.95,
@@ -258,8 +261,8 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     'wss/video/h264': 0.52,
     // WHEP/WebRTC: sub-second latency
     'whep': 0.50,
-    'webrtc': 0.45,
-    'mist/webrtc': 0.45,
+    'webrtc': 0.25,
+    'mist/webrtc': 0.25,
     // MP4/WS (MEWS): 2-5s latency, good fallback
     'ws/video/mp4': 0.30,
     'wss/video/mp4': 0.30,
@@ -283,6 +286,7 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     // WebRTC: minimal for quality mode
     'whep': 0.05,
     'webrtc': 0.05,
+    'mist/webrtc': 0.05,
   },
   'vod': {
     // VOD/Clip: Prefer seekable protocols, EXCLUDE WebRTC (no seek support)
@@ -306,8 +310,8 @@ export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>>
     'html5/video/mp4': 0.42,
     // WHEP/WebRTC: good for low latency
     'whep': 0.38,
-    'webrtc': 0.35,
-    'mist/webrtc': 0.35,
+    'webrtc': 0.20,
+    'mist/webrtc': 0.20,
     // MP4/WS (MEWS): lower latency than HLS
     'ws/video/mp4': 0.30,
     'wss/video/mp4': 0.30,

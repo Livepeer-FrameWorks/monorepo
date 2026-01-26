@@ -1,0 +1,15 @@
+# Resolve viewer endpoint for playback
+# Returns optimal node(s) for streaming content to the viewer
+query ResolveViewerEndpoint($contentId: String!) {
+  resolveViewerEndpoint(contentId: $contentId) {
+    primary {
+      ...ViewerEndpointFields
+    }
+    fallbacks {
+      ...ViewerEndpointFields
+    }
+    metadata {
+      ...PlaybackMetadataFields
+    }
+  }
+}

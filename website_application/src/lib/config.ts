@@ -5,7 +5,10 @@ interface ParsedStreamingUrl {
   useTls: boolean;
 }
 
-function parseStreamingUrl(url: string): ParsedStreamingUrl {
+function parseStreamingUrl(url?: string): ParsedStreamingUrl {
+  if (!url) {
+    return { hostname: "", port: "", useTls: false };
+  }
   try {
     const parsed = new URL(url);
     return {
@@ -15,26 +18,26 @@ function parseStreamingUrl(url: string): ParsedStreamingUrl {
     };
   } catch {
     // Fallback for malformed URLs
-    return { hostname: "localhost", port: "", useTls: false };
+    return { hostname: "", port: "", useTls: false };
   }
 }
 
 // Raw config from environment - these are base URLs that we parse to construct protocol-specific URLs
 const rawConfig = {
-  ingestUrl:
-    import.meta.env.VITE_STREAMING_INGEST_URL || "http://localhost:8080",
-  playUrl: import.meta.env.VITE_STREAMING_PLAY_URL || "http://localhost:18008", // Foghorn for HTTP 307 redirects
-  edgeUrl: import.meta.env.VITE_STREAMING_EDGE_URL || "http://localhost:8080", // Direct edge for non-HTTP protocols
+  gatewayBaseUrl: import.meta.env.VITE_GATEWAY_URL,
+  ingestUrl: import.meta.env.VITE_STREAMING_INGEST_URL,
+  playUrl: import.meta.env.VITE_STREAMING_PLAY_URL, // Foghorn for HTTP 307 redirects
+  edgeUrl: import.meta.env.VITE_STREAMING_EDGE_URL, // Direct edge for non-HTTP protocols
+  graphqlUrl: import.meta.env.VITE_GRAPHQL_HTTP_URL,
   rtmpPort: import.meta.env.VITE_STREAMING_RTMP_PORT || "1935",
   srtPort: import.meta.env.VITE_STREAMING_SRT_PORT || "8889",
   rtmpPath: import.meta.env.VITE_STREAMING_RTMP_PATH || "/live",
   hlsPath: import.meta.env.VITE_STREAMING_HLS_PATH || "/hls",
   webrtcPath: import.meta.env.VITE_STREAMING_WEBRTC_PATH || "/webrtc",
   embedPath: import.meta.env.VITE_STREAMING_EMBED_PATH || "/",
-  marketingSiteUrl:
-    import.meta.env.VITE_MARKETING_SITE_URL || "http://localhost:18031",
-  docsSiteUrl:
-    import.meta.env.VITE_DOCS_SITE_URL || "http://localhost:18090/docs",
+  marketingSiteUrl: import.meta.env.VITE_MARKETING_SITE_URL,
+  docsSiteUrl: import.meta.env.VITE_DOCS_SITE_URL,
+  githubUrl: import.meta.env.VITE_GITHUB_URL,
 };
 
 // Parsed URLs for deriving hostnames and TLS mode
@@ -64,6 +67,7 @@ interface Config {
   // Other
   marketingSiteUrl: string;
   docsSiteUrl: string;
+  githubUrl: string;
 }
 
 const config: Config = {
@@ -85,8 +89,9 @@ const config: Config = {
   webrtcPath: rawConfig.webrtcPath,
   embedPath: rawConfig.embedPath,
   // Other
-  marketingSiteUrl: rawConfig.marketingSiteUrl,
-  docsSiteUrl: rawConfig.docsSiteUrl,
+  marketingSiteUrl: rawConfig.marketingSiteUrl ?? "",
+  docsSiteUrl: rawConfig.docsSiteUrl ?? "",
+  githubUrl: rawConfig.githubUrl ?? "",
 };
 
 // Determine if we're in development
@@ -94,17 +99,20 @@ const isDev = import.meta.env.DEV;
 
 // Build full RTMP URL: rtmp(s)://hostname:port/path
 function buildRtmpUrl(): string {
+  if (!config.ingestHostname) return "";
   const proto = config.ingestUseTls ? "rtmps" : "rtmp";
   return `${proto}://${config.ingestHostname}:${config.rtmpPort}${config.rtmpPath}`;
 }
 
 // Build full SRT URL: srt://hostname:port
 function buildSrtBaseUrl(): string {
+  if (!config.ingestHostname) return "";
   return `srt://${config.ingestHostname}:${config.srtPort}`;
 }
 
 // Build HTTP(S) base URL for edge delivery (direct non-HTTP protocols)
 function buildEdgeBaseUrl(): string {
+  if (!config.edgeHostname) return "";
   const proto = config.edgeUseTls ? "https" : "http";
   const portPart = config.edgePort ? `:${config.edgePort}` : "";
   return `${proto}://${config.edgeHostname}${portPart}`;
@@ -112,6 +120,7 @@ function buildEdgeBaseUrl(): string {
 
 // Build HTTP(S) base URL for Foghorn (HTTP protocol 307 redirects)
 function buildPlayBaseUrl(): string {
+  if (!config.playHostname) return "";
   const proto = config.playUseTls ? "https" : "http";
   const portPart = config.playPort ? `:${config.playPort}` : "";
   return `${proto}://${config.playHostname}${portPart}`;
@@ -119,10 +128,17 @@ function buildPlayBaseUrl(): string {
 
 // Build WHIP/WHEP base URL (same host as ingest, uses HTTP(S))
 function buildWhipBaseUrl(): string {
+  if (!config.ingestHostname) return "";
   const proto = config.ingestUseTls ? "https" : "http";
   const parsed = parseStreamingUrl(rawConfig.ingestUrl);
   const portPart = parsed.port ? `:${parsed.port}` : "";
   return `${proto}://${config.ingestHostname}${portPart}`;
+}
+
+function joinGatewayPath(path: string): string {
+  const base = (rawConfig.gatewayBaseUrl || "").replace(/\/$/, "");
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${suffix}`;
 }
 
 interface IngestUrls {
@@ -171,10 +187,10 @@ export function getDeliveryUrls(playbackId: string): Partial<DeliveryUrls> {
 
 // =============================================================================
 // UNIFIED CONTENT DELIVERY URLs (via Foghorn /play/ path)
-// Works for all content types: live (playbackId), clips (clipHash), DVR (dvrHash)
+// Works for all content types: live/clip/dvr/vod (playbackId)
 // =============================================================================
 
-export type ContentType = "live" | "clip" | "dvr";
+export type ContentType = "live" | "clip" | "dvr" | "vod";
 
 /** Primary protocols shown by default in the UI */
 export interface PrimaryProtocolUrls {
@@ -230,11 +246,22 @@ export interface ContentDeliveryUrls {
   primary: PrimaryProtocolUrls;
   additional: AdditionalProtocolUrls;
   embed: string;
+  share: string;
+}
+
+/**
+ * Generate a shareable view URL for any content type.
+ * Uses the /view route with only the content id (type is resolved server-side).
+ */
+export function getShareUrl(contentId: string): string {
+  if (!contentId) return "";
+  const base = typeof window !== "undefined" ? window.location.origin : "";
+  return `${base}/view?id=${contentId}`;
 }
 
 /**
  * Generate playback URLs for any content type using Foghorn's unified /play/ path.
- * Works for live streams (playbackId), clips (clipHash), and DVR recordings (dvrHash).
+ * Works for live streams, clips, DVR recordings, and VOD assets (playbackId).
  *
  * All URLs route through Foghorn which:
  * - Resolves content type automatically
@@ -251,6 +278,7 @@ export function getContentDeliveryUrls(
       primary: {} as PrimaryProtocolUrls,
       additional: {} as AdditionalProtocolUrls,
       embed: "",
+      share: "",
     };
   }
 
@@ -289,8 +317,9 @@ export function getContentDeliveryUrls(
   };
 
   const embed = getEmbedCodeForContent(contentId, contentType);
+  const share = getShareUrl(contentId);
 
-  return { primary, additional, embed };
+  return { primary, additional, embed, share };
 }
 
 /**
@@ -307,7 +336,7 @@ import '@livepeer-frameworks/player-react/player.css';
   contentType="${contentType}"
   contentId="${contentId}"
   options={{
-    gatewayUrl: '${rawConfig.playUrl}',
+    gatewayUrl: '${rawConfig.graphqlUrl}',
     autoplay: true,
     muted: true,
   }}
@@ -471,6 +500,7 @@ export function getPlaybackUrl(playbackId: string): string {
 
 export function getEmbedCode(playbackId: string): string {
   if (!playbackId) return "";
+  const graphqlUrl = rawConfig.graphqlUrl ?? "";
   // Return NPM package usage snippet instead of iframe
   return `import { Player } from '@livepeer-frameworks/player-react';
 import '@livepeer-frameworks/player-react/player.css';
@@ -479,7 +509,7 @@ import '@livepeer-frameworks/player-react/player.css';
   contentType="live"
   contentId="${playbackId}"
   options={{
-    gatewayUrl: '${rawConfig.playUrl}',
+    gatewayUrl: '${graphqlUrl}',
     autoplay: true,
     muted: true,
   }}
@@ -492,6 +522,19 @@ export function getMarketingSiteUrl(): string {
 
 export function getDocsSiteUrl(): string {
   return config.docsSiteUrl;
+}
+
+export function getGithubUrl(): string {
+  return config.githubUrl;
+}
+
+export function getGraphqlHttpUrl(): string {
+  return rawConfig.graphqlUrl ?? "";
+}
+
+export function getMcpEndpoint(): string {
+  if (!rawConfig.gatewayBaseUrl) return "";
+  return joinGatewayPath("/mcp");
 }
 
 export { config, isDev };

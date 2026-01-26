@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -26,8 +27,8 @@ func runMainMenu(cmd *cobra.Command) error {
 		fmt.Fprintln(cmd.OutOrStdout(), "1) Edge Operations")
 		fmt.Fprintln(cmd.OutOrStdout(), "2) Services & Health")
 		fmt.Fprintln(cmd.OutOrStdout(), "3) Control Plane (Admin)")
-		fmt.Fprintln(cmd.OutOrStdout(), "4) Infrastructure (Provisioning)")
-		fmt.Fprintln(cmd.OutOrStdout(), "5) Developer Workspace")
+		fmt.Fprintln(cmd.OutOrStdout(), "4) Cluster Operations")
+		fmt.Fprintln(cmd.OutOrStdout(), "5) DNS & Mesh")
 		fmt.Fprintln(cmd.OutOrStdout(), "6) Settings & Contexts")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Exit")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
@@ -40,9 +41,9 @@ func runMainMenu(cmd *cobra.Command) error {
 		case "3":
 			controlPlaneMenu(cmd, reader)
 		case "4":
-			infraMenu(cmd, reader)
+			clusterOpsMenu(cmd, reader)
 		case "5":
-			devWorkspaceMenu(cmd, reader)
+			dnsMeshMenu(cmd, reader)
 		case "6":
 			settingsMenu(cmd, reader)
 		case "0":
@@ -106,11 +107,25 @@ func servicesMenu(cmd *cobra.Command, r *bufio.Reader) {
 		c, _ := r.ReadString('\n')
 		switch strings.TrimSpace(c) {
 		case "1":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks services health")
+			_ = newServicesHealthCmd().Execute()
 		case "2":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks services health --service <type>")
+			svcType := promptInputDefault(r, "Service type", "")
+			if svcType == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Service type is required")
+				continue
+			}
+			hc := newServicesHealthCmd()
+			_ = hc.Flags().Set("type", svcType)
+			_ = hc.Execute()
 		case "3":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks services discover --type <name>")
+			svcType := promptInputDefault(r, "Service type", "")
+			if svcType == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Service type is required")
+				continue
+			}
+			dc := newServicesDiscoverCmd()
+			_ = dc.Flags().Set("type", svcType)
+			_ = dc.Execute()
 		case "0":
 			return
 		default:
@@ -125,20 +140,62 @@ func controlPlaneMenu(cmd *cobra.Command, r *bufio.Reader) {
 		fmt.Fprintln(cmd.OutOrStdout(), "1) Create bootstrap token")
 		fmt.Fprintln(cmd.OutOrStdout(), "2) List bootstrap tokens")
 		fmt.Fprintln(cmd.OutOrStdout(), "3) Revoke bootstrap token")
-		fmt.Fprintln(cmd.OutOrStdout(), "4) Drain node (future)")
-		fmt.Fprintln(cmd.OutOrStdout(), "5) Undrain node (future)")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
 		c, _ := r.ReadString('\n')
 		switch strings.TrimSpace(c) {
 		case "1":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks services tokens create")
+			kind := promptInputDefault(r, "Token kind (edge_node|service|infrastructure_node)", "edge_node")
+			tenantID := ""
+			clusterID := ""
+			if kind == "edge_node" {
+				tenantID = promptInputDefault(r, "Tenant ID", "")
+				clusterID = promptInputDefault(r, "Cluster ID", "")
+			}
+			expectedIP := promptInputDefault(r, "Expected IP (optional)", "")
+			ttl := promptInputDefault(r, "TTL (e.g. 24h)", "")
+			name := promptInputDefault(r, "Name", "")
+			usageLimit := promptInputDefault(r, "Usage limit (optional)", "")
+
+			cc := newAdminBootstrapTokensCreateCmd()
+			_ = cc.Flags().Set("kind", kind)
+			if tenantID != "" {
+				_ = cc.Flags().Set("tenant-id", tenantID)
+			}
+			if clusterID != "" {
+				_ = cc.Flags().Set("cluster-id", clusterID)
+			}
+			if expectedIP != "" {
+				_ = cc.Flags().Set("expected-ip", expectedIP)
+			}
+			if ttl != "" {
+				_ = cc.Flags().Set("ttl", ttl)
+			}
+			if name != "" {
+				_ = cc.Flags().Set("name", name)
+			}
+			if usageLimit != "" {
+				if v, err := strconv.Atoi(usageLimit); err == nil {
+					_ = cc.Flags().Set("usage-limit", fmt.Sprintf("%d", v))
+				}
+			}
+			_ = cc.Execute()
 		case "2":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks services tokens list")
+			_ = newAdminBootstrapTokensListCmd().Execute()
 		case "3":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks services tokens revoke")
-		case "4", "5":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: Foghorn drain/undrain when available")
+			tokenID := promptInputDefault(r, "Token ID (leave empty to use name)", "")
+			if tokenID != "" {
+				rc := newAdminBootstrapTokensRevokeCmd()
+				rc.SetArgs([]string{tokenID})
+				_ = rc.Execute()
+				continue
+			}
+			name := promptInputDefault(r, "Token name", "")
+			rc := newAdminBootstrapTokensRevokeCmd()
+			if name != "" {
+				_ = rc.Flags().Set("name", name)
+			}
+			_ = rc.Execute()
 		case "0":
 			return
 		default:
@@ -147,42 +204,107 @@ func controlPlaneMenu(cmd *cobra.Command, r *bufio.Reader) {
 	}
 }
 
-func infraMenu(cmd *cobra.Command, r *bufio.Reader) {
+func clusterOpsMenu(cmd *cobra.Command, r *bufio.Reader) {
 	for {
-		fmt.Fprintln(cmd.OutOrStdout(), "\n-- Infrastructure (Provisioning) --")
-		fmt.Fprintln(cmd.OutOrStdout(), "1) Plan (future)")
-		fmt.Fprintln(cmd.OutOrStdout(), "2) Apply (future)")
-		fmt.Fprintln(cmd.OutOrStdout(), "3) Destroy (future)")
-		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
-		fmt.Fprint(cmd.OutOrStdout(), "> ")
-		c, _ := r.ReadString('\n')
-		switch strings.TrimSpace(c) {
-		case "1", "2", "3":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: infra provisioning coming soon")
-		case "0":
-			return
-		default:
-			fmt.Fprintln(cmd.OutOrStdout(), "Unknown option")
-		}
-	}
-}
-
-func devWorkspaceMenu(cmd *cobra.Command, r *bufio.Reader) {
-	for {
-		fmt.Fprintln(cmd.OutOrStdout(), "\n-- Developer Workspace --")
-		fmt.Fprintln(cmd.OutOrStdout(), "1) Workspace init (clone repos)")
-		fmt.Fprintln(cmd.OutOrStdout(), "2) Build Helmsman (future)")
-		fmt.Fprintln(cmd.OutOrStdout(), "3) Build Mist (future)")
-		fmt.Fprintln(cmd.OutOrStdout(), "4) Start dev env (future)")
-		fmt.Fprintln(cmd.OutOrStdout(), "5) Stop dev env (future)")
+		fmt.Fprintln(cmd.OutOrStdout(), "\n-- Cluster Operations --")
+		fmt.Fprintln(cmd.OutOrStdout(), "1) Detect")
+		fmt.Fprintln(cmd.OutOrStdout(), "2) Doctor")
+		fmt.Fprintln(cmd.OutOrStdout(), "3) Provision")
+		fmt.Fprintln(cmd.OutOrStdout(), "4) Init")
+		fmt.Fprintln(cmd.OutOrStdout(), "5) Upgrade")
+		fmt.Fprintln(cmd.OutOrStdout(), "6) Logs")
+		fmt.Fprintln(cmd.OutOrStdout(), "7) Restart")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
 		c, _ := r.ReadString('\n')
 		switch strings.TrimSpace(c) {
 		case "1":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks workspace init")
-		case "2", "3", "4", "5":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: coming soon")
+			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
+			cc := newClusterDetectCmd()
+			_ = cc.Flags().Set("manifest", manifest)
+			_ = cc.Execute()
+		case "2":
+			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
+			cc := newClusterDoctorCmd()
+			_ = cc.Flags().Set("manifest", manifest)
+			_ = cc.Execute()
+		case "3":
+			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
+			phase := promptInputDefault(r, "Phase (infrastructure|applications|interfaces|all)", "all")
+			cc := newClusterProvisionCmd()
+			_ = cc.Flags().Set("manifest", manifest)
+			if phase != "" {
+				_ = cc.Flags().Set("only", phase)
+			}
+			_ = cc.Execute()
+		case "4":
+			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
+			service := promptInputDefault(r, "Service (postgres|kafka|clickhouse|all)", "all")
+			cc := newClusterInitCmd()
+			cc.SetArgs([]string{service})
+			_ = cc.Flags().Set("manifest", manifest)
+			_ = cc.Execute()
+		case "5":
+			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
+			service := promptInputDefault(r, "Service to upgrade", "")
+			if service == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Service name is required")
+				continue
+			}
+			version := promptInputDefault(r, "Version (stable|rc|vX.Y.Z)", "")
+			cc := newClusterUpgradeCmd()
+			cc.SetArgs([]string{service})
+			_ = cc.Flags().Set("manifest", manifest)
+			if version != "" {
+				_ = cc.Flags().Set("version", version)
+			}
+			_ = cc.Execute()
+		case "6":
+			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
+			service := promptInputDefault(r, "Service to tail", "")
+			if service == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Service name is required")
+				continue
+			}
+			cc := newClusterLogsCmd()
+			cc.SetArgs([]string{service})
+			_ = cc.Flags().Set("manifest", manifest)
+			_ = cc.Execute()
+		case "7":
+			manifest := promptInputDefault(r, "Manifest path", "cluster.yaml")
+			service := promptInputDefault(r, "Service to restart", "")
+			if service == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Service name is required")
+				continue
+			}
+			cc := newClusterRestartCmd()
+			cc.SetArgs([]string{service})
+			_ = cc.Flags().Set("manifest", manifest)
+			_ = cc.Execute()
+		case "0":
+			return
+		default:
+			fmt.Fprintln(cmd.OutOrStdout(), "Unknown option")
+		}
+	}
+}
+
+func dnsMeshMenu(cmd *cobra.Command, r *bufio.Reader) {
+	for {
+		fmt.Fprintln(cmd.OutOrStdout(), "\n-- DNS & Mesh --")
+		fmt.Fprintln(cmd.OutOrStdout(), "1) DNS doctor")
+		fmt.Fprintln(cmd.OutOrStdout(), "2) Mesh status")
+		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
+		fmt.Fprint(cmd.OutOrStdout(), "> ")
+		c, _ := r.ReadString('\n')
+		switch strings.TrimSpace(c) {
+		case "1":
+			domain := promptInputDefault(r, "Root domain", "frameworks.network")
+			cc := newDNSDoctorCmd()
+			_ = cc.Flags().Set("domain", domain)
+			_ = cc.Execute()
+		case "2":
+			_ = newMeshStatusCmd().Execute()
 		case "0":
 			return
 		default:
@@ -194,9 +316,10 @@ func devWorkspaceMenu(cmd *cobra.Command, r *bufio.Reader) {
 func settingsMenu(cmd *cobra.Command, r *bufio.Reader) {
 	for {
 		fmt.Fprintln(cmd.OutOrStdout(), "\n-- Settings & Contexts --")
-		fmt.Fprintln(cmd.OutOrStdout(), "1) Login (Gateway)")
-		fmt.Fprintln(cmd.OutOrStdout(), "2) Switch context")
-		fmt.Fprintln(cmd.OutOrStdout(), "3) Show config path")
+		fmt.Fprintln(cmd.OutOrStdout(), "1) Login (Bridge)")
+		fmt.Fprintln(cmd.OutOrStdout(), "2) List contexts")
+		fmt.Fprintln(cmd.OutOrStdout(), "3) Switch context")
+		fmt.Fprintln(cmd.OutOrStdout(), "4) Show config path")
 		fmt.Fprintln(cmd.OutOrStdout(), "0) Back")
 		fmt.Fprint(cmd.OutOrStdout(), "> ")
 		c, _ := r.ReadString('\n')
@@ -204,8 +327,17 @@ func settingsMenu(cmd *cobra.Command, r *bufio.Reader) {
 		case "1":
 			_ = newLoginCmd().Execute()
 		case "2":
-			fmt.Fprintln(cmd.OutOrStdout(), "TODO: frameworks context use <name>")
+			_ = newContextListCmd().Execute()
 		case "3":
+			name := promptInputDefault(r, "Context name", "")
+			if name == "" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Context name is required")
+				continue
+			}
+			cc := newContextUseCmd()
+			cc.SetArgs([]string{name})
+			_ = cc.Execute()
+		case "4":
 			fmt.Fprintln(cmd.OutOrStdout(), "Config: $HOME/.frameworks/config.yaml (if present)")
 		case "0":
 			return
@@ -213,4 +345,18 @@ func settingsMenu(cmd *cobra.Command, r *bufio.Reader) {
 			fmt.Fprintln(cmd.OutOrStdout(), "Unknown option")
 		}
 	}
+}
+
+func promptInputDefault(r *bufio.Reader, label, def string) string {
+	if def != "" {
+		fmt.Fprintf(os.Stdout, "%s [%s]: ", label, def)
+	} else {
+		fmt.Fprintf(os.Stdout, "%s: ", label)
+	}
+	input, _ := r.ReadString('\n')
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return def
+	}
+	return input
 }

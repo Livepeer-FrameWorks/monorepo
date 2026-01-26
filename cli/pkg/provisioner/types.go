@@ -32,13 +32,16 @@ type Provisioner interface {
 
 // ServiceConfig holds service-specific configuration
 type ServiceConfig struct {
-	Mode      string                 // "docker" or "native"
-	Version   string                 // Service version
-	Port      int                    // Primary port
-	Ports     []int                  // Additional ports
-	EnvFile   string                 // Path to env file
-	DependsOn []string               // Service dependencies
-	Metadata  map[string]interface{} // Service-specific config
+	Mode       string                 // "docker" or "native"
+	Version    string                 // Service version
+	Image      string                 // Docker image (optional override)
+	BinaryURL  string                 // Native binary URL (optional override)
+	DeployName string                 // Container/service name (optional override)
+	Port       int                    // Primary port
+	Ports      []int                  // Additional ports
+	EnvFile    string                 // Path to env file
+	DependsOn  []string               // Service dependencies
+	Metadata   map[string]interface{} // Service-specific config
 }
 
 // ProvisionContext holds context for provisioning operations

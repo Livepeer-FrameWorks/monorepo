@@ -1,0 +1,39 @@
+mutation CompleteVodUpload($input: CompleteVodUploadInput!) {
+  completeVodUpload(input: $input) {
+    ... on VodAsset {
+      id
+      artifactHash
+      playbackId
+      title
+      description
+      filename
+      status
+      storageLocation
+      sizeBytes
+      durationMs
+      resolution
+      videoCodec
+      audioCodec
+      bitrateKbps
+      createdAt
+      updatedAt
+      expiresAt
+      errorMessage
+    }
+    ... on ValidationError {
+      message
+      field
+      code
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

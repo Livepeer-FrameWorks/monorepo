@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -26,8 +25,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-var streamNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // PeriscopeServer implements all Periscope gRPC services
 // All queries use ClickHouse only - no PostgreSQL dependency
@@ -71,12 +68,13 @@ func parseEventPayload(eventData string) *structpb.Struct {
 	return s
 }
 
-// validateStreamName validates stream internal name format
-func validateStreamName(name string) bool {
-	if name == "" || len(name) > 255 {
+// validateStreamID validates stream UUID format
+func validateStreamID(id string) bool {
+	if id == "" {
 		return false
 	}
-	return streamNameRegex.MatchString(name)
+	_, err := uuid.Parse(id)
+	return err == nil
 }
 
 // getTenantID extracts tenant_id from request or context.
@@ -213,362 +211,15 @@ func (s *PeriscopeServer) countAsync(ctx context.Context, query string, args ...
 // StreamAnalyticsService Implementation
 // ============================================================================
 
-func (s *PeriscopeServer) GetStreamAnalytics(ctx context.Context, req *pb.GetStreamAnalyticsRequest) (*pb.GetStreamAnalyticsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
-	}
-
-	streamID := req.GetStreamId()
-	if streamID != "" && !validateStreamName(streamID) {
-		return nil, status.Error(codes.InvalidArgument, "invalid stream name format")
-	}
-
-	params, err := getCursorPagination(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	// Start count query in parallel (runs while main query executes)
-	countQuery := `SELECT count() FROM live_streams FINAL WHERE tenant_id = ?`
-	countArgs := []interface{}{tenantID}
-	if streamID != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, streamID)
-	}
-	countCh := s.countAsync(ctx, countQuery, countArgs...)
-
-	// Simple query against live_streams - no JOINs, no aggregations
-	// All data comes directly from Foghorn's state snapshots
-	query := `
-		SELECT
-			internal_name,
-			node_id,
-			status,
-			buffer_state,
-			current_viewers,
-			total_inputs,
-			uploaded_bytes,
-			downloaded_bytes,
-			viewer_seconds,
-			has_issues,
-			issues_description,
-			track_count,
-			quality_tier,
-			primary_width,
-			primary_height,
-			primary_fps,
-			primary_codec,
-			primary_bitrate,
-			packets_sent,
-			packets_lost,
-			started_at,
-			updated_at
-		FROM live_streams FINAL
-		WHERE tenant_id = ?
-	`
-	args := []interface{}{tenantID}
-
-	if streamID != "" {
-		query += " AND internal_name = ?"
-		args = append(args, streamID)
-	}
-
-	// Add keyset pagination condition (direction-aware)
-	keysetCond, keysetArgs := buildKeysetCondition(params, "updated_at", "internal_name")
-	if keysetCond != "" {
-		query += keysetCond
-		args = append(args, keysetArgs...)
-	}
-
-	query += buildOrderBy(params, "updated_at", "internal_name")
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to query stream analytics from ClickHouse")
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer rows.Close()
-
-	var streams []*pb.StreamAnalytics
-	for rows.Next() {
-		var stream pb.StreamAnalytics
-		var nodeID, bufferState, streamStatus, issuesDesc, qualityTier *string
-		var primaryFps *float32
-		var hasIssues *uint8
-		var trackCount, primaryWidth, primaryHeight *uint16
-		var primaryCodec *string
-		var primaryBitrate *int32
-		var packetsSent, packetsLost *uint64
-		var startedAt, updatedAt *time.Time
-		var downloadedBytes, uploadedBytes, viewerSeconds uint64
-		var currentViewers uint32
-		var totalInputs uint16
-
-		err := rows.Scan(
-			&stream.InternalName, &nodeID, &streamStatus, &bufferState,
-			&currentViewers, &totalInputs, &uploadedBytes, &downloadedBytes,
-			&viewerSeconds, &hasIssues, &issuesDesc,
-			&trackCount, &qualityTier, &primaryWidth, &primaryHeight, &primaryFps,
-			&primaryCodec, &primaryBitrate,
-			&packetsSent, &packetsLost,
-			&startedAt, &updatedAt,
-		)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan stream analytics row")
-			continue
-		}
-
-		// Map to protobuf fields
-		stream.Id = stream.InternalName
-		stream.TenantId = tenantID
-		stream.StreamId = stream.InternalName
-		stream.CurrentViewers = int32(currentViewers)
-		stream.BandwidthIn = int64(downloadedBytes)
-		stream.BandwidthOut = int64(uploadedBytes)
-		stream.TotalBandwidthGb = float64(uploadedBytes) / 1073741824.0
-
-		if nodeID != nil {
-			stream.NodeId = nodeID
-		}
-		if streamStatus != nil {
-			stream.Status = streamStatus
-		}
-		if startedAt != nil && !startedAt.IsZero() {
-			stream.SessionStartTime = timestamppb.New(*startedAt)
-		}
-		if updatedAt != nil && !updatedAt.IsZero() {
-			stream.LastUpdated = timestamppb.New(*updatedAt)
-		}
-
-		// Map remaining fields from live_streams (proto uses optional/oneof - assign pointers)
-		if primaryCodec != nil {
-			stream.CurrentCodec = primaryCodec
-		}
-		if primaryBitrate != nil {
-			kbps := *primaryBitrate / 1000 // Convert to Kbps
-			stream.BitrateKbps = &kbps
-		}
-		if primaryWidth != nil && primaryHeight != nil {
-			res := fmt.Sprintf("%dx%d", *primaryWidth, *primaryHeight)
-			stream.Resolution = &res
-		}
-		if primaryFps != nil {
-			stream.CurrentFps = primaryFps
-		}
-		if qualityTier != nil {
-			stream.QualityTier = qualityTier
-		}
-		if packetsSent != nil {
-			stream.PacketsSent = int64(*packetsSent)
-		}
-		if packetsLost != nil {
-			stream.PacketsLost = int64(*packetsLost)
-		}
-		// Compute packet loss rate: lost / (sent + lost)
-		if packetsSent != nil && packetsLost != nil && (*packetsSent+*packetsLost) > 0 {
-			lossRate := float32(*packetsLost) / float32(*packetsSent+*packetsLost)
-			stream.PacketLossRate = lossRate
-		}
-
-		streams = append(streams, &stream)
-	}
-
-	// Batch query for historical analytics from stream_analytics_daily
-	if len(streams) > 0 {
-		// Collect stream names for batch query
-		streamNames := make([]string, len(streams))
-		streamMap := make(map[string]*pb.StreamAnalytics)
-		for i, stream := range streams {
-			streamNames[i] = stream.InternalName
-			streamMap[stream.InternalName] = stream
-		}
-
-		// Build IN clause with placeholders
-		placeholders := make([]string, len(streamNames))
-		batchArgs := []interface{}{tenantID}
-		for i, name := range streamNames {
-			placeholders[i] = "?"
-			batchArgs = append(batchArgs, name)
-		}
-
-		// Query stream_analytics_daily for all streams in one batch (7-day window)
-		analyticsQuery := fmt.Sprintf(`
-			SELECT
-				internal_name,
-				sum(total_views) AS total_views,
-				sum(unique_viewers) AS unique_viewers,
-				sum(unique_countries) AS unique_countries,
-				sum(unique_cities) AS unique_cities,
-				sum(egress_bytes) AS egress_bytes
-			FROM periscope.stream_analytics_daily
-			WHERE tenant_id = ? AND internal_name IN (%s)
-			AND day >= today() - 7
-			GROUP BY internal_name
-		`, strings.Join(placeholders, ","))
-
-		analyticsRows, err := s.clickhouse.QueryContext(ctx, analyticsQuery, batchArgs...)
-		if err != nil {
-			s.logger.WithError(err).Info("Failed to batch query stream_analytics_daily")
-		} else {
-			defer analyticsRows.Close()
-			for analyticsRows.Next() {
-				var name string
-				var totalViews, uniqueViewers, uniqueCountries, uniqueCities uint64
-				var egressBytes uint64
-				if err := analyticsRows.Scan(&name, &totalViews, &uniqueViewers, &uniqueCountries, &uniqueCities, &egressBytes); err != nil {
-					s.logger.WithError(err).Info("Failed to scan stream_analytics_daily row")
-					continue
-				}
-				if stream, ok := streamMap[name]; ok {
-					stream.TotalViews = int32(totalViews)
-					stream.UniqueViewers = int32(uniqueViewers)
-					stream.UniqueCountries = int32(uniqueCountries)
-					stream.UniqueCities = int32(uniqueCities)
-				}
-			}
-		}
-
-		// Batch query for peak/avg viewers from stream_events
-		peakQuery := fmt.Sprintf(`
-			SELECT
-				internal_name,
-				max(total_viewers) AS peak_viewers,
-				avg(total_viewers) AS avg_viewers
-			FROM periscope.stream_events
-			WHERE tenant_id = ? AND internal_name IN (%s)
-			AND timestamp >= now() - INTERVAL 7 DAY
-			AND total_viewers IS NOT NULL
-			GROUP BY internal_name
-		`, strings.Join(placeholders, ","))
-
-		peakRows, err := s.clickhouse.QueryContext(ctx, peakQuery, batchArgs...)
-		if err != nil {
-			s.logger.WithError(err).Info("Failed to batch query stream_events for peak viewers")
-		} else {
-			defer peakRows.Close()
-			for peakRows.Next() {
-				var name string
-				var peakViewers uint32
-				var avgViewers float64
-				if err := peakRows.Scan(&name, &peakViewers, &avgViewers); err != nil {
-					s.logger.WithError(err).Info("Failed to scan stream_events row")
-					continue
-				}
-				if stream, ok := streamMap[name]; ok {
-					stream.PeakViewers = int32(peakViewers)
-					stream.AvgViewers = avgViewers
-				}
-			}
-		}
-
-		// Batch query for health metrics from stream_health_5m
-		healthQuery := fmt.Sprintf(`
-			SELECT
-				internal_name,
-				avg(avg_bitrate) AS avg_bitrate,
-				avg(avg_buffer_health) AS avg_buffer_health
-			FROM periscope.stream_health_5m
-			WHERE tenant_id = ? AND internal_name IN (%s)
-			AND timestamp_5m >= now() - INTERVAL 7 DAY
-			GROUP BY internal_name
-		`, strings.Join(placeholders, ","))
-
-		healthRows, err := s.clickhouse.QueryContext(ctx, healthQuery, batchArgs...)
-		if err != nil {
-			s.logger.WithError(err).Info("Failed to batch query stream_health_5m")
-		} else {
-			defer healthRows.Close()
-			for healthRows.Next() {
-				var name string
-				var avgBitrate, avgBufferHealth *float32
-				if err := healthRows.Scan(&name, &avgBitrate, &avgBufferHealth); err != nil {
-					s.logger.WithError(err).Info("Failed to scan stream_health_5m row")
-					continue
-				}
-				if stream, ok := streamMap[name]; ok {
-					if avgBitrate != nil {
-						stream.AvgBitrate = int32(*avgBitrate)
-					}
-					if avgBufferHealth != nil {
-						stream.AvgBufferHealth = *avgBufferHealth
-					}
-				}
-			}
-		}
-
-		// Batch query for total session duration from connection_events (disconnect events only)
-		sessionDurationQuery := fmt.Sprintf(`
-			SELECT
-				internal_name,
-				COALESCE(sum(session_duration), 0) AS total_session_duration
-			FROM periscope.connection_events
-			WHERE tenant_id = ? AND internal_name IN (%s)
-			AND event_type = 'disconnect'
-			AND timestamp >= now() - INTERVAL 7 DAY
-			GROUP BY internal_name
-		`, strings.Join(placeholders, ","))
-
-		sessionRows, err := s.clickhouse.QueryContext(ctx, sessionDurationQuery, batchArgs...)
-		if err != nil {
-			s.logger.WithError(err).Info("Failed to batch query connection_events for session duration")
-		} else {
-			defer sessionRows.Close()
-			for sessionRows.Next() {
-				var name string
-				var totalDuration int32
-				if err := sessionRows.Scan(&name, &totalDuration); err != nil {
-					s.logger.WithError(err).Info("Failed to scan connection_events row")
-					continue
-				}
-				if stream, ok := streamMap[name]; ok {
-					stream.TotalSessionDuration = totalDuration
-				}
-			}
-		}
-	}
-
-	resultsLen := len(streams)
-	if resultsLen > params.Limit {
-		streams = streams[:params.Limit]
-	}
-
-	// Reverse for backward pagination (query was ASC, we want DESC order)
-	if params.Direction == pagination.Backward {
-		slices.Reverse(streams)
-	}
-
-	// Wait for parallel count query to complete
-	total := <-countCh
-
-	var startCursor, endCursor string
-	if len(streams) > 0 {
-		first := streams[0]
-		last := streams[len(streams)-1]
-		if first.LastUpdated != nil {
-			startCursor = pagination.EncodeCursor(first.LastUpdated.AsTime(), first.Id)
-		}
-		if last.LastUpdated != nil {
-			endCursor = pagination.EncodeCursor(last.LastUpdated.AsTime(), last.Id)
-		}
-	}
-
-	return &pb.GetStreamAnalyticsResponse{
-		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
-		Streams:    streams,
-	}, nil
-}
-
 func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStreamEventsRequest) (*pb.GetStreamEventsResponse, error) {
 	tenantID := getTenantID(ctx, req.GetTenantId())
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	internalName := req.GetInternalName()
-	if internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name required")
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -582,11 +233,16 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 	}
 
 	query := `
-		SELECT event_id, timestamp, event_type, status, node_id, event_data, internal_name
-		FROM periscope.stream_events
-		WHERE tenant_id = ? AND internal_name = ? AND timestamp >= ? AND timestamp <= ?
+		SELECT event_id, timestamp, event_type, status, node_id, event_data, stream_id,
+		       buffer_state, has_issues, track_count, quality_tier,
+		       primary_width, primary_height, primary_fps, primary_codec, primary_bitrate,
+		       downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, viewer_seconds,
+		       request_url, protocol, latitude, longitude, location, country_code, city
+		FROM periscope.stream_event_log
+		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
+		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update')
 	`
-	args := []interface{}{tenantID, internalName, startTime, endTime}
+	args := []interface{}{tenantID, streamID, startTime, endTime}
 
 	// Add keyset pagination condition (direction-aware)
 	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "event_id")
@@ -609,8 +265,24 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 		var event pb.StreamEvent
 		var ts time.Time
 		var eventData string
+		var bufferState, qualityTier, primaryCodec, requestURL, protocol, location, countryCode, city *string
+		var hasIssues *uint8
+		var trackCount *uint16
+		var primaryWidth, primaryHeight *uint16
+		var primaryFps *float32
+		var primaryBitrate *uint32
+		var downloadedBytes, uploadedBytes, viewerSeconds *uint64
+		var totalViewers *uint32
+		var totalInputs, totalOutputs *uint16
+		var latitude, longitude *float64
 
-		err := rows.Scan(&event.EventId, &ts, &event.EventType, &event.Status, &event.NodeId, &eventData, &event.InternalName)
+		err := rows.Scan(
+			&event.EventId, &ts, &event.EventType, &event.Status, &event.NodeId, &eventData, &event.StreamId,
+			&bufferState, &hasIssues, &trackCount, &qualityTier,
+			&primaryWidth, &primaryHeight, &primaryFps, &primaryCodec, &primaryBitrate,
+			&downloadedBytes, &uploadedBytes, &totalViewers, &totalInputs, &totalOutputs, &viewerSeconds,
+			&requestURL, &protocol, &latitude, &longitude, &location, &countryCode, &city,
+		)
 		if err != nil {
 			continue
 		}
@@ -621,6 +293,66 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 		if eventData != "" {
 			event.EventPayload = parseEventPayload(eventData)
 		}
+
+		event.BufferState = bufferState
+		if hasIssues != nil {
+			v := *hasIssues != 0
+			event.HasIssues = &v
+		}
+		if trackCount != nil {
+			v := int32(*trackCount)
+			event.TrackCount = &v
+		}
+		event.QualityTier = qualityTier
+		if primaryWidth != nil {
+			v := int32(*primaryWidth)
+			event.PrimaryWidth = &v
+		}
+		if primaryHeight != nil {
+			v := int32(*primaryHeight)
+			event.PrimaryHeight = &v
+		}
+		if primaryFps != nil {
+			event.PrimaryFps = primaryFps
+		}
+		event.PrimaryCodec = primaryCodec
+		if primaryBitrate != nil {
+			v := int32(*primaryBitrate)
+			event.PrimaryBitrate = &v
+		}
+		if downloadedBytes != nil {
+			event.DownloadedBytes = downloadedBytes
+		}
+		if uploadedBytes != nil {
+			event.UploadedBytes = uploadedBytes
+		}
+		if totalViewers != nil {
+			v := *totalViewers
+			event.TotalViewers = &v
+		}
+		if totalInputs != nil {
+			v := int32(*totalInputs)
+			event.TotalInputs = &v
+		}
+		if totalOutputs != nil {
+			v := int32(*totalOutputs)
+			event.TotalOutputs = &v
+		}
+		if viewerSeconds != nil {
+			event.ViewerSeconds = viewerSeconds
+		}
+		event.RequestUrl = requestURL
+		event.Protocol = protocol
+		if latitude != nil {
+			event.Latitude = latitude
+		}
+		if longitude != nil {
+			event.Longitude = longitude
+		}
+		event.Location = location
+		event.CountryCode = countryCode
+		event.City = city
+
 		events = append(events, &event)
 	}
 
@@ -636,9 +368,10 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 
 	var total int32
 	s.clickhouse.QueryRowContext(ctx, `
-		SELECT count(*) FROM periscope.stream_events
-		WHERE tenant_id = ? AND internal_name = ? AND timestamp >= ? AND timestamp <= ?
-	`, tenantID, internalName, startTime, endTime).Scan(&total)
+		SELECT count(*) FROM periscope.stream_event_log
+		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
+		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update')
+	`, tenantID, streamID, startTime, endTime).Scan(&total)
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
@@ -658,9 +391,9 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	internalName := req.GetInternalName()
-	if internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name required")
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -673,14 +406,14 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// stream_buffer events are stored in stream_events with event_type filter
+	// stream_buffer events are stored in stream_event_log with event_type filter
 	query := `
 		SELECT event_id, timestamp, buffer_state, node_id, event_data
-		FROM stream_events
-		WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream_buffer'
+		FROM stream_event_log
+		WHERE tenant_id = ? AND stream_id = ? AND event_type = 'stream_buffer'
 			AND timestamp >= ? AND timestamp <= ?
 	`
-	args := []interface{}{tenantID, internalName, startTime, endTime}
+	args := []interface{}{tenantID, streamID, startTime, endTime}
 
 	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "event_id")
 	if keysetCond != "" {
@@ -712,6 +445,7 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 
 		event.EventId = eventID.String()
 		event.Timestamp = timestamppb.New(ts)
+		event.StreamId = streamID
 		if bufferState != nil {
 			event.Status = *bufferState
 		}
@@ -733,10 +467,10 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 
 	var total int32
 	s.clickhouse.QueryRowContext(ctx, `
-		SELECT count(*) FROM stream_events
-		WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream_buffer'
+		SELECT count(*) FROM stream_event_log
+		WHERE tenant_id = ? AND stream_id = ? AND event_type = 'stream_buffer'
 			AND timestamp >= ? AND timestamp <= ?
-	`, tenantID, internalName, startTime, endTime).Scan(&total)
+	`, tenantID, streamID, startTime, endTime).Scan(&total)
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
@@ -767,29 +501,29 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 	}
 
 	query := `
-		SELECT timestamp, tenant_id, internal_name, node_id,
-			bitrate, fps, gop_size, width, height,
+		SELECT timestamp, tenant_id, stream_id, node_id,
+			bitrate, fps, gop_size, frame_ms_max, frame_ms_min, frames_max, frames_min, keyframe_ms_max, keyframe_ms_min, width, height,
 			buffer_size, buffer_health, buffer_state,
 			codec, quality_tier, track_metadata,
 			has_issues, issues_description, track_count,
 			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
-		FROM stream_health_metrics
+		FROM stream_health_samples
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if internalName := req.GetInternalName(); internalName != "" {
-		query += " AND internal_name = ?"
-		args = append(args, internalName)
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "internal_name")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "concat(stream_id, ':', node_id)")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp", "internal_name")
+	query += buildOrderBy(params, "timestamp", "concat(stream_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -810,10 +544,12 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		var audioChannels *uint8
 		var audioSampleRate, audioBitrate *uint32
 		var audioCodec *string
+		var frameMsMax, frameMsMin, keyframeMsMax, keyframeMsMin *float32
+		var framesMax, framesMin *uint32
 
 		err := rows.Scan(
-			&ts, &tenantID, &m.InternalName, &m.NodeId,
-			&m.Bitrate, &m.Fps, &m.GopSize, &m.Width, &m.Height,
+			&ts, &tenantID, &m.StreamId, &m.NodeId,
+			&m.Bitrate, &m.Fps, &m.GopSize, &frameMsMax, &frameMsMin, &framesMax, &framesMin, &keyframeMsMax, &keyframeMsMin, &m.Width, &m.Height,
 			&m.BufferSize, &m.BufferHealth, &m.BufferState,
 			&m.Codec, &m.QualityTier, &trackMetadata,
 			&hasIssues, &issuesDesc, &trackCount,
@@ -824,10 +560,30 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		}
 
 		// Generate composite ID for pagination
-		m.Id = fmt.Sprintf("%s_%s", ts.Format(time.RFC3339), m.InternalName)
+		m.Id = fmt.Sprintf("%s_%s_%s", ts.Format(time.RFC3339), m.StreamId, m.NodeId)
 		m.TenantId = tenantID
 		m.Timestamp = timestamppb.New(ts)
 		m.TrackMetadata = trackMetadata
+		if frameMsMax != nil {
+			m.FrameMsMax = frameMsMax
+		}
+		if frameMsMin != nil {
+			m.FrameMsMin = frameMsMin
+		}
+		if framesMax != nil {
+			v := int32(*framesMax)
+			m.FramesMax = &v
+		}
+		if framesMin != nil {
+			v := int32(*framesMin)
+			m.FramesMin = &v
+		}
+		if keyframeMsMax != nil {
+			m.KeyframeMsMax = keyframeMsMax
+		}
+		if keyframeMsMin != nil {
+			m.KeyframeMsMin = keyframeMsMin
+		}
 
 		// Assign health issue fields (previously scanned but not assigned)
 		if hasIssues != nil {
@@ -866,22 +622,22 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 	}
 
 	var total int32
-	if internalName := req.GetInternalName(); internalName != "" {
+	if streamID := req.GetStreamId(); streamID != "" {
 		s.clickhouse.QueryRowContext(ctx, `
-			SELECT count(*) FROM stream_health_metrics
-			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND internal_name = ?
-		`, tenantID, startTime, endTime, internalName).Scan(&total)
+			SELECT count(*) FROM stream_health_samples
+			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND stream_id = ?
+		`, tenantID, startTime, endTime, streamID).Scan(&total)
 	} else {
 		s.clickhouse.QueryRowContext(ctx, `
-			SELECT count(*) FROM stream_health_metrics
+			SELECT count(*) FROM stream_health_samples
 			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 		`, tenantID, startTime, endTime).Scan(&total)
 	}
 
 	var startCursor, endCursor string
 	if len(metrics) > 0 {
-		startCursor = pagination.EncodeCursor(metrics[0].Timestamp.AsTime(), metrics[0].InternalName)
-		endCursor = pagination.EncodeCursor(metrics[len(metrics)-1].Timestamp.AsTime(), metrics[len(metrics)-1].InternalName)
+		startCursor = pagination.EncodeCursor(metrics[0].Timestamp.AsTime(), fmt.Sprintf("%s:%s", metrics[0].StreamId, metrics[0].NodeId))
+		endCursor = pagination.EncodeCursor(metrics[len(metrics)-1].Timestamp.AsTime(), fmt.Sprintf("%s:%s", metrics[len(metrics)-1].StreamId, metrics[len(metrics)-1].NodeId))
 	}
 
 	return &pb.GetStreamHealthMetricsResponse{
@@ -891,7 +647,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 }
 
 // GetStreamStatus returns operational state for a single stream (Control/Data plane separation)
-// This is the source of truth for stream status - queries live_streams directly
+// This is the source of truth for stream status - queries stream_state_current directly
 func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStreamStatusRequest) (*pb.StreamStatusResponse, error) {
 	tenantID := getTenantID(ctx, req.GetTenantId())
 	if tenantID == "" {
@@ -908,24 +664,31 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 		Status:   "offline", // Default
 	}
 
-	// Simple query against live_streams - source of truth for stream state
+	// Simple query against stream_state_current - source of truth for stream state
 	var streamStatus string
 	var startedAt, updatedAt *time.Time
 	var currentViewers uint32
-	var bufferState, qualityTier, primaryCodec, issuesDescription *string
+	var bufferState, qualityTier, primaryCodec, issuesDescription, nodeID *string
 	var primaryWidth, primaryHeight, primaryBitrate *int32
 	var primaryFps *float32
 	var hasIssues *bool
+	var trackCount, totalInputs *int32
+	var uploadedBytes, downloadedBytes, viewerSeconds *uint64
+	var packetsSent, packetsLost, packetsRetransmitted *uint64
 
 	err := s.clickhouse.QueryRowContext(ctx, `
 		SELECT status, current_viewers, started_at, updated_at,
 			buffer_state, quality_tier, primary_width, primary_height,
-			primary_fps, primary_codec, primary_bitrate, has_issues, issues_description
-		FROM live_streams FINAL
-		WHERE tenant_id = ? AND internal_name = ?
+			primary_fps, primary_codec, primary_bitrate, has_issues, issues_description,
+			node_id, track_count, total_inputs, uploaded_bytes, downloaded_bytes, viewer_seconds,
+			packets_sent, packets_lost, packets_retransmitted
+		FROM stream_state_current FINAL
+		WHERE tenant_id = ? AND stream_id = ?
 	`, tenantID, streamID).Scan(&streamStatus, &currentViewers, &startedAt, &updatedAt,
 		&bufferState, &qualityTier, &primaryWidth, &primaryHeight,
-		&primaryFps, &primaryCodec, &primaryBitrate, &hasIssues, &issuesDescription)
+		&primaryFps, &primaryCodec, &primaryBitrate, &hasIssues, &issuesDescription,
+		&nodeID, &trackCount, &totalInputs, &uploadedBytes, &downloadedBytes, &viewerSeconds,
+		&packetsSent, &packetsLost, &packetsRetransmitted)
 
 	if err == nil {
 		resp.Status = streamStatus
@@ -939,6 +702,7 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 		}
 		if updatedAt != nil && !updatedAt.IsZero() {
 			resp.LastEventAt = timestamppb.New(*updatedAt)
+			resp.UpdatedAt = timestamppb.New(*updatedAt)
 		}
 
 		// Quality metrics
@@ -951,13 +715,22 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 		resp.PrimaryBitrate = primaryBitrate
 		resp.HasIssues = hasIssues
 		resp.IssuesDescription = issuesDescription
+		resp.NodeId = nodeID
+		resp.TrackCount = trackCount
+		resp.TotalInputs = totalInputs
+		resp.UploadedBytes = uploadedBytes
+		resp.DownloadedBytes = downloadedBytes
+		resp.ViewerSeconds = viewerSeconds
+		resp.PacketsSent = packetsSent
+		resp.PacketsLost = packetsLost
+		resp.PacketsRetransmitted = packetsRetransmitted
 	}
 
 	return resp, nil
 }
 
 // GetStreamsStatus returns operational state for multiple streams (batch lookup)
-// Queries live_streams directly - no JOINs needed
+// Queries stream_state_current directly - no JOINs needed
 func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStreamsStatusRequest) (*pb.StreamsStatusResponse, error) {
 	tenantID := getTenantID(ctx, req.GetTenantId())
 	if tenantID == "" {
@@ -987,13 +760,13 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		args[i+1] = id
 	}
 
-	// Simple batch query against live_streams
+	// Simple batch query against stream_state_current
 	query := fmt.Sprintf(`
-		SELECT internal_name, status, current_viewers, started_at, updated_at,
+		SELECT stream_id, status, current_viewers, started_at, updated_at,
 			buffer_state, quality_tier, primary_width, primary_height,
 			primary_fps, primary_codec, primary_bitrate, has_issues, issues_description
-		FROM live_streams FINAL
-		WHERE tenant_id = ? AND internal_name IN (%s)
+		FROM stream_state_current FINAL
+		WHERE tenant_id = ? AND stream_id IN (%s)
 	`, joinStrings(placeholders, ", "))
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -1004,7 +777,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 	defer rows.Close()
 
 	for rows.Next() {
-		var internalName, streamStatus string
+		var streamID, streamStatus string
 		var startedAt, updatedAt *time.Time
 		var currentViewers uint32
 		var bufferState, qualityTier, primaryCodec, issuesDescription *string
@@ -1012,7 +785,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		var primaryFps *float32
 		var hasIssues *bool
 
-		err := rows.Scan(&internalName, &streamStatus, &currentViewers, &startedAt, &updatedAt,
+		err := rows.Scan(&streamID, &streamStatus, &currentViewers, &startedAt, &updatedAt,
 			&bufferState, &qualityTier, &primaryWidth, &primaryHeight,
 			&primaryFps, &primaryCodec, &primaryBitrate, &hasIssues, &issuesDescription)
 		if err != nil {
@@ -1020,7 +793,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		}
 
 		resp := &pb.StreamStatusResponse{
-			StreamId:       internalName,
+			StreamId:       streamID,
 			Status:         streamStatus,
 			CurrentViewers: int64(currentViewers),
 		}
@@ -1046,7 +819,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		resp.HasIssues = hasIssues
 		resp.IssuesDescription = issuesDescription
 
-		statuses[internalName] = resp
+		statuses[streamID] = resp
 	}
 
 	return &pb.StreamsStatusResponse{Statuses: statuses}, nil
@@ -1062,6 +835,13 @@ func joinStrings(strs []string, sep string) string {
 		result += sep + strs[i]
 	}
 	return result
+}
+
+func nullInt64Value(v sql.NullInt64) int64 {
+	if v.Valid {
+		return v.Int64
+	}
+	return 0
 }
 
 // ============================================================================
@@ -1086,26 +866,26 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 
 	// Start count query in parallel
 	streamID := req.GetStreamId()
-	countQuery := `SELECT count(*) FROM periscope.viewer_sessions FINAL WHERE tenant_id = ? AND connected_at >= ? AND connected_at <= ?`
+	countQuery := `SELECT count(*) FROM periscope.viewer_sessions_current FINAL WHERE tenant_id = ? AND connected_at >= ? AND connected_at <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
 	if streamID != "" {
-		countQuery += " AND internal_name = ?"
+		countQuery += " AND stream_id = ?"
 		countArgs = append(countArgs, streamID)
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
-	// Query viewer_sessions with correct column names
+	// Query viewer_sessions_current with correct column names
 	query := `
-		SELECT session_id, connected_at, internal_name, node_id,
+		SELECT session_id, connected_at, disconnected_at, stream_id, node_id,
 			connector, country_code, city,
 			latitude, longitude, session_duration, bytes_transferred
-		FROM periscope.viewer_sessions FINAL
+		FROM periscope.viewer_sessions_current FINAL
 		WHERE tenant_id = ? AND connected_at >= ? AND connected_at <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
 	if streamID != "" {
-		query += " AND internal_name = ?"
+		query += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
 
@@ -1128,11 +908,12 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 	for rows.Next() {
 		var session pb.ViewerSession
 		var connectedAt time.Time
+		var disconnectedAt *time.Time
 		var sessionDuration uint32
 		var bytesTransferred uint64
 
 		err := rows.Scan(
-			&session.SessionId, &connectedAt, &session.InternalName, &session.NodeId,
+			&session.SessionId, &connectedAt, &disconnectedAt, &session.StreamId, &session.NodeId,
 			&session.Connector, &session.CountryCode, &session.City,
 			&session.Latitude, &session.Longitude, &sessionDuration, &bytesTransferred,
 		)
@@ -1143,6 +924,10 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 
 		session.TenantId = tenantID
 		session.Timestamp = timestamppb.New(connectedAt)
+		session.ConnectedAt = timestamppb.New(connectedAt)
+		if disconnectedAt != nil && !disconnectedAt.IsZero() {
+			session.DisconnectedAt = timestamppb.New(*disconnectedAt)
+		}
 		session.DurationSeconds = int64(sessionDuration)
 		session.BytesDown = int64(bytesTransferred)
 		session.BytesUp = 0
@@ -1206,25 +991,23 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.
 		clickhouseInterval = "5 MINUTE"
 	}
 
-	// Query stream_events.total_viewers - this is the actual viewer count logged by Foghorn
-	// on every StreamLifecycleUpdate event. It's NOT an event count, it's the concurrent viewer count.
+	// Query stream_viewer_5m rollups instead of raw event logs.
 	query := fmt.Sprintf(`
 		SELECT
-			toStartOfInterval(timestamp, INTERVAL %s) as bucket,
-			internal_name,
-			max(total_viewers) as viewer_count
-		FROM periscope.stream_events
-		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
-		AND total_viewers IS NOT NULL
+			toStartOfInterval(timestamp_5m, INTERVAL %s) as bucket,
+			stream_id,
+			max(max_viewers) as viewer_count
+		FROM periscope.stream_viewer_5m
+		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`, clickhouseInterval)
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if stream := req.GetStream(); stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
-	query += " GROUP BY bucket, internal_name ORDER BY bucket ASC"
+	query += " GROUP BY bucket, stream_id ORDER BY bucket ASC"
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1235,18 +1018,18 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.
 	var buckets []*pb.ViewerCountBucket
 	for rows.Next() {
 		var bucket time.Time
-		var internalName string
+		var streamID string
 		var viewerCount int32
 
-		if err := rows.Scan(&bucket, &internalName, &viewerCount); err != nil {
+		if err := rows.Scan(&bucket, &streamID, &viewerCount); err != nil {
 			s.logger.WithError(err).Info("Failed to scan viewer count bucket row")
 			continue
 		}
 
 		buckets = append(buckets, &pb.ViewerCountBucket{
-			Timestamp:    timestamppb.New(bucket),
-			InternalName: internalName,
-			ViewerCount:  viewerCount,
+			Timestamp:   timestamppb.New(bucket),
+			StreamId:    streamID,
+			ViewerCount: viewerCount,
 		})
 	}
 
@@ -1271,19 +1054,19 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		topN = 10
 	}
 
-	// Build base WHERE clause - query connection_events for geographic viewer distribution
-	whereClause := "WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND event_type = 'connect'"
+	// Build base WHERE clause - use viewer_hours_hourly MV (no raw events)
+	whereClause := "WHERE tenant_id = ? AND hour >= ? AND hour <= ?"
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if stream := req.GetStream(); stream != "" {
-		whereClause += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID := req.GetStreamId(); streamID != "" {
+		whereClause += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
-	// Query for country aggregates - count distinct sessions per country
+	// Query for country aggregates - distinct viewers per country from MV
 	countryQuery := fmt.Sprintf(`
-		SELECT country_code, count(DISTINCT session_id) as cnt
-		FROM periscope.connection_events
+		SELECT country_code, uniqMerge(unique_viewers) as cnt
+		FROM periscope.viewer_hours_hourly
 		%s AND country_code != ''
 		GROUP BY country_code
 		ORDER BY cnt DESC
@@ -1318,10 +1101,11 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		}
 	}
 
-	// Query for city aggregates - count distinct sessions per city
+	// Query for city aggregates from viewer_city_hourly MV
 	cityQuery := fmt.Sprintf(`
-		SELECT city, country_code, count(DISTINCT session_id) as cnt, any(latitude) as lat, any(longitude) as lon
-		FROM periscope.connection_events
+		SELECT city, country_code, uniqMerge(unique_viewers) as cnt,
+		       anyMerge(latitude) as lat, anyMerge(longitude) as lon
+		FROM periscope.viewer_city_hourly
 		%s AND city != ''
 		GROUP BY city, country_code
 		ORDER BY cnt DESC
@@ -1356,22 +1140,42 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 		})
 	}
 
-	// Query for unique counts
+	// Unique cities from MV (city + country)
+	var uniqueCities int32
+	uniqueCityQuery := fmt.Sprintf(`
+		SELECT uniqExact(city, country_code)
+		FROM periscope.viewer_city_hourly
+		%s AND city != ''
+	`, whereClause)
+	if err := s.clickhouse.QueryRowContext(ctx, uniqueCityQuery, args...).Scan(&uniqueCities); err != nil {
+		s.logger.WithError(err).Warn("Failed to get unique city counts")
+	}
+
+	// Query for unique countries and total viewers from MV
 	uniqueQuery := fmt.Sprintf(`
-		SELECT uniq(country_code), uniq(city)
-		FROM periscope.connection_events
-		%s
+		SELECT uniqExact(country_code), uniqMerge(unique_viewers)
+		FROM periscope.viewer_hours_hourly
+		%s AND country_code != ''
 	`, whereClause)
 
-	var uniqueCountries, uniqueCities int32
-	if err := s.clickhouse.QueryRowContext(ctx, uniqueQuery, args...).Scan(&uniqueCountries, &uniqueCities); err != nil {
+	var uniqueCountries sql.NullInt64
+	var totalViewersAll sql.NullInt64
+	if err := s.clickhouse.QueryRowContext(ctx, uniqueQuery, args...).Scan(&uniqueCountries, &totalViewersAll); err != nil {
 		s.logger.WithError(err).Warn("Failed to get unique geographic counts")
+	}
+	if totalViewersAll.Valid {
+		totalViewers = int32(totalViewersAll.Int64)
+	}
+
+	uniqueCountriesVal := int32(0)
+	if uniqueCountries.Valid {
+		uniqueCountriesVal = int32(uniqueCountries.Int64)
 	}
 
 	return &pb.GetGeographicDistributionResponse{
 		TopCountries:    topCountries,
 		TopCities:       topCities,
-		UniqueCountries: uniqueCountries,
+		UniqueCountries: uniqueCountriesVal,
 		UniqueCities:    uniqueCities,
 		TotalViewers:    totalViewers,
 	}, nil
@@ -1387,9 +1191,9 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	internalName := req.GetInternalName()
-	if internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name required")
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1405,15 +1209,15 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 	// Start count query in parallel
 	countCh := s.countAsync(ctx, `
 		SELECT count(*) FROM track_list_events
-		WHERE tenant_id = ? AND internal_name = ? AND timestamp >= ? AND timestamp <= ?
-	`, tenantID, internalName, startTime, endTime)
+		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
+	`, tenantID, streamID, startTime, endTime)
 
 	query := `
-		SELECT event_id, timestamp, node_id, track_list, track_count, internal_name
+		SELECT event_id, timestamp, node_id, track_list, track_count, stream_id
 		FROM track_list_events
-		WHERE tenant_id = ? AND internal_name = ? AND timestamp >= ? AND timestamp <= ?
+		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
-	args := []interface{}{tenantID, internalName, startTime, endTime}
+	args := []interface{}{tenantID, streamID, startTime, endTime}
 
 	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "event_id")
 	if keysetCond != "" {
@@ -1436,9 +1240,9 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 		var ts time.Time
 		var trackListJSON string
 		var eventID uuid.UUID
-		var streamName string
+		var streamID string
 
-		err := rows.Scan(&eventID, &ts, &event.NodeId, &trackListJSON, &event.TrackCount, &streamName)
+		err := rows.Scan(&eventID, &ts, &event.NodeId, &trackListJSON, &event.TrackCount, &streamID)
 		if err != nil {
 			continue
 		}
@@ -1446,7 +1250,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 		event.Id = eventID.String()
 		event.Timestamp = timestamppb.New(ts)
 		event.TrackList = trackListJSON
-		event.Stream = streamName
+		event.StreamId = streamID
 
 		var tracks []map[string]interface{}
 		if err := json.Unmarshal([]byte(trackListJSON), &tracks); err == nil {
@@ -1513,29 +1317,29 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 	}
 
 	// Start count query in parallel
-	stream := req.GetStream()
-	countQuery := `SELECT count(*) FROM periscope.connection_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
+	streamID := req.GetStreamId()
+	countQuery := `SELECT count(*) FROM periscope.viewer_connection_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if stream != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, stream)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT event_id, timestamp, tenant_id, internal_name, session_id,
+		SELECT event_id, timestamp, tenant_id, stream_id, session_id,
 		       connection_addr, connector, node_id, country_code, city,
 		       latitude, longitude,
 		       client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
-		       event_type, session_duration, bytes_transferred
-		FROM periscope.connection_events
+		       event_type, session_duration, bytes_transferred, request_url
+		FROM periscope.viewer_connection_events
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
 	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "event_id")
@@ -1561,12 +1365,13 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 		var clientBucketH3, nodeBucketH3 *uint64
 		var clientBucketRes, nodeBucketRes *uint8
 
+		var requestURL *string
 		err := rows.Scan(
-			&event.EventId, &ts, &event.TenantId, &event.InternalName, &event.SessionId,
+			&event.EventId, &ts, &event.TenantId, &event.StreamId, &event.SessionId,
 			&event.ConnectionAddr, &event.Connector, &event.NodeId, &event.CountryCode, &event.City,
 			&event.Latitude, &event.Longitude,
 			&clientBucketH3, &clientBucketRes, &nodeBucketH3, &nodeBucketRes,
-			&event.EventType, &event.SessionDurationSeconds, &event.BytesTransferred,
+			&event.EventType, &event.SessionDurationSeconds, &event.BytesTransferred, &requestURL,
 		)
 		if err != nil {
 			continue
@@ -1596,6 +1401,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 		}
 
 		event.Timestamp = timestamppb.New(ts)
+		event.RequestUrl = requestURL
 		events = append(events, &event)
 	}
 
@@ -1645,7 +1451,7 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 
 	// Start count query in parallel
 	nodeID := req.GetNodeId()
-	countQuery := `SELECT count(*) FROM node_metrics WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
+	countQuery := `SELECT count(*) FROM node_metrics_samples WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
 	if nodeID != "" {
 		countQuery += " AND node_id = ?"
@@ -1654,12 +1460,12 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp, node_id, cpu_usage, ram_max, ram_current,
+		SELECT timestamp, cluster_id, node_id, cpu_usage, ram_max, ram_current,
 		       shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
 		       bandwidth_in, bandwidth_out, up_speed, down_speed,
 		       connections_current, stream_count, is_healthy,
 		       latitude, longitude
-		FROM node_metrics
+		FROM node_metrics_samples
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
@@ -1669,13 +1475,13 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 		args = append(args, nodeID)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "node_id")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "concat(cluster_id, ':', node_id)")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp", "node_id")
+	query += buildOrderBy(params, "timestamp", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -1688,9 +1494,10 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 	for rows.Next() {
 		var m pb.NodeMetric
 		var ts time.Time
+		var clusterID string
 
 		err := rows.Scan(
-			&ts, &m.NodeId, &m.CpuUsage, &m.RamMax, &m.RamCurrent,
+			&ts, &clusterID, &m.NodeId, &m.CpuUsage, &m.RamMax, &m.RamCurrent,
 			&m.ShmTotalBytes, &m.ShmUsedBytes, &m.DiskTotalBytes, &m.DiskUsedBytes,
 			&m.BandwidthIn, &m.BandwidthOut, &m.UpSpeed, &m.DownSpeed,
 			&m.ConnectionsCurrent, &m.StreamCount, &m.IsHealthy,
@@ -1701,7 +1508,8 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 		}
 
 		// Generate composite ID for pagination
-		m.Id = fmt.Sprintf("%s_%s", ts.Format(time.RFC3339), m.NodeId)
+		m.Id = fmt.Sprintf("%s:%s", clusterID, m.NodeId)
+		m.ClusterId = clusterID
 		m.Timestamp = timestamppb.New(ts)
 		metrics = append(metrics, &m)
 	}
@@ -1720,8 +1528,8 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 
 	var startCursor, endCursor string
 	if len(metrics) > 0 {
-		startCursor = pagination.EncodeCursor(metrics[0].Timestamp.AsTime(), metrics[0].NodeId)
-		endCursor = pagination.EncodeCursor(metrics[len(metrics)-1].Timestamp.AsTime(), metrics[len(metrics)-1].NodeId)
+		startCursor = pagination.EncodeCursor(metrics[0].Timestamp.AsTime(), metrics[0].Id)
+		endCursor = pagination.EncodeCursor(metrics[len(metrics)-1].Timestamp.AsTime(), metrics[len(metrics)-1].Id)
 	}
 
 	return &pb.GetNodeMetricsResponse{
@@ -1731,9 +1539,10 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 }
 
 func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeMetrics1HRequest) (*pb.GetNodeMetrics1HResponse, error) {
-	// Note: node_metrics_1h is NOT tenant-scoped - it's infrastructure-level aggregation
-	// The materialized view aggregates from node_metrics which has tenant_id, but the
-	// hourly rollup is per-node across all tenants (nodes are shared infrastructure)
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
 	if err != nil {
@@ -1747,8 +1556,8 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 
 	// Start count query in parallel
 	nodeID := req.GetNodeId()
-	countQuery := `SELECT count(*) FROM periscope.node_metrics_1h WHERE timestamp_1h >= ? AND timestamp_1h <= ?`
-	countArgs := []interface{}{startTime, endTime}
+	countQuery := `SELECT count(*) FROM periscope.node_metrics_1h WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?`
+	countArgs := []interface{}{tenantID, startTime, endTime}
 	if nodeID != "" {
 		countQuery += " AND node_id = ?"
 		countArgs = append(countArgs, nodeID)
@@ -1757,33 +1566,25 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 
 	// Query uses actual schema columns (no id column)
 	query := `
-		SELECT timestamp_1h, node_id, avg_cpu, peak_cpu, avg_memory, peak_memory,
+		SELECT timestamp_1h, cluster_id, node_id, avg_cpu, peak_cpu, avg_memory, peak_memory,
 		       avg_disk, peak_disk, avg_shm, peak_shm, total_bandwidth_in, total_bandwidth_out, was_healthy
 		FROM periscope.node_metrics_1h
-		WHERE timestamp_1h >= ? AND timestamp_1h <= ?
+		WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?
 	`
-	args := []interface{}{startTime, endTime}
+	args := []interface{}{tenantID, startTime, endTime}
 
 	if nodeID != "" {
 		query += " AND node_id = ?"
 		args = append(args, nodeID)
 	}
 
-	// Note: This table has no unique ID column, so keyset uses timestamp only
-	if params.Cursor != nil {
-		if params.Direction == pagination.Backward {
-			query += " AND timestamp_1h > ?"
-		} else {
-			query += " AND timestamp_1h < ?"
-		}
-		args = append(args, params.Cursor.Timestamp)
+	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp_1h", "concat(cluster_id, ':', node_id)")
+	if keysetCond != "" {
+		query += keysetCond
+		args = append(args, keysetArgs...)
 	}
 
-	if params.Direction == pagination.Backward {
-		query += " ORDER BY timestamp_1h ASC, node_id"
-	} else {
-		query += " ORDER BY timestamp_1h DESC, node_id"
-	}
+	query += buildOrderBy(params, "timestamp_1h", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -1796,10 +1597,11 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 	for rows.Next() {
 		var m pb.NodeMetricHourly
 		var ts time.Time
+		var clusterID string
 		var wasHealthy uint8
 
 		err := rows.Scan(
-			&ts, &m.NodeId, &m.AvgCpu, &m.PeakCpu, &m.AvgMemory, &m.PeakMemory,
+			&ts, &clusterID, &m.NodeId, &m.AvgCpu, &m.PeakCpu, &m.AvgMemory, &m.PeakMemory,
 			&m.AvgDisk, &m.PeakDisk, &m.AvgShm, &m.PeakShm, &m.TotalBandwidthIn, &m.TotalBandwidthOut, &wasHealthy,
 		)
 		if err != nil {
@@ -1809,7 +1611,8 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 
 		m.Timestamp = timestamppb.New(ts)
 		m.WasHealthy = wasHealthy == 1
-		m.Id = fmt.Sprintf("%d-%s", ts.Unix(), m.NodeId)
+		m.Id = fmt.Sprintf("%s:%s", clusterID, m.NodeId)
+		m.ClusterId = clusterID
 		metrics = append(metrics, &m)
 	}
 
@@ -1837,7 +1640,65 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 	}, nil
 }
 
-// GetLiveNodes returns current state of nodes from live_nodes (ReplacingMergeTree)
+// GetNodeMetricsAggregated returns per-node aggregates for the requested time range.
+func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.GetNodeMetricsAggregatedRequest) (*pb.GetNodeMetricsAggregatedResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT cluster_id, node_id,
+		       avg(avg_cpu), avg(avg_memory), avg(avg_disk), avg(avg_shm),
+		       sum(total_bandwidth_in), sum(total_bandwidth_out),
+		       count()
+		FROM periscope.node_metrics_1h
+		WHERE tenant_id = ? AND timestamp_1h >= ? AND timestamp_1h <= ?
+	`
+	args := []interface{}{tenantID, startTime, endTime}
+	if req.GetNodeId() != "" {
+		query += " AND node_id = ?"
+		args = append(args, req.GetNodeId())
+	}
+	query += " GROUP BY cluster_id, node_id ORDER BY cluster_id, node_id"
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var metrics []*pb.NodeMetricsAggregated
+	for rows.Next() {
+		var m pb.NodeMetricsAggregated
+		var sampleCount uint64
+		if err := rows.Scan(
+			&m.ClusterId,
+			&m.NodeId,
+			&m.AvgCpu,
+			&m.AvgMemory,
+			&m.AvgDisk,
+			&m.AvgShm,
+			&m.TotalBandwidthIn,
+			&m.TotalBandwidthOut,
+			&sampleCount,
+		); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan node_metrics_1h aggregate row")
+			continue
+		}
+		m.SampleCount = uint32(sampleCount)
+		metrics = append(metrics, &m)
+	}
+
+	return &pb.GetNodeMetricsAggregatedResponse{Metrics: metrics}, nil
+}
+
+// GetLiveNodes returns current state of nodes from node_state_current (ReplacingMergeTree)
 // This is the source of truth for real-time node status - simple SELECT, no time-series
 // Supports multi-tenant access for subscribed clusters via related_tenant_ids
 func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodesRequest) (*pb.GetLiveNodesResponse, error) {
@@ -1856,13 +1717,13 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 	}
 	inClause := fmt.Sprintf("tenant_id IN (%s)", strings.Join(placeholders, ", "))
 
-	// Simple query against live_nodes - no JOINs, no aggregations
+	// Simple query against node_state_current - no JOINs, no aggregations
 	query := fmt.Sprintf(`
 		SELECT tenant_id, node_id, cpu_percent, ram_used_bytes, ram_total_bytes,
 		       disk_used_bytes, disk_total_bytes, up_speed, down_speed,
 		       active_streams, is_healthy, latitude, longitude, location,
 		       metadata, updated_at
-		FROM periscope.live_nodes FINAL
+		FROM periscope.node_state_current FINAL
 		WHERE %s
 	`, inClause)
 	args := []interface{}{}
@@ -1879,7 +1740,7 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to query live_nodes")
+		s.logger.WithError(err).Error("Failed to query node_state_current")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	defer rows.Close()
@@ -1898,7 +1759,7 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 			&metadataJSON, &updatedAt,
 		)
 		if err != nil {
-			s.logger.WithError(err).Warn("Failed to scan live_nodes row")
+			s.logger.WithError(err).Warn("Failed to scan node_state_current row")
 			continue
 		}
 
@@ -1953,16 +1814,16 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	inClause := fmt.Sprintf("tenant_id IN (%s)", strings.Join(placeholders, ", "))
 
 	// Count total for pagination
-	countQuery := fmt.Sprintf(`SELECT count(*) FROM periscope.routing_events WHERE %s AND timestamp >= ? AND timestamp <= ?`, inClause)
+	countQuery := fmt.Sprintf(`SELECT count(*) FROM periscope.routing_decisions WHERE %s AND timestamp >= ? AND timestamp <= ?`, inClause)
 	countArgs := []interface{}{}
 	for _, id := range allIDs {
 		countArgs = append(countArgs, id)
 	}
 	countArgs = append(countArgs, startTime, endTime)
 
-	if stream := req.GetStream(); stream != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, stream)
+	if streamID := req.GetStreamId(); streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	// Dual-tenant filtering (RFC: routing-events-dual-tenant-attribution)
 	if streamTenantID := req.GetStreamTenantId(); streamTenantID != "" {
@@ -1981,11 +1842,12 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 
 	// Main query with all geographic columns from ClickHouse schema
 	query := fmt.Sprintf(`
-		SELECT timestamp, internal_name, selected_node, status, details, score,
+		SELECT timestamp, stream_id, selected_node, status, details, score,
 		       client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
 		       node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
-		       selected_node_id, routing_distance_km, tenant_id, stream_tenant_id, cluster_id
-		FROM periscope.routing_events
+		       selected_node_id, routing_distance_km, tenant_id, stream_tenant_id, cluster_id,
+		       latency_ms, candidates_count, event_type, source
+		FROM periscope.routing_decisions
 		WHERE %s AND timestamp >= ? AND timestamp <= ?
 	`, inClause)
 
@@ -1995,9 +1857,9 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	}
 	args = append(args, startTime, endTime)
 
-	if stream := req.GetStream(); stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
 	// Dual-tenant filtering (RFC: routing-events-dual-tenant-attribution)
@@ -2011,22 +1873,22 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	}
 
 	if params.Cursor != nil {
-		// Cursor ID contains "internal_name|selected_node"
+		// Cursor ID contains "stream_id|selected_node"
 		parts := strings.SplitN(params.Cursor.ID, "|", 2)
 		if len(parts) == 2 {
 			if params.Direction == pagination.Backward {
-				query += " AND (timestamp, internal_name, selected_node) > (?, ?, ?)"
+				query += " AND (timestamp, stream_id, selected_node) > (?, ?, ?)"
 			} else {
-				query += " AND (timestamp, internal_name, selected_node) < (?, ?, ?)"
+				query += " AND (timestamp, stream_id, selected_node) < (?, ?, ?)"
 			}
 			args = append(args, params.Cursor.Timestamp, parts[0], parts[1])
 		}
 	}
 
 	if params.Direction == pagination.Backward {
-		query += " ORDER BY timestamp ASC, internal_name ASC, selected_node ASC"
+		query += " ORDER BY timestamp ASC, stream_id ASC, selected_node ASC"
 	} else {
-		query += " ORDER BY timestamp DESC, internal_name DESC, selected_node DESC"
+		query += " ORDER BY timestamp DESC, stream_id DESC, selected_node DESC"
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
@@ -2039,7 +1901,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	var events []*pb.RoutingEvent
 	for rows.Next() {
 		var ts time.Time
-		var streamName, selectedNode, statusStr, rowTenantID string
+		var streamID, selectedNode, statusStr, rowTenantID string
 		var details *string
 		var score *int64
 		var clientCountry *string
@@ -2051,20 +1913,25 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 		var routingDistance *float64
 		var streamTenantID *string
 		var clusterID string
+		var latencyMs *float32
+		var candidatesCount *int32
+		var eventType *string
+		var source *string
 
-		err := rows.Scan(&ts, &streamName, &selectedNode, &statusStr, &details, &score,
+		err := rows.Scan(&ts, &streamID, &selectedNode, &statusStr, &details, &score,
 			&clientCountry, &clientLat, &clientLon, &clientBucketH3, &clientBucketRes,
 			&nodeLat, &nodeLon, &nodeName, &nodeBucketH3, &nodeBucketRes,
-			&selectedNodeID, &routingDistance, &rowTenantID, &streamTenantID, &clusterID)
+			&selectedNodeID, &routingDistance, &rowTenantID, &streamTenantID, &clusterID,
+			&latencyMs, &candidatesCount, &eventType, &source)
 		if err != nil {
 			s.logger.WithError(err).Info("Failed to scan routing event row")
 			continue
 		}
 
 		event := &pb.RoutingEvent{
-			Id:           fmt.Sprintf("%d-%s-%s", ts.UnixNano(), streamName, selectedNode),
+			Id:           fmt.Sprintf("%d-%s-%s", ts.UnixNano(), streamID, selectedNode),
 			Timestamp:    timestamppb.New(ts),
-			Stream:       streamName,
+			StreamId:     streamID,
 			SelectedNode: selectedNode,
 			Status:       statusStr,
 			TenantId:     rowTenantID,
@@ -2076,6 +1943,18 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 		if score != nil {
 			scoreInt32 := int32(*score)
 			event.Score = &scoreInt32
+		}
+		if latencyMs != nil {
+			event.LatencyMs = *latencyMs
+		}
+		if candidatesCount != nil {
+			event.CandidatesCount = *candidatesCount
+		}
+		if eventType != nil {
+			event.EventType = eventType
+		}
+		if source != nil {
+			event.Source = source
 		}
 		if clientCountry != nil {
 			event.ClientCountry = clientCountry
@@ -2147,8 +2026,8 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	if len(events) > 0 {
 		first := events[0]
 		last := events[len(events)-1]
-		startCursor = pagination.EncodeCursor(first.Timestamp.AsTime(), first.Stream+"|"+first.SelectedNode)
-		endCursor = pagination.EncodeCursor(last.Timestamp.AsTime(), last.Stream+"|"+last.SelectedNode)
+		startCursor = pagination.EncodeCursor(first.Timestamp.AsTime(), first.StreamId+"|"+first.SelectedNode)
+		endCursor = pagination.EncodeCursor(last.Timestamp.AsTime(), last.StreamId+"|"+last.SelectedNode)
 	}
 
 	return &pb.GetRoutingEventsResponse{
@@ -2167,20 +2046,19 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	// Parse time range from request, default to last 30 days if not provided
+	// Parse time range from request (defaults to last 24h via validateTimeRangeProto)
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
 	if err != nil {
-		// Default to last 30 days if no valid time range provided
-		endTime = time.Now()
-		startTime = endTime.AddDate(0, 0, -30)
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
 	}
 
 	resp := &pb.GetPlatformOverviewResponse{
 		TenantId:    tenantID,
 		GeneratedAt: timestamppb.Now(),
+		TimeRange:   &pb.TimeRange{Start: timestamppb.New(startTime), End: timestamppb.New(endTime)},
 	}
 
-	// Get current stream stats from live_streams (real-time snapshot)
+	// Get current stream stats from stream_state_current (real-time snapshot)
 	liveQuery := `
 		SELECT
 			count() as total_streams,
@@ -2189,7 +2067,7 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 			avg(current_viewers) as avg_viewers,
 			sum(uploaded_bytes) as total_upload_bytes,
 			sum(downloaded_bytes) as total_download_bytes
-		FROM live_streams FINAL
+		FROM stream_state_current FINAL
 		WHERE tenant_id = ?
 	`
 
@@ -2198,22 +2076,22 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		&resp.TotalUploadBytes, &resp.TotalDownloadBytes,
 	)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to get platform overview from live_streams")
+		s.logger.WithError(err).Error("Failed to get platform overview from stream_state_current")
 	}
 
-	// Get peak bandwidth from client_metrics_5m (actual bandwidth rate, not cumulative bytes)
+	// Get peak bandwidth from client_qoe_5m (actual bandwidth rate, not cumulative bytes)
 	peakBwQuery := `
 		SELECT COALESCE(max(avg_bw_out), 0) as peak_bandwidth
-		FROM client_metrics_5m
+		FROM client_qoe_5m
 		WHERE tenant_id = ?
 		AND timestamp_5m BETWEEN ? AND ?
 	`
 	err = s.clickhouse.QueryRowContext(ctx, peakBwQuery, tenantID, startTime, endTime).Scan(&resp.PeakBandwidth)
 	if err != nil {
-		s.logger.WithError(err).Info("Failed to get peak bandwidth from client_metrics_5m")
+		s.logger.WithError(err).Info("Failed to get peak bandwidth from client_qoe_5m")
 	}
 
-	// Get historical metrics from tenant_viewer_daily (pre-aggregated from connection_events)
+	// Get historical metrics from tenant_viewer_daily (pre-aggregated from viewer_connection_events)
 	historicalQuery := `
 		SELECT
 			COALESCE(sum(egress_gb), 0) as egress_gb,
@@ -2239,14 +2117,14 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		s.logger.WithError(err).Info("Failed to get historical metrics from tenant_viewer_daily")
 	}
 
-	// Get ingest hours (total time streams were live) from stream_events
+	// Get ingest hours (total time streams were live) from stream_event_log
 	// Counts distinct stream-hour buckets as a proxy for streaming hours
 	ingestQuery := `
 		SELECT COALESCE(
-			countDistinct(concat(internal_name, toString(toStartOfHour(timestamp)))),
+			countDistinct(concat(toString(stream_id), toString(toStartOfHour(timestamp)))),
 			0
 		) as stream_hours
-		FROM periscope.stream_events
+		FROM periscope.stream_event_log
 		WHERE tenant_id = ?
 		AND timestamp BETWEEN ? AND ?
 		AND total_viewers IS NOT NULL
@@ -2258,13 +2136,13 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 		resp.StreamHours = streamHours
 		resp.IngestHours = streamHours // Alias for clarity
 	} else {
-		s.logger.WithError(err).Info("Failed to get stream hours from stream_events")
+		s.logger.WithError(err).Info("Failed to get stream hours from stream_event_log")
 	}
 
-	// Get true peak concurrent viewers (max at any instant) from stream_events
+	// Get true peak concurrent viewers (max at any instant) from stream_event_log
 	peakConcurrentQuery := `
 		SELECT COALESCE(max(total_viewers), 0) as peak_concurrent
-		FROM periscope.stream_events
+		FROM periscope.stream_event_log
 		WHERE tenant_id = ?
 		AND timestamp BETWEEN ? AND ?
 		AND total_viewers IS NOT NULL
@@ -2275,11 +2153,11 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 	if err == nil {
 		resp.PeakConcurrentViewers = peakConcurrent
 	} else {
-		s.logger.WithError(err).Info("Failed to get peak concurrent viewers from stream_events")
+		s.logger.WithError(err).Info("Failed to get peak concurrent viewers from stream_event_log")
 	}
 
 	// Get total views count from tenant_analytics_daily (pre-computed rollup)
-	// This table aggregates connection_events by day for efficient dashboard queries
+	// This table aggregates viewer_connection_events by day for efficient dashboard queries
 	totalViewsQuery := `
 		SELECT COALESCE(sum(total_views), 0) as total_views
 		FROM periscope.tenant_analytics_daily
@@ -2319,13 +2197,17 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 	}
 
 	// Start count query in parallel
-	internalName := req.GetInternalName()
+	streamID := req.GetStreamId()
 	stage := req.GetStage()
-	countQuery := `SELECT count(*) FROM periscope.clip_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
-	countArgs := []interface{}{tenantID, startTime, endTime}
-	if internalName != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, internalName)
+	contentType := req.GetContentType()
+	if contentType == "" {
+		contentType = "clip"
+	}
+	countQuery := `SELECT count(*) FROM periscope.artifact_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND content_type = ?`
+	countArgs := []interface{}{tenantID, startTime, endTime, contentType}
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	if stage != "" {
 		countQuery += " AND stage = ?"
@@ -2334,16 +2216,16 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT request_id, timestamp, internal_name, stage, content_type,
-		       start_unix, stop_unix, ingest_node_id, percent, message, file_path, s3_url, size_bytes
-		FROM periscope.clip_events
-		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
+		SELECT request_id, timestamp, stream_id, stage, content_type,
+		       start_unix, stop_unix, ingest_node_id, percent, message, file_path, s3_url, size_bytes, expires_at
+		FROM periscope.artifact_events
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND content_type = ?
 	`
-	args := []interface{}{tenantID, startTime, endTime}
+	args := []interface{}{tenantID, startTime, endTime, contentType}
 
-	if internalName != "" {
-		query += " AND internal_name = ?"
-		args = append(args, internalName)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
 	if stage != "" {
@@ -2374,10 +2256,11 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 		var startUnix, stopUnix *int64
 		var percent *uint32
 		var sizeBytes *uint64
+		var expiresAt *int64
 
 		err := rows.Scan(
-			&event.RequestId, &ts, &event.InternalName, &event.Stage, &contentType,
-			&startUnix, &stopUnix, &ingestNodeID, &percent, &message, &filePath, &s3URL, &sizeBytes,
+			&event.RequestId, &ts, &event.StreamId, &event.Stage, &contentType,
+			&startUnix, &stopUnix, &ingestNodeID, &percent, &message, &filePath, &s3URL, &sizeBytes, &expiresAt,
 		)
 		if err != nil {
 			continue
@@ -2393,6 +2276,7 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 		event.FilePath = filePath
 		event.S3Url = s3URL
 		event.SizeBytes = sizeBytes
+		event.ExpiresAt = expiresAt
 
 		events = append(events, &event)
 	}
@@ -2434,11 +2318,11 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 	}
 
 	query := `
-		SELECT tenant_id, request_id, internal_name, content_type, stage,
+		SELECT tenant_id, request_id, stream_id, content_type, stage,
 		       progress_percent, error_message, requested_at, started_at, completed_at,
 		       clip_start_unix, clip_stop_unix, segment_count, manifest_path,
-		       file_path, s3_url, size_bytes, processing_node_id, updated_at
-		FROM live_artifacts FINAL
+		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at
+		FROM artifact_state_current FINAL
 		WHERE tenant_id = ? AND request_id = ?
 	`
 
@@ -2449,13 +2333,14 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 	var segmentCount *uint32
 	var sizeBytes *uint64
 	var requestedAt, updatedAt time.Time
+	var expiresAt *time.Time
 	var progressPercent uint8
 
 	err := s.clickhouse.QueryRowContext(ctx, query, tenantID, requestID).Scan(
-		&artifact.TenantId, &artifact.RequestId, &artifact.InternalName, &artifact.ContentType, &artifact.Stage,
+		&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 		&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 		&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
-		&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt,
+		&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt, &expiresAt,
 	)
 	if err != nil {
 		s.logger.WithError(err).WithField("request_id", requestID).Info("Artifact not found")
@@ -2480,6 +2365,9 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 	artifact.SizeBytes = sizeBytes
 	artifact.ProcessingNodeId = processingNodeID
 	artifact.UpdatedAt = timestamppb.New(updatedAt)
+	if expiresAt != nil {
+		artifact.ExpiresAt = timestamppb.New(*expiresAt)
+	}
 
 	return &pb.GetArtifactStateResponse{
 		Artifact: &artifact,
@@ -2499,16 +2387,16 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 	}
 
 	// Start count query in parallel
-	internalName := req.GetInternalName()
+	streamID := req.GetStreamId()
 	contentType := req.GetContentType()
 	stage := req.GetStage()
 	requestIDs := req.GetRequestIds()
 
-	countQuery := `SELECT count(*) FROM live_artifacts FINAL WHERE tenant_id = ?`
+	countQuery := `SELECT count(*) FROM artifact_state_current FINAL WHERE tenant_id = ?`
 	countArgs := []interface{}{tenantID}
-	if internalName != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, internalName)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	if contentType != "" {
 		countQuery += " AND content_type = ?"
@@ -2525,18 +2413,18 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT tenant_id, request_id, internal_name, content_type, stage,
+		SELECT tenant_id, request_id, stream_id, content_type, stage,
 		       progress_percent, error_message, requested_at, started_at, completed_at,
 		       clip_start_unix, clip_stop_unix, segment_count, manifest_path,
-		       file_path, s3_url, size_bytes, processing_node_id, updated_at
-		FROM live_artifacts FINAL
+		       file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at
+		FROM artifact_state_current FINAL
 		WHERE tenant_id = ?
 	`
 	args := []interface{}{tenantID}
 
-	if internalName != "" {
-		query += " AND internal_name = ?"
-		args = append(args, internalName)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
 	if contentType != "" {
@@ -2578,13 +2466,14 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 		var segmentCount *uint32
 		var sizeBytes *uint64
 		var requestedAt, updatedAt time.Time
+		var expiresAt *time.Time
 		var progressPercent uint8
 
 		err := rows.Scan(
-			&artifact.TenantId, &artifact.RequestId, &artifact.InternalName, &artifact.ContentType, &artifact.Stage,
+			&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 			&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 			&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
-			&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt,
+			&filePath, &s3URL, &sizeBytes, &processingNodeID, &updatedAt, &expiresAt,
 		)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan artifact row")
@@ -2609,6 +2498,9 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 		artifact.SizeBytes = sizeBytes
 		artifact.ProcessingNodeId = processingNodeID
 		artifact.UpdatedAt = timestamppb.New(updatedAt)
+		if expiresAt != nil {
+			artifact.ExpiresAt = timestamppb.New(*expiresAt)
+		}
 
 		artifacts = append(artifacts, &artifact)
 	}
@@ -2658,20 +2550,20 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	stream := req.GetStream()
+	streamID := req.GetStreamId()
 
 	// Build count query
 	countQuery := `SELECT count(*) FROM stream_connection_hourly WHERE tenant_id = ? AND hour >= ? AND hour <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if stream != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, stream)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	// AggregatingMergeTree requires Merge functions to read aggregated values
 	query := `
-		SELECT hour, tenant_id, internal_name,
+		SELECT hour, tenant_id, stream_id,
 		       sumMerge(total_bytes) as total_bytes,
 		       uniqMerge(unique_viewers) as unique_viewers,
 		       countMerge(total_sessions) as total_sessions
@@ -2680,26 +2572,26 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
-	query += " GROUP BY hour, tenant_id, internal_name"
+	query += " GROUP BY hour, tenant_id, stream_id"
 
 	if params.Cursor != nil {
 		if params.Direction == pagination.Backward {
-			query = `SELECT * FROM (` + query + `) WHERE (hour, internal_name) > (?, ?)`
+			query = `SELECT * FROM (` + query + `) WHERE (hour, stream_id) > (?, ?)`
 		} else {
-			query = `SELECT * FROM (` + query + `) WHERE (hour, internal_name) < (?, ?)`
+			query = `SELECT * FROM (` + query + `) WHERE (hour, stream_id) < (?, ?)`
 		}
 		args = append(args, params.Cursor.Timestamp, params.Cursor.ID)
 	}
 
 	if params.Direction == pagination.Backward {
-		query += " ORDER BY hour ASC, internal_name"
+		query += " ORDER BY hour ASC, stream_id"
 	} else {
-		query += " ORDER BY hour DESC, internal_name"
+		query += " ORDER BY hour DESC, stream_id"
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
@@ -2712,20 +2604,20 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 	var records []*pb.StreamConnectionHourly
 	for rows.Next() {
 		var hour time.Time
-		var tenantIDStr, internalName string
+		var tenantIDStr, streamID string
 		var totalBytes, uniqueViewers, totalSessions uint64
 
-		err := rows.Scan(&hour, &tenantIDStr, &internalName, &totalBytes, &uniqueViewers, &totalSessions)
+		err := rows.Scan(&hour, &tenantIDStr, &streamID, &totalBytes, &uniqueViewers, &totalSessions)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan stream_connection_hourly row")
 			continue
 		}
 
 		records = append(records, &pb.StreamConnectionHourly{
-			Id:            fmt.Sprintf("%s_%s", hour.Format(time.RFC3339), internalName),
+			Id:            fmt.Sprintf("%s_%s", hour.Format(time.RFC3339), streamID),
 			Hour:          timestamppb.New(hour),
 			TenantId:      tenantIDStr,
-			InternalName:  internalName,
+			StreamId:      streamID,
 			TotalBytes:    totalBytes,
 			UniqueViewers: uniqueViewers,
 			TotalSessions: totalSessions,
@@ -2745,8 +2637,8 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Hour.AsTime(), records[0].InternalName)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), records[len(records)-1].InternalName)
+		startCursor = pagination.EncodeCursor(records[0].Hour.AsTime(), records[0].StreamId)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), records[len(records)-1].StreamId)
 	}
 
 	return &pb.GetStreamConnectionHourlyResponse{
@@ -2755,7 +2647,7 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 	}, nil
 }
 
-// GetClientMetrics5M returns 5-minute client metrics aggregates from client_metrics_5m MV
+// GetClientMetrics5M returns 5-minute client metrics aggregates from client_qoe_5m MV
 func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetClientMetrics5MRequest) (*pb.GetClientMetrics5MResponse, error) {
 	tenantID := getTenantID(ctx, req.GetTenantId())
 	if tenantID == "" {
@@ -2772,15 +2664,15 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	stream := req.GetStream()
+	streamID := req.GetStreamId()
 	nodeID := req.GetNodeId()
 
 	// Build count query
-	countQuery := `SELECT count(*) FROM client_metrics_5m WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
+	countQuery := `SELECT count(*) FROM client_qoe_5m WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if stream != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, stream)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	if nodeID != "" {
 		countQuery += " AND node_id = ?"
@@ -2789,16 +2681,16 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp_5m, tenant_id, internal_name, node_id, active_sessions,
+		SELECT timestamp_5m, tenant_id, stream_id, node_id, active_sessions,
 		       avg_bw_in, avg_bw_out, avg_connection_time, pkt_loss_rate
-		FROM client_metrics_5m
+		FROM client_qoe_5m
 		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
 	if nodeID != "" {
@@ -2808,24 +2700,24 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 
 	if params.Cursor != nil {
 		if params.Direction == pagination.Backward {
-			query += " AND (timestamp_5m, internal_name, node_id) > (?, ?, ?)"
+			query += " AND (timestamp_5m, stream_id, node_id) > (?, ?, ?)"
 		} else {
-			query += " AND (timestamp_5m, internal_name, node_id) < (?, ?, ?)"
+			query += " AND (timestamp_5m, stream_id, node_id) < (?, ?, ?)"
 		}
-		// Cursor ID is compound: "internal_name|node_id"
-		cursorInternalName := params.Cursor.ID
+		// Cursor ID is compound: "stream_id|node_id"
+		cursorStreamID := params.Cursor.ID
 		cursorNodeID := ""
 		if parts := strings.SplitN(params.Cursor.ID, "|", 2); len(parts) == 2 {
-			cursorInternalName = parts[0]
+			cursorStreamID = parts[0]
 			cursorNodeID = parts[1]
 		}
-		args = append(args, params.Cursor.Timestamp, cursorInternalName, cursorNodeID)
+		args = append(args, params.Cursor.Timestamp, cursorStreamID, cursorNodeID)
 	}
 
 	if params.Direction == pagination.Backward {
-		query += " ORDER BY timestamp_5m ASC, internal_name, node_id"
+		query += " ORDER BY timestamp_5m ASC, stream_id, node_id"
 	} else {
-		query += " ORDER BY timestamp_5m DESC, internal_name, node_id"
+		query += " ORDER BY timestamp_5m DESC, stream_id, node_id"
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
@@ -2838,24 +2730,24 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 	var records []*pb.ClientMetrics5M
 	for rows.Next() {
 		var timestamp time.Time
-		var tenantIDStr, internalName, nodeIDStr string
+		var tenantIDStr, streamIDStr, nodeIDStr string
 		var activeSessions uint32
 		var avgBwIn, avgBwOut float64
 		var avgConnTime float32
 		var pktLossRate sql.NullFloat64
 
-		err := rows.Scan(&timestamp, &tenantIDStr, &internalName, &nodeIDStr, &activeSessions,
+		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &nodeIDStr, &activeSessions,
 			&avgBwIn, &avgBwOut, &avgConnTime, &pktLossRate)
 		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan client_metrics_5m row")
+			s.logger.WithError(err).Error("Failed to scan client_qoe_5m row")
 			continue
 		}
 
 		record := &pb.ClientMetrics5M{
-			Id:                fmt.Sprintf("%s_%s_%s", timestamp.Format(time.RFC3339), internalName, nodeIDStr),
+			Id:                fmt.Sprintf("%s_%s_%s", timestamp.Format(time.RFC3339), streamIDStr, nodeIDStr),
 			Timestamp:         timestamppb.New(timestamp),
 			TenantId:          tenantIDStr,
-			InternalName:      internalName,
+			StreamId:          streamIDStr,
 			NodeId:            nodeIDStr,
 			ActiveSessions:    activeSessions,
 			AvgBandwidthIn:    avgBwIn,
@@ -2882,9 +2774,9 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		// Encode compound ID: "internal_name|node_id" for proper 3-tuple pagination
-		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].InternalName+"|"+records[0].NodeId)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].InternalName+"|"+records[len(records)-1].NodeId)
+		// Encode compound ID: "stream_id|node_id" for proper 3-tuple pagination
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].StreamId+"|"+records[0].NodeId)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].StreamId+"|"+records[len(records)-1].NodeId)
 	}
 
 	return &pb.GetClientMetrics5MResponse{
@@ -2910,48 +2802,50 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	stream := req.GetStream()
+	streamID := req.GetStreamId()
 
 	// Build count query
 	countQuery := `SELECT count(*) FROM quality_tier_daily WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if stream != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, stream)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	// SummingMergeTree sums numeric columns - need to SUM in query
 	query := `
-		SELECT day, tenant_id, internal_name,
-		       sum(tier_1080p_minutes), sum(tier_720p_minutes), sum(tier_480p_minutes), sum(tier_sd_minutes),
-		       any(primary_tier), sum(codec_h264_minutes), sum(codec_h265_minutes),
-		       avg(avg_bitrate), avg(avg_fps)
-		FROM quality_tier_daily
-		WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
-	`
+			SELECT day, tenant_id, stream_id,
+			       sum(tier_2160p_minutes), sum(tier_1440p_minutes), sum(tier_1080p_minutes),
+			       sum(tier_720p_minutes), sum(tier_480p_minutes), sum(tier_sd_minutes),
+			       any(primary_tier), sum(codec_h264_minutes), sum(codec_h265_minutes),
+			       sum(codec_vp9_minutes), sum(codec_av1_minutes),
+			       avg(avg_bitrate), avg(avg_fps)
+			FROM quality_tier_daily
+			WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
+		`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
-	query += " GROUP BY day, tenant_id, internal_name"
+	query += " GROUP BY day, tenant_id, stream_id"
 
 	if params.Cursor != nil {
 		if params.Direction == pagination.Backward {
-			query = `SELECT * FROM (` + query + `) WHERE (day, internal_name) > (?, ?)`
+			query = `SELECT * FROM (` + query + `) WHERE (day, stream_id) > (?, ?)`
 		} else {
-			query = `SELECT * FROM (` + query + `) WHERE (day, internal_name) < (?, ?)`
+			query = `SELECT * FROM (` + query + `) WHERE (day, stream_id) < (?, ?)`
 		}
 		args = append(args, params.Cursor.Timestamp, params.Cursor.ID)
 	}
 
 	if params.Direction == pagination.Backward {
-		query += " ORDER BY day ASC, internal_name"
+		query += " ORDER BY day ASC, stream_id"
 	} else {
-		query += " ORDER BY day DESC, internal_name"
+		query += " ORDER BY day DESC, stream_id"
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
@@ -2964,22 +2858,24 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 	var records []*pb.QualityTierDaily
 	for rows.Next() {
 		var day time.Time
-		var tenantIDStr, internalName, primaryTier string
-		var tier1080p, tier720p, tier480p, tierSD, codecH264, codecH265, avgBitrate uint32
+		var tenantIDStr, streamIDStr, primaryTier string
+		var tier2160p, tier1440p, tier1080p, tier720p, tier480p, tierSD, codecH264, codecH265, codecVp9, codecAv1, avgBitrate uint32
 		var avgFps float32
 
-		err := rows.Scan(&day, &tenantIDStr, &internalName, &tier1080p, &tier720p, &tier480p, &tierSD,
-			&primaryTier, &codecH264, &codecH265, &avgBitrate, &avgFps)
+		err := rows.Scan(&day, &tenantIDStr, &streamIDStr, &tier2160p, &tier1440p, &tier1080p, &tier720p, &tier480p, &tierSD,
+			&primaryTier, &codecH264, &codecH265, &codecVp9, &codecAv1, &avgBitrate, &avgFps)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan quality_tier_daily row")
 			continue
 		}
 
 		records = append(records, &pb.QualityTierDaily{
-			Id:                fmt.Sprintf("%s_%s", day.Format("2006-01-02"), internalName),
+			Id:                fmt.Sprintf("%s_%s", day.Format("2006-01-02"), streamIDStr),
 			Day:               timestamppb.New(day),
 			TenantId:          tenantIDStr,
-			InternalName:      internalName,
+			StreamId:          streamIDStr,
+			Tier_2160PMinutes: tier2160p,
+			Tier_1440PMinutes: tier1440p,
 			Tier_1080PMinutes: tier1080p,
 			Tier_720PMinutes:  tier720p,
 			Tier_480PMinutes:  tier480p,
@@ -2987,6 +2883,8 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 			PrimaryTier:       primaryTier,
 			CodecH264Minutes:  codecH264,
 			CodecH265Minutes:  codecH265,
+			CodecVp9Minutes:   codecVp9,
+			CodecAv1Minutes:   codecAv1,
 			AvgBitrate:        avgBitrate,
 			AvgFps:            avgFps,
 		})
@@ -3005,14 +2903,204 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Day.AsTime(), records[0].InternalName)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Day.AsTime(), records[len(records)-1].InternalName)
+		startCursor = pagination.EncodeCursor(records[0].Day.AsTime(), records[0].StreamId)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Day.AsTime(), records[len(records)-1].StreamId)
 	}
 
 	return &pb.GetQualityTierDailyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil
+}
+
+// GetStreamAnalyticsSummary returns range aggregates derived from materialized views only.
+func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb.GetStreamAnalyticsSummaryRequest) (*pb.GetStreamAnalyticsSummaryResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	summary := &pb.StreamAnalyticsSummary{
+		TenantId:  tenantID,
+		StreamId:  streamID,
+		TimeRange: req.GetTimeRange(),
+	}
+	// Ensure non-null GraphQL contract for rangeQuality even if the query returns no rows.
+	summary.RangeQuality = &pb.QualityTierSummary{}
+	var totalSessionsVal int64
+	var totalSessionSecondsVal int64
+	var totalBytesVal int64
+
+	// Viewer concurrency summary from stream_viewer_5m
+	{
+		var avgViewers sql.NullFloat64
+		var peakViewers sql.NullInt64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT avg(avg_viewers), max(max_viewers)
+			FROM periscope.stream_viewer_5m
+			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
+		`, tenantID, streamID, startTime, endTime).Scan(&avgViewers, &peakViewers)
+		if err == nil {
+			if avgViewers.Valid {
+				summary.RangeAvgViewers = float32(avgViewers.Float64)
+			}
+			if peakViewers.Valid {
+				summary.RangePeakConcurrentViewers = uint32(peakViewers.Int64)
+			}
+		}
+	}
+
+	// Stream health aggregates from stream_health_5m
+	{
+		var avgBufferHealth, avgFps sql.NullFloat64
+		var avgBitrate sql.NullFloat64
+		var rebufferCount, issueCount, bufferDryCount sql.NullInt64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT avg(avg_buffer_health), avg(avg_bitrate), avg(avg_fps),
+			       sum(rebuffer_count), sum(issue_count), sum(buffer_dry_count)
+			FROM periscope.stream_health_5m
+			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
+		`, tenantID, streamID, startTime, endTime).Scan(&avgBufferHealth, &avgBitrate, &avgFps, &rebufferCount, &issueCount, &bufferDryCount)
+		if err == nil {
+			if avgBufferHealth.Valid {
+				summary.RangeAvgBufferHealth = float32(avgBufferHealth.Float64)
+			}
+			if avgBitrate.Valid {
+				summary.RangeAvgBitrate = uint32(avgBitrate.Float64)
+			}
+			if avgFps.Valid {
+				summary.RangeAvgFps = float32(avgFps.Float64)
+			}
+			if rebufferCount.Valid {
+				summary.RangeRebufferCount = rebufferCount.Int64
+			}
+			if issueCount.Valid {
+				summary.RangeIssueCount = issueCount.Int64
+			}
+			if bufferDryCount.Valid {
+				summary.RangeBufferDryCount = bufferDryCount.Int64
+			}
+		}
+	}
+
+	// Client QoE aggregates from client_qoe_5m
+	{
+		var pktLossRate, avgConnTime sql.NullFloat64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT avg(pkt_loss_rate), avg(avg_connection_time)
+			FROM periscope.client_qoe_5m
+			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
+		`, tenantID, streamID, startTime, endTime).Scan(&pktLossRate, &avgConnTime)
+		if err == nil {
+			if pktLossRate.Valid {
+				summary.RangePacketLossRate = float32(pktLossRate.Float64)
+			}
+			if avgConnTime.Valid {
+				summary.RangeAvgConnectionTime = float32(avgConnTime.Float64)
+			}
+		}
+	}
+
+	// Viewer hours, egress, and unique countries from viewer_hours_hourly
+	{
+		var totalSessionSeconds, totalBytes sql.NullInt64
+		var uniqueCountries sql.NullInt64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT sumMerge(total_session_seconds), sumMerge(total_bytes), uniqExact(country_code)
+			FROM periscope.viewer_hours_hourly
+			WHERE tenant_id = ? AND stream_id = ? AND hour >= ? AND hour <= ?
+		`, tenantID, streamID, startTime, endTime).Scan(&totalSessionSeconds, &totalBytes, &uniqueCountries)
+		if err == nil {
+			if totalSessionSeconds.Valid {
+				summary.RangeViewerHours = float32(totalSessionSeconds.Int64) / 3600.0
+				totalSessionSecondsVal = totalSessionSeconds.Int64
+			}
+			if totalBytes.Valid {
+				summary.RangeEgressGb = float32(float64(totalBytes.Int64) / (1024.0 * 1024.0 * 1024.0))
+				totalBytesVal = totalBytes.Int64
+			}
+			if uniqueCountries.Valid {
+				summary.RangeUniqueCountries = int32(uniqueCountries.Int64)
+			}
+		}
+	}
+
+	// Unique viewers + total sessions from stream_connection_hourly
+	{
+		var uniqueViewers, totalSessions sql.NullInt64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT uniqMerge(unique_viewers), countMerge(total_sessions)
+			FROM periscope.stream_connection_hourly
+			WHERE tenant_id = ? AND stream_id = ? AND hour >= ? AND hour <= ?
+		`, tenantID, streamID, startTime, endTime).Scan(&uniqueViewers, &totalSessions)
+		if err == nil {
+			if uniqueViewers.Valid {
+				summary.RangeUniqueViewers = uniqueViewers.Int64
+			}
+			if totalSessions.Valid {
+				summary.RangeTotalSessions = totalSessions.Int64
+				totalSessionsVal = totalSessions.Int64
+			}
+		}
+	}
+
+	if totalSessionsVal > 0 {
+		summary.RangeAvgSessionSeconds = float32(totalSessionSecondsVal) / float32(totalSessionsVal)
+		summary.RangeAvgBytesPerSession = float32(totalBytesVal) / float32(totalSessionsVal)
+	}
+
+	// Total views from stream_analytics_daily
+	{
+		var totalViews sql.NullInt64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT sum(total_views)
+			FROM periscope.stream_analytics_daily
+			WHERE tenant_id = ? AND stream_id = ? AND day >= toDate(?) AND day <= toDate(?)
+		`, tenantID, streamID, startTime, endTime).Scan(&totalViews)
+		if err == nil && totalViews.Valid {
+			summary.RangeTotalViews = totalViews.Int64
+		}
+	}
+
+	// Quality tier summary from quality_tier_daily
+	{
+		var tier2160p, tier1440p, tier1080p, tier720p, tier480p, tierSD sql.NullInt64
+		var codecH264, codecH265, codecVp9, codecAv1 sql.NullInt64
+		err := s.clickhouse.QueryRowContext(ctx, `
+			SELECT sum(tier_2160p_minutes), sum(tier_1440p_minutes), sum(tier_1080p_minutes),
+			       sum(tier_720p_minutes), sum(tier_480p_minutes), sum(tier_sd_minutes),
+			       sum(codec_h264_minutes), sum(codec_h265_minutes),
+			       sum(codec_vp9_minutes), sum(codec_av1_minutes)
+			FROM periscope.quality_tier_daily
+			WHERE tenant_id = ? AND stream_id = ? AND day >= toDate(?) AND day <= toDate(?)
+		`, tenantID, streamID, startTime, endTime).Scan(&tier2160p, &tier1440p, &tier1080p, &tier720p, &tier480p, &tierSD, &codecH264, &codecH265, &codecVp9, &codecAv1)
+		if err == nil {
+			summary.RangeQuality = &pb.QualityTierSummary{
+				Tier_2160PMinutes: uint32(nullInt64Value(tier2160p)),
+				Tier_1440PMinutes: uint32(nullInt64Value(tier1440p)),
+				Tier_1080PMinutes: uint32(nullInt64Value(tier1080p)),
+				Tier_720PMinutes:  uint32(nullInt64Value(tier720p)),
+				Tier_480PMinutes:  uint32(nullInt64Value(tier480p)),
+				TierSdMinutes:     uint32(nullInt64Value(tierSD)),
+				CodecH264Minutes:  uint32(nullInt64Value(codecH264)),
+				CodecH265Minutes:  uint32(nullInt64Value(codecH265)),
+				CodecVp9Minutes:   uint32(nullInt64Value(codecVp9)),
+				CodecAv1Minutes:   uint32(nullInt64Value(codecAv1)),
+			}
+		}
+	}
+
+	return &pb.GetStreamAnalyticsSummaryResponse{Summary: summary}, nil
 }
 
 // GetStorageUsage returns storage usage records from storage_snapshots table
@@ -3033,6 +3121,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 	}
 
 	nodeID := req.GetNodeId()
+	storageScope := req.GetStorageScope()
 
 	// Build count query
 	countQuery := `SELECT count(*) FROM storage_snapshots WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
@@ -3041,10 +3130,14 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 		countQuery += " AND node_id = ?"
 		countArgs = append(countArgs, nodeID)
 	}
+	if storageScope != "" {
+		countQuery += " AND storage_scope = ?"
+		countArgs = append(countArgs, storageScope)
+	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp, tenant_id, node_id, total_bytes, file_count,
+		SELECT timestamp, tenant_id, node_id, storage_scope, total_bytes, file_count,
 		       dvr_bytes, clip_bytes, vod_bytes,
 		       frozen_dvr_bytes, frozen_clip_bytes, frozen_vod_bytes
 		FROM storage_snapshots
@@ -3056,14 +3149,18 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 		query += " AND node_id = ?"
 		args = append(args, nodeID)
 	}
+	if storageScope != "" {
+		query += " AND storage_scope = ?"
+		args = append(args, storageScope)
+	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "node_id")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "concat(storage_scope, ':', node_id)")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp", "node_id")
+	query += buildOrderBy(params, "timestamp", "concat(storage_scope, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -3075,12 +3172,12 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 	var records []*pb.StorageUsageRecord
 	for rows.Next() {
 		var timestamp time.Time
-		var tenantIDStr, nodeIDStr string
+		var tenantIDStr, nodeIDStr, storageScopeStr string
 		var totalBytes, dvrBytes, clipBytes, vodBytes uint64
 		var frozenDvrBytes, frozenClipBytes, frozenVodBytes uint64
 		var fileCount uint32
 
-		err := rows.Scan(&timestamp, &tenantIDStr, &nodeIDStr, &totalBytes, &fileCount,
+		err := rows.Scan(&timestamp, &tenantIDStr, &nodeIDStr, &storageScopeStr, &totalBytes, &fileCount,
 			&dvrBytes, &clipBytes, &vodBytes,
 			&frozenDvrBytes, &frozenClipBytes, &frozenVodBytes)
 		if err != nil {
@@ -3088,8 +3185,9 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 			continue
 		}
 
+		idKey := fmt.Sprintf("%s:%s", storageScopeStr, nodeIDStr)
 		records = append(records, &pb.StorageUsageRecord{
-			Id:              fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339), nodeIDStr),
+			Id:              idKey,
 			Timestamp:       timestamppb.New(timestamp),
 			TenantId:        tenantIDStr,
 			NodeId:          nodeIDStr,
@@ -3101,6 +3199,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 			FrozenDvrBytes:  frozenDvrBytes,
 			FrozenClipBytes: frozenClipBytes,
 			FrozenVodBytes:  frozenVodBytes,
+			StorageScope:    storageScopeStr,
 		})
 	}
 
@@ -3117,8 +3216,10 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].NodeId)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].NodeId)
+		startID := records[0].Id
+		endID := records[len(records)-1].Id
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), startID)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), endID)
 	}
 
 	return &pb.GetStorageUsageResponse{
@@ -3144,15 +3245,15 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	internalName := req.GetInternalName()
+	streamID := req.GetStreamId()
 	assetType := req.GetAssetType()
 
 	// Build count query
 	countQuery := `SELECT count(*) FROM storage_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if internalName != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, internalName)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	if assetType != "" {
 		countQuery += " AND asset_type = ?"
@@ -3161,16 +3262,16 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp, tenant_id, internal_name, asset_hash, action, asset_type,
+		SELECT timestamp, tenant_id, stream_id, asset_hash, action, asset_type,
 		       size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error
 		FROM storage_events
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if internalName != "" {
-		query += " AND internal_name = ?"
-		args = append(args, internalName)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 	if assetType != "" {
 		query += " AND asset_type = ?"
@@ -3195,12 +3296,12 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 	var events []*pb.StorageEvent
 	for rows.Next() {
 		var timestamp time.Time
-		var tenantIDStr, internalNameStr, assetHash, action, assetTypeStr, nodeID string
+		var tenantIDStr, streamIDStr, assetHash, action, assetTypeStr, nodeID string
 		var sizeBytes uint64
 		var s3URL, localPath, errorMsg sql.NullString
 		var durationMs, warmDurationMs sql.NullInt64
 
-		err := rows.Scan(&timestamp, &tenantIDStr, &internalNameStr, &assetHash, &action, &assetTypeStr,
+		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &assetHash, &action, &assetTypeStr,
 			&sizeBytes, &s3URL, &localPath, &nodeID, &durationMs, &warmDurationMs, &errorMsg)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan storage_events row")
@@ -3208,15 +3309,15 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 		}
 
 		event := &pb.StorageEvent{
-			Id:           fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339), assetHash),
-			Timestamp:    timestamppb.New(timestamp),
-			TenantId:     tenantIDStr,
-			InternalName: internalNameStr,
-			AssetHash:    assetHash,
-			Action:       action,
-			AssetType:    assetTypeStr,
-			SizeBytes:    sizeBytes,
-			NodeId:       nodeID,
+			Id:        fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339), assetHash),
+			Timestamp: timestamppb.New(timestamp),
+			TenantId:  tenantIDStr,
+			StreamId:  streamIDStr,
+			AssetHash: assetHash,
+			Action:    action,
+			AssetType: assetTypeStr,
+			SizeBytes: sizeBytes,
+			NodeId:    nodeID,
 		}
 		if s3URL.Valid {
 			event.S3Url = &s3URL.String
@@ -3271,9 +3372,9 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	internalName := req.GetInternalName()
-	if internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name required")
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -3287,16 +3388,16 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 	}
 
 	// Count query
-	countQuery := `SELECT count(*) FROM stream_health_5m WHERE tenant_id = ? AND internal_name = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
-	countCh := s.countAsync(ctx, countQuery, tenantID, internalName, startTime, endTime)
+	countQuery := `SELECT count(*) FROM stream_health_5m WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
+	countCh := s.countAsync(ctx, countQuery, tenantID, streamID, startTime, endTime)
 
 	query := `
-		SELECT timestamp_5m, tenant_id, internal_name, node_id, rebuffer_count, issue_count,
-		       sample_issues, avg_bitrate, avg_fps, buffer_dry_count, quality_tier
+		SELECT timestamp_5m, tenant_id, stream_id, node_id, rebuffer_count, issue_count,
+		       sample_issues, avg_bitrate, avg_fps, avg_buffer_health, buffer_dry_count, quality_tier
 		FROM stream_health_5m
-		WHERE tenant_id = ? AND internal_name = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
+		WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`
-	args := []interface{}{tenantID, internalName, startTime, endTime}
+	args := []interface{}{tenantID, streamID, startTime, endTime}
 
 	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp_5m", "node_id")
 	if keysetCond != "" {
@@ -3316,30 +3417,31 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 	var records []*pb.StreamHealth5M
 	for rows.Next() {
 		var timestamp time.Time
-		var tenantIDStr, internalNameStr, nodeID, qualityTier string
+		var tenantIDStr, streamIDStr, nodeID, qualityTier string
 		var rebufferCount, issueCount, bufferDryCount int32
 		var sampleIssues sql.NullString
-		var avgBitrate, avgFps float32
+		var avgBitrate, avgFps, avgBufferHealth float32
 
-		err := rows.Scan(&timestamp, &tenantIDStr, &internalNameStr, &nodeID, &rebufferCount, &issueCount,
-			&sampleIssues, &avgBitrate, &avgFps, &bufferDryCount, &qualityTier)
+		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &nodeID, &rebufferCount, &issueCount,
+			&sampleIssues, &avgBitrate, &avgFps, &avgBufferHealth, &bufferDryCount, &qualityTier)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan stream_health_5m row")
 			continue
 		}
 
 		record := &pb.StreamHealth5M{
-			Id:             fmt.Sprintf("%s_%s_%s", timestamp.Format(time.RFC3339), internalNameStr, nodeID),
-			Timestamp:      timestamppb.New(timestamp),
-			TenantId:       tenantIDStr,
-			InternalName:   internalNameStr,
-			NodeId:         nodeID,
-			RebufferCount:  rebufferCount,
-			IssueCount:     issueCount,
-			AvgBitrate:     int32(avgBitrate),
-			AvgFps:         avgFps,
-			BufferDryCount: bufferDryCount,
-			QualityTier:    qualityTier,
+			Id:              fmt.Sprintf("%s_%s_%s", timestamp.Format(time.RFC3339), streamIDStr, nodeID),
+			Timestamp:       timestamppb.New(timestamp),
+			TenantId:        tenantIDStr,
+			StreamId:        streamIDStr,
+			NodeId:          nodeID,
+			RebufferCount:   rebufferCount,
+			IssueCount:      issueCount,
+			AvgBitrate:      int32(avgBitrate),
+			AvgFps:          avgFps,
+			AvgBufferHealth: avgBufferHealth,
+			BufferDryCount:  bufferDryCount,
+			QualityTier:     qualityTier,
 		}
 		if sampleIssues.Valid {
 			record.SampleIssues = sampleIssues.String
@@ -3361,8 +3463,8 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].NodeId)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].NodeId)
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].Id)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].Id)
 	}
 
 	return &pb.GetStreamHealth5MResponse{
@@ -3377,8 +3479,10 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 
 // GetNodePerformance5M returns 5-minute aggregated node performance from node_performance_5m MV
 func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetNodePerformance5MRequest) (*pb.GetNodePerformance5MResponse, error) {
-	// Note: node_performance_5m table doesn't have tenant_id - it's infrastructure-wide
-	// Auth still required but we use the tenant context just for authorization
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
 	if err != nil {
@@ -3393,8 +3497,8 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 	nodeID := req.GetNodeId()
 
 	// Count query
-	countQuery := `SELECT count(*) FROM node_performance_5m WHERE timestamp_5m >= ? AND timestamp_5m <= ?`
-	countArgs := []interface{}{startTime, endTime}
+	countQuery := `SELECT count(*) FROM node_performance_5m WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?`
+	countArgs := []interface{}{tenantID, startTime, endTime}
 	if nodeID != "" {
 		countQuery += " AND node_id = ?"
 		countArgs = append(countArgs, nodeID)
@@ -3402,25 +3506,25 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT timestamp_5m, node_id, avg_cpu, max_cpu, avg_memory, max_memory,
+		SELECT timestamp_5m, cluster_id, node_id, avg_cpu, max_cpu, avg_memory, max_memory,
 		       total_bandwidth, avg_streams, max_streams
 		FROM node_performance_5m
-		WHERE timestamp_5m >= ? AND timestamp_5m <= ?
+		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`
-	args := []interface{}{startTime, endTime}
+	args := []interface{}{tenantID, startTime, endTime}
 
 	if nodeID != "" {
 		query += " AND node_id = ?"
 		args = append(args, nodeID)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp_5m", "node_id")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp_5m", "concat(cluster_id, ':', node_id)")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp_5m", "node_id")
+	query += buildOrderBy(params, "timestamp_5m", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -3432,12 +3536,13 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 	var records []*pb.NodePerformance5M
 	for rows.Next() {
 		var timestamp time.Time
+		var clusterID string
 		var nodeIDStr string
 		var avgCPU, maxCPU, avgMemory, maxMemory, avgStreams float32
 		var totalBandwidth int64
 		var maxStreams int32
 
-		err := rows.Scan(&timestamp, &nodeIDStr, &avgCPU, &maxCPU, &avgMemory, &maxMemory,
+		err := rows.Scan(&timestamp, &clusterID, &nodeIDStr, &avgCPU, &maxCPU, &avgMemory, &maxMemory,
 			&totalBandwidth, &avgStreams, &maxStreams)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan node_performance_5m row")
@@ -3445,7 +3550,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 		}
 
 		records = append(records, &pb.NodePerformance5M{
-			Id:             fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339), nodeIDStr),
+			Id:             fmt.Sprintf("%s:%s", clusterID, nodeIDStr),
 			Timestamp:      timestamppb.New(timestamp),
 			NodeId:         nodeIDStr,
 			AvgCpu:         avgCPU,
@@ -3471,8 +3576,8 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].NodeId)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].NodeId)
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].Id)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].Id)
 	}
 
 	return &pb.GetNodePerformance5MResponse{
@@ -3502,20 +3607,20 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	stream := req.GetStream()
+	streamID := req.GetStreamId()
 
 	// Count query
 	countQuery := `SELECT count(*) FROM viewer_hours_hourly WHERE tenant_id = ? AND hour >= ? AND hour <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if stream != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, stream)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	// Use finalizeAggregation for AggregateFunction columns
 	query := `
-		SELECT hour, tenant_id, internal_name, country_code,
+		SELECT hour, tenant_id, stream_id, country_code,
 		       finalizeAggregation(unique_viewers) as unique_viewers,
 		       finalizeAggregation(total_session_seconds) as total_session_seconds,
 		       finalizeAggregation(total_bytes) as total_bytes
@@ -3524,18 +3629,18 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "hour", "internal_name")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "hour", "concat(stream_id, ':', country_code)")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "hour", "internal_name")
+	query += buildOrderBy(params, "hour", "concat(stream_id, ':', country_code)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -3547,11 +3652,11 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 	var records []*pb.ViewerHoursHourly
 	for rows.Next() {
 		var hour time.Time
-		var tenantIDStr, internalName, countryCode string
+		var tenantIDStr, streamIDStr, countryCode string
 		var uniqueViewers int32
 		var totalSessionSeconds, totalBytes int64
 
-		err := rows.Scan(&hour, &tenantIDStr, &internalName, &countryCode,
+		err := rows.Scan(&hour, &tenantIDStr, &streamIDStr, &countryCode,
 			&uniqueViewers, &totalSessionSeconds, &totalBytes)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan viewer_hours_hourly row")
@@ -3559,10 +3664,10 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 		}
 
 		records = append(records, &pb.ViewerHoursHourly{
-			Id:                  fmt.Sprintf("%s_%s_%s", hour.Format(time.RFC3339), internalName, countryCode),
+			Id:                  fmt.Sprintf("%s_%s_%s", hour.Format(time.RFC3339), streamIDStr, countryCode),
 			Hour:                timestamppb.New(hour),
 			TenantId:            tenantIDStr,
-			InternalName:        internalName,
+			StreamId:            streamIDStr,
 			CountryCode:         countryCode,
 			UniqueViewers:       uniqueViewers,
 			TotalSessionSeconds: totalSessionSeconds,
@@ -3583,8 +3688,8 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Hour.AsTime(), records[0].InternalName)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), records[len(records)-1].InternalName)
+		startCursor = pagination.EncodeCursor(records[0].Hour.AsTime(), fmt.Sprintf("%s:%s", records[0].StreamId, records[0].CountryCode))
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), fmt.Sprintf("%s:%s", records[len(records)-1].StreamId, records[len(records)-1].CountryCode))
 	}
 
 	return &pb.GetViewerHoursHourlyResponse{
@@ -3709,10 +3814,13 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 	}
 
 	query := `
-		SELECT day, tenant_id, viewer_hours, unique_viewers, total_sessions, egress_gb
-		FROM tenant_viewer_daily
-		WHERE tenant_id = ? AND day >= today() - ?
-		ORDER BY day DESC
+		SELECT d.day, d.tenant_id, d.viewer_hours, d.unique_viewers, d.unique_viewers AS total_sessions, d.egress_gb,
+		       COALESCE(a.total_views, 0) AS total_views
+		FROM tenant_viewer_daily d
+		LEFT JOIN tenant_analytics_daily a
+		  ON d.tenant_id = a.tenant_id AND d.day = a.day
+		WHERE d.tenant_id = ? AND d.day >= today() - ?
+		ORDER BY d.day DESC
 		LIMIT ?
 	`
 
@@ -3728,8 +3836,9 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 		var tenantIDStr string
 		var viewerHours, egressGB float64
 		var uniqueViewers, totalSessions int32
+		var totalViews int64
 
-		err := rows.Scan(&day, &tenantIDStr, &viewerHours, &uniqueViewers, &totalSessions, &egressGB)
+		err := rows.Scan(&day, &tenantIDStr, &viewerHours, &uniqueViewers, &totalSessions, &egressGB, &totalViews)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan tenant_viewer_daily row")
 			continue
@@ -3743,7 +3852,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 			ViewerHours:   viewerHours,
 			UniqueViewers: uniqueViewers,
 			TotalSessions: totalSessions,
-			TotalViews:    0, // Not in tenant_viewer_daily - would need to join tenant_analytics_daily
+			TotalViews:    totalViews,
 		})
 	}
 
@@ -3753,7 +3862,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 }
 
 // ============================================================================
-// Processing Usage Queries (from process_billing and process_billing_daily tables)
+// Processing Usage Queries (from processing_events and processing_daily tables)
 // ============================================================================
 
 // GetProcessingUsage returns processing usage records and/or daily summaries for billing
@@ -3773,7 +3882,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	streamName := req.GetStreamName()
+	streamID := req.GetStreamId()
 	processType := req.GetProcessType()
 	summaryOnly := req.GetSummaryOnly()
 
@@ -3788,13 +3897,13 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 		       native_av_h264_seconds, native_av_vp9_seconds, native_av_av1_seconds, native_av_hevc_seconds,
 		       native_av_aac_seconds, native_av_opus_seconds,
 		       audio_seconds, video_seconds
-		FROM process_billing_daily
+		FROM processing_daily
 		WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
 		ORDER BY day DESC
 	`
 	summaryRows, err := s.clickhouse.QueryContext(ctx, summaryQuery, tenantID, startTime, endTime)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to query process_billing_daily")
+		s.logger.WithError(err).Error("Failed to query processing_daily")
 	} else {
 		defer summaryRows.Close()
 		for summaryRows.Next() {
@@ -3817,7 +3926,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 				&nativeAvAac, &nativeAvOpus,
 				&audioSeconds, &videoSeconds)
 			if err != nil {
-				s.logger.WithError(err).Error("Failed to scan process_billing_daily row")
+				s.logger.WithError(err).Error("Failed to scan processing_daily row")
 				continue
 			}
 
@@ -3852,11 +3961,11 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 	}
 
 	// Build count query for detailed records
-	countQuery := `SELECT count(*) FROM process_billing WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
+	countQuery := `SELECT count(*) FROM processing_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if streamName != "" {
-		countQuery += " AND stream_name = ?"
-		countArgs = append(countArgs, streamName)
+	if streamID != "" {
+		countQuery += " AND stream_id = ?"
+		countArgs = append(countArgs, streamID)
 	}
 	if processType != "" {
 		countQuery += " AND process_type = ?"
@@ -3866,7 +3975,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 
 	// Query detailed records - includes all Livepeer and MistProcAV fields
 	query := `
-		SELECT timestamp, tenant_id, node_id, stream_name, process_type, duration_ms,
+		SELECT timestamp, tenant_id, node_id, stream_id, process_type, duration_ms,
 		       input_codec, output_codec, track_type,
 		       -- Livepeer fields
 		       segment_number, width, height, rendition_count, broadcaster_url, upload_time_us,
@@ -3884,27 +3993,27 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 		       source_timestamp_ms, sink_timestamp_ms, source_advanced_ms, sink_advanced_ms,
 		       -- MistProcAV performance
 		       rtf_in, rtf_out, pipeline_lag_ms, output_bitrate_bps
-		FROM process_billing
+		FROM processing_events
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if streamName != "" {
-		query += " AND stream_name = ?"
-		args = append(args, streamName)
+	if streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
 	}
 	if processType != "" {
 		query += " AND process_type = ?"
 		args = append(args, processType)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "stream_name")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "stream_id")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp", "stream_name")
+	query += buildOrderBy(params, "timestamp", "stream_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -3916,7 +4025,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 	var records []*pb.ProcessingUsageRecord
 	for rows.Next() {
 		var timestamp time.Time
-		var tenantIDStr, nodeID, streamNameStr, processTypeStr string
+		var tenantIDStr, nodeID, streamIDStr, processTypeStr string
 		var durationMs int64
 		// Common fields
 		var inputCodec, outputCodec, trackType *string
@@ -3941,7 +4050,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 		var rtfIn, rtfOut *float64
 		var pipelineLagMs, outputBitrateBps *int64
 
-		err := rows.Scan(&timestamp, &tenantIDStr, &nodeID, &streamNameStr, &processTypeStr, &durationMs,
+		err := rows.Scan(&timestamp, &tenantIDStr, &nodeID, &streamIDStr, &processTypeStr, &durationMs,
 			&inputCodec, &outputCodec, &trackType,
 			// Livepeer fields
 			&segmentNumber, &width, &height, &renditionCount, &broadcasterURL, &uploadTimeUs,
@@ -3960,16 +4069,16 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 			// MistProcAV performance
 			&rtfIn, &rtfOut, &pipelineLagMs, &outputBitrateBps)
 		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan process_billing row")
+			s.logger.WithError(err).Error("Failed to scan processing_events row")
 			continue
 		}
 
 		record := &pb.ProcessingUsageRecord{
-			Id:          fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamNameStr),
+			Id:          fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
 			Timestamp:   timestamppb.New(timestamp),
 			TenantId:    tenantIDStr,
 			NodeId:      nodeID,
-			StreamName:  streamNameStr,
+			StreamId:    streamIDStr,
 			ProcessType: processTypeStr,
 			DurationMs:  durationMs,
 			// Common fields
@@ -4046,14 +4155,93 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].StreamName)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].StreamName)
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].StreamId)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].StreamId)
 	}
 
 	response.Pagination = buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor)
 	response.Records = records
 
 	return response, nil
+}
+
+// GetLiveUsageSummary returns a near-real-time usage summary for billing dashboards.
+func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLiveUsageSummaryRequest) (*pb.GetLiveUsageSummaryResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	// Viewer hours + egress + unique viewers (tenant_usage_5m)
+	var totalSessionSeconds uint64
+	var totalBytes uint64
+	var uniqueViewers uint32
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			sumMerge(total_session_seconds) AS total_session_seconds,
+			sumMerge(total_bytes) AS total_bytes,
+			toUInt32(uniqMerge(unique_viewers)) AS unique_viewers
+		FROM tenant_usage_5m
+		WHERE tenant_id = ?
+		  AND timestamp_5m >= ?
+		  AND timestamp_5m <= ?
+	`, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &totalBytes, &uniqueViewers)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Error("Failed to query tenant_usage_5m")
+		return nil, status.Errorf(codes.Internal, "failed to query live usage")
+	}
+
+	viewerHours := float64(totalSessionSeconds) / 3600.0
+	egressGB := float64(totalBytes) / (1024 * 1024 * 1024)
+
+	// Average storage (storage_usage_hourly)
+	var avgTotalBytes uint64
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			toUInt64(avgMerge(avg_total_bytes)) AS avg_total_bytes
+		FROM storage_usage_hourly
+		WHERE tenant_id = ?
+		  AND hour >= ?
+		  AND hour <= ?
+	`, tenantID, startTime, endTime).Scan(&avgTotalBytes)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query storage_usage_hourly")
+	}
+	averageStorageGB := float64(avgTotalBytes) / (1024 * 1024 * 1024)
+
+	// Processing totals (processing_hourly)
+	var livepeerMs, nativeAvMs uint64
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			sumMergeIf(total_duration_ms, process_type = 'Livepeer') AS livepeer_ms,
+			sumMergeIf(total_duration_ms, process_type = 'AV') AS native_av_ms
+		FROM processing_hourly
+		WHERE tenant_id = ?
+		  AND hour >= ?
+		  AND hour <= ?
+	`, tenantID, startTime, endTime).Scan(&livepeerMs, &nativeAvMs)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query processing_hourly for live usage")
+	}
+
+	summary := &pb.LiveUsageSummary{
+		TenantId:         tenantID,
+		PeriodStart:      timestamppb.New(startTime),
+		PeriodEnd:        timestamppb.New(endTime),
+		ViewerHours:      viewerHours,
+		EgressGb:         egressGB,
+		UniqueViewers:    int32(uniqueViewers),
+		AverageStorageGb: averageStorageGB,
+		LivepeerSeconds:  float64(livepeerMs) / 1000.0,
+		NativeAvSeconds:  float64(nativeAvMs) / 1000.0,
+	}
+
+	return &pb.GetLiveUsageSummaryResponse{Summary: summary}, nil
 }
 
 // ============================================================================
@@ -4080,9 +4268,9 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 	// Build count query
 	countQuery := `SELECT count(*) FROM rebuffering_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if req.InternalName != nil && *req.InternalName != "" {
-		countQuery += ` AND internal_name = ?`
-		countArgs = append(countArgs, *req.InternalName)
+	if streamID := req.GetStreamId(); streamID != "" {
+		countQuery += ` AND stream_id = ?`
+		countArgs = append(countArgs, streamID)
 	}
 	if req.NodeId != nil && *req.NodeId != "" {
 		countQuery += ` AND node_id = ?`
@@ -4092,28 +4280,28 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 
 	// Build main query
 	query := `
-		SELECT timestamp, tenant_id, internal_name, node_id, buffer_state, prev_state, rebuffer_start, rebuffer_end
+		SELECT timestamp, tenant_id, stream_id, node_id, buffer_state, prev_state, rebuffer_start, rebuffer_end
 		FROM rebuffering_events
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if req.InternalName != nil && *req.InternalName != "" {
-		query += ` AND internal_name = ?`
-		args = append(args, *req.InternalName)
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += ` AND stream_id = ?`
+		args = append(args, streamID)
 	}
 	if req.NodeId != nil && *req.NodeId != "" {
 		query += ` AND node_id = ?`
 		args = append(args, *req.NodeId)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "internal_name")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "stream_id")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp", "internal_name")
+	query += buildOrderBy(params, "timestamp", "stream_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -4125,19 +4313,19 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 	var events []*pb.RebufferingEvent
 	for rows.Next() {
 		var timestamp, rebufferStart, rebufferEnd time.Time
-		var tenantIDStr, internalName, nodeID, bufferState, prevState string
+		var tenantIDStr, streamIDStr, nodeID, bufferState, prevState string
 
-		err := rows.Scan(&timestamp, &tenantIDStr, &internalName, &nodeID, &bufferState, &prevState, &rebufferStart, &rebufferEnd)
+		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &nodeID, &bufferState, &prevState, &rebufferStart, &rebufferEnd)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan rebuffering_events row")
 			continue
 		}
 
 		events = append(events, &pb.RebufferingEvent{
-			Id:            fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), internalName),
+			Id:            fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
 			Timestamp:     timestamppb.New(timestamp),
 			TenantId:      tenantIDStr,
-			InternalName:  internalName,
+			StreamId:      streamIDStr,
 			NodeId:        nodeID,
 			BufferState:   bufferState,
 			PrevState:     prevState,
@@ -4159,8 +4347,8 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
-		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), events[0].InternalName)
-		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].InternalName)
+		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), events[0].StreamId)
+		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].StreamId)
 	}
 
 	return &pb.GetRebufferingEventsResponse{
@@ -4289,31 +4477,31 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 	// Build count query
 	countQuery := `SELECT count(*) FROM stream_analytics_daily WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)`
 	countArgs := []interface{}{tenantID, startTime, endTime}
-	if req.InternalName != nil && *req.InternalName != "" {
-		countQuery += ` AND internal_name = ?`
-		countArgs = append(countArgs, *req.InternalName)
+	if streamID := req.GetStreamId(); streamID != "" {
+		countQuery += ` AND stream_id = ?`
+		countArgs = append(countArgs, streamID)
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
 	query := `
-		SELECT day, tenant_id, internal_name, total_views, unique_viewers, unique_countries, unique_cities, egress_bytes
+		SELECT day, tenant_id, stream_id, total_views, unique_viewers, unique_countries, unique_cities, egress_bytes
 		FROM stream_analytics_daily
 		WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
 	`
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if req.InternalName != nil && *req.InternalName != "" {
-		query += ` AND internal_name = ?`
-		args = append(args, *req.InternalName)
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += ` AND stream_id = ?`
+		args = append(args, streamID)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "day", "internal_name")
+	keysetCond, keysetArgs := buildKeysetCondition(params, "day", "stream_id")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "day", "internal_name")
+	query += buildOrderBy(params, "day", "stream_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -4325,22 +4513,22 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 	var records []*pb.StreamAnalyticsDaily
 	for rows.Next() {
 		var day time.Time
-		var tenantIDStr, internalName string
+		var tenantIDStr, streamIDStr string
 		var totalViews int64
 		var uniqueViewers, uniqueCountries, uniqueCities int32
 		var egressBytes int64
 
-		err := rows.Scan(&day, &tenantIDStr, &internalName, &totalViews, &uniqueViewers, &uniqueCountries, &uniqueCities, &egressBytes)
+		err := rows.Scan(&day, &tenantIDStr, &streamIDStr, &totalViews, &uniqueViewers, &uniqueCountries, &uniqueCities, &egressBytes)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan stream_analytics_daily row")
 			continue
 		}
 
 		records = append(records, &pb.StreamAnalyticsDaily{
-			Id:              fmt.Sprintf("%s_%s", day.Format("2006-01-02"), internalName),
+			Id:              fmt.Sprintf("%s_%s", day.Format("2006-01-02"), streamIDStr),
 			Day:             timestamppb.New(day),
 			TenantId:        tenantIDStr,
-			InternalName:    internalName,
+			StreamId:        streamIDStr,
 			TotalViews:      totalViews,
 			UniqueViewers:   uniqueViewers,
 			UniqueCountries: uniqueCountries,
@@ -4362,8 +4550,8 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Day.AsTime(), records[0].InternalName)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Day.AsTime(), records[len(records)-1].InternalName)
+		startCursor = pagination.EncodeCursor(records[0].Day.AsTime(), records[0].StreamId)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Day.AsTime(), records[len(records)-1].StreamId)
 	}
 
 	return &pb.GetStreamAnalyticsDailyResponse{
@@ -4372,9 +4560,287 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 	}, nil
 }
 
-// ============================================================================
-// Server Setup
-// ============================================================================
+// GetAPIUsage returns API usage records and/or daily summaries
+func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRequest) (*pb.GetAPIUsageResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	params, err := getCursorPagination(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	authType := req.GetAuthType()
+	operationType := req.GetOperationType()
+	operationName := req.GetOperationName()
+	summaryOnly := req.GetSummaryOnly()
+
+	response := &pb.GetAPIUsageResponse{}
+
+	// Get daily summaries (aggregated by auth_type)
+	if operationName == "" {
+		summaryQuery := `
+			SELECT day, tenant_id, auth_type,
+			       sumMerge(total_requests) AS total_requests,
+			       sumMerge(total_errors) AS total_errors,
+			       sumMerge(total_duration_ms) AS total_duration_ms,
+			       sumMerge(total_complexity) AS total_complexity,
+			       uniqCombinedMerge(unique_users) AS unique_users,
+			       uniqCombinedMerge(unique_tokens) AS unique_tokens
+			FROM api_usage_daily
+			WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
+		`
+		summaryArgs := []interface{}{tenantID, startTime, endTime}
+		if authType != "" {
+			summaryQuery += " AND auth_type = ?"
+			summaryArgs = append(summaryArgs, authType)
+		}
+		if operationType != "" {
+			summaryQuery += " AND operation_type = ?"
+			summaryArgs = append(summaryArgs, operationType)
+		}
+		summaryQuery += " GROUP BY day, tenant_id, auth_type ORDER BY day DESC"
+
+		summaryRows, err := s.clickhouse.QueryContext(ctx, summaryQuery, summaryArgs...)
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to query api_usage_daily")
+		} else {
+			defer summaryRows.Close()
+			for summaryRows.Next() {
+				var day time.Time
+				var tenantIDStr, authTypeStr string
+				var totalRequests, totalErrors, totalDurationMs, totalComplexity, uniqueUsers, uniqueTokens uint64
+
+				err := summaryRows.Scan(&day, &tenantIDStr, &authTypeStr,
+					&totalRequests, &totalErrors, &totalDurationMs, &totalComplexity,
+					&uniqueUsers, &uniqueTokens)
+				if err != nil {
+					s.logger.WithError(err).Error("Failed to scan api_usage_daily row")
+					continue
+				}
+
+				avgDuration := float64(0)
+				if totalRequests > 0 {
+					avgDuration = float64(totalDurationMs) / float64(totalRequests)
+				}
+
+				response.Summaries = append(response.Summaries, &pb.APIUsageSummary{
+					Date:            timestamppb.New(day),
+					TenantId:        tenantIDStr,
+					AuthType:        authTypeStr,
+					TotalRequests:   totalRequests,
+					TotalErrors:     totalErrors,
+					AvgDurationMs:   avgDuration,
+					TotalComplexity: totalComplexity,
+					UniqueUsers:     uniqueUsers,
+					UniqueTokens:    uniqueTokens,
+				})
+			}
+		}
+	}
+
+	operationSummaryQuery := `
+		SELECT operation_type,
+		       sumMerge(total_requests) AS total_requests,
+		       sumMerge(total_errors) AS total_errors,
+		       sumMerge(total_duration_ms) AS total_duration_ms,
+		       sumMerge(total_complexity) AS total_complexity,
+	       uniqCombined(ifNull(operation_name, '')) AS unique_operations
+		FROM api_usage_hourly
+		WHERE tenant_id = ? AND hour >= toStartOfHour(?) AND hour <= toStartOfHour(?)
+	`
+	operationSummaryArgs := []interface{}{tenantID, startTime, endTime}
+	if authType != "" {
+		operationSummaryQuery += " AND auth_type = ?"
+		operationSummaryArgs = append(operationSummaryArgs, authType)
+	}
+	if operationType != "" {
+		operationSummaryQuery += " AND operation_type = ?"
+		operationSummaryArgs = append(operationSummaryArgs, operationType)
+	}
+	if operationName != "" {
+		operationSummaryQuery += " AND ifNull(operation_name, '') = ?"
+		operationSummaryArgs = append(operationSummaryArgs, operationName)
+	}
+	operationSummaryQuery += " GROUP BY operation_type ORDER BY total_requests DESC"
+
+	operationRows, err := s.clickhouse.QueryContext(ctx, operationSummaryQuery, operationSummaryArgs...)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to query api_usage_hourly operation summaries")
+	} else {
+		defer operationRows.Close()
+		for operationRows.Next() {
+			var opTypeStr string
+			var totalRequests, totalErrors, totalDurationMs, totalComplexity, uniqueOperations uint64
+
+			if err := operationRows.Scan(&opTypeStr, &totalRequests, &totalErrors, &totalDurationMs, &totalComplexity, &uniqueOperations); err != nil {
+				s.logger.WithError(err).Error("Failed to scan api_usage_hourly operation summary row")
+				continue
+			}
+
+			avgDuration := float64(0)
+			if totalRequests > 0 {
+				avgDuration = float64(totalDurationMs) / float64(totalRequests)
+			}
+
+			response.OperationSummaries = append(response.OperationSummaries, &pb.APIUsageOperationSummary{
+				OperationType:    opTypeStr,
+				TotalRequests:    totalRequests,
+				TotalErrors:      totalErrors,
+				UniqueOperations: uniqueOperations,
+				AvgDurationMs:    avgDuration,
+				TotalComplexity:  totalComplexity,
+			})
+		}
+	}
+
+	if summaryOnly {
+		return response, nil
+	}
+
+	// Build count query for hourly records
+	countQuery := `SELECT count(*) FROM api_usage_hourly WHERE tenant_id = ? AND hour >= toStartOfHour(?) AND hour <= toStartOfHour(?)`
+	countArgs := []interface{}{tenantID, startTime, endTime}
+	if authType != "" {
+		countQuery += " AND auth_type = ?"
+		countArgs = append(countArgs, authType)
+	}
+	if operationType != "" {
+		countQuery += " AND operation_type = ?"
+		countArgs = append(countArgs, operationType)
+	}
+	if operationName != "" {
+		countQuery += " AND ifNull(operation_name, '') = ?"
+		countArgs = append(countArgs, operationName)
+	}
+	countCh := s.countAsync(ctx, countQuery, countArgs...)
+
+	// Query hourly records
+	query := `
+		SELECT hour, tenant_id, auth_type, operation_type, operation_name,
+		       sumMerge(total_requests) AS total_requests,
+		       sumMerge(total_errors) AS total_errors,
+		       sumMerge(total_duration_ms) AS total_duration_ms,
+		       sumMerge(total_complexity) AS total_complexity,
+		       uniqCombinedMerge(unique_users) AS unique_users,
+		       uniqCombinedMerge(unique_tokens) AS unique_tokens
+		FROM api_usage_hourly
+		WHERE tenant_id = ? AND hour >= toStartOfHour(?) AND hour <= toStartOfHour(?)
+	`
+	args := []interface{}{tenantID, startTime, endTime}
+
+	if authType != "" {
+		query += " AND auth_type = ?"
+		args = append(args, authType)
+	}
+	if operationType != "" {
+		query += " AND operation_type = ?"
+		args = append(args, operationType)
+	}
+	if operationName != "" {
+		query += " AND ifNull(operation_name, '') = ?"
+		args = append(args, operationName)
+	}
+
+	query += " GROUP BY hour, tenant_id, auth_type, operation_type, operation_name"
+
+	if params.Cursor != nil {
+		cursorAuthType := ""
+		cursorOpType := ""
+		cursorOpName := ""
+		if parts := strings.SplitN(params.Cursor.ID, "|", 3); len(parts) == 3 {
+			cursorAuthType = parts[0]
+			cursorOpType = parts[1]
+			cursorOpName = parts[2]
+		}
+		if params.Direction == pagination.Backward {
+			query += " AND (hour, auth_type, operation_type, ifNull(operation_name, '')) > (?, ?, ?, ?)"
+		} else {
+			query += " AND (hour, auth_type, operation_type, ifNull(operation_name, '')) < (?, ?, ?, ?)"
+		}
+		args = append(args, params.Cursor.Timestamp, cursorAuthType, cursorOpType, cursorOpName)
+	}
+
+	if params.Direction == pagination.Backward {
+		query += " ORDER BY hour ASC, auth_type ASC, operation_type ASC, ifNull(operation_name, '') ASC"
+	} else {
+		query += " ORDER BY hour DESC, auth_type DESC, operation_type DESC, ifNull(operation_name, '') DESC"
+	}
+	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var records []*pb.APIUsageRecord
+	for rows.Next() {
+		var hour time.Time
+		var tenantIDStr, authTypeStr, operationTypeStr string
+		var operationName *string
+		var totalRequests, totalErrors, totalDurationMs, totalComplexity, uniqueUsers, uniqueTokens uint64
+
+		err := rows.Scan(&hour, &tenantIDStr, &authTypeStr, &operationTypeStr, &operationName,
+			&totalRequests, &totalErrors, &totalDurationMs, &totalComplexity,
+			&uniqueUsers, &uniqueTokens)
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to scan api_usage_hourly row")
+			continue
+		}
+
+		opName := ""
+		if operationName != nil {
+			opName = *operationName
+		}
+
+		// Composite ID for cursor pagination (timestamp handled separately).
+		id := fmt.Sprintf("%s|%s|%s", authTypeStr, operationTypeStr, opName)
+
+		records = append(records, &pb.APIUsageRecord{
+			Id:              id,
+			Timestamp:       timestamppb.New(hour),
+			TenantId:        tenantIDStr,
+			AuthType:        authTypeStr,
+			OperationType:   operationTypeStr,
+			OperationName:   opName,
+			RequestCount:    totalRequests,
+			ErrorCount:      totalErrors,
+			TotalDurationMs: totalDurationMs,
+			TotalComplexity: totalComplexity,
+			UniqueUsers:     uniqueUsers,
+			UniqueTokens:    uniqueTokens,
+		})
+	}
+
+	// Handle pagination
+	total := <-countCh
+	resultsLen := len(records)
+	if resultsLen > params.Limit {
+		records = records[:params.Limit]
+	}
+	if params.Direction == pagination.Backward {
+		slices.Reverse(records)
+	}
+
+	var startCursor, endCursor string
+	if len(records) > 0 {
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].Id)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].Id)
+	}
+
+	response.Pagination = buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor)
+	response.Records = records
+
+	return response, nil
+}
 
 // GRPCServerConfig contains configuration for creating a Periscope gRPC server
 // Note: All queries use ClickHouse only - no PostgreSQL dependency
@@ -4442,7 +4908,6 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 	}
 }
 
-// Helper to convert map to structpb.Struct
 func mapToStruct(m map[string]interface{}) *structpb.Struct {
 	s, err := structpb.NewStruct(m)
 	if err != nil {

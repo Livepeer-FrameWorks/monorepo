@@ -54,14 +54,6 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 		// Get authorization header
 		authHeaders := md.Get("authorization")
 		if len(authHeaders) == 0 {
-			// Also check x-service-token for backwards compatibility
-			serviceTokens := md.Get("x-service-token")
-			if len(serviceTokens) > 0 {
-				authHeaders = []string{"Bearer " + serviceTokens[0]}
-			}
-		}
-
-		if len(authHeaders) == 0 {
 			return nil, status.Error(codes.Unauthenticated, "missing authorization")
 		}
 
@@ -108,24 +100,6 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 
 				return handler(ctx, req)
 			}
-		}
-
-		// Try API token (fw_ prefix)
-		if strings.HasPrefix(token, "fw_") {
-			// API tokens need to be validated against the database
-			// For now, just pass through and let handlers validate
-			// TODO: Add API token validation here or in handlers
-			ctx = extractMetadataToContext(ctx, md)
-			ctx = context.WithValue(ctx, "api_token", token)
-
-			if cfg.Logger != nil {
-				cfg.Logger.WithFields(logging.Fields{
-					"method":    info.FullMethod,
-					"auth_type": "api_token",
-				}).Debug("gRPC auth: API token passed through")
-			}
-
-			return handler(ctx, req)
 		}
 
 		return nil, status.Error(codes.Unauthenticated, "invalid token")

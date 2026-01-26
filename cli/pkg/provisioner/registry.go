@@ -29,7 +29,7 @@ var ServicePorts = map[string]int{
 	"forms":            18032,
 	"docs":             18033,
 	"caddy":            18090,
-	"privateer":        5353,
+	"privateer":        18012,
 }
 
 // GetProvisioner returns a provisioner for a given service

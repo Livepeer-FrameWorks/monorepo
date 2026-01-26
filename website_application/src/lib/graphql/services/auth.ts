@@ -1,7 +1,6 @@
 import { authAPI } from "../../authAPI.js";
 import { updateAuthToken, getAccessToken } from "$lib/stores/token.js";
 
-// Helper function to reset GraphQL state
 // Houdini automatically clears cache on client recreation
 function resetGraphQLClient(): void {
   updateAuthToken(null);

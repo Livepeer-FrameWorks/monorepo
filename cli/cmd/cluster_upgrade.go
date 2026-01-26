@@ -88,6 +88,25 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}
 
+	// Resolve deploy name (services/interfaces) or use serviceName for infrastructure
+	deployName := serviceName
+	if svcCfg, ok := manifest.Services[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, svcCfg)
+		if err != nil {
+			return err
+		}
+	} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, ifaceCfg)
+		if err != nil {
+			return err
+		}
+	} else if obsCfg, ok := manifest.Observability[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, obsCfg)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Find host for service
 	var host inventory.Host
 	var found bool
@@ -121,6 +140,15 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 		}
 	}
 
+	// Check observability
+	if !found {
+		if obsConfig, ok := manifest.Observability[serviceName]; ok {
+			if obsConfig.Enabled {
+				host, found = manifest.GetHost(obsConfig.Host)
+			}
+		}
+	}
+
 	if !found {
 		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
 	}
@@ -137,7 +165,7 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 	// Detect current state
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[1/6] Detecting current state...\n")
 	detector := detect.NewDetector(host)
-	state, err := detector.Detect(ctx, serviceName)
+	state, err := detector.Detect(ctx, deployName)
 	if err != nil {
 		return fmt.Errorf("failed to detect service: %w", err)
 	}
@@ -168,9 +196,9 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 		return fmt.Errorf("failed to fetch gitops manifest: %w", err)
 	}
 
-	svcInfo, err := gitopsManifest.GetServiceInfo(serviceName)
+	svcInfo, err := gitopsManifest.GetServiceInfo(deployName)
 	if err != nil {
-		return fmt.Errorf("service %s not found in GitOps manifest: %w", serviceName, err)
+		return fmt.Errorf("service %s not found in GitOps manifest: %w", deployName, err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "  New version: %s\n", svcInfo.Version)
@@ -211,22 +239,33 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 
 	// Stop service
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/6] Stopping service...\n")
-	if err := stopService(ctx, host, serviceName, state.Mode, sshPool); err != nil {
+	if err := stopService(ctx, host, deployName, state.Mode, sshPool); err != nil {
 		return fmt.Errorf("failed to stop service: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service stopped\n")
 
 	// Get provisioner and re-provision with new version
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[4/6] Deploying new version...\n")
-	prov, err := provisioner.GetProvisioner(serviceName, sshPool)
+	prov, err := provisioner.GetProvisioner(deployName, sshPool)
 	if err != nil {
 		return fmt.Errorf("failed to get provisioner: %w", err)
+	}
+
+	portCfg := inventory.ServiceConfig{}
+	if svcCfg, ok := manifest.Services[serviceName]; ok {
+		portCfg = svcCfg
+	} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
+		portCfg = ifaceCfg
+	}
+	port, err := resolvePort(serviceName, portCfg)
+	if err != nil {
+		return fmt.Errorf("failed to resolve port for %s: %w", serviceName, err)
 	}
 
 	config := provisioner.ServiceConfig{
 		Mode:     state.Mode,
 		Version:  version,
-		Port:     provisioner.ServicePorts[serviceName],
+		Port:     port,
 		Metadata: make(map[string]interface{}),
 	}
 
@@ -253,7 +292,7 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 				rollbackConfig := provisioner.ServiceConfig{
 					Mode:     previousMode,
 					Version:  previousVersion,
-					Port:     provisioner.ServicePorts[serviceName],
+					Port:     port,
 					Metadata: make(map[string]interface{}),
 				}
 

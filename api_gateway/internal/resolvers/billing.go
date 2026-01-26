@@ -3,14 +3,19 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	x402 "frameworks/pkg/x402"
+	periscope "frameworks/pkg/clients/periscope"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
+	"github.com/gin-gonic/gin"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -49,7 +54,11 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 	// Build edges with keyset cursors
 	edges := make([]*model.InvoiceEdge, len(resp.Invoices))
 	for i, invoice := range resp.Invoices {
-		cursor := pagination.EncodeCursor(invoice.CreatedAt.AsTime(), invoice.Id)
+		cursorTime := invoice.CreatedAt.AsTime()
+		if invoice.PeriodStart != nil {
+			cursorTime = invoice.PeriodStart.AsTime()
+		}
+		cursor := pagination.EncodeCursor(cursorTime, invoice.Id)
 		edges[i] = &model.InvoiceEdge{
 			Cursor: cursor,
 			Node:   invoice,
@@ -66,8 +75,16 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.Invoice, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.InvoicesConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
 		TotalCount: int(resp.Pagination.GetTotalCount()),
 	}, nil
@@ -89,20 +106,15 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	// Determine billing month from time range
-	var billingMonth string
-	if timeRange != nil {
-		billingMonth = timeRange.Start.Format("2006-01")
-	} else {
-		billingMonth = time.Now().Format("2006-01")
-	}
+	// Build time range (required by Purser)
+	tr := buildUsageTimeRange(timeRange, 30*24*time.Hour)
 
 	// Build pagination request
 	paginationReq := buildBillingPaginationRequest(first, after, last, before)
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Fetching usage records connection from Purser")
 
-	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", billingMonth, paginationReq)
+	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", tr, paginationReq)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load usage records")
 		return nil, fmt.Errorf("failed to load usage records: %w", err)
@@ -111,7 +123,11 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 	// Build edges with keyset cursors
 	edges := make([]*model.UsageRecordEdge, len(resp.UsageRecords))
 	for i, record := range resp.UsageRecords {
-		cursor := pagination.EncodeCursor(record.CreatedAt.AsTime(), record.Id)
+		cursorTime := record.CreatedAt.AsTime()
+		if record.PeriodStart != nil {
+			cursorTime = record.PeriodStart.AsTime()
+		}
+		cursor := pagination.EncodeCursor(cursorTime, record.Id)
 		edges[i] = &model.UsageRecordEdge{
 			Cursor: cursor,
 			Node:   record,
@@ -128,8 +144,16 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.UsageRecord, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.UsageRecordsConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
 		TotalCount: int(resp.Pagination.GetTotalCount()),
 	}, nil
@@ -175,7 +199,11 @@ func (r *Resolver) buildInvoicesConnection(invoices []*pb.Invoice, first *int, a
 
 	edges := make([]*model.InvoiceEdge, len(invoices))
 	for i, invoice := range invoices {
-		cursor := pagination.EncodeCursor(invoice.CreatedAt.AsTime(), invoice.Id)
+		cursorTime := invoice.CreatedAt.AsTime()
+		if invoice.PeriodStart != nil {
+			cursorTime = invoice.PeriodStart.AsTime()
+		}
+		cursor := pagination.EncodeCursor(cursorTime, invoice.Id)
 		edges[i] = &model.InvoiceEdge{
 			Cursor: cursor,
 			Node:   invoice,
@@ -191,8 +219,16 @@ func (r *Resolver) buildInvoicesConnection(invoices []*pb.Invoice, first *int, a
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.Invoice, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.InvoicesConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
 		TotalCount: len(invoices),
 	}
@@ -211,7 +247,11 @@ func (r *Resolver) buildUsageRecordsConnection(records []*pb.UsageRecord, first 
 
 	edges := make([]*model.UsageRecordEdge, len(records))
 	for i, record := range records {
-		cursor := pagination.EncodeCursor(record.CreatedAt.AsTime(), record.Id)
+		cursorTime := record.CreatedAt.AsTime()
+		if record.PeriodStart != nil {
+			cursorTime = record.PeriodStart.AsTime()
+		}
+		cursor := pagination.EncodeCursor(cursorTime, record.Id)
 		edges[i] = &model.UsageRecordEdge{
 			Cursor: cursor,
 			Node:   record,
@@ -227,8 +267,16 @@ func (r *Resolver) buildUsageRecordsConnection(records []*pb.UsageRecord, first 
 		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
+	edgeNodes := make([]*pb.UsageRecord, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.UsageRecordsConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
 		TotalCount: len(records),
 	}
@@ -357,6 +405,73 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*pb.BillingStatusRes
 	return status, nil
 }
 
+// DoGetInvoicePreview returns the current draft invoice for the tenant (authoritative preview)
+func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*pb.Invoice, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic invoice preview")
+		return demo.GenerateInvoicePreview(), nil
+	}
+
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	status := "draft"
+	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, &status, &pb.CursorPaginationRequest{First: 1})
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoice preview")
+		return nil, fmt.Errorf("failed to load invoice preview: %w", err)
+	}
+
+	if resp == nil || len(resp.Invoices) == 0 {
+		return nil, nil
+	}
+
+	return resp.Invoices[0], nil
+}
+
+// DoGetLiveUsageSummary returns near-real-time usage summary for the current period.
+func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, periodEnd *time.Time) (*pb.LiveUsageSummary, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic live usage summary")
+		return demo.GenerateLiveUsageSummary(), nil
+	}
+
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	now := time.Now()
+	start := periodStart
+	if start == nil {
+		s := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		start = &s
+	}
+	end := periodEnd
+	if end == nil || end.After(now) {
+		end = &now
+	}
+
+	resp, err := r.Clients.Periscope.GetLiveUsageSummary(ctx, tenantID, &periscope.TimeRangeOpts{
+		StartTime: *start,
+		EndTime:   *end,
+	})
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch live usage summary")
+		return nil, fmt.Errorf("failed to fetch live usage summary: %w", err)
+	}
+
+	return resp.GetSummary(), nil
+}
+
 // DoGetTenantUsage returns full tenant usage with maps converted to arrays
 func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRangeInput) (*model.TenantUsage, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -450,63 +565,142 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting usage records")
 
-	// Determine date range
-	var startDate, endDate string
-	if timeRange != nil {
-		startDate = timeRange.Start.Format("2006-01-02")
-		endDate = timeRange.End.Format("2006-01-02")
-	} else {
-		// Default to last 30 days
-		now := time.Now()
-		endDate = now.Format("2006-01-02")
-		startDate = now.AddDate(0, 0, -30).Format("2006-01-02")
-	}
+	// Build time range for usage records
+	tr := buildUsageTimeRange(timeRange, 30*24*time.Hour)
 
-	// Get usage from Purser
-	usage, err := r.Clients.Purser.GetTenantUsage(ctx, tenantID, startDate, endDate)
+	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", tr, &pb.CursorPaginationRequest{First: 500})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get usage records")
 		return nil, fmt.Errorf("failed to get usage records: %w", err)
 	}
 
-	// Convert usage response to records
-	var records []*pb.UsageRecord
-	for resourceType, amount := range usage.Usage {
-		cost := float64(0)
-		if c, exists := usage.Costs[resourceType]; exists {
-			cost = c
-		}
+	return resp.UsageRecords, nil
+}
 
-		record := &pb.UsageRecord{
-			Id:           fmt.Sprintf("%s_%s_%s", tenantID, resourceType, usage.BillingPeriod),
-			TenantId:     tenantID,
-			UsageType:    resourceType,
-			UsageValue:   amount,
-			BillingMonth: usage.BillingPeriod,
-		}
-
-		// Store cost info in usage details via structpb
-		if cost > 0 {
-			unitPrice := float64(0)
-			if amount > 0 {
-				unitPrice = cost / amount
-			}
-			details := map[string]interface{}{
-				"cost": map[string]interface{}{
-					"quantity":   amount,
-					"unit_price": unitPrice,
-					"unit":       usage.Currency,
-				},
-			}
-			if detailsStruct, err := structpb.NewStruct(details); err == nil {
-				record.UsageDetails = detailsStruct
-			}
-		}
-
-		records = append(records, record)
+// DoGetUsageAggregates returns rollup-backed aggregates for usage charts
+func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.TimeRangeInput, granularity string, usageTypes []string) ([]*pb.UsageAggregate, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic usage aggregates")
+		records := demo.GenerateUsageRecords()
+		return buildUsageAggregates(records, timeRange, granularity, usageTypes), nil
 	}
 
-	return records, nil
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	tr := buildUsageTimeRange(timeRange, 30*24*time.Hour)
+
+	resp, err := r.Clients.Purser.GetUsageAggregates(ctx, tenantID, tr, granularity, usageTypes)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get usage aggregates")
+		return nil, fmt.Errorf("failed to get usage aggregates: %w", err)
+	}
+
+	return resp.Aggregates, nil
+}
+
+func buildUsageTimeRange(timeRange *model.TimeRangeInput, defaultWindow time.Duration) *pb.TimeRange {
+	if timeRange == nil {
+		end := time.Now()
+		start := end.Add(-defaultWindow)
+		return &pb.TimeRange{
+			Start: timestamppb.New(start),
+			End:   timestamppb.New(end),
+		}
+	}
+	return &pb.TimeRange{
+		Start: timestamppb.New(timeRange.Start),
+		End:   timestamppb.New(timeRange.End),
+	}
+}
+
+func buildUsageAggregates(records []*pb.UsageRecord, timeRange *model.TimeRangeInput, granularity string, usageTypes []string) []*pb.UsageAggregate {
+	type key struct {
+		usageType string
+		start     time.Time
+	}
+
+	usageTypeFilter := map[string]bool{}
+	for _, t := range usageTypes {
+		usageTypeFilter[t] = true
+	}
+
+	startTime := time.Time{}
+	endTime := time.Time{}
+	if timeRange != nil {
+		startTime = timeRange.Start
+		endTime = timeRange.End
+	}
+
+	buckets := map[key]*pb.UsageAggregate{}
+
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		if len(usageTypeFilter) > 0 && !usageTypeFilter[record.UsageType] {
+			continue
+		}
+
+		ts := record.CreatedAt.AsTime()
+		if record.PeriodStart != nil {
+			ts = record.PeriodStart.AsTime()
+		}
+
+		if !startTime.IsZero() && ts.Before(startTime) {
+			continue
+		}
+		if !endTime.IsZero() && ts.After(endTime) {
+			continue
+		}
+
+		bucketStart, bucketEnd := bucketForGranularity(ts, granularity)
+		k := key{usageType: record.UsageType, start: bucketStart}
+		if _, ok := buckets[k]; !ok {
+			buckets[k] = &pb.UsageAggregate{
+				UsageType:   record.UsageType,
+				UsageValue:  0,
+				Granularity: granularity,
+				PeriodStart: timestamppb.New(bucketStart),
+				PeriodEnd:   timestamppb.New(bucketEnd),
+			}
+		}
+		buckets[k].UsageValue += record.UsageValue
+	}
+
+	result := make([]*pb.UsageAggregate, 0, len(buckets))
+	for _, agg := range buckets {
+		result = append(result, agg)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		a := result[i].GetPeriodStart()
+		b := result[j].GetPeriodStart()
+		if a == nil || b == nil {
+			return result[i].UsageType < result[j].UsageType
+		}
+		return a.AsTime().Before(b.AsTime())
+	})
+
+	return result
+}
+
+func bucketForGranularity(ts time.Time, granularity string) (time.Time, time.Time) {
+	switch granularity {
+	case "monthly":
+		start := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, ts.Location())
+		return start, start.AddDate(0, 1, 0)
+	case "daily":
+		start := time.Date(ts.Year(), ts.Month(), ts.Day(), 0, 0, 0, 0, ts.Location())
+		return start, start.Add(24 * time.Hour)
+	default:
+		start := ts.Truncate(time.Hour)
+		return start, start.Add(time.Hour)
+	}
 }
 
 // DoCreatePayment processes a payment
@@ -566,7 +760,110 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		return nil, fmt.Errorf("failed to create payment: %w", err)
 	}
 
+	userID := userIDFromContext(ctx)
+	provider := resp.Method
+	if provider == "" {
+		provider = string(input.Method)
+	}
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventPaymentCreated,
+		ResourceType: "payment",
+		ResourceId:   resp.Id,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId:  tenantID,
+				PaymentId: resp.Id,
+				InvoiceId: input.InvoiceID,
+				Amount:    resp.Amount,
+				Currency:  resp.Currency,
+				Provider:  provider,
+				Status:    resp.Status,
+			},
+		},
+		UserId: userID,
+	})
+
 	return resp, nil
+}
+
+// DoSubmitX402Payment settles an x402 payment payload and credits the billable tenant.
+func (r *Resolver) DoSubmitX402Payment(ctx context.Context, payment string, resource *string) (model.SubmitX402PaymentResult, error) {
+	payment = strings.TrimSpace(payment)
+	if payment == "" {
+		return &model.ValidationError{Message: "payment is required"}, nil
+	}
+	if r.Clients == nil || r.Clients.Purser == nil {
+		return &model.ValidationError{Message: "x402 settlement unavailable"}, nil
+	}
+
+	authTenantID, _ := ctx.Value("tenant_id").(string)
+	resourceValue := ""
+	if resource != nil {
+		resourceValue = strings.TrimSpace(*resource)
+	}
+
+	clientIP := ""
+	if ginCtx, ok := ctx.Value("GinContext").(*gin.Context); ok && ginCtx != nil {
+		clientIP = ginCtx.ClientIP()
+	}
+
+	settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
+		PaymentHeader:         payment,
+		Resource:              resourceValue,
+		AuthTenantID:          authTenantID,
+		ClientIP:              clientIP,
+		Purser:                r.Clients.Purser,
+		Commodore:             r.Clients.Commodore,
+		AllowUnresolvedCreator: false,
+		Logger:                r.Logger,
+	})
+	if settleErr != nil {
+		switch settleErr.Code {
+		case x402.ErrAuthRequired, x402.ErrTargetMismatch:
+			return &model.AuthError{Message: settleErr.Message}, nil
+		case x402.ErrResourceNotFound:
+			resourceType := "Resource"
+			if settleErr.ResourceType != "" {
+				resourceType = settleErr.ResourceType
+			}
+			resourceID := ""
+			if settleErr.ResourceID != "" {
+				resourceID = settleErr.ResourceID
+			}
+			return &model.NotFoundError{
+				Message:      settleErr.Message,
+				Code:         strPtr("NOT_FOUND"),
+				ResourceType: resourceType,
+				ResourceID:   resourceID,
+			}, nil
+		case x402.ErrBillingDetailsRequired:
+			return &model.ValidationError{Message: settleErr.Message, Code: strPtr("BILLING_DETAILS_REQUIRED")}, nil
+		default:
+			return &model.ValidationError{Message: settleErr.Message}, nil
+		}
+	}
+	if settleResult == nil || settleResult.Settle == nil || !settleResult.Settle.Success {
+		return &model.ValidationError{Message: "payment settlement failed"}, nil
+	}
+
+	credited := int(settleResult.Settle.CreditedCents)
+	newBalance := int(settleResult.Settle.NewBalanceCents)
+	txHash := strings.TrimSpace(settleResult.Settle.TxHash)
+	var txHashPtr *string
+	if txHash != "" {
+		txHashPtr = &txHash
+	}
+
+	return &model.X402PaymentResult{
+		Success:        true,
+		IsAuthOnly:     false,
+		TenantID:       settleResult.TargetTenantID,
+		WalletAddress:  settleResult.PayerAddress,
+		CreditedCents:  credited,
+		NewBalanceCents: &newBalance,
+		TxHash:         txHashPtr,
+		Message:        fmt.Sprintf("Payment successful! %d cents credited to tenant %s.", settleResult.Settle.CreditedCents, settleResult.TargetTenantID),
+	}, nil
 }
 
 // DoUpdateSubscriptionCustomTerms updates custom billing terms for a tenant subscription
@@ -636,10 +933,24 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 		return nil, fmt.Errorf("failed to update subscription: %w", err)
 	}
 
+	userID := userIDFromContext(ctx)
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventSubscriptionUpdated,
+		ResourceType: "subscription",
+		ResourceId:   subscription.Id,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId:       tenantID,
+				SubscriptionId: subscription.Id,
+				Status:         subscription.Status,
+			},
+		},
+		UserId: userID,
+	})
+
 	return subscription, nil
 }
 
-// Helper to convert AllocationDetailsInput to proto
 func convertAllocationDetailsInput(input *model.AllocationDetailsInput) *pb.AllocationDetails {
 	if input == nil {
 		return nil
@@ -657,7 +968,6 @@ func convertAllocationDetailsInput(input *model.AllocationDetailsInput) *pb.Allo
 	return ad
 }
 
-// Helper to convert OverageRatesInput to proto
 func convertOverageRatesInput(input *model.OverageRatesInput) *pb.OverageRates {
 	if input == nil {
 		return nil
@@ -673,4 +983,772 @@ func convertOverageRatesInput(input *model.OverageRatesInput) *pb.OverageRates {
 		rates.Compute = convertAllocationDetailsInput(input.Compute)
 	}
 	return rates
+}
+
+// ============================================================================
+// PREPAID BALANCE RESOLVERS
+// ============================================================================
+
+// DoGetPrepaidBalance returns the current prepaid balance for the tenant
+func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*model.PrepaidBalance, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic prepaid balance")
+		return &model.PrepaidBalance{
+			ID:                       "demo-balance-001",
+			TenantID:                 "demo-tenant",
+			BalanceCents:             4523,
+			Currency:                 "USD",
+			LowBalanceThresholdCents: 500,
+			IsLowBalance:             false,
+			DrainRateCentsPerHour:    12, // demo: ~$0.12/hr spend rate
+			CreatedAt:                time.Now().Add(-30 * 24 * time.Hour),
+			UpdatedAt:                time.Now().Add(-1 * time.Hour),
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return nil, fmt.Errorf("tenant_id required")
+	}
+
+	curr := "USD"
+	if currency != nil && *currency != "" {
+		curr = *currency
+	}
+
+	resp, err := r.Clients.Purser.GetPrepaidBalance(ctx, tenantID, curr)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get prepaid balance")
+		return nil, err
+	}
+
+	return &model.PrepaidBalance{
+		ID:                       resp.Id,
+		TenantID:                 resp.TenantId,
+		BalanceCents:             int(resp.BalanceCents),
+		Currency:                 resp.Currency,
+		LowBalanceThresholdCents: int(resp.LowBalanceThresholdCents),
+		IsLowBalance:             resp.IsLowBalance,
+		DrainRateCentsPerHour:    int(resp.DrainRateCentsPerHour),
+		CreatedAt:                resp.CreatedAt.AsTime(),
+		UpdatedAt:                resp.UpdatedAt.AsTime(),
+	}, nil
+}
+
+// DoGetBalanceTransactionsConnection returns paginated balance transactions for the tenant
+func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) (*model.BalanceTransactionsConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic balance transactions")
+		now := time.Now()
+		desc1 := "Crypto top-up: 0.05 ETH"
+		desc2 := "Usage: 2.3 viewer-hours @ $0.01/hr"
+		return &model.BalanceTransactionsConnection{
+			Edges: []*model.BalanceTransactionEdge{
+				{Cursor: "tx-001", Node: &model.BalanceTransaction{
+					ID: "tx-001", TenantID: "demo-tenant", AmountCents: 5000, BalanceAfterCents: 4523,
+					TransactionType: "topup", Description: &desc1, CreatedAt: now.Add(-24 * time.Hour),
+				}},
+				{Cursor: "tx-002", Node: &model.BalanceTransaction{
+					ID: "tx-002", TenantID: "demo-tenant", AmountCents: -23, BalanceAfterCents: 4523,
+					TransactionType: "usage", Description: &desc2, CreatedAt: now.Add(-1 * time.Hour),
+				}},
+			},
+			Nodes: []*model.BalanceTransaction{},
+			PageInfo: &model.PageInfo{
+				HasNextPage:     false,
+				HasPreviousPage: false,
+			},
+			TotalCount: 2,
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return nil, fmt.Errorf("tenant_id required")
+	}
+
+	// Convert time range
+	var pbTimeRange *pb.TimeRange
+	if timeRange != nil {
+		pbTimeRange = &pb.TimeRange{
+			Start: timestamppb.New(timeRange.Start),
+			End:   timestamppb.New(timeRange.End),
+		}
+	}
+
+	// Build bidirectional pagination request
+	var first, last *int
+	var after, before *string
+	if page != nil {
+		first, after, last, before = page.First, page.After, page.Last, page.Before
+	}
+	paginationReq := buildBillingPaginationRequest(first, after, last, before)
+
+	resp, err := r.Clients.Purser.ListBalanceTransactions(ctx, tenantID, transactionType, pbTimeRange, paginationReq)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to list balance transactions")
+		return nil, err
+	}
+
+	// Convert to GraphQL types
+	edges := make([]*model.BalanceTransactionEdge, 0, len(resp.Transactions))
+	nodes := make([]*model.BalanceTransaction, 0, len(resp.Transactions))
+
+	for _, tx := range resp.Transactions {
+		node := &model.BalanceTransaction{
+			ID:                tx.Id,
+			TenantID:          tx.TenantId,
+			AmountCents:       int(tx.AmountCents),
+			BalanceAfterCents: int(tx.BalanceAfterCents),
+			TransactionType:   tx.TransactionType,
+			CreatedAt:         tx.CreatedAt.AsTime(),
+		}
+		if tx.Description != "" {
+			node.Description = &tx.Description
+		}
+		if tx.ReferenceId != nil {
+			node.ReferenceID = tx.ReferenceId
+		}
+		if tx.ReferenceType != nil {
+			node.ReferenceType = tx.ReferenceType
+		}
+
+		edges = append(edges, &model.BalanceTransactionEdge{
+			Cursor: tx.Id,
+			Node:   node,
+		})
+		nodes = append(nodes, node)
+	}
+
+	// Build page info from backend response
+	pag := resp.GetPagination()
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: pag.GetHasPreviousPage(),
+		HasNextPage:     pag.GetHasNextPage(),
+	}
+	if pag.GetStartCursor() != "" {
+		sc := pag.GetStartCursor()
+		pageInfo.StartCursor = &sc
+	}
+	if pag.GetEndCursor() != "" {
+		ec := pag.GetEndCursor()
+		pageInfo.EndCursor = &ec
+	}
+
+	return &model.BalanceTransactionsConnection{
+		Edges:      edges,
+		Nodes:      nodes,
+		PageInfo:   pageInfo,
+		TotalCount: int(pag.GetTotalCount()),
+	}, nil
+}
+
+// NOTE: DoAdjustPrepaidBalance is NOT exposed in GraphQL.
+// Admin balance adjustments go through CLI → direct gRPC to Purser.
+// The gRPC AdjustBalance method exists in Purser for CLI use.
+
+// ============================================================================
+// STRIPE CHECKOUT OPERATIONS
+// ============================================================================
+
+// DoCreateStripeCheckout creates a Stripe Checkout Session for subscription setup
+func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPeriod, successURL, cancelURL string) (model.StripeCheckoutResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic Stripe checkout")
+		return &model.StripeCheckoutSession{
+			SessionID:   "cs_demo_" + time.Now().Format("20060102150405"),
+			CheckoutURL: "https://checkout.stripe.com/demo",
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).Info("Creating Stripe checkout session")
+
+	resp, err := r.Clients.Purser.CreateStripeCheckoutSession(ctx, tenantID, tierID, billingPeriod, successURL, cancelURL)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe checkout")
+		return &model.ValidationError{Message: "Failed to create checkout session: " + err.Error()}, nil
+	}
+
+	return &model.StripeCheckoutSession{
+		SessionID:   resp.SessionId,
+		CheckoutURL: resp.CheckoutUrl,
+	}, nil
+}
+
+// DoCreateStripeBillingPortal creates a Stripe Billing Portal session
+func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL string) (model.StripeBillingPortalResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic Stripe billing portal")
+		return &model.StripeBillingPortalSession{
+			PortalURL: "https://billing.stripe.com/demo",
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Creating Stripe billing portal session")
+
+	resp, err := r.Clients.Purser.CreateStripeBillingPortal(ctx, tenantID, returnURL)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe billing portal")
+		return &model.ValidationError{Message: "Failed to create billing portal: " + err.Error()}, nil
+	}
+
+	return &model.StripeBillingPortalSession{
+		PortalURL: resp.PortalUrl,
+	}, nil
+}
+
+// ============================================================================
+// MOLLIE CHECKOUT OPERATIONS
+// ============================================================================
+
+// DoCreateMollieFirstPayment creates a Mollie first payment to establish a mandate
+func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, method, redirectURL string) (model.MollieFirstPaymentResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic Mollie first payment")
+		ts := time.Now().Format("20060102150405")
+		return &model.MollieFirstPayment{
+			PaymentID:  "tr_demo" + ts[:8],
+			CustomerID: "cst_demo" + ts[:8],
+			PaymentURL: "https://www.mollie.com/demo/checkout",
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("method", method).Info("Creating Mollie first payment")
+
+	resp, err := r.Clients.Purser.CreateMollieFirstPayment(ctx, tenantID, tierID, method, redirectURL)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie first payment")
+		return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
+	}
+
+	userID := userIDFromContext(ctx)
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventPaymentCreated,
+		ResourceType: "payment",
+		ResourceId:   resp.PaymentId,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId:  tenantID,
+				PaymentId: resp.PaymentId,
+				Provider:  "mollie",
+			},
+		},
+		UserId: userID,
+	})
+
+	return &model.MollieFirstPayment{
+		PaymentID:  resp.PaymentId,
+		CustomerID: resp.MollieCustomerId,
+		PaymentURL: resp.PaymentUrl,
+	}, nil
+}
+
+// DoCreateMollieSubscription creates a Mollie subscription after mandate is valid
+func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, mandateID string, description *string) (model.MollieSubscriptionResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic Mollie subscription")
+		ts := time.Now().Format("20060102150405")
+		return &model.MollieSubscription{
+			SubscriptionID:  "sub_demo" + ts[:8],
+			Status:          "active",
+			NextPaymentDate: nil,
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	desc := ""
+	if description != nil {
+		desc = *description
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("mandate_id", mandateID).Info("Creating Mollie subscription")
+
+	resp, err := r.Clients.Purser.CreateMollieSubscription(ctx, tenantID, tierID, mandateID, desc)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie subscription")
+		return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
+	}
+
+	userID := userIDFromContext(ctx)
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventSubscriptionCreated,
+		ResourceType: "subscription",
+		ResourceId:   resp.SubscriptionId,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId:       tenantID,
+				SubscriptionId: resp.SubscriptionId,
+				Provider:       "mollie",
+				Status:         resp.Status,
+			},
+		},
+		UserId: userID,
+	})
+
+	var nextPaymentDate *string
+	if resp.NextPaymentDate != "" {
+		nextPaymentDate = &resp.NextPaymentDate
+	}
+
+	return &model.MollieSubscription{
+		SubscriptionID:  resp.SubscriptionId,
+		Status:          resp.Status,
+		NextPaymentDate: nextPaymentDate,
+	}, nil
+}
+
+// DoListMollieMandates lists Mollie mandates for the current tenant
+func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*pb.MollieMandate, error) {
+	if middleware.IsDemoMode(ctx) {
+		ts := time.Now().AddDate(0, -1, 0)
+		details := map[string]interface{}{
+			"consumer_name":    "Demo User",
+			"consumer_account": "NL00DEMO0000000000",
+		}
+		structDetails, _ := structpb.NewStruct(details)
+		return []*pb.MollieMandate{
+			{
+				MollieMandateId:  "mdt_demo_123",
+				MollieCustomerId: "cst_demo_123",
+				Status:           "valid",
+				Method:           "directdebit",
+				Details:          structDetails,
+				CreatedAt:        timestamppb.New(ts),
+			},
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return nil, fmt.Errorf("authentication required")
+	}
+
+	resp, err := r.Clients.Purser.ListMollieMandates(ctx, tenantID)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to list Mollie mandates")
+		return nil, err
+	}
+
+	if resp != nil && resp.Mandates != nil {
+		return resp.Mandates, nil
+	}
+
+	return []*pb.MollieMandate{}, nil
+}
+
+// ============================================================================
+// CARD TOP-UP OPERATIONS (PREPAID)
+// ============================================================================
+
+// DoCreateCardTopup creates a card-based top-up checkout session for prepaid balance
+func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCardTopupInput) (*model.CardTopupResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic card top-up")
+		return &model.CardTopupResult{
+			TopupID:     "topup_demo_" + time.Now().Format("20060102150405"),
+			CheckoutURL: "https://checkout.stripe.com/demo-topup",
+			ExpiresAt:   time.Now().Add(30 * time.Minute),
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return nil, fmt.Errorf("authentication required")
+	}
+
+	// Map GraphQL provider enum to proto
+	var provider string
+	switch input.Provider {
+	case model.CardPaymentProviderStripe:
+		provider = "stripe"
+	case model.CardPaymentProviderMollie:
+		provider = "mollie"
+	default:
+		return nil, fmt.Errorf("unsupported payment provider: %s", input.Provider)
+	}
+
+	currency := "USD"
+	if input.Currency != nil && *input.Currency != "" {
+		currency = *input.Currency
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).
+		WithField("amount_cents", input.AmountCents).
+		WithField("provider", provider).
+		Info("Creating card top-up checkout")
+
+	// Build the gRPC request
+	req := &pb.CreateCardTopupRequest{
+		TenantId:    tenantID,
+		AmountCents: int64(input.AmountCents),
+		Currency:    currency,
+		Provider:    provider,
+		SuccessUrl:  input.SuccessURL,
+		CancelUrl:   input.CancelURL,
+	}
+
+	// Optional billing details - proto uses optional string (pointers)
+	req.BillingEmail = input.BillingEmail
+	req.BillingName = input.BillingName
+	req.BillingCompany = input.BillingCompany
+	req.BillingVatNumber = input.BillingVatNumber
+
+	resp, err := r.Clients.Purser.CreateCardTopup(ctx, req)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create card top-up")
+		return nil, fmt.Errorf("failed to create top-up: %w", err)
+	}
+
+	userID := userIDFromContext(ctx)
+	amount := float64(input.AmountCents) / 100.0
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventTopupCreated,
+		ResourceType: "topup",
+		ResourceId:   resp.TopupId,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId: tenantID,
+				TopupId:  resp.TopupId,
+				Amount:   amount,
+				Currency: currency,
+				Provider: provider,
+				Status:   "pending",
+			},
+		},
+		UserId: userID,
+	})
+
+	return &model.CardTopupResult{
+		TopupID:     resp.TopupId,
+		CheckoutURL: resp.CheckoutUrl,
+		ExpiresAt:   resp.ExpiresAt.AsTime(),
+	}, nil
+}
+
+// ============================================================================
+// CRYPTO TOP-UP OPERATIONS (PREPAID - Agent Payment Method)
+// ============================================================================
+
+// DoCreateCryptoTopup creates a crypto deposit address for prepaid balance top-up
+func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCryptoTopupInput) (*model.CryptoTopupResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic crypto top-up")
+		return &model.CryptoTopupResult{
+			TopupID:             "topup_demo_" + time.Now().Format("20060102150405"),
+			DepositAddress:      "0x742d35cc6634c0532925a3b844bc9e7595f8ab00",
+			Asset:               pb.CryptoAsset_CRYPTO_ASSET_ETH,
+			AssetSymbol:         "ETH",
+			ExpectedAmountCents: input.AmountCents,
+			ExpiresAt:           time.Now().Add(24 * time.Hour),
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return nil, fmt.Errorf("authentication required")
+	}
+
+	// Validate asset (already a proto enum from gqlgen)
+	protoAsset := input.Asset
+	if protoAsset == pb.CryptoAsset_CRYPTO_ASSET_UNSPECIFIED {
+		return nil, fmt.Errorf("unsupported crypto asset: %s", input.Asset)
+	}
+
+	currency := "USD"
+	if input.Currency != nil && *input.Currency != "" {
+		currency = *input.Currency
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).
+		WithField("amount_cents", input.AmountCents).
+		WithField("asset", input.Asset).
+		Info("Creating crypto top-up deposit address")
+
+	req := &pb.CreateCryptoTopupRequest{
+		TenantId:            tenantID,
+		ExpectedAmountCents: int64(input.AmountCents),
+		Asset:               protoAsset,
+		Currency:            currency,
+	}
+
+	resp, err := r.Clients.Purser.CreateCryptoTopup(ctx, req)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create crypto top-up")
+		return nil, fmt.Errorf("failed to create crypto top-up: %w", err)
+	}
+
+	userID := userIDFromContext(ctx)
+	amount := float64(input.AmountCents) / 100.0
+	provider := "crypto"
+	if resp.AssetSymbol != "" {
+		provider = "crypto_" + strings.ToLower(resp.AssetSymbol)
+	}
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventTopupCreated,
+		ResourceType: "topup",
+		ResourceId:   resp.TopupId,
+		Payload: &pb.ServiceEvent_BillingEvent{
+			BillingEvent: &pb.BillingEvent{
+				TenantId: tenantID,
+				TopupId:  resp.TopupId,
+				Amount:   amount,
+				Currency: currency,
+				Provider: provider,
+				Status:   "pending",
+			},
+		},
+		UserId: userID,
+	})
+
+	return &model.CryptoTopupResult{
+		TopupID:             resp.TopupId,
+		DepositAddress:      resp.DepositAddress,
+		Asset:               resp.Asset, // proto enum is used directly by gqlgen
+		AssetSymbol:         resp.AssetSymbol,
+		ExpectedAmountCents: int(resp.ExpectedAmountCents),
+		ExpiresAt:           resp.ExpiresAt.AsTime(),
+	}, nil
+}
+
+// DoGetCryptoTopupStatus returns the status of a crypto top-up for polling
+func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (*model.CryptoTopupStatus, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic crypto top-up status")
+		expiresAt := time.Now().Add(23 * time.Hour)
+		return &model.CryptoTopupStatus{
+			ID:             topupID,
+			DepositAddress: "0x742d35cc6634c0532925a3b844bc9e7595f8ab00",
+			Asset:          pb.CryptoAsset_CRYPTO_ASSET_ETH,
+			Status:         "pending",
+			Confirmations:  0,
+			ExpiresAt:      expiresAt,
+		}, nil
+	}
+
+	resp, err := r.Clients.Purser.GetCryptoTopup(ctx, topupID)
+	if err != nil {
+		r.Logger.WithError(err).WithField("topup_id", topupID).Error("Failed to get crypto top-up status")
+		return nil, fmt.Errorf("failed to get crypto top-up status: %w", err)
+	}
+
+	result := &model.CryptoTopupStatus{
+		ID:             resp.Id,
+		DepositAddress: resp.DepositAddress,
+		Asset:          resp.Asset, // proto enum is used directly by gqlgen
+		Status:         resp.Status,
+		Confirmations:  int(resp.Confirmations),
+		ExpiresAt:      resp.ExpiresAt.AsTime(),
+	}
+
+	if resp.TxHash != "" {
+		result.TxHash = &resp.TxHash
+	}
+	if resp.ReceivedAmountWei > 0 {
+		weiStr := fmt.Sprintf("%d", resp.ReceivedAmountWei)
+		result.ReceivedAmountWei = &weiStr
+	}
+	if resp.CreditedAmountCents > 0 {
+		cents := int(resp.CreditedAmountCents)
+		result.CreditedAmountCents = &cents
+	}
+	if resp.DetectedAt != nil {
+		t := resp.DetectedAt.AsTime()
+		result.DetectedAt = &t
+	}
+	if resp.CompletedAt != nil {
+		t := resp.CompletedAt.AsTime()
+		result.CompletedAt = &t
+	}
+
+	return result, nil
+}
+
+// ============================================================================
+// PROMOTION FLOW
+// ============================================================================
+
+// DoPromoteToPaid upgrades a wallet-only prepaid account to postpaid billing
+func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.PromoteToPaidResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic promotion result")
+		return &model.PromoteToPaidPayload{
+			Success:            true,
+			Message:            "Upgraded to postpaid billing (demo mode)",
+			NewBillingModel:    "postpaid",
+			CreditBalanceCents: 1000, // $10 demo credit
+		}, nil
+	}
+
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return &model.ValidationError{
+			Message: "Tenant context required",
+			Code:    ptrStr("TENANT_REQUIRED"),
+			Field:   ptrStr("tenant_id"),
+		}, nil
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).Info("Processing promotion to postpaid")
+
+	resp, err := r.Clients.Purser.PromoteToPaid(ctx, tenantID, tierID)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to promote to postpaid")
+		return &model.ValidationError{
+			Message: err.Error(),
+			Code:    ptrStr("PROMOTION_FAILED"),
+			Field:   ptrStr("tier_id"),
+		}, nil
+	}
+
+	return &model.PromoteToPaidPayload{
+		Success:            resp.Success,
+		Message:            resp.Message,
+		NewBillingModel:    resp.NewBillingModel,
+		CreditBalanceCents: int(resp.CreditBalanceCents),
+		SubscriptionID:     resp.SubscriptionId,
+	}, nil
+}
+
+// ============================================================================
+// BILLING DETAILS RESOLVERS
+// ============================================================================
+
+// DoGetBillingDetails returns billing details for the current tenant
+func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*pb.BillingDetails, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic billing details")
+		now := time.Now()
+		return &pb.BillingDetails{
+			TenantId:   "demo-tenant",
+			Email:      "billing@example.com",
+			Company:    "Demo Company Inc.",
+			VatNumber:  "DE123456789",
+			Address: &pb.BillingAddress{
+				Street:     "123 Demo Street",
+				City:       "Berlin",
+				State:      "",
+				PostalCode: "10115",
+				Country:    "DE",
+			},
+			IsComplete: true,
+			UpdatedAt:  timestamppb.New(now),
+		}, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return nil, fmt.Errorf("tenant_id required")
+	}
+
+	resp, err := r.Clients.Purser.GetBillingDetails(ctx, tenantID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get billing details")
+		return nil, err
+	}
+
+	return resp, nil
+}
+
+// DoUpdateBillingDetails updates billing details for the current tenant
+func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.UpdateBillingDetailsInput) (*pb.BillingDetails, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic billing details after update")
+		now := time.Now()
+		details := &pb.BillingDetails{
+			TenantId:   "demo-tenant",
+			IsComplete: false,
+			UpdatedAt:  timestamppb.New(now),
+		}
+		if input.Email != nil {
+			details.Email = *input.Email
+		}
+		if input.Company != nil {
+			details.Company = *input.Company
+		}
+		if input.VatNumber != nil {
+			details.VatNumber = *input.VatNumber
+		}
+		if input.Address != nil {
+			details.Address = &pb.BillingAddress{
+				Street:     input.Address.Street,
+				City:       input.Address.City,
+				PostalCode: input.Address.PostalCode,
+				Country:    input.Address.Country,
+			}
+			if input.Address.State != nil {
+				details.Address.State = *input.Address.State
+			}
+		}
+		// Check completeness
+		details.IsComplete = details.Email != "" && details.Address != nil &&
+			details.Address.Street != "" && details.Address.City != "" &&
+			details.Address.PostalCode != "" && details.Address.Country != ""
+		return details, nil
+	}
+
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok || tenantID == "" {
+		return nil, fmt.Errorf("tenant_id required")
+	}
+
+	// Build proto request
+	req := &pb.UpdateBillingDetailsRequest{
+		TenantId: tenantID,
+	}
+	if input.Email != nil {
+		req.Email = input.Email
+	}
+	if input.Company != nil {
+		req.Company = input.Company
+	}
+	if input.VatNumber != nil {
+		req.VatNumber = input.VatNumber
+	}
+	if input.Address != nil {
+		req.Address = &pb.BillingAddress{
+			Street:     input.Address.Street,
+			City:       input.Address.City,
+			PostalCode: input.Address.PostalCode,
+			Country:    input.Address.Country,
+		}
+		if input.Address.State != nil {
+			req.Address.State = *input.Address.State
+		}
+	}
+
+	resp, err := r.Clients.Purser.UpdateBillingDetails(ctx, req)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to update billing details")
+		return nil, err
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Billing details updated")
+	return resp, nil
+}
+
+// ptrStr returns a pointer to the given string (local helper to avoid import conflicts)
+func ptrStr(s string) *string {
+	return &s
 }

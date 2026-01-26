@@ -74,8 +74,9 @@ COPY npm_player/ npm_player/
 COPY npm_studio/ npm_studio/
 COPY website_application/ website_application/
 
-# copy GraphQL schema for Houdini codegen
+# copy GraphQL schema and operations for Houdini codegen
 COPY pkg/graphql/schema.graphql pkg/graphql/schema.graphql
+COPY pkg/graphql/operations/ pkg/graphql/operations/
 
 # build the app (increase memory for Houdini codegen + Vite SSR + adapter-node)
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter frameworks-frontend... run build

@@ -1,0 +1,27 @@
+# Fetch stream lifecycle events (historical)
+query GetStreamEvents($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 50) {
+  analytics {
+    lifecycle {
+      streamEventsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+        edges {
+          cursor
+          node {
+            eventId
+            type
+            streamId
+            nodeId
+            status
+            timestamp
+            details
+            payload
+            source
+          }
+        }
+        pageInfo {
+          ...PageInfoFields
+        }
+        totalCount
+      }
+    }
+  }
+}

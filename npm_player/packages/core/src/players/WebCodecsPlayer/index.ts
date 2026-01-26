@@ -114,11 +114,13 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     name: 'WebCodecs Player',
     shortname: 'webcodecs',
     priority: 0, // Highest priority - lowest latency option
-    // Raw WebSocket (12-byte header + AVCC NAL units) - NOT MP4-muxed
+    // Raw WebSocket (12-byte header + codec frames) - NOT MP4-muxed
     // MistServer's output_wsraw.cpp provides full codec negotiation (audio + video)
+    // MistServer's output_h264.cpp uses same 12-byte header but Annex B payload (video-only)
     // NOTE: ws/video/mp4 is MP4-fragmented which needs MEWS player (uses MSE)
     mimes: [
-      'ws/video/raw', 'wss/video/raw',     // Raw codec frames (audio + video)
+      'ws/video/raw', 'wss/video/raw',     // Raw codec frames - AVCC format (audio + video)
+      'ws/video/h264', 'wss/video/h264',   // Annex B H264/HEVC (video-only, same 12-byte header)
     ],
   };
 
@@ -136,6 +138,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private debugging = false;
   private verboseDebugging = false;
   private streamType: 'live' | 'vod' = 'live';
+  /** Payload format: 'avcc' for ws/video/raw, 'annexb' for ws/video/h264 */
+  private payloadFormat: 'avcc' | 'annexb' = 'avcc';
   private workerUidCounter = 0;
   private workerListeners = new Map<number, (msg: WorkerToMainMessage) => void>();
 
@@ -311,6 +315,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
     }
 
+    // Annex B H264 WebSocket is video-only (no audio payloads)
+    if (mimetype.includes('video/h264')) {
+      delete playableTracks.audio;
+    }
+
     if (Object.keys(playableTracks).length === 0) {
       return false;
     }
@@ -340,6 +349,13 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this._framesDecoded = 0;
     this._bytesReceived = 0;
     this._messagesReceived = 0;
+
+    // Detect payload format from source MIME type
+    // ws/video/h264 uses Annex B (start code delimited NALs), ws/video/raw uses AVCC (length-prefixed)
+    this.payloadFormat = source.type?.includes('h264') ? 'annexb' : 'avcc';
+    if (this.payloadFormat === 'annexb') {
+      this.log('Using Annex B payload format (ws/video/h264)');
+    }
 
     this.container = container;
     container.classList.add('fw-player-container');
@@ -1180,6 +1196,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       track,
       opts: {
         optimizeForLatency: this.streamType === 'live',
+        payloadFormat: this.payloadFormat, // 'avcc' for ws/video/raw, 'annexb' for ws/video/h264
       },
       uid: this.workerUidCounter++,
     });

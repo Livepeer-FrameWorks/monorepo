@@ -54,7 +54,7 @@
   const pageInfoStore = new PageInfoFieldsStore();
 
   // Types from Houdini
-  type StreamEventData = NonNullable<StreamEvents$result["streamEvents"]>;
+  type StreamEventData = NonNullable<StreamEvents$result["liveStreamEvents"]>;
   // StreamData type will be inferred from unmaskedStreams after unmasking
 
   let isAuthenticated = false;
@@ -175,7 +175,7 @@
   // Effect to handle stream events subscription
   // Use untrack to prevent effect loops when mutating state
   $effect(() => {
-    const event = $streamEventsSub.data?.streamEvents;
+    const event = $streamEventsSub.data?.liveStreamEvents;
     if (event) {
       untrack(() => handleStreamEvent(event));
     }
@@ -197,70 +197,50 @@
   });
 
   function handleStreamEvent(event: StreamEventData) {
-    // Extract stream name from the appropriate payload
-    const streamName = event.lifecycleUpdate?.internalName || event.endEvent?.streamName;
-    if (!streamName) return;
+    const streamId = event.streamId;
+    if (!streamId) return;
 
-    // Find and update the stream in our list (safely handle potentially undefined fields)
-    const streamIndex = streams.findIndex(s => s?.name === streamName || s?.id === streamName);
+    const streamIndex = streams.findIndex((s) => s?.id === streamId);
+    if (streamIndex < 0) return;
 
-    if (streamIndex >= 0) {
-      // Update stream status based on event
-      const updatedStream = { ...streams[streamIndex] };
+    const updatedStream = { ...streams[streamIndex] };
+    const status =
+      event.status ??
+      (event.type === "STREAM_START"
+        ? "LIVE"
+        : event.type === "STREAM_END"
+          ? "OFFLINE"
+          : undefined);
+    const isLive = status === "LIVE";
 
-      // Handle lifecycle update (stream going live/offline)
-      if (event.lifecycleUpdate) {
-        const isLive = event.lifecycleUpdate.status === "live";
-        const status = isLive ? "LIVE" : "OFFLINE";
+    if (updatedStream.metrics) {
+      updatedStream.metrics = {
+        ...updatedStream.metrics,
+        status: status as typeof updatedStream.metrics.status,
+        isLive,
+      };
+    } else {
+      updatedStream.metrics = {
+        status,
+        isLive,
+        currentViewers: 0,
+        peakViewers: 0,
+        totalViews: 0,
+        duration: 0,
+      } as NonNullable<typeof updatedStream.metrics>;
+    }
 
-        if (updatedStream.metrics) {
-          updatedStream.metrics = {
-            ...updatedStream.metrics,
-            status: status as typeof updatedStream.metrics.status,
-            isLive,
-            currentViewers: event.lifecycleUpdate.totalViewers ?? updatedStream.metrics.currentViewers,
-          };
-        } else {
-          // Initialize metrics when missing
-          updatedStream.metrics = {
-            status,
-            isLive,
-            currentViewers: event.lifecycleUpdate.totalViewers ?? 0,
-            peakViewers: 0,
-            totalViews: 0,
-            duration: 0,
-          } as NonNullable<typeof updatedStream.metrics>;
-        }
-      }
+    streams = [
+      ...streams.slice(0, streamIndex),
+      updatedStream,
+      ...streams.slice(streamIndex + 1),
+    ];
 
-      // Handle stream end event
-      if (event.endEvent) {
-        if (updatedStream.metrics) {
-          updatedStream.metrics = {
-            ...updatedStream.metrics,
-            status: "OFFLINE" as typeof updatedStream.metrics.status,
-            isLive: false,
-          };
-        }
-      }
-
-      streams = [
-        ...streams.slice(0, streamIndex),
-        updatedStream,
-        ...streams.slice(streamIndex + 1),
-      ];
-
-      // Show toast for significant events
-      const isStreamLive = event.eventType === "EVENT_TYPE_STREAM_LIFECYCLE_UPDATE" &&
-                           event.lifecycleUpdate?.status === "live";
-      const isStreamEnd = event.eventType === "EVENT_TYPE_STREAM_END" ||
-                          (event.lifecycleUpdate?.status === "offline");
-
-      if (isStreamLive) {
-        toast.success(`Stream "${streamName}" is now live!`);
-      } else if (isStreamEnd) {
-        toast.info(`Stream "${streamName}" went offline`);
-      }
+    const streamName = updatedStream.name || streamId;
+    if (status === "LIVE") {
+      toast.success(`Stream "${streamName}" is now live!`);
+    } else if (status === "OFFLINE") {
+      toast.info(`Stream "${streamName}" went offline`);
     }
   }
 
@@ -715,7 +695,7 @@
                               {stream.name}
                             </div>
                             <div class="text-[10px] text-muted-foreground font-mono">
-                              {stream.id.slice(0, 8)}...
+                              {stream.streamId.slice(0, 8)}...
                             </div>
                           </div>
                         </TableCell>
@@ -760,8 +740,8 @@
                         </TableCell>
                         
                         <TableCell class="px-4 py-2 text-sm text-foreground">
-                           {#if stream.metrics?.isLive && stream.metrics?.duration}
-                              {formatDuration(stream.metrics.duration * 1000)}
+                           {#if stream.metrics?.isLive && stream.metrics?.startedAt}
+                              {formatDuration(Date.now() - new Date(stream.metrics.startedAt).getTime())}
                            {:else}
                               <span class="text-muted-foreground">-</span>
                            {/if}
@@ -774,7 +754,7 @@
                           <TableCell colspan={6} class="px-4 py-4 cursor-default" onclick={(e) => e.stopPropagation()}>
                             <div class="pl-4 border-l-2 border-primary/20">
                               <PlaybackProtocols
-                                contentId={stream.id}
+                                contentId={stream.playbackId || stream.streamId}
                                 contentType="live"
                                 showPrimary={true}
                                 showAdditional={true}

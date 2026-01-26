@@ -9,6 +9,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "../iconUtils";
+  import { getDocsSiteUrl } from "$lib/config";
 
   interface Props {
     show?: boolean;
@@ -22,6 +23,7 @@
   let { show = $bindable(false), item = null }: Props = $props();
 
   const dispatch = createEventDispatcher();
+  const docsSiteUrl = getDocsSiteUrl().replace(/\/$/, "");
 
   function close() {
     if (show) {
@@ -141,7 +143,7 @@
             Close
           </Button>
           <Button
-            href="https://docs.frameworks.network"
+            href={docsSiteUrl}
             target="_blank"
             rel="noreferrer"
             variant="ghost"

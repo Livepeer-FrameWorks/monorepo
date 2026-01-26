@@ -16,12 +16,6 @@ import "shared.proto";
 service ClipControlService {
   // CreateClip creates a new clip from a stream
   rpc CreateClip(shared.CreateClipRequest) returns (shared.CreateClipResponse);
-  // GetClips returns all clips for a tenant
-  rpc GetClips(shared.GetClipsRequest) returns (shared.GetClipsResponse);
-  // GetClip returns a specific clip by hash
-  rpc GetClip(shared.GetClipRequest) returns (shared.ClipInfo);
-  // GetClipURLs returns viewing URLs for a clip
-  rpc GetClipURLs(shared.GetClipURLsRequest) returns (shared.ClipViewingURLs);
   // DeleteClip deletes a clip
   rpc DeleteClip(shared.DeleteClipRequest) returns (shared.DeleteClipResponse);
 }
@@ -34,10 +28,6 @@ service DVRControlService {
   rpc StopDVR(shared.StopDVRRequest) returns (shared.StopDVRResponse);
   // DeleteDVR deletes a DVR recording and its files
   rpc DeleteDVR(shared.DeleteDVRRequest) returns (shared.DeleteDVRResponse);
-  // GetDVRStatus returns status of a DVR recording
-  rpc GetDVRStatus(shared.GetDVRStatusRequest) returns (shared.DVRInfo);
-  // ListDVRRecordings lists all DVR recordings for a tenant
-  rpc ListDVRRecordings(shared.ListDVRRecordingsRequest) returns (shared.ListDVRRecordingsResponse);
 }
 
 // ViewerControlService handles viewer and ingest endpoint resolution
@@ -46,8 +36,6 @@ service ViewerControlService {
   rpc ResolveViewerEndpoint(shared.ViewerEndpointRequest) returns (shared.ViewerEndpointResponse);
   // ResolveIngestEndpoint resolves the best endpoint(s) for StreamCrafter ingest
   rpc ResolveIngestEndpoint(shared.IngestEndpointRequest) returns (shared.IngestEndpointResponse);
-  // GetStreamMeta returns MistServer JSON meta for a stream
-  rpc GetStreamMeta(shared.StreamMetaRequest) returns (shared.StreamMetaResponse);
 }
 
 // VodControlService handles VOD upload management (user-initiated video uploads)
@@ -64,4 +52,36 @@ service VodControlService {
   rpc ListVodAssets(shared.ListVodAssetsRequest) returns (shared.ListVodAssetsResponse);
   // DeleteVodAsset deletes a VOD asset
   rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
+}
+
+// TenantControlService handles tenant-level operations called by Purser
+service TenantControlService {
+  // TerminateTenantStreams stops all active streams for a tenant (called when suspended)
+  rpc TerminateTenantStreams(TerminateTenantStreamsRequest) returns (TerminateTenantStreamsResponse);
+  // InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
+  rpc InvalidateTenantCache(InvalidateTenantCacheRequest) returns (InvalidateTenantCacheResponse);
+}
+
+// InvalidateTenantCacheRequest is sent when a tenant's suspension status changes
+message InvalidateTenantCacheRequest {
+  string tenant_id = 1;
+  string reason = 2; // e.g., "reactivated", "balance_topped_up"
+}
+
+// InvalidateTenantCacheResponse indicates cache entries invalidated
+message InvalidateTenantCacheResponse {
+  int32 entries_invalidated = 1;
+}
+
+// TerminateTenantStreamsRequest is sent by Purser when a tenant is suspended
+message TerminateTenantStreamsRequest {
+  string tenant_id = 1;
+  string reason = 2; // e.g., "insufficient_balance", "suspended"
+}
+
+// TerminateTenantStreamsResponse indicates the result of termination
+message TerminateTenantStreamsResponse {
+  int32 streams_terminated = 1;   // Number of streams that were stopped
+  int32 sessions_terminated = 2;  // Total number of sessions stopped
+  repeated string stream_names = 3; // Names of streams that were stopped
 }

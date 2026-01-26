@@ -479,6 +479,12 @@ func eventTypeToString(et pb.EventType) string {
 		return "push_end"
 	case pb.EventType_EVENT_TYPE_RECORDING_COMPLETE:
 		return "recording_complete"
+	case pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE:
+		return "storage_lifecycle"
+	case pb.EventType_EVENT_TYPE_PROCESS_BILLING:
+		return "process_billing"
+	case pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
+		return "storage_snapshot"
 	default:
 		return "unknown"
 	}

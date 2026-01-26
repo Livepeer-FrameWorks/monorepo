@@ -1,0 +1,161 @@
+# Fetch comprehensive stream health including metrics, issues, tracks, and client quality
+# Returns detailed diagnostic data for stream monitoring and troubleshooting
+query GetStreamHealth(
+  $id: ID!
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $metricsFirst: Int = 100
+  $bufferFirst: Int = 200
+) {
+  stream(id: $id) {
+    id
+    name
+    playbackId
+    metrics {
+      status
+      isLive
+      currentViewers
+      bufferState
+      qualityTier
+      primaryWidth
+      primaryHeight
+      primaryFps
+      primaryCodec
+      primaryBitrate
+      hasIssues
+      issuesDescription
+    }
+  }
+  analytics {
+    health {
+      streamHealthConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $metricsFirst }) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            hasIssues
+            issuesDescription
+            bitrate
+            fps
+            width
+            height
+            codec
+            qualityTier
+            gopSize
+            bufferState
+            bufferHealth
+            bufferSize
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      rebufferingEventsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: 100 }) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            bufferState
+            previousState
+            rebufferStart
+            rebufferEnd
+          }
+        }
+      }
+      clientQoeConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $metricsFirst }) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            packetLossRate
+            activeSessions
+            avgBandwidthIn
+            avgBandwidthOut
+            avgConnectionTime
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      # 5-minute health aggregates
+      streamHealth5mConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $metricsFirst }) {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            nodeId
+            rebufferCount
+            issueCount
+            sampleIssues
+            avgBitrate
+            avgFps
+            bufferDryCount
+            qualityTier
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+    lifecycle {
+      trackListConnection(streamId: $streamId, timeRange: $timeRange, page: { first: 50 }) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            trackList
+            trackCount
+            tracks {
+              trackName
+              trackType
+              codec
+              bitrateKbps
+              width
+              height
+              fps
+              buffer
+              jitter
+              channels
+              sampleRate
+              hasBFrames
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      bufferEventsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $bufferFirst }) {
+        edges {
+          cursor
+          node {
+            eventId
+            timestamp
+            nodeId
+            bufferState
+            eventData
+            payload
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

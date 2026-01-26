@@ -1,6 +1,6 @@
 # Quartermaster (Tenants & Clusters)
 
-Authoritative tenant and cluster registry. Other services query Quartermaster over HTTP; no one reads each other's DBs.
+Authoritative tenant and cluster registry. Other services query Quartermaster over gRPC; no one reads each other's DBs.
 
 ## Sovereign Multi-Tenancy
 
@@ -18,12 +18,9 @@ This enables B2B deployments where enterprise customers demand dedicated infrast
 - Feature flags and resource limits per tenant
 - Batch lookups and by‑cluster queries
 
-## API (examples)
-- `GET /api/v1/tenant/:id`
-- `PATCH /api/v1/tenant/:id/cluster`
-- `GET /api/v1/tenants/by-cluster/:cluster_id`
+## API
 
-All endpoints require `Authorization: Bearer <SERVICE_TOKEN>`.
+Quartermaster is gRPC-only. See `pkg/proto/quartermaster.proto` for the current surface.
 
 ## Run (dev)
 - Start the full stack from repo root: `docker-compose up -d`
@@ -35,5 +32,5 @@ Health: `GET /health`.
 
 ## Health & ports
 - Health: `GET /health` (HTTP) or `grpc.health.v1.Health/Check` (gRPC)
-- HTTP: 18002
+- HTTP: 18002 (health/metrics only)
 - gRPC: 19002

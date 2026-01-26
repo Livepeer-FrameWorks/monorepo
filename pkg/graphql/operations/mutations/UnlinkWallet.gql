@@ -1,0 +1,15 @@
+mutation UnlinkWallet($walletId: ID!) {
+  unlinkWallet(walletId: $walletId) {
+    ... on DeleteSuccess {
+      success
+      deletedId
+    }
+    ... on NotFoundError {
+      message
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

@@ -126,12 +126,7 @@ const Contact = () => {
     {
       question: 'What is "Sovereign SaaS"?',
       answer:
-        'Sovereign SaaS means you can run FrameWorks on your own infrastructure, our infrastructure, or both—without vendor lock-in. Unlike cloud-only platforms (Mux) or self-hosted-only products (Wowza), FrameWorks gives you deployment flexibility with native multi-tenancy.',
-    },
-    {
-      question: 'How does FrameWorks compare to Mux or Wowza?',
-      answer:
-        'Mux is cloud-only with per-minute billing—zero self-hosting. Wowza charges $195+/month per server instance with manual clustering. FrameWorks is public domain licensed: self-host for free, or use our managed infrastructure. Native multi-tenancy means you scale on your hardware, not their bills.',
+        'Sovereign SaaS means you can run FrameWorks on your own infrastructure, our infrastructure, or both—without vendor lock-in. Unlike cloud-only platforms or self-hosted-only products, FrameWorks gives you deployment flexibility with native multi-tenancy.',
     },
     {
       question: 'How do I get started with FrameWorks?',
@@ -152,6 +147,21 @@ const Contact = () => {
       question: 'Can I contribute to FrameWorks?',
       answer:
         'Absolutely. FrameWorks is public domain - use, modify, or distribute it without restrictions. Contributions are welcome via GitHub, Discord, or the forum.',
+    },
+    {
+      question: 'How do AI agents access FrameWorks?',
+      answer:
+        'Agents authenticate via wallet signature or API token, then use the MCP server or GraphQL API. Usage is charged to your account balance automatically.',
+    },
+    {
+      question: 'What is pay-as-you-go billing?',
+      answer:
+        'Add funds to your account via card or crypto. Usage (storage, transcoding, delivered minutes) is deducted automatically — no invoices, no monthly commitment. Top up again when your balance runs low.',
+    },
+    {
+      question: 'Can I use FrameWorks without an email account?',
+      answer:
+        'Yes. Connect an Ethereum wallet to authenticate — your wallet address is your identity. You can optionally add an email later for notifications.',
     },
   ]
 

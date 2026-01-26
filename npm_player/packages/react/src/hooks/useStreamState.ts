@@ -70,7 +70,7 @@ const initialState: StreamState = {
  * ```tsx
  * const { status, isOnline, message } = useStreamState({
  *   mistBaseUrl: 'https://mist.example.com',
- *   streamName: 'my-stream',
+ *   streamName: 'pk_...', // playbackId (view key)
  *   pollInterval: 3000,
  * });
  * ```

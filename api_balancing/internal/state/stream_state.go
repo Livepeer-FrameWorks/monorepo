@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )
 
@@ -18,6 +19,9 @@ var (
 	writeCounter             func(labels map[string]string)
 	rehydrateDurationObserve func(seconds float64, labels map[string]string)
 )
+
+// Optional logger for state-level warnings (rehydrate failures, etc.)
+var stateLogger logging.Logger
 
 // DtshSyncHandler is called when a .dtsh file needs to be synced to S3 (set by control package)
 var dtshSyncHandler func(nodeID, assetHash, assetType, filePath string)
@@ -31,6 +35,11 @@ func SetDtshSyncHandler(handler func(nodeID, assetHash, assetType, filePath stri
 func SetMetricsHooks(onWrite func(labels map[string]string), onRehydrateDuration func(seconds float64, labels map[string]string)) {
 	writeCounter = onWrite
 	rehydrateDurationObserve = onRehydrateDuration
+}
+
+// SetLogger registers an optional logger for state-level warnings.
+func SetLogger(logger logging.Logger) {
+	stateLogger = logger
 }
 
 // StreamTrack represents track information from MistServer
@@ -209,6 +218,10 @@ type StreamStateManager struct {
 	// Reconciler (new)
 	reconcileStop   chan struct{}
 	reconcileTicker *time.Ticker
+
+	rehydrateMu      sync.Mutex
+	lastRehydrateAt  time.Time
+	lastRehydrateErr string
 }
 
 // NewStreamStateManager creates a new stream state manager
@@ -332,6 +345,23 @@ func (sm *StreamStateManager) GetAllStreamStates() []*StreamState {
 		stateCopy.Tracks = make([]StreamTrack, len(state.Tracks))
 		copy(stateCopy.Tracks, state.Tracks)
 		states = append(states, &stateCopy)
+	}
+	return states
+}
+
+// GetStreamsByTenant returns all active streams for a specific tenant
+func (sm *StreamStateManager) GetStreamsByTenant(tenantID string) []*StreamState {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	var states []*StreamState
+	for _, state := range sm.streams {
+		if state.TenantID == tenantID && state.Status == "live" {
+			stateCopy := *state
+			stateCopy.Tracks = make([]StreamTrack, len(state.Tracks))
+			copy(stateCopy.Tracks, state.Tracks)
+			states = append(states, &stateCopy)
+		}
 	}
 	return states
 }
@@ -617,6 +647,21 @@ func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID stri
 		inst.RawDetails[k] = v
 	}
 	inst.LastUpdate = time.Now()
+}
+
+// TouchNode updates only health + last update time without overwriting identity fields.
+func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = &NodeState{NodeID: nodeID}
+		sm.nodes[nodeID] = n
+	}
+	n.IsHealthy = isHealthy
+	n.IsStale = false
+	n.LastUpdate = time.Now()
 }
 
 // SetNodeInfo updates per-node info
@@ -1089,6 +1134,8 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 				SizeBytes:    int64(a.GetSizeBytes()),
 				CreatedAt:    a.GetCreatedAt(),
 				HasDtsh:      a.GetHasDtsh(),
+				AccessCount:  int64(a.GetAccessCount()),
+				LastAccessed: a.GetLastAccessed(),
 			})
 		}
 		// Fire-and-forget persistence (errors logged in repository)
@@ -1106,6 +1153,9 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 func inferArtifactType(filePath string) string {
 	if strings.Contains(filePath, "/dvr/") {
 		return "dvr"
+	}
+	if strings.Contains(filePath, "/vod/") {
+		return "upload"
 	}
 	return "clip"
 }
@@ -1364,6 +1414,21 @@ type BalancerSnapshot struct {
 
 // GetBalancerSnapshotAtomic returns an immutable snapshot with pre-computed values for consistent load balancing
 func (sm *StreamStateManager) GetBalancerSnapshotAtomic() *BalancerSnapshot {
+	return sm.getBalancerSnapshotInternal(false, false)
+}
+
+// GetBalancerSnapshotAtomicWithOptions returns a snapshot with optional inclusion of stale nodes.
+func (sm *StreamStateManager) GetBalancerSnapshotAtomicWithOptions(includeStale bool) *BalancerSnapshot {
+	return sm.getBalancerSnapshotInternal(includeStale, false)
+}
+
+// GetAllNodesSnapshot returns ALL nodes regardless of health/stale status (for debugging dashboards)
+func (sm *StreamStateManager) GetAllNodesSnapshot() *BalancerSnapshot {
+	return sm.getBalancerSnapshotInternal(true, true)
+}
+
+// getBalancerSnapshotInternal is the internal implementation with full control over filtering
+func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeUnhealthy bool) *BalancerSnapshot {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -1398,8 +1463,11 @@ func (sm *StreamStateManager) GetBalancerSnapshotAtomic() *BalancerSnapshot {
 			continue
 		}
 
-		// Skip stale or unhealthy nodes to prevent routing blackholes
-		if !n.IsHealthy || n.IsStale {
+		// Skip unhealthy/stale nodes unless explicitly included (for debugging dashboards)
+		if !includeUnhealthy && !n.IsHealthy {
+			continue
+		}
+		if !includeStale && n.IsStale {
 			continue
 		}
 
@@ -1672,10 +1740,17 @@ func (sm *StreamStateManager) runReconciler(t *time.Ticker) {
 // Rehydrate refreshes in-memory state from durable repositories based on sync policies
 func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 	start := time.Now()
+	var rehydrateErr error
+
 	// Nodes
 	if sm.nodeRepo != nil {
 		recs, err := sm.nodeRepo.ListAllNodes(ctx)
-		if err == nil {
+		if err != nil {
+			rehydrateErr = err
+			if stateLogger != nil {
+				stateLogger.WithError(err).Warn("Failed to rehydrate nodes from repository")
+			}
+		} else {
 			for _, r := range recs {
 				// Basic node info
 				sm.SetNodeInfo(r.NodeID, r.BaseURL, true, nil, nil, "", r.OutputsJSON, nil)
@@ -1685,7 +1760,14 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 	// DVR
 	if sm.repos.DVR != nil {
 		recs, err := sm.repos.DVR.ListAllDVR(ctx)
-		if err == nil {
+		if err != nil {
+			if rehydrateErr == nil {
+				rehydrateErr = err
+			}
+			if stateLogger != nil {
+				stateLogger.WithError(err).Warn("Failed to rehydrate DVR records")
+			}
+		} else {
 			for _, r := range recs {
 				if r.InternalName == "" || r.StorageNodeID == "" {
 					continue
@@ -1704,7 +1786,14 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 	// Clips
 	if sm.repos.Clips != nil {
 		recs, err := sm.repos.Clips.ListActiveClips(ctx)
-		if err == nil {
+		if err != nil {
+			if rehydrateErr == nil {
+				rehydrateErr = err
+			}
+			if stateLogger != nil {
+				stateLogger.WithError(err).Warn("Failed to rehydrate clip records")
+			}
+		} else {
 			for _, r := range recs {
 				if r.InternalName == "" || r.NodeID == "" {
 					continue
@@ -1721,7 +1810,24 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 	if rehydrateDurationObserve != nil {
 		rehydrateDurationObserve(time.Since(start).Seconds(), map[string]string{"entity": "all"})
 	}
-	return nil
+
+	sm.rehydrateMu.Lock()
+	sm.lastRehydrateAt = time.Now()
+	if rehydrateErr != nil {
+		sm.lastRehydrateErr = rehydrateErr.Error()
+	} else {
+		sm.lastRehydrateErr = ""
+	}
+	sm.rehydrateMu.Unlock()
+
+	return rehydrateErr
+}
+
+// RehydrateStatus returns the last rehydrate attempt timestamp and error message (if any).
+func (sm *StreamStateManager) RehydrateStatus() (time.Time, string) {
+	sm.rehydrateMu.Lock()
+	defer sm.rehydrateMu.Unlock()
+	return sm.lastRehydrateAt, sm.lastRehydrateErr
 }
 
 // ApplyClipProgress updates state and persists clip progress by request_id
@@ -2036,6 +2142,8 @@ type ArtifactRecord struct {
 	SegmentCount int   // DVR only
 	SegmentBytes int64 // DVR only
 	HasDtsh      bool  // True if .dtsh index file exists locally
+	AccessCount  int64
+	LastAccessed int64 // Unix timestamp
 }
 
 // ArtifactSyncInfo represents sync tracking state for an artifact

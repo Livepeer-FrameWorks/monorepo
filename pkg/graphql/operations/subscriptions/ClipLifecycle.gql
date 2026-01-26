@@ -1,0 +1,25 @@
+# Real-time clip generation progress and completion updates
+# Monitors clip creation stages, upload progress, S3 URLs, and error states
+subscription ClipLifecycle($streamId: ID!) {
+  liveClipLifecycle(streamId: $streamId) {
+    stage
+    clipHash
+    playbackId
+    progressPercent
+    filePath
+    s3Url
+    sizeBytes
+    error
+    startedAt
+    completedAt
+    nodeId
+    streamId
+    stream {
+      streamId
+    }
+    startUnix
+    stopUnix
+    durationSec
+    clipMode
+  }
+}

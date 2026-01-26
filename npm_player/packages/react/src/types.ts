@@ -17,7 +17,7 @@ export interface PlayerProps {
   /** Content identifier or stream name */
   contentId: string;
   /** Content type */
-  contentType: ContentType;
+  contentType?: ContentType;
   /** Pre-resolved endpoints/capabilities from Gateway/Foghorn */
   endpoints?: ContentEndpoints;
   /** Optional thumbnail/poster image */

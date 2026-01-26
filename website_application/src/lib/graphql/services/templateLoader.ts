@@ -29,7 +29,8 @@ export interface TemplateGroups {
 
 // Use Vite's import.meta.glob to load all .gql files at build time
 // The ?raw query imports the file content as a string
-const gqlModules = import.meta.glob("/src/lib/houdini/**/*.gql", {
+// Files are in ../pkg/graphql/operations/ (shared between frontend and Go gateway)
+const gqlModules = import.meta.glob("../../../../pkg/graphql/operations/**/*.gql", {
   query: "?raw",
   import: "default",
   eager: false, // Lazy load for better initial bundle size
@@ -211,10 +212,16 @@ function createTemplate(parsed: ParsedOperation, filePath: string): Template {
 
 /**
  * Clean the file path for display
- * /src/lib/houdini/queries/GetStream.gql -> houdini/queries/GetStream.gql
+ * ../../../../pkg/graphql/operations/queries/GetStream.gql -> operations/queries/GetStream.gql
  */
 function cleanFilePath(path: string): string {
-  return path.replace(/^\/src\/lib\//, "");
+  // Handle the new shared path format
+  const match = path.match(/operations\/(.+)/);
+  if (match) {
+    return "operations/" + match[1];
+  }
+  // Legacy fallback
+  return path.replace(/^\/src\/lib\//, "").replace(/^\.\.\/+pkg\/graphql\//, "");
 }
 
 /**

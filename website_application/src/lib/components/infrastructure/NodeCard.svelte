@@ -13,7 +13,6 @@
     internalIp: string | null;
     wireguardIp: string | null;
     lastHeartbeat: string | null;
-    status: string | null;
     cpuCores: number | null;
     memoryGb: number | null;
     diskGb: number | null;
@@ -131,12 +130,14 @@
 
     <!-- Network Info -->
     <div class="grid grid-cols-2 gap-4 text-sm border-t border-border/40 pt-3">
-      <div>
-        <p class="text-muted-foreground">External IP</p>
-        <p class="font-mono text-xs">
-          {node.externalIp || "N/A"}
-        </p>
-      </div>
+      {#if node.externalIp}
+        <div>
+          <p class="text-muted-foreground">External IP</p>
+          <p class="font-mono text-xs">
+            {node.externalIp}
+          </p>
+        </div>
+      {/if}
       {#if node.internalIp}
         <div>
           <p class="text-muted-foreground">Internal IP</p>

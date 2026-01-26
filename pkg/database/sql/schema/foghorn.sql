@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     -- ===== DENORMALIZED FIELDS (authoritative source: Commodore) =====
     -- Cached here for operational efficiency (stream routing, rehydration, Decklog events)
     internal_name VARCHAR(255),             -- Stream identifier for routing
+    artifact_internal_name VARCHAR(64),     -- Artifact routing name (vod+<artifact_internal_name>)
     tenant_id UUID,                         -- Fallback when Commodore unavailable
     user_id UUID,                           -- User who created the artifact (for Decklog events)
 
@@ -94,6 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_created ON foghorn.artifacts(cr
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_request_id ON foghorn.artifacts(request_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_frozen ON foghorn.artifacts(frozen_at) WHERE frozen_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_internal_name ON foghorn.artifacts(internal_name);
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_artifact_internal ON foghorn.artifacts(artifact_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_user ON foghorn.artifacts(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_retention ON foghorn.artifacts(retention_until) WHERE retention_until IS NOT NULL;
@@ -118,6 +120,8 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_nodes (
     segment_bytes BIGINT DEFAULT 0,
 
     -- ===== HEALTH TRACKING =====
+    access_count BIGINT DEFAULT 0,          -- Best-effort local access count
+    last_accessed TIMESTAMP,                -- Last access time on this node
     last_seen_at TIMESTAMP DEFAULT NOW(),
     is_orphaned BOOLEAN DEFAULT false,      -- Not seen in recent node reports
     cached_at TIMESTAMP,                    -- When cached locally (for warm duration tracking)

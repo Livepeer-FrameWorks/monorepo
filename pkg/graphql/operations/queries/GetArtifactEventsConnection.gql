@@ -1,0 +1,39 @@
+# Fetch artifact lifecycle events (clip/dvr/vod)
+query GetArtifactEventsConnection(
+  $streamId: ID
+  $contentType: String
+  $stage: String
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $after: String
+) {
+  analytics {
+    lifecycle {
+      artifactEventsConnection(
+        streamId: $streamId
+        contentType: $contentType
+        stage: $stage
+        timeRange: $timeRange
+        page: { first: $first, after: $after }
+      ) @paginate {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            contentType
+            playbackId
+            stage
+            percent
+            message
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-react",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "description": "React hooks for StreamCrafter browser streaming",
   "main": "dist/cjs/index.cjs",

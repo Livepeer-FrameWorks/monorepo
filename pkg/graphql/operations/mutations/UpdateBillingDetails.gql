@@ -1,0 +1,16 @@
+mutation UpdateBillingDetails($input: UpdateBillingDetailsInput!) {
+  updateBillingDetails(input: $input) {
+    email
+    company
+    vatNumber
+    address {
+      street
+      city
+      state
+      postalCode
+      country
+    }
+    isComplete
+    updatedAt
+  }
+}

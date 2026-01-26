@@ -21,13 +21,102 @@ service HelmsmanControl {
   rpc ResolveClipHash(ClipHashRequest) returns (ClipHashResponse);
 }
 
-// Service for sending analytics events to Decklog (Foghorn -> Decklog/api_firehose)
-// Unified analytics/event ingress API: one envelope, one RPC.
-// All producers MUST send a MistTrigger with the original payload preserved and
-// any enrichment added in-place (optional fields). Do NOT rewrite payload types.
+// Service for sending events to Decklog (Foghorn -> Decklog/api_firehose)
+// - MistTrigger: media-plane analytics/events
+// - ServiceEvent: service-plane telemetry (API usage, messaging, etc.)
+// All producers MUST preserve the original payload (no rewriting).
 service DecklogService {
   // Unified entrypoint for all events (unary is fine for now).
   rpc SendEvent(MistTrigger) returns (google.protobuf.Empty);
+  // Service-plane events (non-media).
+  rpc SendServiceEvent(ServiceEvent) returns (google.protobuf.Empty);
+}
+
+// ServiceEvent represents service-level telemetry emitted by core services.
+message ServiceEvent {
+  string event_id = 1;
+  string event_type = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string source = 4;
+  string tenant_id = 5;
+  string user_id = 6;
+  string resource_type = 7;
+  string resource_id = 8;
+  oneof payload {
+    APIRequestBatch api_request_batch = 20;
+    AuthEvent auth_event = 21;
+    TenantEvent tenant_event = 22;
+    ClusterEvent cluster_event = 23;
+    StreamChangeEvent stream_change_event = 24;
+    StreamKeyEvent stream_key_event = 25;
+    BillingEvent billing_event = 26;
+    MessageLifecycleData support_event = 27;
+    ArtifactEvent artifact_event = 28;
+  }
+}
+
+message AuthEvent {
+  string user_id = 1;
+  string tenant_id = 2;
+  string auth_type = 3;
+  string wallet_id = 4;
+  string token_id = 5;
+  string error = 6;
+  string ip_bucket = 7;
+}
+
+message TenantEvent {
+  string tenant_id = 1;
+  repeated string changed_fields = 2;
+}
+
+message ClusterEvent {
+  string cluster_id = 1;
+  string tenant_id = 2;
+  string invite_id = 3;
+  string subscription_id = 4;
+  string reason = 5;
+}
+
+// StreamChangeEvent signals that a stream's metadata was updated.
+// Used by Signalman subscriptions for real-time change notifications.
+message StreamChangeEvent {
+  string stream_id = 1;
+  repeated string changed_fields = 2;
+}
+
+message StreamKeyEvent {
+  string stream_id = 1;
+  string key_id = 2;
+}
+
+message BillingEvent {
+  string tenant_id = 1;
+  string payment_id = 2;
+  string subscription_id = 3;
+  string invoice_id = 4;
+  string topup_id = 5;
+  double amount = 6;
+  string currency = 7;
+  string provider = 8;
+  string status = 9;
+}
+
+// ArtifactEvent represents audit/lifecycle events for clip/DVR/VOD artifacts.
+message ArtifactEvent {
+  enum ArtifactType {
+    ARTIFACT_TYPE_UNSPECIFIED = 0;
+    ARTIFACT_TYPE_CLIP = 1;
+    ARTIFACT_TYPE_DVR = 2;
+    ARTIFACT_TYPE_VOD = 3;
+  }
+  ArtifactType artifact_type = 1;
+  string artifact_id = 2;          // clip_hash, dvr_hash, or vod_hash
+  string stream_id = 3;            // Public stream ID (UUID), when applicable
+  string status = 4;               // requested, started, processing, completed, failed, deleted, etc.
+  optional int64 started_at = 5;   // Unix timestamp (if available)
+  optional int64 completed_at = 6; // Unix timestamp (if available)
+  optional int64 expires_at = 7;   // Retention expiration (if available)
 }
 
 message ControlMessage {
@@ -70,7 +159,17 @@ message ControlMessage {
     TranscodeJobRequest transcode_job_request = 60;
     TranscodeJobProgress transcode_job_progress = 61;
     TranscodeJobComplete transcode_job_complete = 62;
+    // Session termination (Foghorn -> Helmsman for billing suspension)
+    StopSessionsRequest stop_sessions_request = 70;
   }
+}
+
+// StopSessionsRequest tells Helmsman to stop all sessions for the given streams
+// Used when a tenant is suspended due to insufficient balance
+message StopSessionsRequest {
+  repeated string stream_names = 1; // Internal stream names to stop
+  string tenant_id = 2;             // For logging/audit
+  string reason = 3;                // e.g., "insufficient_balance", "suspended"
 }
 
 message ArtifactDeleted {
@@ -166,6 +265,7 @@ message MistTrigger {
   string request_id = 6;      // For correlating responses
   optional string tenant_id = 7; // Tenant context (enriched by Foghorn)
   optional string user_id = 8;   // User context (enriched by Foghorn)
+  optional string stream_id = 9; // Public stream ID (enriched by Foghorn)
 
   // Typed trigger payloads (one of these will be set based on trigger_type)
   oneof trigger_payload {
@@ -191,9 +291,13 @@ message MistTrigger {
     RecordingSegmentTrigger recording_segment = 30;
     ProcessBillingEvent process_billing = 31;
     VodLifecycleData vod_lifecycle_data = 32;
+    APIRequestBatch api_request_batch = 34;
+    MessageLifecycleData message_lifecycle_data = 35;
   }
 
-  reserved 20;
+  optional string cluster_id = 33; // Emitting cluster identifier
+
+  reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";
 }
 
@@ -209,8 +313,9 @@ message StorageSnapshot {
   optional string tenant_id = 3; // Node Owner (Supplier)
   optional string location = 4;
   optional NodeCapabilities capabilities = 5;
-  
   repeated TenantStorageUsage usage = 6;
+  // hot = node-local cache, cold = S3 (frozen) totals
+  optional string storage_scope = 7;
 }
 
 message TenantStorageUsage {
@@ -220,6 +325,10 @@ message TenantStorageUsage {
   uint64 dvr_bytes = 4;
   uint64 clip_bytes = 5;
   uint64 vod_bytes = 6;
+  // Frozen storage breakdown (cold storage in S3)
+  uint64 frozen_dvr_bytes = 7;
+  uint64 frozen_clip_bytes = 8;
+  uint64 frozen_vod_bytes = 9;
 }
 
 message ClipHashRequest {
@@ -454,6 +563,7 @@ message StorageLifecycleData {
   string asset_hash = 3;         // clip_hash or dvr_hash
   optional string tenant_id = 4;
   optional string internal_name = 5;
+  optional string stream_id = 13;      // Enriched by Foghorn (UUID)
   uint64 size_bytes = 6;
   optional string s3_url = 7;
   optional string local_path = 8;
@@ -499,6 +609,7 @@ message PushRewriteTrigger {
   optional double publisher_longitude = 14;
   optional GeoBucket publisher_bucket = 15;
   optional GeoBucket node_bucket = 16;
+  optional string stream_id = 17; // Enriched by Foghorn (UUID)
 }
 
 // ViewerResolveTrigger represents a viewer-side resolve of a playback request.
@@ -525,16 +636,21 @@ message ViewerResolveTrigger {
 
   // Node location name (e.g., "us-east-1", "Frankfurt") - enriched by Foghorn
   optional string node_location = 14;
+
+  // Public stream ID (UUID) for external correlation
+  optional string stream_id = 15;
 }
 
 message StreamSourceTrigger {
   string stream_name = 1;
+  optional string stream_id = 2; // Public stream ID (UUID) if known
 }
 
 message PushOutStartTrigger {
   string stream_name = 1;
   string push_target = 2;
   optional string node_id = 3;
+  optional string stream_id = 4; // Enriched by Foghorn (UUID)
 }
 
 message PushEndTrigger {
@@ -545,6 +661,7 @@ message PushEndTrigger {
   string log_messages = 5;
   string push_status = 6;
   optional string node_id = 7;
+  optional string stream_id = 8; // Enriched by Foghorn (UUID)
 }
 
 // ViewerConnectTrigger (formerly USER_NEW) indicates a viewer connection.
@@ -568,6 +685,7 @@ message ViewerConnectTrigger {
   optional double client_longitude = 12;
   optional GeoBucket client_bucket = 13;
   optional GeoBucket node_bucket = 14;
+  optional string stream_id = 15; // Enriched by Foghorn (UUID)
 }
 
 // ViewerDisconnectTrigger (formerly USER_END) indicates a viewer disconnect.
@@ -591,6 +709,7 @@ message ViewerDisconnectTrigger {
   optional uint64 seconds_connected = 15;
   optional GeoBucket client_bucket = 16;
   optional GeoBucket node_bucket = 17;
+  optional string stream_id = 18; // Enriched by Foghorn (UUID)
 }
 
 message StreamBufferTrigger {
@@ -608,6 +727,7 @@ message StreamBufferTrigger {
   optional int32 stream_jitter_ms = 10;     // health.jitter (max jitter across tracks)
   optional string mist_issues = 11;         // health.issues (Mist's issue string, e.g. "HLSnoaudio!")
   optional int32 max_keepaway_ms = 12;      // health.maxkeepaway (max viewer distance from live)
+  optional string stream_id = 13;          // Enriched by Foghorn (UUID)
 }
 
 message StreamEndTrigger {
@@ -619,6 +739,7 @@ message StreamEndTrigger {
   optional int64 total_outputs = 6;
   optional int64 viewer_seconds = 7;
   optional string node_id = 8;
+  optional string stream_id = 9;           // Enriched by Foghorn (UUID)
 }
 
 // StreamTrackListTrigger (formerly LIVE_TRACK_LIST) provides track inventory.
@@ -641,6 +762,7 @@ message StreamTrackListTrigger {
   optional string primary_audio_codec = 13;
   optional int32 primary_audio_channels = 14;
   optional int32 primary_audio_sample_rate = 15;
+  optional string stream_id = 16;          // Enriched by Foghorn (UUID)
 }
 
 // RecordingCompleteTrigger (formerly RECORDING_END) indicates recorder completion.
@@ -656,6 +778,7 @@ message RecordingCompleteTrigger {
   
   // Enrichment fields for analytics (populated by Foghorn)
   optional string node_id = 9;
+  optional string stream_id = 10;       // Enriched by Foghorn (UUID)
 }
 
 // RecordingSegmentTrigger (RECORDING_SEGMENT) indicates a new segment has been written.
@@ -665,6 +788,7 @@ message RecordingSegmentTrigger {
   int64 duration_ms = 3;
   int64 time_started = 4;
   int64 time_ended = 5;
+  optional string stream_id = 6;        // Enriched by Foghorn (UUID)
 }
 
 // Analytics event messages for forwarding to Decklog
@@ -687,7 +811,7 @@ message StreamLifecycleUpdate {
   optional bool has_issues = 14;
   optional string issues_description = 15;
   optional int32 track_count = 16;
-  optional string quality_tier = 17;    // "4K", "1080p", "720p", "480p", "SD"
+  optional string quality_tier = 17;    // "2160p", "1440p", "1080p", "720p", "480p", "SD"
   optional int32 primary_width = 18;
   optional int32 primary_height = 19;
   optional float primary_fps = 20;
@@ -724,6 +848,7 @@ message StreamLifecycleUpdate {
   // Per-track buffer/jitter for primary video track
   optional uint32 video_buffer_ms = 36;
   optional uint32 video_jitter_ms = 37;
+  optional string stream_id = 38;          // Enriched by Foghorn (UUID); REQUIRED for analytics joins
 }
 
 message ClientLifecycleUpdate {
@@ -753,6 +878,7 @@ message ClientLifecycleUpdate {
   optional string client_city = 20;     // GeoIP enriched city  
   optional double client_latitude = 21; // GeoIP enriched latitude
   optional double client_longitude = 22;// GeoIP enriched longitude
+  optional string stream_id = 23;       // Enriched by Foghorn (UUID); REQUIRED for analytics joins
 }
 
 message NodeLifecycleUpdate {
@@ -845,6 +971,10 @@ message LoadBalancingData {
   optional string stream_tenant_id = 18;    // Subject tenant (stream/customer owner)
   optional string cluster_id = 19;          // Emitting cluster identifier
   optional float latency_ms = 20;
+  optional string stream_id = 21;           // Public stream ID (UUID); REQUIRED for analytics joins
+  optional uint32 candidates_count = 22;    // Number of eligible candidates considered
+  optional string event_type = 23;          // "play_rewrite", "grpc_resolve", etc.
+  optional string source = 24;              // "http", "grpc", "internal"
 }
 
 // Clip lifecycle specific data (separate from ClipProgress/ClipDone control messages)
@@ -888,6 +1018,8 @@ message ClipLifecycleData {
   // Clip creation mode (enriched by Foghorn)
   optional string clip_mode = 19;
   optional int64 expires_at = 20;
+  optional string stream_id = 21;      // Public stream ID (UUID)
+  optional string user_id = 22;        // User who initiated the clip (if known)
 }
 
 // DVR lifecycle specific data (separate from DVR control messages)
@@ -920,6 +1052,8 @@ message DVRLifecycleData {
   optional string tenant_id = 10;
   optional string internal_name = 11;
   optional int64 expires_at = 12;
+  optional string stream_id = 13;      // Public stream ID (UUID)
+  optional string user_id = 14;        // User who initiated the DVR (if known)
 }
 
 // VOD lifecycle specific data (for user-uploaded video assets)
@@ -963,6 +1097,28 @@ message VodLifecycleData {
   optional int32 bitrate_kbps = 20;
 }
 
+// MessageLifecycleData tracks support messaging events for real-time UI updates
+// Emitted by Deckhand when Chatwoot webhook events are received
+message MessageLifecycleData {
+  enum EventType {
+    EVENT_TYPE_UNSPECIFIED = 0;
+    EVENT_TYPE_MESSAGE_CREATED = 1;     // New message in conversation
+    EVENT_TYPE_CONVERSATION_CREATED = 2; // New conversation started
+    EVENT_TYPE_CONVERSATION_UPDATED = 3; // Status changed (resolved, pending)
+    EVENT_TYPE_MESSAGE_UPDATED = 4;      // Message edited
+  }
+  EventType event_type = 1;
+  string conversation_id = 2;           // Chatwoot conversation ID
+  optional string message_id = 3;       // Chatwoot message ID (for message events)
+  optional string content = 4;          // Message content (for message_created)
+  optional string sender = 5;           // "USER" or "AGENT"
+  optional string status = 6;           // Conversation status: "OPEN", "RESOLVED", "PENDING"
+  optional string subject = 7;          // Conversation subject
+  int64 timestamp = 8;                  // When event occurred
+  optional string tenant_id = 9;        // Tenant context
+  optional string user_id = 10;         // User context
+}
+
 message NodeCapabilities {
   bool ingest = 1;
   bool edge = 2;
@@ -991,6 +1147,7 @@ message ProcessBillingEvent {
   int64 duration_ms = 4;      // Duration in milliseconds (segment duration or since last event)
   int64 timestamp = 5;        // Unix timestamp when event occurred
   optional string tenant_id = 6; // Tenant context (enriched by Foghorn or Helmsman)
+  optional string stream_id = 7; // Enriched by Foghorn (UUID)
 
   // Common fields
   optional string input_codec = 10;
@@ -1109,6 +1266,8 @@ message StoredArtifact {
   int64 created_at = 6;      // Creation timestamp (Unix seconds)
   string format = 7;         // File format (mp4, webm, etc.)
   bool has_dtsh = 8;         // True if .dtsh index file exists locally
+  uint64 access_count = 9;   // Local access count (best-effort, per node)
+  int64 last_accessed = 10;  // Last access timestamp (Unix seconds)
 }
 
 message StreamProcess {
@@ -1188,4 +1347,27 @@ message TranscodeJobComplete {
   string output_artifact_hash = 3; // New artifact hash for output
   string output_s3_url = 4;        // S3 URL of transcoded output
   string error = 5;                // Error message if failed
+}
+
+// ==================== API Request Tracking ====================
+// Tracks GraphQL API requests for usage analytics (RFC: x402 Agent Access)
+// Gateway aggregates in-memory and flushes periodically (not per-request)
+
+message APIRequestBatch {
+  int64 timestamp = 1;                         // Flush timestamp (Unix seconds)
+  string source_node = 2;                      // Gateway instance ID
+  repeated APIRequestAggregate aggregates = 3;
+}
+
+message APIRequestAggregate {
+  string tenant_id = 1;
+  string auth_type = 2;             // jwt, api_token, wallet
+  string operation_type = 3;        // query, mutation, subscription
+  string operation_name = 4;        // GetStreams, CreateClip, etc. (empty if anonymous)
+  uint32 request_count = 5;
+  uint32 error_count = 6;
+  uint64 total_duration_ms = 7;
+  uint32 total_complexity = 8;      // Sum of GraphQL complexity scores
+  repeated uint64 user_hashes = 9;  // Hashed user IDs observed in the aggregate window
+  repeated uint64 token_hashes = 10; // Hashed API token IDs observed in the aggregate window
 }

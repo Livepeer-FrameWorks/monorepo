@@ -3,10 +3,8 @@ import { subscription } from "$houdini/plugins";
 import { createClient } from "graphql-ws";
 import { browser } from "$app/environment";
 
-const GRAPHQL_HTTP_URL =
-  import.meta.env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/";
-const GRAPHQL_WS_URL =
-  import.meta.env.VITE_GRAPHQL_WS_URL || "ws://localhost:18000/graphql/ws";
+const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL ?? "";
+const GRAPHQL_WS_URL = import.meta.env.VITE_GRAPHQL_WS_URL ?? "";
 
 // Session type from hooks.server.ts
 type Session = {

@@ -213,6 +213,8 @@ export interface CreatePipelineMessage {
   track: TrackInfo;
   opts: {
     optimizeForLatency: boolean;
+    /** Payload format: 'avcc' (length-prefixed) or 'annexb' (start-code delimited) */
+    payloadFormat?: 'avcc' | 'annexb';
   };
   uid?: number;
 }

@@ -9,8 +9,8 @@ import type { ContentEndpoints, EndpointInfo, ContentMetadata, ContentType } fro
 
 export interface ViewerEndpointsOptions {
   gatewayUrl: string;
-  contentType: ContentType;
   contentId: string;
+  contentType?: ContentType;
   authToken?: string;
 }
 
@@ -82,7 +82,7 @@ const initialState: ViewerEndpointsState = {
  *   const resolver = createEndpointResolver({
  *     gatewayUrl: 'https://gateway.example.com/graphql',
  *     contentType: 'live',
- *     contentId: 'my-stream',
+ *     contentId: 'pk_...',
  *   });
  *
  *   $: endpoints = $resolver.endpoints;
@@ -101,7 +101,7 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
    * Fetch endpoints from Gateway
    */
   async function fetchEndpoints() {
-    if (!gatewayUrl || !contentType || !contentId || !mounted) return;
+    if (!gatewayUrl || !contentId || !mounted) return;
 
     // Abort previous request
     abortController?.abort();
@@ -112,8 +112,8 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
     try {
       const graphqlEndpoint = gatewayUrl.replace(/\/$/, '');
       const query = `
-        query ResolveViewer($contentType: String!, $contentId: String!) {
-          resolveViewerEndpoint(contentType: $contentType, contentId: $contentId) {
+        query ResolveViewer($contentId: String!) {
+          resolveViewerEndpoint(contentId: $contentId) {
             primary { nodeId baseUrl protocol url geoDistance loadScore outputs }
             fallbacks { nodeId baseUrl protocol url geoDistance loadScore outputs }
             metadata { contentType contentId title description durationSeconds status isLive viewers recordingSizeBytes clipSource createdAt }
@@ -127,7 +127,7 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
           'Content-Type': 'application/json',
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
-        body: JSON.stringify({ query, variables: { contentType, contentId } }),
+        body: JSON.stringify({ query, variables: { contentId } }),
         signal: abortController.signal,
       });
 

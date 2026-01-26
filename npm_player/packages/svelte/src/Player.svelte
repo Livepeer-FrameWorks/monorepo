@@ -22,7 +22,7 @@
     ContextMenuSeparator,
   } from './ui/context-menu';
   import { StatsIcon, SettingsIcon, PictureInPictureIcon } from './icons';
-  import { cn, type PlaybackMode, type ContentEndpoints, type ContentMetadata, type PlayerState, type PlayerStateContext, type ContentType, type EndpointInfo } from '@livepeer-frameworks/player-core';
+  import { cn, type PlaybackMode, type ContentEndpoints, type ContentMetadata, type PlayerState, type PlayerStateContext, type ContentType, type EndpointInfo, type PlayerMetadata } from '@livepeer-frameworks/player-core';
   import { createPlayerControllerStore, type PlayerControllerStore } from './stores/playerController';
   import type { SkipDirection } from './SkipIndicator.svelte';
 
@@ -48,15 +48,17 @@
       playbackMode?: PlaybackMode;
     };
     onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
+    onMetadata?: (metadata: PlayerMetadata) => void;
   }
 
   let {
     contentId,
-    contentType = 'live',
+    contentType,
     thumbnailUrl = null,
     endpoints = undefined,
     options = {},
     onStateChange = undefined,
+    onMetadata = undefined,
   }: Props = $props();
 
   // ============================================================================
@@ -141,11 +143,17 @@
     debug('playerStore created');
 
     // Subscribe to store state
+    let prevMetadata: PlayerMetadata | null = null;
     const unsubscribe = playerStore.subscribe(state => {
       storeState = state;
       // Forward state changes to prop callback
       if (onStateChange && state.state) {
         onStateChange(state.state);
+      }
+      // Forward metadata changes to prop callback
+      if (onMetadata && state.metadata && state.metadata !== prevMetadata) {
+        prevMetadata = state.metadata;
+        onMetadata(state.metadata);
       }
     });
 
@@ -277,19 +285,7 @@
             isOpen={isStatsOpen}
             onClose={() => isStatsOpen = false}
             {metadata}
-            streamState={storeState.streamState?.isOnline ? {
-              status: storeState.streamState.status,
-              viewers: metadata?.viewers,
-              tracks: storeState.streamState.streamInfo?.meta?.tracks
-                ? Object.values(storeState.streamState.streamInfo.meta.tracks).map((t: any) => ({
-                    type: t.type,
-                    codec: t.codec,
-                    width: t.width,
-                    height: t.height,
-                    bps: t.bps,
-                  }))
-                : [],
-            } : null}
+            streamState={storeState.streamState}
             quality={storeState.playbackQuality}
             videoElement={storeState.videoElement}
             protocol={primaryEndpoint?.protocol}

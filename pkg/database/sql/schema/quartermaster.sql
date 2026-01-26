@@ -15,15 +15,6 @@ CREATE SCHEMA IF NOT EXISTS quartermaster;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Stream status enumerations (legacy - may be moved to Commodore)
-DO $$ BEGIN
-    CREATE TYPE stream_status AS ENUM ('offline','live','terminated');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    CREATE TYPE mist_stream_status AS ENUM ('offline','init','boot','wait','ready','shutdown','invalid');
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
 -- ============================================================================
 -- TENANT MANAGEMENT
 -- ============================================================================
@@ -35,22 +26,29 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
     name VARCHAR(255) NOT NULL,
     subdomain VARCHAR(100) UNIQUE,
     custom_domain VARCHAR(255),
-    
+
     -- ===== BRANDING =====
     logo_url VARCHAR(500),
     primary_color VARCHAR(7) DEFAULT '#6366f1',
     secondary_color VARCHAR(7) DEFAULT '#f59e0b',
-    
+
     -- ===== DEPLOYMENT CONFIGURATION =====
     deployment_tier VARCHAR(50) DEFAULT 'global',
     deployment_model VARCHAR(50) DEFAULT 'shared',
     primary_cluster_id VARCHAR(100),
-    
+
     -- ===== INFRASTRUCTURE CONNECTIVITY =====
     kafka_topic_prefix VARCHAR(100),
     kafka_brokers TEXT[],
     database_url TEXT,
-    
+
+    -- ===== API RATE LIMITING =====
+    rate_limit_per_minute INTEGER NOT NULL DEFAULT 100,   -- Requests per minute
+    rate_limit_burst INTEGER NOT NULL DEFAULT 20,         -- Burst allowance above limit
+
+    -- ===== OWNERSHIP LIMITS =====
+    max_owned_clusters INTEGER DEFAULT 1,
+
     -- ===== STATUS & LIFECYCLE =====
     is_provider BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
@@ -97,7 +95,19 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     health_status VARCHAR(50) DEFAULT 'healthy',
     last_seen TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+
+    -- ===== MARKETPLACE CONFIGURATION =====
+    visibility VARCHAR(20) DEFAULT 'private',
+    pricing_model VARCHAR(20) DEFAULT 'free_unmetered',
+    monthly_price_cents INTEGER DEFAULT 0,
+    metered_rate_config JSONB DEFAULT '{}',
+    requires_approval BOOLEAN DEFAULT FALSE,
+    short_description VARCHAR(500),
+
+    -- ===== CONSTRAINTS =====
+    CONSTRAINT chk_cluster_visibility CHECK (visibility IN ('public', 'unlisted', 'private')),
+    CONSTRAINT chk_cluster_pricing_model CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'custom', 'tier_inherit'))
 );
 
 -- ============================================================================
@@ -112,12 +122,14 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id),
     node_name VARCHAR(255) NOT NULL,
     node_type VARCHAR(50) NOT NULL,
-    
+    status VARCHAR(50) DEFAULT 'offline',
+
     -- ===== NETWORKING =====
     internal_ip INET,
     external_ip INET,
     wireguard_ip INET,
     wireguard_public_key TEXT,
+    wireguard_listen_port INTEGER DEFAULT 51820,
     
     -- ===== GEOGRAPHIC LOCATION =====
     region VARCHAR(50),
@@ -129,11 +141,10 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_nodes (
     cpu_cores INTEGER,
     memory_gb INTEGER,
     disk_gb INTEGER,
-    
-    -- ===== STATUS & HEALTH =====
-    status VARCHAR(50) DEFAULT 'active',
+
+    -- ===== HEARTBEAT =====
     last_heartbeat TIMESTAMP,
-    
+
     -- ===== METADATA & CONFIGURATION =====
     tags JSONB DEFAULT '{}',
     metadata JSONB DEFAULT '{}',
@@ -152,7 +163,9 @@ CREATE TABLE IF NOT EXISTS quartermaster.services (
     service_id VARCHAR(100) UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
     plane VARCHAR(50) NOT NULL, -- control, data, edge
-    
+    type VARCHAR(100),          -- Service type for discovery
+    protocol VARCHAR(10) DEFAULT 'http',
+
     -- ===== SERVICE DEFINITION =====
     description TEXT,
     default_port INTEGER,
@@ -222,10 +235,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     started_at TIMESTAMP,
     stopped_at TIMESTAMP,
     last_health_check TIMESTAMP,
-    
-    -- ===== RESOURCE USAGE =====
-    cpu_usage_percent DECIMAL(5,2),
-    memory_usage_mb INTEGER,
+
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
@@ -257,6 +267,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_assignments (
     priority INTEGER DEFAULT 1,
     is_primary BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
+    kafka_topic_prefix VARCHAR(100),
 
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
@@ -276,13 +287,24 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_access (
     -- ===== RESOURCE LIMITS (synced from Purser custom_allocations) =====
     resource_limits JSONB DEFAULT '{}',  -- Tenant-specific limits: {max_streams, max_viewers, max_bandwidth_mbps}
 
+    -- ===== SUBSCRIPTION STATUS (Approval workflow) =====
+    subscription_status VARCHAR(20) DEFAULT 'active',
+    requested_at TIMESTAMP,
+    approved_at TIMESTAMP,
+    approved_by UUID,
+    rejection_reason TEXT,
+    invite_token VARCHAR(128),
+
     -- ===== STATUS =====
     is_active BOOLEAN DEFAULT true,
     granted_at TIMESTAMP DEFAULT NOW(),
     expires_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(tenant_id, cluster_id)
+    UNIQUE(tenant_id, cluster_id),
+
+    -- ===== CONSTRAINTS =====
+    CONSTRAINT chk_subscription_status CHECK (subscription_status IN ('pending_approval', 'active', 'suspended', 'rejected'))
 );
 
 -- ============================================================================
@@ -360,58 +382,12 @@ CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_token ON quartermaster.bootst
 CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_kind ON quartermaster.bootstrap_tokens(kind);
 
 -- ============================================================================
--- CLUSTER MARKETPLACE (Multi-cluster provider network)
+-- MARKETPLACE INDEXES
 -- ============================================================================
--- Enables clusters to be discovered, subscribed to, and managed as a marketplace
--- Supports visibility controls, pricing models, and invite-based access
--- ============================================================================
-
--- Marketplace columns for infrastructure_clusters
-ALTER TABLE quartermaster.infrastructure_clusters
-ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) DEFAULT 'private',
-ADD COLUMN IF NOT EXISTS pricing_model VARCHAR(20) DEFAULT 'free_unmetered',
-ADD COLUMN IF NOT EXISTS monthly_price_cents INTEGER DEFAULT 0,
-ADD COLUMN IF NOT EXISTS metered_rate_config JSONB DEFAULT '{}',
-ADD COLUMN IF NOT EXISTS required_billing_tier VARCHAR(50),
-ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN DEFAULT FALSE,
-ADD COLUMN IF NOT EXISTS short_description VARCHAR(500),
-ADD COLUMN IF NOT EXISTS long_description TEXT,
-ADD COLUMN IF NOT EXISTS is_platform_cluster BOOLEAN DEFAULT FALSE;
-
--- Add check constraints for marketplace enums
-DO $$ BEGIN
-    ALTER TABLE quartermaster.infrastructure_clusters
-    ADD CONSTRAINT chk_cluster_visibility CHECK (visibility IN ('public', 'unlisted', 'private'));
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-DO $$ BEGIN
-    ALTER TABLE quartermaster.infrastructure_clusters
-    ADD CONSTRAINT chk_cluster_pricing_model CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'custom', 'tier_inherit'));
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Marketplace indexes for cluster discovery
 CREATE INDEX IF NOT EXISTS idx_qm_clusters_visibility ON quartermaster.infrastructure_clusters(visibility) WHERE is_active = true;
 CREATE INDEX IF NOT EXISTS idx_qm_clusters_pricing_model ON quartermaster.infrastructure_clusters(pricing_model) WHERE is_active = true;
-CREATE INDEX IF NOT EXISTS idx_qm_clusters_platform ON quartermaster.infrastructure_clusters(is_platform_cluster) WHERE is_active = true;
-
--- ============================================================================
--- CLUSTER SUBSCRIPTION STATUS (Approval workflow)
--- ============================================================================
-
--- Subscription status columns for tenant_cluster_access
-ALTER TABLE quartermaster.tenant_cluster_access
-ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(20) DEFAULT 'active',
-ADD COLUMN IF NOT EXISTS requested_at TIMESTAMP,
-ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP,
-ADD COLUMN IF NOT EXISTS approved_by UUID,
-ADD COLUMN IF NOT EXISTS rejection_reason TEXT,
-ADD COLUMN IF NOT EXISTS invite_token VARCHAR(128);
-
--- Add check constraint for subscription status
-DO $$ BEGIN
-    ALTER TABLE quartermaster.tenant_cluster_access
-    ADD CONSTRAINT chk_subscription_status CHECK (subscription_status IN ('pending_approval', 'active', 'suspended', 'rejected'));
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Index for pending approval queries
 CREATE INDEX IF NOT EXISTS idx_qm_tca_pending_approval ON quartermaster.tenant_cluster_access(subscription_status)
@@ -451,9 +427,13 @@ CREATE INDEX IF NOT EXISTS idx_qm_cluster_invites_token ON quartermaster.cluster
 CREATE INDEX IF NOT EXISTS idx_qm_cluster_invites_pending ON quartermaster.cluster_invites(status) WHERE status = 'pending';
 
 -- ============================================================================
--- TENANT CLUSTER OWNERSHIP LIMITS
+-- HOT-PATH INDEXES
 -- ============================================================================
 
--- Add max_owned_clusters to tenants (non-providers limited to 1 private cluster)
-ALTER TABLE quartermaster.tenants
-ADD COLUMN IF NOT EXISTS max_owned_clusters INTEGER DEFAULT 1;
+CREATE INDEX IF NOT EXISTS idx_qm_services_type ON quartermaster.services(type);
+CREATE INDEX IF NOT EXISTS idx_qm_service_instances_service_status_created ON quartermaster.service_instances(service_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_qm_service_instances_status_last_check ON quartermaster.service_instances(status, last_health_check);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_qm_infrastructure_nodes_wireguard_ip_unique
+    ON quartermaster.infrastructure_nodes(wireguard_ip)
+    WHERE wireguard_ip IS NOT NULL;
+

@@ -20,6 +20,7 @@ type HealthSpec struct {
 
 type ServiceSpec struct {
 	Name         string     `yaml:"name"`
+	Deploy       string     `yaml:"deploy,omitempty"`
 	Title        string     `yaml:"title"`
 	Role         string     `yaml:"role"`
 	Image        string     `yaml:"image"`

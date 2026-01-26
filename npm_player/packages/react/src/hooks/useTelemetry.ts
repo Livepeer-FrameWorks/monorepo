@@ -36,7 +36,7 @@ export interface UseTelemetryOptions extends TelemetryOptions {
  *   endpoint: '/api/telemetry',
  *   interval: 5000,
  *   videoElement,
- *   contentId: 'my-stream',
+ *   contentId: 'pk_...', // playbackId (view key)
  *   contentType: 'live',
  *   playerType: 'hlsjs',
  *   protocol: 'HLS',

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -21,12 +22,15 @@ import (
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
+	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/version"
+	"frameworks/pkg/x402"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -41,6 +45,7 @@ var (
 	lb                  *balancer.LoadBalancer
 	decklogClient       *decklog.BatchedClient
 	commodoreClient     *commodore.GRPCClient
+	purserClient        *purserclient.GRPCClient
 	quartermasterClient *qmclient.GRPCClient
 	metrics             *FoghornMetrics
 	geoipReader         *geoip.Reader
@@ -58,9 +63,9 @@ func GetClusterInfo() (string, string) {
 	return clusterID, ownerTenantID
 }
 
-func getClipContextByRequestID(requestID string) (string, string) {
+func getClipContextByRequestID(requestID string) (string, string, string, string) {
 	if db == nil || requestID == "" {
-		return "", ""
+		return "", "", "", ""
 	}
 
 	// Get clip_hash, internal_name, and fallback tenant_id from artifacts table
@@ -72,7 +77,7 @@ func getClipContextByRequestID(requestID string) (string, string) {
 		WHERE request_id = $1 AND artifact_type = 'clip'
 	`, requestID).Scan(&clipHash, &internalName, &fallbackTenantID)
 	if err != nil {
-		return "", ""
+		return "", "", "", ""
 	}
 
 	// Resolve tenant context from Commodore (uses cache)
@@ -81,7 +86,7 @@ func getClipContextByRequestID(requestID string) (string, string) {
 		defer cancel()
 		resp, err := commodoreClient.ResolveClipHash(ctx, clipHash)
 		if err == nil && resp.Found {
-			return resp.TenantId, internalName
+			return clipHash, resp.TenantId, internalName, resp.StreamId
 		}
 		// Commodore unavailable - log and fall through to local fallback
 		logger.WithField("clip_hash", clipHash).Info("Commodore unavailable, using local tenant_id fallback")
@@ -89,9 +94,100 @@ func getClipContextByRequestID(requestID string) (string, string) {
 
 	// Fallback to denormalized tenant_id stored locally
 	if fallbackTenantID.Valid {
-		return fallbackTenantID.String, internalName
+		return clipHash, fallbackTenantID.String, internalName, ""
 	}
-	return "", internalName
+	return clipHash, "", internalName, ""
+}
+
+type clipLifecycleContext struct {
+	ClipHash     string
+	TenantID     string
+	UserID       string
+	InternalName string
+	StreamID     string
+
+	StartUnix   *int64
+	StopUnix    *int64
+	StartMs     *int64
+	StopMs      *int64
+	DurationSec *int64
+	ClipMode    *string
+}
+
+func getClipLifecycleContextByRequestID(requestID string) clipLifecycleContext {
+	if db == nil || requestID == "" {
+		return clipLifecycleContext{}
+	}
+
+	// Get local context from foghorn.artifacts (denormalized fallback values).
+	var clipHash, internalName string
+	var fallbackTenantID sql.NullString
+	var fallbackUserID sql.NullString
+	err := db.QueryRow(`
+		SELECT artifact_hash, internal_name, tenant_id, user_id
+		FROM foghorn.artifacts
+		WHERE request_id = $1 AND artifact_type = 'clip'
+	`, requestID).Scan(&clipHash, &internalName, &fallbackTenantID, &fallbackUserID)
+	if err != nil || clipHash == "" {
+		return clipLifecycleContext{}
+	}
+
+	ctx := clipLifecycleContext{
+		ClipHash:     clipHash,
+		InternalName: internalName,
+	}
+	if fallbackTenantID.Valid {
+		ctx.TenantID = fallbackTenantID.String
+	}
+	if fallbackUserID.Valid {
+		ctx.UserID = fallbackUserID.String
+	}
+
+	// Prefer Commodore business registry for canonical tenant/stream attribution + timing enrichment.
+	if commodoreClient == nil {
+		return ctx
+	}
+
+	cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := commodoreClient.ResolveClipHash(cctx, clipHash)
+	if err != nil || !resp.Found {
+		return ctx
+	}
+
+	if resp.TenantId != "" {
+		ctx.TenantID = resp.TenantId
+	}
+	if resp.UserId != "" {
+		ctx.UserID = resp.UserId
+	}
+	if resp.InternalName != "" {
+		ctx.InternalName = resp.InternalName
+	}
+	if resp.StreamId != "" {
+		ctx.StreamID = resp.StreamId
+	}
+	if resp.ClipMode != "" {
+		mode := resp.ClipMode
+		ctx.ClipMode = &mode
+	}
+
+	// Commodore stores clip timing as: start_time (unix ms), duration (ms).
+	if resp.StartTime > 0 && resp.Duration > 0 {
+		startMs := resp.StartTime
+		stopMs := resp.StartTime + resp.Duration
+		startUnix := startMs / 1000
+		stopUnix := stopMs / 1000
+		durationSec := resp.Duration / 1000
+
+		ctx.StartMs = &startMs
+		ctx.StopMs = &stopMs
+		ctx.StartUnix = &startUnix
+		ctx.StopUnix = &stopUnix
+		ctx.DurationSec = &durationSec
+	}
+
+	return ctx
 }
 
 // FoghornMetrics holds all Prometheus metrics for Foghorn
@@ -104,8 +200,9 @@ type FoghornMetrics struct {
 	DBConnections         *prometheus.GaugeVec
 }
 
-// StreamKeyRegex matches stream keys in format xxxx-xxxx-xxxx-xxxx
-var StreamKeyRegex = regexp.MustCompile(`^(?:\w{4}-){3}\w{4}$`)
+// StreamIDRegex matches public playback IDs and internal names (live+/vod+).
+// Accepts alnum, underscore, hyphen, plus; blocks slashes and empty values.
+var StreamIDRegex = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+\-]{3,127}$`)
 
 // NodeHostRegex matches the first part of hostname before first dot
 var NodeHostRegex = regexp.MustCompile(`^.+?\.`)
@@ -118,6 +215,7 @@ func Init(
 	foghornMetrics *FoghornMetrics,
 	dClient *decklog.BatchedClient,
 	cClient *commodore.GRPCClient,
+	pClient *purserclient.GRPCClient,
 	qClient *qmclient.GRPCClient,
 	geo *geoip.Reader,
 	geoCache *cache.Cache,
@@ -128,6 +226,7 @@ func Init(
 	metrics = foghornMetrics
 	decklogClient = dClient
 	commodoreClient = cClient
+	purserClient = pClient
 	quartermasterClient = qClient
 	geoipReader = geo
 	geoipCache = geoCache
@@ -171,10 +270,16 @@ func Init(
 					"cluster_id":      resp.ClusterId,
 					"owner_tenant_id": ownerTenantID,
 				}).Info("Cached cluster owner tenant for dual-tenant attribution")
+				if triggerProcessor != nil {
+					triggerProcessor.SetOwnerTenantID(ownerTenantID)
+				}
 			}
 			// Also cache cluster_id from response if not set from env
 			if clusterID == "" && resp.ClusterId != "" {
 				clusterID = resp.ClusterId
+				if triggerProcessor != nil {
+					triggerProcessor.SetClusterID(clusterID)
+				}
 			}
 		}
 	}()
@@ -185,27 +290,45 @@ func Init(
 			if decklogClient == nil {
 				return
 			}
-			tenantID, internalName := getClipContextByRequestID(p.GetRequestId())
+			cctx := getClipLifecycleContextByRequestID(p.GetRequestId())
 			clipData := &pb.ClipLifecycleData{
 				Stage:     pb.ClipLifecycleData_STAGE_PROGRESS,
-				ClipHash:  "", // Will be set from clip context
+				ClipHash:  cctx.ClipHash,
 				RequestId: func() *string { s := p.GetRequestId(); return &s }(),
 				StartedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
 				// Enrichment fields added by Foghorn
 				TenantId: func() *string {
-					if tenantID != "" {
-						return &tenantID
+					if cctx.TenantID != "" {
+						return &cctx.TenantID
 					} else {
 						return nil
 					}
 				}(),
 				InternalName: func() *string {
-					if internalName != "" {
-						return &internalName
+					if cctx.InternalName != "" {
+						return &cctx.InternalName
 					} else {
 						return nil
 					}
 				}(),
+				StreamId: func() *string {
+					if cctx.StreamID != "" {
+						return &cctx.StreamID
+					}
+					return nil
+				}(),
+				UserId: func() *string {
+					if cctx.UserID != "" {
+						return &cctx.UserID
+					}
+					return nil
+				}(),
+				StartUnix:   cctx.StartUnix,
+				StopUnix:    cctx.StopUnix,
+				StartMs:     cctx.StartMs,
+				StopMs:      cctx.StopMs,
+				DurationSec: cctx.DurationSec,
+				ClipMode:    cctx.ClipMode,
 			}
 			if p.GetPercent() > 0 {
 				percent := uint32(p.GetPercent())
@@ -221,31 +344,49 @@ func Init(
 			if decklogClient == nil {
 				return
 			}
-			tenantID, internalName := getClipContextByRequestID(dn.GetRequestId())
+			cctx := getClipLifecycleContextByRequestID(dn.GetRequestId())
 			stage := pb.ClipLifecycleData_STAGE_DONE
 			if dn.GetStatus() != "success" {
 				stage = pb.ClipLifecycleData_STAGE_FAILED
 			}
 			clipData := &pb.ClipLifecycleData{
 				Stage:       stage,
-				ClipHash:    "", // Will be set from clip context
+				ClipHash:    cctx.ClipHash,
 				RequestId:   func() *string { s := dn.GetRequestId(); return &s }(),
 				CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
 				// Enrichment fields added by Foghorn
 				TenantId: func() *string {
-					if tenantID != "" {
-						return &tenantID
+					if cctx.TenantID != "" {
+						return &cctx.TenantID
 					} else {
 						return nil
 					}
 				}(),
 				InternalName: func() *string {
-					if internalName != "" {
-						return &internalName
+					if cctx.InternalName != "" {
+						return &cctx.InternalName
 					} else {
 						return nil
 					}
 				}(),
+				StreamId: func() *string {
+					if cctx.StreamID != "" {
+						return &cctx.StreamID
+					}
+					return nil
+				}(),
+				UserId: func() *string {
+					if cctx.UserID != "" {
+						return &cctx.UserID
+					}
+					return nil
+				}(),
+				StartUnix:   cctx.StartUnix,
+				StopUnix:    cctx.StopUnix,
+				StartMs:     cctx.StartMs,
+				StopMs:      cctx.StopMs,
+				DurationSec: cctx.DurationSec,
+				ClipMode:    cctx.ClipMode,
 			}
 			if fp := dn.GetFilePath(); fp != "" {
 				clipData.FilePath = &fp
@@ -266,111 +407,63 @@ func Init(
 			}()
 		},
 		func(del *pb.ArtifactDeleted) {
-			// Update DB status
 			clipHash := del.GetClipHash()
 			nodeID := del.GetNodeId()
+			reason := del.GetReason()
 
-			// 1. Update artifacts table
-			_, err := db.Exec(`UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW() WHERE artifact_hash = $1`, clipHash)
-			if err != nil {
-				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to mark artifact as deleted in DB")
-			}
-
-			// 2. Remove from artifact_nodes
-			_, err = db.Exec(`DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`, clipHash, nodeID)
+			// This message indicates node-local deletion/eviction. Remove the node cache record.
+			_, err := db.Exec(`DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`, clipHash, nodeID)
 			if err != nil {
 				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to remove artifact node assignment")
 			}
 
-			// 3. Send Decklog event
-			if decklogClient != nil {
-				// Resolve tenant context from Commodore
-				var tenantID, internalName string
-				if commodoreClient != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					defer cancel()
-					if resp, err := commodoreClient.ResolveClipHash(ctx, clipHash); err == nil && resp.Found {
-						tenantID = resp.TenantId
-						internalName = resp.InternalName
-					}
-				}
-
-				clipData := &pb.ClipLifecycleData{
-					Stage:     pb.ClipLifecycleData_STAGE_DELETED,
-					ClipHash:  clipHash,
-					NodeId:    func() *string { s := nodeID; return &s }(),
-					SizeBytes: func() *uint64 { s := del.GetSizeBytes(); return &s }(),
-					TenantId: func() *string {
-						if tenantID != "" {
-							return &tenantID
-						}
-						return nil
-					}(),
-					InternalName: func() *string {
-						if internalName != "" {
-							return &internalName
-						}
-						return nil
-					}(),
-				}
-				go func() {
-					if err := decklogClient.SendClipLifecycle(clipData); err != nil {
-						logger.WithError(err).WithField("clip_hash", clipData.ClipHash).Warn("Failed to send clip deleted to Decklog")
-					}
-				}()
+			// If the artifact has no remaining cached nodes and is synced, reflect that it is now S3-only.
+			var hasAnyNodes bool
+			_ = db.QueryRow(`
+				SELECT EXISTS(
+					SELECT 1 FROM foghorn.artifact_nodes
+					WHERE artifact_hash = $1 AND NOT is_orphaned
+				)
+			`, clipHash).Scan(&hasAnyNodes)
+			if !hasAnyNodes {
+				_, _ = db.Exec(`
+					UPDATE foghorn.artifacts
+					SET storage_location = CASE
+						WHEN sync_status = 'synced' THEN 's3'
+						ELSE storage_location
+					END,
+					updated_at = NOW()
+					WHERE artifact_hash = $1
+				`, clipHash)
 			}
+
+			// Evictions must never be treated as global deletes.
+			if reason == "eviction" {
+				logger.WithFields(logging.Fields{
+					"clip_hash": clipHash,
+					"node_id":   nodeID,
+				}).Info("Clip evicted from node cache")
+				return
+			}
+
+			// Only emit DELETED when the artifact is already soft-deleted in foghorn.artifacts.
+			// This avoids conflating node-local cleanup with user-initiated deletion.
+			var artifactStatus string
+			if err := db.QueryRow(`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, clipHash).Scan(&artifactStatus); err != nil {
+				logger.WithError(err).WithField("clip_hash", clipHash).Warn("Failed to read artifact status for deletion lifecycle")
+				return
+			}
+			if artifactStatus != "deleted" {
+				logger.WithFields(logging.Fields{
+					"clip_hash": clipHash,
+					"node_id":   nodeID,
+					"reason":    reason,
+				}).Info("Clip removed from node but not globally deleted")
+				return
+			}
+
 		},
 	)
-
-	// Set DVR deleted handler for analytics (called after Helmsman confirms deletion)
-	control.SetDVRDeletedHandler(func(dvrHash string, sizeBytes uint64, nodeID string) {
-		if decklogClient == nil {
-			return
-		}
-
-		// Resolve tenant context from Commodore
-		var tenantID, internalName string
-		if commodoreClient != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if resp, err := commodoreClient.ResolveDVRHash(ctx, dvrHash); err == nil && resp.Found {
-				tenantID = resp.TenantId
-				internalName = resp.InternalName
-			}
-		}
-
-		dvrData := &pb.DVRLifecycleData{
-			Status:  pb.DVRLifecycleData_STATUS_DELETED,
-			DvrHash: dvrHash,
-			TenantId: func() *string {
-				if tenantID != "" {
-					return &tenantID
-				}
-				return nil
-			}(),
-			InternalName: func() *string {
-				if internalName != "" {
-					return &internalName
-				}
-				return nil
-			}(),
-			NodeId: func() *string {
-				if nodeID != "" {
-					return &nodeID
-				}
-				return nil
-			}(),
-			SizeBytes: func() *uint64 {
-				if sizeBytes > 0 {
-					return &sizeBytes
-				}
-				return nil
-			}(),
-		}
-		if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
-			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to send DVR deleted to Decklog")
-		}
-	})
 
 	// Set dtsh sync handler for incremental .dtsh uploads
 	// Called when periodic artifact scan detects .dtsh exists locally but wasn't synced
@@ -433,7 +526,7 @@ func MistServerCompatibilityHandler(c *gin.Context) {
 	streamName := strings.TrimPrefix(path, "/")
 
 	// Validate stream name format
-	if streamName == "" || !StreamKeyRegex.MatchString(streamName) {
+	if streamName == "" || !StreamIDRegex.MatchString(streamName) {
 		c.String(http.StatusBadRequest, "Invalid stream name")
 		return
 	}
@@ -448,6 +541,7 @@ func HandleNodesOverview(c *gin.Context) {
 	offsetStr := c.Query("offset")
 	limitStr := c.Query("limit")
 	fullState := c.Query("full") == "true"
+	includeStale := c.Query("include_stale") == "true"
 	var offset, limit int
 	if v, err := strconv.Atoi(offsetStr); err == nil {
 		offset = v
@@ -456,7 +550,7 @@ func HandleNodesOverview(c *gin.Context) {
 		limit = v
 	}
 
-	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+	snapshot := state.DefaultManager().GetBalancerSnapshotAtomicWithOptions(includeStale)
 	var out []map[string]interface{}
 	if snapshot != nil {
 		for _, n := range snapshot.Nodes {
@@ -520,7 +614,13 @@ func HandleNodesOverview(c *gin.Context) {
 				"geo_longitude": n.GeoLongitude,
 				"location_name": n.LocationName,
 				// status and timing
-				"is_active":   n.IsActive,
+				"is_active": n.IsActive,
+				"is_stale": func() bool {
+					if ns := state.DefaultManager().GetNodeState(n.NodeID); ns != nil {
+						return ns.IsStale
+					}
+					return false
+				}(),
 				"last_update": n.LastUpdate,
 				// resource metrics
 				"cpu_tenths":  uint64(n.CPU * 10),
@@ -961,6 +1061,12 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		if fallback == "" {
 			fallback = "dtsc://localhost:4200"
 		}
+		// Log at Info level: MistServer is asking where to pull this stream from.
+		// No node has it with active inputs, so MistServer will use push/local input instead.
+		logger.WithFields(logging.Fields{
+			"stream":   streamName,
+			"fallback": fallback,
+		}).Info("Source lookup: no node has active input for stream; returning fallback (MistServer will use push/local)")
 		c.String(http.StatusOK, fallback)
 		return
 	}
@@ -1150,6 +1256,29 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 
 	// Unified resolution: Determine if this is Live (Key) or VOD (Artifact)
 	target, _ := control.ResolveStream(c.Request.Context(), streamName)
+	internalName := mist.ExtractInternalName(target.InternalName)
+
+	// Prepaid billing check (402)
+	if target.TenantID != "" {
+		billing := getBillingStatus(c.Request.Context(), internalName, target.TenantID)
+		if billing != nil && billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
+			paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request)
+			resourcePath := c.Request.URL.Path
+			paid, decision := settleX402PaymentForPlayback(c.Request.Context(), target.TenantID, resourcePath, paymentHeader, c.ClientIP(), logger)
+			if decision != nil {
+				c.JSON(decision.Status, decision.Body)
+				return
+			}
+			if !paid {
+				message := "payment required - stream owner needs to top up balance"
+				if billing.IsSuspended {
+					message = "payment required - owner account suspended"
+				}
+				c.JSON(http.StatusPaymentRequired, buildInsufficientBalanceResponse(c.Request.Context(), target.TenantID, resourcePath, message))
+				return
+			}
+		}
+	}
 
 	// 1. Fixed Node (VOD)
 	if target.FixedNode != "" {
@@ -1181,7 +1310,9 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 
 	// 2. Dynamic Balancing (Live)
 	// Use resolved internal name for finding nodes, but preserve original name for redirect
-	internalName := target.InternalName
+	if internalName == "" {
+		internalName = target.InternalName
+	}
 
 	// Optional capability filter
 	requireCap := query.Get("cap")
@@ -1252,7 +1383,6 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 }
 
 // Orchestrate clip creation: select ingest and storage, then call Helmsman on storage to pull clip from Mist
-// HandleCreateClip - DELETED: migrated to gRPC CreateClip in internal/grpc/server.go
 
 func deriveMistHTTPBase(base string) string {
 	u, err := url.Parse(base)
@@ -1352,12 +1482,15 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 	}
 
 	// Enrich with tenant info via Commodore
-	var tenantID, internalName string
+	// MistServer sends stream names with live+/vod+ prefix; strip it for DB lookup
+	var tenantID, internalName, streamID string
 	if commodoreClient != nil && streamName != "" {
 		ctx := context.Background()
-		if resolveResp, err := commodoreClient.ResolveInternalName(ctx, streamName); err == nil {
+		bareInternal := mist.ExtractInternalName(streamName)
+		if resolveResp, err := commodoreClient.ResolveInternalName(ctx, bareInternal); err == nil {
 			tenantID = resolveResp.TenantId
 			internalName = resolveResp.InternalName
+			streamID = resolveResp.StreamId
 		} else {
 			logger.WithError(err).WithField("stream_name", streamName).Info("Failed to resolve tenant via Commodore")
 		}
@@ -1433,6 +1566,12 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 			}
 			return nil
 		}(),
+		StreamId: func() *string {
+			if streamID != "" {
+				return &streamID
+			}
+			return nil
+		}(),
 		ClusterId: func() *string {
 			if clusterID != "" {
 				return &clusterID
@@ -1450,6 +1589,10 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 	if decklogClient == nil {
 		logger.Error("Decklog gRPC client not initialized")
 		return
+	}
+
+	if streamID == "" {
+		logger.WithField("stream_name", streamName).Warn("LoadBalancingData missing stream_id")
 	}
 
 	// Send event via gRPC
@@ -1473,7 +1616,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 // emitViewerRoutingEvent posts a routing decision for viewer playback (used by gRPC + generic HTTP helpers)
 // Keeps it minimal to avoid duplicating the legacy postBalancingEvent gin-specific code.
 // durationMs is the time taken to resolve the routing decision (request processing latency)
-func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID string, durationMs float32) {
+func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID string, durationMs float32, candidatesCount int32, eventType, source string) {
 	if decklogClient == nil || primary == nil {
 		return
 	}
@@ -1573,6 +1716,31 @@ func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEnd
 			}
 			return nil
 		}(),
+		StreamId: func() *string {
+			if streamID != "" {
+				return &streamID
+			}
+			return nil
+		}(),
+		CandidatesCount: func() *uint32 {
+			if candidatesCount > 0 {
+				v := uint32(candidatesCount)
+				return &v
+			}
+			return nil
+		}(),
+		EventType: func() *string {
+			if eventType != "" {
+				return &eventType
+			}
+			return nil
+		}(),
+		Source: func() *string {
+			if source != "" {
+				return &source
+			}
+			return nil
+		}(),
 		ClusterId: func() *string {
 			if clusterID != "" {
 				return &clusterID
@@ -1585,6 +1753,10 @@ func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEnd
 			}
 			return nil
 		}(),
+	}
+
+	if streamID == "" {
+		logger.WithField("content_id", req.GetContentId()).Warn("LoadBalancingData missing stream_id")
 	}
 
 	go func() {
@@ -1657,21 +1829,11 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 	return total
 }
 
-// HandleGetClips - DELETED: migrated to gRPC GetClips in internal/grpc/server.go
-
-// HandleGetClip - DELETED: migrated to gRPC GetClip in internal/grpc/server.go
-
-// HandleGetClipNode - DELETED: migrated to gRPC GetClipURLs in internal/grpc/server.go
-
-// HandleResolveClip - DELETED: migrated to gRPC ResolveClipHash in internal/control/server.go
-
-// HandleDeleteClip - DELETED: migrated to gRPC DeleteClip in internal/grpc/server.go
-
 // === DVR MANAGEMENT ENDPOINTS ===
 
-func getDVRContextByRequestID(requestID string) (string, string) {
+func getDVRContextByRequestID(requestID string) (string, string, string) {
 	if db == nil || requestID == "" {
-		return "", ""
+		return "", "", ""
 	}
 
 	// Get dvr_hash, internal_name, and fallback tenant_id from artifacts table
@@ -1683,7 +1845,7 @@ func getDVRContextByRequestID(requestID string) (string, string) {
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
 	`, requestID).Scan(&dvrHash, &internalName, &fallbackTenantID)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 
 	// Resolve tenant context from Commodore (uses cache)
@@ -1692,7 +1854,7 @@ func getDVRContextByRequestID(requestID string) (string, string) {
 		defer cancel()
 		resp, err := commodoreClient.ResolveDVRHash(ctx, dvrHash)
 		if err == nil && resp.Found {
-			return resp.TenantId, internalName
+			return resp.TenantId, internalName, resp.StreamId
 		}
 		// Commodore unavailable - log and fall through to local fallback
 		logger.WithField("dvr_hash", dvrHash).Info("Commodore unavailable, using local tenant_id fallback")
@@ -1700,16 +1862,10 @@ func getDVRContextByRequestID(requestID string) (string, string) {
 
 	// Fallback to denormalized tenant_id stored locally
 	if fallbackTenantID.Valid {
-		return fallbackTenantID.String, internalName
+		return fallbackTenantID.String, internalName, ""
 	}
-	return "", internalName
+	return "", internalName, ""
 }
-
-// HandleStartDVRRecording - DELETED: migrated to gRPC StartDVR in internal/grpc/server.go
-
-// HandleStopDVRRecording - DELETED: migrated to gRPC StopDVR in internal/grpc/server.go
-
-// HandleGetDVRStatus - DELETED: migrated to gRPC GetDVRStatus in internal/grpc/server.go
 
 // buildOutputCapabilities returns default capabilities for a given protocol and content type
 func buildOutputCapabilities(protocol string, isLive bool) *pb.OutputCapability {
@@ -1920,6 +2076,7 @@ func buildLivePlaybackMetadata(req *pb.ViewerEndpointRequest, endpoints []*pb.Vi
 		return nil
 	}
 
+	contentType := "live"
 	meta := &pb.PlaybackMetadata{
 		Status:        streamState.Status,
 		IsLive:        strings.EqualFold(streamState.Status, "live"),
@@ -1927,25 +2084,21 @@ func buildLivePlaybackMetadata(req *pb.ViewerEndpointRequest, endpoints []*pb.Vi
 		BufferState:   streamState.BufferState,
 		TenantId:      streamState.TenantID,
 		ContentId:     req.ContentId,
-		ContentType:   req.ContentType,
+		ContentType:   contentType,
 		Tracks:        playbackTracksFromState(streamState.Tracks),
 		Instances:     playbackInstancesFromState(sm.GetStreamInstances(req.ContentId)),
 		ProtocolHints: protocolHintsFromEndpoints(endpoints),
 	}
 
 	if meta.Status == "" {
-		meta.Status = req.ContentType
+		meta.Status = contentType
 	}
-	if !meta.IsLive && strings.EqualFold(req.ContentType, "live") {
+	if !meta.IsLive && strings.EqualFold(contentType, "live") {
 		meta.IsLive = true
 	}
 
 	return meta
 }
-
-// HandleResolveViewerEndpoint - DELETED: migrated to gRPC ResolveViewerEndpoint in internal/grpc/server.go
-
-// HandleStreamMeta - DELETED: migrated to gRPC GetStreamMeta in internal/grpc/server.go
 
 func stringOr(v interface{}) string {
 	if s, ok := v.(string); ok {
@@ -1998,7 +2151,7 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 		return nil, fmt.Errorf("stream not found")
 	}
 
-	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName)
+	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName, target.StreamID)
 	if err != nil {
 		return nil, err
 	}
@@ -2006,23 +2159,27 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 	// Emit routing event for analytics
 	if response.Primary != nil {
 		durationMs := float32(time.Since(start).Milliseconds())
-		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, target.InternalName, target.TenantID, durationMs)
+		candidatesCount := int32(0)
+		if response.Primary != nil {
+			candidatesCount = int32(1 + len(response.Fallbacks))
+		}
+		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, target.InternalName, target.TenantID, target.StreamID, durationMs, candidatesCount, "play_rewrite", "http")
 	}
 
 	return response, nil
 }
 
-// resolveDVRViewerEndpoint queries database for DVR storage node
-func resolveDVRViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+// resolveArtifactViewerEndpoint queries database for VOD/Clip/DVR storage nodes via a single resolver.
+// It derives type from the public ID and does not depend on any caller-provided content type.
+func resolveArtifactViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
-	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
 		DB: db,
 		LB: lb,
 	}
 
 	ctx := context.Background()
-	response, err := control.ResolveDVRPlayback(ctx, deps, req.ContentId)
+	response, err := control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
 	if err != nil {
 		return nil, err
 	}
@@ -2030,31 +2187,15 @@ func resolveDVRViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpoint
 	// Emit routing event for analytics
 	if response.Primary != nil && response.Metadata != nil {
 		durationMs := float32(time.Since(start).Milliseconds())
-		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource(), response.Metadata.GetTenantId(), durationMs)
-	}
-
-	return response, nil
-}
-
-// resolveClipViewerEndpoint queries database for clip storage node
-func resolveClipViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	start := time.Now()
-	// Delegate to consolidated control package function
-	deps := &control.PlaybackDependencies{
-		DB: db,
-		LB: lb,
-	}
-
-	ctx := context.Background()
-	response, err := control.ResolveClipPlayback(ctx, deps, req.ContentId)
-	if err != nil {
-		return nil, err
-	}
-
-	// Emit routing event for analytics
-	if response.Primary != nil && response.Metadata != nil {
-		durationMs := float32(time.Since(start).Milliseconds())
-		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource(), response.Metadata.GetTenantId(), durationMs)
+		candidatesCount := int32(0)
+		if response.Primary != nil {
+			candidatesCount = int32(1 + len(response.Fallbacks))
+		}
+		internalName := ""
+		if target, _ := control.ResolveStream(ctx, req.ContentId); target != nil {
+			internalName = target.InternalName
+		}
+		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), durationMs, candidatesCount, "play_rewrite", "http")
 	}
 
 	return response, nil
@@ -2131,8 +2272,8 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		return
 	}
 
-	// UNIFIED RESOLUTION: Use control.ResolveContent to determine content type
-	// This handles: view keys (live), clip hashes, and DVR hashes
+	// UNIFIED RESOLUTION: derive the content type from the public ID.
+	// Never trust or require a caller-provided content type.
 	ctx := context.Background()
 	resolution, err := control.ResolveContent(ctx, viewKey)
 	if err != nil {
@@ -2146,6 +2287,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	if contentID == "" {
 		contentID = viewKey // Fallback to original input
 	}
+	internalName := mist.ExtractInternalName(resolution.InternalName)
 
 	logger.WithFields(logging.Fields{
 		"view_key":     viewKey,
@@ -2154,15 +2296,36 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		"fixed_node":   resolution.FixedNode,
 	}).Info("Resolved content via unified resolution")
 
+	// Prepaid billing check (402)
+	if resolution.TenantId != "" {
+		billing := getBillingStatus(c.Request.Context(), internalName, resolution.TenantId)
+		if billing != nil && billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
+			paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request)
+			resourcePath := c.Request.URL.Path
+			paid, decision := settleX402PaymentForPlayback(c.Request.Context(), resolution.TenantId, resourcePath, paymentHeader, c.ClientIP(), logger)
+			if decision != nil {
+				c.JSON(decision.Status, decision.Body)
+				return
+			}
+			if !paid {
+				message := "payment required - stream owner needs to top up balance"
+				if billing.IsSuspended {
+					message = "payment required - owner account suspended"
+				}
+				c.JSON(http.StatusPaymentRequired, buildInsufficientBalanceResponse(c.Request.Context(), resolution.TenantId, resourcePath, message))
+				return
+			}
+		}
+	}
+
 	// Normalize protocol
 	protocol = normalizeProtocol(protocol)
 
-	// Build viewer endpoint request
+	// Build viewer endpoint request (content type is derived, not supplied)
 	viewerIP := c.ClientIP()
 	req := &pb.ViewerEndpointRequest{
-		ContentType: contentType,
-		ContentId:   contentID,
-		ViewerIp:    proto.String(viewerIP),
+		ContentId: contentID,
+		ViewerIp:  proto.String(viewerIP),
 	}
 
 	// Get geo location for viewer
@@ -2176,19 +2339,29 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Resolve endpoint
 	var response *pb.ViewerEndpointResponse
-	switch contentType {
-	case "live":
+	if contentType == "live" {
 		response, err = resolveLiveViewerEndpoint(req, lat, lon)
-	case "dvr":
-		response, err = resolveDVRViewerEndpoint(req)
-	case "clip":
-		response, err = resolveClipViewerEndpoint(req)
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid content type"})
-		return
+	} else {
+		response, err = resolveArtifactViewerEndpoint(req)
 	}
 
 	if err != nil {
+		var defrostErr *control.DefrostingError
+		if errors.As(err, &defrostErr) {
+			retryAfter := defrostErr.RetryAfterSeconds
+			if retryAfter <= 0 {
+				retryAfter = 10
+			}
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
+			c.JSON(http.StatusAccepted, gin.H{
+				"status":      "defrosting",
+				"retryAfter":  retryAfter,
+				"contentType": contentType,
+				"contentId":   contentID,
+			})
+			return
+		}
+
 		logger.WithError(err).WithFields(logging.Fields{
 			"view_key":      viewKey,
 			"internal_name": contentID,
@@ -2201,7 +2374,10 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// Create virtual viewer for live streams to track this redirect
 	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
 	if contentType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
-		state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, contentID, viewerIP)
+		if internalName == "" {
+			internalName = contentID
+		}
+		state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, viewerIP)
 	}
 
 	// If no protocol or "any", return full JSON response

@@ -17,6 +17,7 @@ enum Channel {
   CHANNEL_ANALYTICS = 2;
   CHANNEL_SYSTEM = 3;
   CHANNEL_ALL = 4;
+  CHANNEL_MESSAGING = 5;  // Support messaging updates
 }
 
 enum EventType {
@@ -49,6 +50,12 @@ enum EventType {
   EVENT_TYPE_PUSH_END = 37;
   EVENT_TYPE_RECORDING_COMPLETE = 39;
   EVENT_TYPE_VOD_LIFECYCLE = 40;
+  EVENT_TYPE_STORAGE_LIFECYCLE = 41;
+  EVENT_TYPE_PROCESS_BILLING = 42;
+  EVENT_TYPE_STORAGE_SNAPSHOT = 43;
+
+  // Messaging events (channel: messaging)
+  EVENT_TYPE_MESSAGE_LIFECYCLE = 50;
 }
 
 // ============================================================================
@@ -91,6 +98,12 @@ message EventData {
     helmsmancontrol.VodLifecycleData vod_lifecycle = 15;
     helmsmancontrol.StreamLifecycleUpdate stream_lifecycle = 16;  // Rich stream health data
     helmsmancontrol.StreamBufferTrigger stream_buffer = 17;       // Buffer state updates
+    helmsmancontrol.StorageLifecycleData storage_lifecycle = 18;
+    helmsmancontrol.ProcessBillingEvent process_billing = 19;
+    helmsmancontrol.ViewerResolveTrigger play_rewrite = 20;
+    helmsmancontrol.StreamSourceTrigger stream_source = 21;
+    helmsmancontrol.StorageSnapshot storage_snapshot = 22;
+    helmsmancontrol.MessageLifecycleData message_lifecycle = 23;
   }
 
   reserved 13;

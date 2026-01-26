@@ -11,7 +11,7 @@
     avgShmUsage?: number;
   }
 
-  type SystemHealthEvent = NonNullable<SystemHealth$result["systemHealth"]>;
+  type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
 
   interface Props {
     nodePerformanceMetrics: NodePerformanceMetric[];

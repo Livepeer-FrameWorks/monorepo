@@ -36,7 +36,8 @@ func PublicGraphQLAllowlist() gin.HandlerFunc {
 		// Allowlist minimal safe operations for public use
 		// - serviceInstancesHealth: for public status page
 		// - resolveViewerEndpoint: for player endpoint discovery by playback id/content id
-		if strings.Contains(s, "serviceinstanceshealth") || strings.Contains(s, "resolveviewerendpoint") {
+		// - resolveIngestEndpoint: for StreamCrafter ingest endpoint discovery by stream key
+		if strings.Contains(s, "serviceinstanceshealth") || strings.Contains(s, "resolveviewerendpoint") || strings.Contains(s, "resolveingestendpoint") {
 			c.Next()
 			return
 		}

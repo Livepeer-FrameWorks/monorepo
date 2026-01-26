@@ -5,9 +5,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
-	pkgauth "frameworks/pkg/auth"
+	"frameworks/api_gateway/internal/clients"
+	"frameworks/pkg/auth"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,7 +43,7 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 		}
 
 		// Validate JWT
-		claims, err := pkgauth.ValidateJWT(token, secret)
+		claims, err := auth.ValidateJWT(token, secret)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			c.Abort()
@@ -52,6 +55,7 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 		c.Set("tenant_id", claims.TenantID)
 		c.Set("email", claims.Email)
 		c.Set("role", claims.Role)
+		c.Set("auth_type", "jwt")
 
 		// Also set in request context for gRPC client interceptor
 		ctx := c.Request.Context()
@@ -73,13 +77,11 @@ func isAllowlistedQuery(body []byte) bool {
 		return false
 	}
 	// Minimal allowlist for public access
-	if strings.Contains(s, "serviceinstanceshealth") || strings.Contains(s, "resolveviewerendpoint") {
+	if strings.Contains(s, "serviceinstanceshealth") || strings.Contains(s, "resolveviewerendpoint") || strings.Contains(s, "resolveingestendpoint") {
 		return true
 	}
 	return false
 }
-
-type TokenValidator func(token string) (*UserContext, error)
 
 // PublicOrJWTAuth allows unauthenticated access for a small allowlist of read-only
 // GraphQL queries; otherwise requires a valid JWT or service token. WebSocket upgrades
@@ -89,10 +91,11 @@ type TokenValidator func(token string) (*UserContext, error)
 // Flow:
 // 1. WebSocket upgrades → pass through (auth in InitFunc)
 // 2. POST requests → check allowlist FIRST
-//    - If allowlisted → proceed anonymously (ignore any tokens)
-//    - If not allowlisted → require auth
+//   - If allowlisted → proceed anonymously (ignore any tokens)
+//   - If not allowlisted → require auth
+//
 // 3. Other methods → require auth
-func PublicOrJWTAuth(secret []byte, validator TokenValidator) gin.HandlerFunc {
+func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Allow WebSocket upgrades; auth handled by WS init
 		if c.GetHeader("Upgrade") == "websocket" && strings.Contains(c.GetHeader("Connection"), "Upgrade") {
@@ -114,60 +117,68 @@ func PublicOrJWTAuth(secret []byte, validator TokenValidator) gin.HandlerFunc {
 
 			// If allowlisted, proceed anonymously (ignore any tokens sent)
 			if isAllowlistedQuery(body) {
+				c.Set("public_allowlisted", true)
 				c.Next()
 				return
 			}
 		}
 
-		// Not allowlisted - require authentication
-		// Try to get token from Authorization header first, then fall back to cookie
-		var token string
-		authHeader := c.GetHeader("Authorization")
-		if authHeader != "" {
-			parts := strings.Split(authHeader, " ")
-			if len(parts) == 2 && parts[0] == "Bearer" {
-				token = parts[1]
-			}
-		}
-
-		// Fall back to httpOnly cookie if no Authorization header
-		if token == "" {
-			if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
-				token = cookieToken
-			}
-		}
-
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "No authorization header"})
-			c.Abort()
+		authResult, err := AuthenticateRequest(c.Request.Context(), c.Request, serviceClients, secret, AuthOptions{
+			AllowCookies: true,
+			AllowWallet:  true,
+			AllowX402:    true,
+		}, nil)
+		if err != nil && authResult == nil {
+			c.Next()
 			return
 		}
-
-		// 1. Try JWT
-		claims, err := pkgauth.ValidateJWT(token, secret)
-		if err == nil {
-			c.Set("user_id", claims.UserID)
-			c.Set("tenant_id", claims.TenantID)
-			c.Set("email", claims.Email)
-			c.Set("role", claims.Role)
+		if authResult == nil {
 			c.Next()
 			return
 		}
 
-		// 2. Try API Token (via callback)
-		if validator != nil {
-			user, err := validator(token)
-			if err == nil && user != nil {
-				c.Set("user_id", user.UserID)
-				c.Set("tenant_id", user.TenantID)
-				c.Set("email", user.Email)
-				c.Set("role", user.Role)
-				c.Next()
-				return
+		if authResult.AuthType == "x402" && authResult.JWTToken != "" {
+			c.Header("X-Access-Token", authResult.JWTToken)
+			if authResult.ExpiresAt != nil {
+				c.Header("X-Access-Token-Expires-At", authResult.ExpiresAt.Format(time.RFC3339))
+			}
+
+			isDev := os.Getenv("ENV") == "development" ||
+				os.Getenv("BUILD_ENV") == "development" ||
+				os.Getenv("GO_ENV") == "development"
+			secure := !isDev
+			c.SetSameSite(http.SameSiteLaxMode)
+			c.SetCookie("access_token", authResult.JWTToken, 15*60, "/", "", secure, true)
+			if authResult.TenantID != "" {
+				c.SetCookie("tenant_id", authResult.TenantID, 15*60, "/", "", secure, true)
 			}
 		}
 
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
-		c.Abort()
+		c.Set("user_id", authResult.UserID)
+		c.Set("tenant_id", authResult.TenantID)
+		c.Set("email", authResult.Email)
+		c.Set("role", authResult.Role)
+		c.Set("auth_type", authResult.AuthType)
+		if authResult.AuthType == "x402" {
+			c.Set("x402_processed", authResult.X402Processed)
+			c.Set("x402_auth_only", authResult.X402AuthOnly)
+		}
+		if authResult.AuthType == "api_token" {
+			tokenID := authResult.TokenID
+			if tokenID == "" {
+				tokenID = authResult.APIToken
+			}
+			c.Set("api_token_hash", hashIdentifier(tokenID))
+		}
+
+		ctx := ApplyAuthToContext(c.Request.Context(), authResult)
+
+		// Also forward X-PAYMENT header in context for downstream gRPC calls (viewer-pays flows)
+		if xPayment := GetX402PaymentHeader(c.Request); xPayment != "" {
+			ctx = context.WithValue(ctx, "x_payment", xPayment)
+		}
+
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
 	}
 }

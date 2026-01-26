@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
@@ -12,6 +13,7 @@ import (
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
+	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
@@ -21,13 +23,13 @@ import (
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 	"strconv"
-	"strings"
 	"time"
 )
 
 func main() {
 	// Initialize logger
 	logger := logging.NewLoggerWithService("foghorn")
+	state.SetLogger(logger)
 
 	// Load environment variables
 	config.LoadEnv(logger)
@@ -67,6 +69,27 @@ func main() {
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
 		"DATABASE_URL": dbURL,
 	}))
+	healthChecker.AddCheck("state_rehydrate", func() monitoring.CheckResult {
+		at, errMsg := state.DefaultManager().RehydrateStatus()
+		if errMsg != "" {
+			return monitoring.CheckResult{
+				Status:  "unhealthy",
+				Message: fmt.Sprintf("last rehydrate error: %s", errMsg),
+				Latency: time.Since(at).String(),
+			}
+		}
+		if at.IsZero() {
+			return monitoring.CheckResult{
+				Status:  "healthy",
+				Message: "rehydrate not yet run",
+			}
+		}
+		return monitoring.CheckResult{
+			Status:  "healthy",
+			Message: "rehydrate ok",
+			Latency: time.Since(at).String(),
+		}
+	})
 
 	// Create custom load balancing metrics
 	metrics := &handlers.FoghornMetrics{
@@ -117,13 +140,10 @@ func main() {
 
 	// --- Initialize Clients (Lifted from Handlers) ---
 
-	// Decklog
-	decklogURL := config.GetEnv("DECKLOG_URL", "decklog:18006")
-	address := strings.TrimPrefix(decklogURL, "http://")
-	address = strings.TrimPrefix(address, "https://")
+	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
 	allowInsecure := config.GetEnv("DECKLOG_USE_TLS", "false") != "true"
 	decklogConfig := decklog.BatchedClientConfig{
-		Target:        address,
+		Target:        decklogGRPCAddr,
 		AllowInsecure: allowInsecure,
 		Timeout:       10 * time.Second,
 		Source:        "foghorn",
@@ -189,6 +209,21 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
 	}
 	defer commodoreClient.Close()
+
+	// Purser (gRPC) - x402 settlement + billing checks
+	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
+	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+		GRPCAddr:     purserGRPCURL,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Purser gRPC client - x402 payments will be unavailable")
+		purserClient = nil
+	} else {
+		defer purserClient.Close()
+	}
 
 	// GeoIP
 	var geoipReader *geoip.Reader
@@ -271,7 +306,7 @@ func main() {
 	}
 
 	// Initialize handlers with injected clients
-	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, qmClient, geoipReader, geoipCache)
+	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
 
 	// Initialize trigger processor (Lifted from Handlers)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
@@ -312,10 +347,13 @@ func main() {
 	control.SetArtifactRepository(control.NewArtifactRepository())
 
 	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution, VOD uploads)
-	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, decklogClient, s3ForGRPC)
+	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, decklogClient, s3ForGRPC, purserClient)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
+
+	// Wire cache invalidator for instant tenant reactivation (Purser → Commodore → Foghorn)
+	foghornServer.SetCacheInvalidator(triggerProcessor)
 
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
 	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
@@ -337,6 +375,7 @@ func main() {
 		Logger:        logger,
 		Interval:      1 * time.Hour,
 		RetentionDays: 30, // Default 30 days
+		DecklogClient: decklogClient,
 	})
 	retentionJob.Start()
 	defer retentionJob.Stop()

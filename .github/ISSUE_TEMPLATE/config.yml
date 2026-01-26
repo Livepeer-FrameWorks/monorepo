@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & Support
+    url: https://github.com/Livepeer-FrameWorks/monorepo/discussions
+    about: Ask questions in Discussions, not in issues
+  - name: Documentation
+    url: https://docs.frameworks.network
+    about: Check the docs first

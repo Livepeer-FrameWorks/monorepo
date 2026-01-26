@@ -327,16 +327,6 @@ func HealthCheck(c *gin.Context) {
 	})
 }
 
-// GetPrometheusPassword handles the /koekjes endpoint for Prometheus scraping
-func GetPrometheusPassword(c *gin.Context) {
-	password := os.Getenv("MIST_PASSWORD")
-	if password == "" {
-		password = "koekjes"
-	}
-
-	c.String(http.StatusOK, password)
-}
-
 // getCurrentNodeID gets the current node ID from the prometheus monitor
 func getCurrentNodeID() string {
 	if prometheusMonitor == nil {
@@ -654,6 +644,19 @@ func getNodeID() string {
 	return control.GetCurrentNodeID()
 }
 
+func extractVODHash(streamName string) string {
+	if streamName == "" {
+		return ""
+	}
+	if strings.HasPrefix(streamName, "vod+") {
+		return strings.TrimPrefix(streamName, "vod+")
+	}
+	if len(streamName) == 32 {
+		return streamName
+	}
+	return ""
+}
+
 // HandlePushEnd handles PUSH_END webhook
 // This is a non-blocking trigger that logs push completion status
 func HandlePushEnd(c *gin.Context) {
@@ -919,6 +922,13 @@ func HandleUserNew(c *gin.Context) {
 		"response": response,
 	}).Info("USER_NEW approved by Foghorn")
 	incMistWebhook("USER_NEW", "success")
+
+	// Track VOD/clip/DVR access on viewer connect (canonical trigger).
+	if mt := mistTrigger.GetViewerConnect(); mt != nil {
+		if hash := extractVODHash(mt.GetStreamName()); hash != "" {
+			touchArtifactAccess(hash)
+		}
+	}
 
 	// Return Foghorn's response to MistServer
 	c.String(http.StatusOK, response)
@@ -1293,7 +1303,7 @@ func determineQualityTier(tracks []*pb.StreamTrack) string {
 	// Resolution tier
 	var resolution string
 	if maxHeight >= 2160 {
-		resolution = "4K"
+		resolution = "2160p"
 	} else if maxHeight >= 1440 {
 		resolution = "1440p"
 	} else if maxHeight >= 1080 {

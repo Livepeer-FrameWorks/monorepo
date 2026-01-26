@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
@@ -14,7 +15,9 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/metadata"
 )
 
 // GraphQLMetrics holds all Prometheus metrics for GraphQL operations
@@ -72,60 +75,8 @@ func (r *Resolver) Shutdown() error {
 	return nil
 }
 
-type TimeRangeParams struct {
-	Start *time.Time
-	End   *time.Time
-	// Max duration allowed
-	MaxWindow time.Duration
-	// Default window when none provided
-	DefaultWindow time.Duration
-}
-
-func (r *Resolver) normalizeTimeRange(p TimeRangeParams) (start *time.Time, end *time.Time, err error) {
-	now := time.Now()
-	// Apply defaults
-	if p.Start == nil && p.End == nil {
-		if p.DefaultWindow == 0 {
-			p.DefaultWindow = 24 * time.Hour
-		}
-		to := now
-		from := now.Add(-p.DefaultWindow)
-		return &from, &to, nil
-	}
-	if p.End == nil {
-		to := now
-		end = &to
-	} else {
-		end = p.End
-	}
-	if p.Start == nil {
-		win := p.DefaultWindow
-		if win == 0 {
-			win = 24 * time.Hour
-		}
-		from := end.Add(-win)
-		start = &from
-	} else {
-		start = p.Start
-	}
-	// Validate order
-	if start.After(*end) {
-		return nil, nil, fmt.Errorf("invalid time range: start after end")
-	}
-	// Enforce max window
-	max := p.MaxWindow
-	if max == 0 {
-		max = 31 * 24 * time.Hour
-	}
-	if end.Sub(*start) > max {
-		clamped := end.Add(-max)
-		start = &clamped
-	}
-	return start, end, nil
-}
-
 // DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
-func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
 	// Diagnostic checks for panic root cause
 	if r == nil {
 		return nil, fmt.Errorf("CRITICAL: Resolver (r) is nil")
@@ -138,7 +89,32 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, con
 	}
 
 	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateViewerEndpointResponse(contentType, contentID), nil
+		return demo.GenerateViewerEndpointResponse(contentID), nil
+	}
+
+	// Resource-based x402 topup (viewer pays for stream owner balance)
+	var httpReq *http.Request
+	x402Paid := false
+	if ginCtx, ok := ctx.Value("GinContext").(*gin.Context); ok && ginCtx != nil {
+		httpReq = ginCtx.Request
+		if v, ok := ginCtx.Get("x402_paid"); ok {
+			if paid, ok := v.(bool); ok {
+				x402Paid = paid
+			}
+		}
+	}
+	paymentHeader := ""
+	if httpReq != nil {
+		paymentHeader = middleware.GetX402PaymentHeader(httpReq)
+	}
+
+	if x402Paid {
+		ctx = metadata.AppendToOutgoingContext(ctx, "x402-paid", "true")
+		paymentHeader = ""
+	}
+
+	if paymentHeader != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "x-payment", paymentHeader)
 	}
 	// Call Commodore's viewer endpoint resolution (Commodore will handle tenant resolution internally)
 	// gRPC client expects string (not *string) for viewerIP
@@ -146,7 +122,7 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, con
 	if viewerIP != nil {
 		ip = *viewerIP
 	}
-	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentType, contentID, ip)
+	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentID, ip)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %v", err)
 	}

@@ -35,5 +35,5 @@ Cross‑refs: see root README "Ports" for stack overview.
 
 ## Health & ports
 - Health: `GET /health` (HTTP) or `grpc.health.v1.Health/Check` (gRPC)
-- HTTP: 18001
+- HTTP: 18001 (health/metrics only)
 - gRPC: 19001

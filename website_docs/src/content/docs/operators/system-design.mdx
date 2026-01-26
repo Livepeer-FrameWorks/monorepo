@@ -8,10 +8,10 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="caution" title="Self-Hosting Coming Soon">
-Self-hosting and hybrid deployment options are currently in development.
-This page documents the platform architecture for transparency.
-Deployment guides will be available when the feature launches.
+<Aside type="caution" title="Self-Hosting Is Experimental">
+Self-hosting is available, but the operator stack is still evolving.
+Expect breaking changes in deployment flows and node lifecycle behavior.
+See the operator docs for current steps.
 </Aside>
 
 FrameWorks is built on a distributed microservices architecture, enforcing strict separation of concerns to maximize stability and throughput. This document details the core design patterns, data flows, and security models that power the platform.
@@ -22,7 +22,7 @@ FrameWorks is built on a distributed microservices architecture, enforcing stric
 FrameWorks isolates concerns into four distinct planes to ensure stability and scalability:
 
 *   **Control Plane (CP)**: Handles business logic, auth, and configuration. Optimized for **consistency** (ACID).
-    *   *Storage*: PostgreSQL (YugabyteDB).
+    *   *Storage*: PostgreSQL-compatible (PostgreSQL in dev; YugabyteDB recommended for production).
     *   *Services*: Commodore, Quartermaster, Purser.
 *   **Data Plane (DP)**: Handles high-volume events and analytics. Optimized for **throughput** and **ingestion**.
     *   *Storage*: ClickHouse (Time-series), Kafka (Stream).
@@ -30,17 +30,19 @@ FrameWorks isolates concerns into four distinct planes to ensure stability and s
 *   **Media Plane (MP)**: Handles video ingestion, processing, and delivery. Optimized for **latency** and **bandwidth**.
     *   *Components*: MistServer, Helmsman, Foghorn.
 *   **Support Plane (SP)**: User interfaces and documentation.
-    *   *Apps*: Web Console, Marketing Site.
+    *   *Apps & Tools*: Web Console, Docs Site, Marketing Site, CLI.
+
+**DNS note**: Public DNS currently relies on Cloudflare. Navigator-managed DNS will migrate to a self-hosted global DNS layer.
 
 ![Tenant Cluster Model](../../../assets/diagrams/Tenant_Cluster_Model.png)
 
 ### Event-Driven Analytics
-All analytics data originates as immutable events from the Edge (Media Plane), flowing through a Kafka pipeline to ensure real-time visibility and historical accuracy.
+All analytics data originates as immutable events from the Edge (Media Plane), flowing through Kafka into ClickHouse for real-time visibility and historical queries.
 
 ```mermaid
 graph LR
     Edge[Edge Node<br/>MistServer + Helmsman] -->|gRPC| Foghorn[Foghorn<br/>Load Balancer]
-    Foghorn -->|HTTP| Commodore[Commodore<br/>Validation]
+    Foghorn -->|gRPC| Commodore[Commodore<br/>Registry + Validation]
     Foghorn -->|gRPC| Decklog[Decklog<br/>Event Ingest]
     Decklog -->|Produce| Kafka[Kafka<br/>analytics_events]
 
@@ -96,7 +98,8 @@ FrameWorks uses **keyset pagination** with opaque cursors for stable, efficient 
 |-------|---------|-----------------|
 | GraphQL complexity | 200 | `GRAPHQL_COMPLEXITY_LIMIT` |
 | WebSocket connections/tenant | 5 | `WS_MAX_CONNECTIONS_PER_TENANT` |
-| HTTP connections/host | 100 | (hardcoded) |
+| API requests/tenant | 100 req/min, burst 20 | Quartermaster tenant limits |
+| Outbound HTTP connections/host | 100 | (hardcoded shared HTTP client) |
 | PostgreSQL pool | 25 open, 5 idle | (code config) |
 | Health check concurrency | 8 | `QM_HEALTH_MAX_CONCURRENCY` |
 | Max transcodes/node | 0 (auto) | `HELMSMAN_MAX_TRANSCODES` |
@@ -107,30 +110,29 @@ FrameWorks uses **keyset pagination** with opaque cursors for stable, efficient 
 
 ## Event Types
 
-The `analytics_events` Kafka topic serves as the central nervous system for platform data. Events are routed to specific ClickHouse tables using a dual-write pattern: one for the current state (replacing snapshots) and one for the immutable event log.
+The `analytics_events` Kafka topic serves as the central nervous system for platform data. Events are ingested into ClickHouse and power both real-time and historical analytics.
 
 ### Stream Events
 
 | Event Type | Source | Description | Storage Tables |
 |------------|--------|-------------|----------------|
-| `stream_buffer` | Helmsman | Buffer state changes (FULL/DRY/RECOVER) and health scores | `stream_events`, `stream_health_metrics` |
-| `stream_end` | Helmsman | Stream session ended | `stream_events` |
-| `stream_source` | Helmsman | New stream source detected | `stream_events` |
-| `stream_bandwidth` | Helmsman | Bandwidth measurement update | `stream_events` |
-| `stream_lifecycle_update` | Helmsman | Aggregated stream state snapshot | `live_streams` (state), `stream_events` (log) |
-| `push_rewrite` | Helmsman | RTMP push URL rewritten (key validation) | `stream_events` |
-| `push_end` | Helmsman | Push session ended | `stream_events` |
-| `push_out_start` | Helmsman | Push output started | `stream_events` |
-| `recording_complete` | Helmsman | Recording segment finished | `stream_events` |
+| `stream_buffer` | Helmsman | Buffer state changes (FULL/DRY/RECOVER) and health scores | `stream_event_log`, `stream_health_samples` |
+| `stream_end` | Helmsman | Stream session ended | `stream_event_log` |
+| `stream_source` | Helmsman | VOD source resolution | `stream_event_log` |
+| `stream_lifecycle_update` | Helmsman | Aggregated stream state snapshot | `stream_state_current` (state), `stream_event_log` (log) |
+| `push_rewrite` | Helmsman | RTMP push URL rewritten (key validation) | `stream_event_log` |
+| `push_end` | Helmsman | Push session ended | `stream_event_log` |
+| `push_out_start` | Helmsman | Push output started | `stream_event_log` |
+| `recording_complete` | Helmsman | Recording segment finished | `stream_event_log` |
 
 ### Viewer Events
 
 | Event Type | Source | Description | Storage Tables |
 |------------|--------|-------------|----------------|
-| `viewer_connect` | Helmsman | Viewer session started (IP, Geo, User-Agent) | `connection_events` |
-| `viewer_disconnect` | Helmsman | Viewer session ended | `connection_events` |
-| `play_rewrite` | Helmsman | Viewer playback URL resolved | `stream_events` |
-| `client_lifecycle_update` | Helmsman | Player-side QoE metrics (bandwidth, errors) | `client_metrics` |
+| `viewer_connect` | Helmsman | Viewer session started (IP, Geo, User-Agent) | `viewer_connection_events` |
+| `viewer_disconnect` | Helmsman | Viewer session ended | `viewer_connection_events` |
+| `play_rewrite` | Helmsman | Viewer playback URL resolved | `stream_event_log` |
+| `client_lifecycle_update` | Helmsman | Player-side QoE metrics (bandwidth, errors) | `client_qoe_samples` |
 
 ### Track Events
 
@@ -142,16 +144,16 @@ The `analytics_events` Kafka topic serves as the central nervous system for plat
 
 | Event Type | Source | Description | Storage Tables |
 |------------|--------|-------------|----------------|
-| `node_lifecycle_update` | Helmsman | Node hardware usage (CPU, RAM, disk, network) | `live_nodes` (state), `node_metrics` (log) |
-| `load_balancing` | Foghorn | Load balancer routing decision | `routing_events` |
+| `node_lifecycle_update` | Helmsman | Node hardware usage (CPU, RAM, disk, network) | `node_state_current` (state), `node_metrics_samples` (log) |
+| `load_balancing` | Foghorn | Load balancer routing decision | `routing_decisions` |
 | `storage_snapshot` | Foghorn | Storage usage snapshot | `storage_snapshots` |
 
 ### Artifact Events
 
 | Event Type | Source | Description | Storage Tables |
 |------------|--------|-------------|----------------|
-| `clip_lifecycle` | Foghorn | Clip generation status updates | `live_artifacts` (state), `clip_events` (log) |
-| `dvr_lifecycle` | Foghorn | DVR recording status updates | `live_artifacts` (state), `clip_events` (log) |
+| `clip_lifecycle` | Foghorn | Clip generation status updates | `artifact_state_current` (state), `artifact_events` (log) |
+| `dvr_lifecycle` | Foghorn | DVR recording status updates | `artifact_state_current` (state), `artifact_events` (log) |
 
 ---
 
@@ -174,9 +176,13 @@ Internal microservices trust each other but require authentication to prevent un
 ### Developer Tokens (API Keys)
 *   **Mechanism**: Long-lived, opaque API tokens.
 *   **Purpose**: Programmatic access for external applications and scripts (as opposed to interactive user sessions).
-*   **Management**: Created and managed via the GraphQL API (Commodore). Tokens have customizable scopes/permissions and expiration dates.
+*   **Management**: Created and managed via the GraphQL API (Commodore). Tokens have customizable permissions and expiration dates. Today, developer tokens are full-access; RBAC will tighten this.
 *   **Validation**: The Gateway validates the token against Commodore's `ValidateAPIToken` RPC. Valid tokens are exchanged for an internal context (User ID, Tenant ID) similar to JWTs.
 
 ### Bot Protection
 *   **Registration**: Cloudflare Turnstile validation on the public registration form.
 *   **Rate Limiting**: IP-based rate limiting on auth endpoints.
+
+### IP Redaction
+*   **Storage**: Viewer IPs are stored in analytics for internal use.
+*   **API**: GraphQL responses redact viewer IPs (host/connectionAddr return null).

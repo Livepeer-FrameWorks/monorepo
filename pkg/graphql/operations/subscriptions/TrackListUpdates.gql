@@ -1,0 +1,32 @@
+# Live updates to stream media tracks and encoding parameters
+# Includes video/audio codec details, bitrates, resolution, and quality tier changes
+subscription TrackListUpdates($streamId: ID!) {
+  liveTrackListUpdates(streamId: $streamId) {
+    streamId
+    totalTracks
+    videoTrackCount
+    audioTrackCount
+    qualityTier
+    primaryWidth
+    primaryHeight
+    primaryFps
+    primaryVideoBitrate
+    primaryVideoCodec
+    tracks {
+      trackName
+      trackType
+      codec
+      bitrateKbps
+      bitrateBps
+      buffer
+      jitter
+      width
+      height
+      fps
+      resolution
+      hasBFrames
+      channels
+      sampleRate
+    }
+  }
+}

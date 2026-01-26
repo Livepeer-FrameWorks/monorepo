@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { explorerService, type Template, type TemplateGroups } from "$lib/graphql/services/explorer.js";
+  import {
+    explorerService,
+    type Template,
+    type TemplateGroups,
+    type ResolvedExplorerSection,
+    type ResolvedExplorerExample,
+  } from "$lib/graphql/services/explorer.js";
   import { extractOperationType, extractDescription, extractVariableDefinitions, extractFragmentSpreads } from "$lib/graphql/services/gqlParser.js";
   import { toast } from "$lib/stores/toast.js";
   import ExplorerHeader from "$lib/components/explorer/ExplorerHeader.svelte";
@@ -39,14 +45,12 @@
 
   let { initialQuery = "", authToken = null }: Props = $props();
 
-  // Component state
-  let query =
-    $state(initialQuery ||
-    `query GetStreamsConnection {
-  streamsConnection(first: 10) {
+  const DEFAULT_QUERY = `query GetStreamsConnection {
+  streamsConnection(page: { first: 10 }) {
     edges {
       node {
         id
+        streamId
         name
         description
         streamKey
@@ -67,16 +71,54 @@
     }
     totalCount
   }
-}`);
+}`;
+
+  // Component state
+  let query = $state(DEFAULT_QUERY);
+
+  // Sync from prop when provided
+  $effect.pre(() => {
+    if (initialQuery) {
+      query = initialQuery;
+    }
+  });
   let variables = $state("{}");
   let response = $state<FormattedResponse | null>(null);
   let loading = $state(false);
+  let schemaLoading = $state(false);
+  type SchemaField = {
+    name: string;
+    description?: string;
+    args?: Array<{
+      name: string;
+      description?: string;
+      type?: { name?: string; kind?: string; ofType?: { name?: string } };
+    }>;
+    type?: { name?: string; kind?: string; ofType?: { name?: string } };
+    isDeprecated?: boolean;
+    deprecationReason?: string;
+  };
+
   let schema: null | {
-    queryType?: { fields: Array<{ name: string; description?: string }> };
-    mutationType?: { fields: Array<{ name: string; description?: string }> };
-    subscriptionType?: { fields: Array<{ name: string; description?: string }> };
+    queryType?: { fields: SchemaField[] };
+    mutationType?: { fields: SchemaField[] };
+    subscriptionType?: { fields: SchemaField[] };
+    types?: Array<{
+      name?: string;
+      kind?: string;
+      description?: string;
+      fields?: SchemaField[];
+      inputFields?: SchemaField[];
+      enumValues?: Array<{
+        name?: string;
+        description?: string;
+        isDeprecated?: boolean;
+        deprecationReason?: string;
+      }>;
+    }>;
   } = $state(null);
   let queryTemplates: TemplateGroups | null = $state(null);
+  let catalogSections = $state<ResolvedExplorerSection[] | null>(null);
   let selectedTemplate: QueryTemplate | null = $state(null);
   let showCodeExamples = $state(false);
   let showQueryEditor = $state(true);
@@ -84,8 +126,41 @@
   let queryHistory = $state<QueryHistoryItem[]>([]);
   let demoMode = $state(false);
 
-  // Library drawer state
-  let libraryOpen = $state(false);
+  type FocusDoc = {
+    kind: "field" | "argument" | "enum" | "type" | "directive" | "variable";
+    signature: string;
+    description?: string;
+    args?: Array<{
+      name: string;
+      type: string;
+      description?: string;
+      inputFields?: Array<{ name: string; type: string; description?: string }>;
+    }>;
+    inputFields?: Array<{ name: string; type: string; description?: string }>;
+    enumValues?: Array<{ name: string; description?: string }>;
+  } | null;
+
+  let activeDoc = $state<FocusDoc>(null);
+
+  // Panel state: which panel is active ('templates', 'schema', or null for closed)
+  type PanelView = 'templates' | 'schema' | null;
+  let activePanel = $state<PanelView>(null);
+
+  // For responsive behavior - default to desktop (sidebar visible)
+  let isMobile = $state(false);
+
+  $effect(() => {
+    const handleResize = () => {
+      isMobile = window.innerWidth < 1024;
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  });
+
+  function handlePanelChange(panel: PanelView) {
+    activePanel = panel;
+  }
 
   const languages = [
     { key: "javascript", name: "JavaScript (Apollo)" },
@@ -95,17 +170,23 @@
     { key: "go", name: "Go" },
   ];
 
-  // Initialize on mount
+  // Initialize on mount - use a flag to ensure we only run once
+  let hasInitialized = false;
+
   $effect(() => {
+    if (hasInitialized) return;
+    hasInitialized = true;
+
     loadQueryTemplates();
     loadQueryHistory();
-    // Load schema for CodeMirror autocomplete
+    // Load schema in background for CodeMirror autocomplete (doesn't block UI)
     loadSchema();
   });
 
   async function loadQueryTemplates() {
     try {
       queryTemplates = await explorerService.getTemplates();
+      catalogSections = await explorerService.getCatalog();
     } catch (error) {
       console.error("Failed to load query templates:", error);
       toast.error("Failed to load query templates");
@@ -113,16 +194,19 @@
   }
 
   async function loadSchema() {
-    if (schema) return; // Already loaded
+    if (schema || schemaLoading) {
+      return;
+    }
 
     try {
-      loading = true;
-      schema = (await explorerService.getSchema()) as any;
+      schemaLoading = true;
+      // Use cached schema when available to avoid duplicate network requests on navigation
+      schema = (await explorerService.getCachedSchema()) as any;
     } catch (error) {
       console.error("Failed to load schema:", error);
       toast.error("Failed to load GraphQL schema");
     } finally {
-      loading = false;
+      schemaLoading = false;
     }
   }
 
@@ -273,33 +357,130 @@
     description: extractDescription(query),
     variables: extractVariableDefinitions(query),
     fragments: extractFragmentSpreads(query),
+    tips: explorerService.getQueryHints(query),
   });
 
-  // Handle library drawer state
-  function openLibrary() {
-    libraryOpen = true;
-  }
-
-  function closeLibrary() {
-    libraryOpen = false;
-  }
-
   // Generate query from schema field selection
-  interface SchemaField {
-    name: string;
-    description?: string;
-    args?: Array<{
-      name: string;
-      description?: string;
-      type?: { name?: string; kind?: string; ofType?: { name?: string } };
-    }>;
-    type?: { name?: string; kind?: string; ofType?: { name?: string } };
-  }
 
   function handleSelectSchemaField(field: SchemaField, operationType: string) {
     const generatedQuery = explorerService.generateQueryFromField(field, operationType);
     query = generatedQuery.query;
     variables = JSON.stringify(generatedQuery.variables, null, 2);
+  }
+
+  function extractRootFieldNames(queryText: string): string[] {
+    const withoutComments = queryText
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    const start = withoutComments.indexOf("{");
+    if (start === -1) return [];
+
+    const fields = new Set<string>();
+    let depth = 0;
+    let i = start;
+    let inString = false;
+    let inBlockString = false;
+
+    while (i < withoutComments.length) {
+      const ch = withoutComments[i];
+      const next = withoutComments[i + 1];
+      const next2 = withoutComments[i + 2];
+
+      if (!inString && ch === "\"" && next === "\"" && next2 === "\"") {
+        inBlockString = !inBlockString;
+        i += 3;
+        continue;
+      }
+      if (inBlockString) {
+        i += 1;
+        continue;
+      }
+      if (ch === "\"" && !inString) {
+        inString = true;
+        i += 1;
+        continue;
+      }
+      if (ch === "\"" && inString) {
+        inString = false;
+        i += 1;
+        continue;
+      }
+      if (inString) {
+        i += 1;
+        continue;
+      }
+
+      if (ch === "{") {
+        depth += 1;
+        i += 1;
+        continue;
+      }
+      if (ch === "}") {
+        depth -= 1;
+        if (depth <= 0) break;
+        i += 1;
+        continue;
+      }
+
+      if (depth === 1) {
+        if (ch === "." && next === "." && next2 === ".") {
+          i += 3;
+          continue;
+        }
+
+        if (/[A-Za-z_]/.test(ch)) {
+          let j = i + 1;
+          while (j < withoutComments.length && /[A-Za-z0-9_]/.test(withoutComments[j])) {
+            j += 1;
+          }
+          const name = withoutComments.slice(i, j);
+          if (name !== "on") {
+            fields.add(name);
+          }
+          i = j;
+          continue;
+        }
+      }
+
+      i += 1;
+    }
+
+    return Array.from(fields);
+  }
+
+  function getSchemaFieldsForOperation(operationType: string): SchemaField[] {
+    if (!schema) return [];
+    if (operationType === "mutation") return schema.mutationType?.fields ?? [];
+    if (operationType === "subscription") return schema.subscriptionType?.fields ?? [];
+    return schema.queryType?.fields ?? [];
+  }
+
+  let rootFieldHints = $derived.by(() => {
+    if (!schema) return [];
+    const operationType = extractOperationType(query);
+    const rootFields = extractRootFieldNames(query);
+    if (!rootFields.length) return [];
+
+    const schemaFields = getSchemaFieldsForOperation(operationType);
+    const hintMap = new Map(schemaFields.map((field) => [field.name, field]));
+    return rootFields
+      .map((name) => hintMap.get(name))
+      .filter((field): field is SchemaField => !!field);
+  });
+
+  function handleSelectExample(example: ResolvedExplorerExample) {
+    if (example.template) {
+      const vars = example.variables ?? example.template.variables;
+      selectedTemplate = example.template;
+      query = example.template.query;
+      variables = JSON.stringify(vars, null, 2);
+      return;
+    }
+    if (example.query) {
+      query = example.query;
+      variables = JSON.stringify(example.variables ?? {}, null, 2);
+    }
   }
 
 </script>
@@ -314,7 +495,8 @@
     {demoMode}
     {loading}
     {queryHelp}
-    onOpenLibrary={openLibrary}
+    {activePanel}
+    onPanelChange={handlePanelChange}
     onToggleQuery={() => {
       showQueryEditor = true;
       showCodeExamples = false;
@@ -328,14 +510,35 @@
     onDemoModeChange={(checked) => (demoMode = checked)}
   />
 
-  <!-- 2-Column Layout: Left (Query/Code+Variables) | Right (Response) -->
+  <!-- 3-Panel Layout: Sidebar | Query Editor | Response -->
   <div class="flex flex-1 min-h-0 relative">
-    <!-- Left Panel - Query Editor or Code Examples -->
-    <div
-      class="flex-1 flex flex-col border-r border-border max-w-[60%] min-w-0 overflow-hidden"
-    >
+    <!-- Left Sidebar - Templates or Schema (inline on desktop, modal on mobile) -->
+    <ExplorerOverlay
+      view={activePanel}
+      sidebarMode={!isMobile}
+      {schema}
+      {queryTemplates}
+      {catalogSections}
+      queryHistory={queryHistory as any}
+      loading={schemaLoading}
+      onClose={() => handlePanelChange(null)}
+      onSelectTemplate={selectTemplate}
+      onSelectExample={handleSelectExample}
+      onLoadFromHistory={loadFromHistory}
+      onSelectSchemaField={handleSelectSchemaField}
+      onLoadSchema={loadSchema}
+    />
+
+    <!-- Middle Panel - Query Editor or Code Examples -->
+    <div class="flex-1 flex flex-col border-r border-border min-w-0 overflow-y-auto">
       {#if showQueryEditor}
-        <QueryEditor bind:query bind:variables {schema} onKeyPress={handleKeyPress} />
+        <QueryEditor
+          bind:query
+          bind:variables
+          {schema}
+          onKeyPress={handleKeyPress}
+          onCursorInfo={(info) => (activeDoc = info as FocusDoc)}
+        />
       {/if}
 
       {#if showCodeExamples}
@@ -348,22 +551,16 @@
       {/if}
     </div>
 
-    <ResponseViewer {response} {loading} onCopy={copyToClipboard} />
+    <!-- Right Panel - Response -->
+    <ResponseViewer
+      {response}
+      {loading}
+      fieldDocs={rootFieldHints}
+      focusDoc={activeDoc}
+      onCopy={copyToClipboard}
+    />
   </div>
 </div>
-
-<ExplorerOverlay
-  open={libraryOpen}
-  {schema}
-  {queryTemplates}
-  queryHistory={queryHistory as any}
-  {loading}
-  onClose={closeLibrary}
-  onSelectTemplate={selectTemplate}
-  onLoadFromHistory={loadFromHistory}
-  onSelectSchemaField={handleSelectSchemaField}
-  onLoadSchema={loadSchema}
-/>
 
 <style>
   @media (max-width: 768px) {

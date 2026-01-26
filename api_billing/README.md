@@ -6,12 +6,12 @@ Billing and subscriptions. Orchestrates usage → invoice drafts → payments. W
 
 - **Self-hosted**: Track usage locally, disable payment integrations if running internal infrastructure
 - **Hybrid**: Bill for FrameWorks-hosted resources while self-hosting edge nodes
-- **Fully managed**: Full Stripe/Mollie integration for SaaS billing
+- **Fully managed**: Stripe/Mollie hooks and payment creation are implemented, but end‑to‑end billing flows are still being wired
 
 ## What it does
 - Accepts usage summaries from Periscope‑Query
-- Writes `invoice_drafts` and invoices to PostgreSQL
-- Integrates with Stripe, Mollie, and crypto flows
+- Writes draft and final invoices to `purser.billing_invoices` (status = draft/pending/paid/etc.)
+- Integrates with Stripe/Mollie webhooks and payment creation (crypto is placeholder)
 - Webhooks update invoice state
 
 ## Run (dev)
@@ -24,7 +24,7 @@ Health: `GET /health`.
 
 ## Health & ports
 - Health: `GET /health` (HTTP) or `grpc.health.v1.Health/Check` (gRPC)
-- HTTP: 18003
+- HTTP: 18003 (health/metrics only)
 - gRPC: 19003
 
 Notes

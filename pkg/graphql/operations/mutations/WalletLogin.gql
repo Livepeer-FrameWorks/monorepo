@@ -1,0 +1,19 @@
+mutation WalletLogin($input: WalletLoginInput!) {
+  walletLogin(input: $input) {
+    ... on WalletLoginPayload {
+      token
+      user {
+        id
+        email
+        name
+        role
+      }
+      expiresAt
+      isNewAccount
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+  }
+}

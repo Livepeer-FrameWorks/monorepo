@@ -30,7 +30,7 @@ message SyncDNSResponse {
 
 // IssueCertificateRequest is sent to request a certificate.
 message IssueCertificateRequest {
-  optional string tenant_id = 1; // Optional: tenant context for tenant custom domains (NULL for platform certs)
+  optional string tenant_id = 1; // Optional: tenant context for platform-managed tenant domains (subdomains)
   string domain = 2;             // The domain to issue the certificate for, e.g., "api.example.com" or "*.example.com"
   string email = 3;              // Email for ACME registration
 }

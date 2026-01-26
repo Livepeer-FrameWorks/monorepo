@@ -1,0 +1,15 @@
+subscription LiveConversationUpdates($conversationId: ID) {
+  liveConversationUpdates(conversationId: $conversationId) {
+    id
+    subject
+    status
+    updatedAt
+    lastMessage {
+      id
+      conversationId
+      content
+      sender
+      createdAt
+    }
+  }
+}

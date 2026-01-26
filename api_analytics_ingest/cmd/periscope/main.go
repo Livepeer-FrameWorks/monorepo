@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -71,25 +73,110 @@ func main() {
 	brokers := strings.Split(brokersEnv, ",")
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "periscope-ingest")
 	clientID := config.GetEnv("KAFKA_CLIENT_ID", "periscope-ingest")
-	topics := strings.Split(config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events"), ",")
+	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events")
+	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", "service_events")
+	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", "decklog_events_dlq")
 
 	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka consumer")
 	}
 
-	// Subscribe to topics with the handler
-	for _, topic := range topics {
-		consumer.AddHandler(topic, eventHandler.HandleMessage)
+	var dlqProducer *kafka.KafkaProducer
+	dlqProducer, err = kafka.NewKafkaProducer(brokers, dlqTopic, clusterID, logger)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create DLQ Kafka producer (DLQ disabled)")
+		dlqProducer = nil
+	} else {
+		defer dlqProducer.Close()
 	}
+
+	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
+		return func(ctx context.Context, msg kafka.Message) error {
+			if err := handler(ctx, msg); err != nil {
+				if dlqProducer == nil {
+					return err
+				}
+
+				payload, encodeErr := kafka.EncodeDLQMessage(msg, err, consumerName)
+				if encodeErr != nil {
+					logger.WithError(encodeErr).WithFields(logging.Fields{
+						"topic":     msg.Topic,
+						"partition": msg.Partition,
+						"offset":    msg.Offset,
+					}).Error("Failed to encode DLQ payload")
+					return encodeErr
+				}
+
+				key := msg.Key
+				if len(key) == 0 {
+					key = []byte(fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset))
+				}
+
+				headers := map[string]string{
+					"source":         consumerName,
+					"original_topic": msg.Topic,
+				}
+
+				if produceErr := dlqProducer.ProduceMessage(dlqTopic, key, payload, headers); produceErr != nil {
+					logger.WithError(produceErr).WithFields(logging.Fields{
+						"topic":     msg.Topic,
+						"partition": msg.Partition,
+						"offset":    msg.Offset,
+					}).Error("Failed to publish message to DLQ")
+					return produceErr
+				}
+
+				logger.WithError(err).WithFields(logging.Fields{
+					"topic":     msg.Topic,
+					"partition": msg.Partition,
+					"offset":    msg.Offset,
+					"dlq_topic": dlqTopic,
+				}).Warn("Message sent to DLQ after handler error")
+
+				return nil
+			}
+
+			return nil
+		}
+	}
+
+	// Subscribe to topics with the handlers
+	consumer.AddHandler(analyticsTopic, wrapWithDLQ("periscope-ingest-analytics", eventHandler.HandleMessage))
+
+	serviceHandler := func(ctx context.Context, msg kafka.Message) error {
+		var event kafka.ServiceEvent
+		if err := json.Unmarshal(msg.Value, &event); err != nil {
+			logger.WithError(err).Error("Failed to unmarshal service event")
+			return fmt.Errorf("unmarshal service event: %w", err)
+		}
+		for k, v := range msg.Headers {
+			if k == "source" && event.Source == "" {
+				event.Source = v
+			}
+			if k == "tenant_id" && event.TenantID == "" {
+				event.TenantID = v
+			}
+			if k == "event_type" && event.EventType == "" {
+				event.EventType = v
+			}
+		}
+		return analyticsHandler.HandleServiceEvent(event)
+	}
+	consumer.AddHandler(serviceEventsTopic, wrapWithDLQ("periscope-ingest-service", serviceHandler))
 
 	// Now add health checks with all dependencies
 	healthChecker.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
+	if dlqProducer != nil {
+		healthChecker.AddCheck("kafka_dlq_producer", monitoring.KafkaProducerHealthCheck(dlqProducer.GetClient()))
+	}
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"CLICKHOUSE_HOST": clickhouseHost,
-		"KAFKA_BROKERS":   brokersEnv,
-		"KAFKA_GROUP_ID":  groupID,
+		"CLICKHOUSE_HOST":            clickhouseHost,
+		"KAFKA_BROKERS":              brokersEnv,
+		"KAFKA_GROUP_ID":             groupID,
+		"SERVICE_EVENTS_KAFKA_TOPIC": serviceEventsTopic,
+		"DECKLOG_DLQ_KAFKA_TOPIC":    dlqTopic,
 	}))
 
 	// Start consuming
@@ -132,7 +219,12 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           18005,
 			AdvertiseHost:  &advertiseHost,
-			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_ingest) failed")
 		} else {

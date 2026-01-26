@@ -50,6 +50,51 @@ func convertToWS(httpURL string) (string, error) {
 	return parsed.String(), nil
 }
 
+func joinURLPath(baseURL, suffix string) (string, error) {
+	if suffix == "" {
+		return "", fmt.Errorf("suffix is required")
+	}
+	base := strings.TrimRight(baseURL, "/")
+	if !strings.HasPrefix(suffix, "/") {
+		suffix = "/" + suffix
+	}
+	return base + suffix, nil
+}
+
+func validateGatewayBaseURL(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse gateway URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("gateway URL must be http or https, got %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("gateway URL must include host")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("gateway URL must not include query or fragment")
+	}
+
+	normalizedPath := strings.TrimRight(parsed.Path, "/")
+	if normalizedPath == "" {
+		return strings.TrimRight(raw, "/"), nil
+	}
+
+	switch {
+	case normalizedPath == "/graphql" || strings.HasSuffix(normalizedPath, "/graphql"):
+		return "", fmt.Errorf("gateway URL must be base path only (cannot include /graphql)")
+	case normalizedPath == "/graphql/ws" || strings.HasSuffix(normalizedPath, "/graphql/ws"):
+		return "", fmt.Errorf("gateway URL must be base path only (cannot include /graphql/ws)")
+	case normalizedPath == "/mcp" || strings.HasSuffix(normalizedPath, "/mcp"):
+		return "", fmt.Errorf("gateway URL must be base path only (cannot include /mcp)")
+	case normalizedPath == "/webhooks" || strings.HasSuffix(normalizedPath, "/webhooks"):
+		return "", fmt.Errorf("gateway URL must be base path only (cannot include /webhooks)")
+	}
+
+	return strings.TrimRight(raw, "/"), nil
+}
+
 // extractHostFromURL returns the host:port from a URL
 func extractHostFromURL(rawURL string) (string, error) {
 	parsed, err := url.Parse(rawURL)
@@ -240,7 +285,7 @@ func computeDerived(env map[string]string) error {
 	if err := setHTTPURL(env, "PERISCOPE_INGEST_URL", "PERISCOPE_INGEST_HOST", "PERISCOPE_INGEST_PORT"); err != nil {
 		return err
 	}
-	if err := setHTTPURL(env, "DECKLOG_URL", "DECKLOG_HOST", "DECKLOG_PORT"); err != nil {
+	if err := setGRPCAddr(env, "DECKLOG_GRPC_ADDR", "DECKLOG_HOST", "DECKLOG_PORT"); err != nil {
 		return err
 	}
 	if err := setHTTPURL(env, "HELMSMAN_WEBHOOK_URL", "HELMSMAN_HOST", "HELMSMAN_PORT"); err != nil {
@@ -281,6 +326,9 @@ func computeDerived(env map[string]string) error {
 	if err := setGRPCAddr(env, "SIGNALMAN_GRPC_ADDR", "SIGNALMAN_HOST", "SIGNALMAN_GRPC_PORT"); err != nil {
 		return err
 	}
+	if err := setGRPCAddr(env, "DECKHAND_GRPC_ADDR", "DECKHAND_HOST", "DECKHAND_GRPC_PORT"); err != nil {
+		return err
+	}
 
 	foghornControlPort, err := require(env, "FOGHORN_CONTROL_PORT")
 	if err != nil {
@@ -301,20 +349,44 @@ func computeDerived(env map[string]string) error {
 // computeViteVariables derives browser-accessible URLs from deployment configuration.
 // These VITE_* variables are baked into the frontend build at compile time.
 func computeViteVariables(env map[string]string) error {
-	// 1. GATEWAY ENDPOINTS - Read from base.env
-	gatewayPublicURL, err := require(env, "GATEWAY_PUBLIC_URL")
+	// 1. GATEWAY ENDPOINTS - Read from base.env (base URL only)
+	gatewayBaseURL, err := require(env, "GATEWAY_PUBLIC_URL")
 	if err != nil {
 		return err
 	}
+	gatewayBaseURL, err = validateGatewayBaseURL(gatewayBaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid GATEWAY_PUBLIC_URL: %w", err)
+	}
 
-	env["VITE_GRAPHQL_HTTP_URL"] = gatewayPublicURL + "/"
-	env["VITE_GATEWAY_URL"] = gatewayPublicURL + "/"
+	graphQLHTTPURL, err := joinURLPath(gatewayBaseURL, "/graphql")
+	if err != nil {
+		return fmt.Errorf("build GraphQL URL: %w", err)
+	}
+	env["VITE_GRAPHQL_HTTP_URL"] = graphQLHTTPURL
+	env["VITE_GATEWAY_URL"] = gatewayBaseURL
 
-	wsURL, err := convertToWS(gatewayPublicURL)
+	wsBase, err := convertToWS(gatewayBaseURL)
 	if err != nil {
 		return fmt.Errorf("convert gateway URL to WebSocket: %w", err)
 	}
-	env["VITE_GRAPHQL_WS_URL"] = wsURL + "/ws"
+	graphQLWSURL, err := joinURLPath(wsBase, "/graphql/ws")
+	if err != nil {
+		return fmt.Errorf("build GraphQL WS URL: %w", err)
+	}
+	env["VITE_GRAPHQL_WS_URL"] = graphQLWSURL
+
+	mcpURL, err := joinURLPath(gatewayBaseURL, "/mcp")
+	if err != nil {
+		return fmt.Errorf("build MCP URL: %w", err)
+	}
+	env["VITE_MCP_URL"] = mcpURL
+
+	webhooksURL, err := joinURLPath(gatewayBaseURL, "/webhooks")
+	if err != nil {
+		return fmt.Errorf("build webhooks URL: %w", err)
+	}
+	env["VITE_WEBHOOKS_URL"] = webhooksURL
 
 	authPublicURL, err := require(env, "AUTH_PUBLIC_URL")
 	if err != nil {
@@ -329,10 +401,16 @@ func computeViteVariables(env map[string]string) error {
 	}
 	env["VITE_APP_URL"] = webappPublicURL
 
-	marketingPublicURL := valueOrDefault(env, "MARKETING_PUBLIC_URL", "http://localhost:18031")
+	marketingPublicURL, err := require(env, "MARKETING_PUBLIC_URL")
+	if err != nil {
+		return err
+	}
 	env["VITE_MARKETING_SITE_URL"] = marketingPublicURL
 
-	docsPublicURL := valueOrDefault(env, "DOCS_PUBLIC_URL", "http://localhost:18090/docs")
+	docsPublicURL, err := require(env, "DOCS_PUBLIC_URL")
+	if err != nil {
+		return err
+	}
 	env["VITE_DOCS_SITE_URL"] = docsPublicURL
 
 	// Contact API URL - Read from base.env
@@ -344,9 +422,23 @@ func computeViteVariables(env map[string]string) error {
 
 	// 3. STREAMING - Pass through raw base.env values, let apps construct protocol-specific URLs
 	// Apps parse these to derive hostname and construct rtmp://, srt://, https:// URLs as needed
-	env["VITE_STREAMING_INGEST_URL"] = valueOrDefault(env, "STREAMING_INGEST_URL", "http://localhost:8080")
-	env["VITE_STREAMING_PLAY_URL"] = valueOrDefault(env, "STREAMING_PLAY_URL", "http://localhost:18008")
-	env["VITE_STREAMING_EDGE_URL"] = valueOrDefault(env, "STREAMING_EDGE_URL", "http://localhost:8080")
+	streamingIngestURL, err := require(env, "STREAMING_INGEST_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_STREAMING_INGEST_URL"] = streamingIngestURL
+
+	streamingPlayURL, err := require(env, "STREAMING_PLAY_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_STREAMING_PLAY_URL"] = streamingPlayURL
+
+	streamingEdgeURL, err := require(env, "STREAMING_EDGE_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_STREAMING_EDGE_URL"] = streamingEdgeURL
 
 	// Streaming ports for protocols that need explicit ports (SRT, RTMP)
 	env["VITE_STREAMING_RTMP_PORT"] = valueOrDefault(env, "STREAMING_RTMP_PORT", "1935")
@@ -364,12 +456,41 @@ func computeViteVariables(env map[string]string) error {
 	env["VITE_CONTACT_EMAIL"] = valueOrDefault(env, "BRAND_CONTACT_EMAIL", "info@frameworks.network")
 
 	// 6. EXTERNAL LINKS - Passthrough from base.env
-	env["VITE_GITHUB_URL"] = valueOrDefault(env, "GITHUB_URL", "https://github.com/livepeer-frameworks/monorepo")
-	env["VITE_LIVEPEER_URL"] = valueOrDefault(env, "LIVEPEER_URL", "https://livepeer.org")
-	env["VITE_LIVEPEER_EXPLORER_URL"] = valueOrDefault(env, "LIVEPEER_EXPLORER_URL", "https://explorer.livepeer.org")
-	env["VITE_FORUM_URL"] = valueOrDefault(env, "FORUM_URL", "https://forum.frameworks.network")
-	env["VITE_DISCORD_URL"] = valueOrDefault(env, "DISCORD_URL", "https://discord.gg/9J6haUjdAq")
-	env["VITE_DEMO_STREAM_NAME"] = valueOrDefault(env, "DEMO_STREAM_NAME", "live+frameworks-demo")
+	githubURL, err := require(env, "GITHUB_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_GITHUB_URL"] = githubURL
+
+	livepeerURL, err := require(env, "LIVEPEER_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_LIVEPEER_URL"] = livepeerURL
+
+	livepeerExplorerURL, err := require(env, "LIVEPEER_EXPLORER_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_LIVEPEER_EXPLORER_URL"] = livepeerExplorerURL
+
+	forumURL, err := require(env, "FORUM_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_FORUM_URL"] = forumURL
+
+	discordURL, err := require(env, "DISCORD_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_DISCORD_URL"] = discordURL
+
+	demoStreamName, err := require(env, "DEMO_STREAM_NAME")
+	if err != nil {
+		return err
+	}
+	env["VITE_DEMO_STREAM_NAME"] = demoStreamName
 
 	// 7. TURNSTILE - Passthrough from secrets.env
 	if authKey := env["TURNSTILE_AUTH_SITE_KEY"]; authKey != "" {

@@ -130,17 +130,24 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 	}
 
 	// HTTP services
-	res = append(res, checkHTTP("gateway", ep.GatewayURL))
+	res = append(res, checkHTTP("bridge", ep.GatewayURL))
 	res = append(res, checkHTTP("quartermaster", ep.QuartermasterURL))
-	res = append(res, checkHTTP("control", ep.ControlURL))
-	res = append(res, checkHTTP("foghorn-http", ep.FoghornHTTPURL))
+	res = append(res, checkHTTP("commodore", ep.ControlURL))
+	res = append(res, checkHTTP("foghorn", ep.FoghornHTTPURL))
 	res = append(res, checkHTTP("periscope-query", ep.PeriscopeQueryURL))
 	res = append(res, checkHTTP("periscope-ingest", ep.PeriscopeIngestURL))
 	res = append(res, checkHTTP("purser", ep.PurserURL))
 	res = append(res, checkHTTP("signalman", ep.SignalmanWSURL))
 
 	// gRPC services
+	res = append(res, checkGRPC("commodore-grpc", ep.CommodoreGRPCAddr))
+	res = append(res, checkGRPC("quartermaster-grpc", ep.QuartermasterGRPCAddr))
+	res = append(res, checkGRPC("purser-grpc", ep.PurserGRPCAddr))
+	res = append(res, checkGRPC("periscope-grpc", ep.PeriscopeGRPCAddr))
+	res = append(res, checkGRPC("signalman-grpc", ep.SignalmanGRPCAddr))
+	res = append(res, checkGRPC("foghorn-grpc", ep.FoghornGRPCAddr))
 	res = append(res, checkGRPC("decklog-grpc", ep.DecklogGRPCAddr))
+	res = append(res, checkGRPC("navigator-grpc", ep.NavigatorGRPCAddr))
 
 	return res
 }

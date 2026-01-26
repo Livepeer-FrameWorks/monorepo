@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/servicedefs"
 )
 
 // Planner creates execution plans from manifests
@@ -152,9 +153,13 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	// 1. Quartermaster (Core Control Plane)
 	// Must run before Privateer and other apps
 	if svc, ok := p.manifest.Services["quartermaster"]; ok && svc.Enabled {
+		deploy, ok := servicedefs.DeployName("quartermaster", svc.Deploy)
+		if !ok {
+			return fmt.Errorf("unknown service id: quartermaster")
+		}
 		graph.AddTask(&Task{
 			Name:       "quartermaster",
-			Type:       "quartermaster",
+			Type:       deploy,
 			Host:       svc.Host,
 			DependsOn:  infraDeps,
 			Phase:      PhaseApplications,
@@ -168,6 +173,10 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	// For now, we assume it's listed in the services manifest or we iterate all hosts.
 	// If 'privateer' is explicit in manifest services:
 	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
+		deploy, ok := servicedefs.DeployName("privateer", svc.Deploy)
+		if !ok {
+			return fmt.Errorf("unknown service id: privateer")
+		}
 		qmDep := append([]string{}, infraDeps...)
 		if _, ok := p.manifest.Services["quartermaster"]; ok {
 			qmDep = append(qmDep, "quartermaster")
@@ -175,7 +184,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 
 		graph.AddTask(&Task{
 			Name:       "privateer",
-			Type:       "privateer",
+			Type:       deploy,
 			Host:       svc.Host,
 			DependsOn:  qmDep,
 			Phase:      PhaseApplications, // Technically infra/system, but needs QM up
@@ -200,10 +209,14 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 		if name == "quartermaster" || name == "privateer" {
 			continue
 		}
+		deploy, ok := servicedefs.DeployName(name, svc.Deploy)
+		if !ok {
+			return fmt.Errorf("unknown service id: %s", name)
+		}
 
 		graph.AddTask(&Task{
 			Name:       name,
-			Type:       name,
+			Type:       deploy,
 			Host:       svc.Host,
 			DependsOn:  coreDeps,
 			Phase:      PhaseApplications,
@@ -229,11 +242,35 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		if !iface.Enabled {
 			continue
 		}
+		deploy, ok := servicedefs.DeployName(name, iface.Deploy)
+		if !ok {
+			return fmt.Errorf("unknown interface id: %s", name)
+		}
 
 		graph.AddTask(&Task{
-			Name:       "interface-" + name,
-			Type:       name,
+			Name:       name,
+			Type:       deploy,
 			Host:       iface.Host,
+			DependsOn:  appDeps,
+			Phase:      PhaseInterfaces,
+			Idempotent: true,
+		})
+	}
+
+	// Observability stack (treated as interfaces for ordering)
+	for name, obs := range p.manifest.Observability {
+		if !obs.Enabled {
+			continue
+		}
+		deploy, ok := servicedefs.DeployName(name, obs.Deploy)
+		if !ok {
+			return fmt.Errorf("unknown observability id: %s", name)
+		}
+
+		graph.AddTask(&Task{
+			Name:       name,
+			Type:       deploy,
+			Host:       obs.Host,
 			DependsOn:  appDeps,
 			Phase:      PhaseInterfaces,
 			Idempotent: true,

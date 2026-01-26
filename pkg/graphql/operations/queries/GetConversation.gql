@@ -1,0 +1,10 @@
+query GetConversation($id: ID!) {
+  conversation(id: $id) {
+    id
+    subject
+    status
+    unreadCount
+    createdAt
+    updatedAt
+  }
+}

@@ -9,7 +9,7 @@
   import type { PlayerMetadata } from '@livepeer-frameworks/player-svelte';
 
   interface PlayerConfig {
-    contentType: "live" | "clip" | "dvr";
+    contentType?: "live" | "clip" | "dvr" | "vod";
     contentId: string;
     thumbnailUrl?: string | null;
     options: {
@@ -21,7 +21,7 @@
     };
   }
 
-  let contentType = $state<"live" | "clip" | "dvr" | "">("");
+  let contentType = $state<"live" | "clip" | "dvr" | "vod" | null>(null);
   let contentId = $state("");
   let loading = $state(true);
   let error = $state("");
@@ -29,7 +29,7 @@
   let streamMetadata = $state<PlayerMetadata | null>(null);
 
   // Derived display values from metadata
-  let displayTitle = $derived(streamMetadata?.title || (contentType === 'live' ? 'Live Stream' : contentType === 'clip' ? 'Clip' : 'DVR Recording'));
+  let displayTitle = $derived(streamMetadata?.title || (contentType === 'live' ? 'Live Stream' : contentType === 'clip' ? 'Clip' : contentType === 'vod' ? 'VOD Asset' : contentType === 'dvr' ? 'DVR Recording' : 'Playback'));
   let videoTrack = $derived(streamMetadata?.tracks?.find(t => t.type === 'video'));
   let audioTrack = $derived(streamMetadata?.tracks?.find(t => t.type === 'audio'));
   let resolutionLabel = $derived(videoTrack ? `${videoTrack.width}x${videoTrack.height}` : null);
@@ -39,34 +39,39 @@
 
   function handleMetadata(metadata: PlayerMetadata) {
     streamMetadata = metadata;
+    if (!contentType) {
+      const resolved = (metadata.contentType || "").toLowerCase();
+      if (resolved === "live" || resolved === "clip" || resolved === "dvr" || resolved === "vod") {
+        contentType = resolved as "live" | "clip" | "dvr" | "vod";
+      } else if (metadata.isLive === true) {
+        contentType = "live";
+      } else if (metadata.isLive === false) {
+        contentType = "vod";
+      }
+    }
   }
 
   onMount(async () => {
     // Parse URL parameters
     const params = page.url.searchParams;
-    const typeParam = params.get("type") || "";
+    const typeParam = (params.get("type") || "").toLowerCase();
     contentId = params.get("id") || "";
 
     // Validate required parameters
-    if (!typeParam || !contentId) {
-      error = "Missing required parameters: type and id";
+    if (!contentId) {
+      error = "Missing required parameter: id";
       loading = false;
       return;
     }
-
-    // Validate content type
-    if (!["live", "clip", "dvr"].includes(typeParam)) {
-      error = "Invalid content type. Must be live, clip, or dvr";
-      loading = false;
-      return;
-    }
-
-    contentType = typeParam as "live" | "clip" | "dvr";
 
     try {
+      if (["live", "clip", "dvr", "vod"].includes(typeParam)) {
+        contentType = typeParam as "live" | "clip" | "dvr" | "vod";
+      }
+
       // Configure player based on content type
       playerConfig = {
-        contentType,
+        contentType: contentType || undefined,
         contentId,
         options: {
           autoplay: true,

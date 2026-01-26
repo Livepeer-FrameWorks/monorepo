@@ -44,11 +44,11 @@ Routes streaming traffic to the best available media nodes based on:
 - Provides 100% compatible load balancer API for MistServer nodes
 - Handles stream routing, origin lookup, ingest selection
 
-## API Endpoints
+## Interfaces
 
-### **Viewer Endpoints (Generic Players)**
+### HTTP (viewer playback + ops)
 
-**NEW**: Generic viewer playback endpoints for any HLS/DASH/WebRTC player:
+Generic viewer playback endpoints for any HLS/DASH/WebRTC player:
 
 ```
 GET /play/:viewkey                    → Full JSON with all protocols
@@ -74,37 +74,15 @@ GET /play/abc123def
 
 **Supported protocols:** HLS (`.m3u8`), DASH (`.mpd`), WebRTC (`.webrtc`), SRT, RTMP
 
-See the DNS documentation in `website_docs/` for complete details.
-
-### **API Endpoints (Custom Players)**
-
-```
-POST /viewer/resolve-endpoint    → Resolve optimal endpoint (JSON)
-POST /viewer/stream-meta         → Fetch MistServer metadata
-```
-
-### **Clip & DVR Management**
-
-```
-POST /clips/create               → Create clip from live/DVR
-GET  /clips                      → List clips
-GET  /clips/:hash                → Clip details
-GET  /clips/:hash/node           → Clip playback URLs
-DELETE /clips/:hash              → Delete clip
-
-POST /dvr/start                  → Start DVR recording
-POST /dvr/stop/:hash             → Stop DVR recording
-GET  /dvr/status/:hash           → DVR status
-GET  /dvr/recordings             → List DVR recordings
-```
-
-### **Node Discovery**
+Ops/diagnostics:
 
 ```
 GET /nodes/overview              → List all nodes with capabilities
+GET /dashboard                   → Minimal status page
+GET /debug/cache/stream-context  → Cache inspection
 ```
 
-### **MistServer Compatibility (Internal)**
+MistServer compatibility endpoints (internal to MistServer nodes):
 
 ```
 GET /<stream>?proto=<protocol>   → Stream routing (MistServer replication)
@@ -116,6 +94,10 @@ GET /?viewers=<stream>           → Viewer count
 GET /?host=<hostname>            → Node status
 GET /?weights=<json>             → Get/set balancer weights
 ```
+
+### gRPC (control plane)
+
+All control-plane APIs are gRPC (viewer/ingest resolution, clips, DVR, processing). Use the Foghorn gRPC service definitions in `pkg/proto`.
 
 ## Run (dev)
 - Start the full stack from repo root: `docker-compose up -d`
@@ -130,7 +112,7 @@ Configuration is sourced from `config/env/base.env` + `config/env/secrets.env`. 
 
 ## View Key Validation
 
-Generic viewer endpoints validate view keys via Commodore's `/resolve-playback-id` endpoint:
+Generic viewer endpoints validate view keys via Commodore gRPC (ResolvePlaybackID):
 - Cached for 60 seconds (30s Stale-While-Revalidate)
 - Returns `internal_name`, `tenant_id`, `status`
 - Invalid keys return HTTP 404

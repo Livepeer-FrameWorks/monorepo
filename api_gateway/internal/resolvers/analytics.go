@@ -3,7 +3,6 @@ package resolvers
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Helper function to convert model time range to Periscope TimeRangeOpts
 func toTimeRangeOpts(timeRange *model.TimeRangeInput) *periscopeclient.TimeRangeOpts {
 	if timeRange == nil {
 		return nil
@@ -29,7 +27,6 @@ func toTimeRangeOpts(timeRange *model.TimeRangeInput) *periscopeclient.TimeRange
 	}
 }
 
-// Helper function to convert time pointers to TimeRangeOpts
 func timePtrsToTimeRangeOpts(startTime, endTime *time.Time) *periscopeclient.TimeRangeOpts {
 	if startTime == nil || endTime == nil {
 		return nil
@@ -40,28 +37,19 @@ func timePtrsToTimeRangeOpts(startTime, endTime *time.Time) *periscopeclient.Tim
 	}
 }
 
-// Helper function to convert model pagination to cursor pagination opts
-func toCursorPaginationOpts(first *int, after *string) *periscopeclient.CursorPaginationOpts {
-	opts := &periscopeclient.CursorPaginationOpts{
-		First: 100,
+// DoGetStreamAnalyticsSummary returns MV-backed range aggregates for a stream.
+func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) (*pb.StreamAnalyticsSummary, error) {
+	normalizedID, err := normalizeStreamID(streamID)
+	if err != nil {
+		return nil, err
 	}
-	if first != nil {
-		opts.First = int32(*first)
-	}
-	if after != nil {
-		opts.After = after
-	}
-	return opts
-}
+	streamID = normalizedID
 
-// DoGetStreamAnalytics returns analytics for a specific stream
-func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) (*pb.StreamAnalytics, error) {
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic stream analytics")
-		return demo.GenerateStreamAnalytics(streamId), nil
+		r.Logger.Debug("Demo mode: returning synthetic stream analytics summary")
+		return demo.GenerateStreamAnalyticsSummary(streamID), nil
 	}
 
-	// Extract tenant ID from context for data isolation
 	// Extract tenant ID from context for data isolation
 	var tenantID string
 	if v, ok := ctx.Value("tenant_id").(string); ok {
@@ -71,28 +59,27 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, ti
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	// Build cache key
-	cacheKey := tenantID + ":" + streamId
+	cacheKey := tenantID + ":" + streamID
 	if timeRange != nil {
 		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
 	}
 
-	// Get analytics from Periscope Query using tenant_id from JWT context
-	val, err := r.fetchPeriscope(ctx, "stream_analytics", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetStreamAnalytics(ctx, tenantID, &streamId, toTimeRangeOpts(timeRange), nil)
+	val, err := r.fetchPeriscope(ctx, "stream_analytics_summary", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetStreamAnalyticsSummary(ctx, tenantID, streamID, toTimeRangeOpts(timeRange))
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get stream analytics")
-		return nil, fmt.Errorf("failed to get stream analytics: %w", err)
+		r.Logger.WithError(err).Error("Failed to get stream analytics summary")
+		return nil, fmt.Errorf("failed to get stream analytics summary: %w", err)
 	}
-	resp := val.(*pb.GetStreamAnalyticsResponse)
+	resp, ok := val.(*pb.GetStreamAnalyticsSummaryResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for stream analytics summary: %T", val)
+	}
+	if resp == nil {
+		return nil, nil
+	}
 
-	// Return the first analytics result if available
-	if len(resp.GetStreams()) > 0 {
-		return resp.GetStreams()[0], nil
-	}
-	// Return null instead of error when no analytics found - this is normal for new streams
-	return nil, nil
+	return resp.GetSummary(), nil
 }
 
 // DoGetPlatformOverview returns platform-wide metrics
@@ -125,8 +112,11 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 		r.Logger.WithError(err).Error("Failed to get platform overview")
 		return nil, fmt.Errorf("failed to get platform overview: %w", err)
 	}
-
-	return val.(*pb.GetPlatformOverviewResponse), nil
+	resp, ok := val.(*pb.GetPlatformOverviewResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for platform overview: %T", val)
+	}
+	return resp, nil
 }
 
 // DoGetViewerCountTimeSeries returns time-bucketed viewer counts for charts
@@ -136,6 +126,12 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 		r.Logger.Debug("Demo mode: returning synthetic viewer count time series")
 		return demo.GenerateViewerCountTimeSeries(), nil
 	}
+
+	normalizedStream, err := normalizeStreamIDPtr(stream)
+	if err != nil {
+		return nil, err
+	}
+	stream = normalizedStream
 
 	// Extract tenant ID from context for data isolation
 	// Extract tenant ID from context for data isolation
@@ -175,13 +171,22 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 		}).Error("Failed to get viewer count time series")
 		return nil, fmt.Errorf("failed to get viewer count time series: %w", err)
 	}
-	resp := val.(*pb.GetViewerCountTimeSeriesResponse)
+	resp, ok := val.(*pb.GetViewerCountTimeSeriesResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for viewer count time series: %T", val)
+	}
 
 	return resp.Buckets, nil
 }
 
 // DoGetStreamHealthMetrics returns stream health metrics
 func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*pb.StreamHealthMetric, error) {
+	normalizedID, err := normalizeStreamID(streamId)
+	if err != nil {
+		return nil, err
+	}
+	streamId = normalizedID
+
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic stream health metrics")
 		return demo.GenerateStreamHealthMetrics(), nil
@@ -189,9 +194,9 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 
 	// Convert time range for Periscope client
 	tr := toTimeRangeOpts(timeRange)
-	var internalName *string
+	var streamID *string
 	if streamId != "" {
-		internalName = &streamId
+		streamID = &streamId
 	}
 
 	// Get health metrics from Periscope Query
@@ -203,13 +208,16 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
 	}
 	val, err := r.fetchPeriscope(ctx, "stream_health", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, internalName, tr, nil)
+		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, streamID, tr, nil)
 	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get stream health metrics")
 		return nil, fmt.Errorf("failed to get stream health metrics: %w", err)
 	}
-	resp := val.(*pb.GetStreamHealthMetricsResponse)
+	resp, ok := val.(*pb.GetStreamHealthMetricsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for stream health metrics: %T", val)
+	}
 
 	// Return metrics
 	result := make([]*pb.StreamHealthMetric, len(resp.Metrics))
@@ -251,6 +259,12 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 		return demo.GenerateViewerGeographics(), nil
 	}
 
+	normalizedStream, err := normalizeStreamIDPtr(stream)
+	if err != nil {
+		return nil, err
+	}
+	stream = normalizedStream
+
 	// Get geographic data from Periscope Query
 	tr := toTimeRangeOpts(timeRange)
 	cacheKey := "all"
@@ -265,13 +279,16 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get connection events for geographics")
-		return []*pb.ConnectionEvent{}, nil
+		return nil, fmt.Errorf("failed to fetch geographic data: %w", err)
 	}
-	connResp := val.(*pb.GetConnectionEventsResponse)
+	connResp, ok := val.(*pb.GetConnectionEventsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for connection events: %T", val)
+	}
 
 	var out []*pb.ConnectionEvent
 	for _, ev := range connResp.Events {
-		if stream != nil && *stream != "" && ev.InternalName != *stream {
+		if stream != nil && *stream != "" && ev.StreamId != *stream {
 			continue
 		}
 		out = append(out, ev)
@@ -286,6 +303,12 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 		r.Logger.Debug("Demo mode: returning synthetic geographic distribution")
 		return demo.GenerateGeographicDistribution(), nil
 	}
+
+	normalizedStream, err := normalizeStreamIDPtr(stream)
+	if err != nil {
+		return nil, err
+	}
+	stream = normalizedStream
 
 	// Extract tenant ID from context for data isolation
 	// Extract tenant ID from context for data isolation
@@ -325,7 +348,10 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 		}).Error("Failed to get geographic distribution")
 		return nil, fmt.Errorf("failed to get geographic distribution: %w", err)
 	}
-	resp := val.(*pb.GetGeographicDistributionResponse)
+	resp, ok := val.(*pb.GetGeographicDistributionResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for geographic distribution: %T", val)
+	}
 
 	// Build time range for response
 	startTime := time.Now().Add(-24 * time.Hour)
@@ -350,24 +376,6 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 		TotalViewers:     int(resp.TotalViewers),
 		ViewersByCountry: []*model.CountryTimeSeries{}, // Server-side doesn't return time series yet
 	}, nil
-}
-
-func isZeroCoord(lat, lon float64) bool {
-	return lat == 0 && lon == 0
-}
-
-func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
-	const earthRadiusKm = 6371.0
-	toRad := func(deg float64) float64 { return deg * math.Pi / 180 }
-	lat1Rad := toRad(lat1)
-	lon1Rad := toRad(lon1)
-	lat2Rad := toRad(lat2)
-	lon2Rad := toRad(lon2)
-	dLat := lat2Rad - lat1Rad
-	dLon := lon2Rad - lon1Rad
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(lat1Rad)*math.Cos(lat2Rad)*math.Sin(dLon/2)*math.Sin(dLon/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return earthRadiusKm * c
 }
 
 func (r *Resolver) fetchPeriscope(ctx context.Context, operation string, keyParts []string, loader func(context.Context) (interface{}, error)) (interface{}, error) {
@@ -415,6 +423,12 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 		if opts.After != nil {
 			keyParts = append(keyParts, *opts.After)
 		}
+		if opts.Last > 0 {
+			keyParts = append(keyParts, fmt.Sprintf("l%d", opts.Last))
+		}
+		if opts.Before != nil {
+			keyParts = append(keyParts, *opts.Before)
+		}
 	}
 
 	// Convert time pointers to TimeRangeOpts
@@ -429,7 +443,11 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetRoutingEventsResponse), nil
+	resp, ok := val.(*pb.GetRoutingEventsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for routing events: %T", val)
+	}
+	return resp, nil
 }
 
 func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetConnectionEventsResponse, error) {
@@ -459,7 +477,11 @@ func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, sta
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetConnectionEventsResponse), nil
+	resp, ok := val.(*pb.GetConnectionEventsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for connection events: %T", val)
+	}
+	return resp, nil
 }
 
 func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetricsResponse, error) {
@@ -489,7 +511,11 @@ func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTim
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetNodeMetricsResponse), nil
+	resp, ok := val.(*pb.GetNodeMetricsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for node metrics: %T", val)
+	}
+	return resp, nil
 }
 
 func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetrics1HResponse, error) {
@@ -519,21 +545,29 @@ func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startT
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetNodeMetrics1HResponse), nil
+	resp, ok := val.(*pb.GetNodeMetrics1HResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for node metrics 1h: %T", val)
+	}
+	return resp, nil
 }
 
-func (r *Resolver) loadClipEvents(ctx context.Context, internalName, stage *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetClipEventsResponse, error) {
-	internalNameKey := ""
-	if internalName != nil {
-		internalNameKey = *internalName
+func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentType *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetClipEventsResponse, error) {
+	streamIDKey := ""
+	if streamID != nil {
+		streamIDKey = *streamID
 	}
 	stageKey := ""
 	if stage != nil {
 		stageKey = *stage
 	}
+	contentTypeKey := ""
+	if contentType != nil {
+		contentTypeKey = *contentType
+	}
 
 	// Build cache key including pagination parameters
-	keyParts := []string{internalNameKey, stageKey, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{streamIDKey, stageKey, contentTypeKey, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -548,17 +582,21 @@ func (r *Resolver) loadClipEvents(ctx context.Context, internalName, stage *stri
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "clip_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetClipEvents(ctx, internalName, stage, tr, opts)
+		return r.Clients.Periscope.GetClipEvents(ctx, streamID, stage, contentType, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetClipEventsResponse), nil
+	resp, ok := val.(*pb.GetClipEventsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for clip events: %T", val)
+	}
+	return resp, nil
 }
 
-func (r *Resolver) loadStreamEvents(ctx context.Context, internalName string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamEventsResponse, error) {
+func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamEventsResponse, error) {
 	// Build cache key including pagination parameters
-	keyParts := []string{internalName, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{streamID, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -573,17 +611,21 @@ func (r *Resolver) loadStreamEvents(ctx context.Context, internalName string, st
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetStreamEvents(ctx, internalName, tr, opts)
+		return r.Clients.Periscope.GetStreamEvents(ctx, streamID, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetStreamEventsResponse), nil
+	resp, ok := val.(*pb.GetStreamEventsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for stream events: %T", val)
+	}
+	return resp, nil
 }
 
-func (r *Resolver) loadTrackListEvents(ctx context.Context, stream string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetTrackListEventsResponse, error) {
+func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetTrackListEventsResponse, error) {
 	// Build cache key including pagination parameters
-	keyParts := []string{stream, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{streamID, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -598,12 +640,16 @@ func (r *Resolver) loadTrackListEvents(ctx context.Context, stream string, start
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "track_list_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetTrackListEvents(ctx, stream, tr, opts)
+		return r.Clients.Periscope.GetTrackListEvents(ctx, streamID, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetTrackListEventsResponse), nil
+	resp, ok := val.(*pb.GetTrackListEventsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for track list events: %T", val)
+	}
+	return resp, nil
 }
 
 func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamHealthMetricsResponse, error) {
@@ -632,7 +678,11 @@ func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, 
 	if err != nil {
 		return nil, err
 	}
-	return val.(*pb.GetStreamHealthMetricsResponse), nil
+	resp, ok := val.(*pb.GetStreamHealthMetricsResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for stream health metrics: %T", val)
+	}
+	return resp, nil
 }
 
 // DoGetTenantDailyStats returns daily tenant statistics for PlatformOverview.dailyStats.

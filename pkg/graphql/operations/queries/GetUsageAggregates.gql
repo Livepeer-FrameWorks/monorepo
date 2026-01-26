@@ -1,0 +1,13 @@
+query GetUsageAggregates(
+  $timeRange: TimeRangeInput!
+  $granularity: String = "daily"
+  $usageTypes: [String!]
+) {
+  usageAggregates(timeRange: $timeRange, granularity: $granularity, usageTypes: $usageTypes) {
+    usageType
+    periodStart
+    periodEnd
+    usageValue
+    granularity
+  }
+}

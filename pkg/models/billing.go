@@ -238,7 +238,7 @@ type BillingTier struct {
 
 	// Tier metadata
 	IsActive     bool `json:"is_active" db:"is_active"`
-	SortOrder    int  `json:"sort_order" db:"sort_order"`
+	TierLevel    int  `json:"tier_level" db:"tier_level"`
 	IsEnterprise bool `json:"is_enterprise" db:"is_enterprise"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
@@ -259,6 +259,8 @@ type TenantSubscription struct {
 	StartedAt       time.Time  `json:"started_at" db:"started_at"`
 	TrialEndsAt     *time.Time `json:"trial_ends_at,omitempty" db:"trial_ends_at"`
 	NextBillingDate *time.Time `json:"next_billing_date,omitempty" db:"next_billing_date"`
+	BillingPeriodStart *time.Time `json:"billing_period_start,omitempty" db:"billing_period_start"`
+	BillingPeriodEnd   *time.Time `json:"billing_period_end,omitempty" db:"billing_period_end"`
 	CancelledAt     *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
 
 	// Custom arrangements (for enterprise tiers)
@@ -287,7 +289,6 @@ type UsageRecord struct {
 	UsageType    string       `json:"usage_type" db:"usage_type"`
 	UsageValue   float64      `json:"usage_value" db:"usage_value"`
 	UsageDetails UsageDetails `json:"usage_details" db:"usage_details"`
-	BillingMonth string       `json:"billing_month" db:"billing_month"`
 	CreatedAt    time.Time    `json:"created_at" db:"created_at"`
 }
 

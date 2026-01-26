@@ -20,7 +20,10 @@
     playbackId?: string | null;
     manifestPath?: string | null;
     createdAt?: string | null;
-    streamName?: string;
+    streamId?: string;
+    stream?: {
+      streamId: string;
+    } | null;
   }
 
   interface Props {
@@ -33,8 +36,8 @@
   let copiedField = $state<string | null>(null);
   let showUrls = $state(false);
 
-  // Get delivery URLs for clip using clipHash
-  let clipUrls = $derived(clip?.clipHash ? getContentDeliveryUrls(clip.clipHash, "clip") : null);
+  // Get delivery URLs for clip using playbackId
+  let clipUrls = $derived(clip?.playbackId ? getContentDeliveryUrls(clip.playbackId, "clip") : null);
 
   // Primary protocols to show for clips
   const clipProtocols: Array<{
@@ -112,16 +115,22 @@
       </DialogHeader>
 
       <section class="bg-black">
-        <Player
-          contentId={clip.id}
-          contentType="clip"
-          thumbnailUrl={undefined}
-          options={{
-            autoplay: true,
-            muted: false,
-            controls: true,
-          }}
-        />
+        {#if clip.playbackId}
+          <Player
+            contentId={clip.playbackId}
+            contentType="clip"
+            thumbnailUrl={undefined}
+            options={{
+              autoplay: true,
+              muted: false,
+              controls: true,
+            }}
+          />
+        {:else}
+          <div class="p-6 text-center text-muted-foreground">
+            Missing playback ID for this clip.
+          </div>
+        {/if}
       </section>
 
       <section class="grid gap-4 border-t border-border p-6 text-sm text-foreground">
@@ -146,16 +155,17 @@
           </div>
         </div>
 
-        {#if clip.streamName}
+        {#if clip.stream?.streamId || clip.streamId}
+          {@const displayStreamId = clip.stream?.streamId ?? clip.streamId}
           <div class="border border-border p-4">
             <p class="text-sm text-foreground/80">
-              From stream: <span class="font-medium text-foreground">{clip.streamName}</span>
+              From stream: <span class="font-medium text-foreground">{displayStreamId}</span>
             </p>
           </div>
         {/if}
 
         <!-- Playback URLs Section -->
-        {#if clipUrls && clip.clipHash}
+        {#if clipUrls && clip.playbackId}
           <div class="border border-border">
             <button
               class="w-full p-3 flex items-center justify-between text-sm hover:bg-muted/10 transition-colors"

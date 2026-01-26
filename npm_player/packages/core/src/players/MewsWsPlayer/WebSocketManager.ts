@@ -105,7 +105,6 @@ export class WebSocketManager {
       return false;
     }
 
-    // Helper to schedule retry with tracking
     const scheduleRetry = (delay: number) => {
       const timer = setTimeout(() => {
         this.pendingRetryTimers.delete(timer);

@@ -1,0 +1,19 @@
+# Real-time viewer connection/disconnection events
+# Shows geographic distribution and session metrics for live streams
+subscription ConnectionEventsLive($streamId: ID) {
+  liveConnectionEvents(streamId: $streamId) {
+    eventId
+    timestamp
+    streamId
+    sessionId
+    connector
+    nodeId
+    countryCode
+    city
+    latitude
+    longitude
+    eventType
+    sessionDurationSeconds
+    bytesTransferred
+  }
+}

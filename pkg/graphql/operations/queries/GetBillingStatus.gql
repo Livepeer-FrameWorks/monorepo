@@ -1,0 +1,71 @@
+# Fetch complete billing status including current tier, subscription, and usage summary
+query GetBillingStatus {
+  billingStatus {
+    billingStatus
+    currency
+    nextBillingDate
+    trialEndsAt
+    outstandingAmount
+    usageReconciled
+    currentTier {
+      ...BillingTierFields
+    }
+    subscription {
+      id
+      tenantId
+      tierId
+      status
+      billingEmail
+      startedAt
+      trialEndsAt
+      nextBillingDate
+      cancelledAt
+      customPricing {
+        basePrice
+        discountRate
+        overageRates {
+          bandwidth {
+            ...AllocationFields
+          }
+          storage {
+            ...AllocationFields
+          }
+          compute {
+            ...AllocationFields
+          }
+        }
+      }
+      customFeatures {
+        recording
+        analytics
+        customBranding
+        apiAccess
+        supportLevel
+        sla
+      }
+      customAllocations {
+        ...AllocationFields
+      }
+      paymentMethod
+      createdAt
+      updatedAt
+    }
+    liveUsage {
+      ...LiveUsageSummaryFields
+    }
+    invoicePreview {
+      id
+      status
+      amount
+      baseAmount
+      meteredAmount
+      currency
+      dueDate
+      periodStart
+      periodEnd
+      usageSummary {
+        ...UsageSummaryFields
+      }
+    }
+  }
+}

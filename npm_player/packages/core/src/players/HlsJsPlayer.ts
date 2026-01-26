@@ -3,6 +3,7 @@ import { checkProtocolMismatch, getBrowserInfo } from '../core/detector';
 import { translateCodec } from '../core/CodecUtils';
 import { LiveDurationProxy } from '../core/LiveDurationProxy';
 import type { StreamSource, StreamInfo, PlayerOptions, PlayerCapability } from '../core/PlayerInterface';
+import type { HlsJsConfig } from '../types';
 
 // Player implementation class
 export class HlsJsPlayerImpl extends BasePlayer {
@@ -148,13 +149,36 @@ export class HlsJsPlayerImpl extends BasePlayer {
       console.log('[HLS.js] hls.js module imported, Hls.isSupported():', Hls.isSupported?.());
 
       if (Hls.isSupported()) {
-        this.hls = new Hls({
+        // Build optimized HLS.js config with user overrides
+        const hlsConfig: HlsJsConfig = {
+          // Worker disabled for lower latency (per HLS.js maintainer recommendation)
           enableWorker: false,
+
+          // LL-HLS support
           lowLatencyMode: true,
-          maxBufferLength: 15,
-          maxMaxBufferLength: 60,
-          backBufferLength: 30  // Reduced from 90 to prevent memory issues on long streams
-        });
+
+          // AGGRESSIVE: Assume 5 Mbps initially (not 500kbps default)
+          // This dramatically improves startup time by selecting appropriate quality faster
+          abrEwmaDefaultEstimate: 5_000_000,
+
+          // AGGRESSIVE: Minimal buffers for fastest startup
+          maxBufferLength: 6,         // Reduced from 15 (just 2 segments @ 3s)
+          maxMaxBufferLength: 15,     // Reduced from 60
+          backBufferLength: Infinity, // Let browser manage (per maintainer advice)
+
+          // Stay close to live edge but not too aggressive
+          liveSyncDuration: 4,        // Target 4 seconds behind live edge
+          liveMaxLatencyDuration: 8,  // Max 8 seconds before seeking to live
+
+          // Faster ABR adaptation for live
+          abrEwmaFastLive: 2.0,       // Faster than default 3.0
+          abrEwmaSlowLive: 6.0,       // Faster than default 9.0
+
+          // Allow user overrides
+          ...options.hlsConfig,
+        };
+
+        this.hls = new Hls(hlsConfig);
 
         this.hls.attachMedia(video);
 

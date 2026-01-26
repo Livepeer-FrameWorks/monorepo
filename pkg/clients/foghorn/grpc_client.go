@@ -20,6 +20,7 @@ type GRPCClient struct {
 	dvr     pb.DVRControlServiceClient
 	viewer  pb.ViewerControlServiceClient
 	vod     pb.VodControlServiceClient
+	tenant  pb.TenantControlServiceClient
 	logger  logging.Logger
 	timeout time.Duration
 }
@@ -92,6 +93,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		dvr:     pb.NewDVRControlServiceClient(conn),
 		viewer:  pb.NewViewerControlServiceClient(conn),
 		vod:     pb.NewVodControlServiceClient(conn),
+		tenant:  pb.NewTenantControlServiceClient(conn),
 		logger:  config.Logger,
 		timeout: config.Timeout,
 	}, nil
@@ -115,46 +117,6 @@ func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) 
 	defer cancel()
 
 	return c.clip.CreateClip(ctx, req)
-}
-
-// GetClips returns all clips for a tenant
-func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.GetClipsResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	return c.clip.GetClips(ctx, &pb.GetClipsRequest{
-		TenantId:     tenantID,
-		InternalName: internalName,
-		Pagination:   pagination,
-	})
-}
-
-// GetClip returns a specific clip by hash
-func (c *GRPCClient) GetClip(ctx context.Context, clipHash string, tenantID *string) (*pb.ClipInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	req := &pb.GetClipRequest{
-		ClipHash: clipHash,
-	}
-	if tenantID != nil {
-		req.TenantId = *tenantID
-	}
-	return c.clip.GetClip(ctx, req)
-}
-
-// GetClipURLs returns viewing URLs for a clip
-func (c *GRPCClient) GetClipURLs(ctx context.Context, clipHash string, tenantID *string) (*pb.ClipViewingURLs, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	req := &pb.GetClipURLsRequest{
-		ClipHash: clipHash,
-	}
-	if tenantID != nil {
-		req.TenantId = *tenantID
-	}
-	return c.clip.GetClipURLs(ctx, req)
 }
 
 // DeleteClip deletes a clip
@@ -184,7 +146,7 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb
 }
 
 // StopDVR stops an active DVR recording
-func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string) (*pb.StopDVRResponse, error) {
+func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string, streamID *string) (*pb.StopDVRResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -193,6 +155,9 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *stri
 	}
 	if tenantID != nil {
 		req.TenantId = *tenantID
+	}
+	if streamID != nil && *streamID != "" {
+		req.StreamId = streamID
 	}
 	return c.dvr.StopDVR(ctx, req)
 }
@@ -211,50 +176,19 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *st
 	return c.dvr.DeleteDVR(ctx, req)
 }
 
-// GetDVRStatus returns status of a DVR recording
-func (c *GRPCClient) GetDVRStatus(ctx context.Context, dvrHash string) (*pb.DVRInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	return c.dvr.GetDVRStatus(ctx, &pb.GetDVRStatusRequest{
-		DvrHash: dvrHash,
-	})
-}
-
-// ListDVRRecordings lists all DVR recordings for a tenant
-func (c *GRPCClient) ListDVRRecordings(ctx context.Context, tenantID string, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	return c.dvr.ListDVRRecordings(ctx, &pb.ListDVRRecordingsRequest{
-		TenantId:     tenantID,
-		InternalName: internalName,
-		Pagination:   pagination,
-	})
-}
-
 // =============================================================================
 // VIEWER OPERATIONS
 // =============================================================================
 
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	return c.viewer.ResolveViewerEndpoint(ctx, &pb.ViewerEndpointRequest{
-		ContentType: contentType,
 		ContentId:   contentID,
 		ViewerIp:    viewerIP,
 	})
-}
-
-// GetStreamMeta returns MistServer JSON meta for a stream
-func (c *GRPCClient) GetStreamMeta(ctx context.Context, req *pb.StreamMetaRequest) (*pb.StreamMetaResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	return c.viewer.GetStreamMeta(ctx, req)
 }
 
 // ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter
@@ -329,5 +263,27 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 	return c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
+	})
+}
+
+// TerminateTenantStreams stops all active streams for a suspended tenant
+func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.tenant.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{
+		TenantId: tenantID,
+		Reason:   reason,
+	})
+}
+
+// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
+func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.tenant.InvalidateTenantCache(ctx, &pb.InvalidateTenantCacheRequest{
+		TenantId: tenantID,
+		Reason:   reason,
 	})
 }

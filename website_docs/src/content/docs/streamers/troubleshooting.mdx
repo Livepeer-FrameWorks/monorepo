@@ -19,14 +19,14 @@ The encoder can't reach our servers.
 1. **RTMP URL:** Verify it is exactly `%RTMP_URL%`.
 2. **Stream Key:** Ensure you've copied the active key from the **Stream Key** card on your dashboard.
 3. **Port 1935:** Some corporate or school networks block RTMP. Try a different network (like a mobile hotspot) or use SRT.
-4. **Service Status:** Check our Discord community for any ongoing maintenance or outages.
+4. **Service Status:** Check our Discord community or **Support → Messages** for any ongoing maintenance or outages.
 
 ### "Authentication failed"
 
 Your stream key is wrong or revoked.
 
 1. Go to your stream in the dashboard
-2. Click **Stream Keys** tab
+2. Open the **Ingest** tab → **Stream Keys** section
 3. Create a new key or copy an existing active one
 4. Paste into OBS (Settings → Stream → Stream Key)
 
@@ -43,11 +43,12 @@ This typically indicates network instability or packet loss between your locatio
 
 ### Viewers see "Stream not found"
 
-The playback ID doesn't match an active stream.
+The playback ID doesn't match a live stream or a ready asset.
 
-1. Is the stream actually live? The dashboard shows status
-2. Is the URL exactly right? Playback IDs are case-sensitive
-3. Did you accidentally use the stream key instead of the playback ID?
+1. Is the stream actually live? The dashboard shows status.
+2. If this is VOD/clip/DVR, make sure it finished processing.
+3. Is the URL exactly right? Copy from the **Playback** tab.
+4. Did you accidentally use the stream key instead of the playback ID?
 
 ### Video plays but no audio
 
@@ -64,7 +65,7 @@ The playback ID doesn't match an active stream.
 
 **On the viewer's end:**
 - Slow connection. The player will drop to a lower quality, but there's a limit
-- Too far from the nearest edge node (we're expanding coverage)
+- If you’re self-hosted, the viewer may be far from your nearest edge
 
 **On your end:**
 - Your upload can't keep up with your bitrate
@@ -83,11 +84,11 @@ Classic encoder overload.
 
 ### 10-30 second delay
 
-That's normal for HLS. It's not a bug, just how the protocol works.
+That's normal for HLS. Actual latency depends on segment size and player config.
 
 For lower latency:
-- Use WebRTC/WHEP playback URLs for sub-second latency (the player auto-selects optimal protocol)
-- Or enable Low Latency HLS in your encoder if you need broader compatibility
+- Use WebRTC/WHEP playback URLs for sub-second latency
+- Or enable Low Latency HLS if you need broader compatibility
 
 ## Encoding Performance & Quality
 
@@ -139,11 +140,11 @@ If still offline:
 
 ### Analytics missing or delayed
 
-Analytics have a 2-3 minute delay. If you just started streaming, give it time.
+Analytics can be delayed by a few minutes. If you just started streaming, give it time.
 
 For older streams:
 - Make sure the stream was actually live (not just connected)
-- You need at least one viewer (your own browser counts)
+- Some metrics require viewer sessions (testing with your own playback is fine)
 
 ## API Errors
 
@@ -168,7 +169,7 @@ Make sure the header is `Authorization: Bearer YOUR_TOKEN` (not just the token).
 You don't have access to this resource.
 
 - Are you accessing another tenant's data by mistake?
-- Does your API key have the required scopes?
+- Does your API token have the required permissions?
 - Is this feature available on your plan?
 
 ### 429 Too Many Requests
@@ -184,7 +185,7 @@ You're hitting rate limits.
 Something broke on our end.
 
 1. Wait a minute and retry
-2. Check [status.frameworks.network](https://status.frameworks.network)
+2. Ask in Discord or **Support → Messages** to confirm status
 3. If it keeps happening, file a support ticket with:
    - The request you made
    - The timestamp
@@ -194,4 +195,5 @@ Something broke on our end.
 
 1. **Search these docs** - Cmd/Ctrl+K opens search
 2. **Discord** - Other streamers might have hit the same issue: [%DISCORD_URL%](%DISCORD_URL%)
-3. **GitHub** - [Open an issue](%GITHUB_URL%/issues) with your stream ID and timestamps
+3. **Support** - Send us a message via the dashboard
+4. **GitHub** - [Open an issue](%GITHUB_URL%/issues) with your stream ID and timestamps

@@ -1,0 +1,33 @@
+# 5-minute node performance aggregates
+query GetNodePerformance5m(
+  $nodeId: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+) {
+  analytics {
+    infra {
+      nodePerformance5mConnection(nodeId: $nodeId, timeRange: $timeRange, page: { first: $first, after: $after }) {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            nodeId
+            avgCpu
+            maxCpu
+            avgMemory
+            maxMemory
+            totalBandwidth
+            avgStreams
+            maxStreams
+          }
+        }
+        pageInfo {
+          ...PageInfoFields
+        }
+        totalCount
+      }
+    }
+  }
+}

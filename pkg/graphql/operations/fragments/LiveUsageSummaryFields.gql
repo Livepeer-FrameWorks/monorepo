@@ -1,0 +1,10 @@
+fragment LiveUsageSummaryFields on LiveUsageSummary {
+  periodStart
+  periodEnd
+  viewerHours
+  egressGb
+  uniqueViewers
+  averageStorageGb
+  livepeerSeconds
+  nativeAvSeconds
+}

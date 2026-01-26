@@ -21,10 +21,24 @@ npm install @livepeer-frameworks/streamcrafter-svelte
 </script>
 
 <StreamCrafter
-  whipUrl="https://ingest.example.com/whip/your-stream-key"
+  whipUrl="https://ingest.example.com/webrtc/your-stream-key"
   initialProfile="broadcast"
 />
 ```
+
+### Gateway Mode (Stream Key + Gateway URL)
+
+```svelte
+<StreamCrafter
+  gatewayUrl="https://api.example.com/graphql"
+  streamKey="sk_live_..."
+  initialProfile="broadcast"
+/>
+```
+
+Notes:
+- There is **no default gateway**; pass either `whipUrl` or (`gatewayUrl` + `streamKey`).
+- If both are provided, `whipUrl` takes priority.
 
 ## Usage (Stores)
 
@@ -37,7 +51,7 @@ npm install @livepeer-frameworks/streamcrafter-svelte
 
   onMount(() => {
     crafter.initialize({
-      whipUrl: 'https://ingest.example.com/whip/your-stream-key',
+      whipUrl: 'https://ingest.example.com/webrtc/your-stream-key',
       profile: 'broadcast',
     });
   });

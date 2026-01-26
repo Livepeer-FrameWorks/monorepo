@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Go modules - shared pkg
+  - package-ecosystem: gomod
+    directory: /pkg
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+
+  # Node/pnpm - root workspace
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-deps:
+        patterns: ["*"]
+
+  # GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

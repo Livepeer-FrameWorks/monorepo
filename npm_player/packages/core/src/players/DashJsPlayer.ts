@@ -296,16 +296,17 @@ export class DashJsPlayerImpl extends BasePlayer {
       });
 
       // Configure dashjs v5 streaming settings BEFORE initialization
+      // AGGRESSIVE settings for fastest startup and low latency
       this.dashPlayer.updateSettings({
         streaming: {
-          // Buffer settings
+          // AGGRESSIVE: Minimal buffers for fastest startup
           buffer: {
             fastSwitchEnabled: true,
-            stableBufferTime: 16,
-            bufferTimeAtTopQuality: 30,
-            bufferTimeAtTopQualityLongForm: 60,
-            bufferToKeep: 30,
-            bufferPruningInterval: 30,
+            stableBufferTime: 4,           // Reduced from 16 (aggressive!)
+            bufferTimeAtTopQuality: 8,     // Reduced from 30
+            bufferTimeAtTopQualityLongForm: 15, // Reduced from 60
+            bufferToKeep: 10,              // Reduced from 30
+            bufferPruningInterval: 10,     // Reduced from 30
           },
           // Gaps/stall handling
           gaps: {
@@ -314,12 +315,23 @@ export class DashJsPlayerImpl extends BasePlayer {
             smallGapLimit: 1.5,
             threshold: 0.3,
           },
-          // ABR - try disabling to isolate the issue
+          // AGGRESSIVE: ABR with high initial bitrate estimate
           abr: {
             autoSwitchBitrate: { video: true, audio: true },
             limitBitrateByPortal: false,
             useDefaultABRRules: true,
-            initialBitrate: { video: -1, audio: -1 },  // Let dashjs choose
+            initialBitrate: { video: 5_000_000, audio: 128_000 },  // 5Mbps initial (was -1)
+          },
+          // LIVE CATCHUP - critical for maintaining live edge (was missing!)
+          liveCatchup: {
+            enabled: true,
+            maxDrift: 1.5,            // Seek to live if drift > 1.5s
+            playbackRate: {
+              max: 0.15,              // Speed up by max 15%
+              min: -0.15,             // Slow down by max 15%
+            },
+            playbackBufferMin: 0.3,   // Min buffer before catchup
+            mode: 'liveCatchupModeDefault',
           },
           // Retry settings - more aggressive
           retryAttempts: {
@@ -354,11 +366,11 @@ export class DashJsPlayerImpl extends BasePlayer {
           abandonLoadTimeout: 5000,  // 5 seconds instead of default 10
           xhrWithCredentials: false,
           text: { defaultEnabled: false },
-          // Live delay settings for live streams
+          // AGGRESSIVE: Tighter live delay
           delay: {
-            liveDelay: 4,  // Target 4 seconds behind live edge
+            liveDelay: 2,  // Reduced from 4 (2s behind live edge)
             liveDelayFragmentCount: null,
-            useSuggestedPresentationDelay: true,
+            useSuggestedPresentationDelay: false,  // Ignore manifest suggestions
           },
         },
         debug: {

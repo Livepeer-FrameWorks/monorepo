@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 )
 
 // ClipCleanupInfo holds information about a clip candidate for cleanup
@@ -40,6 +43,7 @@ type CleanupMonitor struct {
 var (
 	cleanupMonitor *CleanupMonitor
 	cleanupLogger  logging.Logger
+	errCleanupSkip = errors.New("cleanup skipped (not safe to evict)")
 )
 
 // InitCleanupMonitor initializes the cleanup monitor
@@ -163,6 +167,9 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 		}
 
 		if err := cm.cleanupClip(candidate); err != nil {
+			if errors.Is(err, errCleanupSkip) {
+				continue
+			}
 			cm.logger.WithError(err).WithField("clip_hash", candidate.ClipHash).Error("Failed to cleanup clip")
 			continue
 		}
@@ -267,6 +274,10 @@ func (cm *CleanupMonitor) getCleanupCandidates(clipsDir string) ([]ClipCleanupIn
 		if clipInfo, exists := artifactIndex[clipHash]; exists {
 			// Use creation time from file system as it's more reliable
 			candidate.CreatedAt = clipInfo.CreatedAt
+			candidate.AccessCount = clipInfo.AccessCount
+			if !clipInfo.LastAccessed.IsZero() {
+				candidate.LastAccessed = clipInfo.LastAccessed
+			}
 		}
 
 		// Calculate cleanup priority (lower = higher priority for deletion)
@@ -345,6 +356,34 @@ func (cm *CleanupMonitor) calculateCleanupPriority(clip ClipCleanupInfo) float64
 
 // cleanupClip removes a clip file from storage
 func (cm *CleanupMonitor) cleanupClip(clip ClipCleanupInfo) error {
+	// In dual-storage mode, clips are expected to have an authoritative S3 copy.
+	// Before evicting from local disk, ask Foghorn if it's safe (synced).
+	// If it's not safe, trigger a storage check (which will sync via presigned URLs)
+	// and skip local deletion for now.
+	isEviction := false
+	var warmDurationMs int64
+	if control.IsConnected() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		safeToDelete, reason, wd, err := control.RequestCanDelete(ctx, clip.ClipHash)
+		cancel()
+
+		if err != nil {
+			cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to check if clip is safe to evict")
+			return errCleanupSkip
+		}
+		if !safeToDelete {
+			cm.logger.WithFields(logging.Fields{
+				"clip_hash": clip.ClipHash,
+				"reason":    reason,
+			}).Info("Clip not safe to evict yet; triggering sync")
+			TriggerStorageCheck()
+			return errCleanupSkip
+		}
+
+		isEviction = true
+		warmDurationMs = wd
+	}
+
 	// Remove the file
 	if err := os.Remove(clip.FilePath); err != nil {
 		return fmt.Errorf("failed to remove clip file: %w", err)
@@ -371,51 +410,22 @@ func (cm *CleanupMonitor) cleanupClip(clip ClipCleanupInfo) error {
 	}
 
 	// Notify Foghorn about the deletion
-	if err := control.SendArtifactDeleted(clip.ClipHash, clip.FilePath, "cleanup", clip.SizeBytes); err != nil {
-		cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to notify Foghorn of artifact deletion")
-	}
-
-	return nil
-}
-
-// TriggerCleanup manually triggers a cleanup check (for testing/debugging)
-func TriggerCleanup() error {
-	if cleanupMonitor == nil {
-		return fmt.Errorf("cleanup monitor not initialized")
-	}
-
-	cleanupLogger.Info("Manual cleanup triggered")
-	return cleanupMonitor.checkAndCleanup()
-}
-
-// GetCleanupStatus returns current cleanup status for monitoring
-func GetCleanupStatus() map[string]interface{} {
-	if cleanupMonitor == nil {
-		return map[string]interface{}{
-			"initialized": false,
+	if isEviction {
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:         pb.StorageLifecycleData_ACTION_EVICTED,
+			AssetType:      string(AssetTypeClip),
+			AssetHash:      clip.ClipHash,
+			SizeBytes:      clip.SizeBytes,
+			WarmDurationMs: &warmDurationMs,
+		})
+		if err := control.SendArtifactDeleted(clip.ClipHash, clip.FilePath, "eviction", clip.SizeBytes); err != nil {
+			cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to notify Foghorn of clip eviction")
+		}
+	} else {
+		if err := control.SendArtifactDeleted(clip.ClipHash, clip.FilePath, "cleanup", clip.SizeBytes); err != nil {
+			cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to notify Foghorn of artifact deletion")
 		}
 	}
 
-	clipsDir := filepath.Join(cleanupMonitor.basePath, "clips")
-	usagePercent, usedBytes, totalBytes, err := cleanupMonitor.getStorageUsage(clipsDir)
-
-	status := map[string]interface{}{
-		"initialized":         true,
-		"running":             cleanupMonitor.running,
-		"cleanup_threshold":   cleanupMonitor.cleanupThreshold,
-		"target_threshold":    cleanupMonitor.targetThreshold,
-		"min_retention_hours": cleanupMonitor.minRetentionHours,
-		"check_interval":      cleanupMonitor.checkInterval.String(),
-	}
-
-	if err == nil {
-		status["storage_usage_percent"] = usagePercent
-		status["storage_used_gb"] = float64(usedBytes) / (1024 * 1024 * 1024)
-		status["storage_total_gb"] = float64(totalBytes) / (1024 * 1024 * 1024)
-		status["cleanup_needed"] = usagePercent > cleanupMonitor.cleanupThreshold
-	} else {
-		status["storage_error"] = err.Error()
-	}
-
-	return status
+	return nil
 }

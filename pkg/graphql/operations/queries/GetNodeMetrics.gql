@@ -1,0 +1,41 @@
+# Fetch paginated node metrics including CPU, memory, disk, network, and connection data
+# Used for individual node monitoring and resource tracking
+query GetNodeMetrics(
+  $nodeId: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  analytics {
+    infra {
+      nodeMetricsConnection(nodeId: $nodeId, timeRange: $timeRange, noCache: $noCache, page: { first: $first, after: $after }) @paginate {
+        edges {
+          cursor
+          node {
+            timestamp
+            nodeId
+            cpuUsage
+            memoryTotal
+            memoryUsed
+            diskTotal
+            diskUsed
+            shmTotal
+            shmUsed
+            networkRx
+            networkTx
+            upSpeed
+            downSpeed
+            connectionsCurrent
+            status
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

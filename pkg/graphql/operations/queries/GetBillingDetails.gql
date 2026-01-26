@@ -1,0 +1,16 @@
+query GetBillingDetails {
+  billingDetails {
+    email
+    company
+    vatNumber
+    address {
+      street
+      city
+      state
+      postalCode
+      country
+    }
+    isComplete
+    updatedAt
+  }
+}

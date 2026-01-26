@@ -13,6 +13,7 @@ const MarketingGridSplit = forwardRef(
       stackAt = 'lg',
       reverse = false,
       bleed = false,
+      seam = false,
       className,
       style,
       ...props
@@ -29,10 +30,11 @@ const MarketingGridSplit = forwardRef(
         className={cn(
           'marketing-grid-split',
           align && `marketing-grid-split--align-${align}`,
-          gap && `marketing-grid-split--gap-${gap}`,
+          !seam && gap && `marketing-grid-split--gap-${gap}`,
           stackAt && `marketing-grid-split--stack-${stackAt}`,
           reverse && 'marketing-grid-split--reverse',
           bleed && 'marketing-grid-split--bleed',
+          seam && 'marketing-grid-split--seam',
           className
         )}
         {...props}

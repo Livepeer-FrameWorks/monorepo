@@ -1,0 +1,42 @@
+# Fetch geographic viewer distribution with top countries and cities
+# Returns aggregated viewer counts and percentages for geographic analytics
+query GetGeographicDistribution(
+  $streamId: ID
+  $timeRange: TimeRangeInput
+  $topN: Int = 10
+) {
+  analytics {
+    usage {
+      streaming {
+        geographicDistribution(streamId: $streamId, timeRange: $timeRange, topN: $topN) {
+          timeRange {
+            start
+            end
+          }
+          streamId
+          topCountries {
+            countryCode
+            viewerCount
+            percentage
+          }
+          topCities {
+            city
+            countryCode
+            viewerCount
+            percentage
+            latitude
+            longitude
+          }
+          uniqueCountries
+          uniqueCities
+          totalViewers
+          viewersByCountry {
+            timestamp
+            countryCode
+            viewerCount
+          }
+        }
+      }
+    }
+  }
+}

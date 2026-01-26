@@ -1,0 +1,69 @@
+fragment UsageSummaryFields on UsageSummary {
+  clusterId
+  period
+  periodStart
+  periodEnd
+  timestamp
+  granularity
+  streamHours
+  egressGb
+  recordingGb
+  peakBandwidthMbps
+  storageGb
+  # Processing/transcoding usage (Livepeer Gateway and local AV)
+  livepeerSeconds
+  livepeerSegmentCount
+  livepeerUniqueStreams
+  nativeAvSeconds
+  nativeAvSegmentCount
+  nativeAvUniqueStreams
+  # Per-codec breakdown: Livepeer (external gateway)
+  livepeerH264Seconds
+  livepeerVp9Seconds
+  livepeerAv1Seconds
+  livepeerHevcSeconds
+  # Per-codec breakdown: Native AV (local processing)
+  nativeAvH264Seconds
+  nativeAvVp9Seconds
+  nativeAvAv1Seconds
+  nativeAvHevcSeconds
+  nativeAvAacSeconds
+  nativeAvOpusSeconds
+  # Track type aggregates
+  audioSeconds
+  videoSeconds
+  averageStorageGb
+  # Clip storage lifecycle
+  clipsAdded
+  clipsDeleted
+  clipStorageAddedGb
+  clipStorageDeletedGb
+  # DVR storage lifecycle
+  dvrAdded
+  dvrDeleted
+  dvrStorageAddedGb
+  dvrStorageDeletedGb
+  # VOD storage lifecycle
+  vodAdded
+  vodDeleted
+  vodStorageAddedGb
+  vodStorageDeletedGb
+  # Viewer metrics
+  totalStreams
+  totalViewers
+  viewerHours
+  peakViewers
+  maxViewers
+  uniqueUsers
+  uniqueUsersPeriod
+  avgViewers
+  uniqueCountries
+  uniqueCities
+  geoBreakdown {
+    countryCode
+    viewerCount
+    viewerHours
+    percentage
+    egressGb
+  }
+}

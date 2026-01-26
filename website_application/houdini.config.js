@@ -3,9 +3,9 @@ const config = {
   schemaPath: "../pkg/graphql/schema.graphql",
   runtimeDir: "$houdini",
 
-  // Only include Houdini-specific files, exclude old Apollo graphql files
+  // Include shared operations from pkg/graphql and route files
   include: [
-    "src/lib/houdini/**/*.gql",
+    "../pkg/graphql/operations/**/*.gql",
     "src/routes/**/*.svelte",
     "src/routes/**/*.js",
     "src/routes/**/*.ts",
@@ -21,6 +21,12 @@ const config = {
       type: "Record<string, unknown>",
     },
     ID: {
+      type: "string",
+    },
+    Money: {
+      type: "number",
+    },
+    Currency: {
       type: "string",
     },
   },

@@ -88,10 +88,12 @@ func (f *DatabaseFixtures) RoutingEventsData() []map[string]interface{} {
 // GetRoutingEventsColumns returns column names for routing events queries
 func (f *DatabaseFixtures) GetRoutingEventsColumns() []string {
 	return []string{
-		"timestamp", "stream_name", "selected_node", "status",
+		"timestamp", "internal_name", "selected_node", "status",
 		"details", "score", "client_ip", "client_country",
-		"client_region", "client_city", "client_latitude", "client_longitude",
-		"node_scores", "routing_metadata",
+		"client_latitude", "client_longitude",
+		"node_latitude", "node_longitude", "node_name",
+		"routing_distance_km", "latency_ms", "candidates_count",
+		"event_type", "source",
 	}
 }
 
@@ -100,20 +102,24 @@ func (f *DatabaseFixtures) GetRoutingEventsQuery() string {
 	return `
 		SELECT 
 			timestamp,
-			stream_name,
+			internal_name,
 			selected_node,
 			status,
 			details,
 			score,
 			client_ip,
 			client_country,
-			client_region,
-			client_city,
 			client_latitude,
 			client_longitude,
-			node_scores,
-			routing_metadata
-		FROM routing_events
+			node_latitude,
+			node_longitude,
+			node_name,
+			routing_distance_km,
+			latency_ms,
+			candidates_count,
+			event_type,
+			source
+		FROM routing_decisions
 		WHERE tenant_id = $1 
 		AND timestamp BETWEEN $2 AND $3
 		ORDER BY timestamp DESC

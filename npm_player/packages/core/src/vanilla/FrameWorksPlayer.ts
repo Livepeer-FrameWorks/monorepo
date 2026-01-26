@@ -6,11 +6,11 @@
  *
  * @example
  * ```typescript
- * import { FrameWorksPlayer } from '@livepeer-frameworks/player/vanilla';
- * import '@livepeer-frameworks/player/player.css';
+ * import { FrameWorksPlayer } from '@livepeer-frameworks/player-core/vanilla';
+ * import '@livepeer-frameworks/player-core/player.css';
  *
  * const player = new FrameWorksPlayer('#player', {
- *   contentId: 'my-stream',
+ *   contentId: 'pk_...',
  *   contentType: 'live',
  *   gatewayUrl: 'https://gateway.example.com/graphql',
  *   onStateChange: (state) => console.log('State:', state),
@@ -36,7 +36,7 @@ export interface FrameWorksPlayerOptions {
   /** Content identifier (stream name) */
   contentId: string;
   /** Content type */
-  contentType: ContentType;
+  contentType?: ContentType;
 
   /** Pre-resolved endpoints (skip gateway) */
   endpoints?: ContentEndpoints;
@@ -71,7 +71,7 @@ export interface FrameWorksPlayerOptions {
 // Legacy config format for backward compatibility with Svelte wrapper
 interface LegacyConfig {
   contentId: string;
-  contentType: ContentType;
+  contentType?: ContentType;
   thumbnailUrl?: string | null;
   options?: {
     gatewayUrl?: string;

@@ -1,0 +1,18 @@
+# Start DVR recording for a stream with optional expiration
+mutation StartDVR($streamId: ID!, $expiresAt: Int) {
+  startDVR(streamId: $streamId, expiresAt: $expiresAt) {
+    __typename
+    ... on DVRRequest {
+      ...DVRRequestFields
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

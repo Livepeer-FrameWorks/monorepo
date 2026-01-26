@@ -2,6 +2,8 @@
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
   import { getIconComponent } from "$lib/iconUtils";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
+  import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
+  import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
 
   // Local interface matching Houdini TrackListUpdates subscription
@@ -19,7 +21,7 @@
   }
 
   interface TrackInfo {
-    streamName: string;
+    streamId: string;
     totalTracks: number | null;
     tracks?: StreamTrack[] | null;
   }
@@ -32,7 +34,7 @@
 
   interface DailyAnalytics {
     day: string;
-    internalName: string;
+    streamId: string;
     totalViews: number;
     uniqueViewers: number;
     uniqueCountries: number;
@@ -41,7 +43,37 @@
     egressGb: number;
   }
 
-  let { stream, streamKeys, recordings, clips = [], analytics, tracks = null, viewerMetrics = [], dailyAnalytics = [] }: {
+  interface QualityTierSummary {
+    tier2160pMinutes: number;
+    tier1440pMinutes: number;
+    tier1080pMinutes: number;
+    tier720pMinutes: number;
+    tier480pMinutes: number;
+    tierSdMinutes: number;
+    codecH264Minutes?: number;
+    codecH265Minutes?: number;
+    totalMinutes?: number;
+    avgBitrate?: number | null;
+    avgFps?: number | null;
+  }
+
+  interface CodecData {
+    codec: string;
+    minutes: number;
+  }
+
+  let {
+    stream,
+    streamKeys,
+    recordings,
+    clips = [],
+    analytics,
+    tracks = null,
+    viewerMetrics = [],
+    dailyAnalytics = [],
+    qualityTierSummary = null,
+    codecDistribution = [],
+  }: {
     stream: any;
     streamKeys: any[];
     recordings: any[];
@@ -50,6 +82,8 @@
     tracks?: TrackInfo | null;
     viewerMetrics?: ViewerMetric[];
     dailyAnalytics?: DailyAnalytics[];
+    qualityTierSummary?: QualityTierSummary | null;
+    codecDistribution?: CodecData[];
   } = $props();
 
   // Separate video and audio tracks
@@ -109,6 +143,12 @@
   function formatNumber(n: number | null | undefined): string {
     if (n === null || n === undefined) return "0";
     return n.toLocaleString();
+  }
+
+  function formatMinutes(minutes: number | null | undefined): string {
+    if (minutes === null || minutes === undefined) return "0m";
+    if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h`;
+    return `${Math.round(minutes)}m`;
   }
 
   // Packet loss status color
@@ -377,6 +417,58 @@
     </div>
   {/if}
 
+  <!-- Quality + Codec Distribution -->
+  {#if qualityTierSummary}
+    <div class="slab col-span-full">
+      <div class="slab-header flex items-center gap-2">
+        <VideoIcon class="w-5 h-5 text-success" />
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Quality Mix</h3>
+        {#if qualityTierSummary.totalMinutes}
+          <span class="text-xs text-muted-foreground ml-auto">
+            {formatMinutes(qualityTierSummary.totalMinutes)} analyzed
+          </span>
+        {/if}
+      </div>
+      <div class="slab-body--padded">
+        <div class="grid grid-cols-1 md:grid-cols-2 border border-border/30">
+          <div class="p-4 border-b border-border/30 md:border-b-0 md:border-r border-border/30">
+            <QualityTierChart data={qualityTierSummary} height={200} />
+          </div>
+          <div class="p-4">
+            <CodecDistributionChart data={codecDistribution} height={200} title="" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+          <div>
+            <span class="text-sm text-muted-foreground">Avg Bitrate</span>
+            <p class="font-mono text-lg text-foreground">
+              {qualityTierSummary.avgBitrate ? `${Math.round(qualityTierSummary.avgBitrate / 1000)} kbps` : "N/A"}
+            </p>
+          </div>
+          <div>
+            <span class="text-sm text-muted-foreground">Avg FPS</span>
+            <p class="font-mono text-lg text-foreground">
+              {qualityTierSummary.avgFps ? qualityTierSummary.avgFps.toFixed(1) : "N/A"}
+            </p>
+          </div>
+          <div>
+            <span class="text-sm text-muted-foreground">H.264 Minutes</span>
+            <p class="font-mono text-lg text-foreground">
+              {formatMinutes(qualityTierSummary.codecH264Minutes ?? 0)}
+            </p>
+          </div>
+          <div>
+            <span class="text-sm text-muted-foreground">H.265 Minutes</span>
+            <p class="font-mono text-lg text-foreground">
+              {formatMinutes(qualityTierSummary.codecH265Minutes ?? 0)}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Viewer Trend Chart -->
   <div class="slab col-span-full">
     <div class="slab-header flex items-center gap-2">
@@ -455,7 +547,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each dailyAnalytics.slice().reverse() as day (day.day)}
+            {#each dailyAnalytics.slice().reverse() as day, i (`${day.day}-${i}`)}
               <tr class="border-b border-border/20 hover:bg-muted/20">
                 <td class="py-2 px-2 font-mono text-foreground">
                   {new Date(day.day).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}

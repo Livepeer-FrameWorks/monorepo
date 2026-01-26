@@ -6,11 +6,9 @@ sidebar:
   order: 2
 ---
 
-An edge node is the workhorse of the FrameWorks network. It pairs the industrial-strength streaming capabilities of MistServer with our lightweight agent, Helmsman, to securely join your hardware to the global fleet.
+An edge node pairs MistServer with Helmsman to connect your hardware to the FrameWorks control plane.
 
 ## Get the CLI
-
-The FrameWorks CLI handles most of the setup.
 
 ```bash
 # Download
@@ -24,25 +22,28 @@ frameworks version
 
 ## Run Preflight Checks
 
-Before installing anything, make sure your host is ready:
-
 ```bash
 frameworks edge preflight --domain stream.yourdomain.com
 ```
 
 This checks:
 - Docker and Docker Compose installed
-- Required ports available (80, 443, 1935, 8080)
-- DNS resolves to this server
+- Ports 80/443 available for HTTPS
+- DNS resolves (compare to this server's public IP)
 - Kernel parameters (sysctl) are sane
-- `/dev/shm` is large enough
-- File descriptor limits won't choke under load
+- `/dev/shm` is mounted
+- File descriptor limits won’t choke under load
 
-If something fails, the output tells you how to fix it.
+Note: if you plan to use direct ingest or non-HTTP protocols, open the MistServer ports you need:
+- **1935/tcp** (RTMP ingest)
+- **8889/udp** (SRT ingest)
+- **5554/tcp** (RTSP)
+- **18203/udp** (WebRTC)
+- **4200/tcp** (DTSC replication)
+- **8080/tcp** (MistServer HTTP)
+- **4242/tcp** (Mist controller; keep internal)
 
 ## Apply System Tuning
-
-For production workloads, apply recommended kernel and limit settings:
 
 ```bash
 # Preview what will change
@@ -53,10 +54,9 @@ sudo frameworks edge tune --write
 ```
 
 This configures:
-- TCP buffer sizes for streaming workloads
+- TCP buffer sizes and backlog tuning
+- Local port range for high connection counts
 - File descriptor limits
-- Memory-mapped file limits
-- Network stack tuning
 
 ## Generate the Edge Stack
 
@@ -68,45 +68,48 @@ frameworks edge init --dir /opt/frameworks-edge \
 
 This creates:
 - `.edge.env` - Environment configuration
-- `docker-compose.edge.yml` - Container definitions for MistServer, Helmsman, and Caddy
+- `docker-compose.edge.yml` - MistServer, Helmsman, and Caddy
 - `Caddyfile` - Reverse proxy with automatic HTTPS
-
-The `--email` is for Let's Encrypt certificates.
 
 ## Review the Config
 
-Before starting, check `.edge.env`:
+`.edge.env` contains the required settings:
 
 ```bash
-# Node identity (assigned during enrollment)
-HELMSMAN_CLUSTER_ID=your-cluster
-HELMSMAN_NODE_ID=edge-node-1
+NODE_ID=edge-us-sea-1
+EDGE_PUBLIC_URL=https://stream.yourdomain.com/view
+FOGHORN_URL=https://foghorn.example.com
+FOGHORN_CONTROL_ADDR=foghorn.example.com:18019
+FOGHORN_HTTP_BASE=https://foghorn.example.com
+EDGE_ENROLLMENT_TOKEN=your-enrollment-token
+EDGE_DOMAIN=stream.yourdomain.com
+ACME_EMAIL=ops@yourdomain.com
+```
 
-# Where to send events
-DECKLOG_HOST=decklog.frameworks.network
-DECKLOG_PORT=18006
+`NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path.
 
-# Stream authentication
-COMMODORE_URL=https://api.frameworks.network
+Optional Helmsman overrides (add only if needed, in `.edge.env`):
 
-# Capabilities (what this node can do)
+```bash
 HELMSMAN_CAP_INGEST=true
 HELMSMAN_CAP_EDGE=true
 HELMSMAN_CAP_STORAGE=true
+HELMSMAN_CAP_PROCESSING=true
+HELMSMAN_MAX_TRANSCODES=0
+HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/mistserver/recordings
 ```
-
-Most defaults are fine. You'll fill in the cluster/node IDs after enrollment.
 
 ## Start the Stack
 
 ```bash
-cd /opt/frameworks-edge
-docker compose -f docker-compose.edge.yml up -d
+frameworks edge enroll --dir /opt/frameworks-edge
 ```
+
+This starts the containers and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set.
 
 Check status:
 ```bash
-frameworks edge status
+frameworks edge status --dir /opt/frameworks-edge
 ```
 
 You should see:
@@ -115,32 +118,30 @@ You should see:
 - `caddy` - Running
 - HTTPS - Valid certificate
 
-## What's Running
+## What’s Running
 
 ### MistServer
 
 The media server. Handles:
 - RTMP/SRT/WHIP ingest
 - HLS/DASH/WebRTC delivery
-- Transcoding (if configured)
 - Recording (if enabled)
 
-Web UI: `https://stream.yourdomain.com:4242` (internal, not exposed by default)
+Web UI: `http://localhost:4242` (internal, not exposed by default). If you proxy it, add auth/IP restrictions so you don’t expose the controller API.
 
 ### Helmsman
 
 The sidecar. Does:
-- Validates stream keys against Commodore
-- Collects client and node metrics
-- Batches events and sends to Decklog
-- Reports node capacity to Foghorn
+- Forwards MistServer triggers to Foghorn for validation/routing
+- Collects client and node metrics for Foghorn
+- Reports node capacity and storage details
 
 Health check: `curl http://localhost:18007/health`
 
 ### Caddy
 
 Reverse proxy. Provides:
-- Automatic HTTPS via Let's Encrypt
+- Automatic HTTPS via Let’s Encrypt
 - Routes viewer traffic to MistServer
 - Terminates TLS
 
@@ -148,10 +149,10 @@ Reverse proxy. Provides:
 
 ```bash
 # All containers
-frameworks edge logs
+frameworks edge logs --dir /opt/frameworks-edge
 
-# Specific container (positional argument)
-frameworks edge logs helmsman --follow
+# Specific container
+frameworks edge logs helmsman --dir /opt/frameworks-edge --follow
 
 # Or use docker directly
 docker compose -f docker-compose.edge.yml logs -f helmsman
@@ -161,49 +162,35 @@ docker compose -f docker-compose.edge.yml logs -f helmsman
 
 **"DNS does not resolve to this host"**
 
-Your DNS record doesn't point to this server's public IP.
+Your DNS record doesn’t point to this server’s public IP.
 
 ```bash
-# Check what DNS returns
 dig +short stream.yourdomain.com
-
-# Compare to your public IP
 curl ifconfig.me
 ```
 
 **"Port 443 in use"**
 
-Something else is running on 443 (probably Apache or Nginx).
-
 ```bash
-# Find what's using it
 sudo lsof -i :443
-
-# Stop the conflicting service
 sudo systemctl stop nginx
 ```
 
 **"Certificate failed"**
 
-Let's Encrypt rate limits or DNS not propagated yet.
-
 ```bash
-# Check certificate status
-frameworks edge cert
-
-# Force reload after fixing
-frameworks edge cert --reload
+frameworks edge cert --dir /opt/frameworks-edge
+frameworks edge cert --dir /opt/frameworks-edge --reload
 ```
 
-**"Helmsman can't reach Commodore"**
+**"Helmsman can't reach Foghorn"**
 
-Network issue or firewall blocking outbound HTTPS.
+Network issue or firewall blocking outbound gRPC/HTTPS.
 
 ```bash
-# Test connectivity
-curl -I %API_URL%/health
+curl -I $FOGHORN_URL/health
 ```
 
 ## Next Steps
 
-Your edge node is running but not connected to the network yet. Next: [Connect to the network](/hybrid/connecting).
+Your edge node is running. Next: [Connect to the network](/hybrid/connecting).

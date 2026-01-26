@@ -59,6 +59,27 @@ func runRestart(cmd *cobra.Command, manifestPath, serviceName string, validate b
 		return fmt.Errorf("failed to load manifest: %w", err)
 	}
 
+	// Resolve deploy name
+	var deployName string
+	if svcCfg, ok := manifest.Services[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, svcCfg)
+		if err != nil {
+			return err
+		}
+	} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, ifaceCfg)
+		if err != nil {
+			return err
+		}
+	} else if obsCfg, ok := manifest.Observability[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, obsCfg)
+		if err != nil {
+			return err
+		}
+	} else {
+		deployName = serviceName // infrastructure services use canonical IDs
+	}
+
 	// Find host for service
 	var host inventory.Host
 	var found bool
@@ -92,6 +113,15 @@ func runRestart(cmd *cobra.Command, manifestPath, serviceName string, validate b
 		}
 	}
 
+	// Check observability
+	if !found {
+		if obsConfig, ok := manifest.Observability[serviceName]; ok {
+			if obsConfig.Enabled {
+				host, found = manifest.GetHost(obsConfig.Host)
+			}
+		}
+	}
+
 	if !found {
 		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
 	}
@@ -107,7 +137,7 @@ func runRestart(cmd *cobra.Command, manifestPath, serviceName string, validate b
 
 	// Detect service mode
 	detector := detect.NewDetector(host)
-	state, err := detector.Detect(ctx, serviceName)
+	state, err := detector.Detect(ctx, deployName)
 	if err != nil {
 		return fmt.Errorf("failed to detect service: %w", err)
 	}
@@ -120,10 +150,10 @@ func runRestart(cmd *cobra.Command, manifestPath, serviceName string, validate b
 	var restartCmd string
 	switch state.Mode {
 	case "docker":
-		restartCmd = fmt.Sprintf("cd /opt/frameworks/%s && docker compose restart", serviceName)
+		restartCmd = fmt.Sprintf("cd /opt/frameworks/%s && docker compose restart", deployName)
 
 	case "native":
-		restartCmd = fmt.Sprintf("systemctl restart frameworks-%s", serviceName)
+		restartCmd = fmt.Sprintf("systemctl restart frameworks-%s", deployName)
 
 	default:
 		return fmt.Errorf("unknown service mode: %s (cannot determine restart method)", state.Mode)
@@ -168,15 +198,28 @@ func runRestart(cmd *cobra.Command, manifestPath, serviceName string, validate b
 		time.Sleep(3 * time.Second)
 
 		// Get provisioner and validate
-		prov, err := provisioner.GetProvisioner(serviceName, sshPool)
+		prov, err := provisioner.GetProvisioner(deployName, sshPool)
 		if err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Warning: Cannot validate (unknown service type)\n")
 			return nil
 		}
 
+		portCfg := inventory.ServiceConfig{}
+		if svcCfg, ok := manifest.Services[serviceName]; ok {
+			portCfg = svcCfg
+		} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
+			portCfg = ifaceCfg
+		} else if obsCfg, ok := manifest.Observability[serviceName]; ok {
+			portCfg = obsCfg
+		}
+		port, err := resolvePort(serviceName, portCfg)
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Warning: Cannot resolve port for validation: %v\n", err)
+			return nil
+		}
 		config := provisioner.ServiceConfig{
 			Mode: state.Mode,
-			Port: provisioner.ServicePorts[serviceName],
+			Port: port,
 		}
 
 		if err := prov.Validate(ctx, host, config); err != nil {

@@ -193,7 +193,7 @@
   }
 
   .marketing-icon-list--list .marketing-icon-list__item {
-    padding: clamp(0.9rem, 1.4vw, 1.2rem) 0;
+    padding: clamp(0.9rem, 1.4vw, 1.2rem) clamp(1.25rem, 2vw, 1.75rem);
     border-radius: 0;
     background: transparent;
     border: none;

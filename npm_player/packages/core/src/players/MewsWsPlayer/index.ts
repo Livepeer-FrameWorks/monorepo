@@ -121,7 +121,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     return Object.keys(playableTracks);
   }
 
-  async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
+  async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions, streamInfo?: StreamInfo): Promise<HTMLVideoElement> {
     this.container = container;
     container.classList.add('fw-player-container');
 
@@ -153,12 +153,14 @@ export class MewsWsPlayerImpl extends BasePlayer {
       endpoint: anyOpts.analytics?.endpoint || null
     };
 
-    // Get stream type from options if available
-    if ((source as any).type === 'live') {
+    // Get stream type from streamInfo if available
+    // Note: source.type is a MIME string (e.g., 'ws/video/mp4'), not 'live'/'vod'
+    if (streamInfo?.type === 'live') {
       this.streamType = 'live';
-    } else if ((source as any).type === 'vod') {
+    } else if (streamInfo?.type === 'vod') {
       this.streamType = 'vod';
     }
+    // Fallback: will be determined by server on_time messages (end === 0 means live)
 
     try {
       // Initialize MediaSource (mews.js:138-196)

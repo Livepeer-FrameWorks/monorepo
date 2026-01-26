@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 Welcome to FrameWorks! This guide will get you streaming your first live video in just a few minutes. Follow these simple steps to go from account creation to a live broadcast.
 
 <Aside type="tip" title="Self-hosting?">
-This guide uses the managed FrameWorks service. Want full control? See [Infrastructure Operators](/operators/deployment) to deploy on your own servers—same features, your infrastructure.
+This guide uses the managed FrameWorks service. Want full control? See [Infrastructure Operators](/operators/deployment) to deploy on your own servers. Core streaming features are the same; managed‑only services and UI flows may differ.
 </Aside>
 
 ## 1. Create an Account
@@ -20,7 +20,7 @@ Head to [%APP_URL%](%APP_URL%) and sign up with your email.
 ## 2. Create a Stream
 
 In the dashboard:
-1. Click **Streams** in the sidebar
+1. Click **Content → Streams** in the sidebar
 2. Click **Create Stream**
 3. Give it a name (this is just for you to identify it)
 4. Click **Create**
@@ -29,7 +29,7 @@ You'll land on your stream's detail page.
 
 ## 3. Copy Your Stream Key
 
-Click the **Keys** tab, then click the copy button next to your stream key.
+On your stream detail page, copy the **Stream Key** from the top row. If you want to manage multiple keys, open the **Ingest** tab and use **Stream Keys Management**.
 
 Keep this secret—anyone with your stream key can broadcast to your channel. Stream keys are tied to your account and the specific stream you created.
 
@@ -40,7 +40,7 @@ Open OBS Studio (or your preferred streaming software). For the quickest setup, 
 **In OBS Studio:**
 1. Go to **Settings** → **Stream**.
 2. Set **Service:** `Custom`.
-3. For **Server:** Enter `%RTMP_URL%`.
+3. For **Server:** Enter `%RTMP_URL%` (you can also copy the RTMP URL from the **Ingest** tab).
 4. For **Stream Key:** Paste the stream key you copied from your FrameWorks dashboard.
 
 Once configured, hit **Start Streaming** in OBS.
@@ -49,7 +49,7 @@ Once configured, hit **Start Streaming** in OBS.
 
 Back in the dashboard, your stream status should flip to **Live** within a few seconds.
 
-The **Playback Info** card shows your Playback ID. You should also be able to find direct links for various protocols & containers, ready to plug into your player of choice.
+The **Playback Info** card shows your Playback ID. For protocol URLs and embed code, open the **Playback** tab.
 
 ## What's Next
 

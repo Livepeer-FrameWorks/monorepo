@@ -1,0 +1,343 @@
+---
+title: "Operations Reference"
+description: "Post-deployment operations guide: debugging, tuning, monitoring, and troubleshooting FrameWorks."
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Deployment First">
+This page covers post-deployment operations. For initial deployment, see:
+- [CLI Reference](/operators/cli-reference) - Automated deployment
+- [Manual Deployment](/operators/deployment-manual) - Step-by-step manual deployment
+</Aside>
+
+This page is an **operator reference** for those who have deployed FrameWorks and need to understand what's running, debug issues, or customize their setup.
+
+## Directory Structure
+
+The CLI creates this standard layout on each server:
+
+```
+/opt/frameworks/
+├── bin/              # Service binaries
+├── config/           # Configuration files
+├── data/             # Persistent data (recordings, caches)
+└── logs/             # Service logs (if not using journald)
+
+/etc/frameworks/
+├── quartermaster.env
+├── commodore.env
+├── purser.env
+├── inventory.json    # CLI inventory state (nodes + services)
+└── ...               # Per-service environment files
+```
+
+Create the structure manually:
+
+```bash
+sudo mkdir -p /opt/frameworks/{bin,config,data,logs}
+sudo mkdir -p /etc/frameworks
+sudo useradd -r -s /sbin/nologin frameworks 2>/dev/null || true
+sudo chown -R frameworks:frameworks /opt/frameworks /etc/frameworks
+```
+
+## Service Startup Order
+
+Services must start in dependency order. The CLI handles this automatically, but for manual control:
+
+1. **YugabyteDB + ClickHouse**
+2. **Kafka** (regional clusters)
+3. **Listmonk + Chatwoot + Redis** (central)
+4. **Quartermaster**
+5. **Purser**
+6. **Commodore**
+7. **Periscope Query**
+8. **Decklog** (per region)
+9. **Periscope Ingest** (per region)
+10. **Signalman** (per region)
+11. **Foghorn** (per region)
+12. **Bridge** (per region)
+13. **Deckhand** (central)
+14. **Forms** (central)
+15. **Helmsman** (edge)
+
+## Health Check Reference
+
+All services expose HTTP health endpoints on `/health`. Most services are **gRPC‑only** for their main APIs; HTTP is for health/metrics unless explicitly documented. For the complete list of service ports, see [Architecture Overview](/operators/architecture#core-services).
+
+**Quick health check:**
+
+```bash
+# Central services (HTTP health endpoints)
+for port in 18002 18001 18003 18004 18015 18032; do
+    curl -sf http://localhost:$port/health && echo " :$port OK" || echo " :$port FAIL"
+done
+
+# Regional services (HTTP health endpoints)
+# Note: Decklog health is on 18026 (metrics port), not 18006 (gRPC)
+for port in 18008 18000 18005 18026 18009; do
+    curl -sf http://localhost:$port/health && echo " :$port OK" || echo " :$port FAIL"
+done
+
+# gRPC health (requires grpcurl)
+# Central gRPC services
+for port in 19002 19001 19003 19004 19006; do
+    grpcurl -plaintext localhost:$port grpc.health.v1.Health/Check 2>/dev/null && echo " :$port OK" || echo " :$port FAIL"
+done
+
+# Regional gRPC services
+for port in 18019 18006 19005; do
+    grpcurl -plaintext localhost:$port grpc.health.v1.Health/Check 2>/dev/null && echo " :$port OK" || echo " :$port FAIL"
+done
+```
+
+## Firewall Configuration
+
+Minimum required ports:
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow ssh
+sudo ufw allow 80/tcp       # HTTP
+sudo ufw allow 443/tcp      # HTTPS
+sudo ufw allow 1935/tcp     # RTMP ingest
+sudo ufw allow 51820/udp    # WireGuard (backend nodes only)
+sudo ufw enable
+```
+
+**Internal mesh** (backend nodes only; edge nodes do not join the mesh):
+
+```bash
+# Allow all traffic on WireGuard interface
+sudo ufw allow in on wg0
+```
+
+**Edge nodes (media ports):**
+
+```bash
+sudo ufw allow 8080/tcp     # HTTP (MistServer)
+sudo ufw allow 1935/tcp     # RTMP ingest
+sudo ufw allow 5554/tcp     # RTSP
+sudo ufw allow 4200/tcp     # DTSC
+sudo ufw allow 8889/udp     # SRT
+sudo ufw allow 18203/udp    # WebRTC
+sudo ufw allow 4242/tcp     # MistServer controller (optional; keep internal when possible)
+```
+
+## Performance Tuning
+
+The CLI applies these automatically with `frameworks edge tune --write`. For manual application:
+
+**Network tuning** (`/etc/sysctl.d/99-frameworks.conf`):
+
+```bash
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.somaxconn = 8192
+net.ipv4.ip_local_port_range = 16384 65535
+```
+
+**File descriptors** (`/etc/security/limits.d/frameworks.conf`):
+
+```
+* soft nofile 65536
+* hard nofile 65536
+```
+
+Apply changes:
+
+```bash
+sudo sysctl -p /etc/sysctl.d/99-frameworks.conf
+# Reboot or re-login for limits changes
+```
+
+## Troubleshooting
+
+**Service won't start:**
+
+```bash
+# Check status and logs
+sudo systemctl status quartermaster
+sudo journalctl -u quartermaster -f --no-pager -n 100
+
+# Check if port is in use
+sudo ss -tlnp | grep 18002
+```
+
+**Database connection issues:**
+
+```bash
+# Test YugabyteDB/Postgres connectivity
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -c "SELECT 1;"
+
+# Test ClickHouse
+clickhouse-client -h <clickhouse-host> -q "SELECT 1;"
+```
+
+**Inter-service communication:**
+
+```bash
+# Test gRPC from Bridge to Quartermaster
+grpcurl -plaintext localhost:19002 grpc.health.v1.Health/Check
+
+# Check if WireGuard is up
+wg show
+ping 10.18.0.1  # Central node (adjust for your mesh)
+```
+
+**Kafka issues:**
+
+```bash
+# Check consumer group lag
+kafka-consumer-groups.sh --bootstrap-server <broker>:9092 --describe --group periscope-ingest
+
+# List topics
+kafka-topics.sh --bootstrap-server <broker>:9092 --list
+```
+
+---
+
+<details>
+<summary><strong>Advanced: Manual Database Installation</strong></summary>
+
+For airgapped environments or custom setups where the CLI cannot install dependencies.
+
+### System Dependencies
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y build-essential curl wget git unzip
+
+# Go 1.21+
+wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
+
+# Node.js 18+ (for frontends)
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Docker (useful for some components)
+curl -fsSL https://get.docker.com | sudo sh
+```
+
+### YugabyteDB (Postgres-compatible)
+
+Install YugabyteDB (or PostgreSQL) and create the `frameworks` database + `frameworks_user`.
+Use your configured DB port (YB default **5433**, Postgres default **5432**).
+Then initialize schemas using `psql` or `ysqlsh`:
+
+```bash
+# Schemas are in pkg/database/sql/schema/*.sql
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/quartermaster.sql
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/commodore.sql
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/purser.sql
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/foghorn.sql
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/periscope.sql
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/listmonk.sql
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/chatwoot.sql
+
+# Optional (Navigator)
+# psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/schema/navigator.sql
+
+# Seed billing tiers (required)
+psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -f pkg/database/sql/seeds/static/purser_tiers.sql
+```
+
+### ClickHouse
+
+```bash
+sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 8919F6BD2B48D754
+echo "deb https://packages.clickhouse.com/deb stable main" | sudo tee /etc/apt/sources.list.d/clickhouse.list
+sudo apt update && sudo apt install -y clickhouse-server clickhouse-client
+
+sudo systemctl enable clickhouse-server
+sudo systemctl start clickhouse-server
+
+# Initialize schema
+clickhouse-client < pkg/database/sql/clickhouse/periscope.sql
+```
+
+### Kafka
+
+```bash
+# Install Java
+sudo apt install -y openjdk-11-jdk
+
+# Download Kafka
+cd /opt
+sudo wget https://downloads.apache.org/kafka/3.6.0/kafka_2.13-3.6.0.tgz
+sudo tar -xzf kafka_2.13-3.6.0.tgz
+sudo mv kafka_2.13-3.6.0 kafka
+
+# Start Kafka (KRaft mode, single-node)
+/opt/kafka/bin/kafka-storage.sh format -t $(cat /proc/sys/kernel/random/uuid) -c /opt/kafka/config/kraft/server.properties
+/opt/kafka/bin/kafka-server-start.sh -daemon /opt/kafka/config/kraft/server.properties
+
+# Create required topics (shared cluster; run once from any broker)
+kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
+  --topic analytics_events --partitions 6 --replication-factor 1
+
+kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
+  --topic service_events --partitions 3 --replication-factor 1
+
+kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
+  --topic billing.usage_reports --partitions 3 --replication-factor 1
+
+kafka-topics.sh --bootstrap-server <any-broker>:9092 --create \
+  --topic decklog_events_dlq --partitions 3 --replication-factor 1
+```
+
+### Building Services
+
+```bash
+git clone https://github.com/Livepeer-FrameWorks/monorepo.git
+cd monorepo
+
+# Build all binaries
+make build
+
+# Or individually
+make build-bin-quartermaster
+make build-bin-commodore
+# etc.
+```
+
+Binaries are output to `bin/`.
+
+### Creating systemd Units
+
+Example for Quartermaster:
+
+```bash
+sudo tee /etc/systemd/system/quartermaster.service > /dev/null <<'EOF'
+[Unit]
+Description=FrameWorks Quartermaster
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=frameworks
+WorkingDirectory=/opt/frameworks
+EnvironmentFile=/etc/frameworks/quartermaster.env
+ExecStart=/opt/frameworks/bin/quartermaster
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable quartermaster
+sudo systemctl start quartermaster
+```
+
+Repeat for each service. CLI provisioners generate systemd units in native mode; Docker mode uses compose.
+
+</details>

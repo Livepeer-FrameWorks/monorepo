@@ -1,26 +1,46 @@
-# Deckhand (Support Ticketing Service)
+# Deckhand (Support Messaging)
 
-Status: Planned — tracked on the roadmap. Not implemented yet.
+Native in-app support messaging using Chatwoot as the backend. Users interact via a custom chat UI while support agents use the Chatwoot dashboard. **Tenant-isolated**—all messages are scoped to the authenticated tenant.
 
-## Overview
+## Why Deckhand?
 
-Deckhand provides comprehensive support ticketing with streaming-specific context, handling customer inquiries, technical issues, and internal escalations from Lookout incidents.
+- **Native UX**: Chat UI embedded in the dashboard, no external widget
+- **Tenant context**: Enriches messages with billing tier, subscription status, and page context
+- **Real-time**: WebSocket delivery via Signalman for instant message updates
+- **Audit trail**: All messaging events flow through the service events pipeline
 
-## Core Features
+## Ports
 
-- **Stream-Aware Tickets** - Automatically attach stream metadata and diagnostics
-- **Multi-Channel Intake** - Email, web forms, chat integration, API
-- **SLA Management** - Response time tracking and escalation policies
-- **Knowledge Base** - Self-service articles and troubleshooting guides
-- **Agent Routing** - Skills-based assignment and workload balancing
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 18015 | HTTP | Webhooks from Chatwoot |
+| 19006 | gRPC | Internal API for Bridge |
 
-## Architecture
+## Configuration
 
+| Env Var | Description |
+|---------|-------------|
+| `SERVICE_TOKEN` | Service token for internal gRPC auth (Quartermaster/Purser/Decklog) |
+| `DECKHAND_PORT` | HTTP port for webhook + health endpoints |
+| `DECKHAND_GRPC_PORT` | gRPC port for Bridge integration |
+| `DECKHAND_WEBHOOK_RATE_LIMIT_PER_MIN` | Webhook rate limit per minute |
+| `CHATWOOT_HOST` | Chatwoot host (no scheme) |
+| `CHATWOOT_PORT` | Chatwoot port |
+| `CHATWOOT_ACCOUNT_ID` | Chatwoot account ID |
+| `CHATWOOT_INBOX_ID` | API channel inbox ID |
+| `CHATWOOT_API_TOKEN` | Chatwoot API access token |
+| `QUARTERMASTER_GRPC_ADDR` | Quartermaster gRPC address |
+| `PURSER_GRPC_ADDR` | Purser gRPC address |
+| `DECKLOG_GRPC_ADDR` | Decklog gRPC address |
+
+## Run (dev)
+
+```bash
+docker-compose up deckhand
 ```
-Email/Web/API ──┐
-                ├→ Ticket Intake → Classification → Agent Assignment
-Chat/Webhook ───┤                         ↓
-                │                 Stream Context Lookup
-Incidents ──────┘                         ↓
-                                 [Agent Dashboard, Customer Portal]
-```
+
+## Related
+
+- Architecture: `docs/architecture/deckhand.md`
+- GraphQL: Conversation/Message types in `pkg/graphql/schema.graphql`
+- Real-time: `CHANNEL_MESSAGING` in Signalman

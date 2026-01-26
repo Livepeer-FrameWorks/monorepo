@@ -1,0 +1,32 @@
+# Fetch viewer session details for a stream
+query GetViewerSessionsConnection(
+  $streamId: ID
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $after: String
+) {
+  analytics {
+    lifecycle {
+      viewerSessionsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first, after: $after }) @paginate {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            sessionId
+            connector
+            countryCode
+            city
+            durationSeconds
+            connectionQuality
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

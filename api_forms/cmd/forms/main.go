@@ -53,7 +53,7 @@ func main() {
 	app.POST("/api/contact", contactHandler.Handle)
 
 	// Listmonk Integration
-	listmonkURL := config.GetEnv("LISTMONK_URL", "http://listmonk:9000")
+	listmonkURL := config.RequireEnv("LISTMONK_URL")
 	listmonkUser := config.GetEnv("LISTMONK_USERNAME", "admin")
 	listmonkPass := config.GetEnv("LISTMONK_PASSWORD", "admin")
 	listIDStr := config.GetEnv("DEFAULT_MAILING_LIST_ID", "1")

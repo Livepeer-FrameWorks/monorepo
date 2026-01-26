@@ -1,0 +1,28 @@
+query GetTenantAnalyticsDailyConnection($timeRange: TimeRangeInput, $first: Int = 100, $after: String, $last: Int, $before: String, $noCache: Boolean = false) {
+  analytics {
+    usage {
+      streaming {
+        tenantAnalyticsDailyConnection(timeRange: $timeRange, noCache: $noCache, page: { first: $first, after: $after, last: $last, before: $before }) {
+          edges {
+            cursor
+            node {
+              id
+              day
+              totalStreams
+              totalViews
+              uniqueViewers
+              egressBytes
+            }
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          totalCount
+        }
+      }
+    }
+  }
+}

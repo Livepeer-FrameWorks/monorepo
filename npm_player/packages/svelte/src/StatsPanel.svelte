@@ -3,27 +3,14 @@
   Port of src/components/StatsPanel.tsx
 -->
 <script lang="ts">
-  import { cn, type ContentMetadata, type PlaybackQuality } from '@livepeer-frameworks/player-core';
+  import { cn, type ContentMetadata, type PlaybackQuality, type StreamState } from '@livepeer-frameworks/player-core';
   import Button from './ui/Button.svelte';
-
-  interface StreamStateInfo {
-    status?: string;
-    viewers?: number;
-    tracks?: Array<{
-      type: string;
-      codec: string;
-      width?: number;
-      height?: number;
-      bps?: number;
-      channels?: number;
-    }>;
-  }
 
   interface Props {
     isOpen: boolean;
     onClose: () => void;
     metadata?: ContentMetadata | null;
-    streamState?: StreamStateInfo | null;
+    streamState?: StreamState | null;
     quality?: PlaybackQuality | null;
     videoElement?: HTMLVideoElement | null;
     protocol?: string;
@@ -59,17 +46,38 @@
   let latency = $derived(quality?.latency ? `${Math.round(quality.latency)} ms` : '—');
 
   // Stream state stats
-  let viewers = $derived(streamState?.viewers ?? metadata?.viewers ?? '—');
+  let viewers = $derived(metadata?.viewers ?? '—');
   let streamStatus = $derived(streamState?.status ?? metadata?.status ?? '—');
+
+  const mistInfo = $derived(metadata?.mist ?? streamState?.streamInfo);
+
+  function deriveTracksFromMist() {
+    const mistTracks = mistInfo?.meta?.tracks;
+    if (!mistTracks) return undefined;
+    return Object.values(mistTracks).map((t: any) => ({
+      type: t.type,
+      codec: t.codec,
+      width: t.width,
+      height: t.height,
+      bitrate: typeof t.bps === 'number' ? Math.round(t.bps) : undefined,
+      fps: typeof t.fpks === 'number' ? t.fpks / 1000 : undefined,
+      channels: t.channels,
+      sampleRate: t.rate,
+    }));
+  }
 
   // Format track info
   function formatTracks(): string {
-    if (!streamState?.tracks?.length) return '—';
-    return streamState.tracks.map(t => {
+    const tracks = metadata?.tracks ?? deriveTracksFromMist();
+    if (!tracks?.length) return '—';
+    return tracks.map(t => {
       if (t.type === 'video') {
-        return `${t.codec} ${t.width}x${t.height}@${t.bps ? Math.round(t.bps / 1000) + 'kbps' : '?'}`;
+        const resolution = t.width && t.height ? `${t.width}x${t.height}` : '?';
+        const bitrate = t.bitrate ? `${Math.round(t.bitrate / 1000)}kbps` : '?';
+        return `${t.codec ?? '?'} ${resolution}@${bitrate}`;
       }
-      return `${t.codec} ${t.channels}ch`;
+      const channels = t.channels ? `${t.channels}ch` : '?';
+      return `${t.codec ?? '?'} ${channels}`;
     }).join(', ');
   }
 
@@ -96,6 +104,15 @@
       { label: 'Viewers', value: String(viewers) },
       { label: 'Status', value: streamStatus },
       { label: 'Tracks', value: formatTracks() },
+      { label: 'Mist Type', value: mistInfo?.type ?? '—' },
+      {
+        label: 'Mist Buffer Window',
+        value: mistInfo?.meta?.buffer_window != null
+          ? String(mistInfo.meta.buffer_window)
+          : '—',
+      },
+      { label: 'Mist Lastms', value: mistInfo?.lastms != null ? String(mistInfo.lastms) : '—' },
+      { label: 'Mist Unixoffset', value: mistInfo?.unixoffset != null ? String(mistInfo.unixoffset) : '—' },
     );
 
     if (metadata?.durationSeconds) {

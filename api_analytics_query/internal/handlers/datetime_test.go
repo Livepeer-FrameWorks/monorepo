@@ -230,8 +230,8 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 
 				// Mock query to ClickHouse with proper time.Time objects
 				_, err = mockDB.Query(`
-					SELECT timestamp, stream_name, viewer_count, peak_viewers, bandwidth
-					FROM viewer_metrics
+					SELECT timestamp, stream_id, bitrate, fps, buffer_health
+					FROM stream_health_samples
 					WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3
 					ORDER BY timestamp DESC
 				`, tenantID, startTime, endTime)
@@ -246,10 +246,10 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 					"data": []map[string]interface{}{
 						{
 							"timestamp":    "2024-01-15T10:30:00Z",
-							"stream_name":  "test-stream",
-							"viewer_count": 100,
-							"peak_viewers": 150,
-							"bandwidth":    1000.5,
+							"stream_id":    "stream-123",
+							"bitrate":      4500,
+							"fps":          60.0,
+							"buffer_health": 0.92,
 						},
 					},
 					"start_time": startTime.Format(time.RFC3339),
@@ -317,8 +317,8 @@ func TestClickHouseTimeQuery_ProperTypes(t *testing.T) {
 			startTime: "2024-01-15T10:00:00Z",
 			endTime:   "2024-01-15T11:00:00Z",
 			query: `
-				SELECT timestamp, stream_name, viewer_count, peak_viewers, bandwidth
-				FROM viewer_metrics
+				SELECT timestamp, stream_id, bitrate, fps, buffer_health
+				FROM stream_health_samples
 				WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3
 				ORDER BY timestamp DESC
 			`,
@@ -329,7 +329,7 @@ func TestClickHouseTimeQuery_ProperTypes(t *testing.T) {
 			endTime:   "2024-01-15T10:00:00Z",
 			query: `
 				SELECT timestamp, internal_name, selected_node, status
-				FROM routing_events
+				FROM routing_decisions
 				WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3
 				ORDER BY timestamp DESC
 			`,

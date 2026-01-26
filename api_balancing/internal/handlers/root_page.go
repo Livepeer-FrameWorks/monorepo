@@ -178,6 +178,7 @@ func HandleRootPage(c *gin.Context) {
         .artifact-card { background: var(--bg-row); border: 1px solid var(--border-seam); padding: 12px; border-radius: 4px; }
         .artifact-card .hash { font-family: monospace; font-size: 11px; color: var(--accent); margin-bottom: 8px; word-break: break-all; }
         .artifact-card .meta { font-size: 11px; color: var(--text-secondary); }
+        .artifact-card .meta .mono { font-family: monospace; }
     </style>
 </head>
 <body>
@@ -526,6 +527,8 @@ func HandleRootPage(c *gin.Context) {
                                 <div>Stream: <span class="accent">{{.StreamName}}</span></div>
                                 <div>Format: <span class="tag">{{.Format}}</span></div>
                                 <div>Size: {{.SizeStr}}</div>
+                                <div>Access: <span class="mono">{{.AccessCount}}</span></div>
+                                <div>Last: <span class="mono">{{.LastAccessed}}</span></div>
                                 <div>Path: <span style="word-break: break-all;">{{.FilePath}}</span></div>
                             </div>
                         </div>
@@ -656,6 +659,8 @@ func HandleRootPage(c *gin.Context) {
                             <th>Stream</th>
                             <th>Format</th>
                             <th>Size</th>
+                            <th>Access</th>
+                            <th>Last Access</th>
                             <th>Duration</th>
                             <th>Codec</th>
                             <th>Resolution</th>
@@ -695,6 +700,8 @@ func HandleRootPage(c *gin.Context) {
                             <td class="mono">{{if .InternalName}}{{.InternalName}}{{else}}<span class="secondary">-</span>{{end}}</td>
                             <td>{{if .Format}}<span class="tag">{{.Format}}</span>{{else}}<span class="secondary">-</span>{{end}}</td>
                             <td>{{if .SizeStr}}{{.SizeStr}}{{else}}<span class="secondary">-</span>{{end}}</td>
+                            <td>{{.AccessCount}}</td>
+                            <td>{{if .LastAccessed}}{{.LastAccessed}}{{else}}<span class="secondary">-</span>{{end}}</td>
                             <td>{{if .DurationSeconds}}{{.DurationSeconds}}s{{else if .DurationMs}}{{.DurationMs}}ms{{else}}<span class="secondary">-</span>{{end}}</td>
                             <td>{{if .VideoCodec}}{{.VideoCodec}}{{if .AudioCodec}}/{{.AudioCodec}}{{end}}{{else}}<span class="secondary">-</span>{{end}}</td>
                             <td>{{if .Resolution}}{{.Resolution}}{{else}}<span class="secondary">-</span>{{end}}</td>
@@ -780,12 +787,14 @@ func HandleRootPage(c *gin.Context) {
 	}
 
 	type ArtifactInfo struct {
-		ClipHash   string
-		StreamName string
-		FilePath   string
-		SizeBytes  uint64
-		SizeStr    string
-		Format     string
+		ClipHash     string
+		StreamName   string
+		FilePath     string
+		SizeBytes    uint64
+		SizeStr      string
+		Format       string
+		AccessCount  uint64
+		LastAccessed string
 	}
 
 	type NodeData struct {
@@ -890,6 +899,8 @@ func HandleRootPage(c *gin.Context) {
 		Format          string
 		SizeBytes       int64
 		SizeStr         string
+		AccessCount     uint64
+		LastAccessed    string
 		ManifestPath    string
 		DurationSeconds int
 		DtshSynced      bool
@@ -972,13 +983,19 @@ func HandleRootPage(c *gin.Context) {
 		// Build artifacts list
 		var artifactList []ArtifactInfo
 		for _, a := range node.Artifacts {
+			lastAccessed := "-"
+			if ts := a.GetLastAccessed(); ts > 0 {
+				lastAccessed = time.Unix(ts, 0).Format("2006-01-02 15:04:05")
+			}
 			artifactList = append(artifactList, ArtifactInfo{
-				ClipHash:   a.GetClipHash(),
-				StreamName: a.GetStreamName(),
-				FilePath:   a.GetFilePath(),
-				SizeBytes:  uint64(a.GetSizeBytes()),
-				SizeStr:    formatBytes(uint64(a.GetSizeBytes())),
-				Format:     a.GetFormat(),
+				ClipHash:     a.GetClipHash(),
+				StreamName:   a.GetStreamName(),
+				FilePath:     a.GetFilePath(),
+				SizeBytes:    uint64(a.GetSizeBytes()),
+				SizeStr:      formatBytes(uint64(a.GetSizeBytes())),
+				Format:       a.GetFormat(),
+				AccessCount:  a.GetAccessCount(),
+				LastAccessed: lastAccessed,
 			})
 		}
 
@@ -1122,6 +1139,7 @@ func HandleRootPage(c *gin.Context) {
 			SELECT
 				a.artifact_hash, a.artifact_type, a.status, a.internal_name, a.tenant_id,
 				a.storage_location, a.sync_status, a.s3_url, a.format, a.size_bytes,
+				a.access_count, a.last_accessed_at,
 				a.manifest_path, a.duration_seconds, a.dtsh_synced, a.retention_until,
 				a.created_at,
 				v.video_codec, v.audio_codec, v.resolution, v.duration_ms, v.bitrate_kbps,
@@ -1138,6 +1156,8 @@ func HandleRootPage(c *gin.Context) {
 				var hash, artType, status, storageLocation, syncStatus string
 				var internalName, tenantID, s3URL, format, manifestPath, retentionUntil sql.NullString
 				var sizeBytes sql.NullInt64
+				var accessCount sql.NullInt64
+				var lastAccessed sql.NullTime
 				var durationSeconds sql.NullInt32
 				var dtshSynced sql.NullBool
 				var createdAt time.Time
@@ -1147,6 +1167,7 @@ func HandleRootPage(c *gin.Context) {
 				err := artifactRows.Scan(
 					&hash, &artType, &status, &internalName, &tenantID,
 					&storageLocation, &syncStatus, &s3URL, &format, &sizeBytes,
+					&accessCount, &lastAccessed,
 					&manifestPath, &durationSeconds, &dtshSynced, &retentionUntil,
 					&createdAt,
 					&videoCodec, &audioCodec, &resolution, &durationMs, &bitrateKbps,
@@ -1179,6 +1200,12 @@ func HandleRootPage(c *gin.Context) {
 				if sizeBytes.Valid {
 					art.SizeBytes = sizeBytes.Int64
 					art.SizeStr = formatBytes(uint64(sizeBytes.Int64))
+				}
+				if accessCount.Valid && accessCount.Int64 >= 0 {
+					art.AccessCount = uint64(accessCount.Int64)
+				}
+				if lastAccessed.Valid {
+					art.LastAccessed = lastAccessed.Time.Format("2006-01-02 15:04:05")
 				}
 				if manifestPath.Valid {
 					art.ManifestPath = manifestPath.String

@@ -1,0 +1,147 @@
+---
+title: Billing & Pricing
+description: Understanding FrameWorks billing - tiers, usage, and payments.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+FrameWorks billing is in beta. Today we offer a **Free shared cluster** and a **prepaid balance** model. Paid tiers below are planned as we roll out paid clusters.
+
+<Aside type="note">
+**Beta Pricing:** Current rates are beta pricing. As we scale, pricing may adjust—but you keep the allowances you signed up for throughout beta.
+</Aside>
+
+## What You Pay For
+
+Paid tiers use **resource-based billing**:
+
+| Resource | What It Measures |
+|----------|------------------|
+| **Delivered Minutes** | Total viewer playback time |
+| **Storage** | Average GB stored over the billing period |
+
+The delivered minutes price is **all-inclusive**: bandwidth, transcoding, and ABR ladder generation. No separate encoding fees.
+
+<Aside type="tip">
+**API requests are free.** Stream creation, analytics queries, configuration changes—all API operations cost nothing. You only pay when viewers watch or you store recordings.
+</Aside>
+
+## Free Tier
+
+Access to a shared cluster on a fair-use basis. No metering, no billing.
+
+**Included:**
+- Shared cluster access
+- Livepeer-backed transcoding
+- Analytics dashboard
+- API access
+- Recording (beta)
+
+**Limitations:**
+- 30-day recording retention (beta; plan-based in the future)
+- No GPU hours
+- Watermarked player
+- Community support only
+- No SLA
+
+## Pay-As-You-Go (Current)
+
+Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at the rates below.
+
+| Resource | Rate |
+|----------|------|
+| Delivered Minutes | €0.00049/min |
+| Storage (avg GB) | €0.01/GB |
+| GPU Hours | €0.50/hr |
+
+## Metered Tiers (Planned)
+
+Paid tiers include monthly allocations with overage billing:
+
+| Tier | Base | Delivered Minutes | GPU Hours | Retention |
+|------|------|-------------------|-----------|-----------|
+| Supporter | €79 | 150K | 10 | 90 days |
+| Developer | €249 | 500K | 50 | 180 days |
+| Production | €999 | 2M | 250 | 365 days |
+| Enterprise | Custom | Custom | Custom | Custom |
+
+**Overages (metered tiers):**
+
+| Tier | Delivered Minutes | Storage (avg GB) | GPU Hours |
+|------|-------------------|------------------|-----------|
+| Supporter | €0.00049/min | €0.01/GB | €0.50/hr |
+| Developer | €0.00047/min | €0.008/GB | €0.50/hr |
+| Production | €0.00045/min | €0.005/GB | €0.50/hr |
+| Enterprise | Custom | Custom | Custom |
+
+## Billing Models
+
+### Prepaid
+
+Load credits first, use resources as you go. Balance decreases as usage accrues.
+
+**Thresholds:**
+
+| Balance | Effect |
+|---------|--------|
+| Below €5 | Low balance warning |
+| €0 or below | New ingests blocked; playback may return 402 |
+| Below -€10 | Account suspended; streams terminated |
+
+### Postpaid (Planned)
+
+Monthly subscription with included allocations. Overages invoiced at period end. Requires verified billing details. Planned for paid tiers; not active yet.
+
+## Topping Up
+
+### Card
+
+Pay via Stripe or Mollie. Funds credit immediately after checkout.
+
+### Crypto
+
+Send ETH or USDC on Ethereum, Base, or Arbitrum. LPT is supported on Ethereum and Arbitrum.
+
+**Confirmations:**
+- Ethereum: 12 confirmations
+- Base: 10 confirmations
+- Arbitrum: 10 confirmations
+
+### x402 Protocol
+
+For programmatic clients, FrameWorks supports the [x402 protocol](https://www.x402.org/).
+
+When balance is insufficient, the API returns HTTP 402 with payment requirements. Clients sign an EIP-3009 authorization and retry with the `X-PAYMENT` (or `PAYMENT-SIGNATURE`) header to top up automatically.
+
+x402 supports USDC on Base and Arbitrum. For ETH/LPT, use the standard deposit flow.
+
+## Invoicing
+
+FrameWorks is registered in the EU and follows EU VAT invoicing rules.
+
+### Why the €100 Threshold
+
+EU VAT law allows **simplified invoices** for transactions under €100. These invoices don't require customer details—just the supplier info, amount, and VAT breakdown.
+
+For payments **under €100**, we issue simplified invoices automatically. No billing details needed from you.
+
+For payments **€100 or above**, EU law requires a full VAT invoice with your details (name, address, and VAT number if applicable). You must add billing details in your account settings before making large payments.
+
+### B2B in the EU
+
+If you're a business in the EU, add your VAT number in account settings. We validate the format and apply reverse charge (0% VAT) automatically.
+
+### Record Keeping
+
+All invoices are available in your account. We retain transaction records for 10 years per EU requirements.
+
+## What's Always Free
+
+- All API requests
+- Stream creation and configuration
+- Analytics queries
+- Webhook deliveries
+- Player embed generation
+- Ingest (streaming in)—you pay for viewer delivery only

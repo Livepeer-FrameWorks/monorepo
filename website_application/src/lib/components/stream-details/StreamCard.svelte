@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { resolve } from "$app/paths";
   import { getIconComponent } from "$lib/iconUtils";
+  import { getShareUrl } from "$lib/config";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
   import { StreamStatus } from "$houdini";
 
   // Stream data interface matching Houdini's generated types
   interface StreamCardData {
     id: string;
+    streamId?: string;
     name: string;
     playbackId?: string | null;
     metrics?: {
@@ -51,6 +52,7 @@
   // Derive status from metrics edge
   const status = $derived(stream.metrics?.status);
   const isLive = $derived(status === StreamStatus.LIVE);
+  const displayStreamId = $derived(stream.streamId || stream.id);
 
   // Merge health data: prefer explicit healthData, fall back to stream.metrics
   const effectiveHealthData = $derived.by(() => {
@@ -84,7 +86,7 @@
   <div class="slab-header flex items-center justify-between">
     <div class="flex items-center gap-2 min-w-0">
       <h3 class="truncate text-foreground" title={stream.name}>
-        {stream.name || `Stream ${stream.id.slice(0, 8)}`}
+        {stream.name || `Stream ${displayStreamId.slice(0, 8)}`}
       </h3>
       {#if selected}
         <span class="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-sm font-medium shrink-0 uppercase tracking-wider">
@@ -164,7 +166,7 @@
   {#if isLive}
     <div class="slab-actions">
       <a
-        href={resolve(`/view?type=live&id=${stream.playbackId || stream.id}` as any)}
+        href={getShareUrl(stream.playbackId || displayStreamId)}
         class="flex items-center justify-center py-3 text-sm font-medium text-primary hover:bg-primary/5 transition-colors"
         onclick={(event) => event.stopPropagation()}
         title="Watch live stream"

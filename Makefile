@@ -1,6 +1,7 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge \
-	proto graphql clean version install-tools verify test coverage env tidy fmt
+	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
+	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
 # Version information
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
@@ -23,9 +24,16 @@ GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
 proto:
 	cd pkg/proto && make proto
 
-# Generate GraphQL files
+# Generate GraphQL files (backend)
 graphql:
 	cd api_gateway && make graphql
+
+# Generate GraphQL files (frontend)
+graphql-frontend:
+	cd website_application && pnpm run gql:codegen
+
+# Generate GraphQL files (backend + frontend)
+graphql-all: graphql graphql-frontend
 
 # Build all service binaries
 build: proto graphql
@@ -272,3 +280,112 @@ fmt:
 		(cd $$service_dir && go fmt ./...); \
 	done
 	@echo "✓ All modules formatted"
+
+# =============================================================================
+# Dead Code Analysis
+# =============================================================================
+
+REPORTS_DIR := reports
+
+# Install dead code analysis tools
+dead-code-install:
+	@echo "Installing Go dead code analysis tools..."
+	go install golang.org/x/tools/cmd/deadcode@latest
+	go install honnef.co/go/tools/cmd/staticcheck@latest
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo ""
+	@echo "✓ Go dead code analysis tools installed"
+	@echo "Note: knip must be installed separately (workspace dev dependency)."
+
+# Run Go dead code analysis
+dead-code-go:
+	@mkdir -p $(REPORTS_DIR)
+	@echo "=== Go Dead Code Analysis ==="
+	@echo ""
+	@echo "--- Running deadcode (unreachable functions) ---"
+	@./scripts/deadcode-analysis.sh
+	@echo ""
+	@echo "--- Running staticcheck U1000 (unused identifiers) ---"
+	@for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "Analyzing $$service_name..."; \
+		if ! command -v staticcheck >/dev/null 2>&1; then \
+			echo "  WARNING: staticcheck not found; skipping."; \
+			echo "# ERROR: staticcheck not found; skipping." > $(REPORTS_DIR)/staticcheck-$$service_name.txt; \
+			continue; \
+		fi; \
+		tmpfile=$$(mktemp); \
+		( cd $$service_dir && staticcheck -checks="U1000" ./... > $$tmpfile 2>&1 ); \
+		status=$$?; \
+		grep -v '\.pb\.go:' $$tmpfile | \
+			grep -v '_grpc\.pb\.go:' | \
+			grep -v 'graph/generated/' \
+			> $(REPORTS_DIR)/staticcheck-$$service_name.txt || true; \
+		rm -f $$tmpfile; \
+		if [ $$status -gt 1 ]; then \
+			echo "  WARNING: staticcheck failed (exit $$status)"; \
+			echo "# ERROR: staticcheck failed (exit $$status)" >> $(REPORTS_DIR)/staticcheck-$$service_name.txt; \
+		fi; \
+		count=$$(wc -l < $(REPORTS_DIR)/staticcheck-$$service_name.txt | tr -d ' '); \
+		if [ "$$count" -gt 0 ]; then \
+			echo "  Found $$count issues"; \
+		else \
+			echo "  No issues"; \
+		fi; \
+	done
+	@echo ""
+	@echo "Go reports saved to $(REPORTS_DIR)/"
+
+# Run TypeScript dead code analysis
+dead-code-ts:
+	@mkdir -p $(REPORTS_DIR)
+	@echo "=== TypeScript Dead Code Analysis ==="
+	@echo ""
+	@echo "--- Running knip (comprehensive unused code finder) ---"
+	@if ! command -v pnpm >/dev/null 2>&1; then \
+		echo "WARNING: pnpm not found; skipping knip." ; \
+		echo "# ERROR: pnpm not found; skipping knip." > $(REPORTS_DIR)/knip-report.txt; \
+	elif ! pnpm exec knip --version >/dev/null 2>&1; then \
+		echo "WARNING: knip not installed; skipping knip." ; \
+		echo "# ERROR: knip not installed; skipping knip." > $(REPORTS_DIR)/knip-report.txt; \
+	else \
+		tmpjson=$$(mktemp); \
+		tmptxt=$$(mktemp); \
+		pnpm exec knip --config knip.json --reporter json > $$tmpjson 2>&1; \
+		status=$$?; \
+		cat $$tmpjson > $(REPORTS_DIR)/knip-report.json; \
+		pnpm exec knip --config knip.json > $$tmptxt 2>&1 || true; \
+		cat $$tmptxt > $(REPORTS_DIR)/knip-report.txt; \
+		rm -f $$tmpjson $$tmptxt; \
+		if [ $$status -gt 1 ]; then \
+			echo "WARNING: knip failed (exit $$status)"; \
+			echo "# ERROR: knip failed (exit $$status)" >> $(REPORTS_DIR)/knip-report.txt; \
+		fi; \
+	fi
+	@echo "Report saved to $(REPORTS_DIR)/knip-report.{json,txt}"
+	@echo ""
+	@echo "--- Summary by category ---"
+	@if [ -f $(REPORTS_DIR)/knip-report.json ]; then \
+		echo "Unused files:        $$(jq '.files | length' $(REPORTS_DIR)/knip-report.json 2>/dev/null || echo 0)"; \
+		echo "Unused dependencies: $$(jq '.dependencies | length' $(REPORTS_DIR)/knip-report.json 2>/dev/null || echo 0)"; \
+		echo "Unused exports:      $$(jq '.exports | length' $(REPORTS_DIR)/knip-report.json 2>/dev/null || echo 0)"; \
+		echo "Unused types:        $$(jq '.types | length' $(REPORTS_DIR)/knip-report.json 2>/dev/null || echo 0)"; \
+	fi
+
+# Generate consolidated dead code report
+dead-code-report:
+	@mkdir -p $(REPORTS_DIR)
+	@echo "=== Generating Consolidated Dead Code Report ==="
+	@./scripts/consolidate-dead-code-report.sh > $(REPORTS_DIR)/DEAD_CODE_SUMMARY.md
+	@echo "Summary report: $(REPORTS_DIR)/DEAD_CODE_SUMMARY.md"
+
+# Run all dead code analysis
+dead-code: dead-code-go dead-code-ts dead-code-report
+	@echo ""
+	@echo "=== Dead Code Analysis Complete ==="
+	@echo "Reports available in $(REPORTS_DIR)/"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Review $(REPORTS_DIR)/DEAD_CODE_SUMMARY.md"
+	@echo "  2. Investigate individual reports for details"
+	@echo "  3. Create issues/PRs for confirmed dead code removal"

@@ -7,31 +7,31 @@ sidebar:
 
 import { Aside } from '@astrojs/starlight/components';
 
-Now that you're broadcasting, let's get your stream to your audience. FrameWorks provides versatile playback options, from a drop-in React component to raw protocol support for HLS, DASH, and WebRTC.
+Now that you're broadcasting, let's get your stream to your audience. FrameWorks provides versatile playback options, from a drop-in React component to raw protocol URLs for HLS, DASH, and WebRTC.
 
 <Aside type="note" title="Self-hosted delivery">
-Self-hosted operators serve streams from their own edge nodes. The same protocols and player work—just point to your Foghorn load balancer instead.
+Self-hosted operators serve streams from their own edge nodes. The same protocols and player work—use your **Gateway GraphQL endpoint** for the player, and your **Foghorn /play** base URL for direct protocol URLs.
 </Aside>
 
 ## Where to Find Your Playback URLs
 
-You can find your **Playback ID** in the FrameWorks dashboard under the **Playback Info** card of your stream. This ID is public-safe and used to construct all viewer URLs.
+You can find your **Playback ID** in the FrameWorks dashboard under the **Playback Info** card of your stream. This ID is public-safe and used to construct all viewer URLs. The **Playback** tab contains copy buttons for the full set of protocol URLs.
 
 **Primary Protocols:**
 - **HLS (HTTP Live Streaming):** The industry standard for broad compatibility (browsers, mobile apps, smart TVs).
 - **HLS (CMAF):** Lower latency HLS variant using Common Media Application Format.
 - **DASH (MPEG-DASH):** Adaptive bitrate protocol often used on Android and set-top boxes.
 - **WebRTC (WHEP):** Ultra-low latency streaming (~0.5s) for real-time interactivity.
-- **SRT:** Secure Reliable Transport for low-latency contribution and delivery.
+- **SRT:** Secure Reliable Transport for low-latency contribution or specialized delivery.
 - **MP4/WebM:** Progressive download formats for wide compatibility.
 
 **Additional Protocols:** RTSP, RTMP, MPEG-TS, FLV, MKV, AAC (audio-only), Smooth Streaming, HDS, and more. See [Supported Protocols](#supported-protocols) for the full list.
 
 <Aside type="note" title="Powered by MistServer">
-FrameWorks uses MistServer for transcoding and delivery, which supports nearly every video codec and container format with on-the-fly muxing. For detailed protocol documentation, see [docs.mistserver.org](https://docs.mistserver.org/).
+FrameWorks uses MistServer for transcoding and delivery, with wide codec/container support and on-the-fly muxing (availability depends on source codecs). For detailed protocol documentation, see [docs.mistserver.org](https://docs.mistserver.org/).
 </Aside>
 
-The URLs follow a unified pattern through Foghorn's `/play/` path:
+The URLs below follow a unified pattern through Foghorn's `/play/` path (HTTP protocols only):
 ```
 HLS:    %PLAY_URL%/play/{content-id}/hls/index.m3u8
 DASH:   %PLAY_URL%/play/{content-id}/cmaf/index.mpd
@@ -51,8 +51,8 @@ MP4:    %PLAY_URL%/play/{content-id}.mp4
 
 Where `{id}` is:
 - **Live streams:** Your `playbackId` (view key)
-- **Clips:** The `clipHash` (32-character identifier)
-- **DVR recordings:** The `dvrHash` (32-character identifier)
+- **Clips:** The clip’s **playbackId**
+- **DVR recordings:** The recording’s **playbackId**
 
 Your playback ID is different from your stream key (which is secret and used for ingest only).
 
@@ -73,7 +73,7 @@ The FrameWorks Player is a React component that wraps multiple open-source playb
 - **Intelligent protocol selection** — Ported from MistServer's MistMetaPlayer algorithm, scoring player/source combinations by codec support, browser compatibility, and source priority
 - **Adaptive bitrate (ABR)** — Built-in ABR controller with resize-aware and bitrate-aware modes that match quality to viewport size and network conditions
 - **Gateway integration** — Resolves optimal edge nodes via the FrameWorks Gateway GraphQL API, no manual URL construction needed
-- **Telemetry reporting** — Batched playback metrics (stalls, quality score, dropped frames) sent to your analytics endpoint with `sendBeacon()` for reliable page-unload reporting
+- **Telemetry (optional)** — Hooks/reporting for playback metrics (stalls, quality score, dropped frames) with `sendBeacon()` on page unload
 - **Lazy-loaded transports** — Heavy player bundles are loaded on-demand, keeping initial bundle size small
 
 ### Controls & Shortcuts
@@ -139,7 +139,7 @@ function LiveStream() {
       contentType="live"
       contentId="<YOUR_PLAYBACK_ID>"  // Your stream's Playback ID
       options={{
-        gatewayUrl: '%API_URL%',
+        gatewayUrl: '%GATEWAY_URL%/graphql', // GraphQL endpoint
         autoplay: true,
         muted: true,  // Required for autoplay in browsers
       }}
@@ -150,63 +150,98 @@ function LiveStream() {
 
 The player queries the Gateway to resolve the best edge node for your viewer's location.
 
+<Aside type="note" title="No default gateway">
+Outside the FrameWorks dashboard, there is **no default gateway**. Provide `gatewayUrl` (GraphQL endpoint) unless you pass `endpoints` or `mistUrl`.
+</Aside>
+
 ### Direct Endpoint Override (Advanced)
 
-If you already have resolved endpoints (e.g. from your own backend) or want to force a specific MistServer node, you can bypass the Gateway by passing `endpoints` directly:
+If you already have resolved endpoints (for example, from `resolveViewerEndpoint`), you can bypass the Gateway by passing them to `endpoints`. This is an advanced workflow; most users should use `gatewayUrl` or `mistUrl`.
+
+### Direct MistServer Node (Alternative)
+
+If you want the player to resolve streams directly from a specific MistServer node, pass `mistUrl`. This fetches `json_{contentId}.js` from that MistServer base URL:
 
 ```tsx
 <Player
   contentType="live"
   contentId="<YOUR_PLAYBACK_ID>"
-  endpoints={{
-    // Direct MistServer base URL
-    http: "%EDGE_URL%",
-    ws: "%EDGE_URL%"
-  }}
-  options={{
-    autoplay: true,
-    muted: true,
-  }}
+  options={{ mistUrl: "https://edge.example.com" }}
 />
 ```
 
-When `endpoints` is provided, the `gatewayUrl` is ignored and the player connects directly to the specified node.
+Use `mistUrl` when you control the MistServer node. `contentId` can be a **playback ID** or the stream name; the node resolves it to the internal stream. If you only have a playback ID and want geo‑routing, use `gatewayUrl`.
+
+### Playback Presets (Selection Modes)
+
+`playbackMode` controls the **preference order** for protocol selection:
+
+- **`low-latency`** — Prefer WebRTC/WHEP first, then MP4/WS, then HLS/DASH
+- **`quality`** — Prefer MP4/WS for stability, then HLS/DASH, then WebRTC/WHEP
+- **`vod`** — Prefer seekable protocols (HLS/MP4), penalize WHEP
+- **`auto`** — Balanced default (score-based selection)
+
+```tsx
+<Player
+  contentType="live"
+  contentId="<YOUR_PLAYBACK_ID>"
+  options={{ gatewayUrl: "%GATEWAY_URL%/graphql", playbackMode: "low-latency" }}
+/>
+```
+
+### WHEP‑Only (Force Protocol)
+
+If you want **strict WHEP** (no fallback), force the source type:
+
+```tsx
+<Player
+  contentType="live"
+  contentId="<YOUR_PLAYBACK_ID>"
+  options={{
+    gatewayUrl: "%GATEWAY_URL%/graphql",
+    forceType: "whep",
+  }}
+/>
+```
+`forceType` matches the Mist source type string (for WHEP, use `whep`).
 
 ### For DVR and Clips
 
 Same component, different content type. The player automatically resolves the correct edge node for playback:
 
 ```tsx
-// DVR recording - use the dvrHash from the recording
-<Player contentType="dvr" contentId="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" />
+// DVR recording - use the recording playbackId
+<Player contentType="dvr" contentId="pk_..." />
 
-// Clip - use the clipHash from the clip
-<Player contentType="clip" contentId="f8a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6" />
+// Clip - use the clip playbackId
+<Player contentType="clip" contentId="pk_..." />
 ```
+
+For VOD uploads, use `contentType="vod"` to apply seek‑friendly presets.
 
 You can also access DVR recordings and clips directly via URL:
 
 ```bash
 # DVR recording
-https://play.example.com/play/{dvrHash}/hls/index.m3u8
-https://play.example.com/play/{dvrHash}.mp4
+https://play.example.com/play/{playbackId}/hls/index.m3u8
+https://play.example.com/play/{playbackId}.mp4
 
 # Clip
-https://play.example.com/play/{clipHash}/hls/index.m3u8
-https://play.example.com/play/{clipHash}.mp4
+https://play.example.com/play/{playbackId}/hls/index.m3u8
+https://play.example.com/play/{playbackId}.mp4
 ```
 
-Find these identifiers in the FrameWorks dashboard under **Recordings** and **Clips**. Each recording and clip shows its hash and provides copy buttons for all protocol URLs.
+Find these identifiers in the FrameWorks dashboard under **Recordings** and **Clips**. Each item shows its playback ID and provides copy buttons for primary protocol URLs.
 
 ### With Thumbnail/Poster
 
 ```tsx
 <Player
   contentType="live"
-  contentId="my-stream"
+  contentId="<YOUR_PLAYBACK_ID>"
   thumbnailUrl="https://your-cdn.com/poster.jpg"
   options={{
-    gatewayUrl: '%API_URL%',
+    gatewayUrl: '%GATEWAY_URL%/graphql', // GraphQL endpoint
     autoplay: false,  // Wait for user interaction
   }}
 />
@@ -219,8 +254,8 @@ Track player lifecycle for UI feedback:
 ```tsx
 <Player
   contentType="live"
-  contentId="my-stream"
-  options={{ gatewayUrl: '%API_URL%' }}
+  contentId="<YOUR_PLAYBACK_ID>"
+  options={{ gatewayUrl: '%GATEWAY_URL%/graphql' }} // GraphQL endpoint
   onStateChange={(state, context) => {
     // States: booting, gateway_loading, gateway_ready, gateway_error, no_endpoint,
     //         selecting_player, connecting, buffering, playing, paused, ended, error, destroyed
@@ -231,16 +266,16 @@ Track player lifecycle for UI feedback:
 
 ### Vanilla JS / Non-React Usage
 
-For Svelte, Vue, Angular, or plain JavaScript, use the `FrameWorksPlayer` class instead of the React component:
+For Svelte, Vue, Angular, or plain JavaScript, use the `FrameWorksPlayer` class:
 
 ```ts
-import { FrameWorksPlayer } from '@livepeer-frameworks/player-core';
+import { FrameWorksPlayer } from '@livepeer-frameworks/player-core/vanilla';
 import '@livepeer-frameworks/player-core/player.css';
 
 const player = new FrameWorksPlayer('#player-container', {
   contentId: '<YOUR_PLAYBACK_ID>',
   contentType: 'live',
-  gatewayUrl: '%API_URL%',
+  gatewayUrl: '%GATEWAY_URL%/graphql', // GraphQL endpoint
   autoplay: true,
   muted: true,
   onStateChange: (state) => console.log('State:', state),
@@ -258,38 +293,23 @@ player.jumpToLive();    // Jump to live edge
 player.destroy();
 ```
 
-### Direct Endpoint Override (Vanilla)
-
-```ts
-const player = new FrameWorksPlayer('#player-container', {
-  contentId: '<YOUR_PLAYBACK_ID>',
-  contentType: 'live',
-  // Skip Gateway resolution and connect directly
-  endpoints: {
-    http: "%EDGE_URL%",
-    ws: "%EDGE_URL%"
-  },
-  autoplay: true,
-});
-```
-
 #### Svelte Example
 
 ```svelte
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import type { FrameWorksPlayer as FrameWorksPlayerType } from '@livepeer-frameworks/player';
+  import type { FrameWorksPlayer as FrameWorksPlayerType } from '@livepeer-frameworks/player-core/vanilla';
 
   let container: HTMLDivElement;
   let player: FrameWorksPlayerType | null = null;
 
   onMount(async () => {
-    const { FrameWorksPlayer } = await import('@livepeer-frameworks/player');
+    const { FrameWorksPlayer } = await import('@livepeer-frameworks/player-core/vanilla');
 
     player = new FrameWorksPlayer(container, {
-      contentId: 'my-stream',
+      contentId: 'pk_...',
       contentType: 'live',
-      gatewayUrl: '%API_URL%',
+      gatewayUrl: '%GATEWAY_URL%/graphql', // GraphQL endpoint
       autoplay: true,
       muted: true,
     });
@@ -310,20 +330,20 @@ const player = new FrameWorksPlayer('#player-container', {
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
-import type { FrameWorksPlayer as FrameWorksPlayerType } from '@livepeer-frameworks/player-core';
+import type { FrameWorksPlayer as FrameWorksPlayerType } from '@livepeer-frameworks/player-core/vanilla';
 
 const playerContainer = ref<HTMLDivElement>();
 let player: FrameWorksPlayerType | null = null;
 
 onMounted(async () => {
-  const { FrameWorksPlayer } = await import('@livepeer-frameworks/player-core');
+  const { FrameWorksPlayer } = await import('@livepeer-frameworks/player-core/vanilla');
   await import('@livepeer-frameworks/player-core/player.css');
 
   if (playerContainer.value) {
     player = new FrameWorksPlayer(playerContainer.value, {
-      contentId: 'my-stream',
+      contentId: '<YOUR_PLAYBACK_ID>',
       contentType: 'live',
-      gatewayUrl: '%API_URL%',
+      gatewayUrl: '%GATEWAY_URL%/graphql', // GraphQL endpoint
       autoplay: true,
       muted: true,
     });
@@ -334,21 +354,32 @@ onUnmounted(() => player?.destroy());
 </script>
 ```
 
-#### Available Options
+#### Available Options (Quick Reference)
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `contentId` | string | required | Playback ID, DVR hash, or clip hash |
-| `contentType` | `'live'` \| `'dvr'` \| `'clip'` | required | Content type |
-| `gatewayUrl` | string | - | Gateway GraphQL endpoint |
-| `authToken` | string | - | Bearer token for private streams |
-| `autoplay` | boolean | `true` | Auto-start playback |
-| `muted` | boolean | `true` | Start muted |
-| `controls` | boolean | `true` | Show player controls |
-| `poster` | string | - | Poster/thumbnail image |
-| `onStateChange` | function | - | State change callback |
-| `onReady` | function | - | Ready callback (receives video element) |
-| `onError` | function | - | Error callback |
+**React/Svelte `Player` props**
+
+| Prop | Type | Notes |
+|------|------|-------|
+| `contentId` | string | Playback ID (live/clip/DVR/VOD) |
+| `contentType` | `'live'` \| `'dvr'` \| `'clip'` \| `'vod'` | Affects presets and UI |
+| `endpoints` | `ContentEndpoints` | Advanced: pass resolved endpoints |
+| `thumbnailUrl` | string | Poster image |
+| `options` | `PlayerOptions` | `gatewayUrl`, `mistUrl`, `authToken`, `autoplay`, `muted`, `controls`, `playbackMode`, `forceType`, `debug` |
+| `onStateChange` | function | Player state transitions |
+
+**Vanilla `FrameWorksPlayer` options**
+
+| Option | Type | Notes |
+|--------|------|-------|
+| `contentId` | string | Playback ID (live/clip/DVR/VOD) |
+| `contentType` | `'live'` \| `'dvr'` \| `'clip'` \| `'vod'` | Affects presets |
+| `gatewayUrl` | string | GraphQL endpoint |
+| `mistUrl` | string | Direct MistServer base URL |
+| `endpoints` | `ContentEndpoints` | Advanced: pass resolved endpoints |
+| `authToken` | string | For private streams |
+| `autoplay` / `muted` / `controls` | boolean | Playback toggles |
+| `poster` | string | Poster image |
+| `onStateChange` / `onReady` / `onError` | function | Lifecycle callbacks |
 
 ## Using Other Players
 
@@ -363,7 +394,7 @@ If you need full control over the player:
 <script>
   const video = document.getElementById('video');
   // Replace with your actual edge URL and playback ID
-  const hlsUrl = '%EDGE_URL%%HLS_PATH%/{playback-id}/index.m3u8';
+  const hlsUrl = '%PLAY_URL%/play/{playback-id}.m3u8';
 
   if (Hls.isSupported()) {
     const hls = new Hls();
@@ -384,15 +415,16 @@ If you need full control over the player:
 
 <video-js id="my-video" class="video-js" controls data-setup="{}">
   <source
-    src="%EDGE_URL%%HLS_PATH%/{playback-id}/index.m3u8"
+    src="%PLAY_URL%/play/{playback-id}.m3u8"
     type="application/x-mpegURL"
   />
 </video-js>
 ```
 
-## Universal Playback URLs
+## Universal Playback URLs (`/play`)
 
-Instead of constructing URLs manually with edge hostnames, you can use **universal playback URLs** that automatically route viewers to the optimal edge node based on their location.
+`/play` is a **redirect + resolver** endpoint. It is not used by the FrameWorks Player; it’s for direct protocol URLs and CLI tools.  
+It can return **307 redirects** to edge nodes (HTTP protocols), or return **JSON** with full outputs so you can use direct URLs.
 
 ### Simple Redirect URLs
 
@@ -400,17 +432,16 @@ These URLs work directly with any player (VLC, ffmpeg, native `<video>` tags):
 
 ```bash
 # HLS - redirects to nearest edge node
-%PLAY_URL%/play/{view-key}/hls
 %PLAY_URL%/play/{view-key}.m3u8
-%PLAY_URL%/play/{view-key}/index.m3u8
+%PLAY_URL%/play/{view-key}/hls/index.m3u8
 
 # WebRTC (WHEP)
 %PLAY_URL%/play/{view-key}/webrtc
 %PLAY_URL%/play/{view-key}.webrtc
 
 # DASH
-%PLAY_URL%/play/{view-key}/dash
 %PLAY_URL%/play/{view-key}.mpd
+%PLAY_URL%/play/{view-key}/cmaf/index.mpd
 ```
 
 The server returns an **HTTP 307 redirect** to the actual edge node URL, so your player follows the redirect automatically.
@@ -429,7 +460,7 @@ ffmpeg -i %PLAY_URL%/play/abc123def/hls -c copy output.mp4
 
 ### JSON Response (for Custom Players)
 
-If you need all available protocols and fallback nodes, request the full JSON response:
+If you need all available protocols and fallback nodes, request the full JSON response and use the resolved URLs directly:
 
 ```bash
 curl %PLAY_URL%/play/{view-key}
@@ -441,11 +472,11 @@ Returns:
   "primary": {
     "node_id": "edge-7",
     "base_url": "%EDGE_URL%",
-    "protocol": "hls",
+    "protocol": "HLS",
     "outputs": {
-      "HLS": {"url": "%EDGE_URL%/hls/stream-id/index.m3u8"},
-      "DASH": {"url": "%EDGE_URL%/cmaf/stream-id/index.mpd"},
-      "WebRTC": {"url": "%EDGE_URL%/webrtc/stream-id"}
+      "HLS": {"protocol": "HLS", "url": "%EDGE_URL%/hls/stream-id/index.m3u8"},
+      "DASH": {"protocol": "DASH", "url": "%EDGE_URL%/cmaf/stream-id/index.mpd"},
+      "WHEP": {"protocol": "WHEP", "url": "%EDGE_URL%/webrtc/stream-id"}
     }
   },
   "fallbacks": [...]
@@ -454,7 +485,7 @@ Returns:
 
 ### Supported Protocols
 
-#### Primary Protocols
+#### Primary Protocols (HTTP via `/play`)
 
 These protocols are shown by default in the dashboard and cover most use cases:
 
@@ -466,7 +497,12 @@ These protocols are shown by default in the dashboard and cover most use cases:
 | `/play/{id}/webrtc` | WebRTC (WHEP) | Ultra-low latency (~0.5s) |
 | `/play/{id}.mp4` | MP4 | Progressive download, wide support |
 | `/play/{id}.webm` | WebM | Open format (VP8/VP9) |
-| `srt://host/?streamid={id}` | SRT | Secure Reliable Transport |
+
+**Direct edge (non‑HTTP):**
+
+| URL Pattern | Protocol | Description |
+|-------------|----------|-------------|
+| `srt://<edge-host>:<port>?streamid={id}` | SRT | Secure Reliable Transport |
 
 #### Additional Protocols
 
@@ -474,8 +510,8 @@ These protocols are available for specialized use cases:
 
 | URL Pattern | Protocol | Description |
 |-------------|----------|-------------|
-| `rtsp://host/play/{id}` | RTSP | IP cameras, VLC, ffmpeg |
-| `rtmp://host/play/{id}` | RTMP | Legacy Flash players, OBS playback |
+| `rtsp://<edge-host>:<port>/play/{id}` | RTSP | IP cameras, VLC, ffmpeg |
+| `rtmp://<edge-host>:<port>/play/{id}` | RTMP | Legacy Flash players, OBS playback |
 | `/play/{id}.ts` | MPEG-TS | Transport stream, DVB compatible |
 | `/play/{id}.flv` | FLV | Legacy Flash Video |
 | `/play/{id}.mkv` | MKV | Matroska container |
@@ -484,9 +520,9 @@ These protocols are available for specialized use cases:
 | `/play/{id}/dynamic/manifest.f4m` | HDS | Adobe HTTP Dynamic Streaming |
 | `/play/{id}.sdp` | SDP | Session Description Protocol |
 | `/play/{id}.h264` | Raw H264 | Elementary video stream |
-| `wss://host/play/{id}.mp4` | WebSocket MP4 | MP4 over WebSocket |
-| `wss://host/play/webrtc/{id}` | WebSocket WebRTC | WebRTC over WebSocket |
-| `dtsc://host/play/{id}` | DTSC | MistServer internal protocol |
+| `wss://<edge-host>:<port>/play/{id}.mp4` | WebSocket MP4 | MP4 over WebSocket |
+| `wss://<edge-host>:<port>/play/webrtc/{id}` | WebSocket WebRTC | WebRTC over WebSocket |
+| `dtsc://<edge-host>:<port>/play/{id}` | DTSC | MistServer internal protocol |
 
 <Aside type="tip" title="Protocol Compatibility">
 MistServer handles on-the-fly muxing between container formats. Container support depends on source codecs. For detailed codec/container compatibility, see the [MistServer Protocol Documentation](https://docs.mistserver.org/).

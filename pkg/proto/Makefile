@@ -11,12 +11,13 @@
 # - periscope.proto: Data plane - analytics query service
 # - signalman.proto: Realtime events (bidirectional streaming)
 # - foghorn.proto: Control plane - Foghorn clip/DVR/viewer operations
+# - deckhand.proto: Support messaging (Chatwoot integration)
 proto: clean
 	protoc --go_out=. \
 		--go_opt=paths=source_relative \
 		--go-grpc_out=. \
 		--go-grpc_opt=paths=source_relative \
-		common.proto shared.proto ipc.proto dns.proto commodore.proto quartermaster.proto purser.proto periscope.proto signalman.proto foghorn.proto
+		common.proto shared.proto ipc.proto dns.proto commodore.proto quartermaster.proto purser.proto periscope.proto signalman.proto foghorn.proto deckhand.proto
 
 # Clean generated files
 clean:

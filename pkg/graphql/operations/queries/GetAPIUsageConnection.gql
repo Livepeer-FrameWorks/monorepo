@@ -1,0 +1,66 @@
+query GetAPIUsageConnection(
+  $timeRange: TimeRangeInput
+  $authType: String
+  $operationType: String
+  $first: Int = 50
+) {
+  analytics {
+    usage {
+      api {
+        apiUsageConnection(
+          page: { first: $first }
+          authType: $authType
+          operationType: $operationType
+          timeRange: $timeRange
+        ) {
+          edges {
+            cursor
+            node {
+              id
+              timestamp
+              authType
+              operationType
+              operationName
+              requestCount
+              errorCount
+              totalDurationMs
+              totalComplexity
+              uniqueUsers
+              uniqueTokens
+            }
+          }
+          nodes {
+            id
+            operationName
+            requestCount
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          totalCount
+          summaries {
+            date
+            authType
+            totalRequests
+            totalErrors
+            avgDurationMs
+            totalComplexity
+            uniqueUsers
+            uniqueTokens
+          }
+          operationSummaries {
+            operationType
+            totalRequests
+            totalErrors
+            uniqueOperations
+            avgDurationMs
+            totalComplexity
+          }
+        }
+      }
+    }
+  }
+}

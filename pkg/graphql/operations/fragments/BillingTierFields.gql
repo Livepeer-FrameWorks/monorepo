@@ -1,0 +1,41 @@
+fragment BillingTierFields on BillingTier {
+  id
+  tierName
+  displayName
+  description
+  basePrice
+  currency
+  billingPeriod
+  supportLevel
+  slaLevel
+  meteringEnabled
+  isEnterprise
+  features {
+    recording
+    analytics
+    customBranding
+    apiAccess
+    supportLevel
+    sla
+  }
+  bandwidthAllocation {
+    ...AllocationFields
+  }
+  storageAllocation {
+    ...AllocationFields
+  }
+  computeAllocation {
+    ...AllocationFields
+  }
+  overageRates {
+    bandwidth {
+      ...AllocationFields
+    }
+    storage {
+      ...AllocationFields
+    }
+    compute {
+      ...AllocationFields
+    }
+  }
+}

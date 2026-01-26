@@ -107,10 +107,7 @@ func (m *Manager) reconcile() {
 		}
 	}
 
-	// Step 1: Read current config backup (best-effort)
 	current, _ := m.mistClient.ConfigBackup()
-
-	// Step 2: Build partial desired config for UpdateConfig (location + triggers)
 	desiredConfig := map[string]interface{}{}
 
 	// Location (from seed)
@@ -152,20 +149,15 @@ func (m *Manager) reconcile() {
 	}
 	desiredConfig["triggers"] = triggers
 
-	// Step 3: Ensure essential protocols exist (HTTP, WebRTC)
 	_ = m.ensureProtocols(current)
-
-	// Step 4: Ensure streams from seed templates exist/updated
 	_ = m.ensureStreams(seed)
 
-	// Step 5: Apply partial config
 	if len(desiredConfig) > 0 {
 		if _, err := m.mistClient.UpdateConfig(desiredConfig); err != nil {
 			m.logger.WithError(err).Warn("UpdateConfig failed")
 		}
 	}
 
-	// Step 6: Save to persist
 	_ = m.mistClient.Save()
 
 	// Record applied signature

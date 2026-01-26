@@ -1,9 +1,0 @@
-# Fetch current tenant basic information
-query GetTenant {
-  tenant {
-    id
-    name
-    cluster
-    createdAt
-  }
-}

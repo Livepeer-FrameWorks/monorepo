@@ -1,0 +1,11 @@
+fragment StreamCoreFields on Stream {
+  id
+  streamId
+  name
+  description
+  streamKey
+  playbackId
+  record
+  createdAt
+  updatedAt
+}

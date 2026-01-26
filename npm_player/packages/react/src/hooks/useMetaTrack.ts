@@ -36,7 +36,7 @@ export interface UseMetaTrackReturn {
  * ```tsx
  * const { isConnected, subscribe } = useMetaTrack({
  *   mistBaseUrl: 'https://mist.example.com',
- *   streamName: 'my-stream',
+ *   streamName: 'pk_...', // playbackId (view key)
  *   enabled: true,
  * });
  *

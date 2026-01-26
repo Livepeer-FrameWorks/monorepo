@@ -67,6 +67,11 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 			md.Set("authorization", "Bearer "+serviceToken)
 		}
 
+		// Forward X-PAYMENT header for x402 settlement (viewer-pays flows)
+		if xPayment, ok := ctx.Value("x_payment").(string); ok && xPayment != "" {
+			md.Set("x-payment", xPayment)
+		}
+
 		// Merge with existing outgoing metadata if any
 		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
 			md = metadata.Join(existingMD, md)
@@ -172,6 +177,50 @@ func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (
 func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName string) (*pb.ResolveInternalNameResponse, error) {
 	return c.internal.ResolveInternalName(ctx, &pb.ResolveInternalNameRequest{
 		InternalName: internalName,
+	})
+}
+
+// ResolveArtifactPlaybackID resolves an artifact playback ID to artifact identity
+func (c *GRPCClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+	if c.cache != nil {
+		cacheKey := "commodore:artifact:playback:" + playbackID
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{
+				PlaybackId: playbackID,
+			})
+			if err != nil || !resp.Found {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveArtifactPlaybackIDResponse), nil
+		}
+	}
+
+	return c.internal.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{
+		PlaybackId: playbackID,
+	})
+}
+
+// ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
+func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalName string) (*pb.ResolveArtifactInternalNameResponse, error) {
+	if c.cache != nil {
+		cacheKey := "commodore:artifact:internal:" + internalName
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
+				ArtifactInternalName: internalName,
+			})
+			if err != nil || !resp.Found {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveArtifactInternalNameResponse), nil
+		}
+	}
+
+	return c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
+		ArtifactInternalName: internalName,
 	})
 }
 
@@ -325,6 +374,27 @@ func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*pb.Re
 	})
 }
 
+// ResolveVodID resolves a VOD relay ID (vod_assets.id) to VOD hash + tenant context
+func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*pb.ResolveVodIDResponse, error) {
+	return c.internal.ResolveVodID(ctx, &pb.ResolveVodIDRequest{
+		VodId: vodID,
+	})
+}
+
+// ============================================================================
+// WALLET IDENTITY (x402 / Agent Access)
+// ============================================================================
+
+// GetOrCreateWalletUser looks up or creates a tenant/user for a verified wallet address.
+// This is called by x402 middleware after verifying the ERC-3009 payment signature.
+// If the wallet is unknown, Commodore creates: tenant (prepaid) + user (email=NULL) + wallet_identity.
+func (c *GRPCClient) GetOrCreateWalletUser(ctx context.Context, chainType, walletAddress string) (*pb.GetOrCreateWalletUserResponse, error) {
+	return c.internal.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
+		ChainType:     chainType,
+		WalletAddress: walletAddress,
+	})
+}
+
 // ============================================================================
 // STREAM OPERATIONS
 // ============================================================================
@@ -459,6 +529,60 @@ func (c *GRPCClient) UpdateNewsletter(ctx context.Context, subscribed bool) (*pb
 }
 
 // ============================================================================
+// WALLET AUTHENTICATION OPERATIONS
+// ============================================================================
+
+// WalletLogin authenticates a user via wallet signature, auto-provisioning if new
+func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signature string) (*pb.AuthResponse, error) {
+	return c.user.WalletLogin(ctx, &pb.WalletLoginRequest{
+		WalletAddress: address,
+		Message:       message,
+		Signature:     signature,
+	})
+}
+
+// WalletLoginWithX402 authenticates via x402 payload and returns session token + payment info.
+func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *pb.X402PaymentPayload, clientIP, targetTenantID string) (*pb.WalletLoginWithX402Response, error) {
+	req := &pb.WalletLoginWithX402Request{
+		Payment:  payment,
+		ClientIp: clientIP,
+	}
+	if targetTenantID != "" {
+		req.TargetTenantId = &targetTenantID
+	}
+	return c.user.WalletLoginWithX402(ctx, req)
+}
+
+// LinkWallet links a wallet to the current user's account
+func (c *GRPCClient) LinkWallet(ctx context.Context, address, message, signature string) (*pb.WalletIdentity, error) {
+	return c.user.LinkWallet(ctx, &pb.LinkWalletRequest{
+		WalletAddress: address,
+		Message:       message,
+		Signature:     signature,
+	})
+}
+
+// UnlinkWallet removes a wallet from the current user's account
+func (c *GRPCClient) UnlinkWallet(ctx context.Context, walletID string) (*pb.UnlinkWalletResponse, error) {
+	return c.user.UnlinkWallet(ctx, &pb.UnlinkWalletRequest{
+		WalletId: walletID,
+	})
+}
+
+// ListWallets lists wallets linked to the current user
+func (c *GRPCClient) ListWallets(ctx context.Context) (*pb.ListWalletsResponse, error) {
+	return c.user.ListWallets(ctx, &pb.ListWalletsRequest{})
+}
+
+// LinkEmail adds an email to a wallet-only account (for postpaid upgrade path)
+func (c *GRPCClient) LinkEmail(ctx context.Context, email, password string) (*pb.LinkEmailResponse, error) {
+	return c.user.LinkEmail(ctx, &pb.LinkEmailRequest{
+		Email:    email,
+		Password: password,
+	})
+}
+
+// ============================================================================
 // DEVELOPER/API TOKEN OPERATIONS
 // ============================================================================
 
@@ -490,14 +614,14 @@ func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) 
 	return c.clip.CreateClip(ctx, req)
 }
 
-// GetClips lists clips with optional internal_name filter
-func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.GetClipsResponse, error) {
+// GetClips lists clips with optional stream_id filter
+func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest) (*pb.GetClipsResponse, error) {
 	req := &pb.GetClipsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 	}
-	if internalName != nil {
-		req.InternalName = internalName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.clip.GetClips(ctx, req)
 }
@@ -505,13 +629,6 @@ func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, internalName
 // GetClip gets a single clip by hash
 func (c *GRPCClient) GetClip(ctx context.Context, clipHash string) (*pb.ClipInfo, error) {
 	return c.clip.GetClip(ctx, &pb.GetClipRequest{
-		ClipHash: clipHash,
-	})
-}
-
-// GetClipURLs gets viewing URLs for a clip
-func (c *GRPCClient) GetClipURLs(ctx context.Context, clipHash string) (*pb.ClipViewingURLs, error) {
-	return c.clip.GetClipURLs(ctx, &pb.GetClipURLsRequest{
 		ClipHash: clipHash,
 	})
 }
@@ -545,22 +662,15 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
 }
 
 // ListDVRRequests lists DVR recordings with filters
-func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
+func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, streamID *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
 	req := &pb.ListDVRRecordingsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
 	}
-	if internalName != nil {
-		req.InternalName = internalName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.dvr.ListDVRRequests(ctx, req)
-}
-
-// GetDVRStatus gets the status of a DVR recording
-func (c *GRPCClient) GetDVRStatus(ctx context.Context, dvrHash string) (*pb.DVRInfo, error) {
-	return c.dvr.GetDVRStatus(ctx, &pb.GetDVRStatusRequest{
-		DvrHash: dvrHash,
-	})
 }
 
 // ============================================================================
@@ -568,7 +678,7 @@ func (c *GRPCClient) GetDVRStatus(ctx context.Context, dvrHash string) (*pb.DVRI
 // ============================================================================
 
 // ResolveViewerEndpoint resolves the best endpoint for a viewer
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentType, contentID, viewerIP string) (*pb.ViewerEndpointResponse, error) {
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP string) (*pb.ViewerEndpointResponse, error) {
 	if c == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
 	}
@@ -576,31 +686,12 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentType, con
 		return nil, fmt.Errorf("CRITICAL: Commodore.viewer client is nil - gRPC connection failed or not initialized?")
 	}
 	req := &pb.ViewerEndpointRequest{
-		ContentType: contentType,
-		ContentId:   contentID,
+		ContentId: contentID,
 	}
 	if viewerIP != "" {
 		req.ViewerIp = &viewerIP
 	}
 	return c.viewer.ResolveViewerEndpoint(ctx, req)
-}
-
-// GetStreamMeta gets stream metadata from MistServer
-func (c *GRPCClient) GetStreamMeta(ctx context.Context, internalName, contentType string, includeRaw bool, targetNodeID, targetBaseURL string) (*pb.StreamMetaResponse, error) {
-	req := &pb.StreamMetaRequest{
-		InternalName: internalName,
-		IncludeRaw:   includeRaw,
-	}
-	if contentType != "" {
-		req.ContentType = &contentType
-	}
-	if targetNodeID != "" {
-		req.TargetNodeId = &targetNodeID
-	}
-	if targetBaseURL != "" {
-		req.TargetBaseUrl = &targetBaseURL
-	}
-	return c.viewer.GetStreamMeta(ctx, req)
 }
 
 // ResolveIngestEndpoint resolves the best ingest endpoint for StreamCrafter
@@ -664,5 +755,44 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 	return c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
+	})
+}
+
+// TerminateTenantStreams stops all active streams for a suspended tenant.
+// Called by Purser when prepaid balance drops below threshold.
+func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, error) {
+	return c.internal.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{
+		TenantId: tenantID,
+		Reason:   reason,
+	})
+}
+
+// InvalidateTenantCache clears cached suspension status for a tenant.
+// Called by Purser when a tenant is reactivated after payment.
+func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, error) {
+	return c.internal.InvalidateTenantCache(ctx, &pb.InvalidateTenantCacheRequest{
+		TenantId: tenantID,
+		Reason:   reason,
+	})
+}
+
+// ============================================================================
+// CROSS-SERVICE: BILLING DATA ACCESS
+// Called by Purser to avoid cross-service database access.
+// ============================================================================
+
+// GetTenantUserCount returns active and total user counts for a tenant.
+// Called by Purser billing job for user-based billing calculations.
+func (c *GRPCClient) GetTenantUserCount(ctx context.Context, tenantID string) (*pb.GetTenantUserCountResponse, error) {
+	return c.internal.GetTenantUserCount(ctx, &pb.GetTenantUserCountRequest{
+		TenantId: tenantID,
+	})
+}
+
+// GetTenantPrimaryUser returns the primary user info for a tenant.
+// Called by Purser billing job for billing notifications and invoices.
+func (c *GRPCClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) (*pb.GetTenantPrimaryUserResponse, error) {
+	return c.internal.GetTenantPrimaryUser(ctx, &pb.GetTenantPrimaryUserRequest{
+		TenantId: tenantID,
 	})
 }

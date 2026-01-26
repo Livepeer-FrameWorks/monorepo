@@ -62,6 +62,8 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   // Frame extraction
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private frameProcessors: Map<string, any> = new Map();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private frameReaders: Map<string, ReadableStreamDefaultReader<any>> = new Map();
 
   // Output
   private outputCanvas: HTMLCanvasElement | null = null;
@@ -727,6 +729,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     // Read frames and send to worker
     const reader = processor.readable.getReader();
+    this.frameReaders.set(sourceId, reader);
 
     const readFrame = async (): Promise<void> => {
       try {
@@ -745,7 +748,10 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         // Continue reading
         readFrame();
       } catch (error) {
-        console.error('[SceneManager] Frame read error:', error);
+        // Ignore errors from cancelled readers (expected during unbind)
+        if ((error as Error)?.name !== 'AbortError') {
+          console.error('[SceneManager] Frame read error:', error);
+        }
       }
     };
 
@@ -756,9 +762,15 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * Unbind a source from the compositor
    */
   unbindSource(sourceId: string): void {
+    // Cancel the reader first to stop the read loop
+    const reader = this.frameReaders.get(sourceId);
+    if (reader) {
+      reader.cancel().catch(() => {});
+      this.frameReaders.delete(sourceId);
+    }
+
     const processor = this.frameProcessors.get(sourceId);
     if (processor) {
-      // Processor will be garbage collected
       this.frameProcessors.delete(sourceId);
     }
   }
@@ -896,11 +908,12 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * Destroy the SceneManager and release all resources
    */
   destroy(): void {
-    // Stop all frame processors
+    // Stop all frame processors and cancel readers
     for (const [sourceId] of this.frameProcessors) {
       this.unbindSource(sourceId);
     }
     this.frameProcessors.clear();
+    this.frameReaders.clear();
 
     // Terminate the worker
     if (this.worker) {

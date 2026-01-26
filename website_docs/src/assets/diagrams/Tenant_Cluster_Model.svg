@@ -1,143 +1,146 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
 <svg width="100%" height="100%" viewBox="0 0 800 400" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;">
-    <g transform="matrix(1,0,0,1,400.113,38.7341)">
-        <text x="-126.532px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:18px;fill:white;">T<tspan x="-116.864px -106.853px " y="0px 0px ">en</tspan>ant &amp; Cluster <tspan x="20.5px 33.5px " y="0px 0px ">Ar</tspan>chitecture</text>
-    </g>
-    <g transform="matrix(1,0,0,1,9.96364,-1.37387)">
-        <path d="M350,78L350,162C350,166.415 346.415,170 342,170L58,170C53.585,170 50,166.415 50,162L50,78C50,73.585 53.585,70 58,70L342,70C346.415,70 350,73.585 350,78Z" style="fill:rgb(227,242,253);stroke:rgb(33,150,243);stroke-width:2px;"/>
-        <g transform="matrix(1,0,0,1,200,95)">
-            <text x="-22.429px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:14px;fill:rgb(33,150,243);">T<tspan x="-14.909px -7.123px " y="0px 0px ">en</tspan>ant</text>
-        </g>
-        <g transform="matrix(1,0,0,1,200,115)">
-            <text x="-74.373px" y="0px" style="font-family:'Helvetica';font-size:12px;fill:rgb(51,51,51);">Individual, business or team</text>
-        </g>
-        <g transform="matrix(1,0,0,1,200,135)">
-            <text x="-85.693px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• Isolated data scope in all services</text>
-        </g>
-        <g transform="matrix(1,0,0,1,207.538,148.135)">
-            <text x="-94.241px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• JWT/API token carries tenant context</text>
-        </g>
-    </g>
-    <g transform="matrix(1,0,0,1,-16.0984,-1.37641)">
-        <path d="M750,78L750,162C750,166.415 746.415,170 742,170L458,170C453.585,170 450,166.415 450,162L450,78C450,73.585 453.585,70 458,70L742,70C746.415,70 750,73.585 750,78Z" style="fill:rgb(255,243,224);stroke:rgb(255,152,0);stroke-width:2px;"/>
-        <g transform="matrix(1,0,0,1,600,95)">
-            <text x="-24.117px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:14px;fill:rgb(255,152,0);">Cluster</text>
-        </g>
-        <g transform="matrix(1,0,0,1,600,115)">
-            <text x="-71.355px" y="0px" style="font-family:'Helvetica';font-size:12px;fill:rgb(51,51,51);">Collection of microservices</text>
-        </g>
-        <g transform="matrix(1,0,0,1,600,135)">
-            <text x="-68.277px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• Independent pricing model</text>
-        </g>
-        <g transform="matrix(1,0,0,1,611.639,146.809)">
-            <text x="-80.502px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• Resource allocation boundaries</text>
-        </g>
-    </g>
-    <g transform="matrix(1,0,0,1,394.147,226.349)">
-        <text x="-80.02px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:16px;fill:white;">Deployment</text>
-        <text x="15.996px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:16px;fill:white;">Patterns</text>
-    </g>
-    <g transform="matrix(1,0,0,1,-17.3481,17.9758)">
-        <path d="M220,236L220,344C220,347.311 217.311,350 214,350L56,350C52.689,350 50,347.311 50,344L50,236C50,232.689 52.689,230 56,230L214,230C217.311,230 220,232.689 220,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
-        <g transform="matrix(1,0,0,1,135,250)">
-            <text x="-42.68px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Shared Cluster</text>
-        </g>
-        <g transform="matrix(1,0,0,1,135,270)">
-            <text x="-35.02px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Multiple tenants</text>
-        </g>
-        <g transform="matrix(1,0,0,1,135,285)">
-            <text x="-46.689px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Shared infrastructure</text>
-        </g>
-        <g transform="matrix(1,0,0,1,135,300)">
-            <g transform="matrix(10,0,0,10,34.7461,0)">
+    <g id="Tenant-Cluster" transform="matrix(1,0,0,1,400.113,38.7341)">
+        <g id="Open-Marketplace" serif:id="Open Marketplace" transform="matrix(1,0,0,1,-417.461,-20.7583)">
+            <path d="M790,236L790,344C790,347.311 787.311,350 784,350L626,350C622.689,350 620,347.311 620,344L620,236C620,232.689 622.689,230 626,230L784,230C787.311,230 790,232.689 790,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
+            <g transform="matrix(1,0,0,1,663.33,335)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(244,67,54);">Future possibility</text>
             </g>
-            <text x="-34.746px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">T<tspan x="-29.746px -24.185px " y="0px 0px ">en</tspan>ant isolation</text>
-        </g>
-        <g transform="matrix(1,0,0,1,135,315)">
-            <g transform="matrix(10,0,0,10,-13.9868,0)">
+            <g transform="matrix(1,0,0,1,650.535,315)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Distributed infrastructure</text>
             </g>
-            <g transform="matrix(10,0,0,10,-11.2085,0)">
+            <g transform="matrix(1,0,0,1,647.747,300)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Federated CDN approach</text>
             </g>
-            <text x="-46.042px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Cost-ef<tspan x="-13.987px " y="0px ">ﬁ</tspan>cient scaling</text>
-        </g>
-        <g transform="matrix(1,0,0,1,135,335)">
-            <text x="-73.081px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(76,175,80);">Example: Free, rate-limited tier</text>
-        </g>
-    </g>
-    <g transform="matrix(1,0,0,1,-17.3481,17.9758)">
-        <path d="M410,236L410,344C410,347.311 407.311,350 404,350L246,350C242.689,350 240,347.311 240,344L240,236C240,232.689 242.689,230 246,230L404,230C407.311,230 410,232.689 410,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
-        <g transform="matrix(1,0,0,1,325,250)">
-            <text x="-51.015px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Dedicated Cluster</text>
-        </g>
-        <g transform="matrix(1,0,0,1,325,270)">
-            <text x="-29.189px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Single tenant</text>
-        </g>
-        <g transform="matrix(1,0,0,1,325,285)">
-            <text x="-48.079px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Isolated infrastructure</text>
-        </g>
-        <g transform="matrix(1,0,0,1,325,300)">
-            <text x="-53.357px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">On-premise deployment</text>
-        </g>
-        <g transform="matrix(1,0,0,1,325,315)">
-            <text x="-54.473px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Predictable performance</text>
-        </g>
-        <g transform="matrix(1,0,0,1,325,335)">
-            <text x="-58.352px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(255,152,0);">Example: Big customers</text>
-        </g>
-    </g>
-    <g transform="matrix(1,0,0,1,-17.3481,17.9758)">
-        <path d="M600,236L600,344C600,347.311 597.311,350 594,350L436,350C432.689,350 430,347.311 430,344L430,236C430,232.689 432.689,230 436,230L594,230C597.311,230 600,232.689 600,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
-        <g transform="matrix(1,0,0,1,515,250)">
-            <text x="-55.008px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Hybrid Deployment</text>
-        </g>
-        <g transform="matrix(1,0,0,1,515,270)">
-            <g transform="matrix(10,0,0,10,55.3125,0)">
+            <g transform="matrix(1,0,0,1,652.234,285)">
+                <g transform="matrix(10,0,0,10,105.532,0)">
+                </g>
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Orchestrator as &apos;T<tspan x="78.599px 84.16px " y="0px 0px ">en</tspan>ant&apos;</text>
             </g>
-            <text x="-55.313px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Self-hosted Media nodes</text>
-        </g>
-        <g transform="matrix(1,0,0,1,515,285)">
-            <g transform="matrix(10,0,0,10,60.3674,0)">
+            <g transform="matrix(1,0,0,1,651.36,270)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Anyone can run clusters</text>
             </g>
-            <text x="-60.367px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Enhanced through pla<tspan x="37.589px " y="0px ">t</tspan>form</text>
-        </g>
-        <g transform="matrix(1,0,0,1,515,300)">
-            <g transform="matrix(10,0,0,10,63.9185,0)">
+            <g transform="matrix(1,0,0,1,653.314,250)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Open Marketplace</text>
             </g>
-            <text x="-63.918px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Fallback to available clusters</text>
         </g>
-        <g transform="matrix(1,0,0,1,515,315)">
-            <g transform="matrix(10,0,0,10,67.8149,0)">
+        <g id="Hybrid-Deployment" serif:id="Hybrid Deployment" transform="matrix(1,0,0,1,-417.461,-20.7583)">
+            <path d="M600,236L600,344C600,347.311 597.311,350 594,350L436,350C432.689,350 430,347.311 430,344L430,236C430,232.689 432.689,230 436,230L594,230C597.311,230 600,232.689 600,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
+            <g transform="matrix(1,0,0,1,464.155,335)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(156,39,176);">Example: Self-hosted</text>
             </g>
-            <text x="-67.815px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Zero-maintenance deployment</text>
-        </g>
-        <g transform="matrix(1,0,0,1,515,335)">
-            <text x="-50.845px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(156,39,176);">Example: Self-hosted</text>
-        </g>
-    </g>
-    <g transform="matrix(1,0,0,1,-17.3481,17.9758)">
-        <path d="M790,236L790,344C790,347.311 787.311,350 784,350L626,350C622.689,350 620,347.311 620,344L620,236C620,232.689 622.689,230 626,230L784,230C787.311,230 790,232.689 790,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
-        <g transform="matrix(1,0,0,1,705,250)">
-            <g transform="matrix(12,0,0,12,51.6855,0)">
+            <g transform="matrix(1,0,0,1,447.185,315)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Zero-maintenance deployment</text>
             </g>
-            <text x="-51.686px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Open Marketplace</text>
-        </g>
-        <g transform="matrix(1,0,0,1,705,270)">
-            <g transform="matrix(10,0,0,10,53.6401,0)">
+            <g transform="matrix(1,0,0,1,451.082,300)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Fallback to available clusters</text>
             </g>
-            <text x="-53.64px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Anyone can run clusters</text>
+            <g transform="matrix(1,0,0,1,454.633,285)">
+                <g transform="matrix(10,0,0,10,120.635,0)">
+                </g>
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Enhanced through platform</text>
+            </g>
+            <g transform="matrix(1,0,0,1,459.687,270)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Self-hosted Media nodes</text>
+            </g>
+            <g transform="matrix(1,0,0,1,459.992,250)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Hybrid Deployment</text>
+            </g>
         </g>
-        <g transform="matrix(1,0,0,1,705,285)">
-            <text x="-52.766px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Orchestrator as &apos;T<tspan x="25.833px 31.394px " y="0px 0px ">en</tspan>ant&apos;</text>
+        <g id="Dedicated-Cluster" serif:id="Dedicated Cluster" transform="matrix(1,0,0,1,-417.461,-20.7583)">
+            <path d="M410,236L410,344C410,347.311 407.311,350 404,350L246,350C242.689,350 240,347.311 240,344L240,236C240,232.689 242.689,230 246,230L404,230C407.311,230 410,232.689 410,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
+            <g transform="matrix(1,0,0,1,276.388,335)">
+                <g transform="matrix(10,0,0,10,96.7041,0)">
+                </g>
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(255,152,0);">Example: Enterprise</text>
+            </g>
+            <g transform="matrix(1,0,0,1,270.527,315)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Predictable performance</text>
+            </g>
+            <g transform="matrix(1,0,0,1,271.643,300)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">On-premise deployment</text>
+            </g>
+            <g transform="matrix(1,0,0,1,276.921,285)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Isolated infrastructure</text>
+            </g>
+            <g transform="matrix(1,0,0,1,295.811,270)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Single tenant</text>
+            </g>
+            <g transform="matrix(1,0,0,1,273.985,250)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Dedicated Cluster</text>
+            </g>
         </g>
-        <g transform="matrix(1,0,0,1,705,300)">
-            <text x="-57.253px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Federated CDN approach</text>
+        <g id="Shared-Cluster" serif:id="Shared Cluster" transform="matrix(1,0,0,1,-417.461,-20.7583)">
+            <path d="M220,236L220,344C220,347.311 217.311,350 214,350L56,350C52.689,350 50,347.311 50,344L50,236C50,232.689 52.689,230 56,230L214,230C217.311,230 220,232.689 220,236Z" style="fill:rgb(248,249,250);stroke:rgb(102,102,102);stroke-width:1px;"/>
+            <g transform="matrix(1,0,0,1,61.919,335)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(76,175,80);">Example: Free, rate-limited tier</text>
+            </g>
+            <g transform="matrix(1,0,0,1,88.958,315)">
+                <g transform="matrix(10,0,0,10,32.0557,0)">
+                </g>
+                <g transform="matrix(10,0,0,10,34.834,0)">
+                </g>
+                <g transform="matrix(10,0,0,10,92.085,0)">
+                </g>
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Cost-ef<tspan x="32.056px " y="0px ">ﬁ</tspan>cient scaling</text>
+            </g>
+            <g transform="matrix(1,0,0,1,100.254,300)">
+                <g transform="matrix(10,0,0,10,69.4922,0)">
+                </g>
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">T<tspan x="5px 10.562px " y="0px 0px ">en</tspan>ant isolation</text>
+            </g>
+            <g transform="matrix(1,0,0,1,88.311,285)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Shared infrastructure</text>
+            </g>
+            <g transform="matrix(1,0,0,1,99.98,270)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Multiple tenants</text>
+            </g>
+            <g transform="matrix(1,0,0,1,92.32,250)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(51,51,51);">Shared Cluster</text>
+            </g>
         </g>
-        <g transform="matrix(1,0,0,1,705,315)">
-            <text x="-54.465px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(102,102,102);">Distributed infrastructure</text>
+        <g id="Clusters-Title" serif:id="Clusters Title" transform="matrix(1,0,0,1,-85.986,187.615)">
+            <g transform="matrix(16,0,0,16,160.039,0)">
+            </g>
+            <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:16px;fill:white;">Deployment Patterns</text>
         </g>
-        <g transform="matrix(1,0,0,1,705,335)">
-            <text x="-41.67px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:10px;fill:rgb(244,67,54);">Future possibility</text>
+        <g id="Cluster" transform="matrix(1,0,0,1,-416.211,-40.1105)">
+            <path d="M750,78L750,162C750,166.415 746.415,170 742,170L458,170C453.585,170 450,166.415 450,162L450,78C450,73.585 453.585,70 458,70L742,70C746.415,70 750,73.585 750,78Z" style="fill:rgb(255,243,224);stroke:rgb(255,152,0);stroke-width:2px;"/>
+            <g transform="matrix(1,0,0,1,531.137,146.809)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• Resource allocation boundaries</text>
+            </g>
+            <g transform="matrix(1,0,0,1,531.723,135)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• Independent pricing model</text>
+            </g>
+            <g transform="matrix(1,0,0,1,528.645,115)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:12px;fill:rgb(51,51,51);">Collection of microservices</text>
+            </g>
+            <g transform="matrix(1,0,0,1,575.883,95)">
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:14px;fill:rgb(255,152,0);">Cluster</text>
+            </g>
+        </g>
+        <g id="Tenant" transform="matrix(1,0,0,1,-390.149,-40.108)">
+            <path d="M350,78L350,162C350,166.415 346.415,170 342,170L58,170C53.585,170 50,166.415 50,162L50,78C50,73.585 53.585,70 58,70L342,70C346.415,70 350,73.585 350,78Z" style="fill:rgb(227,242,253);stroke:rgb(33,150,243);stroke-width:2px;"/>
+            <g transform="matrix(1,0,0,1,113.297,148.135)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• JWT/API token carries tenant context</text>
+            </g>
+            <g transform="matrix(1,0,0,1,114.307,135)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(102,102,102);">• Isolated data scope in all services</text>
+            </g>
+            <g transform="matrix(1,0,0,1,125.627,115)">
+                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:12px;fill:rgb(51,51,51);">Individual, business or team</text>
+            </g>
+            <g transform="matrix(1,0,0,1,177.571,95)">
+                <g transform="matrix(14,0,0,14,44.8574,0)">
+                </g>
+                <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:14px;fill:rgb(33,150,243);">T<tspan x="7.52px 15.306px " y="0px 0px ">en</tspan>ant</text>
+            </g>
+        </g>
+        <g id="Main-Title" serif:id="Main Title" transform="matrix(1,0,0,1,-126.532,0)">
+            <g transform="matrix(18,0,0,18,253.063,0)">
+            </g>
+            <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:18px;fill:white;">T<tspan x="9.668px 19.679px " y="0px 0px ">en</tspan>ant &amp; Cluster <tspan x="147.032px 160.031px " y="0px 0px ">Ar</tspan>chitecture</text>
         </g>
     </g>
 </svg>

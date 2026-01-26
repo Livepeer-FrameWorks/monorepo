@@ -8,6 +8,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 )
@@ -20,25 +21,16 @@ func newClusterCmd() *cobra.Command {
 		Long: `Manage central and regional FrameWorks clusters including:
   - Infrastructure tier (Postgres, Kafka, Zookeeper, ClickHouse)
   - Application services (Quartermaster, Commodore, Bridge, Periscope, etc.)
-  - Interface services (Nginx, webapp, website, forms)`,
+  - Interface services (Nginx/Caddy, Chartroom, Foredeck, Logbook)`,
 	}
 
-	// Phase 1: Detection & Validation commands (highest priority)
 	cluster.AddCommand(newClusterDetectCmd())
 	cluster.AddCommand(newClusterDoctorCmd())
-
-	// Phase 2: Provisioning commands
 	cluster.AddCommand(newClusterProvisionCmd())
 	cluster.AddCommand(newClusterInitCmd())
-
-	// Phase 4: Operations commands
 	cluster.AddCommand(newClusterLogsCmd())
 	cluster.AddCommand(newClusterRestartCmd())
-
-	// Phase 5: Advanced operations
 	cluster.AddCommand(newClusterUpgradeCmd())
-
-	// Phase 6: Backup/Restore/Diagnostics
 	cluster.AddCommand(newClusterBackupCmd())
 	cluster.AddCommand(newClusterRestoreCmd())
 	cluster.AddCommand(newClusterDiagnoseCmd())
@@ -150,24 +142,24 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 
 	// Detect infrastructure services
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		detectService(ctx, cmd, manifest, "postgres", manifest.Infrastructure.Postgres.Host)
+		detectService(ctx, cmd, manifest, "postgres", "postgres", manifest.Infrastructure.Postgres.Host)
 	}
 
 	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		detectService(ctx, cmd, manifest, "clickhouse", manifest.Infrastructure.ClickHouse.Host)
+		detectService(ctx, cmd, manifest, "clickhouse", "clickhouse", manifest.Infrastructure.ClickHouse.Host)
 	}
 
 	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
 		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
 			serviceName := fmt.Sprintf("kafka-broker-%d", broker.ID)
-			detectService(ctx, cmd, manifest, serviceName, broker.Host)
+			detectService(ctx, cmd, manifest, serviceName, "kafka", broker.Host)
 		}
 	}
 
 	if manifest.Infrastructure.Zookeeper != nil && manifest.Infrastructure.Zookeeper.Enabled {
 		for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
 			serviceName := fmt.Sprintf("zookeeper-%d", node.ID)
-			detectService(ctx, cmd, manifest, serviceName, node.Host)
+			detectService(ctx, cmd, manifest, serviceName, "zookeeper", node.Host)
 		}
 	}
 
@@ -177,11 +169,21 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 			continue
 		}
 		if svc.Host != "" {
-			detectService(ctx, cmd, manifest, name, svc.Host)
+			deploy, err := resolveDeployName(name, svc)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				continue
+			}
+			detectService(ctx, cmd, manifest, name, deploy, svc.Host)
 		} else if len(svc.Hosts) > 0 {
 			for i, hostName := range svc.Hosts {
+				deploy, err := resolveDeployName(name, svc)
+				if err != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+					continue
+				}
 				serviceName := fmt.Sprintf("%s-%d", name, i+1)
-				detectService(ctx, cmd, manifest, serviceName, hostName)
+				detectService(ctx, cmd, manifest, serviceName, deploy, hostName)
 			}
 		}
 	}
@@ -192,7 +194,27 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 			continue
 		}
 		if iface.Host != "" {
-			detectService(ctx, cmd, manifest, name, iface.Host)
+			deploy, err := resolveDeployName(name, iface)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				continue
+			}
+			detectService(ctx, cmd, manifest, name, deploy, iface.Host)
+		}
+	}
+
+	// Detect observability services
+	for name, obs := range manifest.Observability {
+		if !obs.Enabled {
+			continue
+		}
+		if obs.Host != "" {
+			deploy, err := resolveDeployName(name, obs)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				continue
+			}
+			detectService(ctx, cmd, manifest, name, deploy, obs.Host)
 		}
 	}
 
@@ -200,7 +222,7 @@ func runDetect(cmd *cobra.Command, manifestPath string) error {
 }
 
 // detectService detects a single service on a host
-func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, serviceName, hostName string) {
+func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, serviceName, deployName, hostName string) {
 	host, ok := manifest.GetHost(hostName)
 	if !ok {
 		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", serviceName, hostName)
@@ -208,7 +230,7 @@ func detectService(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	}
 
 	detector := detect.NewDetector(host)
-	state, err := detector.Detect(ctx, serviceName)
+	state, err := detector.Detect(ctx, deployName)
 
 	if err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "✗ %s (%s): detection error: %v\n", serviceName, hostName, err)
@@ -349,16 +371,21 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 			continue
 		}
 
-		if svc.Port == 0 {
-			continue // Skip if no port defined
+		port, err := resolvePort(name, svc)
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+			continue
 		}
-
 		totalChecks++
+		path := "/health"
+		if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
+			path = def.HealthPath
+		}
 		checker := &health.HTTPChecker{
-			Path:    "/health",
+			Path:    path,
 			Timeout: 5 * time.Second,
 		}
-		result := checker.Check(host.Address, svc.Port)
+		result := checker.Check(host.Address, port)
 		printHealthResult(cmd, name, result)
 		if result.OK {
 			passedChecks++
@@ -366,6 +393,87 @@ func runDoctor(cmd *cobra.Command, manifestPath string) error {
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
+
+	// Interface Services Health Checks
+	fmt.Fprintln(cmd.OutOrStdout(), "Interface Services:")
+	fmt.Fprintln(cmd.OutOrStdout(), "")
+
+	for name, svc := range manifest.Interfaces {
+		if !svc.Enabled {
+			continue
+		}
+		if svc.Host == "" {
+			continue
+		}
+
+		host, ok := manifest.GetHost(svc.Host)
+		if !ok {
+			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", name, svc.Host)
+			continue
+		}
+
+		port, err := resolvePort(name, svc)
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+			continue
+		}
+
+		totalChecks++
+		path := "/health"
+		if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
+			path = def.HealthPath
+		}
+		checker := &health.HTTPChecker{
+			Path:    path,
+			Timeout: 5 * time.Second,
+		}
+		result := checker.Check(host.Address, port)
+		printHealthResult(cmd, name, result)
+		if result.OK {
+			passedChecks++
+		}
+	}
+
+	fmt.Fprintln(cmd.OutOrStdout(), "")
+
+	// Observability Services Health Checks
+	if len(manifest.Observability) > 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "Observability Services:")
+		fmt.Fprintln(cmd.OutOrStdout(), "")
+		for name, svc := range manifest.Observability {
+			if !svc.Enabled {
+				continue
+			}
+			if svc.Host == "" {
+				continue
+			}
+			host, ok := manifest.GetHost(svc.Host)
+			if !ok {
+				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: host '%s' not found\n", name, svc.Host)
+				continue
+			}
+			port, err := resolvePort(name, svc)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", name, err)
+				continue
+			}
+			totalChecks++
+			path := "/health"
+			if def, ok := servicedefs.Lookup(name); ok && def.HealthPath != "" {
+				path = def.HealthPath
+			}
+			checker := &health.HTTPChecker{
+				Path:    path,
+				Timeout: 5 * time.Second,
+			}
+			result := checker.Check(host.Address, port)
+			printHealthResult(cmd, name, result)
+			if result.OK {
+				passedChecks++
+			}
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "")
+	}
 
 	// Summary
 	fmt.Fprintf(cmd.OutOrStdout(), "Summary: %d/%d checks passed\n", passedChecks, totalChecks)

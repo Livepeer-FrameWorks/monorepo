@@ -16,11 +16,12 @@ type Manifest struct {
 
 // Host represents a target machine
 type Host struct {
-	Address string            `yaml:"address"`
-	User    string            `yaml:"user"`
-	SSHKey  string            `yaml:"ssh_key,omitempty"`
-	Roles   []string          `yaml:"roles,omitempty"`
-	Labels  map[string]string `yaml:"labels,omitempty"`
+	Address    string            `yaml:"address"`
+	ExternalIP string            `yaml:"external_ip,omitempty"`
+	User       string            `yaml:"user"`
+	SSHKey     string            `yaml:"ssh_key,omitempty"`
+	Roles      []string          `yaml:"roles,omitempty"`
+	Labels     map[string]string `yaml:"labels,omitempty"`
 }
 
 // WireGuardConfig represents WireGuard mesh configuration
@@ -121,9 +122,11 @@ type ServiceConfig struct {
 	Version   string            `yaml:"version"`
 	Image     string            `yaml:"image,omitempty"`      // For docker mode
 	BinaryURL string            `yaml:"binary_url,omitempty"` // For native mode
+	Deploy    string            `yaml:"deploy,omitempty"`     // Underlying service slug (container/binary name)
 	Host      string            `yaml:"host,omitempty"`       // Single host
 	Hosts     []string          `yaml:"hosts,omitempty"`      // Multiple hosts (for replicas)
 	Port      int               `yaml:"port,omitempty"`
+	GRPCPort  int               `yaml:"grpc_port,omitempty"`
 	Replicas  int               `yaml:"replicas,omitempty"`
 	EnvFile   string            `yaml:"env_file,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty"`
@@ -134,7 +137,6 @@ type ServiceConfig struct {
 // EdgeManifest represents edge node deployment configuration (edges.yaml)
 type EdgeManifest struct {
 	Version    string     `yaml:"version"`
-	Type       string     `yaml:"type"` // Should be "edge"
 	RootDomain string     `yaml:"root_domain"`
 	PoolDomain string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
 	Email      string     `yaml:"email"`       // ACME email

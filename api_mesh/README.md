@@ -16,22 +16,31 @@ For self-hosted deployments, Privateer ensures your nodes communicate securely w
 
 ## What it does
 - Manages WireGuard peer connections automatically
-- Token-based join: new nodes join mesh with time-limited JWT tokens
+- Token-based join: new nodes join mesh with time-limited bootstrap tokens
 - Peer discovery via Quartermaster
 - Health monitoring and reporting
 - Local DNS resolution for mesh hostnames (port 5353)
 
 ## How nodes join
+The agent uses the bootstrap token to register the node, then uses the service token for ongoing mesh sync:
 ```bash
-# Admin generates token via Quartermaster
-# New node joins with single command
-privateer join --token=<signed-jwt-token>
+ENROLLMENT_TOKEN=bt_xxx SERVICE_TOKEN=svc_xxx privateer
 ```
 
-The agent validates the token, generates WireGuard keys, connects to the bootstrap peer, registers with Quartermaster, and establishes mesh connections.
-
 ## Run (dev)
-- Bootstrap node: `privateer init --role=bootstrap --listen=0.0.0.0:51820`
-- Regular node: `privateer join --token=<token>`
+- Start the agent directly with env vars (no interactive join/init subcommands yet).
 
 Configuration comes from the top-level `config/env` stack. Generate `.env` with `make env` and customise `config/env/secrets.env` for secrets. Do not commit secrets.
+
+## Required env vars
+- `SERVICE_TOKEN` (required for mesh sync)
+- `ENROLLMENT_TOKEN` (optional; used once to register the node)
+
+## Optional env vars
+- `MESH_NODE_TYPE` (default: `edge`)
+- `MESH_NODE_NAME` (default: hostname)
+- `MESH_EXTERNAL_IP` (optional; used during bootstrap)
+- `MESH_INTERNAL_IP` (optional; used during bootstrap)
+- `MESH_LISTEN_PORT` (default: `51820`)
+- `PRIVATEER_SYNC_INTERVAL` (default: `30s`)
+- `PRIVATEER_SYNC_TIMEOUT` (default: `10s`)

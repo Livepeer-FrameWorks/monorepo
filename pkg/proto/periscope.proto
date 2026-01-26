@@ -9,103 +9,8 @@ import "google/protobuf/struct.proto";
 import "common.proto";
 import "ipc.proto";  // For StreamTrack
 
-// ============================================================================
-// Stream Analytics
-// Matches pkg/models/streams.go:StreamAnalytics (lines 8-60)
-// ============================================================================
 
-message StreamAnalytics {
-  // Core identifiers
-  string id = 1;                        // json:"id" - Unique ID for cursor pagination
-  string tenant_id = 2;                 // json:"tenant_id"
-  string stream_id = 3;                 // json:"stream_id"
-  string internal_name = 4;             // json:"internal_name"
-
-  // Session timing
-  optional google.protobuf.Timestamp session_start_time = 5;  // json:"session_start_time"
-  optional google.protobuf.Timestamp session_end_time = 6;    // json:"session_end_time"
-  int32 total_session_duration = 7;     // json:"total_session_duration" (seconds)
-
-  // Viewer metrics
-  int32 current_viewers = 8;            // json:"current_viewers"
-  int32 peak_viewers = 9;               // json:"peak_viewers"
-  int32 total_connections = 10;         // json:"total_connections"
-
-  // Bandwidth metrics
-  int64 bandwidth_in = 11;              // json:"bandwidth_in"
-  int64 bandwidth_out = 12;             // json:"bandwidth_out"
-  double total_bandwidth_gb = 13;       // json:"total_bandwidth_gb"
-
-  // Stream quality
-  optional int32 bitrate_kbps = 14;     // json:"bitrate_kbps"
-  optional string resolution = 15;      // json:"resolution"
-
-  // Packet metrics
-  int64 packets_sent = 16;              // json:"packets_sent"
-  int64 packets_lost = 17;              // json:"packets_lost"
-  int64 packets_retrans = 18;           // json:"packets_retrans"
-
-  // Byte counters
-  int64 upbytes = 19;                   // json:"upbytes"
-  int64 downbytes = 20;                 // json:"downbytes"
-
-  // Timing info
-  optional int32 first_ms = 21;         // json:"first_ms"
-  optional int32 last_ms = 22;          // json:"last_ms"
-
-  // Track info
-  int32 track_count = 23;               // json:"track_count"
-  int32 inputs = 24;                    // json:"inputs"
-  int32 outputs = 25;                   // json:"outputs"
-  repeated helmsmancontrol.StreamTrack tracks = 26;
-
-  // Node/location info
-  optional string node_id = 27;         // json:"node_id"
-  optional string node_name = 28;       // json:"node_name"
-  optional double latitude = 29;        // json:"latitude"
-  optional double longitude = 30;       // json:"longitude"
-  optional string location = 31;        // json:"location"
-
-  // Status info
-  optional string status = 32;          // json:"status"
-  google.protobuf.Timestamp last_updated = 33; // json:"last_updated"
-  google.protobuf.Timestamp created_at = 34;   // json:"created_at"
-
-  // Current health state (from STREAM_BUFFER events)
-  // REMOVED: current_health_score = 35 (no data source - derive from buffer_state if needed)
-  optional string current_buffer_state = 36;  // json:"current_buffer_state"
-  optional string current_issues = 37;        // json:"current_issues"
-  optional string current_codec = 38;         // json:"current_codec"
-  optional float current_fps = 39;            // json:"current_fps"
-  optional string current_resolution = 40;    // json:"current_resolution"
-  optional string mist_status = 41;           // json:"mist_status"
-  optional string quality_tier = 42;          // json:"quality_tier"
-
-  // Enriched metrics (computed from ClickHouse aggregations)
-  double avg_viewers = 43;              // json:"avg_viewers"
-  int32 unique_countries = 44;          // json:"unique_countries"
-  int32 unique_cities = 45;             // json:"unique_cities"
-  float avg_buffer_health = 46;         // json:"avg_buffer_health"
-  int32 avg_bitrate = 47;               // json:"avg_bitrate"
-  float packet_loss_rate = 48;          // json:"packet_loss_rate"
-
-  // Total viewer counts (for analytics display)
-  int32 total_views = 49;               // json:"total_views" - Total view count (session starts)
-  int32 unique_viewers = 50;            // json:"unique_viewers" - Unique viewer count (distinct sessions)
-}
-
-message GetStreamAnalyticsRequest {
-  string tenant_id = 1;
-  optional string stream_id = 2;
-  common.TimeRange time_range = 3;
-  common.CursorPaginationRequest pagination = 4;
-}
-
-message GetStreamAnalyticsResponse {
-  common.CursorPaginationResponse pagination = 1;
-  repeated StreamAnalytics streams = 2;
-}
-
+// StreamEvent is the canonical analytics stream event returned by Periscope APIs.
 message StreamEvent {
   string event_id = 1;  // Used as cursor ID
   google.protobuf.Timestamp timestamp = 2;
@@ -114,12 +19,34 @@ message StreamEvent {
   string node_id = 5;
   string event_data = 6;
   google.protobuf.Struct event_payload = 7;
-  string internal_name = 8;
+  string stream_id = 8;
+  optional string buffer_state = 9;
+  optional bool has_issues = 10;
+  optional int32 track_count = 11;
+  optional string quality_tier = 12;
+  optional int32 primary_width = 13;
+  optional int32 primary_height = 14;
+  optional float primary_fps = 15;
+  optional string primary_codec = 16;
+  optional int32 primary_bitrate = 17;
+  optional uint64 downloaded_bytes = 18;
+  optional uint64 uploaded_bytes = 19;
+  optional uint32 total_viewers = 20;
+  optional int32 total_inputs = 21;
+  optional int32 total_outputs = 22;
+  optional uint64 viewer_seconds = 23;
+  optional string request_url = 24;
+  optional string protocol = 25;
+  optional double latitude = 26;
+  optional double longitude = 27;
+  optional string location = 28;
+  optional string country_code = 29;
+  optional string city = 30;
 }
 
 message GetStreamEventsRequest {
   string tenant_id = 1;
-  string internal_name = 2;
+  string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -136,11 +63,12 @@ message BufferEvent {
   string node_id = 4;
   string event_data = 5;
   google.protobuf.Struct event_payload = 6;
+  string stream_id = 7;
 }
 
 message GetBufferEventsRequest {
   string tenant_id = 1;
-  string internal_name = 2;
+  string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -148,16 +76,6 @@ message GetBufferEventsRequest {
 message GetBufferEventsResponse {
   common.CursorPaginationResponse pagination = 1;
   repeated BufferEvent events = 2;
-}
-
-// Single stream details (from live_streams table)
-message GetStreamDetailsRequest {
-  string tenant_id = 1;
-  string internal_name = 2;
-}
-
-message GetStreamDetailsResponse {
-  StreamAnalytics stream = 1;
 }
 
 // Stream end events (filtered stream_events where event_type = 'stream_end')
@@ -172,7 +90,7 @@ message EndEvent {
 
 message GetEndEventsRequest {
   string tenant_id = 1;
-  string internal_name = 2;
+  string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -186,11 +104,17 @@ message StreamHealthMetric {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   string node_id = 5;
   int32 bitrate = 6;
   float fps = 7;
   int32 gop_size = 8;
+  optional float frame_ms_max = 36;
+  optional float frame_ms_min = 37;
+  optional int32 frames_max = 38;
+  optional int32 frames_min = 39;
+  optional float keyframe_ms_max = 40;
+  optional float keyframe_ms_min = 41;
   int32 width = 9;
   int32 height = 10;
   int32 buffer_size = 11;
@@ -224,7 +148,7 @@ message StreamHealthMetric {
 
 message GetStreamHealthMetricsRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;
+  optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -257,7 +181,7 @@ message ViewerGeographicStats {
 
 message GetViewerStatsRequest {
   string tenant_id = 1;
-  string internal_name = 2;
+  string stream_id = 2;
 }
 
 message GetViewerStatsResponse {
@@ -271,7 +195,7 @@ message GetViewerStatsResponse {
 message ViewerSession {
   string session_id = 1;  // Used as cursor ID
   google.protobuf.Timestamp timestamp = 2;
-  string internal_name = 3;
+  string stream_id = 3;
   string tenant_id = 4;
   string node_id = 5;
   string connection_addr = 6;
@@ -288,6 +212,8 @@ message ViewerSession {
   float connection_quality = 17;
   float buffer_health = 18;
   optional helmsmancontrol.GeoBucket client_bucket = 19;
+  optional google.protobuf.Timestamp connected_at = 20;
+  optional google.protobuf.Timestamp disconnected_at = 21;
 }
 
 message GetViewerMetricsRequest {
@@ -306,12 +232,12 @@ message GetViewerMetricsResponse {
 message ViewerCountBucket {
   google.protobuf.Timestamp timestamp = 1;
   int32 viewer_count = 2;
-  string internal_name = 3;
+  string stream_id = 3;
 }
 
 message GetViewerCountTimeSeriesRequest {
   string tenant_id = 1;
-  optional string stream = 2;      // Filter by stream, or all streams if omitted
+  optional string stream_id = 2;   // Filter by stream, or all streams if omitted
   common.TimeRange time_range = 3;
   string interval = 4;             // Bucket interval: "5m", "15m", "1h", "1d"
 }
@@ -338,7 +264,7 @@ message CityMetric {
 
 message GetGeographicDistributionRequest {
   string tenant_id = 1;
-  optional string stream = 2;      // Filter by stream, or all streams if omitted
+  optional string stream_id = 2;   // Filter by stream, or all streams if omitted
   common.TimeRange time_range = 3;
   int32 top_n = 4;                 // Limit results, default 10
 }
@@ -362,12 +288,12 @@ message TrackListEvent {
   string track_list = 4;  // Raw JSON
   repeated helmsmancontrol.StreamTrack tracks = 5;
   int32 track_count = 6;
-  string stream = 7;
+  string stream_id = 7;
 }
 
 message GetTrackListEventsRequest {
   string tenant_id = 1;
-  string internal_name = 2;
+  string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -385,7 +311,7 @@ message ConnectionEvent {
   string event_id = 1;  // Used as cursor ID
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   string session_id = 5;
   string connection_addr = 6;
   string connector = 7;
@@ -399,11 +325,12 @@ message ConnectionEvent {
   helmsmancontrol.GeoBucket node_bucket = 15;
   uint32 session_duration_seconds = 16;  // Duration of session (disconnect events)
   uint64 bytes_transferred = 17;         // Bytes transferred during session
+  optional string request_url = 18;
 }
 
 message GetConnectionEventsRequest {
   string tenant_id = 1;
-  optional string stream = 2;
+  optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -421,6 +348,7 @@ message NodeMetric {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
   string node_id = 3;
+  string cluster_id = 23;
   float cpu_usage = 4;
   uint64 ram_max = 5;
   uint64 ram_current = 6;
@@ -458,6 +386,7 @@ message NodeMetricHourly {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
   string node_id = 3;
+  string cluster_id = 16;
   float avg_cpu = 4;
   float peak_cpu = 5;
   float avg_memory = 6;
@@ -472,6 +401,18 @@ message NodeMetricHourly {
   float peak_shm = 15;
 }
 
+message NodeMetricsAggregated {
+  string node_id = 1;
+  string cluster_id = 2;
+  float avg_cpu = 3;
+  float avg_memory = 4;
+  float avg_disk = 5;
+  float avg_shm = 6;
+  int64 total_bandwidth_in = 7;
+  int64 total_bandwidth_out = 8;
+  uint32 sample_count = 9;
+}
+
 message GetNodeMetrics1hRequest {
   string tenant_id = 1;
   optional string node_id = 2;
@@ -482,6 +423,16 @@ message GetNodeMetrics1hRequest {
 message GetNodeMetrics1hResponse {
   common.CursorPaginationResponse pagination = 1;
   repeated NodeMetricHourly metrics = 2;
+}
+
+message GetNodeMetricsAggregatedRequest {
+  string tenant_id = 1;
+  optional string node_id = 2;
+  common.TimeRange time_range = 3;
+}
+
+message GetNodeMetricsAggregatedResponse {
+  repeated NodeMetricsAggregated metrics = 1;
 }
 
 // Live node state (from live_nodes ReplacingMergeTree - current state, not time-series)
@@ -536,7 +487,7 @@ message GetLiveNodesResponse {
 message RoutingEvent {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
-  string stream = 3;  // internal_name/stream identifier
+  string stream_id = 3;
   string selected_node = 4;
   optional string node_id = 5;
   // client_ip intentionally omitted (PII)
@@ -567,7 +518,7 @@ message RoutingEvent {
 
 message GetRoutingEventsRequest {
   string tenant_id = 1;
-  optional string stream = 2;
+  optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
   repeated string related_tenant_ids = 5;
@@ -586,7 +537,7 @@ message GetRoutingEventsResponse {
 // ============================================================================
 
 message RealtimeStream {
-  string internal_name = 1;
+  string stream_id = 1;
   int32 current_viewers = 2;
   int64 bandwidth_in = 3;
   int64 bandwidth_out = 4;
@@ -609,7 +560,7 @@ message GetRealtimeStreamsResponse {
 }
 
 message RealtimeStreamViewer {
-  string internal_name = 1;
+  string stream_id = 1;
   double avg_viewers = 2;
   double peak_viewers = 3;
   int32 unique_countries = 4;
@@ -682,6 +633,9 @@ message GetPlatformOverviewResponse {
 
   // Total views count (from tenant_analytics_daily - connection events)
   int64 total_views = 20;               // Total number of view sessions started in time range
+
+  // Echoed time range used for aggregation (for UI consistency)
+  common.TimeRange time_range = 21;
 }
 
 // ============================================================================
@@ -691,7 +645,7 @@ message GetPlatformOverviewResponse {
 message ClipEvent {
   string request_id = 1;  // Used as cursor ID
   google.protobuf.Timestamp timestamp = 2;
-  string internal_name = 3;
+  string stream_id = 3;
   string stage = 4;
   optional string content_type = 5;
   optional int64 start_unix = 6;
@@ -707,8 +661,9 @@ message ClipEvent {
 
 message GetClipEventsRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;
+  optional string stream_id = 2;
   optional string stage = 3;
+  optional string content_type = 6; // clip|dvr|vod (artifact lifecycle)
   common.TimeRange time_range = 4;
   common.CursorPaginationRequest pagination = 5;
 }
@@ -722,7 +677,7 @@ message GetClipEventsResponse {
 message ArtifactState {
   string tenant_id = 1;
   string request_id = 2;          // clip_hash or dvr_hash
-  string internal_name = 3;       // source stream
+  string stream_id = 3;           // source stream
   string content_type = 4;        // 'clip' or 'dvr'
   string stage = 5;               // requested, queued, processing, completed, failed, deleted
   uint32 progress_percent = 6;
@@ -753,7 +708,7 @@ message GetArtifactStateResponse {
 
 message GetArtifactStatesRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;   // filter by source stream
+  optional string stream_id = 2;       // filter by source stream
   optional string content_type = 3;    // filter by 'clip' or 'dvr'
   optional string stage = 4;           // filter by stage
   common.CursorPaginationRequest pagination = 5;
@@ -772,7 +727,7 @@ message GetArtifactStatesResponse {
 
 message GetStreamStatusRequest {
   string tenant_id = 1;
-  string stream_id = 2;  // internal_name
+  string stream_id = 2;
 }
 
 message StreamStatusResponse {
@@ -797,11 +752,23 @@ message StreamStatusResponse {
   optional int32 primary_bitrate = 17;
   optional bool has_issues = 18;
   optional string issues_description = 19;
+
+  // Current state identifiers / counters (from stream_state_current)
+  optional string node_id = 20;
+  optional int32 track_count = 21;
+  optional int32 total_inputs = 22;
+  optional uint64 uploaded_bytes = 23;
+  optional uint64 downloaded_bytes = 24;
+  optional uint64 viewer_seconds = 25;
+  optional uint64 packets_sent = 26;
+  optional uint64 packets_lost = 27;
+  optional uint64 packets_retransmitted = 28;
+  optional google.protobuf.Timestamp updated_at = 29;
 }
 
 message GetStreamsStatusRequest {
   string tenant_id = 1;
-  repeated string stream_ids = 2;  // internal_names (batch lookup)
+  repeated string stream_ids = 2;
 }
 
 message StreamsStatusResponse {
@@ -813,7 +780,6 @@ message StreamsStatusResponse {
 // ============================================================================
 
 service StreamAnalyticsService {
-  rpc GetStreamAnalytics(GetStreamAnalyticsRequest) returns (GetStreamAnalyticsResponse);
   rpc GetStreamEvents(GetStreamEventsRequest) returns (GetStreamEventsResponse);
   rpc GetBufferEvents(GetBufferEventsRequest) returns (GetBufferEventsResponse);
   rpc GetStreamHealthMetrics(GetStreamHealthMetricsRequest) returns (GetStreamHealthMetricsResponse);
@@ -839,6 +805,7 @@ service ConnectionAnalyticsService {
 service NodeAnalyticsService {
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   rpc GetNodeMetrics1h(GetNodeMetrics1hRequest) returns (GetNodeMetrics1hResponse);
+  rpc GetNodeMetricsAggregated(GetNodeMetricsAggregatedRequest) returns (GetNodeMetricsAggregatedResponse);
   // Live node state queries (from live_nodes ReplacingMergeTree)
   rpc GetLiveNodes(GetLiveNodesRequest) returns (GetLiveNodesResponse);
 }
@@ -867,7 +834,7 @@ message StreamConnectionHourly {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp hour = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   uint64 total_bytes = 5;
   uint64 unique_viewers = 6;
   uint64 total_sessions = 7;
@@ -875,7 +842,7 @@ message StreamConnectionHourly {
 
 message GetStreamConnectionHourlyRequest {
   string tenant_id = 1;
-  optional string stream = 2;
+  optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -890,7 +857,7 @@ message ClientMetrics5m {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   string node_id = 5;
   uint32 active_sessions = 6;
   double avg_bandwidth_in = 7;
@@ -901,7 +868,7 @@ message ClientMetrics5m {
 
 message GetClientMetrics5mRequest {
   string tenant_id = 1;
-  optional string stream = 2;
+  optional string stream_id = 2;
   optional string node_id = 3;
   common.TimeRange time_range = 4;
   common.CursorPaginationRequest pagination = 5;
@@ -917,21 +884,25 @@ message QualityTierDaily {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp day = 2;
   string tenant_id = 3;
-  string internal_name = 4;
-  uint32 tier_1080p_minutes = 5;
-  uint32 tier_720p_minutes = 6;
-  uint32 tier_480p_minutes = 7;
-  uint32 tier_sd_minutes = 8;
-  string primary_tier = 9;
-  uint32 codec_h264_minutes = 10;
-  uint32 codec_h265_minutes = 11;
-  uint32 avg_bitrate = 12;
-  float avg_fps = 13;
+  string stream_id = 4;
+  uint32 tier_2160p_minutes = 5;
+  uint32 tier_1440p_minutes = 6;
+  uint32 tier_1080p_minutes = 7;
+  uint32 tier_720p_minutes = 8;
+  uint32 tier_480p_minutes = 9;
+  uint32 tier_sd_minutes = 10;
+  string primary_tier = 11;
+  uint32 codec_h264_minutes = 12;
+  uint32 codec_h265_minutes = 13;
+  uint32 codec_vp9_minutes = 16;
+  uint32 codec_av1_minutes = 17;
+  uint32 avg_bitrate = 14;
+  float avg_fps = 15;
 }
 
 message GetQualityTierDailyRequest {
   string tenant_id = 1;
-  optional string stream = 2;
+  optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -957,6 +928,7 @@ message StorageUsageRecord {
   uint64 frozen_dvr_bytes = 10;
   uint64 frozen_clip_bytes = 11;
   uint64 frozen_vod_bytes = 12;
+  string storage_scope = 13; // hot | cold
 }
 
 // Storage lifecycle event (freeze/defrost operations)
@@ -964,7 +936,7 @@ message StorageEvent {
   string id = 1;  // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   string asset_hash = 5;           // clip_hash or dvr_hash
   string action = 6;               // freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
   string asset_type = 7;           // clip, dvr
@@ -979,7 +951,7 @@ message StorageEvent {
 
 message GetStorageEventsRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;
+  optional string stream_id = 2;
   optional string asset_type = 3;   // filter: clip or dvr
   common.TimeRange time_range = 4;
   common.CursorPaginationRequest pagination = 5;
@@ -995,6 +967,7 @@ message GetStorageUsageRequest {
   optional string node_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
+  optional string storage_scope = 5;
 }
 
 message GetStorageUsageResponse {
@@ -1002,11 +975,34 @@ message GetStorageUsageResponse {
   repeated StorageUsageRecord records = 2;
 }
 
+// Live usage summary for billing dashboards (near-real-time)
+message GetLiveUsageSummaryRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+}
+
+message LiveUsageSummary {
+  string tenant_id = 1;
+  google.protobuf.Timestamp period_start = 2;
+  google.protobuf.Timestamp period_end = 3;
+  double viewer_hours = 4;
+  double egress_gb = 5;
+  int32 unique_viewers = 6;
+  double average_storage_gb = 7;
+  double livepeer_seconds = 8;
+  double native_av_seconds = 9;
+}
+
+message GetLiveUsageSummaryResponse {
+  LiveUsageSummary summary = 1;
+}
+
 // Service for materialized view analytics
 service AggregatedAnalyticsService {
   rpc GetStreamConnectionHourly(GetStreamConnectionHourlyRequest) returns (GetStreamConnectionHourlyResponse);
   rpc GetClientMetrics5m(GetClientMetrics5mRequest) returns (GetClientMetrics5mResponse);
   rpc GetQualityTierDaily(GetQualityTierDailyRequest) returns (GetQualityTierDailyResponse);
+  rpc GetStreamAnalyticsSummary(GetStreamAnalyticsSummaryRequest) returns (GetStreamAnalyticsSummaryResponse);
   rpc GetStorageUsage(GetStorageUsageRequest) returns (GetStorageUsageResponse);
   rpc GetStorageEvents(GetStorageEventsRequest) returns (GetStorageEventsResponse);
   rpc GetStreamHealth5m(GetStreamHealth5mRequest) returns (GetStreamHealth5mResponse);
@@ -1015,10 +1011,12 @@ service AggregatedAnalyticsService {
   rpc GetViewerGeoHourly(GetViewerGeoHourlyRequest) returns (GetViewerGeoHourlyResponse);
   rpc GetTenantDailyStats(GetTenantDailyStatsRequest) returns (GetTenantDailyStatsResponse);
   rpc GetProcessingUsage(GetProcessingUsageRequest) returns (GetProcessingUsageResponse);
+  rpc GetLiveUsageSummary(GetLiveUsageSummaryRequest) returns (GetLiveUsageSummaryResponse);
   // Newly exposed tables
   rpc GetRebufferingEvents(GetRebufferingEventsRequest) returns (GetRebufferingEventsResponse);
   rpc GetTenantAnalyticsDaily(GetTenantAnalyticsDailyRequest) returns (GetTenantAnalyticsDailyResponse);
   rpc GetStreamAnalyticsDaily(GetStreamAnalyticsDailyRequest) returns (GetStreamAnalyticsDailyResponse);
+  rpc GetAPIUsage(GetAPIUsageRequest) returns (GetAPIUsageResponse);
 }
 
 // ============================================================================
@@ -1029,20 +1027,21 @@ message StreamHealth5m {
   string id = 1;
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   string node_id = 5;
   int32 rebuffer_count = 6;
   int32 issue_count = 7;
   string sample_issues = 8;
   int32 avg_bitrate = 9;
   float avg_fps = 10;
-  int32 buffer_dry_count = 11;
-  string quality_tier = 12;
+  float avg_buffer_health = 11;
+  int32 buffer_dry_count = 12;
+  string quality_tier = 13;
 }
 
 message GetStreamHealth5mRequest {
   string tenant_id = 1;
-  string internal_name = 2;
+  string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -1089,7 +1088,7 @@ message ViewerHoursHourly {
   string id = 1;
   google.protobuf.Timestamp hour = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   string country_code = 5;
   int32 unique_viewers = 6;
   int64 total_session_seconds = 7;
@@ -1098,7 +1097,7 @@ message ViewerHoursHourly {
 
 message GetViewerHoursHourlyRequest {
   string tenant_id = 1;
-  optional string stream = 2;
+  optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -1124,7 +1123,7 @@ message ViewerGeoHourly {
 
 message GetViewerGeoHourlyRequest {
   string tenant_id = 1;
-  optional string stream = 2;
+  optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -1168,7 +1167,7 @@ message ProcessingUsageRecord {
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
   string node_id = 4;
-  string stream_name = 5;
+  string stream_id = 5;
   string process_type = 6;           // "Livepeer", "AV", "FFmpeg"
   int64 duration_ms = 7;
   optional string input_codec = 8;
@@ -1261,7 +1260,7 @@ message ProcessingUsageSummary {
 
 message GetProcessingUsageRequest {
   string tenant_id = 1;
-  optional string stream_name = 2;      // Filter by stream
+  optional string stream_id = 2;        // Filter by stream
   optional string process_type = 3;     // Filter by process type ("Livepeer", "AV", "FFmpeg")
   common.TimeRange time_range = 4;
   common.CursorPaginationRequest pagination = 5;
@@ -1283,7 +1282,7 @@ message RebufferingEvent {
   string id = 1;                                         // Unique ID for cursor pagination
   google.protobuf.Timestamp timestamp = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   string node_id = 5;
   string buffer_state = 6;                               // Current buffer state
   string prev_state = 7;                                 // Previous buffer state
@@ -1293,7 +1292,7 @@ message RebufferingEvent {
 
 message GetRebufferingEventsRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;                     // Filter by stream
+  optional string stream_id = 2;                         // Filter by stream
   optional string node_id = 3;                           // Filter by node
   common.TimeRange time_range = 4;
   common.CursorPaginationRequest pagination = 5;
@@ -1339,7 +1338,7 @@ message StreamAnalyticsDaily {
   string id = 1;                                         // Unique ID for cursor pagination
   google.protobuf.Timestamp day = 2;
   string tenant_id = 3;
-  string internal_name = 4;
+  string stream_id = 4;
   int64 total_views = 5;                                 // Total view events
   int32 unique_viewers = 6;                              // Unique viewer count
   int32 unique_countries = 7;                            // Geographic diversity
@@ -1349,7 +1348,7 @@ message StreamAnalyticsDaily {
 
 message GetStreamAnalyticsDailyRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;                     // Filter by stream
+  optional string stream_id = 2;                         // Filter by stream
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
 }
@@ -1357,4 +1356,116 @@ message GetStreamAnalyticsDailyRequest {
 message GetStreamAnalyticsDailyResponse {
   common.CursorPaginationResponse pagination = 1;
   repeated StreamAnalyticsDaily records = 2;
+}
+
+// ============================================================================
+// Stream Analytics Summary (range aggregates, MV-only)
+// ============================================================================
+
+message QualityTierSummary {
+  uint32 tier_2160p_minutes = 1;
+  uint32 tier_1440p_minutes = 2;
+  uint32 tier_1080p_minutes = 3;
+  uint32 tier_720p_minutes = 4;
+  uint32 tier_480p_minutes = 5;
+  uint32 tier_sd_minutes = 6;
+  uint32 codec_h264_minutes = 7;
+  uint32 codec_h265_minutes = 8;
+  uint32 codec_vp9_minutes = 9;
+  uint32 codec_av1_minutes = 10;
+}
+
+message StreamAnalyticsSummary {
+  string tenant_id = 1;
+  string stream_id = 2;
+  common.TimeRange time_range = 3;
+  float range_avg_viewers = 4;
+  uint32 range_peak_concurrent_viewers = 5;
+  int64 range_total_views = 6;
+  int64 range_total_sessions = 7;
+  float range_avg_buffer_health = 8;
+  uint32 range_avg_bitrate = 9;
+  float range_avg_fps = 10;
+  float range_packet_loss_rate = 11;
+  float range_avg_connection_time = 12;
+  float range_viewer_hours = 13;
+  float range_egress_gb = 14;
+  int64 range_unique_viewers = 15;
+  int32 range_unique_countries = 16;
+  int64 range_rebuffer_count = 17;
+  int64 range_issue_count = 18;
+  int64 range_buffer_dry_count = 19;
+  QualityTierSummary range_quality = 20;
+  float range_avg_session_seconds = 21;
+  float range_avg_bytes_per_session = 22;
+}
+
+message GetStreamAnalyticsSummaryRequest {
+  string tenant_id = 1;
+  string stream_id = 2;
+  common.TimeRange time_range = 3;
+}
+
+message GetStreamAnalyticsSummaryResponse {
+  StreamAnalyticsSummary summary = 1;
+}
+
+// ============================================================================
+// API Usage Analytics (from api_usage_hourly/daily tables)
+// ============================================================================
+
+// Hourly API usage record (from api_usage_hourly MV)
+message APIUsageRecord {
+  string id = 1;                                         // Unique ID for cursor pagination
+  google.protobuf.Timestamp timestamp = 2;               // Hour timestamp
+  string tenant_id = 3;
+  string auth_type = 4;                                  // jwt, api_token, wallet, anonymous
+  string operation_type = 5;                             // query, mutation, subscription
+  string operation_name = 6;                             // GetStreams, CreateClip, etc.
+  uint64 request_count = 7;
+  uint64 error_count = 8;
+  uint64 total_duration_ms = 9;
+  uint64 total_complexity = 10;
+  uint64 unique_users = 11;                              // Distinct user count in period
+  uint64 unique_tokens = 12;                             // Distinct API token count in period
+}
+
+// Daily API usage summary (from api_usage_daily MV)
+message APIUsageSummary {
+  google.protobuf.Timestamp date = 1;
+  string tenant_id = 2;
+  string auth_type = 3;
+  uint64 total_requests = 4;
+  uint64 total_errors = 5;
+  double avg_duration_ms = 6;
+  uint64 total_complexity = 7;
+  uint64 unique_users = 8;
+  uint64 unique_tokens = 9;
+}
+
+// Operation-level API usage summary (from api_usage_hourly)
+message APIUsageOperationSummary {
+  string operation_type = 1;                       // query, mutation, subscription
+  uint64 total_requests = 2;
+  uint64 total_errors = 3;
+  uint64 unique_operations = 4;                    // Distinct operation_name count
+  double avg_duration_ms = 5;
+  uint64 total_complexity = 6;
+}
+
+message GetAPIUsageRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+  optional string auth_type = 3;                         // Filter: jwt, api_token, wallet
+  optional string operation_type = 4;                    // Filter: query, mutation, subscription
+  common.CursorPaginationRequest pagination = 5;
+  bool summary_only = 6;                                 // If true, return only daily summaries
+  optional string operation_name = 7;                    // Filter: GraphQL operation name
+}
+
+message GetAPIUsageResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated APIUsageRecord records = 2;                   // Hourly records (when summary_only=false)
+  repeated APIUsageSummary summaries = 3;                // Daily summaries
+  repeated APIUsageOperationSummary operation_summaries = 4;
 }

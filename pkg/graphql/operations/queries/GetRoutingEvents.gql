@@ -1,0 +1,57 @@
+# Fetch paginated routing events for a specific stream with geographic and scoring details
+# Returns load balancer decisions with client and node locations
+query GetRoutingEvents(
+  $streamId: ID
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  analytics {
+    infra {
+      routingEventsConnection(streamId: $streamId, timeRange: $timeRange, noCache: $noCache, page: { first: $first, after: $after }) @paginate {
+        edges {
+          cursor
+          node {
+            timestamp
+            streamId
+            stream {
+              streamId
+            }
+            selectedNode
+            nodeId
+            status
+            details
+            score
+            clientCountry
+            clientLatitude
+            clientLongitude
+            clientBucket {
+              h3Index
+              resolution
+            }
+            nodeLatitude
+            nodeLongitude
+            nodeName
+            nodeBucket {
+              h3Index
+              resolution
+            }
+            routingDistance
+            latencyMs
+            candidatesCount
+            eventType
+            source
+            streamTenantId
+            clusterId
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

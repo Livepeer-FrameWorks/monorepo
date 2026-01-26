@@ -1,0 +1,22 @@
+# Real-time transcoding/processing events
+# Tracks encode performance, renditions, and billing metrics
+subscription ProcessingEventsLive($streamId: ID) {
+  liveProcessingEvents(streamId: $streamId) {
+    timestamp
+    nodeId
+    streamId
+    processType
+    trackType
+    durationMs
+    inputCodec
+    outputCodec
+    segmentNumber
+    width
+    height
+    renditionCount
+    inputBytes
+    outputBytesTotal
+    turnaroundMs
+    speedFactor
+  }
+}

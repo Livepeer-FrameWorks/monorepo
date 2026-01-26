@@ -19,5 +19,5 @@ Configuration comes from the top-level `config/env` stack. Generate `.env` with 
 
 ## Health & ports
 - Health: `GET /health` (HTTP) or `grpc.health.v1.Health/Check` (gRPC)
-- HTTP: 18009
+- HTTP: 18009 (health/metrics only)
 - gRPC: 19005

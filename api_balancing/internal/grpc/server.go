@@ -5,14 +5,12 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net"
-	"net/http"
-	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,19 +20,23 @@ import (
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
+	"frameworks/api_balancing/internal/triggers"
 	"frameworks/pkg/clients/decklog"
+	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/clips"
 	"frameworks/pkg/dvr"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/x402"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -51,19 +53,28 @@ type S3ClientInterface interface {
 	Delete(ctx context.Context, key string) error
 }
 
+// CacheInvalidator is implemented by the trigger processor to invalidate and lookup cached tenant data
+type CacheInvalidator interface {
+	InvalidateTenantCache(tenantID string) int
+	GetBillingStatus(ctx context.Context, internalName, tenantID string) *triggers.BillingStatus
+}
+
 // FoghornGRPCServer implements the Foghorn control plane gRPC services
 type FoghornGRPCServer struct {
 	pb.UnimplementedClipControlServiceServer
 	pb.UnimplementedDVRControlServiceServer
 	pb.UnimplementedViewerControlServiceServer
 	pb.UnimplementedVodControlServiceServer
+	pb.UnimplementedTenantControlServiceServer
 
-	db            *sql.DB
-	logger        logging.Logger
-	lb            *balancer.LoadBalancer
-	geoipReader   *geoip.Reader
-	decklogClient *decklog.BatchedClient
-	s3Client      S3ClientInterface
+	db               *sql.DB
+	logger           logging.Logger
+	lb               *balancer.LoadBalancer
+	geoipReader      *geoip.Reader
+	decklogClient    *decklog.BatchedClient
+	s3Client         S3ClientInterface
+	cacheInvalidator CacheInvalidator
+	purserClient     *purserclient.GRPCClient
 }
 
 // NewFoghornGRPCServer creates a new Foghorn gRPC server
@@ -74,6 +85,7 @@ func NewFoghornGRPCServer(
 	geoReader *geoip.Reader,
 	decklogClient *decklog.BatchedClient,
 	s3Client S3ClientInterface,
+	purserClient *purserclient.GRPCClient,
 ) *FoghornGRPCServer {
 	return &FoghornGRPCServer{
 		db:            db,
@@ -82,6 +94,7 @@ func NewFoghornGRPCServer(
 		geoipReader:   geoReader,
 		decklogClient: decklogClient,
 		s3Client:      s3Client,
+		purserClient:  purserClient,
 	}
 }
 
@@ -91,6 +104,12 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 	pb.RegisterDVRControlServiceServer(grpcServer, s)
 	pb.RegisterViewerControlServiceServer(grpcServer, s)
 	pb.RegisterVodControlServiceServer(grpcServer, s)
+	pb.RegisterTenantControlServiceServer(grpcServer, s)
+}
+
+// SetCacheInvalidator sets the cache invalidator for tenant cache management
+func (s *FoghornGRPCServer) SetCacheInvalidator(ci CacheInvalidator) {
+	s.cacheInvalidator = ci
 }
 
 // emitRoutingEvent sends a LoadBalancingData event with dual-tenant attribution
@@ -99,8 +118,10 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 func (s *FoghornGRPCServer) emitRoutingEvent(
 	primary *pb.ViewerEndpoint,
 	viewerLat, viewerLon, nodeLat, nodeLon float64,
-	internalName, streamTenantID string,
+	internalName, streamTenantID, streamID string,
 	durationMs float32,
+	candidatesCount int32,
+	eventType, source string,
 ) {
 	if s.decklogClient == nil || primary == nil {
 		return
@@ -195,6 +216,31 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 			}
 			return nil
 		}(),
+		StreamId: func() *string {
+			if streamID != "" {
+				return &streamID
+			}
+			return nil
+		}(),
+		CandidatesCount: func() *uint32 {
+			if candidatesCount > 0 {
+				v := uint32(candidatesCount)
+				return &v
+			}
+			return nil
+		}(),
+		EventType: func() *string {
+			if eventType != "" {
+				return &eventType
+			}
+			return nil
+		}(),
+		Source: func() *string {
+			if source != "" {
+				return &source
+			}
+			return nil
+		}(),
 		ClusterId: func() *string {
 			if clusterID != "" {
 				return &clusterID
@@ -259,6 +305,9 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 	if req.InternalName != "" {
 		data.InternalName = &req.InternalName
 	}
+	if req.StreamId != nil && *req.StreamId != "" {
+		data.StreamId = req.StreamId
+	}
 	// CRITICAL: Enrich with timing fields for analytics
 	if req.StartUnix != nil {
 		data.StartUnix = req.StartUnix
@@ -283,6 +332,9 @@ func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClip
 	if req.ExpiresAt != nil {
 		data.ExpiresAt = req.ExpiresAt
 	}
+	if req.UserId != nil && *req.UserId != "" {
+		data.UserId = req.UserId
+	}
 	return data
 }
 
@@ -293,6 +345,9 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+	if req.GetArtifactInternalName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_internal_name is required")
 	}
 
 	format := req.GetFormat()
@@ -316,12 +371,6 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 
 	// Generate request_id for correlation
 	reqID := uuid.New().String()
-
-	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
-	if s.decklogClient != nil {
-		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, "")
-		go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
-	}
 
 	// Get storage node ID
 	storageNodeID := s.lb.GetNodeIDByHost(storageHost)
@@ -359,6 +408,12 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		}
 	}
 
+	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
+	if s.decklogClient != nil {
+		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
+		go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
+	}
+
 	// Build requested_params JSON for audit
 	requestedParams := map[string]interface{}{
 		"mode": req.Mode.String(),
@@ -387,9 +442,9 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// retention_until defaults to 30 days (system default, not user-configured yet)
 	storagePath := clips.BuildClipStoragePath(req.InternalName, clipHash, format)
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, internal_name, tenant_id, user_id, status, request_id, manifest_path, format, retention_until, created_at, updated_at)
-		VALUES ($1, 'clip', $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'requested', $5, $6, $7, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, clipHash, req.InternalName, req.TenantId, req.GetUserId(), reqID, storagePath, format)
+		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, internal_name, artifact_internal_name, tenant_id, user_id, status, request_id, manifest_path, format, retention_until, created_at, updated_at)
+		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, NOW() + INTERVAL '30 days', NOW(), NOW())
+	`, clipHash, req.InternalName, req.GetArtifactInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format)
 
 	if err != nil {
 		// Commodore registration succeeded (clip_hash provided) but Foghorn insert failed
@@ -420,7 +475,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		StreamName:    req.InternalName,
 		Format:        format,
 		OutputName:    clipHash,
-		SourceBaseUrl: deriveMistHTTPBase(ingestHost),
+		SourceBaseUrl: control.DeriveMistHTTPBase(ingestHost),
 		RequestId:     reqID,
 	}
 	if req.StartUnix != nil {
@@ -486,292 +541,8 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		NodeId:      storageNodeID,
 		RequestId:   reqID,
 		ClipHash:    clipHash,
+		PlaybackId:  req.GetPlaybackId(),
 	}, nil
-}
-
-// GetClips returns clips filtered by internal_name (stream)
-// NOTE: tenant_id filtering now happens at Commodore level (business registry)
-// Foghorn returns lifecycle data by internal_name (stream) only
-func (s *FoghornGRPCServer) GetClips(ctx context.Context, req *pb.GetClipsRequest) (*pb.GetClipsResponse, error) {
-	internalName := req.GetInternalName()
-	if internalName == "" {
-		// Without internal_name, we can't filter meaningfully
-		// Caller should use Commodore.GetClips for tenant-wide queries
-		return nil, status.Error(codes.InvalidArgument, "internal_name is required for artifact queries")
-	}
-
-	// Parse bidirectional keyset pagination
-	params, err := pagination.Parse(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "artifact_hash",
-	}
-
-	// Build base WHERE clause - filter by internal_name and artifact_type
-	baseWhere := "internal_name = $1 AND artifact_type = 'clip' AND status != 'deleted'"
-	args := []interface{}{internalName}
-	argIdx := 2
-
-	// Count total
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM foghorn.artifacts WHERE %s", baseWhere)
-	var total int32
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		s.logger.WithError(err).Error("Failed to count clips")
-		return nil, status.Error(codes.Internal, "failed to count clips")
-	}
-
-	// Build select query with keyset pagination
-	selectQuery := fmt.Sprintf(`
-		SELECT a.artifact_hash, a.internal_name, COALESCE(a.manifest_path, ''),
-		       a.size_bytes, a.status, a.access_count, a.created_at, a.updated_at,
-		       COALESCE(a.storage_location, 'pending'), COALESCE(n.node_id, ''), COALESCE(n.file_path, '')
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.artifact_nodes n ON a.artifact_hash = n.artifact_hash AND NOT n.is_orphaned
-		WHERE %s`, baseWhere)
-
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		selectQuery += " AND " + condition
-		args = append(args, cursorArgs...)
-	}
-
-	// Add ORDER BY and LIMIT
-	selectQuery += " " + builder.OrderBy(params)
-	selectQuery += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	// Fetch clips
-	rows, err := s.db.QueryContext(ctx, selectQuery, args...)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to fetch clips")
-		return nil, status.Error(codes.Internal, "failed to fetch clips")
-	}
-	defer rows.Close()
-
-	var clips []*pb.ClipInfo
-	for rows.Next() {
-		var clipHash, streamName, storagePath, clipStatus, storageLocation, nodeID, filePath string
-		var sizeBytes sql.NullInt64
-		var accessCount int32
-		var createdAt, updatedAt time.Time
-
-		err := rows.Scan(
-			&clipHash, &streamName, &storagePath,
-			&sizeBytes, &clipStatus, &accessCount, &createdAt, &updatedAt,
-			&storageLocation, &nodeID, &filePath,
-		)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan clip")
-			continue
-		}
-
-		clip := &pb.ClipInfo{
-			Id:         clipHash, // Use hash as ID for lifecycle responses
-			ClipHash:   clipHash,
-			StreamName: streamName,
-			// Title/Description now come from Commodore's business registry
-			Title:           "",
-			Description:     "",
-			NodeId:          nodeID,
-			StoragePath:     storagePath,
-			Status:          clipStatus,
-			AccessCount:     accessCount,
-			CreatedAt:       timestamppb.New(createdAt),
-			UpdatedAt:       timestamppb.New(updatedAt),
-			StorageLocation: &storageLocation,
-		}
-		if sizeBytes.Valid {
-			clip.SizeBytes = &sizeBytes.Int64
-		}
-		clips = append(clips, clip)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(clips) > params.Limit
-	if hasMore {
-		clips = clips[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(clips) > 0 {
-		for i, j := 0, len(clips)-1; i < j; i, j = i+1, j-1 {
-			clips[i], clips[j] = clips[j], clips[i]
-		}
-	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(clips) > 0 {
-		first := clips[0]
-		last := clips[len(clips)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.Id)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
-	}
-
-	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.GetClipsResponse{
-		Clips: clips,
-		Pagination: &pb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-
-	return resp, nil
-}
-
-// GetClip returns a specific clip by hash
-func (s *FoghornGRPCServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (*pb.ClipInfo, error) {
-	if req.ClipHash == "" {
-		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
-	}
-	// NOTE: tenant_id validation now happens at Commodore level (business registry)
-	// Foghorn only provides lifecycle data by artifact_hash
-
-	// Query artifact lifecycle from foghorn.artifacts
-	artifactQuery := `
-		SELECT artifact_hash, internal_name, status, COALESCE(error_message, ''),
-		       size_bytes, manifest_path, COALESCE(storage_location, 'pending'),
-		       access_count, created_at, updated_at
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND status != 'deleted'
-	`
-
-	var clipHash, internalName, clipStatus, errorMsg, storagePath, storageLocation string
-	var sizeBytes sql.NullInt64
-	var accessCount int32
-	var createdAt, updatedAt time.Time
-
-	err := s.db.QueryRowContext(ctx, artifactQuery, req.ClipHash).Scan(
-		&clipHash, &internalName, &clipStatus, &errorMsg,
-		&sizeBytes, &storagePath, &storageLocation,
-		&accessCount, &createdAt, &updatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, status.Error(codes.NotFound, "clip not found")
-	} else if err != nil {
-		s.logger.WithError(err).Error("Failed to fetch clip artifact")
-		return nil, status.Error(codes.Internal, "failed to fetch clip")
-	}
-
-	// Get node info from artifact_nodes
-	var nodeID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.ClipHash).Scan(&nodeID)
-
-	clip := &pb.ClipInfo{
-		Id:         clipHash, // Use hash as ID for lifecycle responses
-		ClipHash:   clipHash,
-		StreamName: internalName,
-		// Title/Description now come from Commodore's business registry
-		Title:           "",
-		Description:     "",
-		NodeId:          nodeID,
-		StoragePath:     storagePath,
-		Status:          clipStatus,
-		AccessCount:     accessCount,
-		CreatedAt:       timestamppb.New(createdAt),
-		UpdatedAt:       timestamppb.New(updatedAt),
-		StorageLocation: &storageLocation,
-	}
-	if sizeBytes.Valid {
-		clip.SizeBytes = &sizeBytes.Int64
-	}
-	// NOTE: errorMsg is stored in foghorn.artifacts but not exposed in ClipInfo proto
-
-	return clip, nil
-}
-
-// GetClipURLs returns viewing URLs for a clip
-func (s *FoghornGRPCServer) GetClipURLs(ctx context.Context, req *pb.GetClipURLsRequest) (*pb.ClipViewingURLs, error) {
-	if req.ClipHash == "" {
-		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
-	}
-	// NOTE: tenant_id validation now happens at Commodore level
-
-	// Get artifact info
-	var internalName string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT internal_name FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND status != 'deleted'
-	`, req.ClipHash).Scan(&internalName)
-
-	if err == sql.ErrNoRows {
-		return nil, status.Error(codes.NotFound, "clip not found")
-	} else if err != nil {
-		return nil, status.Error(codes.Internal, "failed to fetch clip")
-	}
-
-	// Get node_id from artifact_nodes
-	var nodeID string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.ClipHash).Scan(&nodeID)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, status.Error(codes.Unavailable, "clip storage node unknown: no active node assignment found")
-		}
-		return nil, status.Errorf(codes.Unavailable, "clip storage node unknown: %v", err)
-	}
-	if nodeID == "" {
-		return nil, status.Error(codes.Unavailable, "clip storage node unknown: empty node_id")
-	}
-
-	// Get node outputs
-	nodeOutputs, exists := control.GetNodeOutputs(nodeID)
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil, status.Error(codes.Unavailable, "storage node outputs not available")
-	}
-
-	// Build URLs using clip hash directly (MistServer resolves via PLAY_REWRITE trigger)
-	urls := make(map[string]string)
-	clipHash := req.ClipHash
-	baseURL := ensureTrailingSlash(nodeOutputs.BaseURL)
-
-	// Always add HTML player URL
-	urls["MIST_HTML"] = baseURL + clipHash + ".html"
-
-	// Add protocol-specific URLs if available
-	if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-		urls["HLS"] = resolveTemplateURL(hlsURL, baseURL, clipHash)
-	}
-	if dashURL, ok := nodeOutputs.Outputs["DASH"].(string); ok {
-		urls["DASH"] = resolveTemplateURL(dashURL, baseURL, clipHash)
-	}
-	if mp4URL, ok := nodeOutputs.Outputs["MP4"].(string); ok {
-		urls["MP4"] = resolveTemplateURL(mp4URL, baseURL, clipHash)
-	}
-	if webmURL, ok := nodeOutputs.Outputs["WEBM"].(string); ok {
-		urls["WEBM"] = resolveTemplateURL(webmURL, baseURL, clipHash)
-	}
-
-	resp := &pb.ClipViewingURLs{
-		Urls: urls,
-	}
-	// NOTE: ExpiresAt (retention_until) is now in Commodore's business registry
-	return resp, nil
 }
 
 // DeleteClip deletes a clip
@@ -782,11 +553,19 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	// NOTE: tenant_id validation now happens at Commodore level
 
 	// Check current status from foghorn.artifacts
-	var currentStatus string
+	var (
+		currentStatus  string
+		sizeBytes      sql.NullInt64
+		retentionUntil sql.NullTime
+		internalName   sql.NullString
+		denormTenantID sql.NullString
+		denormUserID   sql.NullString
+	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT status FROM foghorn.artifacts
+		SELECT status, size_bytes, retention_until, internal_name, tenant_id, user_id
+		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'clip'
-	`, req.ClipHash).Scan(&currentStatus)
+	`, req.ClipHash).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "clip not found")
@@ -844,6 +623,9 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 
 	s.logger.WithField("clip_hash", req.ClipHash).Info("Clip soft-deleted successfully")
 
+	// Emit deletion lifecycle immediately (do not wait for node cleanup)
+	s.emitClipDeletedLifecycle(ctx, req.ClipHash, nodeID, sizeBytes, retentionUntil, internalName, denormTenantID, denormUserID)
+
 	return &pb.DeleteClipResponse{
 		Success: true,
 		Message: "clip deleted successfully",
@@ -861,6 +643,12 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	}
 	if req.TenantId == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	// Resolve retention policy (default 30 days) for cleanup jobs.
+	retentionUntil := time.Now().Add(30 * 24 * time.Hour)
+	if req.ExpiresAt != nil && *req.ExpiresAt > 0 {
+		retentionUntil = time.Unix(*req.ExpiresAt, 0)
 	}
 
 	// Resolve actual source node for this stream
@@ -890,22 +678,31 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	`, req.InternalName).Scan(&existingHash)
 
 	if existingHash != "" {
+		playbackID := ""
+		if control.CommodoreClient != nil {
+			if resp, err := control.CommodoreClient.ResolveDVRHash(ctx, existingHash); err == nil && resp.Found {
+				playbackID = resp.PlaybackId
+			}
+		}
 		return &pb.StartDVRResponse{
 			Status:        "already_started",
 			DvrHash:       existingHash,
 			IngestHost:    baseURL,
 			StorageHost:   storageHost,
 			StorageNodeId: storageNodeID,
+			PlaybackId:    playbackID,
 		}, nil
 	}
 
 	// Register DVR in Commodore business registry to get hash
 	var dvrHash string
+	var artifactInternalName string
+	var playbackID string
 	if control.CommodoreClient != nil {
 		regResp, err := control.CommodoreClient.RegisterDVR(ctx, &pb.RegisterDVRRequest{
 			TenantId:     req.TenantId,
 			UserId:       req.GetUserId(),
-			StreamId:     "", // Commodore resolves stream_id from internal_name
+			StreamId:     req.GetStreamId(),
 			InternalName: req.InternalName,
 		})
 		if err != nil {
@@ -913,6 +710,8 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			return nil, status.Errorf(codes.Internal, "failed to register DVR: %v", err)
 		}
 		dvrHash = regResp.DvrHash
+		artifactInternalName = regResp.GetArtifactInternalName()
+		playbackID = regResp.GetPlaybackId()
 	} else {
 		// Fallback: generate locally (legacy, should not happen in production)
 		var err error
@@ -931,9 +730,15 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// tenant_id is denormalized here for fallback when Commodore is unavailable
 	// retention_until defaults to 30 days (system default, not user-configured yet)
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, internal_name, tenant_id, status, request_id, format, retention_until, created_at, updated_at)
-		VALUES ($1, 'dvr', $2, NULLIF($3, '')::uuid, 'requested', $4, 'm3u8', NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, dvrHash, req.InternalName, req.TenantId, requestID)
+		INSERT INTO foghorn.artifacts (
+			artifact_hash, artifact_type, internal_name, artifact_internal_name,
+			tenant_id, user_id,
+			status, request_id, format,
+			retention_until, created_at, updated_at
+		)
+		VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid,
+		        'requested', $6, 'm3u8', $7, NOW(), NOW())
+	`, dvrHash, req.InternalName, artifactInternalName, req.TenantId, req.GetUserId(), requestID, retentionUntil)
 
 	if err != nil {
 		// Commodore registration succeeded but Foghorn insert failed
@@ -994,6 +799,12 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 				Status:  pb.DVRLifecycleData_STATUS_FAILED,
 				DvrHash: dvrHash,
 				Error:   func() *string { e := fmt.Sprintf("storage node unavailable: %v", err); return &e }(),
+				StreamId: func() *string {
+					if req.StreamId != nil && *req.StreamId != "" {
+						return req.StreamId
+					}
+					return nil
+				}(),
 				TenantId: func() *string {
 					if req.TenantId != "" {
 						return &req.TenantId
@@ -1003,6 +814,12 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 				InternalName: func() *string {
 					if req.InternalName != "" {
 						return &req.InternalName
+					}
+					return nil
+				}(),
+				UserId: func() *string {
+					if req.UserId != nil && *req.UserId != "" {
+						return req.UserId
 					}
 					return nil
 				}(),
@@ -1028,6 +845,12 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			Status:    pb.DVRLifecycleData_STATUS_STARTED,
 			DvrHash:   dvrHash,
 			StartedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+			StreamId: func() *string {
+				if req.StreamId != nil && *req.StreamId != "" {
+					return req.StreamId
+				}
+				return nil
+			}(),
 			TenantId: func() *string {
 				if req.TenantId != "" {
 					return &req.TenantId
@@ -1037,6 +860,12 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			InternalName: func() *string {
 				if req.InternalName != "" {
 					return &req.InternalName
+				}
+				return nil
+			}(),
+			UserId: func() *string {
+				if req.UserId != nil && *req.UserId != "" {
+					return req.UserId
 				}
 				return nil
 			}(),
@@ -1059,6 +888,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		IngestHost:    baseURL,
 		StorageHost:   storageHost,
 		StorageNodeId: storageNodeID,
+		PlaybackId:    playbackID,
 	}, nil
 }
 
@@ -1070,11 +900,21 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 	// NOTE: tenant_id validation now happens at Commodore level
 
 	// Get DVR artifact info
-	var dvrStatus, internalName string
-	query := `SELECT status, internal_name FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'`
-
-	err := s.db.QueryRowContext(ctx, query, req.DvrHash).Scan(&dvrStatus, &internalName)
+	var (
+		dvrStatus      string
+		internalName   string
+		sizeBytes      sql.NullInt64
+		retentionUntil sql.NullTime
+		startedAt      sql.NullTime
+		endedAt        sql.NullTime
+		denormTenantID sql.NullString
+		denormUserID   sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT status, COALESCE(internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
+	`, req.DvrHash).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
@@ -1127,6 +967,12 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 			Status:  pb.DVRLifecycleData_STATUS_STOPPED,
 			DvrHash: req.DvrHash,
 			EndedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+			StreamId: func() *string {
+				if req.StreamId != nil && *req.StreamId != "" {
+					return req.StreamId
+				}
+				return nil
+			}(),
 			TenantId: func() *string {
 				if req.TenantId != "" {
 					return &req.TenantId
@@ -1136,6 +982,12 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 			InternalName: func() *string {
 				if internalName != "" {
 					return &internalName
+				}
+				return nil
+			}(),
+			UserId: func() *string {
+				if denormUserID.Valid && denormUserID.String != "" {
+					return &denormUserID.String
 				}
 				return nil
 			}(),
@@ -1157,11 +1009,22 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	// NOTE: tenant_id validation now happens at Commodore level
 
 	// Get DVR artifact info
-	var dvrStatus, internalName string
-	query := `SELECT status, internal_name FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'`
+	var (
+		dvrStatus      string
+		internalName   string
+		sizeBytes      sql.NullInt64
+		retentionUntil sql.NullTime
+		startedAt      sql.NullTime
+		endedAt        sql.NullTime
+		denormTenantID sql.NullString
+		denormUserID   sql.NullString
+	)
 
-	err := s.db.QueryRowContext(ctx, query, req.DvrHash).Scan(&dvrStatus, &internalName)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT status, COALESCE(internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
+	`, req.DvrHash).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
@@ -1226,7 +1089,6 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	}
 
 	// Soft delete in foghorn.artifacts
-	// Note: Analytics event is emitted when Helmsman confirms deletion (via dvrDeletedHandler)
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
@@ -1238,259 +1100,13 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 
 	s.logger.WithField("dvr_hash", req.DvrHash).Info("DVR recording soft-deleted successfully")
 
+	// Emit deletion lifecycle immediately (do not wait for node cleanup)
+	s.emitDVRDeletedLifecycle(ctx, req.DvrHash, nodeID, sizeBytes, retentionUntil, startedAt, endedAt, internalName, denormTenantID, denormUserID)
+
 	return &pb.DeleteDVRResponse{
 		Success: true,
 		Message: "DVR recording deleted successfully",
 	}, nil
-}
-
-// GetDVRStatus returns status of a DVR recording
-func (s *FoghornGRPCServer) GetDVRStatus(ctx context.Context, req *pb.GetDVRStatusRequest) (*pb.DVRInfo, error) {
-	if req.DvrHash == "" {
-		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
-	}
-	// NOTE: tenant_id validation now happens at Commodore level
-
-	// Query artifact lifecycle from foghorn.artifacts
-	query := `
-		SELECT artifact_hash, internal_name, status,
-		       started_at, ended_at, duration_seconds, size_bytes, manifest_path,
-		       error_message, created_at, updated_at,
-		       COALESCE(storage_location, 'pending'), s3_url, frozen_at
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND status != 'deleted'
-	`
-
-	var dvrHash, internalName, dvrStatus string
-	var startedAt, endedAt sql.NullTime
-	var durationSec sql.NullInt32
-	var sizeBytes sql.NullInt64
-	var manifestPath, errorMessage sql.NullString
-	var createdAt, updatedAt time.Time
-	var storageLocation string
-	var s3URL sql.NullString
-	var frozenAt sql.NullTime
-
-	err := s.db.QueryRowContext(ctx, query, req.DvrHash).Scan(
-		&dvrHash, &internalName, &dvrStatus,
-		&startedAt, &endedAt, &durationSec, &sizeBytes, &manifestPath,
-		&errorMessage, &createdAt, &updatedAt,
-		&storageLocation, &s3URL, &frozenAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, status.Error(codes.NotFound, "DVR recording not found")
-	} else if err != nil {
-		s.logger.WithError(err).Error("Failed to fetch DVR status")
-		return nil, status.Error(codes.Internal, "failed to fetch DVR status")
-	}
-
-	// Get node_id from artifact_nodes
-	var storageNodeID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.DvrHash).Scan(&storageNodeID)
-
-	dvr := &pb.DVRInfo{
-		DvrHash:         dvrHash,
-		InternalName:    internalName,
-		StorageNodeId:   storageNodeID,
-		Status:          dvrStatus,
-		ManifestPath:    manifestPath.String,
-		ErrorMessage:    errorMessage.String,
-		CreatedAt:       timestamppb.New(createdAt),
-		UpdatedAt:       timestamppb.New(updatedAt),
-		StorageLocation: &storageLocation,
-	}
-
-	if startedAt.Valid {
-		dvr.StartedAt = timestamppb.New(startedAt.Time)
-	}
-	if endedAt.Valid {
-		dvr.EndedAt = timestamppb.New(endedAt.Time)
-	}
-	if durationSec.Valid {
-		dvr.DurationSeconds = &durationSec.Int32
-	}
-	if sizeBytes.Valid {
-		dvr.SizeBytes = &sizeBytes.Int64
-	}
-	if s3URL.Valid {
-		dvr.S3Url = &s3URL.String
-	}
-	if frozenAt.Valid {
-		dvr.FrozenAt = timestamppb.New(frozenAt.Time)
-	}
-	// NOTE: ExpiresAt (retention_until) is now in Commodore's business registry
-
-	return dvr, nil
-}
-
-// ListDVRRecordings lists DVR recordings for a stream (by internal_name)
-// NOTE: Tenant-wide queries should go through Commodore (business registry owner)
-func (s *FoghornGRPCServer) ListDVRRecordings(ctx context.Context, req *pb.ListDVRRecordingsRequest) (*pb.ListDVRRecordingsResponse, error) {
-	internalName := req.GetInternalName()
-	if internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name is required for artifact queries - tenant-wide queries should go through Commodore")
-	}
-
-	// Parse bidirectional keyset pagination
-	params, err := pagination.Parse(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "a.created_at",
-		IDColumn:        "a.artifact_hash",
-	}
-
-	// Build base WHERE clause (always exclude deleted, filter by artifact_type)
-	baseWhere := "a.internal_name = $1 AND a.artifact_type = 'dvr' AND a.status != 'deleted'"
-	args := []interface{}{internalName}
-	argIdx := 2
-
-	// Count total
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM foghorn.artifacts a WHERE %s", baseWhere)
-	var total int32
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		s.logger.WithError(err).Error("Failed to count DVR recordings")
-		return nil, status.Error(codes.Internal, "failed to count DVR recordings")
-	}
-
-	// Build select query with keyset pagination
-	// Join with artifact_nodes to get storage node info
-	selectQuery := fmt.Sprintf(`
-		SELECT a.artifact_hash, a.internal_name, COALESCE(an.node_id, ''), a.status,
-		       a.started_at, a.ended_at, a.duration_seconds, a.size_bytes, a.manifest_path,
-		       a.error_message, a.created_at, a.updated_at,
-		       COALESCE(a.storage_location, 'pending'), a.s3_url, a.frozen_at
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
-		WHERE %s`, baseWhere)
-
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		selectQuery += " AND " + condition
-		args = append(args, cursorArgs...)
-	}
-
-	// Add ORDER BY and LIMIT
-	selectQuery += " " + builder.OrderBy(params)
-	selectQuery += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	// Fetch recordings
-	rows, err := s.db.QueryContext(ctx, selectQuery, args...)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to fetch DVR recordings")
-		return nil, status.Error(codes.Internal, "failed to fetch DVR recordings")
-	}
-	defer rows.Close()
-
-	var recordings []*pb.DVRInfo
-	for rows.Next() {
-		var dvrHash, internalNameVal, storageNodeID, dvrStatus string
-		var startedAt, endedAt sql.NullTime
-		var durationSec sql.NullInt32
-		var sizeBytes sql.NullInt64
-		var manifestPath, errorMessage sql.NullString
-		var createdAt, updatedAt time.Time
-		var storageLocation string
-		var s3URL sql.NullString
-		var frozenAt sql.NullTime
-
-		err := rows.Scan(
-			&dvrHash, &internalNameVal, &storageNodeID, &dvrStatus,
-			&startedAt, &endedAt, &durationSec, &sizeBytes, &manifestPath,
-			&errorMessage, &createdAt, &updatedAt,
-			&storageLocation, &s3URL, &frozenAt,
-		)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan DVR recording")
-			continue
-		}
-
-		dvr := &pb.DVRInfo{
-			DvrHash:         dvrHash,
-			InternalName:    internalNameVal,
-			StorageNodeId:   storageNodeID,
-			Status:          dvrStatus,
-			ManifestPath:    manifestPath.String,
-			ErrorMessage:    errorMessage.String,
-			CreatedAt:       timestamppb.New(createdAt),
-			UpdatedAt:       timestamppb.New(updatedAt),
-			StorageLocation: &storageLocation,
-		}
-
-		if startedAt.Valid {
-			dvr.StartedAt = timestamppb.New(startedAt.Time)
-		}
-		if endedAt.Valid {
-			dvr.EndedAt = timestamppb.New(endedAt.Time)
-		}
-		if durationSec.Valid {
-			dvr.DurationSeconds = &durationSec.Int32
-		}
-		if sizeBytes.Valid {
-			dvr.SizeBytes = &sizeBytes.Int64
-		}
-		if s3URL.Valid {
-			dvr.S3Url = &s3URL.String
-		}
-		if frozenAt.Valid {
-			dvr.FrozenAt = timestamppb.New(frozenAt.Time)
-		}
-		// NOTE: ExpiresAt/retention_until now in Commodore business registry
-
-		recordings = append(recordings, dvr)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(recordings) > params.Limit
-	if hasMore {
-		recordings = recordings[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(recordings) > 0 {
-		for i, j := 0, len(recordings)-1; i < j; i, j = i+1, j-1 {
-			recordings[i], recordings[j] = recordings[j], recordings[i]
-		}
-	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(recordings) > 0 {
-		first := recordings[0]
-		last := recordings[len(recordings)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.DvrHash)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.DvrHash)
-	}
-
-	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListDVRRecordingsResponse{
-		DvrRecordings: recordings,
-		Pagination: &pb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-
-	return resp, nil
 }
 
 // =============================================================================
@@ -1503,21 +1119,51 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 		return nil, status.Error(codes.InvalidArgument, "content_id is required")
 	}
 
-	// Auto-detect content type if not specified (unified resolution)
-	if req.ContentType == "" {
-		resolution, err := control.ResolveContent(ctx, req.ContentId)
+	// Always resolve content type from the public ID (do not trust caller-provided type)
+	resolution, err := control.ResolveContent(ctx, req.ContentId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "failed to resolve content: %v", err)
+	}
+	resolvedType := resolution.ContentType
+	s.logger.WithFields(logging.Fields{
+		"content_id":   req.ContentId,
+		"content_type": resolvedType,
+	}).Info("Resolved content type from ID")
+
+	resourcePath := "viewer://" + req.ContentId
+	x402Paid := x402PaidFromMetadata(ctx)
+	paymentHeader := x402.GetPaymentHeaderFromContext(ctx)
+	clientIP := req.GetViewerIp()
+
+	if !x402Paid && paymentHeader != "" && s.purserClient != nil && resolution.TenantId != "" {
+		paid, err := s.handleX402ViewerPayment(ctx, resolution.TenantId, resourcePath, paymentHeader, clientIP)
 		if err != nil {
-			return nil, status.Errorf(codes.NotFound, "failed to resolve content: %v", err)
+			return nil, err
 		}
-		req.ContentType = resolution.ContentType
-		s.logger.WithFields(logging.Fields{
-			"content_id":   req.ContentId,
-			"content_type": req.ContentType,
-		}).Info("Auto-detected content type")
+		x402Paid = paid
 	}
 
-	if req.ContentType != "live" && req.ContentType != "dvr" && req.ContentType != "clip" {
-		return nil, status.Error(codes.InvalidArgument, "content_type must be 'live', 'dvr', or 'clip'")
+	// Check billing status for the content owner
+	if s.cacheInvalidator != nil && resolution.TenantId != "" {
+		billing := s.cacheInvalidator.GetBillingStatus(ctx, resolution.InternalName, resolution.TenantId)
+		if billing != nil {
+			// Hard block: tenant suspended (balance < -$10)
+			if billing.IsSuspended && !x402Paid {
+				s.logger.WithFields(logging.Fields{
+					"content_id": req.ContentId,
+					"tenant_id":  resolution.TenantId,
+				}).Warn("Rejecting viewer: content owner suspended")
+				return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - owner account suspended")
+			}
+			// Soft block: balance negative for prepaid (return 402-equivalent)
+			if billing.BillingModel == "prepaid" && billing.IsBalanceNegative && !x402Paid {
+				s.logger.WithFields(logging.Fields{
+					"content_id": req.ContentId,
+					"tenant_id":  resolution.TenantId,
+				}).Warn("Rejecting viewer: content owner balance exhausted (402)")
+				return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - content owner needs to top up balance")
+			}
+		}
 	}
 
 	// GeoIP resolution
@@ -1532,27 +1178,35 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	}
 
 	var response *pb.ViewerEndpointResponse
-	var err error
 
-	switch req.ContentType {
+	switch resolvedType {
 	case "live":
 		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon)
-	case "dvr":
-		response, err = s.resolveDVRViewerEndpoint(ctx, req)
-	case "clip":
-		response, err = s.resolveClipViewerEndpoint(ctx, req)
+	case "dvr", "clip", "vod":
+		response, err = s.resolveArtifactViewerEndpoint(ctx, req)
+	default:
+		return nil, status.Error(codes.InvalidArgument, "content_type must resolve to 'live', 'dvr', 'clip', or 'vod'")
 	}
 
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
-			"content_type": req.ContentType,
+			"content_type": resolvedType,
 			"content_id":   req.ContentId,
 		}).Error("Failed to resolve viewer endpoint")
 		return nil, err
 	}
 
+	// Create virtual viewer for live streams (consistent with HTTP handlers)
+	if resolvedType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
+		internalName := resolution.InternalName
+		if internalName == "" {
+			internalName = req.ContentId
+		}
+		state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, clientIP)
+	}
+
 	// Enrich live metadata from unified state
-	if req.ContentType == "live" && response.Metadata != nil {
+	if resolvedType == "live" && response.Metadata != nil {
 		st := state.DefaultManager().GetStreamState(req.ContentId)
 		if st != nil {
 			response.Metadata.IsLive = st.Status == "live"
@@ -1585,7 +1239,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
-	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName)
+	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName, target.StreamID)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "%v", err)
 	}
@@ -1593,50 +1247,34 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 	// Emit routing event for analytics
 	if response.Primary != nil {
 		durationMs := float32(time.Since(start).Milliseconds())
-		s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, target.InternalName, target.TenantID, durationMs)
+		candidatesCount := int32(0)
+		if response.Primary != nil {
+			candidatesCount = int32(1 + len(response.Fallbacks))
+		}
+		s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, target.InternalName, target.TenantID, target.StreamID, durationMs, candidatesCount, "grpc_resolve", "grpc")
 	}
 
 	return response, nil
 }
 
-func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
-	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
 		DB: s.db,
 		LB: s.lb,
 	}
 
-	response, err := control.ResolveDVRPlayback(ctx, deps, req.ContentId)
+	response, err := control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, status.Error(codes.NotFound, err.Error())
+		var defrostErr *control.DefrostingError
+		if errors.As(err, &defrostErr) {
+			retryAfter := defrostErr.RetryAfterSeconds
+			if retryAfter <= 0 {
+				retryAfter = 10
+			}
+			_ = grpc.SetTrailer(ctx, metadata.Pairs("retry-after", strconv.Itoa(retryAfter)))
+			return nil, status.Error(codes.Unavailable, defrostErr.Error())
 		}
-		if strings.Contains(err.Error(), "not available") {
-			return nil, status.Error(codes.Unavailable, err.Error())
-		}
-		return nil, status.Errorf(codes.Internal, "%v", err)
-	}
-
-	// Emit routing event for analytics
-	if response.Primary != nil && response.Metadata != nil {
-		durationMs := float32(time.Since(start).Milliseconds())
-		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource(), response.Metadata.GetTenantId(), durationMs)
-	}
-
-	return response, nil
-}
-
-func (s *FoghornGRPCServer) resolveClipViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	start := time.Now()
-	// Delegate to consolidated control package function
-	deps := &control.PlaybackDependencies{
-		DB: s.db,
-		LB: s.lb,
-	}
-
-	response, err := control.ResolveClipPlayback(ctx, deps, req.ContentId)
-	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return nil, status.Error(codes.NotFound, err.Error())
 		}
@@ -1649,509 +1287,137 @@ func (s *FoghornGRPCServer) resolveClipViewerEndpoint(ctx context.Context, req *
 	// Emit routing event for analytics
 	if response.Primary != nil && response.Metadata != nil {
 		durationMs := float32(time.Since(start).Milliseconds())
-		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource(), response.Metadata.GetTenantId(), durationMs)
+		candidatesCount := int32(0)
+		if response.Primary != nil {
+			candidatesCount = int32(1 + len(response.Fallbacks))
+		}
+		internalName := ""
+		if target, _ := control.ResolveStream(ctx, req.ContentId); target != nil {
+			internalName = target.InternalName
+		}
+		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), durationMs, candidatesCount, "grpc_resolve", "grpc")
 	}
 
 	return response, nil
 }
 
-// GetStreamMeta returns MistServer JSON meta for a stream
-func (s *FoghornGRPCServer) GetStreamMeta(ctx context.Context, req *pb.StreamMetaRequest) (*pb.StreamMetaResponse, error) {
-	internalName := strings.TrimSpace(req.InternalName)
-	if internalName == "" {
-		return nil, status.Error(codes.InvalidArgument, "internal_name is required")
+func x402PaidFromMetadata(ctx context.Context) bool {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok || md == nil {
+		return false
 	}
-
-	// Determine base URL
-	base := strings.TrimSpace(req.GetTargetBaseUrl())
-	if base == "" && req.TargetNodeId != nil && *req.TargetNodeId != "" {
-		if no, ok := control.GetNodeOutputs(*req.TargetNodeId); ok {
-			base = no.BaseURL
-		}
+	values := md.Get("x402-paid")
+	if len(values) == 0 {
+		return false
 	}
-	if base == "" {
-		if nodeID, _, ok := control.GetStreamSource(internalName); ok {
-			if no, ok2 := control.GetNodeOutputs(nodeID); ok2 {
-				base = no.BaseURL
-			}
-		}
+	switch strings.ToLower(strings.TrimSpace(values[0])) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
 	}
-	if base == "" {
-		return nil, status.Error(codes.Unavailable, "no source node available")
-	}
-
-	// Build json URL
-	encoded := url.PathEscape("live+" + internalName)
-	jsonURL, err := url.JoinPath(strings.TrimRight(base, "/"), "json_"+encoded+".js")
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to build meta URL")
-	}
-
-	httpClient := &http.Client{Timeout: 4 * time.Second}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, jsonURL, nil)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to build request")
-	}
-	httpReq.Header.Set("Accept", "application/json, text/javascript")
-
-	resp, err := httpClient.Do(httpReq)
-	if err != nil {
-		return nil, status.Error(codes.Unavailable, "failed to fetch meta")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, status.Errorf(codes.Unavailable, "edge response error: %d - %s", resp.StatusCode, string(body))
-	}
-
-	var raw map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, status.Error(codes.Unavailable, "failed to parse meta")
-	}
-
-	// Build summary
-	summary := &pb.MetaSummary{
-		IsLive:         false,
-		BufferWindowMs: 0,
-		JitterMs:       0,
-		UnixOffsetMs:   0,
-		Type:           "",
-		Tracks:         []*pb.TrackSummary{},
-	}
-
-	if meta, ok := raw["meta"].(map[string]interface{}); ok {
-		if live, ok := meta["live"].(float64); ok {
-			summary.IsLive = live != 0
-		}
-		if bw, ok := meta["buffer_window"].(float64); ok {
-			summary.BufferWindowMs = int64(bw)
-		}
-		if jit, ok := meta["jitter"].(float64); ok {
-			summary.JitterMs = int64(jit)
-		}
-		if uo, ok := raw["unixoffset"].(float64); ok {
-			summary.UnixOffsetMs = int64(uo)
-		}
-		if t, ok := raw["type"].(string); ok {
-			summary.Type = t
-		}
-		if w, ok := raw["width"].(float64); ok {
-			v := int32(w)
-			summary.Width = &v
-		}
-		if h, ok := raw["height"].(float64); ok {
-			v := int32(h)
-			summary.Height = &v
-		}
-		// tracks
-		if tracks, ok := meta["tracks"].(map[string]interface{}); ok {
-			for id, tv := range tracks {
-				if tm, ok := tv.(map[string]interface{}); ok {
-					track := &pb.TrackSummary{
-						Id:    id,
-						Type:  stringOr(tm["type"]),
-						Codec: stringOr(tm["codec"]),
-					}
-					if ch, ok := toInt(tm["channels"]); ok {
-						track.Channels = &ch
-					}
-					if rate, ok := toInt(tm["rate"]); ok {
-						track.Rate = &rate
-					}
-					if bw, ok := toInt(tm["bps"]); ok {
-						track.BitrateBps = &bw
-					}
-					if w, ok := toInt(tm["width"]); ok {
-						track.Width = &w
-					}
-					if h, ok := toInt(tm["height"]); ok {
-						track.Height = &h
-					}
-					if now, ok := toInt64(tm["nowms"]); ok {
-						track.NowMs = &now
-					}
-					if last, ok := toInt64(tm["lastms"]); ok {
-						track.LastMs = &last
-					}
-					if first, ok := toInt64(tm["firstms"]); ok {
-						track.FirstMs = &first
-					}
-					summary.Tracks = append(summary.Tracks, track)
-				}
-			}
-		}
-	}
-
-	response := &pb.StreamMetaResponse{
-		MetaSummary: summary,
-	}
-
-	if req.IncludeRaw {
-		if rawBytes, err := json.Marshal(raw); err == nil {
-			response.Raw = rawBytes
-		}
-	}
-
-	return response, nil
 }
 
-// ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter
-func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *pb.IngestEndpointRequest) (*pb.IngestEndpointResponse, error) {
-	streamKey := strings.TrimSpace(req.StreamKey)
-	if streamKey == "" {
-		return nil, status.Error(codes.InvalidArgument, "stream_key is required")
+func (s *FoghornGRPCServer) handleX402ViewerPayment(ctx context.Context, tenantID, resourcePath, paymentHeader, clientIP string) (bool, error) {
+	if tenantID == "" || paymentHeader == "" || s.purserClient == nil {
+		return false, nil
 	}
 
-	// 1. Validate stream key via Commodore
-	validation, err := control.CommodoreClient.ValidateStreamKey(ctx, streamKey)
+	resourceID := strings.TrimPrefix(resourcePath, "viewer://")
+	if resourceID == "" {
+		resourceID = resourcePath
+	}
+
+	result, err := x402.SettleX402Payment(ctx, x402.SettlementOptions{
+		PaymentHeader: paymentHeader,
+		Resource:      resourcePath,
+		AuthTenantID:  "",
+		ClientIP:      clientIP,
+		Purser:        s.purserClient,
+		Commodore:     nil,
+		Logger:        s.logger,
+		Resolution: &x402.ResourceResolution{
+			Resource: resourcePath,
+			Kind:     x402.ResourceKindViewer,
+			TenantID: tenantID,
+			Resolved: true,
+		},
+	})
+
 	if err != nil {
-		s.logger.WithError(err).WithField("stream_key", streamKey).Error("Failed to validate stream key")
-		return nil, status.Errorf(codes.Internal, "failed to validate stream key: %v", err)
-	}
-	if !validation.Valid {
-		errMsg := validation.Error
-		if errMsg == "" {
-			errMsg = "Invalid stream key"
-		}
-		return nil, status.Error(codes.NotFound, errMsg)
+		return false, s.mapSettlementErrorToGRPC(ctx, tenantID, resourcePath, err)
 	}
 
-	// 2. GeoIP resolution for geo-routing (optional)
-	var lat, lon float64 = 0.0, 0.0
-	viewerIP := req.GetViewerIp()
-	var region string
-
-	if viewerIP != "" && s.geoipReader != nil {
-		if geoData := s.geoipReader.Lookup(viewerIP); geoData != nil {
-			lat = geoData.Latitude
-			lon = geoData.Longitude
-			region = geoData.City
-			if region == "" {
-				region = geoData.CountryName
-			}
-		}
+	if result == nil || result.Settle == nil || !result.Settle.Success {
+		return false, s.paymentFailedError(ctx, tenantID, resourcePath, "payment settlement failed")
 	}
 
-	// 3. Get available ingest nodes (use isSourceSelection=true for ingest)
-	// For ingest, we need nodes that can receive streams, so we use isSourceSelection=false
-	// to find nodes that have capacity (not specifically for a particular stream)
-	nodes, err := s.lb.GetTopNodesWithScores(ctx, "", lat, lon, nil, viewerIP, 5, false)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to get ingest nodes")
-		return nil, status.Error(codes.Unavailable, "no ingest nodes available")
-	}
-	if len(nodes) == 0 {
-		return nil, status.Error(codes.Unavailable, "no ingest nodes available")
-	}
+	return true, nil
+}
 
-	internalName := validation.InternalName
-
-	// 4. Build primary endpoint
-	primaryNode := nodes[0]
-	primary, err := s.buildIngestEndpoint(primaryNode, internalName, region)
-	if err != nil {
-		s.logger.WithError(err).WithField("node_id", primaryNode.NodeID).Error("Failed to build primary ingest endpoint")
-		return nil, status.Error(codes.Internal, "failed to build ingest endpoint")
+func (s *FoghornGRPCServer) mapSettlementErrorToGRPC(ctx context.Context, tenantID, resourcePath string, err *x402.SettlementError) error {
+	switch err.Code {
+	case x402.ErrInvalidPayment:
+		return s.paymentFailedError(ctx, tenantID, resourcePath, err.Message)
+	case x402.ErrBillingDetailsRequired:
+		return s.billingDetailsRequiredError(err.Message)
+	case x402.ErrAuthOnly:
+		return s.paymentRequiredError(ctx, tenantID, resourcePath, "payment required - balance exhausted")
+	case x402.ErrVerificationFailed:
+		return s.paymentFailedError(ctx, tenantID, resourcePath, err.Message)
+	case x402.ErrSettlementFailed:
+		return s.paymentFailedError(ctx, tenantID, resourcePath, err.Message)
+	default:
+		return s.paymentFailedError(ctx, tenantID, resourcePath, err.Message)
 	}
+}
 
-	// 5. Build fallback endpoints
-	var fallbacks []*pb.IngestEndpoint
-	for i := 1; i < len(nodes); i++ {
-		fallback, err := s.buildIngestEndpoint(nodes[i], internalName, "")
+func (s *FoghornGRPCServer) billingDetailsRequiredError(message string) error {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		msg = "billing details required"
+	}
+	return status.Error(codes.FailedPrecondition, msg)
+}
+
+func (s *FoghornGRPCServer) paymentRequiredError(ctx context.Context, tenantID, resourcePath, message string) error {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		msg = "payment required"
+	}
+	st := status.New(codes.FailedPrecondition, msg)
+	if s.purserClient != nil {
+		reqs, err := s.purserClient.GetPaymentRequirements(ctx, tenantID, resourcePath)
 		if err != nil {
-			s.logger.WithError(err).WithField("node_id", nodes[i].NodeID).Warn("Failed to build fallback ingest endpoint")
-			continue
-		}
-		fallbacks = append(fallbacks, fallback)
-	}
-
-	// 6. Build metadata
-	metadata := &pb.IngestMetadata{
-		StreamId:         internalName,
-		StreamKey:        streamKey,
-		TenantId:         validation.TenantId,
-		RecordingEnabled: validation.IsRecordingEnabled,
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"stream_key":    streamKey,
-		"internal_name": internalName,
-		"primary_node":  primary.NodeId,
-		"fallback_cnt":  len(fallbacks),
-	}).Info("Resolved ingest endpoint")
-
-	return &pb.IngestEndpointResponse{
-		Primary:   primary,
-		Fallbacks: fallbacks,
-		Metadata:  metadata,
-	}, nil
-}
-
-// buildIngestEndpoint constructs ingest URLs for a given node
-func (s *FoghornGRPCServer) buildIngestEndpoint(node balancer.NodeWithScore, streamName string, region string) (*pb.IngestEndpoint, error) {
-	// Get node outputs for the base URL
-	nodeOutputs, ok := control.GetNodeOutputs(node.NodeID)
-	if !ok || nodeOutputs.BaseURL == "" {
-		return nil, fmt.Errorf("no base URL for node %s", node.NodeID)
-	}
-
-	baseURL := strings.TrimRight(nodeOutputs.BaseURL, "/")
-	host := node.Host
-
-	// Parse host to get hostname without protocol/port for RTMP/SRT
-	if strings.Contains(host, "://") {
-		if u, err := url.Parse(host); err == nil {
-			host = u.Hostname()
-		}
-	}
-	if strings.Contains(host, ":") {
-		host, _, _ = net.SplitHostPort(host)
-	}
-
-	// If host is still empty, extract from baseURL
-	if host == "" {
-		if u, err := url.Parse(baseURL); err == nil {
-			host = u.Hostname()
-		}
-	}
-
-	// Build ingest URLs
-	// WHIP: baseURL/webrtc/{streamName}
-	whipURL := fmt.Sprintf("%s/webrtc/%s", baseURL, streamName)
-
-	// RTMP: rtmp://{host}:1935/live/{streamName}
-	rtmpURL := fmt.Sprintf("rtmp://%s:1935/live/%s", host, streamName)
-
-	// SRT: srt://{host}:9000?streamid={streamName}
-	srtURL := fmt.Sprintf("srt://%s:9000?streamid=%s", host, streamName)
-
-	// Determine region from node location
-	nodeRegion := region
-	if nodeRegion == "" {
-		nodeRegion = node.LocationName
-	}
-
-	// Calculate normalized load score (lower is better, 0-1 range)
-	var loadScore float64
-	if node.Score > 0 {
-		// Score is 0-10000, convert to 0-1 (inverted: higher score = lower load)
-		loadScore = 1.0 - (float64(node.Score) / 10000.0)
-		if loadScore < 0 {
-			loadScore = 0
-		}
-	}
-
-	return &pb.IngestEndpoint{
-		NodeId:    node.NodeID,
-		BaseUrl:   baseURL,
-		WhipUrl:   &whipURL,
-		RtmpUrl:   &rtmpURL,
-		SrtUrl:    &srtURL,
-		Region:    &nodeRegion,
-		LoadScore: &loadScore,
-	}, nil
-}
-
-// =============================================================================
-// HELPER FUNCTIONS
-// =============================================================================
-
-func deriveMistHTTPBase(base string) string {
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" {
-		host := strings.TrimPrefix(base, "http://")
-		host = strings.TrimPrefix(host, "https://")
-		parts := strings.Split(host, ":")
-		hostname := parts[0]
-		port := "8080"
-		return "http://" + hostname + ":" + port
-	}
-	hostname := u.Hostname()
-	port := u.Port()
-	if port == "" || port == "4242" {
-		port = "8080"
-	}
-	return u.Scheme + "://" + hostname + ":" + port
-}
-
-func ensureTrailingSlash(s string) string {
-	if !strings.HasSuffix(s, "/") {
-		return s + "/"
-	}
-	return s
-}
-
-func resolveTemplateURL(raw interface{}, baseURL, streamName string) string {
-	var s string
-	switch v := raw.(type) {
-	case string:
-		s = v
-	case []interface{}:
-		if len(v) > 0 {
-			if ss, ok := v[0].(string); ok {
-				s = ss
-			}
-		}
-	default:
-		return ""
-	}
-	if s == "" {
-		return ""
-	}
-	s = strings.Replace(s, "$", streamName, -1)
-	if strings.Contains(s, "HOST") {
-		host := baseURL
-		if strings.HasPrefix(host, "https://") {
-			host = strings.TrimPrefix(host, "https://")
-		}
-		if strings.HasPrefix(host, "http://") {
-			host = strings.TrimPrefix(host, "http://")
-		}
-		host = strings.TrimSuffix(host, "/")
-		s = strings.Replace(s, "HOST", host, -1)
-	}
-	s = strings.Trim(s, "[]\"")
-	return s
-}
-
-func buildOutputsMapProto(baseURL string, rawOutputs map[string]interface{}, streamName string, isLive bool) map[string]*pb.OutputEndpoint {
-	outputs := make(map[string]*pb.OutputEndpoint)
-
-	base := ensureTrailingSlash(baseURL)
-	html := base + streamName + ".html"
-	outputs["MIST_HTML"] = &pb.OutputEndpoint{Protocol: "MIST_HTML", Url: html, Capabilities: buildOutputCapabilitiesProto("MIST_HTML", isLive)}
-	outputs["PLAYER_JS"] = &pb.OutputEndpoint{Protocol: "PLAYER_JS", Url: base + "player.js", Capabilities: buildOutputCapabilitiesProto("PLAYER_JS", isLive)}
-
-	// WHEP
-	if raw, ok := rawOutputs["WHEP"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WHEP"] = &pb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: buildOutputCapabilitiesProto("WHEP", isLive)}
-		}
-	}
-	if _, ok := outputs["WHEP"]; !ok {
-		if u := deriveWHEPFromHTML(html); u != "" {
-			outputs["WHEP"] = &pb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: buildOutputCapabilitiesProto("WHEP", isLive)}
-		}
-	}
-
-	if raw, ok := rawOutputs["HLS"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["HLS"] = &pb.OutputEndpoint{Protocol: "HLS", Url: u, Capabilities: buildOutputCapabilitiesProto("HLS", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["DASH"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["DASH"] = &pb.OutputEndpoint{Protocol: "DASH", Url: u, Capabilities: buildOutputCapabilitiesProto("DASH", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["MP4"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["MP4"] = &pb.OutputEndpoint{Protocol: "MP4", Url: u, Capabilities: buildOutputCapabilitiesProto("MP4", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["WEBM"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WEBM"] = &pb.OutputEndpoint{Protocol: "WEBM", Url: u, Capabilities: buildOutputCapabilitiesProto("WEBM", isLive)}
-		}
-	}
-
-	return outputs
-}
-
-func buildOutputCapabilitiesProto(protocol string, isLive bool) *pb.OutputCapability {
-	caps := &pb.OutputCapability{
-		SupportsSeek:          !isLive,
-		SupportsQualitySwitch: true,
-		HasAudio:              true,
-		HasVideo:              true,
-	}
-	switch strings.ToUpper(protocol) {
-	case "WHEP":
-		caps.SupportsQualitySwitch = false
-		caps.SupportsSeek = false
-	case "MP4", "WEBM":
-		caps.SupportsQualitySwitch = false
-		caps.SupportsSeek = true
-	}
-	return caps
-}
-
-func deriveWHEPFromHTML(htmlURL string) string {
-	u, err := url.Parse(htmlURL)
-	if err != nil {
-		return ""
-	}
-	path := strings.Trim(u.Path, "/")
-	parts := strings.Split(path, "/")
-	if len(parts) == 0 {
-		return ""
-	}
-	last := parts[len(parts)-1]
-	if !strings.HasSuffix(last, ".html") {
-		return ""
-	}
-	stream := strings.TrimSuffix(last, ".html")
-	base := parts[:len(parts)-1]
-	base = append(base, "webrtc", stream)
-	u.Path = "/" + strings.Join(base, "/")
-	return u.String()
-}
-
-func buildLivePlaybackMetadataProto(req *pb.ViewerEndpointRequest, endpoints []*pb.ViewerEndpoint) *pb.PlaybackMetadata {
-	meta := &pb.PlaybackMetadata{
-		Status:      "live",
-		IsLive:      true,
-		ContentId:   req.ContentId,
-		ContentType: "live",
-	}
-
-	if len(endpoints) > 0 {
-		for _, ep := range endpoints {
-			if ep.Outputs != nil {
-				for proto := range ep.Outputs {
-					meta.ProtocolHints = append(meta.ProtocolHints, proto)
-				}
-				break
+			s.logger.WithError(err).Warn("Failed to get x402 payment requirements")
+		} else if reqs != nil {
+			if stWith, err := st.WithDetails(reqs); err == nil {
+				st = stWith
 			}
 		}
 	}
-
-	return meta
+	return st.Err()
 }
 
-func stringOr(v interface{}) string {
-	if s, ok := v.(string); ok {
-		return s
+func (s *FoghornGRPCServer) paymentFailedError(ctx context.Context, tenantID, resourcePath, message string) error {
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		msg = "payment failed"
 	}
-	return ""
-}
-
-func toInt(v interface{}) (int32, bool) {
-	switch x := v.(type) {
-	case float64:
-		return int32(x), true
-	case int:
-		return int32(x), true
-	default:
-		return 0, false
+	st := status.New(codes.FailedPrecondition, msg)
+	if s.purserClient != nil {
+		reqs, err := s.purserClient.GetPaymentRequirements(ctx, tenantID, resourcePath)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to get x402 payment requirements")
+		} else if reqs != nil {
+			if stWith, err := st.WithDetails(reqs); err == nil {
+				st = stWith
+			}
+		}
 	}
+	return st.Err()
 }
 
-func toInt64(v interface{}) (int64, bool) {
-	switch x := v.(type) {
-	case float64:
-		return int64(x), true
-	case int64:
-		return x, true
-	case int:
-		return int64(x), true
-	default:
-		return 0, false
-	}
-}
-
-// =============================================================================
 // VOD CONTROL SERVICE IMPLEMENTATION
 // =============================================================================
 
@@ -2172,6 +1438,9 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	}
 	if req.SizeBytes <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "size_bytes must be positive")
+	}
+	if req.GetArtifactInternalName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_internal_name is required")
 	}
 	if s.s3Client == nil {
 		return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")
@@ -2226,12 +1495,13 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 	// Store artifact in foghorn.artifacts with status='uploading'
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
-			id, artifact_hash, artifact_type, tenant_id, user_id, status,
-			size_bytes, s3_url, format, retention_until, created_at, updated_at
+			id, artifact_hash, artifact_type, artifact_internal_name,
+			tenant_id, user_id, status,
+			sync_status, size_bytes, s3_url, format, retention_until, created_at, updated_at
 		)
-		VALUES ($1, $2, 'upload', NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'uploading',
-		        $5, $6, $7, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, artifactID, artifactHash, req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat)
+		VALUES ($1, $2, 'upload', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
+		        'in_progress', $6, $7, $8, NOW() + INTERVAL '30 days', NOW(), NOW())
+	`, artifactID, artifactHash, req.GetArtifactInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat)
 
 	if err != nil {
 		// Abort S3 upload since we can't track it
@@ -2298,6 +1568,7 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		PartSize:     partSize,
 		Parts:        protoParts,
 		ExpiresAt:    timestamppb.New(time.Now().Add(2 * time.Hour)),
+		PlaybackId:   req.GetPlaybackId(),
 	}, nil
 }
 
@@ -2317,12 +1588,14 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 	// Get artifact info by upload_id
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	var artifactHash, s3Key string
+	var sizeBytes sql.NullInt64
+	var userID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT v.artifact_hash, v.s3_key
+		SELECT v.artifact_hash, v.s3_key, a.size_bytes, a.user_id
 		FROM foghorn.vod_metadata v
 		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
 		WHERE v.s3_upload_id = $1 AND a.status = 'uploading'
-	`, req.UploadId).Scan(&artifactHash, &s3Key)
+	`, req.UploadId).Scan(&artifactHash, &s3Key, &sizeBytes, &userID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
@@ -2346,7 +1619,13 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		s.logger.WithError(err).Error("Failed to complete S3 multipart upload")
 		// Update status to 'failed'
 		_, _ = s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW()
+			UPDATE foghorn.artifacts
+			SET status = 'failed',
+			    sync_status = 'failed',
+			    sync_error = $1,
+			    error_message = $1,
+			    last_sync_attempt = NOW(),
+			    updated_at = NOW()
 			WHERE artifact_hash = $2
 		`, fmt.Sprintf("S3 upload failed: %v", err), artifactHash)
 		// Emit VOD lifecycle event (STATUS_FAILED)
@@ -2360,6 +1639,12 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 				TenantId:    &req.TenantId,
 				CompletedAt: proto.Int64(time.Now().Unix()),
 			}
+			if userID.Valid && userID.String != "" {
+				vodData.UserId = &userID.String
+			}
+			if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+				vodData.SizeBytes = proto.Uint64(uint64(sizeBytes.Int64))
+			}
 			go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
 		}
 		return nil, status.Errorf(codes.Internal, "failed to complete upload: %v", err)
@@ -2369,9 +1654,16 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 	// TODO: When we add ffprobe validation, change this to 'processing' and trigger async validation
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
-		SET status = 'ready', storage_location = 's3', updated_at = NOW()
+		SET status = 'ready',
+		    storage_location = 's3',
+		    sync_status = 'synced',
+		    sync_error = NULL,
+		    last_sync_attempt = NOW(),
+		    frozen_at = COALESCE(frozen_at, NOW()),
+		    s3_url = COALESCE(s3_url, $2),
+		    updated_at = NOW()
 		WHERE artifact_hash = $1
-	`, artifactHash)
+	`, artifactHash, s.s3Client.BuildS3URL(s3Key))
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to update artifact status")
 	}
@@ -2393,6 +1685,12 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 			S3Url:       &s3URL,
 			TenantId:    &req.TenantId,
 			CompletedAt: proto.Int64(time.Now().Unix()),
+		}
+		if userID.Valid && userID.String != "" {
+			vodData.UserId = &userID.String
+		}
+		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+			vodData.SizeBytes = proto.Uint64(uint64(sizeBytes.Int64))
 		}
 		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
 	}
@@ -2428,12 +1726,13 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 	// Get artifact info by upload_id
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
 	var artifactHash, s3Key string
+	var userID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT v.artifact_hash, v.s3_key
+		SELECT v.artifact_hash, v.s3_key, a.user_id
 		FROM foghorn.vod_metadata v
 		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
 		WHERE v.s3_upload_id = $1 AND a.status = 'uploading'
-	`, req.UploadId).Scan(&artifactHash, &s3Key)
+	`, req.UploadId).Scan(&artifactHash, &s3Key, &userID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
@@ -2471,6 +1770,9 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 			UploadId:    &req.UploadId,
 			TenantId:    &req.TenantId,
 			CompletedAt: proto.Int64(time.Now().Unix()),
+		}
+		if userID.Valid && userID.String != "" {
+			vodData.UserId = &userID.String
 		}
 		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
 	}
@@ -2627,13 +1929,19 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 
 	// Check current status
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
-	var currentStatus, s3Key string
+	var (
+		currentStatus  string
+		s3Key          string
+		sizeBytes      sql.NullInt64
+		retentionUntil sql.NullTime
+		userID         sql.NullString
+	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT a.status, COALESCE(v.s3_key, '')
+		SELECT a.status, COALESCE(v.s3_key, ''), a.size_bytes, a.retention_until, a.user_id
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 		WHERE a.artifact_hash = $1 AND a.artifact_type = 'upload'
-	`, req.ArtifactHash).Scan(&currentStatus, &s3Key)
+	`, req.ArtifactHash).Scan(&currentStatus, &s3Key, &sizeBytes, &retentionUntil, &userID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "VOD asset not found")
@@ -2695,6 +2003,17 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 			TenantId:    &req.TenantId,
 			CompletedAt: proto.Int64(time.Now().Unix()),
 		}
+		if userID.Valid && userID.String != "" {
+			vodData.UserId = &userID.String
+		}
+		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+			sb := uint64(sizeBytes.Int64)
+			vodData.SizeBytes = &sb
+		}
+		if retentionUntil.Valid {
+			exp := retentionUntil.Time.Unix()
+			vodData.ExpiresAt = &exp
+		}
 		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
 	}
 
@@ -2719,22 +2038,6 @@ func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash st
 		WHERE a.artifact_hash = $1 AND a.artifact_type = 'upload' AND a.status != 'deleted'
 	`
 	row := s.db.QueryRowContext(ctx, query, artifactHash)
-	return s.scanVodAssetRow(row)
-}
-
-func (s *FoghornGRPCServer) getVodAssetInfoWithTenant(ctx context.Context, artifactHash, tenantID string) (*pb.VodAssetInfo, error) {
-	query := `
-		SELECT a.id, a.artifact_hash, a.status, a.size_bytes,
-		       COALESCE(a.storage_location, 'pending'), COALESCE(a.s3_url, ''),
-		       a.error_message, a.created_at, a.updated_at, a.retention_until,
-		       COALESCE(v.filename, ''), COALESCE(v.title, ''), COALESCE(v.description, ''),
-		       v.duration_ms, v.resolution, v.video_codec, v.audio_codec, v.bitrate_kbps,
-		       COALESCE(v.s3_upload_id, ''), COALESCE(v.s3_key, '')
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-		WHERE a.artifact_hash = $1 AND a.tenant_id = $2::uuid AND a.artifact_type = 'upload' AND a.status != 'deleted'
-	`
-	row := s.db.QueryRowContext(ctx, query, artifactHash, tenantID)
 	return s.scanVodAssetRow(row)
 }
 
@@ -2861,4 +2164,297 @@ func buildVodAssetInfo(
 	}
 
 	return asset
+}
+
+func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
+	ctx context.Context,
+	clipHash string,
+	nodeID string,
+	sizeBytes sql.NullInt64,
+	retentionUntil sql.NullTime,
+	internalName sql.NullString,
+	denormTenantID sql.NullString,
+	denormUserID sql.NullString,
+) {
+	if s.decklogClient == nil {
+		return
+	}
+
+	var (
+		tenantIDStr     string
+		userIDStr       string
+		internalNameStr string
+		streamID        string
+		clipMode        *string
+		startUnix       *int64
+		stopUnix        *int64
+		startMs         *int64
+		stopMs          *int64
+		durationSec     *int64
+	)
+
+	if denormTenantID.Valid {
+		tenantIDStr = denormTenantID.String
+	}
+	if denormUserID.Valid {
+		userIDStr = denormUserID.String
+	}
+	if internalName.Valid {
+		internalNameStr = internalName.String
+	}
+
+	if control.CommodoreClient != nil {
+		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if resp, err := control.CommodoreClient.ResolveClipHash(cctx, clipHash); err == nil && resp.Found {
+			if resp.TenantId != "" {
+				tenantIDStr = resp.TenantId
+			}
+			if resp.UserId != "" {
+				userIDStr = resp.UserId
+			}
+			if resp.InternalName != "" {
+				internalNameStr = resp.InternalName
+			}
+			if resp.StreamId != "" {
+				streamID = resp.StreamId
+			}
+			if resp.ClipMode != "" {
+				m := resp.ClipMode
+				clipMode = &m
+			}
+			if resp.StartTime > 0 && resp.Duration > 0 {
+				sMs := resp.StartTime
+				eMs := resp.StartTime + resp.Duration
+				sU := sMs / 1000
+				eU := eMs / 1000
+				dS := resp.Duration / 1000
+				startMs, stopMs = &sMs, &eMs
+				startUnix, stopUnix = &sU, &eU
+				durationSec = &dS
+			}
+		}
+	}
+
+	clipData := &pb.ClipLifecycleData{
+		Stage:    pb.ClipLifecycleData_STAGE_DELETED,
+		ClipHash: clipHash,
+	}
+	if nodeID != "" {
+		clipData.NodeId = &nodeID
+	}
+	if tenantIDStr != "" {
+		clipData.TenantId = &tenantIDStr
+	}
+	if internalNameStr != "" {
+		clipData.InternalName = &internalNameStr
+	}
+	if streamID != "" {
+		clipData.StreamId = &streamID
+	}
+	if userIDStr != "" {
+		clipData.UserId = &userIDStr
+	}
+	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+		sb := uint64(sizeBytes.Int64)
+		clipData.SizeBytes = &sb
+	}
+	if retentionUntil.Valid {
+		exp := retentionUntil.Time.Unix()
+		clipData.ExpiresAt = &exp
+	}
+	clipData.ClipMode = clipMode
+	clipData.StartUnix = startUnix
+	clipData.StopUnix = stopUnix
+	clipData.StartMs = startMs
+	clipData.StopMs = stopMs
+	clipData.DurationSec = durationSec
+
+	go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
+}
+
+func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
+	ctx context.Context,
+	dvrHash string,
+	nodeID string,
+	sizeBytes sql.NullInt64,
+	retentionUntil sql.NullTime,
+	startedAt sql.NullTime,
+	endedAt sql.NullTime,
+	internalName string,
+	denormTenantID sql.NullString,
+	denormUserID sql.NullString,
+) {
+	if s.decklogClient == nil {
+		return
+	}
+
+	var (
+		tenantIDStr     string
+		userIDStr       string
+		internalNameStr string
+		streamID        string
+	)
+
+	if denormTenantID.Valid {
+		tenantIDStr = denormTenantID.String
+	}
+	if denormUserID.Valid {
+		userIDStr = denormUserID.String
+	}
+	if internalName != "" {
+		internalNameStr = internalName
+	}
+
+	if control.CommodoreClient != nil {
+		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if resp, err := control.CommodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
+			if resp.TenantId != "" {
+				tenantIDStr = resp.TenantId
+			}
+			if resp.UserId != "" {
+				userIDStr = resp.UserId
+			}
+			if resp.InternalName != "" {
+				internalNameStr = resp.InternalName
+			}
+			if resp.StreamId != "" {
+				streamID = resp.StreamId
+			}
+		}
+	}
+
+	dvrData := &pb.DVRLifecycleData{
+		Status:  pb.DVRLifecycleData_STATUS_DELETED,
+		DvrHash: dvrHash,
+	}
+	if nodeID != "" {
+		dvrData.NodeId = &nodeID
+	}
+	if tenantIDStr != "" {
+		dvrData.TenantId = &tenantIDStr
+	}
+	if internalNameStr != "" {
+		dvrData.InternalName = &internalNameStr
+	}
+	if streamID != "" {
+		dvrData.StreamId = &streamID
+	}
+	if userIDStr != "" {
+		dvrData.UserId = &userIDStr
+	}
+	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
+		sb := uint64(sizeBytes.Int64)
+		dvrData.SizeBytes = &sb
+	}
+	if retentionUntil.Valid {
+		exp := retentionUntil.Time.Unix()
+		dvrData.ExpiresAt = &exp
+	}
+	if startedAt.Valid {
+		st := startedAt.Time.Unix()
+		dvrData.StartedAt = &st
+	}
+	if endedAt.Valid {
+		et := endedAt.Time.Unix()
+		dvrData.EndedAt = &et
+	}
+
+	go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
+}
+
+// TerminateTenantStreams stops all active streams for a suspended tenant
+// Called by Purser when a tenant's prepaid balance drops below -$10
+func (s *FoghornGRPCServer) TerminateTenantStreams(ctx context.Context, req *pb.TerminateTenantStreamsRequest) (*pb.TerminateTenantStreamsResponse, error) {
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": req.TenantId,
+		"reason":    req.Reason,
+	}).Info("Terminating tenant streams due to suspension")
+
+	// Get all active streams for this tenant from the stream state manager
+	streams := s.lb.GetStreamsByTenant(req.TenantId)
+	if len(streams) == 0 {
+		s.logger.WithField("tenant_id", req.TenantId).Debug("No active streams to terminate")
+		return &pb.TerminateTenantStreamsResponse{
+			StreamsTerminated:  0,
+			SessionsTerminated: 0,
+			StreamNames:        []string{},
+		}, nil
+	}
+
+	// Group streams by node for efficient batch stop_sessions calls
+	streamsByNode := make(map[string][]string)
+	var allStreamNames []string
+	for _, stream := range streams {
+		allStreamNames = append(allStreamNames, stream.InternalName)
+		// Get the node from stream instances
+		instances := s.lb.GetStreamInstances(stream.InternalName)
+		for nodeID := range instances {
+			streamsByNode[nodeID] = append(streamsByNode[nodeID], stream.InternalName)
+		}
+	}
+
+	// Send stop_sessions to each node
+	sessionsTerminated := int32(0)
+	for nodeID, nodeStreams := range streamsByNode {
+		stopReq := &pb.StopSessionsRequest{
+			StreamNames: nodeStreams,
+			TenantId:    req.TenantId,
+			Reason:      req.Reason,
+		}
+		if err := control.SendStopSessions(nodeID, stopReq); err != nil {
+			s.logger.WithFields(logging.Fields{
+				"node_id":   nodeID,
+				"tenant_id": req.TenantId,
+				"error":     err,
+			}).Warn("Failed to send stop_sessions to node")
+			// Continue trying other nodes
+		} else {
+			sessionsTerminated += int32(len(nodeStreams))
+		}
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":           req.TenantId,
+		"streams_terminated":  len(allStreamNames),
+		"sessions_terminated": sessionsTerminated,
+		"stream_names":        allStreamNames,
+	}).Info("Tenant stream termination completed")
+
+	return &pb.TerminateTenantStreamsResponse{
+		StreamsTerminated:  int32(len(allStreamNames)),
+		SessionsTerminated: sessionsTerminated,
+		StreamNames:        allStreamNames,
+	}, nil
+}
+
+// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
+func (s *FoghornGRPCServer) InvalidateTenantCache(ctx context.Context, req *pb.InvalidateTenantCacheRequest) (*pb.InvalidateTenantCacheResponse, error) {
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	if s.cacheInvalidator == nil {
+		s.logger.WithField("tenant_id", req.TenantId).Warn("Cache invalidator not configured, skipping cache invalidation")
+		return &pb.InvalidateTenantCacheResponse{
+			EntriesInvalidated: 0,
+		}, nil
+	}
+
+	entriesInvalidated := s.cacheInvalidator.InvalidateTenantCache(req.TenantId)
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":           req.TenantId,
+		"reason":              req.Reason,
+		"entries_invalidated": entriesInvalidated,
+	}).Info("Invalidated tenant cache entries")
+
+	return &pb.InvalidateTenantCacheResponse{
+		EntriesInvalidated: int32(entriesInvalidated),
+	}, nil
 }

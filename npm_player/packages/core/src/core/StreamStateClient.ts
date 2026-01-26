@@ -114,7 +114,7 @@ function getStatusMessage(status: StreamStatus, percentage?: number): string {
  * ```typescript
  * const client = new StreamStateClient({
  *   mistBaseUrl: 'https://mist.example.com',
- *   streamName: 'my-stream',
+ *   streamName: 'pk_...', // playbackId (view key)
  * });
  *
  * client.on('stateChange', ({ state }) => console.log('State:', state));
@@ -291,7 +291,7 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
         .replace(/^https:/, 'wss:')
         .replace(/\/$/, '');
 
-      const ws = new WebSocket(`${wsUrl}/json_${encodeURIComponent(streamName)}.js`);
+      const ws = new WebSocket(`${wsUrl}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`);
       this.ws = ws;
 
       ws.onopen = () => {
@@ -337,7 +337,7 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
     const { mistBaseUrl, streamName, pollInterval } = this.config;
 
     try {
-      const url = `${mistBaseUrl.replace(/\/$/, '')}/json_${encodeURIComponent(streamName)}.js`;
+      const url = `${mistBaseUrl.replace(/\/$/, '')}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
       const response = await fetch(url, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
 	pb "frameworks/pkg/proto"
 )
@@ -79,9 +80,10 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "demo").Inc()
 		}
+		demoEmail := "developer@frameworks.demo"
 		return &pb.User{
 			Id:        "demo_user_developer",
-			Email:     "developer@frameworks.demo",
+			Email:     &demoEmail,
 			FirstName: "Demo",
 			LastName:  "Developer",
 		}, nil
@@ -114,4 +116,193 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 		r.Metrics.Operations.WithLabelValues("getMe", "success").Inc()
 	}
 	return user, nil
+}
+
+// DoWalletLogin authenticates a user via wallet signature
+func (r *Resolver) DoWalletLogin(ctx context.Context, input model.WalletLoginInput) (model.WalletLoginResult, error) {
+	start := time.Now()
+	defer func() {
+		if r.Metrics != nil {
+			r.Metrics.Duration.WithLabelValues("walletLogin").Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	// Call Commodore wallet login
+	authResp, err := r.Clients.Commodore.WalletLogin(ctx, input.Address, input.Message, input.Signature)
+	if err != nil {
+		r.Logger.WithError(err).Error("Wallet login failed")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("walletLogin", "error").Inc()
+		}
+		return &model.ValidationError{
+			Message: err.Error(),
+			Code:    ptrString("WALLET_AUTH_FAILED"),
+		}, nil
+	}
+
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("walletLogin", "success").Inc()
+	}
+
+	expiresAt := time.Now().Add(15 * time.Minute)
+	if authResp.ExpiresAt != nil {
+		expiresAt = authResp.ExpiresAt.AsTime()
+	}
+
+	return &model.WalletLoginPayload{
+		Token:        authResp.Token,
+		User:         authResp.User,
+		ExpiresAt:    expiresAt,
+		IsNewAccount: authResp.IsNewUser,
+	}, nil
+}
+
+// DoLinkWallet links a wallet to the current user's account
+func (r *Resolver) DoLinkWallet(ctx context.Context, input model.WalletLoginInput) (model.LinkWalletResult, error) {
+	start := time.Now()
+	defer func() {
+		if r.Metrics != nil {
+			r.Metrics.Duration.WithLabelValues("linkWallet").Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	// Requires authenticated user
+	if _, ok := ctx.Value("user_id").(string); !ok {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("linkWallet", "auth_error").Inc()
+		}
+		return &model.AuthError{
+			Message: "Authentication required",
+			Code:    ptrString("UNAUTHENTICATED"),
+		}, nil
+	}
+
+	// Call Commodore link wallet
+	walletPb, err := r.Clients.Commodore.LinkWallet(ctx, input.Address, input.Message, input.Signature)
+	if err != nil {
+		r.Logger.WithError(err).Error("Link wallet failed")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("linkWallet", "error").Inc()
+		}
+		return &model.ValidationError{
+			Message: err.Error(),
+			Code:    ptrString("LINK_WALLET_FAILED"),
+		}, nil
+	}
+
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("linkWallet", "success").Inc()
+	}
+
+	// Convert proto to model
+	wallet := protoToWalletIdentity(walletPb)
+	return &wallet, nil
+}
+
+// DoUnlinkWallet removes a wallet from the current user's account
+func (r *Resolver) DoUnlinkWallet(ctx context.Context, walletID string) (model.UnlinkWalletResult, error) {
+	start := time.Now()
+	defer func() {
+		if r.Metrics != nil {
+			r.Metrics.Duration.WithLabelValues("unlinkWallet").Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	// Requires authenticated user
+	if _, ok := ctx.Value("user_id").(string); !ok {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("unlinkWallet", "auth_error").Inc()
+		}
+		return &model.AuthError{
+			Message: "Authentication required",
+			Code:    ptrString("UNAUTHENTICATED"),
+		}, nil
+	}
+
+	// Call Commodore unlink wallet
+	resp, err := r.Clients.Commodore.UnlinkWallet(ctx, walletID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Unlink wallet failed")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("unlinkWallet", "error").Inc()
+		}
+		return &model.NotFoundError{
+			Message:      err.Error(),
+			Code:         ptrString("WALLET_NOT_FOUND"),
+			ResourceType: "WalletIdentity",
+		}, nil
+	}
+
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("unlinkWallet", "success").Inc()
+	}
+
+	return &model.DeleteSuccess{
+		DeletedID: walletID,
+		Success:   resp.Success,
+	}, nil
+}
+
+// DoLinkEmail adds an email to a wallet-only account (for postpaid upgrade path)
+func (r *Resolver) DoLinkEmail(ctx context.Context, input model.LinkEmailInput) (model.LinkEmailResult, error) {
+	start := time.Now()
+	defer func() {
+		if r.Metrics != nil {
+			r.Metrics.Duration.WithLabelValues("linkEmail").Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	// Requires authenticated user
+	if _, ok := ctx.Value("user_id").(string); !ok {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("linkEmail", "auth_error").Inc()
+		}
+		return &model.AuthError{
+			Message: "Authentication required",
+			Code:    ptrString("UNAUTHENTICATED"),
+		}, nil
+	}
+
+	// Call Commodore to link email
+	resp, err := r.Clients.Commodore.LinkEmail(ctx, input.Email, input.Password)
+	if err != nil {
+		r.Logger.WithError(err).Error("Link email failed")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("linkEmail", "error").Inc()
+		}
+		return &model.ValidationError{
+			Message: err.Error(),
+			Code:    ptrString("EMAIL_LINK_FAILED"),
+			Field:   ptrString("email"),
+		}, nil
+	}
+
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("linkEmail", "success").Inc()
+	}
+
+	return &model.LinkEmailPayload{
+		Success:          resp.Success,
+		Message:          resp.Message,
+		VerificationSent: resp.VerificationSent,
+	}, nil
+}
+
+// protoToWalletIdentity converts proto WalletIdentity to model WalletIdentity
+func protoToWalletIdentity(w *pb.WalletIdentity) model.WalletIdentity {
+	result := model.WalletIdentity{
+		ID:        w.Id,
+		Address:   w.WalletAddress,
+		CreatedAt: w.CreatedAt.AsTime(),
+	}
+	if w.LastAuthAt != nil {
+		t := w.LastAuthAt.AsTime()
+		result.LastAuthAt = &t
+	}
+	return result
+}
+
+// ptrString returns a pointer to the given string
+func ptrString(s string) *string {
+	return &s
 }

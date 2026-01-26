@@ -1,0 +1,1069 @@
+---
+title: "Manual Deployment"
+description: "Step-by-step guide for deploying FrameWorks on bare metal servers without the CLI."
+sidebar:
+  order: 3
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Advanced Deployment">
+This guide is for operators who cannot or choose not to use the automated CLI deployment. For most users, we recommend `frameworks cluster provision` instead. See [CLI Reference](/operators/cli-reference).
+</Aside>
+
+This guide walks through deploying FrameWorks services manually on bare metal servers. It assumes:
+- A private network (WireGuard mesh or VLAN) for backend communication
+- Edge nodes communicate over public internet (not on the mesh)
+- You have root/sudo access to all servers
+
+---
+
+## Streaming URI Quick Reference
+
+| Purpose | Domain | Path | Example |
+|---------|--------|------|---------|
+| **RTMP Ingest** | `ingest.your-domain.com` | `/live/{streamKey}` | `rtmp://ingest.your-domain.com:1935/live/sk_abc123` |
+| **WHIP Ingest** | `ingest.your-domain.com` | `/webrtc/{streamKey}` | `https://ingest.your-domain.com/webrtc/sk_abc123` |
+| **HLS Playback** | `play.your-domain.com` | `/play/{playbackId}/hls/index.m3u8` | `https://play.your-domain.com/play/pk_xyz789/hls/index.m3u8` |
+| **WebRTC (WHEP)** | `play.your-domain.com` | `/play/{playbackId}/webrtc` | `https://play.your-domain.com/play/pk_xyz789/webrtc` |
+| **Viewer Routing** | `play.your-domain.com` | `/play/{contentId}` | Returns JSON or 307 redirect |
+| **GraphQL API** | `api.your-domain.com` | `/graphql` | `resolveViewerEndpoint` query |
+
+**Note:** `/play/*` and `/resolve/*` return JSON unless a protocol/extension is requested (then 307 redirect).
+
+---
+
+## Prerequisites
+
+### Network Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Private Mesh (10.x.x.x)                         │
+│                                                                     │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐               │
+│  │   Central   │   │  Regional   │   │  Database   │               │
+│  │  Services   │◄─►│  Services   │◄─►│   Nodes     │               │
+│  └─────────────┘   └─────────────┘   └─────────────┘               │
+│                           ▲                                         │
+└───────────────────────────┼─────────────────────────────────────────┘
+                            │ Public Internet
+                    ┌───────┴───────┐
+                    │  Edge Nodes   │
+                    │  (MistServer) │
+                    └───────────────┘
+```
+
+### Mesh CIDR Standard
+
+- **Shared infrastructure mesh:** `10.x.0.0/16` (choose your `x`)
+- **Reserved for future tenant meshes:** `10.y.0.0/16` (subdivide per tenant, e.g. `/20`)
+
+Edge nodes are **not** on the mesh. They communicate with regional services over public DNS.
+
+### Hosts File (Backend Servers Only)
+
+Add to `/etc/hosts` on **central + regional + database** servers for internal mesh resolution.
+Do **not** add edge nodes here unless they are on the mesh.
+
+```bash
+# FrameWorks Internal Mesh (example - adjust IPs to your mesh)
+10.x.0.1   central quartermaster commodore purser periscope-query deckhand forms
+10.x.2.11  yuga1 postgres
+10.x.2.12  yuga2
+10.x.2.13  yuga3
+10.x.3.11  clickhouse1
+10.x.3.12  clickhouse2
+10.x.3.13  clickhouse3
+10.x.1.21  regional-eu bridge-eu foghorn-eu decklog-eu periscope-ingest-eu signalman-eu
+10.x.1.22  regional-us bridge-us foghorn-us decklog-us periscope-ingest-us signalman-us
+```
+
+### Server Inventory (Example)
+
+| Role | WireGuard IP | Services |
+|------|--------------|----------|
+| Central | 10.x.0.1 | Quartermaster, Commodore, Purser, Periscope Query, Deckhand, Forms |
+| Database (×3) | 10.x.2.11-13 | PostgreSQL/YugabyteDB, ClickHouse |
+| Regional (×N) | 10.x.1.21+ | Bridge, Foghorn, Decklog, Periscope Ingest, Signalman |
+| Edge (×N) | N/A | MistServer, Helmsman |
+
+### Directory Structure
+
+Create on all servers:
+
+```bash
+sudo mkdir -p /opt/frameworks/{bin,config,data,logs}
+sudo mkdir -p /etc/frameworks
+sudo useradd -r -s /sbin/nologin frameworks 2>/dev/null || true
+sudo chown -R frameworks:frameworks /opt/frameworks /etc/frameworks
+```
+
+### Secrets Generation
+
+Generate once and use identical values across all services:
+
+```bash
+# JWT secret (64 hex chars) - user authentication
+JWT_SECRET=$(openssl rand -hex 32)
+
+# Password reset secret (32 hex chars) - email reset tokens
+PASSWORD_RESET_SECRET=$(openssl rand -hex 16)
+
+# Service token (64 hex chars) - inter-service auth
+SERVICE_TOKEN=$(openssl rand -hex 32)
+
+# Save these securely - they must match everywhere
+echo "JWT_SECRET=$JWT_SECRET"
+echo "PASSWORD_RESET_SECRET=$PASSWORD_RESET_SECRET"
+echo "SERVICE_TOKEN=$SERVICE_TOKEN"
+```
+
+---
+
+## Phase 1: DNS & Load Balancing
+
+Configure your DNS provider with the following records. Exact steps vary by provider.
+
+### Required DNS Records
+
+| Type | Name | Content | Notes |
+|------|------|---------|-------|
+| A | @ | `<central-ip>` | Root domain |
+| A | app | `<central-ip>` | Web console |
+| A | api | `<regional-ip>` | GraphQL API |
+| A | docs | `<central-ip>` | Documentation |
+
+### Streaming Records
+
+| Type | Name | Content | Notes |
+|------|------|---------|-------|
+| A/CNAME | edge | Load balancer or edge IP | Edge node delivery |
+| CNAME | ingest | edge.your-domain.com | RTMP/WHIP ingest |
+| A/CNAME | play | `<regional-ip>` | Foghorn routing |
+
+### Load Balancer Setup (Multi-Node)
+
+If running multiple edge nodes, configure a load balancer:
+
+1. **Health Monitor**: HTTP check on `/api` (MistServer API endpoint)
+2. **Origin Pool**: Add all edge nodes with health monitoring
+3. **Load Balancer**: Geographic or round-robin steering
+
+<Aside type="tip">
+For streaming protocols (WebRTC, RTMP, SRT), use DNS-only mode (not proxied) to avoid protocol interference.
+</Aside>
+
+---
+
+## Phase 2: Database Initialization
+
+### PostgreSQL/YugabyteDB
+
+Connect to your database:
+
+```bash
+psql -h <db-host> -p <db-port> -U <user> -d frameworks
+```
+
+Run schemas in order:
+
+```sql
+\i pkg/database/sql/schema/quartermaster.sql
+\i pkg/database/sql/schema/commodore.sql
+\i pkg/database/sql/schema/purser.sql
+\i pkg/database/sql/schema/foghorn.sql
+\i pkg/database/sql/schema/periscope.sql
+\i pkg/database/sql/schema/listmonk.sql
+\i pkg/database/sql/schema/chatwoot.sql
+
+-- Seed billing tiers (required)
+\i pkg/database/sql/seeds/static/purser_tiers.sql
+```
+
+Bootstrap a platform tenant and cluster:
+
+```sql
+-- Create platform owner tenant
+INSERT INTO quartermaster.tenants (id, name, subdomain, is_provider, deployment_tier, deployment_model)
+VALUES ('<owner-tenant-uuid>', 'Platform Owner', 'platform', TRUE, 'enterprise', 'shared');
+
+-- Create default cluster (CLUSTER_ID must match env var)
+INSERT INTO quartermaster.infrastructure_clusters (
+  cluster_id, cluster_name, cluster_type, base_url, owner_tenant_id,
+  deployment_model, visibility, pricing_model, is_default_cluster
+)
+VALUES (
+  '<cluster-id>', 'Primary Cluster', 'central', 'your-domain.com',
+  '<owner-tenant-uuid>', 'shared', 'public', 'free_unmetered', TRUE
+);
+
+-- Assign tenant to cluster
+INSERT INTO quartermaster.tenant_cluster_assignments (tenant_id, cluster_id, deployment_tier, is_primary)
+VALUES ('<owner-tenant-uuid>', '<cluster-id>', 'enterprise', TRUE);
+```
+
+### ClickHouse
+
+```bash
+clickhouse-client -h <clickhouse-host> --user <user> --password <password>
+```
+
+```sql
+source pkg/database/sql/clickhouse/periscope.sql
+```
+
+### Kafka Topics
+
+Create on any broker (shared cluster):
+
+```bash
+BROKER=<any-broker>:9092
+
+kafka-topics.sh --bootstrap-server $BROKER --create \
+  --topic analytics_events --partitions 6 --replication-factor 1
+
+kafka-topics.sh --bootstrap-server $BROKER --create \
+  --topic service_events --partitions 3 --replication-factor 1
+
+kafka-topics.sh --bootstrap-server $BROKER --create \
+  --topic billing.usage_reports --partitions 3 --replication-factor 1
+
+kafka-topics.sh --bootstrap-server $BROKER --create \
+  --topic decklog_events_dlq --partitions 3 --replication-factor 1
+```
+
+---
+
+## Phase 3: Central Services
+
+### Service Ports
+
+| Service | HTTP | gRPC | Binary |
+|---------|------|------|--------|
+| Quartermaster | 18002 | 19002 | quartermaster |
+| Commodore | 18001 | 19001 | commodore |
+| Purser | 18003 | 19003 | purser |
+| Periscope Query | 18004 | 19004 | periscope-query |
+| Deckhand | 18015 | 19006 | deckhand |
+| Forms | 18032 | - | forms |
+
+**Support Services (External):**
+
+| Service | Port | Notes |
+|---------|------|-------|
+| Listmonk | 9000 | Newsletter backend (HTTP) |
+| Chatwoot | 3000 | Support dashboard + API |
+| Redis | 6379 | Chatwoot dependency |
+
+### Build Binaries
+
+```bash
+cd /path/to/monorepo
+
+go build -o /opt/frameworks/bin/quartermaster ./api_tenants/cmd/quartermaster/
+go build -o /opt/frameworks/bin/commodore ./api_control/cmd/commodore/
+go build -o /opt/frameworks/bin/purser ./api_billing/cmd/purser/
+go build -o /opt/frameworks/bin/periscope-query ./api_analytics_query/cmd/periscope/
+go build -o /opt/frameworks/bin/deckhand ./api_ticketing/cmd/deckhand/
+go build -o /opt/frameworks/bin/forms ./api_forms/cmd/forms/
+```
+
+### Environment Configuration
+
+<Tabs>
+<TabItem label="Quartermaster">
+```bash
+# /etc/frameworks/quartermaster.env
+PORT=18002
+GRPC_PORT=19002
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
+
+JWT_SECRET=<your-jwt-secret>
+SERVICE_TOKEN=<your-service-token>
+
+# Optional DNS
+NAVIGATOR_URL=
+```
+</TabItem>
+<TabItem label="Commodore">
+```bash
+# /etc/frameworks/commodore.env
+PORT=18001
+GRPC_PORT=19001
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
+
+JWT_SECRET=<your-jwt-secret>
+PASSWORD_RESET_SECRET=<your-password-reset-secret>
+SERVICE_TOKEN=<your-service-token>
+TURNSTILE_AUTH_SECRET_KEY=<your-turnstile-secret>
+
+# Service Dependencies (via mesh)
+QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
+PURSER_GRPC_ADDR=127.0.0.1:19003
+FOGHORN_CONTROL_ADDR=<regional-ip>:18019
+
+# Public URLs (for emails)
+WEBAPP_PUBLIC_URL=https://app.your-domain.com
+
+# Optional: Listmonk newsletter
+LISTMONK_URL=
+LISTMONK_USERNAME=
+LISTMONK_PASSWORD=
+DEFAULT_MAILING_LIST_ID=1
+```
+</TabItem>
+<TabItem label="Purser">
+```bash
+# /etc/frameworks/purser.env
+PORT=18003
+GRPC_PORT=19003
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
+
+JWT_SECRET=<your-jwt-secret>
+SERVICE_TOKEN=<your-service-token>
+
+QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
+
+# Stripe (optional)
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+
+# Kafka
+KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
+BILLING_KAFKA_TOPIC=billing.usage_reports
+KAFKA_GROUP_ID=purser-ingest
+KAFKA_CLIENT_ID=purser
+```
+</TabItem>
+<TabItem label="Periscope Query">
+```bash
+# /etc/frameworks/periscope-query.env
+PORT=18004
+GRPC_PORT=19004
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+# PostgreSQL (for billing cursors only)
+DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
+
+# ClickHouse
+CLICKHOUSE_HOST=<clickhouse-host>
+CLICKHOUSE_PORT=9000
+CLICKHOUSE_DB=periscope
+CLICKHOUSE_USER=<clickhouse-user>
+CLICKHOUSE_PASSWORD=<clickhouse-password>
+
+# Auth
+JWT_SECRET=<your-jwt-secret>
+SERVICE_TOKEN=<your-service-token>
+
+# Service Dependencies
+QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
+
+# Kafka (for billing events)
+KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
+BILLING_KAFKA_TOPIC=billing.usage_reports
+```
+</TabItem>
+<TabItem label="Deckhand">
+```bash
+# /etc/frameworks/deckhand.env
+DECKHAND_PORT=18015
+DECKHAND_GRPC_PORT=19006
+DECKHAND_WEBHOOK_RATE_LIMIT_PER_MIN=600
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+# Chatwoot integration
+CHATWOOT_HOST=127.0.0.1
+CHATWOOT_PORT=3000
+CHATWOOT_ACCOUNT_ID=1
+CHATWOOT_INBOX_ID=1
+CHATWOOT_API_TOKEN=<your-chatwoot-api-token>
+
+# gRPC dependencies (mesh)
+QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
+PURSER_GRPC_ADDR=127.0.0.1:19003
+DECKLOG_GRPC_ADDR=<regional-ip>:18006
+
+# Auth
+SERVICE_TOKEN=<your-service-token>
+```
+</TabItem>
+<TabItem label="Forms">
+```bash
+# /etc/frameworks/forms.env
+PORT=18032
+NODE_ENV=production
+FORMS_ALLOWED_ORIGINS=https://your-domain.com
+TURNSTILE_FORMS_SECRET_KEY=<your-turnstile-secret>
+
+# SMTP
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=<smtp-user>
+SMTP_PASSWORD=<smtp-password>
+FROM_EMAIL=info@your-domain.com
+TO_EMAIL=contact@your-domain.com
+
+# Listmonk
+LISTMONK_URL=http://127.0.0.1:9000
+LISTMONK_USERNAME=admin
+LISTMONK_PASSWORD=<listmonk-password>
+DEFAULT_MAILING_LIST_ID=1
+```
+</TabItem>
+</Tabs>
+
+### Systemd Unit (Example)
+
+```bash
+# /etc/systemd/system/quartermaster.service
+[Unit]
+Description=FrameWorks Quartermaster
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=frameworks
+Group=frameworks
+EnvironmentFile=/etc/frameworks/quartermaster.env
+ExecStart=/opt/frameworks/bin/quartermaster
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Repeat for each service, adjusting `Description`, `EnvironmentFile`, and `ExecStart`.
+
+### Start Services
+
+```bash
+systemctl daemon-reload
+
+# Start in dependency order
+for svc in quartermaster purser commodore periscope-query deckhand forms; do
+    systemctl enable $svc
+    systemctl start $svc
+    sleep 2
+    systemctl status $svc --no-pager | head -3
+done
+```
+
+---
+
+### Deploy Listmonk (Newsletter Backend)
+
+Listmonk is an external service. Deploy it via Docker (recommended) or its native binary.
+Ensure it can reach the Postgres/Yugabyte instance and the `listmonk` database/user created in Phase 2.
+
+```bash
+# Docker example
+docker run -d --name listmonk \
+  -p 9000:9000 \
+  -e LISTMONK_DB_HOST=<db-host> \
+  -e LISTMONK_DB_PORT=<db-port> \
+  -e LISTMONK_DB_USER=listmonk \
+  -e LISTMONK_DB_PASSWORD=<listmonk-db-password> \
+  -e LISTMONK_DB_DATABASE=listmonk \
+  listmonk/listmonk:latest
+```
+
+---
+
+### Deploy Chatwoot + Redis (Support Backend)
+
+**Port:** 3000 (HTTP)
+**Dependencies:** PostgreSQL (YugabyteDB), Redis
+
+Chatwoot requires:
+- **PostgreSQL** - Database (use YugabyteDB with `chatwoot` database from Phase 2)
+- **Redis** - Background jobs and caching
+- **Sidekiq** - Worker process (runs alongside Rails)
+
+**Option A: Docker Compose (Recommended)**
+
+```bash
+# Create chatwoot directory
+mkdir -p /opt/frameworks/chatwoot && cd /opt/frameworks/chatwoot
+
+# Download production compose
+curl -o docker-compose.yaml https://raw.githubusercontent.com/chatwoot/chatwoot/develop/docker-compose.production.yaml
+curl -o .env https://raw.githubusercontent.com/chatwoot/chatwoot/develop/.env.example
+
+# Edit .env with your settings:
+# - DATABASE_URL=postgresql://chatwoot:<password>@<db-host>:<db-port>/chatwoot
+# - REDIS_URL=redis://localhost:6379
+# - SECRET_KEY_BASE=<generate with: openssl rand -hex 64>
+# - FRONTEND_URL=https://support.your-domain.com
+# - RAILS_ENV=production
+
+# Prepare database
+docker compose run --rm rails bundle exec rails db:chatwoot_prepare
+
+# Start services
+docker compose up -d
+```
+
+**Option B: External Redis + Chatwoot container only**
+
+```bash
+# Start Redis (if not already running)
+docker run -d --name chatwoot-redis -p 6379:6379 redis:7-alpine
+
+# Start Chatwoot (Rails + Sidekiq)
+docker run -d --name chatwoot \
+  -e DATABASE_URL=postgresql://chatwoot:<password>@<db-host>:<db-port>/chatwoot \
+  -e REDIS_URL=redis://127.0.0.1:6379 \
+  -e SECRET_KEY_BASE=$(openssl rand -hex 64) \
+  -e FRONTEND_URL=https://support.your-domain.com \
+  -e RAILS_ENV=production \
+  -p 3000:3000 \
+  chatwoot/chatwoot:latest
+```
+
+**Post-Deployment: Chatwoot Admin Setup**
+
+After Chatwoot is running, configure it for Deckhand integration:
+
+1. **Create admin account** - Visit `http://localhost:3000` and complete setup
+2. **Create API channel inbox:**
+   - Settings → Inboxes → Add Inbox → Select "API"
+   - Name: "FrameWorks Support"
+   - Copy the `CHATWOOT_API_TOKEN` for Deckhand
+3. **Add custom attributes:**
+   - Settings → Custom Attributes → Add Attribute
+   - Create: `tenant_id` (Text), `page_url` (Link), `subject` (Text)
+4. **Configure webhook:**
+   - Settings → Webhooks → Add Webhook
+   - URL: `http://deckhand:18015/webhooks/chatwoot` (internal Docker network)
+   - Enable events: `conversation_created`, `conversation_updated`, `message_created`, `message_updated`
+
+<Aside type="note">
+Chatwoot does not support webhook HMAC signature verification.
+See [GitHub Issue #9354](https://github.com/chatwoot/chatwoot/issues/9354).
+Security relies on internal Docker network isolation.
+</Aside>
+
+---
+
+## Phase 4: Regional Services
+
+Deploy per region. Each region needs its own set of these services.
+
+### Service Ports
+
+| Service | HTTP | gRPC | Binary |
+|---------|------|------|--------|
+| Bridge | 18000 | - | bridge |
+| Foghorn | 18008 | 18019 | foghorn |
+| Decklog | 18026 | 18006 | decklog |
+| Periscope Ingest | 18005 | - | periscope-ingest |
+| Signalman | 18009 | 19005 | signalman |
+
+**Notes:**
+- Decklog is gRPC-only (metrics/health on 18026)
+- Bridge exposes GraphQL over HTTP (no gRPC)
+- Periscope Ingest is a Kafka consumer (HTTP for health only)
+
+### Build Binaries
+
+```bash
+go build -o /opt/frameworks/bin/bridge ./api_gateway/cmd/bridge/
+go build -o /opt/frameworks/bin/foghorn ./api_balancing/cmd/foghorn/
+go build -o /opt/frameworks/bin/decklog ./api_firehose/cmd/decklog/
+go build -o /opt/frameworks/bin/periscope-ingest ./api_analytics_ingest/cmd/periscope/
+go build -o /opt/frameworks/bin/signalman ./api_realtime/cmd/signalman/
+```
+
+### Environment Configuration
+
+<Tabs>
+<TabItem label="Foghorn">
+```bash
+# /etc/frameworks/foghorn.env
+PORT=18008
+FOGHORN_CONTROL_BIND_ADDR=:18019
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+# gRPC TLS (Helmsman control plane)
+GRPC_USE_TLS=false
+GRPC_TLS_CERT_PATH=
+GRPC_TLS_KEY_PATH=
+
+# Database
+DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
+
+# Auth
+SERVICE_TOKEN=<your-service-token>
+CLUSTER_ID=<cluster-id>
+
+# Service Dependencies (central over mesh)
+COMMODORE_GRPC_ADDR=<central-ip>:19001
+QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
+
+# Decklog (local regional)
+DECKLOG_GRPC_ADDR=127.0.0.1:18006
+DECKLOG_USE_TLS=false
+
+# GeoIP (MaxMind)
+GEOIP_MMDB_PATH=/var/lib/GeoIP/GeoLite2-City.mmdb
+GEOIP_CACHE_TTL=300s
+GEOIP_CACHE_SWR=120s
+GEOIP_CACHE_MAX=50000
+
+# Cache settings
+COMMODORE_CACHE_TTL=60s
+COMMODORE_CACHE_SWR=30s
+COMMODORE_CACHE_NEG_TTL=10s
+COMMODORE_CACHE_MAX=10000
+
+# Load balancing weights
+CPU_WEIGHT=500
+RAM_WEIGHT=500
+BANDWIDTH_WEIGHT=1000
+GEO_WEIGHT=1000
+STREAM_BONUS=50
+```
+</TabItem>
+<TabItem label="Bridge">
+```bash
+# /etc/frameworks/bridge.env
+PORT=18000
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+# Auth
+JWT_SECRET=<your-jwt-secret>
+SERVICE_TOKEN=<your-service-token>
+CLUSTER_ID=<cluster-id>
+
+# GraphQL
+GRAPHQL_PLAYGROUND_ENABLED=false
+GRAPHQL_COMPLEXITY_LIMIT=200
+WS_MAX_CONNECTIONS_PER_TENANT=5
+
+# gRPC dependencies (central over mesh)
+COMMODORE_GRPC_ADDR=<central-ip>:19001
+QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
+PURSER_GRPC_ADDR=<central-ip>:19003
+PERISCOPE_GRPC_ADDR=<central-ip>:19004
+
+# Regional dependencies (local)
+SIGNALMAN_GRPC_ADDR=127.0.0.1:19005
+FOGHORN_GRPC_ADDR=127.0.0.1:18019
+```
+</TabItem>
+<TabItem label="Decklog">
+```bash
+# /etc/frameworks/decklog.env
+PORT=18006
+DECKLOG_METRICS_PORT=18026
+LOG_LEVEL=info
+BUILD_ENV=production
+REGION=eu-west
+
+# Kafka (shared cluster)
+KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
+ANALYTICS_KAFKA_TOPIC=analytics_events
+KAFKA_CLUSTER_ID=frameworks
+
+# Auth
+SERVICE_TOKEN=<your-service-token>
+CLUSTER_ID=<cluster-id>
+QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
+
+# Service Events
+SERVICE_EVENTS_KAFKA_TOPIC=service_events
+
+# TLS (production - optional but recommended for edge communication)
+DECKLOG_ALLOW_INSECURE=true
+DECKLOG_TLS_CERT_FILE=
+DECKLOG_TLS_KEY_FILE=
+```
+</TabItem>
+<TabItem label="Periscope Ingest">
+```bash
+# /etc/frameworks/periscope-ingest.env
+LOG_LEVEL=info
+BUILD_ENV=production
+ENABLE_HEALTH_ENDPOINT=true
+
+# ClickHouse (native driver expects host:port)
+CLICKHOUSE_HOST=<clickhouse-host>:9000
+CLICKHOUSE_DB=periscope
+CLICKHOUSE_USER=<clickhouse-user>
+CLICKHOUSE_PASSWORD=<clickhouse-password>
+
+# Kafka (shared cluster)
+KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
+KAFKA_CLUSTER_ID=frameworks
+KAFKA_GROUP_ID=periscope-ingest
+KAFKA_CLIENT_ID=periscope-ingest
+ANALYTICS_KAFKA_TOPIC=analytics_events
+SERVICE_EVENTS_KAFKA_TOPIC=service_events
+DECKLOG_DLQ_KAFKA_TOPIC=decklog_events_dlq
+
+# Service Dependencies (central over mesh)
+QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
+
+# Auth
+SERVICE_TOKEN=<your-service-token>
+CLUSTER_ID=<cluster-id>
+```
+</TabItem>
+<TabItem label="Signalman">
+```bash
+# /etc/frameworks/signalman.env
+PORT=18009
+GRPC_PORT=19005
+LOG_LEVEL=info
+BUILD_ENV=production
+REGION=eu-west
+
+# Auth
+JWT_SECRET=<your-jwt-secret>
+SERVICE_TOKEN=<your-service-token>
+
+# Kafka (shared cluster)
+KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
+ANALYTICS_KAFKA_TOPIC=analytics_events
+SERVICE_EVENTS_KAFKA_TOPIC=service_events
+DECKLOG_DLQ_KAFKA_TOPIC=decklog_events_dlq
+KAFKA_GROUP_ID=signalman-group
+KAFKA_CLIENT_ID=signalman-<region>
+KAFKA_CLUSTER_ID=frameworks
+
+# Dependencies
+QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
+```
+</TabItem>
+</Tabs>
+
+### Systemd Units
+
+Create systemd service files for each regional service following the same pattern as central services.
+
+```bash
+# Example for Foghorn
+cat > /etc/systemd/system/foghorn.service << 'EOF'
+[Unit]
+Description=FrameWorks Foghorn (Load Balancer)
+After=network.target
+
+[Service]
+Type=simple
+User=frameworks
+Group=frameworks
+EnvironmentFile=/etc/frameworks/foghorn.env
+ExecStart=/opt/frameworks/bin/foghorn
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable foghorn
+systemctl start foghorn
+```
+
+### Start Regional Services
+
+```bash
+# Start in dependency order
+for svc in decklog periscope-ingest signalman foghorn bridge; do
+    systemctl enable $svc
+    systemctl start $svc
+    sleep 2
+    systemctl status $svc --no-pager | head -3
+done
+```
+
+---
+
+### Nginx Reverse Proxy for Bridge
+
+```nginx
+# /etc/nginx/conf.d/bridge.conf
+upstream bridge {
+    server 127.0.0.1:18000;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name api.your-domain.com;
+
+    # SSL certs (certbot)
+    ssl_certificate /etc/letsencrypt/live/api.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.your-domain.com/privkey.pem;
+
+    location /graphql {
+        proxy_pass http://bridge/graphql;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400;
+    }
+
+    location /health {
+        proxy_pass http://bridge/health;
+    }
+}
+```
+
+---
+
+## Phase 5: Edge Services
+
+Deploy on each edge node.
+
+### Build Helmsman
+
+```bash
+go build -o /opt/frameworks/bin/helmsman ./api_sidecar/cmd/helmsman/
+```
+
+### Environment Configuration
+
+```bash
+# /etc/frameworks/helmsman.env
+PORT=18007
+LOG_LEVEL=info
+BUILD_ENV=production
+REGION=eu-west
+
+# Node identity
+NODE_ID=edge-<region>-<n>
+EDGE_PUBLIC_URL=https://edge-<region>-<n>.your-domain.com
+
+# Auth
+SERVICE_TOKEN=<your-service-token>
+
+# MistServer (local)
+MISTSERVER_URL=http://127.0.0.1:4242
+MIST_PASSWORD=<mist-password>
+MIST_API_USERNAME=admin
+MIST_API_PASSWORD=<mist-api-password>
+
+# Regional services (public DNS - edges are not on mesh)
+FOGHORN_URL=https://foghorn-<region>.your-domain.com
+FOGHORN_CONTROL_ADDR=foghorn-<region>.your-domain.com:18019
+
+# gRPC TLS (Helmsman client to Foghorn control plane)
+GRPC_USE_TLS=false
+GRPC_TLS_CERT_PATH=
+GRPC_TLS_KEY_PATH=
+
+# Capabilities
+HELMSMAN_CAP_INGEST=true
+HELMSMAN_CAP_EDGE=true
+HELMSMAN_CAP_STORAGE=true
+HELMSMAN_CAP_PROCESSING=true
+
+# Storage
+HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/mistserver/recordings
+HELMSMAN_STORAGE_CAPACITY_BYTES=1099511627776
+```
+
+<Aside type="caution">
+Edge nodes are **not** on the mesh. Prefer TLS for Decklog and Foghorn control when exposed publicly.
+</Aside>
+
+### Systemd Service
+
+```bash
+cat > /etc/systemd/system/helmsman.service << 'EOF'
+[Unit]
+Description=FrameWorks Helmsman (Edge Sidecar)
+After=network.target
+
+[Service]
+Type=simple
+User=frameworks
+Group=frameworks
+EnvironmentFile=/etc/frameworks/helmsman.env
+ExecStart=/opt/frameworks/bin/helmsman
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable helmsman
+systemctl start helmsman
+```
+
+### MistServer Configuration
+
+Configure MistServer triggers to notify Helmsman:
+
+| Trigger | URL | Events |
+|---------|-----|--------|
+| STREAM_BUFFER | `http://localhost:18007/triggers` | Stream health |
+| USER_NEW | `http://localhost:18007/triggers` | Viewer connect |
+| USER_END | `http://localhost:18007/triggers` | Viewer disconnect |
+| RECORDING_* | `http://localhost:18007/triggers` | Clip/DVR lifecycle |
+
+---
+
+## Phase 6: Navigator (Optional)
+
+Navigator automatically syncs DNS records based on your node inventory. It also issues TLS certificates via Let's Encrypt.
+
+<Aside type="note">
+Navigator is optional for manual deployments. If you prefer to manage DNS records manually (as shown in Phase 1), skip this section.
+</Aside>
+
+### Build Navigator
+
+```bash
+go build -o /opt/frameworks/bin/navigator ./api_dns/cmd/navigator/
+```
+
+### Environment Configuration
+
+```bash
+# /etc/frameworks/navigator.env
+PORT=18010
+GRPC_PORT=18011
+LOG_LEVEL=info
+GIN_MODE=release
+BUILD_ENV=production
+
+# Database
+DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
+
+# Auth
+SERVICE_TOKEN=<your-service-token>
+
+# DNS Provider API
+CLOUDFLARE_API_TOKEN=<your-dns-provider-token>
+CLOUDFLARE_ZONE_ID=<your-zone-id>
+CLOUDFLARE_ACCOUNT_ID=<your-account-id>
+
+# DNS Configuration
+NAVIGATOR_ROOT_DOMAIN=your-domain.com
+
+# Service Dependencies
+QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
+```
+
+### Systemd Service
+
+```bash
+cat > /etc/systemd/system/navigator.service << 'EOF'
+[Unit]
+Description=FrameWorks Navigator (DNS Manager)
+After=network.target quartermaster.service
+
+[Service]
+Type=simple
+User=frameworks
+Group=frameworks
+EnvironmentFile=/etc/frameworks/navigator.env
+ExecStart=/opt/frameworks/bin/navigator
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable navigator
+systemctl start navigator
+```
+
+---
+
+## Startup Order
+
+Services must start in dependency order:
+
+1. **Databases**: PostgreSQL/YugabyteDB, ClickHouse
+2. **Kafka**: Shared broker cluster
+3. **Support**: Listmonk, Chatwoot + Redis (central)
+4. **Quartermaster**: No service dependencies
+5. **Purser**: Needs Quartermaster, Kafka
+6. **Commodore**: Needs Quartermaster, Purser
+7. **Periscope Query**: Needs Quartermaster, ClickHouse, Kafka
+8. **Decklog**: Per region, needs Kafka
+9. **Periscope Ingest**: Per region, needs Kafka, ClickHouse, Quartermaster
+10. **Signalman**: Per region, needs Kafka, Quartermaster
+11. **Foghorn**: Per region, needs Quartermaster, Commodore, Decklog
+12. **Bridge**: Per region, needs all central + regional services
+13. **Deckhand**: Central, needs Quartermaster, Purser, Decklog, Chatwoot
+14. **Forms**: Central, needs Listmonk, SMTP
+15. **Helmsman**: Per edge, needs Foghorn, Decklog
+16. **Navigator**: Optional, central, needs Quartermaster
+
+---
+
+## Health Checks
+
+```bash
+# Central services
+curl http://localhost:18002/health  # Quartermaster
+curl http://localhost:18001/health  # Commodore
+curl http://localhost:18003/health  # Purser
+curl http://localhost:18004/health  # Periscope Query
+curl http://localhost:18015/health  # Deckhand
+curl http://localhost:18032/health  # Forms
+
+# Support services
+curl http://localhost:3000/api      # Chatwoot
+
+# Regional services
+curl http://localhost:18000/health  # Bridge
+curl http://localhost:18008/health  # Foghorn
+curl http://localhost:18005/health  # Periscope Ingest
+curl http://localhost:18009/health  # Signalman
+curl http://localhost:18026/health  # Decklog (metrics port)
+
+# Edge services
+curl http://localhost:18007/health  # Helmsman
+
+# gRPC health (requires grpcurl)
+grpcurl -plaintext localhost:19002 grpc.health.v1.Health/Check
+```
+
+---
+
+## Next Steps
+
+- Configure TLS certificates (Let's Encrypt via Caddy or certbot)
+- Set up Nginx/Caddy reverse proxy for API endpoints
+- Configure monitoring (Prometheus/VictoriaMetrics + Grafana)
+- Review [Operations Reference](/operators/operations) for tuning and troubleshooting

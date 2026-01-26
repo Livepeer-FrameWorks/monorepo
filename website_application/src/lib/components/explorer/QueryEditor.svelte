@@ -10,6 +10,7 @@
     variables: string;
     schema?: SchemaInput;
     onKeyPress: (event: KeyboardEvent) => void;
+    onCursorInfo?: (info: unknown | null) => void;
   }
 
   let {
@@ -17,6 +18,7 @@
     variables = $bindable(),
     schema = null,
     onKeyPress,
+    onCursorInfo,
   }: Props = $props();
 
   function handleQueryKeydown(event: KeyboardEvent) {
@@ -54,6 +56,7 @@
         placeholder="# Enter your GraphQL query here..."
         minHeight="300px"
         onkeydown={handleQueryKeydown}
+        {onCursorInfo}
       />
     {:else}
       <!-- SSR fallback -->

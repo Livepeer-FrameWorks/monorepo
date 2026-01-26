@@ -33,9 +33,10 @@ func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseCo
 func (s *Scheduler) Start() {
 	s.logger.Info("Starting usage summarization scheduler")
 
-	// Robust cursor-based billing runs frequently (15m) to keep drafts updated
+	// Robust cursor-based billing runs frequently to keep drafts updated
+	// 5-minute interval for faster metering (especially important for prepaid accounts)
 	// It handles any period size automatically via cursors
-	interval := 15 * time.Minute
+	interval := 5 * time.Minute
 
 	s.logger.WithFields(logging.Fields{
 		"interval": interval,

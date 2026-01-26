@@ -96,8 +96,36 @@ func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, 
 		}
 	}
 
+	// Check observability
+	if !found {
+		if obsConfig, ok := manifest.Observability[serviceName]; ok {
+			if obsConfig.Enabled {
+				host, found = manifest.GetHost(obsConfig.Host)
+			}
+		}
+	}
+
 	if !found {
 		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
+	}
+
+	// Resolve deploy name
+	deployName := serviceName
+	if svcCfg, ok := manifest.Services[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, svcCfg)
+		if err != nil {
+			return err
+		}
+	} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, ifaceCfg)
+		if err != nil {
+			return err
+		}
+	} else if obsCfg, ok := manifest.Observability[serviceName]; ok {
+		deployName, err = resolveDeployName(serviceName, obsCfg)
+		if err != nil {
+			return err
+		}
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Fetching logs for %s on %s...\n\n", serviceName, host.Address)
@@ -122,7 +150,7 @@ func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, 
 
 	// Detect service mode
 	detector := detect.NewDetector(host)
-	state, err := detector.Detect(ctx, serviceName)
+	state, err := detector.Detect(ctx, deployName)
 	if err != nil {
 		return fmt.Errorf("failed to detect service: %w", err)
 	}
@@ -135,7 +163,7 @@ func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, 
 	var logCmd string
 	switch state.Mode {
 	case "docker":
-		logCmd = fmt.Sprintf("cd /opt/frameworks/%s && docker compose logs", serviceName)
+		logCmd = fmt.Sprintf("cd /opt/frameworks/%s && docker compose logs", deployName)
 		if tail > 0 {
 			logCmd += fmt.Sprintf(" --tail=%d", tail)
 		}
@@ -144,7 +172,7 @@ func runLogs(cmd *cobra.Command, manifestPath, serviceName string, follow bool, 
 		}
 
 	case "native":
-		logCmd = fmt.Sprintf("journalctl -u frameworks-%s", serviceName)
+		logCmd = fmt.Sprintf("journalctl -u frameworks-%s", deployName)
 		if tail > 0 {
 			logCmd += fmt.Sprintf(" -n %d", tail)
 		}

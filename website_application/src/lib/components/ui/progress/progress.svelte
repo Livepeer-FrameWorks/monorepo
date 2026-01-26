@@ -29,5 +29,5 @@
   <div
     class="h-full bg-primary transition-all duration-300 ease-in-out"
     style="width: {percentage}%"
-  />
+  ></div>
 </div>

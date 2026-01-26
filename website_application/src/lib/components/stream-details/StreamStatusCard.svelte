@@ -4,8 +4,9 @@
 
   let { stream, analytics } = $props();
 
-  const statusIcon = $derived(getStatusIcon(stream?.status));
-  const statusColor = $derived(getStatusColor(stream?.status));
+  const resolvedStatus = $derived(stream?.status ?? stream?.metrics?.status);
+  const statusIcon = $derived(getStatusIcon(resolvedStatus));
+  const statusColor = $derived(getStatusColor(resolvedStatus));
   const StatusIconComponent = $derived(getIconComponent(statusIcon));
 </script>
 
@@ -20,7 +21,7 @@
     <div class="flex justify-between items-center">
       <span class="text-sm text-muted-foreground">Status:</span>
       <span class="font-mono {statusColor} uppercase font-medium text-sm">
-        {stream?.status || "Unknown"}
+        {resolvedStatus || "Unknown"}
       </span>
     </div>
     <div class="flex justify-between items-center">

@@ -35,6 +35,10 @@ type CreateClusterInviteResult interface {
 	IsCreateClusterInviteResult()
 }
 
+type CreateConversationResult interface {
+	IsCreateConversationResult()
+}
+
 type CreateDeveloperTokenResult interface {
 	IsCreateDeveloperTokenResult()
 }
@@ -85,6 +89,26 @@ type Error interface {
 	GetCode() *string
 }
 
+type LinkEmailResult interface {
+	IsLinkEmailResult()
+}
+
+type LinkWalletResult interface {
+	IsLinkWalletResult()
+}
+
+type MollieFirstPaymentResult interface {
+	IsMollieFirstPaymentResult()
+}
+
+type MollieSubscriptionResult interface {
+	IsMollieSubscriptionResult()
+}
+
+type PromoteToPaidResult interface {
+	IsPromoteToPaidResult()
+}
+
 type RevokeBootstrapTokenResult interface {
 	IsRevokeBootstrapTokenResult()
 }
@@ -97,12 +121,32 @@ type RevokeDeveloperTokenResult interface {
 	IsRevokeDeveloperTokenResult()
 }
 
+type SendMessageResult interface {
+	IsSendMessageResult()
+}
+
 type StartDVRResult interface {
 	IsStartDVRResult()
 }
 
 type StopDVRResult interface {
 	IsStopDVRResult()
+}
+
+type StripeBillingPortalResult interface {
+	IsStripeBillingPortalResult()
+}
+
+type StripeCheckoutResult interface {
+	IsStripeCheckoutResult()
+}
+
+type SubmitX402PaymentResult interface {
+	IsSubmitX402PaymentResult()
+}
+
+type UnlinkWalletResult interface {
+	IsUnlinkWalletResult()
 }
 
 type UpdateClusterResult interface {
@@ -117,10 +161,44 @@ type UpdateTenantResult interface {
 	IsUpdateTenantResult()
 }
 
+type WalletLoginResult interface {
+	IsWalletLoginResult()
+}
+
+type APIUsageConnection struct {
+	Edges              []*APIUsageEdge                   `json:"edges"`
+	Nodes              []*proto.APIUsageRecord           `json:"nodes"`
+	PageInfo           *PageInfo                         `json:"pageInfo"`
+	TotalCount         int                               `json:"totalCount"`
+	Summaries          []*proto.APIUsageSummary          `json:"summaries"`
+	OperationSummaries []*proto.APIUsageOperationSummary `json:"operationSummaries"`
+}
+
+type APIUsageEdge struct {
+	Cursor string                `json:"cursor"`
+	Node   *proto.APIUsageRecord `json:"node"`
+}
+
+// Resource allocation configuration.
 type AllocationDetailsInput struct {
-	Limit     *float64 `json:"limit,omitempty"`
+	// Resource limit (null = unlimited).
+	Limit *float64 `json:"limit,omitempty"`
+	// Price per unit above the limit.
 	UnitPrice *float64 `json:"unitPrice,omitempty"`
-	Unit      *string  `json:"unit,omitempty"`
+	// Unit of measurement (GiB, hours, etc.).
+	Unit *string `json:"unit,omitempty"`
+}
+
+type ArtifactEventEdge struct {
+	Cursor string           `json:"cursor"`
+	Node   *proto.ClipEvent `json:"node"`
+}
+
+type ArtifactEventsConnection struct {
+	Edges      []*ArtifactEventEdge `json:"edges"`
+	Nodes      []*proto.ClipEvent   `json:"nodes"`
+	PageInfo   *PageInfo            `json:"pageInfo"`
+	TotalCount int                  `json:"totalCount"`
 }
 
 type ArtifactStateEdge struct {
@@ -129,9 +207,10 @@ type ArtifactStateEdge struct {
 }
 
 type ArtifactStatesConnection struct {
-	Edges      []*ArtifactStateEdge `json:"edges"`
-	PageInfo   *PageInfo            `json:"pageInfo"`
-	TotalCount int                  `json:"totalCount"`
+	Edges      []*ArtifactStateEdge   `json:"edges"`
+	Nodes      []*proto.ArtifactState `json:"nodes"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
 }
 
 type AuthError struct {
@@ -173,6 +252,16 @@ func (AuthError) IsDeleteVodAssetResult() {}
 
 func (AuthError) IsCreatePaymentResult() {}
 
+func (AuthError) IsSubmitX402PaymentResult() {}
+
+func (AuthError) IsStripeCheckoutResult() {}
+
+func (AuthError) IsStripeBillingPortalResult() {}
+
+func (AuthError) IsMollieFirstPaymentResult() {}
+
+func (AuthError) IsMollieSubscriptionResult() {}
+
 func (AuthError) IsUpdateTenantResult() {}
 
 func (AuthError) IsCreateDeveloperTokenResult() {}
@@ -193,6 +282,18 @@ func (AuthError) IsRevokeClusterInviteResult() {}
 
 func (AuthError) IsClusterSubscriptionResult() {}
 
+func (AuthError) IsLinkWalletResult() {}
+
+func (AuthError) IsUnlinkWalletResult() {}
+
+func (AuthError) IsLinkEmailResult() {}
+
+func (AuthError) IsPromoteToPaidResult() {}
+
+func (AuthError) IsCreateConversationResult() {}
+
+func (AuthError) IsSendMessageResult() {}
+
 type AvailableCluster struct {
 	ClusterID   string   `json:"clusterId"`
 	ClusterName string   `json:"clusterName"`
@@ -202,6 +303,7 @@ type AvailableCluster struct {
 
 type AvailableClusterConnection struct {
 	Edges      []*AvailableClusterEdge `json:"edges"`
+	Nodes      []*AvailableCluster     `json:"nodes"`
 	PageInfo   *PageInfo               `json:"pageInfo"`
 	TotalCount int                     `json:"totalCount"`
 }
@@ -211,19 +313,54 @@ type AvailableClusterEdge struct {
 	Node   *AvailableCluster `json:"node"`
 }
 
+// Balance transaction connection for pagination.
+type BalanceTransactionEdge struct {
+	Cursor string              `json:"cursor"`
+	Node   *BalanceTransaction `json:"node"`
+}
+
+type BalanceTransactionsConnection struct {
+	Edges      []*BalanceTransactionEdge `json:"edges"`
+	Nodes      []*BalanceTransaction     `json:"nodes"`
+	PageInfo   *PageInfo                 `json:"pageInfo"`
+	TotalCount int                       `json:"totalCount"`
+}
+
+// Input for billing address.
+type BillingAddressInput struct {
+	// Street address line 1.
+	Street string `json:"street"`
+	// City name.
+	City string `json:"city"`
+	// State or province.
+	State *string `json:"state,omitempty"`
+	// Postal or ZIP code.
+	PostalCode string `json:"postalCode"`
+	// ISO 3166-1 alpha-2 country code.
+	Country string `json:"country"`
+}
+
+// Feature flag configuration for custom subscriptions.
 type BillingFeaturesInput struct {
-	Recording      *bool   `json:"recording,omitempty"`
-	Analytics      *bool   `json:"analytics,omitempty"`
-	CustomBranding *bool   `json:"customBranding,omitempty"`
-	APIAccess      *bool   `json:"apiAccess,omitempty"`
-	SupportLevel   *string `json:"supportLevel,omitempty"`
-	SLA            *bool   `json:"sla,omitempty"`
+	// DVR recording capability.
+	Recording *bool `json:"recording,omitempty"`
+	// Analytics dashboard access.
+	Analytics *bool `json:"analytics,omitempty"`
+	// Custom branding options.
+	CustomBranding *bool `json:"customBranding,omitempty"`
+	// API access for automation.
+	APIAccess *bool `json:"apiAccess,omitempty"`
+	// Support level (community, email, priority, dedicated).
+	SupportLevel *string `json:"supportLevel,omitempty"`
+	// SLA guarantees.
+	SLA *bool `json:"sla,omitempty"`
 }
 
 type BootstrapTokenConnection struct {
-	Edges      []*BootstrapTokenEdge `json:"edges"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int                   `json:"totalCount"`
+	Edges      []*BootstrapTokenEdge   `json:"edges"`
+	Nodes      []*proto.BootstrapToken `json:"nodes"`
+	PageInfo   *PageInfo               `json:"pageInfo"`
+	TotalCount int                     `json:"totalCount"`
 }
 
 type BootstrapTokenEdge struct {
@@ -231,10 +368,33 @@ type BootstrapTokenEdge struct {
 	Node   *proto.BootstrapToken `json:"node"`
 }
 
+type BufferEventEdge struct {
+	Cursor string             `json:"cursor"`
+	Node   *proto.BufferEvent `json:"node"`
+}
+
+type BufferEventsConnection struct {
+	Edges      []*BufferEventEdge   `json:"edges"`
+	Nodes      []*proto.BufferEvent `json:"nodes"`
+	PageInfo   *PageInfo            `json:"pageInfo"`
+	TotalCount int                  `json:"totalCount"`
+}
+
+// Result from creating a card top-up checkout session.
+type CardTopupResult struct {
+	// Internal top-up ID for tracking.
+	TopupID string `json:"topupId"`
+	// URL to redirect user for checkout.
+	CheckoutURL string `json:"checkoutUrl"`
+	// When the checkout session expires.
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 type ClientMetrics5mConnection struct {
-	Edges      []*ClientMetrics5mEdge `json:"edges"`
-	PageInfo   *PageInfo              `json:"pageInfo"`
-	TotalCount int                    `json:"totalCount"`
+	Edges      []*ClientMetrics5mEdge   `json:"edges"`
+	Nodes      []*proto.ClientMetrics5M `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
 }
 
 type ClientMetrics5mEdge struct {
@@ -247,21 +407,11 @@ type ClipEdge struct {
 	Node   *proto.ClipInfo `json:"node"`
 }
 
-type ClipEventEdge struct {
-	Cursor string           `json:"cursor"`
-	Node   *proto.ClipEvent `json:"node"`
-}
-
-type ClipEventsConnection struct {
-	Edges      []*ClipEventEdge `json:"edges"`
-	PageInfo   *PageInfo        `json:"pageInfo"`
-	TotalCount int              `json:"totalCount"`
-}
-
 type ClipsConnection struct {
-	Edges      []*ClipEdge `json:"edges"`
-	PageInfo   *PageInfo   `json:"pageInfo"`
-	TotalCount int         `json:"totalCount"`
+	Edges      []*ClipEdge       `json:"edges"`
+	Nodes      []*proto.ClipInfo `json:"nodes"`
+	PageInfo   *PageInfo         `json:"pageInfo"`
+	TotalCount int               `json:"totalCount"`
 }
 
 type ClusterAccess struct {
@@ -273,6 +423,7 @@ type ClusterAccess struct {
 
 type ClusterAccessConnection struct {
 	Edges      []*ClusterAccessEdge `json:"edges"`
+	Nodes      []*ClusterAccess     `json:"nodes"`
 	PageInfo   *PageInfo            `json:"pageInfo"`
 	TotalCount int                  `json:"totalCount"`
 }
@@ -288,9 +439,10 @@ type ClusterEdge struct {
 }
 
 type ClusterInviteConnection struct {
-	Edges      []*ClusterInviteEdge `json:"edges"`
-	PageInfo   *PageInfo            `json:"pageInfo"`
-	TotalCount int                  `json:"totalCount"`
+	Edges      []*ClusterInviteEdge   `json:"edges"`
+	Nodes      []*proto.ClusterInvite `json:"nodes"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
 }
 
 type ClusterInviteEdge struct {
@@ -299,9 +451,10 @@ type ClusterInviteEdge struct {
 }
 
 type ClusterSubscriptionConnection struct {
-	Edges      []*ClusterSubscriptionEdge `json:"edges"`
-	PageInfo   *PageInfo                  `json:"pageInfo"`
-	TotalCount int                        `json:"totalCount"`
+	Edges      []*ClusterSubscriptionEdge   `json:"edges"`
+	Nodes      []*proto.ClusterSubscription `json:"nodes"`
+	PageInfo   *PageInfo                    `json:"pageInfo"`
+	TotalCount int                          `json:"totalCount"`
 }
 
 type ClusterSubscriptionEdge struct {
@@ -310,14 +463,19 @@ type ClusterSubscriptionEdge struct {
 }
 
 type ClustersConnection struct {
-	Edges      []*ClusterEdge `json:"edges"`
-	PageInfo   *PageInfo      `json:"pageInfo"`
-	TotalCount int            `json:"totalCount"`
+	Edges      []*ClusterEdge                 `json:"edges"`
+	Nodes      []*proto.InfrastructureCluster `json:"nodes"`
+	PageInfo   *PageInfo                      `json:"pageInfo"`
+	TotalCount int                            `json:"totalCount"`
 }
 
+// Input for completing a multipart VOD upload.
+// Call after all parts have been uploaded to S3.
 type CompleteVodUploadInput struct {
-	UploadID string                    `json:"uploadId"`
-	Parts    []*VodUploadCompletedPart `json:"parts"`
+	// Upload session ID from createVodUpload.
+	UploadID string `json:"uploadId"`
+	// ETags from each successfully uploaded part.
+	Parts []*VodUploadCompletedPart `json:"parts"`
 }
 
 type ConnectionEventEdge struct {
@@ -326,9 +484,76 @@ type ConnectionEventEdge struct {
 }
 
 type ConnectionEventsConnection struct {
-	Edges      []*ConnectionEventEdge `json:"edges"`
-	PageInfo   *PageInfo              `json:"pageInfo"`
-	TotalCount int                    `json:"totalCount"`
+	Edges      []*ConnectionEventEdge   `json:"edges"`
+	Nodes      []*proto.ConnectionEvent `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
+}
+
+// Standard cursor-based pagination input for all connections.
+// Follows the Relay Connection specification for consistent pagination.
+//
+// ## Forward Pagination
+// Use `first` and `after` to paginate forward:
+// ```graphql
+// streamsConnection(page: { first: 10, after: "cursor..." })
+// ```
+//
+// ## Backward Pagination
+// Use `last` and `before` to paginate backward:
+// ```graphql
+// streamsConnection(page: { last: 10, before: "cursor..." })
+// ```
+type ConnectionInput struct {
+	// Number of items to fetch (forward pagination). Default: 50, Max: 500.
+	First *int `json:"first,omitempty"`
+	// Cursor to start fetching after (forward pagination).
+	After *string `json:"after,omitempty"`
+	// Number of items to fetch (backward pagination).
+	Last *int `json:"last,omitempty"`
+	// Cursor to start fetching before (backward pagination).
+	Before *string `json:"before,omitempty"`
+}
+
+// A support conversation between tenant and support team.
+// Conversations can contain multiple messages and have a status.
+type Conversation struct {
+	// The globally unique identifier for this conversation.
+	ID string `json:"id"`
+	// Optional subject line for the conversation.
+	Subject *string `json:"subject,omitempty"`
+	// Current status of the conversation.
+	Status proto.ConversationStatus `json:"status"`
+	// The last message in this conversation.
+	LastMessage *Message `json:"lastMessage,omitempty"`
+	// Number of unread messages.
+	UnreadCount int `json:"unreadCount"`
+	// When the conversation was created.
+	CreatedAt time.Time `json:"createdAt"`
+	// When the conversation was last updated.
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func (Conversation) IsCreateConversationResult() {}
+
+func (Conversation) IsNode() {}
+
+// A conversation edge in a connection.
+type ConversationEdge struct {
+	// The conversation.
+	Node *Conversation `json:"node"`
+	// Cursor for this edge.
+	Cursor string `json:"cursor"`
+}
+
+// Paginated list of conversations.
+type ConversationsConnection struct {
+	// List of conversations.
+	Edges []*ConversationEdge `json:"edges"`
+	// Pagination information.
+	PageInfo *PageInfo `json:"pageInfo"`
+	// Total count of conversations.
+	TotalCount int `json:"totalCount"`
 }
 
 type CostEntry struct {
@@ -342,41 +567,113 @@ type CountryTimeSeries struct {
 	ViewerCount int       `json:"viewerCount"`
 }
 
+// Input for creating a bootstrap token for node provisioning.
 type CreateBootstrapTokenInput struct {
-	Name       string             `json:"name"`
-	Type       BootstrapTokenType `json:"type"`
-	ExpiresIn  *int               `json:"expiresIn,omitempty"`
-	UsageLimit *int               `json:"usageLimit,omitempty"`
-	ClusterID  *string            `json:"clusterId,omitempty"`
+	// Human-readable name for the token.
+	Name string `json:"name"`
+	// Token type (edge_node, service).
+	Type BootstrapTokenType `json:"type"`
+	// Days until expiration.
+	ExpiresIn *int `json:"expiresIn,omitempty"`
+	// Maximum number of uses allowed.
+	UsageLimit *int `json:"usageLimit,omitempty"`
+	// Target cluster UUID (required for edge_node tokens; not the Relay ID).
+	ClusterID *string `json:"clusterId,omitempty"`
 }
 
+// Input for creating a card-based prepaid balance top-up.
+type CreateCardTopupInput struct {
+	// Amount to top up in cents. Minimum $5.00 (500 cents).
+	AmountCents int `json:"amountCents"`
+	// Currency code (default: USD).
+	Currency *string `json:"currency,omitempty"`
+	// Payment provider to use.
+	Provider CardPaymentProvider `json:"provider"`
+	// URL to redirect after successful payment.
+	SuccessURL string `json:"successUrl"`
+	// URL to redirect if user cancels.
+	CancelURL string `json:"cancelUrl"`
+	// Optional billing email for invoice.
+	BillingEmail *string `json:"billingEmail,omitempty"`
+	// Optional billing name for invoice.
+	BillingName *string `json:"billingName,omitempty"`
+	// Optional company name for invoice.
+	BillingCompany *string `json:"billingCompany,omitempty"`
+	// Optional VAT number for invoice.
+	BillingVatNumber *string `json:"billingVatNumber,omitempty"`
+}
+
+// Input for creating a clip from a live stream's DVR buffer.
+// Time specification depends on the selected mode.
 type CreateClipInput struct {
-	Stream      string            `json:"stream"`
-	Title       string            `json:"title"`
-	Description *string           `json:"description,omitempty"`
-	Mode        *ClipCreationMode `json:"mode,omitempty"`
-	StartUnix   *int              `json:"startUnix,omitempty"`
-	StopUnix    *int              `json:"stopUnix,omitempty"`
-	StartMedia  *int              `json:"startMedia,omitempty"`
-	StopMedia   *int              `json:"stopMedia,omitempty"`
-	Duration    *int              `json:"duration,omitempty"`
-	ExpiresAt   *int              `json:"expiresAt,omitempty"`
-	StartTime   *int              `json:"startTime,omitempty"`
-	EndTime     *int              `json:"endTime,omitempty"`
+	// Stream to create the clip from (Stream.id, Relay global ID).
+	StreamID string `json:"streamId"`
+	// Display title for the clip.
+	Title string `json:"title"`
+	// Optional description.
+	Description *string `json:"description,omitempty"`
+	// Time mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). Default: ABSOLUTE.
+	Mode *ClipCreationMode `json:"mode,omitempty"`
+	// Start time as Unix timestamp (ABSOLUTE/DURATION mode).
+	StartUnix *int `json:"startUnix,omitempty"`
+	// End time as Unix timestamp (ABSOLUTE mode).
+	StopUnix *int `json:"stopUnix,omitempty"`
+	// Start time as seconds from stream start (RELATIVE mode).
+	StartMedia *int `json:"startMedia,omitempty"`
+	// End time as seconds from stream start (RELATIVE mode).
+	StopMedia *int `json:"stopMedia,omitempty"`
+	// Clip duration in seconds (DURATION/CLIP_NOW mode).
+	Duration *int `json:"duration,omitempty"`
+	// Optional expiration as Unix timestamp.
+	ExpiresAt *int `json:"expiresAt,omitempty"`
+	// Deprecated: Use startUnix instead.
+	StartTime *int `json:"startTime,omitempty"`
+	// Deprecated: Use stopUnix instead.
+	EndTime *int `json:"endTime,omitempty"`
 }
 
+// Input for creating a cluster access invite.
 type CreateClusterInviteInput struct {
-	ClusterID       string  `json:"clusterId"`
-	InvitedTenantID string  `json:"invitedTenantId"`
-	AccessLevel     *string `json:"accessLevel,omitempty"`
-	ResourceLimits  *string `json:"resourceLimits,omitempty"`
-	ExpiresInDays   *int    `json:"expiresInDays,omitempty"`
+	// Target cluster ID.
+	ClusterID string `json:"clusterId"`
+	// Tenant to invite.
+	InvitedTenantID string `json:"invitedTenantId"`
+	// Access level (read, write, admin).
+	AccessLevel *string `json:"accessLevel,omitempty"`
+	// Resource limits for the invited tenant.
+	ResourceLimits *string `json:"resourceLimits,omitempty"`
+	// Days until invite expires.
+	ExpiresInDays *int `json:"expiresInDays,omitempty"`
 }
 
+// Input for creating a new conversation.
+type CreateConversationInput struct {
+	// Optional subject line.
+	Subject *string `json:"subject,omitempty"`
+	// Initial message content (required).
+	Message string `json:"message"`
+	// Optional page URL where conversation was initiated.
+	PageURL *string `json:"pageUrl,omitempty"`
+}
+
+// Input for creating a crypto top-up deposit address.
+type CreateCryptoTopupInput struct {
+	// Expected top-up amount in cents. Must be positive. Actual credit based on received amount.
+	AmountCents int `json:"amountCents"`
+	// Crypto asset to receive.
+	Asset proto.CryptoAsset `json:"asset"`
+	// Target currency for balance (default: USD).
+	Currency *string `json:"currency,omitempty"`
+}
+
+// Input for creating a developer API token.
 type CreateDeveloperTokenInput struct {
-	Name        string  `json:"name"`
+	// Human-readable name for the token.
+	Name string `json:"name"`
+	// Comma-separated permission scopes (read:streams, write:streams, etc.).
 	Permissions *string `json:"permissions,omitempty"`
-	ExpiresIn   *int    `json:"expiresIn,omitempty"`
+	// Days until expiration (null = non-expiring).
+	ExpiresIn *int `json:"expiresIn,omitempty"`
 }
 
 type CreatePaymentInput struct {
@@ -387,33 +684,97 @@ type CreatePaymentInput struct {
 	ReturnURL *string       `json:"returnUrl,omitempty"`
 }
 
+// Input for creating a private streaming cluster.
 type CreatePrivateClusterInput struct {
-	ClusterName      string  `json:"clusterName"`
-	Region           *string `json:"region,omitempty"`
+	// Human-readable cluster name.
+	ClusterName string `json:"clusterName"`
+	// Geographic region for the cluster.
+	Region *string `json:"region,omitempty"`
+	// Short description for marketplace listing.
 	ShortDescription *string `json:"shortDescription,omitempty"`
 }
 
+// Input for creating a new live stream.
 type CreateStreamInput struct {
-	Name        string  `json:"name"`
+	// Human-readable name for the stream.
+	Name string `json:"name"`
+	// Optional description for the stream.
 	Description *string `json:"description,omitempty"`
-	Record      *bool   `json:"record,omitempty"`
+	// Enable DVR recording (default: false).
+	Record *bool `json:"record,omitempty"`
 }
 
+// Input for creating an additional stream key.
 type CreateStreamKeyInput struct {
+	// Human-readable name for the key.
 	Name string `json:"name"`
 }
 
+// Input for initiating a multipart VOD upload.
+// Returns presigned S3 URLs for uploading file parts.
 type CreateVodUploadInput struct {
-	Filename    string  `json:"filename"`
-	SizeBytes   int     `json:"sizeBytes"`
+	// Original filename (for metadata and content-type detection).
+	Filename string `json:"filename"`
+	// Total file size in bytes (required for part calculation).
+	SizeBytes float64 `json:"sizeBytes"`
+	// MIME type (video/mp4, video/webm, etc.). Auto-detected if omitted.
 	ContentType *string `json:"contentType,omitempty"`
-	Title       *string `json:"title,omitempty"`
+	// Optional display title for the asset.
+	Title *string `json:"title,omitempty"`
+	// Optional description for the asset.
 	Description *string `json:"description,omitempty"`
 }
 
+// Result from creating a crypto top-up.
+// Contains the deposit address for the agent to send funds.
+type CryptoTopupResult struct {
+	// Internal top-up ID for tracking/polling.
+	TopupID string `json:"topupId"`
+	// HD-derived Ethereum address to send funds to.
+	DepositAddress string `json:"depositAddress"`
+	// Asset to send (ETH, USDC, or LPT).
+	Asset proto.CryptoAsset `json:"asset"`
+	// Human-readable asset symbol.
+	AssetSymbol string `json:"assetSymbol"`
+	// Expected amount in cents (echoed from input).
+	ExpectedAmountCents int `json:"expectedAmountCents"`
+	// When this deposit address expires (24 hours from creation).
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// Status of a crypto top-up (for polling).
+type CryptoTopupStatus struct {
+	// Top-up ID.
+	ID string `json:"id"`
+	// Deposit address.
+	DepositAddress string `json:"depositAddress"`
+	// Asset being received.
+	Asset proto.CryptoAsset `json:"asset"`
+	// Current status: pending, confirming, completed, expired.
+	Status string `json:"status"`
+	// Blockchain transaction hash (when detected).
+	TxHash *string `json:"txHash,omitempty"`
+	// Number of block confirmations.
+	Confirmations int `json:"confirmations"`
+	// Amount received in smallest unit (wei for ETH).
+	ReceivedAmountWei *string `json:"receivedAmountWei,omitempty"`
+	// Amount credited to balance in cents (after conversion).
+	CreditedAmountCents *int `json:"creditedAmountCents,omitempty"`
+	// When the deposit address expires.
+	ExpiresAt time.Time `json:"expiresAt"`
+	// When payment was first detected on-chain.
+	DetectedAt *time.Time `json:"detectedAt,omitempty"`
+	// When balance was credited.
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+}
+
+// Custom pricing configuration for enterprise subscriptions.
 type CustomPricingInput struct {
-	BasePrice    *float64           `json:"basePrice,omitempty"`
-	DiscountRate *float64           `json:"discountRate,omitempty"`
+	// Custom base monthly price.
+	BasePrice *float64 `json:"basePrice,omitempty"`
+	// Discount rate (0.0 to 1.0).
+	DiscountRate *float64 `json:"discountRate,omitempty"`
+	// Custom overage rates.
 	OverageRates *OverageRatesInput `json:"overageRates,omitempty"`
 }
 
@@ -424,6 +785,7 @@ type DVRRecordingEdge struct {
 
 type DVRRecordingsConnection struct {
 	Edges      []*DVRRecordingEdge `json:"edges"`
+	Nodes      []*proto.DVRInfo    `json:"nodes"`
 	PageInfo   *PageInfo           `json:"pageInfo"`
 	TotalCount int                 `json:"totalCount"`
 }
@@ -453,6 +815,8 @@ func (DeleteSuccess) IsRevokeBootstrapTokenResult() {}
 
 func (DeleteSuccess) IsRevokeClusterInviteResult() {}
 
+func (DeleteSuccess) IsUnlinkWalletResult() {}
+
 type DeveloperTokenEdge struct {
 	Cursor string              `json:"cursor"`
 	Node   *proto.APITokenInfo `json:"node"`
@@ -460,19 +824,9 @@ type DeveloperTokenEdge struct {
 
 type DeveloperTokensConnection struct {
 	Edges      []*DeveloperTokenEdge `json:"edges"`
+	Nodes      []*proto.APITokenInfo `json:"nodes"`
 	PageInfo   *PageInfo             `json:"pageInfo"`
 	TotalCount int                   `json:"totalCount"`
-}
-
-type GeographicDistribution struct {
-	TimeRange        *proto.TimeRange       `json:"timeRange"`
-	Stream           *string                `json:"stream,omitempty"`
-	TopCountries     []*proto.CountryMetric `json:"topCountries"`
-	TopCities        []*proto.CityMetric    `json:"topCities"`
-	UniqueCountries  int                    `json:"uniqueCountries"`
-	UniqueCities     int                    `json:"uniqueCities"`
-	TotalViewers     int                    `json:"totalViewers"`
-	ViewersByCountry []*CountryTimeSeries   `json:"viewersByCountry"`
 }
 
 type InvoiceEdge struct {
@@ -481,22 +835,49 @@ type InvoiceEdge struct {
 }
 
 type InvoicesConnection struct {
-	Edges      []*InvoiceEdge `json:"edges"`
-	PageInfo   *PageInfo      `json:"pageInfo"`
-	TotalCount int            `json:"totalCount"`
+	Edges      []*InvoiceEdge   `json:"edges"`
+	Nodes      []*proto.Invoice `json:"nodes"`
+	PageInfo   *PageInfo        `json:"pageInfo"`
+	TotalCount int              `json:"totalCount"`
 }
 
+// A single line item on an invoice.
 type LineItem struct {
-	Description string  `json:"description"`
-	Quantity    int     `json:"quantity"`
-	UnitPrice   float64 `json:"unitPrice"`
-	Total       float64 `json:"total"`
+	// Description of the charge.
+	Description string `json:"description"`
+	// Quantity of units.
+	Quantity int `json:"quantity"`
+	// Price per unit.
+	UnitPrice float64 `json:"unitPrice"`
+	// Total for this line item.
+	Total float64 `json:"total"`
 }
+
+// Input for linking email to a wallet-only account.
+type LinkEmailInput struct {
+	// Email address to link.
+	Email string `json:"email"`
+	// Password to set for email-based login.
+	Password string `json:"password"`
+}
+
+// Successful email link response.
+type LinkEmailPayload struct {
+	// Whether the operation succeeded.
+	Success bool `json:"success"`
+	// Human-readable status message.
+	Message string `json:"message"`
+	// Whether a verification email was sent.
+	VerificationSent bool `json:"verificationSent"`
+}
+
+func (LinkEmailPayload) IsLinkEmailResult() {}
 
 type MarketplaceClusterConnection struct {
-	Edges      []*MarketplaceClusterEdge `json:"edges"`
-	PageInfo   *PageInfo                 `json:"pageInfo"`
-	TotalCount int                       `json:"totalCount"`
+	Edges      []*MarketplaceClusterEdge        `json:"edges"`
+	Nodes      []*proto.MarketplaceClusterEntry `json:"nodes"`
+	PageInfo   *PageInfo                        `json:"pageInfo"`
+	TotalCount int                              `json:"totalCount"`
 }
 
 type MarketplaceClusterEdge struct {
@@ -504,6 +885,70 @@ type MarketplaceClusterEdge struct {
 	Node   *proto.MarketplaceClusterEntry `json:"node"`
 }
 
+// A message within a support conversation.
+type Message struct {
+	// The globally unique identifier for this message.
+	ID string `json:"id"`
+	// The conversation this message belongs to.
+	ConversationID string `json:"conversationId"`
+	// The message content.
+	Content string `json:"content"`
+	// Who sent this message.
+	Sender proto.MessageSender `json:"sender"`
+	// When the message was sent.
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func (Message) IsSendMessageResult() {}
+
+func (Message) IsNode() {}
+
+// A message edge in a connection.
+type MessageEdge struct {
+	// The message.
+	Node *Message `json:"node"`
+	// Cursor for this edge.
+	Cursor string `json:"cursor"`
+}
+
+// Paginated list of messages.
+type MessagesConnection struct {
+	// List of messages.
+	Edges []*MessageEdge `json:"edges"`
+	// Pagination information.
+	PageInfo *PageInfo `json:"pageInfo"`
+	// Total count of messages.
+	TotalCount int `json:"totalCount"`
+}
+
+// Mollie First Payment - redirect URL for initial payment that creates a mandate.
+type MollieFirstPayment struct {
+	// Mollie payment ID (tr_xxx).
+	PaymentID string `json:"paymentId"`
+	// Mollie customer ID (cst_xxx).
+	CustomerID string `json:"customerId"`
+	// URL to redirect user to for payment.
+	PaymentURL string `json:"paymentUrl"`
+}
+
+func (MollieFirstPayment) IsMollieFirstPaymentResult() {}
+
+// Mollie Subscription - recurring subscription created after mandate is valid.
+type MollieSubscription struct {
+	// Mollie subscription ID (sub_xxx).
+	SubscriptionID string `json:"subscriptionId"`
+	// Subscription status (active, pending, etc.).
+	Status string `json:"status"`
+	// Next payment date (ISO 8601).
+	NextPaymentDate *string `json:"nextPaymentDate,omitempty"`
+}
+
+func (MollieSubscription) IsMollieSubscriptionResult() {}
+
+// Root Mutation type - the entry point for all write operations.
+//
+// All mutations return union types with explicit error states per GraphQL best practices.
+// Check the result type to handle success/error cases appropriately.
 type Mutation struct {
 }
 
@@ -513,9 +958,10 @@ type MySubscriptionEdge struct {
 }
 
 type MySubscriptionsConnection struct {
-	Edges      []*MySubscriptionEdge `json:"edges"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int                   `json:"totalCount"`
+	Edges      []*MySubscriptionEdge          `json:"edges"`
+	Nodes      []*proto.InfrastructureCluster `json:"nodes"`
+	PageInfo   *PageInfo                      `json:"pageInfo"`
+	TotalCount int                            `json:"totalCount"`
 }
 
 type NodeEdge struct {
@@ -534,21 +980,24 @@ type NodeMetricHourlyEdge struct {
 }
 
 type NodeMetrics1hConnection struct {
-	Edges      []*NodeMetricHourlyEdge `json:"edges"`
-	PageInfo   *PageInfo               `json:"pageInfo"`
-	TotalCount int                     `json:"totalCount"`
+	Edges      []*NodeMetricHourlyEdge   `json:"edges"`
+	Nodes      []*proto.NodeMetricHourly `json:"nodes"`
+	PageInfo   *PageInfo                 `json:"pageInfo"`
+	TotalCount int                       `json:"totalCount"`
 }
 
 type NodeMetricsConnection struct {
-	Edges      []*NodeMetricEdge `json:"edges"`
-	PageInfo   *PageInfo         `json:"pageInfo"`
-	TotalCount int               `json:"totalCount"`
+	Edges      []*NodeMetricEdge   `json:"edges"`
+	Nodes      []*proto.NodeMetric `json:"nodes"`
+	PageInfo   *PageInfo           `json:"pageInfo"`
+	TotalCount int                 `json:"totalCount"`
 }
 
 type NodePerformance5mConnection struct {
-	Edges      []*NodePerformance5mEdge `json:"edges"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*NodePerformance5mEdge   `json:"edges"`
+	Nodes      []*proto.NodePerformance5M `json:"nodes"`
+	PageInfo   *PageInfo                  `json:"pageInfo"`
+	TotalCount int                        `json:"totalCount"`
 }
 
 type NodePerformance5mEdge struct {
@@ -557,9 +1006,10 @@ type NodePerformance5mEdge struct {
 }
 
 type NodesConnection struct {
-	Edges      []*NodeEdge `json:"edges"`
-	PageInfo   *PageInfo   `json:"pageInfo"`
-	TotalCount int         `json:"totalCount"`
+	Edges      []*NodeEdge                 `json:"edges"`
+	Nodes      []*proto.InfrastructureNode `json:"nodes"`
+	PageInfo   *PageInfo                   `json:"pageInfo"`
+	TotalCount int                         `json:"totalCount"`
 }
 
 type NotFoundError struct {
@@ -597,6 +1047,16 @@ func (NotFoundError) IsAbortVodUploadResult() {}
 
 func (NotFoundError) IsDeleteVodAssetResult() {}
 
+func (NotFoundError) IsSubmitX402PaymentResult() {}
+
+func (NotFoundError) IsStripeCheckoutResult() {}
+
+func (NotFoundError) IsStripeBillingPortalResult() {}
+
+func (NotFoundError) IsMollieFirstPaymentResult() {}
+
+func (NotFoundError) IsMollieSubscriptionResult() {}
+
 func (NotFoundError) IsRevokeDeveloperTokenResult() {}
 
 func (NotFoundError) IsRevokeBootstrapTokenResult() {}
@@ -609,10 +1069,18 @@ func (NotFoundError) IsRevokeClusterInviteResult() {}
 
 func (NotFoundError) IsClusterSubscriptionResult() {}
 
+func (NotFoundError) IsUnlinkWalletResult() {}
+
+func (NotFoundError) IsSendMessageResult() {}
+
+// Overage rate configuration for custom pricing.
 type OverageRatesInput struct {
+	// Bandwidth overage configuration.
 	Bandwidth *AllocationDetailsInput `json:"bandwidth,omitempty"`
-	Storage   *AllocationDetailsInput `json:"storage,omitempty"`
-	Compute   *AllocationDetailsInput `json:"compute,omitempty"`
+	// Storage overage configuration.
+	Storage *AllocationDetailsInput `json:"storage,omitempty"`
+	// Compute overage configuration.
+	Compute *AllocationDetailsInput `json:"compute,omitempty"`
 }
 
 type PageInfo struct {
@@ -624,6 +1092,7 @@ type PageInfo struct {
 
 type ProcessingUsageConnection struct {
 	Edges      []*ProcessingUsageEdge          `json:"edges"`
+	Nodes      []*proto.ProcessingUsageRecord  `json:"nodes"`
 	PageInfo   *PageInfo                       `json:"pageInfo"`
 	TotalCount int                             `json:"totalCount"`
 	Summaries  []*proto.ProcessingUsageSummary `json:"summaries"`
@@ -634,10 +1103,27 @@ type ProcessingUsageEdge struct {
 	Node   *proto.ProcessingUsageRecord `json:"node"`
 }
 
+// Successful promotion to postpaid billing.
+type PromoteToPaidPayload struct {
+	// Whether the promotion succeeded.
+	Success bool `json:"success"`
+	// Human-readable status message.
+	Message string `json:"message"`
+	// The new billing model (postpaid).
+	NewBillingModel string `json:"newBillingModel"`
+	// Prepaid balance carried forward as credit (in cents).
+	CreditBalanceCents int `json:"creditBalanceCents"`
+	// The new subscription ID.
+	SubscriptionID string `json:"subscriptionId"`
+}
+
+func (PromoteToPaidPayload) IsPromoteToPaidResult() {}
+
 type QualityTierDailyConnection struct {
-	Edges      []*QualityTierDailyEdge `json:"edges"`
-	PageInfo   *PageInfo               `json:"pageInfo"`
-	TotalCount int                     `json:"totalCount"`
+	Edges      []*QualityTierDailyEdge   `json:"edges"`
+	Nodes      []*proto.QualityTierDaily `json:"nodes"`
+	PageInfo   *PageInfo                 `json:"pageInfo"`
+	TotalCount int                       `json:"totalCount"`
 }
 
 type QualityTierDailyEdge struct {
@@ -645,6 +1131,11 @@ type QualityTierDailyEdge struct {
 	Node   *proto.QualityTierDaily `json:"node"`
 }
 
+// Root Query type - the entry point for all read operations.
+//
+// List and object fields are nullable per GraphQL best practices,
+// enabling graceful degradation when individual services are unavailable.
+// Most connection fields are non-null, but some may be nullable when upstream data is optional.
 type Query struct {
 }
 
@@ -666,9 +1157,10 @@ type RebufferingEventEdge struct {
 }
 
 type RebufferingEventsConnection struct {
-	Edges      []*RebufferingEventEdge `json:"edges"`
-	PageInfo   *PageInfo               `json:"pageInfo"`
-	TotalCount int                     `json:"totalCount"`
+	Edges      []*RebufferingEventEdge   `json:"edges"`
+	Nodes      []*proto.RebufferingEvent `json:"nodes"`
+	PageInfo   *PageInfo                 `json:"pageInfo"`
+	TotalCount int                       `json:"totalCount"`
 }
 
 type RoutingEventEdge struct {
@@ -677,9 +1169,18 @@ type RoutingEventEdge struct {
 }
 
 type RoutingEventsConnection struct {
-	Edges      []*RoutingEventEdge `json:"edges"`
-	PageInfo   *PageInfo           `json:"pageInfo"`
-	TotalCount int                 `json:"totalCount"`
+	Edges      []*RoutingEventEdge   `json:"edges"`
+	Nodes      []*proto.RoutingEvent `json:"nodes"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int                   `json:"totalCount"`
+}
+
+// Input for sending a message.
+type SendMessageInput struct {
+	// The conversation ID to send the message to.
+	ConversationID string `json:"conversationId"`
+	// The message content.
+	Content string `json:"content"`
 }
 
 type ServiceInstanceEdge struct {
@@ -688,9 +1189,10 @@ type ServiceInstanceEdge struct {
 }
 
 type ServiceInstancesConnection struct {
-	Edges      []*ServiceInstanceEdge `json:"edges"`
-	PageInfo   *PageInfo              `json:"pageInfo"`
-	TotalCount int                    `json:"totalCount"`
+	Edges      []*ServiceInstanceEdge   `json:"edges"`
+	Nodes      []*proto.ServiceInstance `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
 }
 
 type StorageEventEdge struct {
@@ -699,15 +1201,17 @@ type StorageEventEdge struct {
 }
 
 type StorageEventsConnection struct {
-	Edges      []*StorageEventEdge `json:"edges"`
-	PageInfo   *PageInfo           `json:"pageInfo"`
-	TotalCount int                 `json:"totalCount"`
+	Edges      []*StorageEventEdge   `json:"edges"`
+	Nodes      []*proto.StorageEvent `json:"nodes"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int                   `json:"totalCount"`
 }
 
 type StorageUsageConnection struct {
-	Edges      []*StorageUsageEdge `json:"edges"`
-	PageInfo   *PageInfo           `json:"pageInfo"`
-	TotalCount int                 `json:"totalCount"`
+	Edges      []*StorageUsageEdge         `json:"edges"`
+	Nodes      []*proto.StorageUsageRecord `json:"nodes"`
+	PageInfo   *PageInfo                   `json:"pageInfo"`
+	TotalCount int                         `json:"totalCount"`
 }
 
 type StorageUsageEdge struct {
@@ -716,9 +1220,10 @@ type StorageUsageEdge struct {
 }
 
 type StreamAnalyticsDailyConnection struct {
-	Edges      []*StreamAnalyticsDailyEdge `json:"edges"`
-	PageInfo   *PageInfo                   `json:"pageInfo"`
-	TotalCount int                         `json:"totalCount"`
+	Edges      []*StreamAnalyticsDailyEdge   `json:"edges"`
+	Nodes      []*proto.StreamAnalyticsDaily `json:"nodes"`
+	PageInfo   *PageInfo                     `json:"pageInfo"`
+	TotalCount int                           `json:"totalCount"`
 }
 
 type StreamAnalyticsDailyEdge struct {
@@ -727,9 +1232,10 @@ type StreamAnalyticsDailyEdge struct {
 }
 
 type StreamConnectionHourlyConnection struct {
-	Edges      []*StreamConnectionHourlyEdge `json:"edges"`
-	PageInfo   *PageInfo                     `json:"pageInfo"`
-	TotalCount int                           `json:"totalCount"`
+	Edges      []*StreamConnectionHourlyEdge   `json:"edges"`
+	Nodes      []*proto.StreamConnectionHourly `json:"nodes"`
+	PageInfo   *PageInfo                       `json:"pageInfo"`
+	TotalCount int                             `json:"totalCount"`
 }
 
 type StreamConnectionHourlyEdge struct {
@@ -743,20 +1249,22 @@ type StreamEdge struct {
 }
 
 type StreamEventEdge struct {
-	Cursor string             `json:"cursor"`
-	Node   *proto.StreamEvent `json:"node"`
+	Cursor string       `json:"cursor"`
+	Node   *StreamEvent `json:"node"`
 }
 
 type StreamEventsConnection struct {
 	Edges      []*StreamEventEdge `json:"edges"`
+	Nodes      []*StreamEvent     `json:"nodes"`
 	PageInfo   *PageInfo          `json:"pageInfo"`
 	TotalCount int                `json:"totalCount"`
 }
 
 type StreamHealth5mConnection struct {
-	Edges      []*StreamHealth5mEdge `json:"edges"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int                   `json:"totalCount"`
+	Edges      []*StreamHealth5mEdge   `json:"edges"`
+	Nodes      []*proto.StreamHealth5M `json:"nodes"`
+	PageInfo   *PageInfo               `json:"pageInfo"`
+	TotalCount int                     `json:"totalCount"`
 }
 
 type StreamHealth5mEdge struct {
@@ -770,9 +1278,10 @@ type StreamHealthMetricEdge struct {
 }
 
 type StreamHealthMetricsConnection struct {
-	Edges      []*StreamHealthMetricEdge `json:"edges"`
-	PageInfo   *PageInfo                 `json:"pageInfo"`
-	TotalCount int                       `json:"totalCount"`
+	Edges      []*StreamHealthMetricEdge   `json:"edges"`
+	Nodes      []*proto.StreamHealthMetric `json:"nodes"`
+	PageInfo   *PageInfo                   `json:"pageInfo"`
+	TotalCount int                         `json:"totalCount"`
 }
 
 type StreamKeyEdge struct {
@@ -781,17 +1290,10 @@ type StreamKeyEdge struct {
 }
 
 type StreamKeysConnection struct {
-	Edges      []*StreamKeyEdge `json:"edges"`
-	PageInfo   *PageInfo        `json:"pageInfo"`
-	TotalCount int              `json:"totalCount"`
-}
-
-type StreamSubscriptionEvent struct {
-	EventType       string                       `json:"eventType"`
-	Timestamp       time.Time                    `json:"timestamp"`
-	LifecycleUpdate *proto.StreamLifecycleUpdate `json:"lifecycleUpdate,omitempty"`
-	EndEvent        *proto.StreamEndTrigger      `json:"endEvent,omitempty"`
-	BufferEvent     *proto.StreamBufferTrigger   `json:"bufferEvent,omitempty"`
+	Edges      []*StreamKeyEdge   `json:"edges"`
+	Nodes      []*proto.StreamKey `json:"nodes"`
+	PageInfo   *PageInfo          `json:"pageInfo"`
+	TotalCount int                `json:"totalCount"`
 }
 
 type StreamValidation struct {
@@ -801,36 +1303,46 @@ type StreamValidation struct {
 }
 
 type StreamsConnection struct {
-	Edges      []*StreamEdge `json:"edges"`
-	PageInfo   *PageInfo     `json:"pageInfo"`
-	TotalCount int           `json:"totalCount"`
+	Edges      []*StreamEdge   `json:"edges"`
+	Nodes      []*proto.Stream `json:"nodes"`
+	PageInfo   *PageInfo       `json:"pageInfo"`
+	TotalCount int             `json:"totalCount"`
 }
 
+// Stripe Billing Portal Session - redirect URL for subscription management.
+type StripeBillingPortalSession struct {
+	// URL to redirect user to for billing management.
+	PortalURL string `json:"portalUrl"`
+}
+
+func (StripeBillingPortalSession) IsStripeBillingPortalResult() {}
+
+// Stripe Checkout Session - redirect URL for hosted checkout.
+type StripeCheckoutSession struct {
+	// Stripe Checkout Session ID (cs_xxx).
+	SessionID string `json:"sessionId"`
+	// URL to redirect user to for checkout.
+	CheckoutURL string `json:"checkoutUrl"`
+}
+
+func (StripeCheckoutSession) IsStripeCheckoutResult() {}
+
+// Real-time subscriptions for live event streaming via WebSocket.
+// All subscriptions are tenant-scoped and require authentication.
+// Events are delivered as they occur with minimal latency.
 type Subscription struct {
 }
 
 type TenantAnalyticsDailyConnection struct {
-	Edges      []*TenantAnalyticsDailyEdge `json:"edges"`
-	PageInfo   *PageInfo                   `json:"pageInfo"`
-	TotalCount int                         `json:"totalCount"`
+	Edges      []*TenantAnalyticsDailyEdge   `json:"edges"`
+	Nodes      []*proto.TenantAnalyticsDaily `json:"nodes"`
+	PageInfo   *PageInfo                     `json:"pageInfo"`
+	TotalCount int                           `json:"totalCount"`
 }
 
 type TenantAnalyticsDailyEdge struct {
 	Cursor string                      `json:"cursor"`
 	Node   *proto.TenantAnalyticsDaily `json:"node"`
-}
-
-type TenantEvent struct {
-	Type              string                        `json:"type"`
-	Channel           string                        `json:"channel"`
-	Timestamp         time.Time                     `json:"timestamp"`
-	StreamEvent       *StreamSubscriptionEvent      `json:"streamEvent,omitempty"`
-	ViewerMetrics     *proto.ClientLifecycleUpdate  `json:"viewerMetrics,omitempty"`
-	TrackListUpdate   *proto.StreamTrackListTrigger `json:"trackListUpdate,omitempty"`
-	ClipLifecycle     *proto.ClipLifecycleData      `json:"clipLifecycle,omitempty"`
-	DvrEvent          *proto.DVRLifecycleData       `json:"dvrEvent,omitempty"`
-	VodLifecycle      *proto.VodLifecycleData       `json:"vodLifecycle,omitempty"`
-	SystemHealthEvent *proto.NodeLifecycleUpdate    `json:"systemHealthEvent,omitempty"`
 }
 
 type TenantUsage struct {
@@ -841,9 +1353,12 @@ type TenantUsage struct {
 	Currency      string        `json:"currency"`
 }
 
+// Time range for filtering time-series data.
 type TimeRangeInput struct {
+	// Start of the time range.
 	Start time.Time `json:"start"`
-	End   time.Time `json:"end"`
+	// End of the time range.
+	End time.Time `json:"end"`
 }
 
 type TrackListEventEdge struct {
@@ -852,35 +1367,64 @@ type TrackListEventEdge struct {
 }
 
 type TrackListEventsConnection struct {
-	Edges      []*TrackListEventEdge `json:"edges"`
-	PageInfo   *PageInfo             `json:"pageInfo"`
-	TotalCount int                   `json:"totalCount"`
+	Edges      []*TrackListEventEdge   `json:"edges"`
+	Nodes      []*proto.TrackListEvent `json:"nodes"`
+	PageInfo   *PageInfo               `json:"pageInfo"`
+	TotalCount int                     `json:"totalCount"`
 }
 
+// Input for updating billing details.
+type UpdateBillingDetailsInput struct {
+	// Billing contact email.
+	Email *string `json:"email,omitempty"`
+	// Company name for invoices.
+	Company *string `json:"company,omitempty"`
+	// VAT number (EU format: XX123456789).
+	VatNumber *string `json:"vatNumber,omitempty"`
+	// Structured billing address.
+	Address *BillingAddressInput `json:"address,omitempty"`
+}
+
+// Input for updating cluster marketplace settings.
 type UpdateClusterMarketplaceInput struct {
-	Visibility          *proto.ClusterVisibility   `json:"visibility,omitempty"`
-	PricingModel        *proto.ClusterPricingModel `json:"pricingModel,omitempty"`
-	MonthlyPriceCents   *int                       `json:"monthlyPriceCents,omitempty"`
-	RequiredBillingTier *string                    `json:"requiredBillingTier,omitempty"`
-	RequiresApproval    *bool                      `json:"requiresApproval,omitempty"`
-	ShortDescription    *string                    `json:"shortDescription,omitempty"`
-	LongDescription     *string                    `json:"longDescription,omitempty"`
+	// Marketplace visibility (PUBLIC, PRIVATE, INVITE_ONLY).
+	Visibility *proto.ClusterVisibility `json:"visibility,omitempty"`
+	// Pricing model for subscriptions.
+	PricingModel *proto.ClusterPricingModel `json:"pricingModel,omitempty"`
+	// Monthly subscription price in cents.
+	MonthlyPriceCents *int `json:"monthlyPriceCents,omitempty"`
+	// Whether access requires owner approval.
+	RequiresApproval *bool `json:"requiresApproval,omitempty"`
+	// Short marketplace description.
+	ShortDescription *string `json:"shortDescription,omitempty"`
 }
 
+// Input for updating an existing stream.
+// All fields are optional - only provided fields are updated.
 type UpdateStreamInput struct {
-	Name        *string `json:"name,omitempty"`
+	// New name for the stream.
+	Name *string `json:"name,omitempty"`
+	// New description for the stream.
 	Description *string `json:"description,omitempty"`
-	Record      *bool   `json:"record,omitempty"`
+	// Enable or disable DVR recording.
+	Record *bool `json:"record,omitempty"`
 }
 
+// Input for updating enterprise subscription custom terms.
 type UpdateSubscriptionCustomTermsInput struct {
-	CustomPricing     *CustomPricingInput     `json:"customPricing,omitempty"`
-	CustomFeatures    *BillingFeaturesInput   `json:"customFeatures,omitempty"`
+	// Custom pricing overrides.
+	CustomPricing *CustomPricingInput `json:"customPricing,omitempty"`
+	// Custom feature flags.
+	CustomFeatures *BillingFeaturesInput `json:"customFeatures,omitempty"`
+	// Custom resource allocations.
 	CustomAllocations *AllocationDetailsInput `json:"customAllocations,omitempty"`
 }
 
+// Input for updating tenant settings.
 type UpdateTenantInput struct {
-	Name     *string `json:"name,omitempty"`
+	// New tenant name.
+	Name *string `json:"name,omitempty"`
+	// Custom settings JSON.
 	Settings *string `json:"settings,omitempty"`
 }
 
@@ -895,9 +1439,10 @@ type UsageRecordEdge struct {
 }
 
 type UsageRecordsConnection struct {
-	Edges      []*UsageRecordEdge `json:"edges"`
-	PageInfo   *PageInfo          `json:"pageInfo"`
-	TotalCount int                `json:"totalCount"`
+	Edges      []*UsageRecordEdge   `json:"edges"`
+	Nodes      []*proto.UsageRecord `json:"nodes"`
+	PageInfo   *PageInfo            `json:"pageInfo"`
+	TotalCount int                  `json:"totalCount"`
 }
 
 type ValidationError struct {
@@ -927,6 +1472,16 @@ func (ValidationError) IsCompleteVodUploadResult() {}
 
 func (ValidationError) IsCreatePaymentResult() {}
 
+func (ValidationError) IsSubmitX402PaymentResult() {}
+
+func (ValidationError) IsStripeCheckoutResult() {}
+
+func (ValidationError) IsStripeBillingPortalResult() {}
+
+func (ValidationError) IsMollieFirstPaymentResult() {}
+
+func (ValidationError) IsMollieSubscriptionResult() {}
+
 func (ValidationError) IsUpdateTenantResult() {}
 
 func (ValidationError) IsCreateDeveloperTokenResult() {}
@@ -941,15 +1496,28 @@ func (ValidationError) IsCreateClusterInviteResult() {}
 
 func (ValidationError) IsClusterSubscriptionResult() {}
 
+func (ValidationError) IsWalletLoginResult() {}
+
+func (ValidationError) IsLinkWalletResult() {}
+
+func (ValidationError) IsLinkEmailResult() {}
+
+func (ValidationError) IsPromoteToPaidResult() {}
+
+func (ValidationError) IsCreateConversationResult() {}
+
+func (ValidationError) IsSendMessageResult() {}
+
 type ViewerCountBucketEdge struct {
 	Cursor string                   `json:"cursor"`
 	Node   *proto.ViewerCountBucket `json:"node"`
 }
 
 type ViewerGeoHourlyConnection struct {
-	Edges      []*ViewerGeoHourlyEdge `json:"edges"`
-	PageInfo   *PageInfo              `json:"pageInfo"`
-	TotalCount int                    `json:"totalCount"`
+	Edges      []*ViewerGeoHourlyEdge   `json:"edges"`
+	Nodes      []*proto.ViewerGeoHourly `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
 }
 
 type ViewerGeoHourlyEdge struct {
@@ -963,15 +1531,17 @@ type ViewerGeographicEdge struct {
 }
 
 type ViewerGeographicsConnection struct {
-	Edges      []*ViewerGeographicEdge `json:"edges"`
-	PageInfo   *PageInfo               `json:"pageInfo"`
-	TotalCount int                     `json:"totalCount"`
+	Edges      []*ViewerGeographicEdge  `json:"edges"`
+	Nodes      []*proto.ConnectionEvent `json:"nodes"`
+	PageInfo   *PageInfo                `json:"pageInfo"`
+	TotalCount int                      `json:"totalCount"`
 }
 
 type ViewerHoursHourlyConnection struct {
-	Edges      []*ViewerHoursHourlyEdge `json:"edges"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*ViewerHoursHourlyEdge   `json:"edges"`
+	Nodes      []*proto.ViewerHoursHourly `json:"nodes"`
+	PageInfo   *PageInfo                  `json:"pageInfo"`
+	TotalCount int                        `json:"totalCount"`
 }
 
 type ViewerHoursHourlyEdge struct {
@@ -985,38 +1555,63 @@ type ViewerSessionEdge struct {
 }
 
 type ViewerSessionsConnection struct {
-	Edges      []*ViewerSessionEdge `json:"edges"`
-	PageInfo   *PageInfo            `json:"pageInfo"`
-	TotalCount int                  `json:"totalCount"`
+	Edges      []*ViewerSessionEdge   `json:"edges"`
+	Nodes      []*proto.ViewerSession `json:"nodes"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
 }
 
 type ViewerTimeSeriesConnection struct {
-	Edges      []*ViewerCountBucketEdge `json:"edges"`
-	PageInfo   *PageInfo                `json:"pageInfo"`
-	TotalCount int                      `json:"totalCount"`
+	Edges      []*ViewerCountBucketEdge   `json:"edges"`
+	Nodes      []*proto.ViewerCountBucket `json:"nodes"`
+	PageInfo   *PageInfo                  `json:"pageInfo"`
+	TotalCount int                        `json:"totalCount"`
 }
 
+// A Video-on-Demand asset uploaded by the tenant.
+// VOD assets can be played back using the playbackId in playback URLs.
 type VodAsset struct {
-	ID              string         `json:"id"`
-	ArtifactHash    string         `json:"artifactHash"`
-	Title           *string        `json:"title,omitempty"`
-	Description     *string        `json:"description,omitempty"`
-	Filename        *string        `json:"filename,omitempty"`
-	Status          VodAssetStatus `json:"status"`
-	StorageLocation string         `json:"storageLocation"`
-	SizeBytes       *float64       `json:"sizeBytes,omitempty"`
-	DurationMs      *int           `json:"durationMs,omitempty"`
-	Resolution      *string        `json:"resolution,omitempty"`
-	VideoCodec      *string        `json:"videoCodec,omitempty"`
-	AudioCodec      *string        `json:"audioCodec,omitempty"`
-	BitrateKbps     *int           `json:"bitrateKbps,omitempty"`
-	CreatedAt       time.Time      `json:"createdAt"`
-	UpdatedAt       time.Time      `json:"updatedAt"`
-	ExpiresAt       *time.Time     `json:"expiresAt,omitempty"`
-	ErrorMessage    *string        `json:"errorMessage,omitempty"`
+	// Global unique identifier for Relay compatibility.
+	ID string `json:"id"`
+	// Internal hash used for playback URL resolution.
+	ArtifactHash string `json:"artifactHash"`
+	// Public playback identifier for generating playback URLs.
+	PlaybackID string `json:"playbackId"`
+	// Optional display title for the asset.
+	Title *string `json:"title,omitempty"`
+	// Optional description of the asset content.
+	Description *string `json:"description,omitempty"`
+	// Original filename when uploaded.
+	Filename *string `json:"filename,omitempty"`
+	// Current processing/storage status of the asset.
+	Status VodAssetStatus `json:"status"`
+	// Where the asset is stored (s3, local, freezing, defrosting).
+	StorageLocation string `json:"storageLocation"`
+	// File size in bytes (available after validation).
+	SizeBytes *float64 `json:"sizeBytes,omitempty"`
+	// Video duration in milliseconds.
+	DurationMs *int `json:"durationMs,omitempty"`
+	// Video resolution (e.g., '1920x1080').
+	Resolution *string `json:"resolution,omitempty"`
+	// Video codec (h264, h265, vp9, av1).
+	VideoCodec *string `json:"videoCodec,omitempty"`
+	// Audio codec (aac, opus).
+	AudioCodec *string `json:"audioCodec,omitempty"`
+	// Average bitrate in kbps.
+	BitrateKbps *int `json:"bitrateKbps,omitempty"`
+	// When the asset was created/uploaded.
+	CreatedAt time.Time `json:"createdAt"`
+	// When the asset was last modified.
+	UpdatedAt time.Time `json:"updatedAt"`
+	// Optional expiration time for auto-deletion.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	// Error message if processing failed.
+	ErrorMessage *string `json:"errorMessage,omitempty"`
 }
 
 func (VodAsset) IsCompleteVodUploadResult() {}
+
+func (VodAsset) IsNode() {}
 
 type VodAssetEdge struct {
 	Cursor string    `json:"cursor"`
@@ -1025,25 +1620,72 @@ type VodAssetEdge struct {
 
 type VodAssetsConnection struct {
 	Edges      []*VodAssetEdge `json:"edges"`
+	Nodes      []*VodAsset     `json:"nodes"`
 	PageInfo   *PageInfo       `json:"pageInfo"`
 	TotalCount int             `json:"totalCount"`
 }
 
+// Completed part info returned by S3 after each part upload.
 type VodUploadCompletedPart struct {
-	PartNumber int    `json:"partNumber"`
-	Etag       string `json:"etag"`
+	// 1-indexed part number.
+	PartNumber int `json:"partNumber"`
+	// ETag header value returned by S3 on part upload.
+	Etag string `json:"etag"`
 }
 
+// Response from createVodUpload with S3 multipart upload instructions.
+// Use the presigned URLs to upload file parts directly to S3.
 type VodUploadSession struct {
-	ID           string                 `json:"id"`
-	ArtifactID   string                 `json:"artifactId"`
-	ArtifactHash string                 `json:"artifactHash"`
-	PartSize     int                    `json:"partSize"`
-	Parts        []*proto.VodUploadPart `json:"parts"`
-	ExpiresAt    time.Time              `json:"expiresAt"`
+	// Upload session ID (S3 uploadId).
+	ID string `json:"id"`
+	// Internal artifact ID.
+	ArtifactID string `json:"artifactId"`
+	// Hash for playback URL resolution.
+	ArtifactHash string `json:"artifactHash"`
+	// Public playback identifier.
+	PlaybackID string `json:"playbackId"`
+	// Recommended part size in bytes.
+	PartSize float64 `json:"partSize"`
+	// Presigned URLs for each part.
+	Parts []*proto.VodUploadPart `json:"parts"`
+	// When presigned URLs expire (typically 2 hours).
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 func (VodUploadSession) IsCreateVodUploadResult() {}
+
+// Input for wallet-based authentication.
+// The signature proves ownership of the wallet address.
+type WalletLoginInput struct {
+	// Ethereum address (0x-prefixed, 40 hex characters).
+	Address string `json:"address"`
+	// Message that was signed, including timestamp and nonce for replay protection.
+	Message string `json:"message"`
+	// EIP-191 personal_sign signature (0x-prefixed, 65 bytes hex).
+	Signature string `json:"signature"`
+}
+
+// Result from submitting an x402 payment for settlement.
+type X402PaymentResult struct {
+	// Whether the payment settlement succeeded.
+	Success bool `json:"success"`
+	// True if this was an auth-only payload (always false for settlement).
+	IsAuthOnly bool `json:"isAuthOnly"`
+	// Tenant that was credited.
+	TenantID string `json:"tenantId"`
+	// Wallet address that paid.
+	WalletAddress string `json:"walletAddress"`
+	// Amount credited in cents.
+	CreditedCents int `json:"creditedCents"`
+	// New balance in cents (if available).
+	NewBalanceCents *int `json:"newBalanceCents,omitempty"`
+	// Blockchain transaction hash (if available).
+	TxHash *string `json:"txHash,omitempty"`
+	// Human-readable status message.
+	Message string `json:"message"`
+}
+
+func (X402PaymentResult) IsSubmitX402PaymentResult() {}
 
 type BootstrapTokenType string
 
@@ -1159,13 +1801,76 @@ func (e BufferState) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Card payment provider for top-ups.
+type CardPaymentProvider string
+
+const (
+	// Stripe checkout.
+	CardPaymentProviderStripe CardPaymentProvider = "STRIPE"
+	// Mollie checkout.
+	CardPaymentProviderMollie CardPaymentProvider = "MOLLIE"
+)
+
+var AllCardPaymentProvider = []CardPaymentProvider{
+	CardPaymentProviderStripe,
+	CardPaymentProviderMollie,
+}
+
+func (e CardPaymentProvider) IsValid() bool {
+	switch e {
+	case CardPaymentProviderStripe, CardPaymentProviderMollie:
+		return true
+	}
+	return false
+}
+
+func (e CardPaymentProvider) String() string {
+	return string(e)
+}
+
+func (e *CardPaymentProvider) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = CardPaymentProvider(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid CardPaymentProvider", str)
+	}
+	return nil
+}
+
+func (e CardPaymentProvider) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *CardPaymentProvider) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e CardPaymentProvider) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Clip creation mode determines how time fields are interpreted.
 type ClipCreationMode string
 
 const (
+	// Use startUnix and stopUnix as Unix timestamps in seconds.
 	ClipCreationModeAbsolute ClipCreationMode = "ABSOLUTE"
+	// Use startMedia and stopMedia as seconds from stream start.
 	ClipCreationModeRelative ClipCreationMode = "RELATIVE"
+	// Use startUnix (or startMedia) plus duration.
 	ClipCreationModeDuration ClipCreationMode = "DURATION"
-	ClipCreationModeClipNow  ClipCreationMode = "CLIP_NOW"
+	// Clip the last N seconds from the current live position.
+	ClipCreationModeClipNow ClipCreationMode = "CLIP_NOW"
 )
 
 var AllClipCreationMode = []ClipCreationMode{
@@ -1218,15 +1923,22 @@ func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Service instance lifecycle status.
 type InstanceStatus string
 
 const (
-	InstanceStatusRunning  InstanceStatus = "RUNNING"
+	// Service is running and healthy.
+	InstanceStatusRunning InstanceStatus = "RUNNING"
+	// Service is starting up.
 	InstanceStatusStarting InstanceStatus = "STARTING"
+	// Service is shutting down.
 	InstanceStatusStopping InstanceStatus = "STOPPING"
-	InstanceStatusStopped  InstanceStatus = "STOPPED"
-	InstanceStatusError    InstanceStatus = "ERROR"
-	InstanceStatusUnknown  InstanceStatus = "UNKNOWN"
+	// Service is stopped.
+	InstanceStatusStopped InstanceStatus = "STOPPED"
+	// Service encountered an error.
+	InstanceStatusError InstanceStatus = "ERROR"
+	// Service status unknown.
+	InstanceStatusUnknown InstanceStatus = "UNKNOWN"
 )
 
 var AllInstanceStatus = []InstanceStatus{
@@ -1281,25 +1993,36 @@ func (e InstanceStatus) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Invoice lifecycle status.
 type InvoiceStatus string
 
 const (
-	InvoiceStatusPending   InvoiceStatus = "PENDING"
-	InvoiceStatusPaid      InvoiceStatus = "PAID"
-	InvoiceStatusFailed    InvoiceStatus = "FAILED"
+	// Invoice being prepared, not yet sent.
+	InvoiceStatusDraft InvoiceStatus = "DRAFT"
+	// Invoice sent, awaiting payment.
+	InvoiceStatusPending InvoiceStatus = "PENDING"
+	// Invoice paid in full.
+	InvoiceStatusPaid InvoiceStatus = "PAID"
+	// Payment past due date.
+	InvoiceStatusOverdue InvoiceStatus = "OVERDUE"
+	// Payment processing failed.
+	InvoiceStatusFailed InvoiceStatus = "FAILED"
+	// Invoice cancelled.
 	InvoiceStatusCancelled InvoiceStatus = "CANCELLED"
 )
 
 var AllInvoiceStatus = []InvoiceStatus{
+	InvoiceStatusDraft,
 	InvoiceStatusPending,
 	InvoiceStatusPaid,
+	InvoiceStatusOverdue,
 	InvoiceStatusFailed,
 	InvoiceStatusCancelled,
 }
 
 func (e InvoiceStatus) IsValid() bool {
 	switch e {
-	case InvoiceStatusPending, InvoiceStatusPaid, InvoiceStatusFailed, InvoiceStatusCancelled:
+	case InvoiceStatusDraft, InvoiceStatusPending, InvoiceStatusPaid, InvoiceStatusOverdue, InvoiceStatusFailed, InvoiceStatusCancelled:
 		return true
 	}
 	return false
@@ -1397,11 +2120,15 @@ func (e NodeStatus) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Supported payment methods.
 type PaymentMethod string
 
 const (
-	PaymentMethodCard         PaymentMethod = "CARD"
-	PaymentMethodCrypto       PaymentMethod = "CRYPTO"
+	// Credit/debit card via Stripe.
+	PaymentMethodCard PaymentMethod = "CARD"
+	// Cryptocurrency payment.
+	PaymentMethodCrypto PaymentMethod = "CRYPTO"
+	// ACH/wire bank transfer.
 	PaymentMethodBankTransfer PaymentMethod = "BANK_TRANSFER"
 )
 
@@ -1454,12 +2181,16 @@ func (e PaymentMethod) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Payment processing status.
 type PaymentStatus string
 
 const (
-	PaymentStatusPending   PaymentStatus = "PENDING"
+	// Payment initiated, awaiting confirmation.
+	PaymentStatusPending PaymentStatus = "PENDING"
+	// Payment successfully processed.
 	PaymentStatusConfirmed PaymentStatus = "CONFIRMED"
-	PaymentStatusFailed    PaymentStatus = "FAILED"
+	// Payment failed or declined.
+	PaymentStatusFailed PaymentStatus = "FAILED"
 )
 
 var AllPaymentStatus = []PaymentStatus{
@@ -1511,10 +2242,13 @@ func (e PaymentStatus) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Sort direction for ordered results.
 type SortOrder string
 
 const (
-	SortOrderAsc  SortOrder = "ASC"
+	// Ascending order (oldest first, A-Z).
+	SortOrderAsc SortOrder = "ASC"
+	// Descending order (newest first, Z-A).
 	SortOrderDesc SortOrder = "DESC"
 )
 
@@ -1566,27 +2300,86 @@ func (e SortOrder) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type StreamEventSource string
+
+const (
+	StreamEventSourceHistorical StreamEventSource = "HISTORICAL"
+	StreamEventSourceLive       StreamEventSource = "LIVE"
+)
+
+var AllStreamEventSource = []StreamEventSource{
+	StreamEventSourceHistorical,
+	StreamEventSourceLive,
+}
+
+func (e StreamEventSource) IsValid() bool {
+	switch e {
+	case StreamEventSourceHistorical, StreamEventSourceLive:
+		return true
+	}
+	return false
+}
+
+func (e StreamEventSource) String() string {
+	return string(e)
+}
+
+func (e *StreamEventSource) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = StreamEventSource(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid StreamEventSource", str)
+	}
+	return nil
+}
+
+func (e StreamEventSource) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *StreamEventSource) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e StreamEventSource) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type StreamEventType string
 
 const (
-	StreamEventTypeStreamStart     StreamEventType = "STREAM_START"
-	StreamEventTypeStreamEnd       StreamEventType = "STREAM_END"
-	StreamEventTypeStreamError     StreamEventType = "STREAM_ERROR"
-	StreamEventTypeBufferUpdate    StreamEventType = "BUFFER_UPDATE"
-	StreamEventTypeTrackListUpdate StreamEventType = "TRACK_LIST_UPDATE"
+	StreamEventTypeStreamLifecycleUpdate StreamEventType = "STREAM_LIFECYCLE_UPDATE"
+	StreamEventTypeStreamStart           StreamEventType = "STREAM_START"
+	StreamEventTypeStreamEnd             StreamEventType = "STREAM_END"
+	StreamEventTypeBufferUpdate          StreamEventType = "BUFFER_UPDATE"
+	StreamEventTypeTrackListUpdate       StreamEventType = "TRACK_LIST_UPDATE"
+	StreamEventTypePlayRewrite           StreamEventType = "PLAY_REWRITE"
+	StreamEventTypeStreamSource          StreamEventType = "STREAM_SOURCE"
 )
 
 var AllStreamEventType = []StreamEventType{
+	StreamEventTypeStreamLifecycleUpdate,
 	StreamEventTypeStreamStart,
 	StreamEventTypeStreamEnd,
-	StreamEventTypeStreamError,
 	StreamEventTypeBufferUpdate,
 	StreamEventTypeTrackListUpdate,
+	StreamEventTypePlayRewrite,
+	StreamEventTypeStreamSource,
 }
 
 func (e StreamEventType) IsValid() bool {
 	switch e {
-	case StreamEventTypeStreamStart, StreamEventTypeStreamEnd, StreamEventTypeStreamError, StreamEventTypeBufferUpdate, StreamEventTypeTrackListUpdate:
+	case StreamEventTypeStreamLifecycleUpdate, StreamEventTypeStreamStart, StreamEventTypeStreamEnd, StreamEventTypeBufferUpdate, StreamEventTypeTrackListUpdate, StreamEventTypePlayRewrite, StreamEventTypeStreamSource:
 		return true
 	}
 	return false
@@ -1627,13 +2420,18 @@ func (e StreamEventType) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Live stream status.
 type StreamStatus string
 
 const (
-	StreamStatusOffline   StreamStatus = "OFFLINE"
-	StreamStatusLive      StreamStatus = "LIVE"
+	// Stream is not broadcasting.
+	StreamStatusOffline StreamStatus = "OFFLINE"
+	// Stream is currently live.
+	StreamStatusLive StreamStatus = "LIVE"
+	// Stream is live and recording.
 	StreamStatusRecording StreamStatus = "RECORDING"
-	StreamStatusEnded     StreamStatus = "ENDED"
+	// Stream has ended (no longer live).
+	StreamStatusEnded StreamStatus = "ENDED"
 )
 
 var AllStreamStatus = []StreamStatus{
@@ -1743,14 +2541,20 @@ func (e ValidationStatus) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// VOD asset processing status.
 type VodAssetStatus string
 
 const (
-	VodAssetStatusUploading  VodAssetStatus = "UPLOADING"
+	// S3 multipart upload in progress.
+	VodAssetStatusUploading VodAssetStatus = "UPLOADING"
+	// Upload complete, validating and extracting metadata.
 	VodAssetStatusProcessing VodAssetStatus = "PROCESSING"
-	VodAssetStatusReady      VodAssetStatus = "READY"
-	VodAssetStatusFailed     VodAssetStatus = "FAILED"
-	VodAssetStatusDeleted    VodAssetStatus = "DELETED"
+	// Validated and ready for playback.
+	VodAssetStatusReady VodAssetStatus = "READY"
+	// Validation failed or upload error.
+	VodAssetStatusFailed VodAssetStatus = "FAILED"
+	// Marked for deletion.
+	VodAssetStatusDeleted VodAssetStatus = "DELETED"
 )
 
 var AllVodAssetStatus = []VodAssetStatus{

@@ -1,0 +1,10 @@
+mutation CreateCryptoTopup($input: CreateCryptoTopupInput!) {
+  createCryptoTopup(input: $input) {
+    topupId
+    depositAddress
+    asset
+    assetSymbol
+    expectedAmountCents
+    expiresAt
+  }
+}

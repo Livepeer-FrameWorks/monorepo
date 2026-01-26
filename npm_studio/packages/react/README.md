@@ -21,12 +21,26 @@ import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
 export function BroadcastPage() {
   return (
     <StreamCrafter
-      whipUrl="https://ingest.example.com/whip/your-stream-key"
+      whipUrl="https://ingest.example.com/webrtc/your-stream-key"
       initialProfile="broadcast"
     />
   );
 }
 ```
+
+### Gateway Mode (Stream Key + Gateway URL)
+
+```tsx
+<StreamCrafter
+  gatewayUrl="https://api.example.com/graphql"
+  streamKey="sk_live_..."
+  initialProfile="broadcast"
+/>
+```
+
+Notes:
+- There is **no default gateway**; pass either `whipUrl` or (`gatewayUrl` + `streamKey`).
+- If both are provided, `whipUrl` takes priority.
 
 ## Usage (Hook)
 
@@ -35,7 +49,7 @@ import { useStreamCrafterV2 } from '@livepeer-frameworks/streamcrafter-react';
 
 export function CustomBroadcaster() {
   const { mediaStream, startCamera, startStreaming, stopStreaming } = useStreamCrafterV2({
-    whipUrl: 'https://ingest.example.com/whip/your-stream-key',
+    whipUrl: 'https://ingest.example.com/webrtc/your-stream-key',
     profile: 'broadcast',
   });
 

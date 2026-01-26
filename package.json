@@ -19,6 +19,7 @@
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
     "@typescript-eslint/type-utils": "^8",
-    "@typescript-eslint/utils": "^8"
+    "@typescript-eslint/utils": "^8",
+    "knip": "^5.78.0"
   }
 }

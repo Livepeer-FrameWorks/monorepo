@@ -31,64 +31,42 @@ export const navigationConfig: Record<string, NavigationItem> = {
     href: "/",
     icon: "LayoutDashboard",
     active: true,
-    description: "Overview of your streams and analytics",
+    description: "Quick overview with KPIs and contextual hints",
   },
 
-  // Core Streaming Features
-  streaming: {
-    name: "Streaming",
+  // Content - Streaming & Media
+  content: {
+    name: "Content",
     icon: "Video",
     children: {
-      overview: {
+      streams: {
         name: "Streams",
         href: "/streams",
         icon: "Radio",
         active: true,
-        description: "Quickly browse and manage your live streams",
+        description: "Manage your live streams",
       },
-      browser: {
+      library: {
+        name: "Library",
+        href: "/library",
+        icon: "FolderOpen",
+        active: true,
+        description: "Clips, recordings, and VOD assets in one place",
+      },
+      goLive: {
         name: "Go Live",
-        href: "/streams/browser",
+        href: "/go-live",
         icon: "Globe",
         active: true,
         description: "Stream directly from your browser with WebRTC",
       },
       composer: {
         name: "Composer",
-        href: "/streams/composer",
+        href: "/composer",
         icon: "Clapperboard",
         active: "soon",
         description:
           "Compose multiple input streams with picture-in-picture layouts",
-      },
-    },
-  },
-
-  // Media Management
-  media: {
-    name: "Media",
-    icon: "FolderOpen",
-    children: {
-      clips: {
-        name: "Clips",
-        href: "/clips",
-        icon: "Scissors",
-        active: true,
-        description: "Create and manage stream clips",
-      },
-      recordings: {
-        name: "Recordings",
-        href: "/recordings",
-        icon: "Film",
-        active: true,
-        description: "Access stream DVR and manage your media library",
-      },
-      vod: {
-        name: "VOD Library",
-        href: "/vod",
-        icon: "Upload",
-        active: true,
-        description: "Upload and manage video-on-demand assets",
       },
     },
   },
@@ -104,35 +82,21 @@ export const navigationConfig: Record<string, NavigationItem> = {
         icon: "ChartLine",
         active: true,
         description:
-          "View comprehensive streaming analytics with real-time metrics",
+          "Real-time metrics and streaming analytics overview",
       },
-      geographic: {
-        name: "Geolytics",
-        href: "/analytics/geographic",
+      audience: {
+        name: "Audience",
+        href: "/analytics/audience",
         icon: "Globe2",
         active: true,
-        description: "View viewer distribution and regional metrics",
-      },
-      storage: {
-        name: "Storage",
-        href: "/analytics/storage",
-        icon: "Database",
-        active: true,
-        description: "Monitor storage consumption and trends",
+        description: "Geographic distribution, viewer sessions, and routing",
       },
       usage: {
-        name: "Usage",
+        name: "Usage & Costs",
         href: "/analytics/usage",
         icon: "Gauge",
         active: true,
-        description: "Track resource usage and costs",
-      },
-      transcoding: {
-        name: "Transcoding",
-        href: "/analytics/transcoding",
-        icon: "Cpu",
-        active: true,
-        description: "Monitor transcoding usage and codec distribution",
+        description: "Usage, storage, transcoding, and cost breakdown",
       },
     },
   },
@@ -259,7 +223,7 @@ export const navigationConfig: Record<string, NavigationItem> = {
     icon: "Code2",
     children: {
       api: {
-        name: "API Tokens",
+        name: "API",
         href: "/developer/api",
         icon: "Key",
         active: true,
@@ -272,12 +236,12 @@ export const navigationConfig: Record<string, NavigationItem> = {
         active: "soon",
         description: "Configure event notifications and external integrations",
       },
-      sdk: {
+      sdks: {
         name: "SDKs & Libraries",
-        href: "/developer/sdk",
+        href: "/developer/sdks",
         icon: "Package",
-        active: "soon",
-        description: "Ready-to-use SDKs and libraries for your projects",
+        active: true,
+        description: "Player and Studio SDKs for React, Svelte, and vanilla JS",
       },
     },
   },
@@ -287,12 +251,12 @@ export const navigationConfig: Record<string, NavigationItem> = {
     name: "Support",
     icon: "MessageCircle",
     children: {
-      tickets: {
-        name: "Support Tickets",
-        href: "/support/tickets",
-        icon: "Ticket",
-        active: "soon",
-        description: "Get help from our support team",
+      messages: {
+        name: "Messages",
+        href: "/messages",
+        icon: "MessageSquare",
+        active: true,
+        description: "Contact support and view conversation history",
       },
     },
   },

@@ -17,6 +17,7 @@ type UserContext struct {
 	TenantID string
 	Email    string
 	Role     string
+	TokenID  string
 }
 
 // GraphQLContextMiddleware transfers user info from Gin context to request context
@@ -111,11 +112,6 @@ func GetUserFromContext(ctx context.Context) *UserContext {
 	return nil
 }
 
-// IsAuthenticated checks if the current context has an authenticated user
-func IsAuthenticated(ctx context.Context) bool {
-	return GetUserFromContext(ctx) != nil
-}
-
 // RequireAuth checks if user is authenticated and returns error if not
 func RequireAuth(ctx context.Context) (*UserContext, error) {
 	user := GetUserFromContext(ctx)
@@ -133,12 +129,4 @@ func HasServiceToken(ctx context.Context) bool {
 		token, ok = v.(string)
 	}
 	return ok && token != ""
-}
-
-// RequireServiceToken checks if service token is present and returns error if not
-func RequireServiceToken(ctx context.Context) error {
-	if !HasServiceToken(ctx) {
-		return auth.ErrUnauthenticated
-	}
-	return nil
 }

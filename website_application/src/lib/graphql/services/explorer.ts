@@ -20,9 +20,18 @@ import {
 } from "./schemaUtils";
 
 import { extractOperationType } from "./gqlParser";
+import {
+  EXPLORER_CATALOG,
+  type ResolvedExplorerSection,
+  type ResolvedExplorerExample,
+} from "./explorerCatalog";
 
 // Re-export template types for consumers
 export type { Template, TemplateGroups };
+export type {
+  ResolvedExplorerSection,
+  ResolvedExplorerExample,
+} from "./explorerCatalog";
 
 // Also export the search function
 export { searchTemplatesFromLoader as searchTemplates };
@@ -30,8 +39,42 @@ export { searchTemplatesFromLoader as searchTemplates };
 // Cached schema for query generation
 let cachedSchema: IntrospectedSchema | null = null;
 
+const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL ?? "";
+
 // Cached templates for field-to-template matching
 let cachedTemplatesMap: Map<string, Template> | null = null;
+
+function resolveCatalogTemplates(
+  templates: TemplateGroups,
+): ResolvedExplorerSection[] {
+  const templateByPath = new Map<string, Template>();
+  const allTemplates = [
+    ...templates.queries,
+    ...templates.mutations,
+    ...templates.subscriptions,
+  ];
+
+  for (const template of allTemplates) {
+    if (template.filePath) {
+      templateByPath.set(template.filePath, template);
+    }
+  }
+
+  return EXPLORER_CATALOG.map((section) => ({
+    id: section.id,
+    title: section.title,
+    description: section.description,
+    examples: section.examples.map((example) => {
+      const template = example.templatePath
+        ? templateByPath.get(example.templatePath)
+        : undefined;
+      return {
+        ...example,
+        template,
+      } satisfies ResolvedExplorerExample;
+    }),
+  }));
+}
 
 /**
  * Build a map of field names to templates for quick lookup
@@ -369,15 +412,11 @@ const GET_ROOT_TYPES = `
 export const explorerService = {
   /**
    * Get the full GraphQL schema via introspection
-   * Also caches the schema and loads templates for use in query generation
+   * Caches the schema; templates are warmed in the background for query generation
    */
   async getSchema(): Promise<IntrospectedSchema> {
     try {
-      // Load templates in parallel with schema introspection
-      const [result] = await Promise.all([
-        executeGraphQL(INTROSPECT_SCHEMA),
-        buildTemplateMap(), // Pre-load templates for field-to-template matching
-      ]);
+      const result = await executeGraphQL(INTROSPECT_SCHEMA);
 
       if (result.errors?.length) {
         throw new Error(result.errors[0].message);
@@ -385,6 +424,10 @@ export const explorerService = {
       const schema = (result.data as { __schema: IntrospectedSchema }).__schema;
       // Cache the schema for query generation
       cachedSchema = schema;
+      // Warm template map asynchronously so schema load isn't blocked
+      void buildTemplateMap().catch((error) => {
+        console.warn("Failed to preload template map:", error);
+      });
       return schema;
     } catch (error: unknown) {
       console.error("Failed to introspect schema:", error);
@@ -469,6 +512,14 @@ export const explorerService = {
   },
 
   /**
+   * Get curated catalog sections for the explorer.
+   */
+  async getCatalog(): Promise<ResolvedExplorerSection[]> {
+    const templates = await loadAllTemplates();
+    return resolveCatalogTemplates(templates);
+  },
+
+  /**
    * Search templates by name or description
    */
   async searchTemplates(query: string): Promise<Template[]> {
@@ -529,8 +580,8 @@ export const explorerService = {
       javascript: `// JavaScript (Apollo Client)
 import { ApolloClient, InMemoryCache, gql } from '@apollo/client';
 
-const client = new ApolloClient({
-  uri: '${import.meta.env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}',
+  const client = new ApolloClient({
+  uri: '${GRAPHQL_HTTP_URL}',
   cache: new InMemoryCache(),
   headers: {
     Authorization: 'Bearer ${tokenValue}'
@@ -558,7 +609,7 @@ console.log(data);`,
 const query = \`${query}\`;
 ${hasVariables ? `const variables = ${JSON.stringify(variables, null, 2)};` : ""}
 
-const response = await fetch('${import.meta.env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}', {
+const response = await fetch('${GRAPHQL_HTTP_URL}', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -577,13 +628,13 @@ curl -X POST \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${tokenValue}" \\
   -d '{"query":"${query.replace(/"/g, '\\"').replace(/\n/g, "\\n")}"${hasVariables ? `,"variables":${JSON.stringify(variables)}` : ""}}' \\
-  ${import.meta.env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}`,
+  ${GRAPHQL_HTTP_URL}`,
 
       python: `# Python (requests)
 import requests
 import json
 
-url = "${import.meta.env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}"
+url = "${GRAPHQL_HTTP_URL}"
 headers = {
     "Content-Type": "application/json",
     "Authorization": "Bearer ${tokenValue}"
@@ -615,7 +666,7 @@ type GraphQLRequest struct {
 }
 
 func main() {
-    url := "${import.meta.env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}"
+    url := "${GRAPHQL_HTTP_URL}"
 
     query := \`${query}\`
 ${
@@ -652,6 +703,79 @@ ${Object.entries(variables)
     };
 
     return examples;
+  },
+
+  /**
+   * Lightweight heuristics to surface schema-aware hints in the explorer.
+   */
+  getQueryHints(query: string): Array<{ title: string; body: string }> {
+    const hints: Array<{ title: string; body: string }> = [];
+    const normalized = query.toLowerCase();
+
+    if (normalized.includes("analytics")) {
+      hints.push({
+        title: "Analytics entry point",
+        body: "Analytics live under analytics.{usage|health|lifecycle|infra}. Pick the branch that matches what you’re after.",
+      });
+    }
+
+    if (normalized.includes("analytics") && normalized.includes("usage")) {
+      hints.push({
+        title: "Usage rollups",
+        body: "For long ranges, use daily rollups. Hourly series are best for short windows.",
+      });
+    }
+
+    if (normalized.includes("analytics") && normalized.includes("health")) {
+      hints.push({
+        title: "Health detail",
+        body: "Use 5m rollups for long ranges; use raw health for short, detailed windows.",
+      });
+    }
+
+    if (normalized.includes("analytics") && normalized.includes("lifecycle")) {
+      hints.push({
+        title: "Lifecycle scope",
+        body: "Add streamId to focus events; otherwise you’ll get platform-wide noise.",
+      });
+    }
+
+    if (normalized.includes("analytics") && normalized.includes("infra")) {
+      hints.push({
+        title: "Infra signals",
+        body: "Node metrics are rollups. Routing events explain load‑balancer decisions.",
+      });
+    }
+
+    if (normalized.includes("subscription")) {
+      hints.push({
+        title: "Live streams",
+        body: "Subscriptions are live‑only. Pair with historical queries for context.",
+      });
+    }
+
+    if (normalized.includes("page:")) {
+      hints.push({
+        title: "Pagination",
+        body: "Connections use page: { first, after, last, before }. Use pageInfo.endCursor to fetch more.",
+      });
+    }
+
+    if (normalized.includes("streamid")) {
+      hints.push({
+        title: "Stream identifiers",
+        body: "streamId is a Relay global ID (Stream.id). Use Stream.streamId for public UUIDs.",
+      });
+    }
+
+    if (normalized.includes("clip") || normalized.includes("vod")) {
+      hints.push({
+        title: "Artifacts",
+        body: "Clip/VOD hashes are safe to expose. Lifecycle + storage gives the full story.",
+      });
+    }
+
+    return hints;
   },
 
   /**
@@ -699,7 +823,14 @@ ${Object.entries(variables)
     // Generate default variables object with placeholder values
     const variables: Record<string, unknown> = {};
     for (const arg of args) {
-      variables[arg.name] = this.getDefaultValueForType(arg.type);
+      let value = this.getDefaultValueForType(arg.type);
+      if (arg.name === "streamId") value = "stream_global_id";
+      if (arg.name === "nodeId") value = "node_id";
+      if (arg.name === "clusterId") value = "cluster_id";
+      if (arg.name === "page") value = { first: 50 };
+      if (arg.name === "timeRange")
+        value = this.getDefaultForInputType("TimeRangeInput");
+      variables[arg.name] = value;
     }
 
     // Use provided schema or fall back to cached schema
@@ -792,40 +923,55 @@ ${Object.entries(variables)
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     switch (typeName) {
+      case "ConnectionInput":
+        return {
+          first: 50,
+          after: null,
+        };
+
       case "TimeRangeInput":
         return {
           start: oneDayAgo.toISOString(),
           end: now.toISOString(),
         };
 
-      case "PaginationInput":
-        return {
-          limit: 50,
-          offset: 0,
-        };
-
       case "CreateStreamInput":
         return {
-          name: "my-stream",
-          description: "Stream description",
+          name: "example-live-stream",
+          description: "Example stream description",
           record: false,
         };
 
       case "UpdateStreamInput":
         return {
-          name: "updated-stream-name",
-          description: "Updated description",
+          name: "example-live-stream-updated",
+          description: "Updated stream description",
           record: false,
         };
 
       case "CreateClipInput":
         return {
-          stream: "stream-name",
-          title: "My Clip",
-          description: "Clip description",
-          mode: "TRIM",
+          streamId: "stream_global_id",
+          title: "Example Clip",
+          description: "Example clip description",
+          mode: "ABSOLUTE",
           startUnix: 0,
           stopUnix: 30,
+        };
+
+      case "CreateVodUploadInput":
+        return {
+          filename: "example.mp4",
+          sizeBytes: 1024 * 1024,
+          contentType: "video/mp4",
+          title: "Example VOD",
+          description: "Example VOD upload",
+        };
+
+      case "CompleteVodUploadInput":
+        return {
+          uploadId: "upload_id",
+          parts: [{ partNumber: 1, etag: "etag-value" }],
         };
 
       case "CreateStreamKeyInput":
@@ -835,26 +981,84 @@ ${Object.entries(variables)
 
       case "CreateDeveloperTokenInput":
         return {
-          name: "my-api-token",
+          name: "example-api-token",
           permissions: "read,write",
+          expiresIn: null,
+        };
+
+      case "CreateBootstrapTokenInput":
+        return {
+          name: "bootstrap-token",
+          kind: "cluster",
           expiresIn: null,
         };
 
       case "StartDvrInput":
         return {
-          streamId: "your-stream-id",
+          streamId: "stream_global_id",
         };
 
       case "StopDvrInput":
         return {
-          streamId: "your-stream-id",
+          streamId: "stream_global_id",
         };
 
-      case "PaymentInput":
+      case "CreatePaymentInput":
         return {
           amount: 1000,
           currency: "USD",
           method: "CARD",
+        };
+
+      case "CreatePrivateClusterInput":
+        return {
+          name: "My Private Cluster",
+          region: "us-east",
+          deploymentModel: "hybrid",
+        };
+
+      case "UpdateClusterMarketplaceInput":
+        return {
+          shortDescription: "Low latency premium cluster",
+          pricingModel: "SUBSCRIPTION",
+          monthlyPriceCents: 5000,
+        };
+
+      case "CreateClusterInviteInput":
+        return {
+          email: "operator@example.com",
+        };
+
+      case "UpdateSubscriptionCustomTermsInput":
+        return {
+          monthlyPriceCents: 5000,
+          billingCycle: "monthly",
+        };
+
+      case "CustomPricingInput":
+        return {
+          monthlyPriceCents: 5000,
+          billingCycle: "monthly",
+        };
+
+      case "OverageRatesInput":
+        return {
+          bandwidth: { unit: "GB", unitPrice: 0.01 },
+          storage: { unit: "GB", unitPrice: 0.02 },
+          compute: { unit: "hour", unitPrice: 0.05 },
+        };
+
+      case "AllocationDetailsInput":
+        return {
+          unit: "GB",
+          included: 100,
+          unitPrice: 0.02,
+        };
+
+      case "BillingFeaturesInput":
+        return {
+          analytics: true,
+          prioritySupport: false,
         };
 
       case "UpdateTenantInput":
@@ -930,13 +1134,13 @@ ${Object.entries(variables)
     role
     createdAt
   }`,
-      StreamAnalytics: `{
+      StreamAnalyticsSummary: `{
     streamId
-    totalViews
-    totalSessionDuration
-    peakViewers
-    avgViewers
-    uniqueViewers
+    rangeTotalViews
+    rangeTotalSessions
+    rangePeakConcurrentViewers
+    rangeAvgViewers
+    rangeUniqueViewers
   }`,
       Clip: `{
     id

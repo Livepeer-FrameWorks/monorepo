@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"frameworks/pkg/auth"
+	"frameworks/pkg/billing"
+	decklogclient "frameworks/pkg/clients/decklog"
 	foghornclient "frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/listmonk"
 	purserclient "frameworks/pkg/clients/purser"
@@ -76,7 +78,6 @@ func validateBehavior(req botProtectionRequest) bool {
 type ServerMetrics struct {
 	AuthOperations   *prometheus.CounterVec
 	AuthDuration     *prometheus.HistogramVec
-	ActiveSessions   *prometheus.GaugeVec
 	StreamOperations *prometheus.CounterVec
 }
 
@@ -97,9 +98,11 @@ type CommodoreServer struct {
 	quartermasterClient  *qmclient.GRPCClient
 	purserClient         *purserclient.GRPCClient
 	listmonkClient       *listmonk.Client
+	decklogClient        *decklogclient.BatchedClient
 	defaultMailingListID int
 	metrics              *ServerMetrics
 	turnstileValidator   *turnstile.Validator
+	turnstileFailOpen    bool
 	passwordResetSecret  []byte // Secret for HMAC signing of password reset tokens
 }
 
@@ -111,6 +114,7 @@ type CommodoreServerConfig struct {
 	QuartermasterClient  *qmclient.GRPCClient
 	PurserClient         *purserclient.GRPCClient
 	ListmonkClient       *listmonk.Client
+	DecklogClient        *decklogclient.BatchedClient
 	DefaultMailingListID int
 	Metrics              *ServerMetrics
 	// Auth config for gRPC interceptor
@@ -118,6 +122,7 @@ type CommodoreServerConfig struct {
 	JWTSecret    []byte
 	// Bot protection
 	TurnstileSecretKey string
+	TurnstileFailOpen  bool
 	// Password reset token signing
 	PasswordResetSecret []byte
 }
@@ -135,32 +140,13 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		quartermasterClient:  cfg.QuartermasterClient,
 		purserClient:         cfg.PurserClient,
 		listmonkClient:       cfg.ListmonkClient,
+		decklogClient:        cfg.DecklogClient,
 		defaultMailingListID: cfg.DefaultMailingListID,
 		metrics:              cfg.Metrics,
 		turnstileValidator:   tv,
+		turnstileFailOpen:    cfg.TurnstileFailOpen,
 		passwordResetSecret:  cfg.PasswordResetSecret,
 	}
-}
-
-// recordAuthOp records an authentication operation metric
-func (s *CommodoreServer) recordAuthOp(operation, status string, duration time.Duration) {
-	if s.metrics == nil {
-		return
-	}
-	if s.metrics.AuthOperations != nil {
-		s.metrics.AuthOperations.WithLabelValues(operation, status).Inc()
-	}
-	if s.metrics.AuthDuration != nil {
-		s.metrics.AuthDuration.WithLabelValues(operation).Observe(duration.Seconds())
-	}
-}
-
-// recordStreamOp records a stream operation metric
-func (s *CommodoreServer) recordStreamOp(operation, status string) {
-	if s.metrics == nil || s.metrics.StreamOperations == nil {
-		return
-	}
-	s.metrics.StreamOperations.WithLabelValues(operation, status).Inc()
 }
 
 // ============================================================================
@@ -177,13 +163,17 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		}, nil
 	}
 
+	// Query stream info from commodore tables only (no cross-service DB access)
 	var streamID, userID, tenantID, internalName string
 	var isActive, isRecordingEnabled bool
+
 	err := s.db.QueryRowContext(ctx, `
-		SELECT s.id, s.user_id, s.tenant_id, s.internal_name, u.is_active, s.is_recording_enabled
+		SELECT
+			s.id, s.user_id, s.tenant_id, s.internal_name,
+			u.is_active, s.is_recording_enabled
 		FROM commodore.streams s
 		JOIN commodore.users u ON s.user_id = u.id
-		WHERE LOWER(s.stream_key) = LOWER($1)
+		WHERE s.stream_key = $1
 	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled)
 
 	if err == sql.ErrNoRows {
@@ -208,12 +198,35 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		}, nil
 	}
 
+	// Get billing status via Purser gRPC (not direct DB access)
+	var billingModel string = "postpaid"
+	var isSuspended, isBalanceNegative bool
+
+	if s.purserClient != nil {
+		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+		if err != nil {
+			s.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID,
+				"error":     err,
+			}).Warn("Failed to get billing status from Purser, assuming postpaid/active")
+			// Continue with defaults - don't fail stream validation on billing lookup failure
+		} else {
+			billingModel = billingStatus.BillingModel
+			isSuspended = billingStatus.IsSuspended
+			isBalanceNegative = billingStatus.IsBalanceNegative
+		}
+	}
+
 	return &pb.ValidateStreamKeyResponse{
 		Valid:              true,
 		UserId:             userID,
 		TenantId:           tenantID,
 		InternalName:       internalName,
 		IsRecordingEnabled: isRecordingEnabled,
+		StreamId:           streamID,
+		BillingModel:       billingModel,
+		IsSuspended:        isSuspended,
+		IsBalanceNegative:  isBalanceNegative,
 	}, nil
 }
 
@@ -224,10 +237,10 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		return nil, status.Error(codes.InvalidArgument, "playback_id required")
 	}
 
-	var internalName, tenantID string
+	var streamID, internalName, tenantID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT internal_name, tenant_id FROM commodore.streams WHERE LOWER(playback_id) = LOWER($1)
-	`, playbackID).Scan(&internalName, &tenantID)
+		SELECT id, internal_name, tenant_id FROM commodore.streams WHERE playback_id = $1
+	`, playbackID).Scan(&streamID, &internalName, &tenantID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -248,6 +261,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		InternalName: internalName,
 		TenantId:     tenantID,
 		PlaybackId:   playbackID,
+		StreamId:     streamID,
 	}, nil
 }
 
@@ -258,11 +272,11 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
 	}
 
-	var tenantID, userID string
+	var streamID, tenantID, userID string
 	var isRecordingEnabled bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
-	`, internalName).Scan(&tenantID, &userID, &isRecordingEnabled)
+		SELECT id, tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
+	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -281,6 +295,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		TenantId:           tenantID,
 		UserId:             userID,
 		IsRecordingEnabled: isRecordingEnabled,
+		StreamId:           streamID,
 	}, nil
 }
 
@@ -296,8 +311,10 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, user_id, tenant_id, permissions
 		FROM commodore.api_tokens
-		WHERE token_value = $1 AND is_active = true AND (expires_at IS NULL OR expires_at > NOW())
-	`, token).Scan(&tokenID, &userID, &tenantID, pq.Array(&permissions))
+		WHERE token_value = $1
+		  AND is_active = true
+		  AND (expires_at IS NULL OR expires_at > NOW())
+	`, hashToken(token)).Scan(&tokenID, &userID, &tenantID, pq.Array(&permissions))
 
 	if err == sql.ErrNoRows {
 		return &pb.ValidateAPITokenResponse{Valid: false}, nil
@@ -330,42 +347,91 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 		Email:       email,
 		Role:        role,
 		Permissions: permissions,
+		TokenId:     tokenID,
 	}, nil
 }
 
-// StartDVR initiates DVR recording for a stream (called by Foghorn when recording is enabled)
+// StartDVR initiates DVR recording for a stream (Gateway → Commodore → Foghorn).
 func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
-	tenantID := req.GetTenantId()
-	internalName := req.GetInternalName()
-	userID := req.GetUserId()
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	}
 
+	// Get user and tenant context from gateway metadata.
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if tenant is suspended (prepaid balance < -$10)
+	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
+		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+		// Continue anyway - don't block on suspension check failure
+	} else if suspended {
+		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to start recordings")
+	}
+
+	internalName := req.GetInternalName()
+	streamID := req.GetStreamId()
 	if internalName == "" {
-		return &pb.StartDVRResponse{
-			Status: "error",
-		}, nil
+		if streamID == "" {
+			return nil, status.Error(codes.InvalidArgument, "stream_id is required")
+		}
+		// Resolve internal_name from stream_id (public -> internal)
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+		`, streamID, tenantID).Scan(&internalName); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, status.Error(codes.NotFound, "stream not found")
+			}
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+	}
+
+	// Verify stream exists in this tenant (tenant isolation) and resolve stream_id if needed.
+	if streamID == "" {
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
+		`, internalName, tenantID).Scan(&streamID); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, status.Error(codes.NotFound, "stream not found")
+			}
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+	}
+
+	// Enforce 30-day default retention if not specified.
+	expiresAt := req.ExpiresAt
+	if expiresAt == nil || *expiresAt <= 0 {
+		expiry := time.Now().Add(30 * 24 * time.Hour).Unix()
+		expiresAt = &expiry
+	}
+
+	foghornReq := &pb.StartDVRRequest{
+		TenantId:     tenantID,
+		InternalName: internalName,
+		ExpiresAt:    expiresAt,
+		UserId:       &userID,
+	}
+	if streamID != "" {
+		foghornReq.StreamId = &streamID
 	}
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":     tenantID,
 		"internal_name": internalName,
 		"user_id":       userID,
-	}).Info("Starting DVR recording via gRPC")
+	}).Info("Starting DVR recording via Foghorn")
 
-	// Enforce 30-day default retention if not specified
-	if req.ExpiresAt == nil {
-		expiry := time.Now().Add(30 * 24 * time.Hour).Unix()
-		req.ExpiresAt = &expiry
+	resp, err := s.foghornClient.StartDVR(ctx, foghornReq)
+	if err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"internal_name": internalName,
+		}).Error("Failed to start DVR via Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to start DVR: %v", err)
 	}
-
-	// Generate DVR hash - use crypto/rand for secure hash
-	dvrHash := generateDVRHash()
-
-	// For now, just return the DVR hash - actual DVR orchestration
-	// happens through Foghorn's control plane
-	return &pb.StartDVRResponse{
-		DvrHash: dvrHash,
-		Status:  "requested",
-	}, nil
+	return resp, nil
 }
 
 // ============================================================================
@@ -388,15 +454,24 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 	// Generate clip hash
 	clipHash := generateClipHash()
 	clipID := uuid.New().String()
+	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"stream_id": streamID,
+			"error":     err,
+		}).Error("Failed to generate artifact identifiers for clip")
+		return nil, status.Errorf(codes.Internal, "failed to generate clip identifiers: %v", err)
+	}
 
 	// Insert into business registry
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.clips (
-			id, tenant_id, user_id, stream_id, clip_hash,
+			id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-	`, clipID, tenantID, userID, streamID, clipHash,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), req.GetStartTime(), req.GetDuration(),
 		req.GetClipMode(), req.GetRequestedParams())
 
@@ -415,9 +490,13 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 		"clip_id":   clipID,
 	}).Info("Registered clip in business registry")
 
+	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", nil)
+
 	return &pb.RegisterClipResponse{
-		ClipHash: clipHash,
-		ClipId:   clipID,
+		ClipHash:             clipHash,
+		ClipId:               clipID,
+		PlaybackId:           playbackID,
+		ArtifactInternalName: artifactInternalName,
 	}, nil
 }
 
@@ -435,6 +514,15 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 	// Generate DVR hash
 	dvrHash := generateDVRHash()
 	dvrID := uuid.New().String()
+	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Failed to generate artifact identifiers for DVR")
+		return nil, status.Errorf(codes.Internal, "failed to generate DVR identifiers: %v", err)
+	}
 
 	// stream_id is optional (legacy DVRs may not have it)
 	var streamID *string
@@ -444,12 +532,12 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 	}
 
 	// Insert into business registry
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.dvr_recordings (
-			id, tenant_id, user_id, stream_id, dvr_hash, internal_name,
+			id, tenant_id, user_id, stream_id, dvr_hash, artifact_internal_name, playback_id, internal_name,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, NOW(), NOW())
-	`, dvrID, tenantID, userID, streamID, dvrHash, internalName)
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, NOW(), NOW())
+	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -467,9 +555,13 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		"internal_name": internalName,
 	}).Info("Registered DVR in business registry")
 
+	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, req.GetStreamId(), "registered", nil)
+
 	return &pb.RegisterDVRResponse{
-		DvrHash: dvrHash,
-		DvrId:   dvrID,
+		DvrHash:              dvrHash,
+		DvrId:                dvrID,
+		PlaybackId:           playbackID,
+		ArtifactInternalName: artifactInternalName,
 	}, nil
 }
 
@@ -482,17 +574,19 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 	}
 
 	var tenantID, userID, streamID, title, description, clipMode string
+	var playbackID, artifactInternalName string
 	var startTime, duration int64
 	var internalName sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT c.tenant_id, c.user_id, c.stream_id, c.title, c.description,
-			   c.start_time, c.duration, c.clip_mode, s.internal_name
+			   c.start_time, c.duration, c.clip_mode, s.internal_name,
+			   c.playback_id, c.artifact_internal_name
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
 		WHERE c.clip_hash = $1
 	`, clipHash).Scan(&tenantID, &userID, &streamID, &title, &description,
-		&startTime, &duration, &clipMode, &internalName)
+		&startTime, &duration, &clipMode, &internalName, &playbackID, &artifactInternalName)
 
 	if err == sql.ErrNoRows {
 		return &pb.ResolveClipHashResponse{
@@ -509,16 +603,18 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 	}
 
 	return &pb.ResolveClipHashResponse{
-		Found:        true,
-		TenantId:     tenantID,
-		UserId:       userID,
-		StreamId:     streamID,
-		InternalName: internalName.String,
-		Title:        title,
-		Description:  description,
-		StartTime:    startTime,
-		Duration:     duration,
-		ClipMode:     clipMode,
+		Found:                true,
+		TenantId:             tenantID,
+		UserId:               userID,
+		StreamId:             streamID,
+		InternalName:         internalName.String,
+		Title:                title,
+		Description:          description,
+		StartTime:            startTime,
+		Duration:             duration,
+		ClipMode:             clipMode,
+		PlaybackId:           playbackID,
+		ArtifactInternalName: artifactInternalName,
 	}, nil
 }
 
@@ -531,13 +627,14 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 	}
 
 	var tenantID, userID, internalName string
+	var playbackID, artifactInternalName string
 	var streamID sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, stream_id, internal_name
+		SELECT tenant_id, user_id, stream_id, internal_name, playback_id, artifact_internal_name
 		FROM commodore.dvr_recordings
 		WHERE dvr_hash = $1
-	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName)
+	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName)
 
 	if err == sql.ErrNoRows {
 		return &pb.ResolveDVRHashResponse{
@@ -554,11 +651,13 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 	}
 
 	return &pb.ResolveDVRHashResponse{
-		Found:        true,
-		TenantId:     tenantID,
-		UserId:       userID,
-		StreamId:     streamID.String,
-		InternalName: internalName,
+		Found:                true,
+		TenantId:             tenantID,
+		UserId:               userID,
+		StreamId:             streamID.String,
+		InternalName:         internalName,
+		PlaybackId:           playbackID,
+		ArtifactInternalName: artifactInternalName,
 	}, nil
 }
 
@@ -576,18 +675,27 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 	// Generate VOD hash
 	vodHash := generateVodHash()
 	vodID := uuid.New().String()
+	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"filename":  filename,
+			"error":     err,
+		}).Error("Failed to generate artifact identifiers for VOD")
+		return nil, status.Errorf(codes.Internal, "failed to generate VOD identifiers: %v", err)
+	}
 
 	// Resolve retention (default 90 days for VOD)
 	retentionUntil := time.Now().Add(90 * 24 * time.Hour)
 
 	// Insert into business registry
-	_, err := s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.vod_assets (
-			id, tenant_id, user_id, vod_hash,
+			id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
 			retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-	`, vodID, tenantID, userID, vodHash,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), filename, req.GetContentType(), req.GetSizeBytes(),
 		retentionUntil)
 
@@ -607,9 +715,14 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 		"filename":  filename,
 	}).Info("Registered VOD in business registry")
 
+	expiresAt := retentionUntil.Unix()
+	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, vodHash, "", "registered", &expiresAt)
+
 	return &pb.RegisterVodResponse{
-		VodHash: vodHash,
-		VodId:   vodID,
+		VodHash:              vodHash,
+		VodId:                vodID,
+		PlaybackId:           playbackID,
+		ArtifactInternalName: artifactInternalName,
 	}, nil
 }
 
@@ -622,13 +735,14 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 	}
 
 	var tenantID, userID, filename string
+	var playbackID, artifactInternalName string
 	var title, description sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, filename, title, description
+		SELECT tenant_id, user_id, filename, title, description, playback_id, artifact_internal_name
 		FROM commodore.vod_assets
 		WHERE vod_hash = $1
-	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description)
+	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName)
 
 	if err == sql.ErrNoRows {
 		return &pb.ResolveVodHashResponse{
@@ -645,13 +759,236 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 	}
 
 	return &pb.ResolveVodHashResponse{
-		Found:       true,
-		TenantId:    tenantID,
-		UserId:      userID,
-		Filename:    filename,
-		Title:       title.String,
-		Description: description.String,
+		Found:                true,
+		TenantId:             tenantID,
+		UserId:               userID,
+		Filename:             filename,
+		Title:                title.String,
+		Description:          description.String,
+		PlaybackId:           playbackID,
+		ArtifactInternalName: artifactInternalName,
 	}, nil
+}
+
+// ResolveVodID resolves a VOD relay ID (commodore.vod_assets.id) to vod_hash + tenant context
+func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodIDRequest) (*pb.ResolveVodIDResponse, error) {
+	vodID := req.GetVodId()
+	if vodID == "" {
+		return nil, status.Error(codes.InvalidArgument, "vod_id is required")
+	}
+
+	var tenantID, userID, vodHash, playbackID, artifactInternalName string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, vod_hash, playback_id, artifact_internal_name
+		FROM commodore.vod_assets
+		WHERE id = $1
+	`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
+
+	if err == sql.ErrNoRows {
+		return &pb.ResolveVodIDResponse{
+			Found: false,
+		}, nil
+	}
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"vod_id": vodID,
+			"error":  err,
+		}).Error("Database error resolving VOD id")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.ResolveVodIDResponse{
+		Found:                true,
+		TenantId:             tenantID,
+		UserId:               userID,
+		VodHash:              vodHash,
+		PlaybackId:           playbackID,
+		ArtifactInternalName: artifactInternalName,
+	}, nil
+}
+
+// ResolveArtifactPlaybackID resolves an artifact playback ID to artifact identity
+func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb.ResolveArtifactPlaybackIDRequest) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+	playbackID := req.GetPlaybackId()
+	if playbackID == "" {
+		return nil, status.Error(codes.InvalidArgument, "playback_id is required")
+	}
+
+	// 1. Clips
+	var (
+		artifactHash         string
+		artifactInternalName string
+		tenantID             string
+		userID               string
+		streamID             sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		FROM commodore.clips
+		WHERE playback_id = $1
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	if err == nil {
+		return &pb.ResolveArtifactPlaybackIDResponse{
+			Found:                true,
+			ArtifactHash:         artifactHash,
+			ArtifactInternalName: artifactInternalName,
+			TenantId:             tenantID,
+			UserId:               userID,
+			StreamId:             streamID.String,
+			ContentType:          "clip",
+		}, nil
+	}
+	if err != sql.ErrNoRows {
+		s.logger.WithFields(logging.Fields{
+			"playback_id": playbackID,
+			"error":       err,
+		}).Error("Database error resolving clip playback_id")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// 2. DVR
+	err = s.db.QueryRowContext(ctx, `
+		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		FROM commodore.dvr_recordings
+		WHERE playback_id = $1
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	if err == nil {
+		return &pb.ResolveArtifactPlaybackIDResponse{
+			Found:                true,
+			ArtifactHash:         artifactHash,
+			ArtifactInternalName: artifactInternalName,
+			TenantId:             tenantID,
+			UserId:               userID,
+			StreamId:             streamID.String,
+			ContentType:          "dvr",
+		}, nil
+	}
+	if err != sql.ErrNoRows {
+		s.logger.WithFields(logging.Fields{
+			"playback_id": playbackID,
+			"error":       err,
+		}).Error("Database error resolving DVR playback_id")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// 3. VOD
+	streamID = sql.NullString{}
+	err = s.db.QueryRowContext(ctx, `
+		SELECT vod_hash, artifact_internal_name, tenant_id, user_id
+		FROM commodore.vod_assets
+		WHERE playback_id = $1
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID)
+	if err == nil {
+		return &pb.ResolveArtifactPlaybackIDResponse{
+			Found:                true,
+			ArtifactHash:         artifactHash,
+			ArtifactInternalName: artifactInternalName,
+			TenantId:             tenantID,
+			UserId:               userID,
+			ContentType:          "vod",
+		}, nil
+	}
+	if err != sql.ErrNoRows {
+		s.logger.WithFields(logging.Fields{
+			"playback_id": playbackID,
+			"error":       err,
+		}).Error("Database error resolving VOD playback_id")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
+}
+
+// ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
+func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *pb.ResolveArtifactInternalNameRequest) (*pb.ResolveArtifactInternalNameResponse, error) {
+	internalName := req.GetArtifactInternalName()
+	if internalName == "" {
+		return nil, status.Error(codes.InvalidArgument, "artifact_internal_name is required")
+	}
+
+	// 1. Clips
+	var (
+		artifactHash         string
+		artifactInternalName string
+		tenantID             string
+		userID               string
+		streamID             sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		FROM commodore.clips
+		WHERE artifact_internal_name = $1
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	if err == nil {
+		return &pb.ResolveArtifactInternalNameResponse{
+			Found:                true,
+			ArtifactHash:         artifactHash,
+			ArtifactInternalName: artifactInternalName,
+			TenantId:             tenantID,
+			UserId:               userID,
+			StreamId:             streamID.String,
+			ContentType:          "clip",
+		}, nil
+	}
+	if err != sql.ErrNoRows {
+		s.logger.WithFields(logging.Fields{
+			"artifact_internal_name": internalName,
+			"error":                  err,
+		}).Error("Database error resolving clip artifact_internal_name")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// 2. DVR
+	err = s.db.QueryRowContext(ctx, `
+		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		FROM commodore.dvr_recordings
+		WHERE artifact_internal_name = $1
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	if err == nil {
+		return &pb.ResolveArtifactInternalNameResponse{
+			Found:                true,
+			ArtifactHash:         artifactHash,
+			ArtifactInternalName: artifactInternalName,
+			TenantId:             tenantID,
+			UserId:               userID,
+			StreamId:             streamID.String,
+			ContentType:          "dvr",
+		}, nil
+	}
+	if err != sql.ErrNoRows {
+		s.logger.WithFields(logging.Fields{
+			"artifact_internal_name": internalName,
+			"error":                  err,
+		}).Error("Database error resolving DVR artifact_internal_name")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// 3. VOD
+	streamID = sql.NullString{}
+	err = s.db.QueryRowContext(ctx, `
+		SELECT vod_hash, artifact_internal_name, tenant_id, user_id
+		FROM commodore.vod_assets
+		WHERE artifact_internal_name = $1
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID)
+	if err == nil {
+		return &pb.ResolveArtifactInternalNameResponse{
+			Found:                true,
+			ArtifactHash:         artifactHash,
+			ArtifactInternalName: artifactInternalName,
+			TenantId:             tenantID,
+			UserId:               userID,
+			ContentType:          "vod",
+		}, nil
+	}
+	if err != sql.ErrNoRows {
+		s.logger.WithFields(logging.Fields{
+			"artifact_internal_name": internalName,
+			"error":                  err,
+		}).Error("Database error resolving VOD artifact_internal_name")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.ResolveArtifactInternalNameResponse{Found: false}, nil
 }
 
 // ResolveIdentifier provides unified resolution across all Commodore registries
@@ -662,12 +999,51 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 		return nil, status.Error(codes.InvalidArgument, "identifier is required")
 	}
 
+	// 0. Try streams by stream_id (UUID)
+	if _, err := uuid.Parse(identifier); err == nil {
+		var streamID, tenantID, userID, internalName string
+		var isRecordingEnabled bool
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id, tenant_id, user_id, internal_name, is_recording_enabled
+			FROM commodore.streams WHERE id = $1
+		`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled)
+		if err == nil {
+			return &pb.ResolveIdentifierResponse{
+				Found:              true,
+				TenantId:           tenantID,
+				UserId:             userID,
+				InternalName:       internalName,
+				IdentifierType:     "stream_id",
+				IsRecordingEnabled: isRecordingEnabled,
+				StreamId:           streamID,
+			}, nil
+		} else if err != sql.ErrNoRows {
+			s.logger.WithError(err).Error("Database error checking streams by stream_id")
+		}
+
+		var vodTenantID, vodUserID string
+		err = s.db.QueryRowContext(ctx, `
+			SELECT tenant_id, user_id
+			FROM commodore.vod_assets WHERE id = $1
+		`, identifier).Scan(&vodTenantID, &vodUserID)
+		if err == nil {
+			return &pb.ResolveIdentifierResponse{
+				Found:          true,
+				TenantId:       vodTenantID,
+				UserId:         vodUserID,
+				IdentifierType: "vod_id",
+			}, nil
+		} else if err != sql.ErrNoRows {
+			s.logger.WithError(err).Error("Database error checking VOD by id")
+		}
+	}
+
 	// 1. Try streams by internal_name (most common for live stream events)
-	var tenantID, userID string
+	var streamID, tenantID, userID string
 	var isRecordingEnabled bool
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
-	`, identifier).Scan(&tenantID, &userID, &isRecordingEnabled)
+		SELECT id, tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
+	`, identifier).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:              true,
@@ -676,6 +1052,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			InternalName:       identifier,
 			IdentifierType:     "stream",
 			IsRecordingEnabled: isRecordingEnabled,
+			StreamId:           streamID,
 		}, nil
 	} else if err != sql.ErrNoRows {
 		s.logger.WithError(err).Error("Database error checking streams by internal_name")
@@ -684,9 +1061,9 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 	// 2. Try streams by playback_id
 	var internalName string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, internal_name, is_recording_enabled
-		FROM commodore.streams WHERE LOWER(playback_id) = LOWER($1)
-	`, identifier).Scan(&tenantID, &userID, &internalName, &isRecordingEnabled)
+		SELECT id, tenant_id, user_id, internal_name, is_recording_enabled
+		FROM commodore.streams WHERE playback_id = $1
+	`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:              true,
@@ -695,19 +1072,132 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			InternalName:       internalName,
 			IdentifierType:     "playback_id",
 			IsRecordingEnabled: isRecordingEnabled,
+			StreamId:           streamID,
 		}, nil
 	} else if err != sql.ErrNoRows {
 		s.logger.WithError(err).Error("Database error checking streams by playback_id")
 	}
 
-	// 3. Try clips by clip_hash
+	// 2b. Try artifact playback_id (clip)
 	var parentInternalName sql.NullString
 	err = s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, s.internal_name
+		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id
+		FROM commodore.clips c
+		LEFT JOIN commodore.streams s ON c.stream_id = s.id
+		WHERE c.playback_id = $1
+	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			InternalName:   parentInternalName.String,
+			IdentifierType: "clip_playback_id",
+			StreamId:       streamID,
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking clips by playback_id")
+	}
+
+	// 2c. Try artifact playback_id (DVR)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, internal_name, stream_id
+		FROM commodore.dvr_recordings
+		WHERE playback_id = $1
+	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			InternalName:   internalName,
+			IdentifierType: "dvr_playback_id",
+			StreamId:       streamID,
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking DVR by playback_id")
+	}
+
+	// 2d. Try artifact playback_id (VOD)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id
+		FROM commodore.vod_assets
+		WHERE playback_id = $1
+	`, identifier).Scan(&tenantID, &userID)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			IdentifierType: "vod_playback_id",
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking VOD by playback_id")
+	}
+
+	// 2e. Try artifact internal_name (clip)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id
+		FROM commodore.clips c
+		LEFT JOIN commodore.streams s ON c.stream_id = s.id
+		WHERE c.artifact_internal_name = $1
+	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			InternalName:   parentInternalName.String,
+			IdentifierType: "clip_internal_name",
+			StreamId:       streamID,
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking clips by artifact_internal_name")
+	}
+
+	// 2f. Try artifact internal_name (DVR)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, internal_name, stream_id
+		FROM commodore.dvr_recordings
+		WHERE artifact_internal_name = $1
+	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			InternalName:   internalName,
+			IdentifierType: "dvr_internal_name",
+			StreamId:       streamID,
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking DVR by artifact_internal_name")
+	}
+
+	// 2g. Try artifact internal_name (VOD)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id
+		FROM commodore.vod_assets
+		WHERE artifact_internal_name = $1
+	`, identifier).Scan(&tenantID, &userID)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			IdentifierType: "vod_internal_name",
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking VOD by artifact_internal_name")
+	}
+
+	// 3. Try clips by clip_hash
+	err = s.db.QueryRowContext(ctx, `
+		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
 		WHERE c.clip_hash = $1
-	`, identifier).Scan(&tenantID, &userID, &parentInternalName)
+	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -715,6 +1205,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			UserId:         userID,
 			InternalName:   parentInternalName.String,
 			IdentifierType: "clip",
+			StreamId:       streamID,
 		}, nil
 	} else if err != sql.ErrNoRows {
 		s.logger.WithError(err).Error("Database error checking clips")
@@ -722,8 +1213,8 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 
 	// 4. Try DVR by dvr_hash
 	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, internal_name FROM commodore.dvr_recordings WHERE dvr_hash = $1
-	`, identifier).Scan(&tenantID, &userID, &internalName)
+		SELECT tenant_id, user_id, internal_name, stream_id FROM commodore.dvr_recordings WHERE dvr_hash = $1
+	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID)
 	if err == nil {
 		return &pb.ResolveIdentifierResponse{
 			Found:          true,
@@ -731,6 +1222,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			UserId:         userID,
 			InternalName:   internalName,
 			IdentifierType: "dvr",
+			StreamId:       streamID,
 		}, nil
 	} else if err != sql.ErrNoRows {
 		s.logger.WithError(err).Error("Database error checking DVR")
@@ -754,6 +1246,162 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 	// Not found in any registry
 	return &pb.ResolveIdentifierResponse{
 		Found: false,
+	}, nil
+}
+
+// ============================================================================
+// WALLET IDENTITY (x402 / Agent Access)
+// ============================================================================
+
+// GetOrCreateWalletUser looks up or creates a tenant/user for a verified wallet address.
+// This is called by x402 middleware after verifying the ERC-3009 payment signature.
+// If the wallet is not known, creates a new tenant (prepaid) + user (email=NULL) + wallet_identity.
+func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.GetOrCreateWalletUserRequest) (*pb.GetOrCreateWalletUserResponse, error) {
+	chainType := req.GetChainType()
+	walletAddress := req.GetWalletAddress()
+
+	// Validate chain type
+	if !auth.IsValidChainType(chainType) {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported chain type: %s", chainType)
+	}
+
+	// Normalize wallet address
+	normalizedAddress, err := auth.NormalizeAddress(auth.ChainType(chainType), walletAddress)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid wallet address: %v", err)
+	}
+
+	// Try to find existing wallet identity (query only commodore.* tables)
+	var tenantID, userID string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id
+		FROM commodore.wallet_identities
+		WHERE chain_type = $1 AND wallet_address = $2
+	`, chainType, normalizedAddress).Scan(&tenantID, &userID)
+
+	if err == nil {
+		// Existing wallet found - update last_auth_at
+		_, _ = s.db.ExecContext(ctx, `
+			UPDATE commodore.wallet_identities
+			SET last_auth_at = NOW()
+			WHERE chain_type = $1 AND wallet_address = $2
+		`, chainType, normalizedAddress)
+
+		// Get billing info via Purser gRPC (not DB JOIN)
+		billingModel := "postpaid"
+		if s.purserClient != nil {
+			billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+			if err != nil {
+				s.logger.WithFields(logging.Fields{
+					"tenant_id": tenantID,
+					"error":     err,
+				}).Warn("Failed to get billing status from Purser, using default")
+			} else {
+				billingModel = billingStatus.BillingModel
+			}
+		}
+
+		s.logger.WithFields(logging.Fields{
+			"chain_type":     chainType,
+			"wallet_address": normalizedAddress,
+			"tenant_id":      tenantID,
+			"user_id":        userID,
+		}).Info("Wallet identity found")
+
+		return &pb.GetOrCreateWalletUserResponse{
+			TenantId:      tenantID,
+			UserId:        userID,
+			IsNew:         false,
+			BillingModel:  billingModel,
+			WalletAddress: normalizedAddress,
+		}, nil
+	}
+
+	if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Failed to lookup wallet identity")
+		return nil, status.Error(codes.Internal, "failed to lookup wallet identity")
+	}
+
+	// Wallet not found - create new tenant, user, and wallet identity
+
+	// 1. Create tenant via Quartermaster gRPC (not direct DB INSERT)
+	if s.quartermasterClient == nil {
+		return nil, status.Error(codes.Internal, "quartermaster client not available")
+	}
+	tenantName := "Wallet: " + normalizedAddress[:10] + "..."
+	tenantResp, err := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
+		Name: tenantName,
+	})
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to create tenant via Quartermaster")
+		return nil, status.Error(codes.Internal, "failed to create tenant")
+	}
+	tenantID = tenantResp.Tenant.Id
+
+	// 2. Initialize prepaid account via Purser gRPC (not direct DB INSERT)
+	if s.purserClient == nil {
+		return nil, status.Error(codes.Internal, "purser client not available")
+	}
+	_, err = s.purserClient.InitializePrepaidAccount(ctx, tenantID, billing.DefaultCurrency())
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to initialize prepaid account via Purser")
+		return nil, status.Error(codes.Internal, "failed to initialize prepaid account")
+	}
+
+	// 3. Create user and wallet identity in local commodore.* tables (owned by this service)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to begin transaction")
+		return nil, status.Error(codes.Internal, "failed to create wallet account")
+	}
+	defer tx.Rollback()
+
+	userID = uuid.NewString()
+	shortAddr := normalizedAddress
+	if len(shortAddr) >= 8 {
+		shortAddr = shortAddr[2:8]
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO commodore.users (
+			id, tenant_id, email, password_hash,
+			role, is_active, is_verified,
+			first_name, last_name,
+			created_at, updated_at
+		)
+		VALUES ($1, $2, NULL, '', 'owner', true, true, $3, '', NOW(), NOW())
+	`, userID, tenantID, "Wallet "+shortAddr)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to create user")
+		return nil, status.Error(codes.Internal, "failed to create user")
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO commodore.wallet_identities (id, wallet_address, chain_type, tenant_id, user_id, created_at, last_auth_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
+	`, normalizedAddress, chainType, tenantID, userID)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to create wallet identity")
+		return nil, status.Error(codes.Internal, "failed to create wallet identity")
+	}
+
+	if err := tx.Commit(); err != nil {
+		s.logger.WithError(err).Error("Failed to commit transaction")
+		return nil, status.Error(codes.Internal, "failed to create wallet account")
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"chain_type":     chainType,
+		"wallet_address": normalizedAddress,
+		"tenant_id":      tenantID,
+		"user_id":        userID,
+	}).Info("Created new wallet account")
+
+	return &pb.GetOrCreateWalletUserResponse{
+		TenantId:      tenantID,
+		UserId:        userID,
+		IsNew:         true,
+		BillingModel:  "prepaid",
+		WalletAddress: normalizedAddress,
 	}, nil
 }
 
@@ -784,6 +1432,9 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 		turnstileResp, err := s.turnstileValidator.Verify(ctx, req.GetTurnstileToken(), clientIP)
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
+			if !s.turnstileFailOpen {
+				return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			}
 		} else if !turnstileResp.Success {
 			s.logger.WithFields(logging.Fields{
 				"email":       email,
@@ -832,14 +1483,17 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 
 	// Check account status
 	if !user.IsActive {
+		s.emitAuthEvent(eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "account_inactive")
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
 	}
 	if !user.IsVerified {
+		s.emitAuthEvent(eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "email_not_verified")
 		return nil, status.Error(codes.Unauthenticated, "email not verified")
 	}
 
 	// Verify password
 	if !auth.CheckPassword(password, user.PasswordHash) {
+		s.emitAuthEvent(eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "invalid_credentials")
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 
@@ -869,6 +1523,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
+	s.emitAuthEvent(eventAuthLoginSucceeded, user.ID, user.TenantID, "password", "", "", "")
 
 	return &pb.AuthResponse{
 		Token:        token,
@@ -876,7 +1531,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 		User: &pb.User{
 			Id:          user.ID,
 			TenantId:    user.TenantID,
-			Email:       user.Email,
+			Email:       &user.Email,
 			FirstName:   user.FirstName.String,
 			LastName:    user.LastName.String,
 			Role:        user.Role,
@@ -914,6 +1569,9 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 		turnstileResp, err := s.turnstileValidator.Verify(ctx, req.GetTurnstileToken(), clientIP)
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
+			if !s.turnstileFailOpen {
+				return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			}
 		} else if !turnstileResp.Success {
 			s.logger.WithFields(logging.Fields{
 				"email":       email,
@@ -1034,6 +1692,8 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 		"role":      role,
 	}).Info("User registered successfully via gRPC")
 
+	s.emitAuthEvent(eventAuthRegistered, userID, tenantID, "password", "", "", "")
+
 	return &pb.RegisterResponse{
 		Success: true,
 		Message: "Registration successful. Please check your email to verify your account.",
@@ -1079,7 +1739,7 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 	result := &pb.User{
 		Id:          user.ID,
 		TenantId:    user.TenantID,
-		Email:       user.Email,
+		Email:       &user.Email,
 		FirstName:   user.FirstName.String,
 		LastName:    user.LastName.String,
 		Role:        user.Role,
@@ -1091,6 +1751,37 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 	}
 	if user.LastLoginAt.Valid {
 		result.LastLoginAt = timestamppb.New(user.LastLoginAt.Time)
+	}
+
+	// Fetch linked wallets
+	walletRows, err := s.db.QueryContext(ctx, `
+		SELECT id, wallet_address, created_at, last_auth_at
+		FROM commodore.wallet_identities
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to fetch user wallets")
+		// Don't fail the whole request - just return user without wallets
+	} else {
+		defer walletRows.Close()
+		for walletRows.Next() {
+			var walletID, walletAddr string
+			var walletCreatedAt time.Time
+			var walletLastAuthAt sql.NullTime
+			if err := walletRows.Scan(&walletID, &walletAddr, &walletCreatedAt, &walletLastAuthAt); err != nil {
+				continue
+			}
+			wallet := &pb.WalletIdentity{
+				Id:            walletID,
+				WalletAddress: walletAddr,
+				CreatedAt:     timestamppb.New(walletCreatedAt),
+			}
+			if walletLastAuthAt.Valid {
+				wallet.LastAuthAt = timestamppb.New(walletLastAuthAt.Time)
+			}
+			result.Wallets = append(result.Wallets, wallet)
+		}
 	}
 
 	return result, nil
@@ -1214,6 +1905,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
+	s.emitAuthEvent(eventAuthTokenRefreshed, userID, tenantID, "refresh_token", "", "", "")
 
 	return &pb.AuthResponse{
 		Token:        token,
@@ -1221,7 +1913,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 		User: &pb.User{
 			Id:          userID,
 			TenantId:    tenantID,
-			Email:       user.Email,
+			Email:       &user.Email,
 			FirstName:   user.FirstName.String,
 			LastName:    user.LastName.String,
 			Role:        user.Role,
@@ -1299,6 +1991,9 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 		turnstileResp, err := s.turnstileValidator.Verify(ctx, req.GetTurnstileToken(), clientIP)
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
+			if !s.turnstileFailOpen {
+				return nil, status.Error(codes.InvalidArgument, "bot verification failed")
+			}
 		} else if !turnstileResp.Success {
 			return nil, status.Error(codes.InvalidArgument, "bot verification failed")
 		}
@@ -1559,6 +2254,545 @@ func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *pb.UpdateNe
 }
 
 // ============================================================================
+// WALLET AUTHENTICATION (x402 / agent access)
+// ============================================================================
+
+// WalletLogin authenticates via Ethereum wallet signature
+// If the wallet is not linked to any account, creates a new one (auto-provisioning)
+func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRequest) (*pb.AuthResponse, error) {
+	walletAddr := req.GetWalletAddress()
+	message := req.GetMessage()
+	signature := req.GetSignature()
+
+	if walletAddr == "" || message == "" || signature == "" {
+		return nil, status.Error(codes.InvalidArgument, "wallet_address, message, and signature required")
+	}
+
+	// Verify the signature
+	valid, err := auth.VerifyWalletAuth(auth.WalletMessage{
+		Address:   walletAddr,
+		Message:   message,
+		Signature: signature,
+	})
+	if err != nil {
+		s.logger.WithError(err).WithField("wallet", walletAddr).Warn("Wallet signature verification failed")
+		return nil, status.Errorf(codes.InvalidArgument, "signature verification failed: %v", err)
+	}
+	if !valid {
+		return nil, status.Error(codes.Unauthenticated, "invalid signature")
+	}
+
+	// Normalize address
+	normalizedAddr, err := auth.NormalizeEthAddress(walletAddr)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+	}
+
+	// Resolve or create wallet identity (single source of truth)
+	walletResp, err := s.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
+		ChainType:     string(auth.ChainEthereum),
+		WalletAddress: normalizedAddr,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resolve wallet user: %v", err)
+	}
+
+	userID := walletResp.GetUserId()
+	tenantID := walletResp.GetTenantId()
+	isNewUser := walletResp.GetIsNew()
+
+	var email sql.NullString
+	var firstName, lastName, role string
+	var isActive, isVerified bool
+	var lastLoginAt sql.NullTime
+	var createdAt, updatedAt time.Time
+
+	err = s.db.QueryRowContext(ctx, `
+		SELECT email, first_name, last_name, role, is_active, is_verified,
+		       last_login_at, created_at, updated_at
+		FROM commodore.users WHERE id = $1
+	`, userID).Scan(&email, &firstName, &lastName, &role,
+		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
+	}
+
+	// Update last_auth_at on wallet identity
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE commodore.wallet_identities
+		SET last_auth_at = NOW()
+		WHERE chain_type = 'ethereum' AND wallet_address = $1
+	`, normalizedAddr)
+
+	// Update last_login_at on user
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1
+	`, userID)
+
+	// Generate JWT
+	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
+	var emailStr string
+	if email.Valid {
+		emailStr = email.String
+	}
+	token, err := auth.GenerateJWT(userID, tenantID, emailStr, role, jwtSecret)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
+	expiresAt := time.Now().Add(15 * time.Minute)
+
+	// Build user response
+	user := &pb.User{
+		Id:         userID,
+		TenantId:   tenantID,
+		FirstName:  firstName,
+		LastName:   lastName,
+		Role:       role,
+		IsActive:   isActive,
+		IsVerified: isVerified,
+		CreatedAt:  timestamppb.New(createdAt),
+		UpdatedAt:  timestamppb.New(updatedAt),
+	}
+	if email.Valid {
+		user.Email = &email.String
+	}
+	if lastLoginAt.Valid {
+		user.LastLoginAt = timestamppb.New(lastLoginAt.Time)
+	}
+
+	s.emitAuthEvent(eventAuthLoginSucceeded, userID, tenantID, "wallet", "", "", "")
+
+	return &pb.AuthResponse{
+		Token:     token,
+		User:      user,
+		ExpiresAt: timestamppb.New(expiresAt),
+		IsNewUser: isNewUser,
+	}, nil
+}
+
+// WalletLoginWithX402 authenticates via x402 payload and returns a session token.
+// If payment value > 0, it settles the payment and credits the target tenant (or payer if none specified).
+func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.WalletLoginWithX402Request) (*pb.WalletLoginWithX402Response, error) {
+	if s.purserClient == nil {
+		return nil, status.Error(codes.Unavailable, "purser client not configured")
+	}
+
+	payment := req.GetPayment()
+	if payment == nil {
+		return nil, status.Error(codes.InvalidArgument, "payment required")
+	}
+
+	verifyResp, err := s.purserClient.VerifyX402Payment(ctx, "", payment, req.GetClientIp())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "payment verification failed: %v", err)
+	}
+	if !verifyResp.Valid {
+		return nil, status.Errorf(codes.Unauthenticated, "payment invalid: %s", verifyResp.Error)
+	}
+
+	payerAddress := verifyResp.PayerAddress
+	if payerAddress == "" {
+		return nil, status.Error(codes.InvalidArgument, "payer address missing")
+	}
+
+	chainType := x402NetworkToChainType(payment.GetNetwork())
+	walletResp, err := s.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
+		ChainType:     chainType,
+		WalletAddress: payerAddress,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resolve wallet user: %v", err)
+	}
+
+	userID := walletResp.GetUserId()
+	tenantID := walletResp.GetTenantId()
+	isNewUser := walletResp.GetIsNew()
+
+	var email sql.NullString
+	var firstName, lastName, role string
+	var isActive, isVerified bool
+	var lastLoginAt sql.NullTime
+	var createdAt, updatedAt time.Time
+
+	err = s.db.QueryRowContext(ctx, `
+		SELECT email, first_name, last_name, role, is_active, is_verified,
+		       last_login_at, created_at, updated_at
+		FROM commodore.users WHERE id = $1
+	`, userID).Scan(&email, &firstName, &lastName, &role,
+		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
+	}
+
+	// Update last_auth_at on wallet identity
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE commodore.wallet_identities
+		SET last_auth_at = NOW()
+		WHERE chain_type = $1 AND wallet_address = $2
+	`, chainType, walletResp.GetWalletAddress())
+
+	// Update last_login_at on user
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1
+	`, userID)
+
+	// Generate JWT
+	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
+	var emailStr string
+	if email.Valid {
+		emailStr = email.String
+	}
+	token, err := auth.GenerateJWT(userID, tenantID, emailStr, role, jwtSecret)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
+	expiresAt := time.Now().Add(15 * time.Minute)
+
+	user := &pb.User{
+		Id:         userID,
+		TenantId:   tenantID,
+		FirstName:  firstName,
+		LastName:   lastName,
+		Role:       role,
+		IsActive:   isActive,
+		IsVerified: isVerified,
+		CreatedAt:  timestamppb.New(createdAt),
+		UpdatedAt:  timestamppb.New(updatedAt),
+	}
+	if email.Valid {
+		user.Email = &email.String
+	}
+	if lastLoginAt.Valid {
+		user.LastLoginAt = timestamppb.New(lastLoginAt.Time)
+	}
+
+	s.emitAuthEvent(eventAuthLoginSucceeded, userID, tenantID, "x402", "", "", "")
+
+	authResp := &pb.AuthResponse{
+		Token:     token,
+		User:      user,
+		ExpiresAt: timestamppb.New(expiresAt),
+		IsNewUser: isNewUser,
+	}
+
+	if verifyResp.IsAuthOnly {
+		return &pb.WalletLoginWithX402Response{
+			Auth:           authResp,
+			IsAuthOnly:     true,
+			PayerAddress:   payerAddress,
+			TargetTenantId: tenantID,
+		}, nil
+	}
+
+	targetTenantID := req.GetTargetTenantId()
+	if targetTenantID == "" {
+		targetTenantID = tenantID
+	}
+
+	settleResp, err := s.purserClient.SettleX402Payment(ctx, targetTenantID, payment, req.GetClientIp())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "payment settlement failed: %v", err)
+	}
+	if !settleResp.Success {
+		return nil, status.Errorf(codes.Internal, "payment settlement failed: %s", settleResp.Error)
+	}
+
+	return &pb.WalletLoginWithX402Response{
+		Auth:            authResp,
+		IsAuthOnly:      false,
+		CreditedCents:   settleResp.CreditedCents,
+		NewBalanceCents: settleResp.NewBalanceCents,
+		TxHash:          settleResp.TxHash,
+		Currency:        settleResp.Currency,
+		InvoiceNumber:   settleResp.InvoiceNumber,
+		PayerAddress:    settleResp.PayerAddress,
+		TargetTenantId:  targetTenantID,
+	}, nil
+}
+
+func x402NetworkToChainType(network string) string {
+	switch strings.ToLower(network) {
+	case "base", "base-mainnet", "base-sepolia":
+		return string(auth.ChainBase)
+	case "arbitrum", "arbitrum-one":
+		return string(auth.ChainArbitrum)
+	case "ethereum", "mainnet":
+		return string(auth.ChainEthereum)
+	default:
+		return string(auth.ChainEthereum)
+	}
+}
+
+// createWalletUser creates a new user and tenant for a wallet address
+func (s *CommodoreServer) createWalletUser(ctx context.Context, walletAddress string) (userID, tenantID string, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Create tenant via Quartermaster
+	tenantResp, err := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
+		Name: "Wallet " + walletAddress[:10] + "...",
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create tenant: %w", err)
+	}
+	tenantID = tenantResp.GetTenant().GetId()
+
+	// Create user with NULL email (wallet-only)
+	userID = uuid.New().String()
+	shortAddr := walletAddress[2:8] // First 6 hex chars after 0x
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO commodore.users (id, tenant_id, email, first_name, last_name, role, is_active, is_verified)
+		VALUES ($1, $2, NULL, $3, '', 'owner', true, true)
+	`, userID, tenantID, "Wallet "+shortAddr)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create user: %w", err)
+	}
+
+	// Create wallet identity
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO commodore.wallet_identities (tenant_id, user_id, chain_type, wallet_address)
+		VALUES ($1, $2, 'ethereum', $3)
+	`, tenantID, userID, walletAddress)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create wallet identity: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("failed to commit: %w", err)
+	}
+
+	return userID, tenantID, nil
+}
+
+// LinkWallet links a wallet to the authenticated user's account
+func (s *CommodoreServer) LinkWallet(ctx context.Context, req *pb.LinkWalletRequest) (*pb.WalletIdentity, error) {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	walletAddr := req.GetWalletAddress()
+	message := req.GetMessage()
+	signature := req.GetSignature()
+
+	if walletAddr == "" || message == "" || signature == "" {
+		return nil, status.Error(codes.InvalidArgument, "wallet_address, message, and signature required")
+	}
+
+	// Verify the signature
+	valid, err := auth.VerifyWalletAuth(auth.WalletMessage{
+		Address:   walletAddr,
+		Message:   message,
+		Signature: signature,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "signature verification failed: %v", err)
+	}
+	if !valid {
+		return nil, status.Error(codes.Unauthenticated, "invalid signature")
+	}
+
+	// Normalize address
+	normalizedAddr, err := auth.NormalizeEthAddress(walletAddr)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid address: %v", err)
+	}
+
+	// Check if wallet is already linked to another user
+	var existingUserID string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT user_id FROM commodore.wallet_identities
+		WHERE chain_type = 'ethereum' AND wallet_address = $1
+	`, normalizedAddr).Scan(&existingUserID)
+	if err == nil {
+		if existingUserID == userID {
+			return nil, status.Error(codes.AlreadyExists, "wallet already linked to your account")
+		}
+		return nil, status.Error(codes.AlreadyExists, "wallet already linked to another account")
+	} else if err != sql.ErrNoRows {
+		return nil, status.Errorf(codes.Internal, "failed to check wallet: %v", err)
+	}
+
+	// Create wallet identity
+	var walletID string
+	var createdAt time.Time
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO commodore.wallet_identities (tenant_id, user_id, chain_type, wallet_address)
+		VALUES ($1, $2, 'ethereum', $3)
+		RETURNING id, created_at
+	`, tenantID, userID, normalizedAddr).Scan(&walletID, &createdAt)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to link wallet: %v", err)
+	}
+
+	s.emitAuthEvent(eventWalletLinked, userID, tenantID, "wallet", walletID, "", "")
+
+	return &pb.WalletIdentity{
+		Id:            walletID,
+		WalletAddress: normalizedAddr,
+		CreatedAt:     timestamppb.New(createdAt),
+	}, nil
+}
+
+// UnlinkWallet removes a wallet from the user's account
+func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *pb.UnlinkWalletRequest) (*pb.UnlinkWalletResponse, error) {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	walletID := req.GetWalletId()
+	if walletID == "" {
+		return nil, status.Error(codes.InvalidArgument, "wallet_id required")
+	}
+
+	// Delete only if it belongs to the user
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM commodore.wallet_identities
+		WHERE id = $1 AND user_id = $2
+	`, walletID, userID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to unlink wallet: %v", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
+	}
+
+	s.emitAuthEvent(eventWalletUnlinked, userID, tenantID, "wallet", walletID, "", "")
+
+	return &pb.UnlinkWalletResponse{
+		Success: true,
+		Message: "wallet unlinked",
+	}, nil
+}
+
+// ListWallets returns all wallets linked to the authenticated user
+func (s *CommodoreServer) ListWallets(ctx context.Context, req *pb.ListWalletsRequest) (*pb.ListWalletsResponse, error) {
+	userID, _, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, wallet_address, created_at, last_auth_at
+		FROM commodore.wallet_identities
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to list wallets: %v", err)
+	}
+	defer rows.Close()
+
+	var wallets []*pb.WalletIdentity
+	for rows.Next() {
+		var id, addr string
+		var createdAt time.Time
+		var lastAuthAt sql.NullTime
+		if err := rows.Scan(&id, &addr, &createdAt, &lastAuthAt); err != nil {
+			continue
+		}
+		w := &pb.WalletIdentity{
+			Id:            id,
+			WalletAddress: addr,
+			CreatedAt:     timestamppb.New(createdAt),
+		}
+		if lastAuthAt.Valid {
+			w.LastAuthAt = timestamppb.New(lastAuthAt.Time)
+		}
+		wallets = append(wallets, w)
+	}
+
+	return &pb.ListWalletsResponse{Wallets: wallets}, nil
+}
+
+// LinkEmail adds an email to a wallet-only account (for postpaid upgrade path)
+func (s *CommodoreServer) LinkEmail(ctx context.Context, req *pb.LinkEmailRequest) (*pb.LinkEmailResponse, error) {
+	userID, _, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	email := strings.TrimSpace(strings.ToLower(req.GetEmail()))
+	password := req.GetPassword()
+
+	if email == "" {
+		return nil, status.Error(codes.InvalidArgument, "email required")
+	}
+	if password == "" || len(password) < 8 {
+		return nil, status.Error(codes.InvalidArgument, "password must be at least 8 characters")
+	}
+
+	// Check if user already has an email
+	var existingEmail sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+		SELECT email FROM commodore.users WHERE id = $1
+	`, userID).Scan(&existingEmail)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to check user: %v", err)
+	}
+	if existingEmail.Valid && existingEmail.String != "" {
+		return nil, status.Error(codes.AlreadyExists, "email already linked to your account")
+	}
+
+	// Check if email is already used by another account
+	var otherUserID string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id FROM commodore.users WHERE LOWER(email) = $1 AND id != $2
+	`, email, userID).Scan(&otherUserID)
+	if err == nil {
+		return nil, status.Error(codes.AlreadyExists, "email already in use by another account")
+	} else if err != sql.ErrNoRows {
+		return nil, status.Errorf(codes.Internal, "failed to check email: %v", err)
+	}
+
+	// Hash password
+	passwordHash, err := auth.HashPassword(password)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to hash password: %v", err)
+	}
+
+	// Generate verification token
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	}
+	verificationToken := hex.EncodeToString(tokenBytes)
+	tokenExpiry := time.Now().Add(24 * time.Hour)
+
+	// Update user with email, password, and verification token
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE commodore.users
+		SET email = $1, password_hash = $2, verification_token = $3, token_expires_at = $4, updated_at = NOW()
+		WHERE id = $5
+	`, email, passwordHash, verificationToken, tokenExpiry, userID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to link email: %v", err)
+	}
+
+	// Send verification email
+	if err := s.sendVerificationEmail(email, verificationToken); err != nil {
+		s.logger.WithError(err).Warn("Failed to send verification email")
+		return &pb.LinkEmailResponse{
+			Success:          true,
+			Message:          "Email linked. Verification email could not be sent - please use resend verification.",
+			VerificationSent: false,
+		}, nil
+	}
+
+	return &pb.LinkEmailResponse{
+		Success:          true,
+		Message:          fmt.Sprintf("Verification email sent to %s", email),
+		VerificationSent: true,
+	}, nil
+}
+
+// ============================================================================
 // STREAM SERVICE (Gateway → Commodore for stream CRUD)
 // ============================================================================
 
@@ -1567,6 +2801,14 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if tenant is suspended (prepaid balance < -$10)
+	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
+		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+		// Continue anyway - don't block on suspension check failure
+	} else if suspended {
+		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to create new streams")
 	}
 
 	title := req.GetTitle()
@@ -1606,8 +2848,17 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 		}
 	}
 
+	changedFields := []string{"title"}
+	if req.GetDescription() != "" {
+		changedFields = append(changedFields, "description")
+	}
+	if req.GetIsRecording() {
+		changedFields = append(changedFields, "is_recording_enabled")
+	}
+	s.emitStreamChangeEvent(eventStreamCreated, tenantID, userID, streamID, changedFields)
+
 	return &pb.CreateStreamResponse{
-		Id:          internalName,
+		Id:          streamID,
 		StreamKey:   streamKey,
 		PlaybackId:  playbackID,
 		Title:       title,
@@ -1656,12 +2907,12 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	// Build keyset pagination query
 	builder := &pagination.KeysetBuilder{
 		TimestampColumn: "created_at",
-		IDColumn:        "internal_name",
+		IDColumn:        "id",
 	}
 
 	// Base query
 	query := `
-		SELECT internal_name, stream_key, playback_id, title, description,
+		SELECT id, internal_name, stream_key, playback_id, title, description,
 		       is_recording_enabled, created_at, updated_at
 		FROM commodore.streams
 		WHERE user_id = $1 AND tenant_id = $2`
@@ -1713,8 +2964,8 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	if len(streams) > 0 {
 		first := streams[0]
 		last := streams[len(streams)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.InternalName)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.InternalName)
+		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.StreamId)
+		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.StreamId)
 	}
 
 	// Build response with proper hasNextPage/hasPreviousPage
@@ -1753,42 +3004,46 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Verify ownership
-	var exists bool
+	// Verify ownership and fetch internal_name for internal ops
+	var internalName string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3)
-	`, streamID, userID, tenantID).Scan(&exists)
+		SELECT internal_name FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamID, userID, tenantID).Scan(&internalName)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "stream not found")
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	if !exists {
-		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
 	// Build update query dynamically
 	var updates []string
 	var args []interface{}
 	argIdx := 1
+	changedFields := []string{}
 
 	if req.Name != nil {
 		updates = append(updates, fmt.Sprintf("title = $%d", argIdx))
 		args = append(args, *req.Name)
 		argIdx++
+		changedFields = append(changedFields, "title")
 	}
 	if req.Description != nil {
 		updates = append(updates, fmt.Sprintf("description = $%d", argIdx))
 		args = append(args, *req.Description)
 		argIdx++
+		changedFields = append(changedFields, "description")
 	}
 	if req.Record != nil {
 		updates = append(updates, fmt.Sprintf("is_recording_enabled = $%d", argIdx))
 		args = append(args, *req.Record)
 		argIdx++
+		changedFields = append(changedFields, "is_recording_enabled")
 	}
 
 	if len(updates) > 0 {
 		updates = append(updates, "updated_at = NOW()")
-		query := fmt.Sprintf("UPDATE commodore.streams SET %s WHERE internal_name = $%d",
+		query := fmt.Sprintf("UPDATE commodore.streams SET %s WHERE id = $%d",
 			strings.Join(updates, ", "), argIdx)
 		args = append(args, streamID)
 
@@ -1798,62 +3053,8 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		}
 	}
 
-	// Handle dynamic DVR start/stop when recording config changes while stream is live
-	if req.Record != nil && s.foghornClient != nil {
-		newRecordingEnabled := *req.Record
-		// Capture variables for goroutine
-		internalName := streamID
-		tid := tenantID
-
-		go func() {
-			// Check if stream is currently live
-			contentType := "live"
-			meta, err := s.foghornClient.GetStreamMeta(context.Background(), &pb.StreamMetaRequest{
-				InternalName: internalName,
-				ContentType:  &contentType,
-			})
-			if err != nil || meta.GetMetaSummary() == nil || !meta.GetMetaSummary().GetIsLive() {
-				// Stream not live - config will take effect on next stream start
-				return
-			}
-
-			// Stream is live - handle recording toggle
-			if newRecordingEnabled {
-				// Start DVR recording
-				_, err := s.foghornClient.StartDVR(context.Background(), &pb.StartDVRRequest{
-					TenantId:     tid,
-					InternalName: internalName,
-				})
-				if err != nil {
-					s.logger.WithError(err).WithField("internal_name", internalName).
-						Error("Failed to start DVR after config change")
-				} else {
-					s.logger.WithField("internal_name", internalName).
-						Info("Started DVR recording after config enabled while live")
-				}
-			} else {
-				// Stop DVR - find active recording first
-				recordings, err := s.foghornClient.ListDVRRecordings(context.Background(), tid, &internalName, nil)
-				if err != nil {
-					s.logger.WithError(err).Error("Failed to list DVR recordings")
-					return
-				}
-				for _, rec := range recordings.GetDvrRecordings() {
-					status := rec.GetStatus()
-					if status == "recording" || status == "requested" || status == "starting" {
-						_, err := s.foghornClient.StopDVR(context.Background(), rec.GetDvrHash(), &tid)
-						if err != nil {
-							s.logger.WithError(err).WithField("dvr_hash", rec.GetDvrHash()).
-								Error("Failed to stop DVR after config change")
-						} else {
-							s.logger.WithField("internal_name", internalName).
-								Info("Stopped DVR recording after config disabled while live")
-						}
-						break
-					}
-				}
-			}
-		}()
+	if len(changedFields) > 0 {
+		s.emitStreamChangeEvent(eventStreamUpdated, tenantID, userID, streamID, changedFields)
 	}
 
 	return s.queryStream(ctx, streamID, userID, tenantID)
@@ -1872,17 +3073,39 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 	}
 
 	// Get stream details before deletion
-	var streamUUID, title string
+	var internalName, title string
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id, title FROM commodore.streams
-		WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&streamUUID, &title)
+		SELECT internal_name, title FROM commodore.streams
+		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamID, userID, tenantID).Scan(&internalName, &title)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Delete related clips (best-effort, don't fail stream deletion)
+	if s.foghornClient != nil {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT clip_hash FROM commodore.clips
+			WHERE stream_id = $1 AND tenant_id = $2
+		`, streamID, tenantID)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to list clips for stream deletion cleanup")
+		} else {
+			defer rows.Close()
+			for rows.Next() {
+				var clipHash string
+				if err := rows.Scan(&clipHash); err != nil {
+					continue
+				}
+				if _, delErr := s.foghornClient.DeleteClip(ctx, clipHash, &tenantID); delErr != nil {
+					s.logger.WithError(delErr).WithField("clip_hash", clipHash).Warn("Failed to delete clip during stream cleanup")
+				}
+			}
+		}
 	}
 
 	// Begin transaction
@@ -1893,27 +3116,13 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 	defer tx.Rollback()
 
 	// Delete related stream_keys (use UUID, not internal_name)
-	_, err = tx.ExecContext(ctx, `DELETE FROM commodore.stream_keys WHERE stream_id = $1`, streamUUID)
+	_, err = tx.ExecContext(ctx, `DELETE FROM commodore.stream_keys WHERE stream_id = $1`, streamID)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to delete stream keys")
 	}
 
-	// Delete related clips via Foghorn gRPC (best-effort, don't fail stream deletion)
-	if s.foghornClient != nil {
-		clipsResp, err := s.foghornClient.GetClips(ctx, tenantID, &streamID, nil)
-		if err != nil {
-			s.logger.WithError(err).Warn("Failed to list clips for stream deletion cleanup")
-		} else if clipsResp != nil {
-			for _, clip := range clipsResp.Clips {
-				if _, delErr := s.foghornClient.DeleteClip(ctx, clip.ClipHash, &tenantID); delErr != nil {
-					s.logger.WithError(delErr).WithField("clip_hash", clip.ClipHash).Warn("Failed to delete clip during stream cleanup")
-				}
-			}
-		}
-	}
-
 	// Delete the stream
-	_, err = tx.ExecContext(ctx, `DELETE FROM commodore.streams WHERE id = $1`, streamUUID)
+	_, err = tx.ExecContext(ctx, `DELETE FROM commodore.streams WHERE id = $1`, streamID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete stream: %v", err)
 	}
@@ -1921,6 +3130,8 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 	if err := tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
+
+	s.emitStreamChangeEvent(eventStreamDeleted, tenantID, userID, streamID, nil)
 
 	return &pb.DeleteStreamResponse{
 		Message:     "Stream deleted successfully",
@@ -1949,7 +3160,7 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshS
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE commodore.streams
 		SET stream_key = $1, updated_at = NOW()
-		WHERE internal_name = $2 AND user_id = $3 AND tenant_id = $4
+		WHERE id = $2 AND user_id = $3 AND tenant_id = $4
 	`, newStreamKey, streamID, userID, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to refresh stream key: %v", err)
@@ -1962,7 +3173,9 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshS
 
 	// Get playback ID
 	var playbackID string
-	s.db.QueryRowContext(ctx, `SELECT playback_id FROM commodore.streams WHERE internal_name = $1`, streamID).Scan(&playbackID)
+	s.db.QueryRowContext(ctx, `SELECT playback_id FROM commodore.streams WHERE id = $1`, streamID).Scan(&playbackID)
+
+	s.emitStreamChangeEvent(eventStreamUpdated, tenantID, userID, streamID, []string{"stream_key"})
 
 	return &pb.RefreshStreamKeyResponse{
 		Message:           "Stream key refreshed successfully",
@@ -1990,15 +3203,18 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStr
 	}
 
 	// Verify stream ownership
-	var streamUUID string
+	var exists bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&streamUUID)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+	`, streamID, userID, tenantID).Scan(&exists)
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !exists {
+		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
 	// Generate new key
@@ -2012,10 +3228,12 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStr
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.stream_keys (id, tenant_id, user_id, stream_id, key_value, key_name, is_active)
 		VALUES ($1, $2, $3, $4, $5, $6, true)
-	`, keyID, tenantID, userID, streamUUID, keyValue, keyName)
+	`, keyID, tenantID, userID, streamID, keyValue, keyName)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create stream key: %v", err)
 	}
+
+	s.emitStreamKeyEvent(eventStreamKeyCreated, tenantID, userID, streamID, keyID)
 
 	return &pb.StreamKeyResponse{
 		StreamKey: &pb.StreamKey{
@@ -2045,16 +3263,16 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Resolve internal_name to UUID
-	var streamUUID string
+	// Verify stream ownership
+	var exists bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&streamUUID)
-	if err == sql.ErrNoRows {
-		return nil, status.Error(codes.NotFound, "stream not found")
-	}
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+	`, streamID, userID, tenantID).Scan(&exists)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !exists {
+		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
 	// Parse bidirectional pagination
@@ -2072,7 +3290,7 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 	var total int32
 	err = s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM commodore.stream_keys WHERE stream_id = $1
-	`, streamUUID).Scan(&total)
+	`, streamID).Scan(&total)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -2082,7 +3300,7 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 		SELECT id, tenant_id, user_id, stream_id, key_value, key_name, is_active, last_used_at, created_at, updated_at
 		FROM commodore.stream_keys
 		WHERE stream_id = $1`
-	args := []interface{}{streamUUID}
+	args := []interface{}{streamID}
 	argIdx := 2
 
 	// Add keyset condition if cursor provided
@@ -2174,22 +3392,22 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *pb.Deact
 		return nil, err
 	}
 
-	// Resolve internal_name to UUID
-	var streamUUID string
+	// Verify stream ownership
+	var exists bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
-	`, req.GetStreamId(), userID, tenantID).Scan(&streamUUID)
-	if err == sql.ErrNoRows {
-		return nil, status.Error(codes.NotFound, "stream not found")
-	}
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
+	`, req.GetStreamId(), userID, tenantID).Scan(&exists)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !exists {
+		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE commodore.stream_keys SET is_active = false, updated_at = NOW()
 		WHERE id = $1 AND stream_id = $2
-	`, req.GetKeyId(), streamUUID)
+	`, req.GetKeyId(), req.GetStreamId())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to deactivate key: %v", err)
 	}
@@ -2198,6 +3416,8 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *pb.Deact
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "stream key not found")
 	}
+
+	s.emitStreamKeyEvent(eventStreamKeyDeleted, tenantID, userID, req.GetStreamId(), req.GetKeyId())
 
 	return &emptypb.Empty{}, nil
 }
@@ -2215,6 +3435,7 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *pb.CreateAPIT
 
 	tokenID := uuid.New().String()
 	tokenValue := "fw_" + generateSecureToken(32)
+	tokenHash := hashToken(tokenValue)
 	tokenName := req.GetTokenName()
 	if tokenName == "" {
 		tokenName = "API Token " + time.Now().Format("2006-01-02")
@@ -2233,10 +3454,12 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *pb.CreateAPIT
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.api_tokens (id, tenant_id, user_id, token_value, token_name, permissions, is_active, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, true, $7)
-	`, tokenID, tenantID, userID, tokenValue, tokenName, pq.Array(permissions), expiresAt)
+	`, tokenID, tenantID, userID, tokenHash, tokenName, pq.Array(permissions), expiresAt)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create API token: %v", err)
 	}
+
+	s.emitAuthEvent(eventTokenCreated, userID, tenantID, "api_token", "", tokenID, "")
 
 	resp := &pb.CreateAPITokenResponse{
 		Id:          tokenID,
@@ -2403,6 +3626,8 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 		return nil, status.Errorf(codes.Internal, "failed to revoke token: %v", err)
 	}
 
+	s.emitAuthEvent(eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), "")
+
 	return &pb.RevokeAPITokenResponse{
 		Message:   "Token revoked successfully",
 		TokenId:   req.GetTokenId(),
@@ -2415,6 +3640,121 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 // HELPER FUNCTIONS
 // ============================================================================
 
+const (
+	eventAuthLoginSucceeded = "auth_login_succeeded"
+	eventAuthLoginFailed    = "auth_login_failed"
+	eventAuthRegistered     = "auth_registered"
+	eventAuthTokenRefreshed = "auth_token_refreshed"
+	eventTokenCreated       = "token_created"
+	eventTokenRevoked       = "token_revoked"
+	eventWalletLinked       = "wallet_linked"
+	eventWalletUnlinked     = "wallet_unlinked"
+	eventStreamCreated      = "stream_created"
+	eventStreamUpdated      = "stream_updated"
+	eventStreamDeleted      = "stream_deleted"
+	eventStreamKeyCreated   = "stream_key_created"
+	eventStreamKeyDeleted   = "stream_key_deleted"
+	eventArtifactRegistered = "artifact_registered"
+)
+
+func (s *CommodoreServer) emitServiceEvent(event *pb.ServiceEvent) {
+	if s.decklogClient == nil || event == nil {
+		return
+	}
+
+	go func(ev *pb.ServiceEvent) {
+		if err := s.decklogClient.SendServiceEvent(ev); err != nil {
+			s.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit service event")
+		}
+	}(event)
+}
+
+func (s *CommodoreServer) emitAuthEvent(eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) {
+	payload := &pb.AuthEvent{
+		UserId:   userID,
+		TenantId: tenantID,
+		AuthType: authType,
+		WalletId: walletID,
+		TokenId:  tokenID,
+		Error:    errMsg,
+	}
+	event := &pb.ServiceEvent{
+		EventType:    eventType,
+		Timestamp:    timestamppb.Now(),
+		Source:       "commodore",
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: "user",
+		ResourceId:   userID,
+		Payload:      &pb.ServiceEvent_AuthEvent{AuthEvent: payload},
+	}
+	s.emitServiceEvent(event)
+}
+
+func (s *CommodoreServer) emitStreamChangeEvent(eventType, tenantID, userID, streamID string, changedFields []string) {
+	payload := &pb.StreamChangeEvent{
+		StreamId:      streamID,
+		ChangedFields: changedFields,
+	}
+	event := &pb.ServiceEvent{
+		EventType:    eventType,
+		Timestamp:    timestamppb.Now(),
+		Source:       "commodore",
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: "stream",
+		ResourceId:   streamID,
+		Payload:      &pb.ServiceEvent_StreamChangeEvent{StreamChangeEvent: payload},
+	}
+	s.emitServiceEvent(event)
+}
+
+func (s *CommodoreServer) emitArtifactEvent(eventType, tenantID, userID string, artifactType pb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) {
+	if artifactID == "" || tenantID == "" {
+		return
+	}
+
+	payload := &pb.ArtifactEvent{
+		ArtifactType: artifactType,
+		ArtifactId:   artifactID,
+		StreamId:     streamID,
+		Status:       status,
+	}
+	if expiresAt != nil {
+		payload.ExpiresAt = expiresAt
+	}
+
+	event := &pb.ServiceEvent{
+		EventType:    eventType,
+		Timestamp:    timestamppb.Now(),
+		Source:       "commodore",
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: "artifact",
+		ResourceId:   artifactID,
+		Payload:      &pb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
+	}
+	s.emitServiceEvent(event)
+}
+
+func (s *CommodoreServer) emitStreamKeyEvent(eventType, tenantID, userID, streamID, keyID string) {
+	payload := &pb.StreamKeyEvent{
+		StreamId: streamID,
+		KeyId:    keyID,
+	}
+	event := &pb.ServiceEvent{
+		EventType:    eventType,
+		Timestamp:    timestamppb.Now(),
+		Source:       "commodore",
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: "stream_key",
+		ResourceId:   keyID,
+		Payload:      &pb.ServiceEvent_StreamKeyEvent{StreamKeyEvent: payload},
+	}
+	s.emitServiceEvent(event)
+}
+
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
 	var stream pb.Stream
 	var description sql.NullString
@@ -2422,11 +3762,11 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 
 	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane
 	err := s.db.QueryRowContext(ctx, `
-		SELECT internal_name, stream_key, playback_id, title, description,
+		SELECT id, internal_name, stream_key, playback_id, title, description,
 		       is_recording_enabled, created_at, updated_at
 		FROM commodore.streams
-		WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
+		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt)
 
 	if err == sql.ErrNoRows {
@@ -2453,7 +3793,7 @@ func scanStream(rows *sql.Rows) (*pb.Stream, error) {
 	var description sql.NullString
 	var createdAt, updatedAt time.Time
 
-	err := rows.Scan(&stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
+	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
@@ -2471,19 +3811,33 @@ func scanStream(rows *sql.Rows) (*pb.Stream, error) {
 }
 
 func extractUserContext(ctx context.Context) (userID, tenantID string, err error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return "", "", status.Error(codes.Unauthenticated, "missing metadata")
-	}
-
-	userIDs := md.Get("x-user-id")
-	tenantIDs := md.Get("x-tenant-id")
-
-	if len(userIDs) == 0 || len(tenantIDs) == 0 {
+	userID = middleware.GetUserID(ctx)
+	tenantID = middleware.GetTenantID(ctx)
+	if userID == "" || tenantID == "" {
 		return "", "", status.Error(codes.Unauthenticated, "missing user context")
 	}
+	return userID, tenantID, nil
+}
 
-	return userIDs[0], tenantIDs[0], nil
+// isTenantSuspended checks if a tenant is suspended due to negative prepaid balance.
+// Returns true if the tenant's subscription status is 'suspended'.
+func (s *CommodoreServer) isTenantSuspended(ctx context.Context, tenantID string) (bool, error) {
+	// Call Purser via gRPC instead of querying purser.* tables directly
+	if s.purserClient == nil {
+		// No Purser client = assume not suspended (graceful degradation)
+		return false, nil
+	}
+
+	billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"error":     err,
+		}).Warn("Failed to get billing status from Purser, assuming not suspended")
+		return false, nil
+	}
+
+	return billingStatus.IsSuspended, nil
 }
 
 func generateDVRHash() string {
@@ -2500,6 +3854,79 @@ func generateVodHash() string {
 
 func generateStreamKey() string {
 	return "sk_" + generateSecureToken(16)
+}
+
+const artifactInternalNameLength = 32
+const artifactPlaybackIDLength = 16
+
+const alphaNumCharset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+func generateRandomString(length int) string {
+	if length <= 0 {
+		return ""
+	}
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to hex if crypto/rand fails
+		return generateSecureToken((length + 1) / 2)[:length]
+	}
+	for i := range b {
+		b[i] = alphaNumCharset[int(b[i])%len(alphaNumCharset)]
+	}
+	return string(b)
+}
+
+func generateArtifactInternalName() string {
+	return generateRandomString(artifactInternalNameLength)
+}
+
+func generateArtifactPlaybackID() string {
+	return generateRandomString(artifactPlaybackIDLength)
+}
+
+func (s *CommodoreServer) identifierExists(ctx context.Context, identifier string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM commodore.streams WHERE internal_name = $1 OR playback_id = $1
+			UNION ALL
+			SELECT 1 FROM commodore.clips WHERE artifact_internal_name = $1 OR playback_id = $1 OR clip_hash = $1
+			UNION ALL
+			SELECT 1 FROM commodore.dvr_recordings WHERE artifact_internal_name = $1 OR playback_id = $1 OR dvr_hash = $1
+			UNION ALL
+			SELECT 1 FROM commodore.vod_assets WHERE artifact_internal_name = $1 OR playback_id = $1 OR vod_hash = $1
+		)
+	`, identifier).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (s *CommodoreServer) generateUniqueArtifactIdentifiers(ctx context.Context) (string, string, error) {
+	const maxAttempts = 10
+	for i := 0; i < maxAttempts; i++ {
+		internalName := generateArtifactInternalName()
+		exists, err := s.identifierExists(ctx, internalName)
+		if err != nil {
+			return "", "", err
+		}
+		if exists {
+			continue
+		}
+
+		playbackID := generateArtifactPlaybackID()
+		exists, err = s.identifierExists(ctx, playbackID)
+		if err != nil {
+			return "", "", err
+		}
+		if exists {
+			continue
+		}
+
+		return internalName, playbackID, nil
+	}
+	return "", "", fmt.Errorf("failed to generate unique artifact identifiers")
 }
 
 func generateSecureToken(n int) string {
@@ -2519,16 +3946,6 @@ func getDefaultPermissions(role string) []string {
 	}
 }
 
-func encodeOffsetToCursor(offset int32) string {
-	return fmt.Sprintf("offset:%d", offset)
-}
-
-func decodeCursorToOffset(cursor string) int32 {
-	var offset int32
-	fmt.Sscanf(cursor, "offset:%d", &offset)
-	return offset
-}
-
 // ============================================================================
 // CLIP SERVICE (Commodore → Foghorn proxy)
 // ============================================================================
@@ -2545,15 +3962,43 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		return nil, err
 	}
 
-	// Look up stream_id from internal_name
-	var streamID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
-	`, req.InternalName, tenantID).Scan(&streamID)
+	// Check if tenant is suspended (prepaid balance < -$10)
+	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
+		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+		// Continue anyway - don't block on suspension check failure
+	} else if suspended {
+		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to create clips")
+	}
+
+	streamID := req.GetStreamId()
+	if streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "stream_id required")
+	}
+
+	// Resolve internal_name for Foghorn/Mist (internal use only)
+	var internalName string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+	`, streamID, tenantID).Scan(&internalName)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "stream not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
 
 	// Generate clip hash (Commodore is authoritative)
 	clipHash := generateClipHash()
 	clipID := uuid.New().String()
+	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Failed to generate artifact identifiers for clip")
+		return nil, status.Errorf(codes.Internal, "failed to generate clip identifiers: %v", err)
+	}
 
 	// Resolve timing for storage
 	var startTime, duration int64
@@ -2592,18 +4037,18 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	// Register in commodore.clips (business registry)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.clips (
-			id, tenant_id, user_id, stream_id, clip_hash,
+			id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
 			retention_until, created_at, updated_at
 		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
-	`, clipID, tenantID, userID, streamID, clipHash,
+	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
 		retentionUntil)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
-			"internal_name": req.InternalName,
+			"internal_name": internalName,
 			"error":         err,
 		}).Error("Failed to register clip in business registry")
 		return nil, status.Errorf(codes.Internal, "failed to register clip: %v", err)
@@ -2613,14 +4058,19 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		"tenant_id":     tenantID,
 		"clip_hash":     clipHash,
 		"clip_id":       clipID,
-		"internal_name": req.InternalName,
+		"internal_name": internalName,
 	}).Info("Registered clip in business registry")
 
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &pb.CreateClipRequest{
-		TenantId:     tenantID,
-		InternalName: req.InternalName,
-		ClipHash:     &clipHash, // Pass the hash we generated
+		TenantId:             tenantID,
+		InternalName:         internalName,
+		ClipHash:             &clipHash, // Pass the hash we generated
+		PlaybackId:           &playbackID,
+		ArtifactInternalName: &artifactInternalName,
+	}
+	if streamID != "" {
+		foghornReq.StreamId = &streamID
 	}
 	if req.Format != "" {
 		foghornReq.Format = req.Format
@@ -2661,9 +4111,9 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	args := []interface{}{tenantID}
 	argIdx := 2
 
-	if internalName := req.GetInternalName(); internalName != "" {
-		whereClause += fmt.Sprintf(" AND st.internal_name = $%d", argIdx)
-		args = append(args, internalName)
+	if streamID := req.GetStreamId(); streamID != "" {
+		whereClause += fmt.Sprintf(" AND c.stream_id = $%d", argIdx)
+		args = append(args, streamID)
 		argIdx++
 	}
 
@@ -2671,7 +4121,6 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	var total int32
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(*) FROM commodore.clips c
-		LEFT JOIN commodore.streams st ON c.stream_id = st.id
 		WHERE %s`, whereClause)
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -2683,13 +4132,12 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		IDColumn:        "c.clip_hash",
 	}
 
-	// Base query - join with streams to get internal_name (stream_name)
+	// Base query
 	query := fmt.Sprintf(`
-		SELECT c.id, c.clip_hash, COALESCE(st.internal_name, ''), c.title, c.description,
+		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
 		       c.start_time, c.duration, c.clip_mode, c.requested_params,
 		       c.retention_until, c.created_at, c.updated_at
 		FROM commodore.clips c
-		LEFT JOIN commodore.streams st ON c.stream_id = st.id
 		WHERE %s`, whereClause)
 
 	// Add keyset condition if cursor provided
@@ -2711,15 +4159,15 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	var clips []*pb.ClipInfo
 	for rows.Next() {
 		var (
-			id, clipHash, streamName      string
-			title, description            sql.NullString
-			startTime, duration           int64
-			clipMode                      sql.NullString
-			requestedParams               sql.NullString
-			retentionUntil                sql.NullTime
-			createdAt, updatedAt          time.Time
+			id, clipHash, playbackID, streamID string
+			title, description                 sql.NullString
+			startTime, duration                int64
+			clipMode                           sql.NullString
+			requestedParams                    sql.NullString
+			retentionUntil                     sql.NullTime
+			createdAt, updatedAt               time.Time
 		)
-		if err := rows.Scan(&id, &clipHash, &streamName, &title, &description,
+		if err := rows.Scan(&id, &clipHash, &playbackID, &streamID, &title, &description,
 			&startTime, &duration, &clipMode, &requestedParams,
 			&retentionUntil, &createdAt, &updatedAt); err != nil {
 			s.logger.WithError(err).Warn("Error scanning clip")
@@ -2729,7 +4177,8 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 		clip := &pb.ClipInfo{
 			Id:         id,
 			ClipHash:   clipHash,
-			StreamName: streamName,
+			PlaybackId: playbackID,
+			StreamId:   streamID,
 			StartTime:  startTime / 1000, // Convert ms to seconds
 			Duration:   duration / 1000,  // Convert ms to seconds
 			Status:     "registry",       // Indicates business registry data, lifecycle from Foghorn
@@ -2802,44 +4251,76 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	return resp, nil
 }
 
-// GetClip proxies single clip fetch to Foghorn
+// GetClip returns clip business registry metadata (no lifecycle data).
+// Lifecycle/access data must come from Periscope (data plane).
 func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (*pb.ClipInfo, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	resp, err := s.foghornClient.GetClip(ctx, req.GetClipHash(), &tenantID)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to get clip from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to get clip: %v", err)
+	clipHash := req.GetClipHash()
+	if clipHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
 	}
 
-	return resp, nil
-}
+	query := `
+		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
+		       c.start_time, c.duration, c.clip_mode, c.requested_params,
+		       c.retention_until, c.created_at, c.updated_at
+		FROM commodore.clips c
+		WHERE c.tenant_id = $1 AND c.clip_hash = $2
+	`
 
-// GetClipURLs proxies clip URL generation to Foghorn
-func (s *CommodoreServer) GetClipURLs(ctx context.Context, req *pb.GetClipURLsRequest) (*pb.ClipViewingURLs, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	var (
+		id, streamID, playbackID string
+		title, description       sql.NullString
+		startTime, duration      int64
+		clipMode                 sql.NullString
+		requestedParams          sql.NullString
+		retentionUntil           sql.NullTime
+		createdAt, updatedAt     time.Time
+	)
+
+	err = s.db.QueryRowContext(ctx, query, tenantID, clipHash).Scan(
+		&id, &clipHash, &playbackID, &streamID, &title, &description,
+		&startTime, &duration, &clipMode, &requestedParams,
+		&retentionUntil, &createdAt, &updatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "clip not found")
+	} else if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	_, tenantID, err := extractUserContext(ctx)
-	if err != nil {
-		return nil, err
+	clip := &pb.ClipInfo{
+		Id:         id,
+		ClipHash:   clipHash,
+		PlaybackId: playbackID,
+		StreamId:   streamID,
+		StartTime:  startTime / 1000, // Convert ms to seconds
+		Duration:   duration / 1000,  // Convert ms to seconds
+		Status:     "registry",
+		CreatedAt:  timestamppb.New(createdAt),
+		UpdatedAt:  timestamppb.New(updatedAt),
+	}
+	if title.Valid {
+		clip.Title = title.String
+	}
+	if description.Valid {
+		clip.Description = description.String
+	}
+	if clipMode.Valid {
+		clip.ClipMode = &clipMode.String
+	}
+	if requestedParams.Valid {
+		clip.RequestedParams = &requestedParams.String
+	}
+	if retentionUntil.Valid {
+		expiresAt := timestamppb.New(retentionUntil.Time)
+		clip.ExpiresAt = expiresAt
 	}
 
-	resp, err := s.foghornClient.GetClipURLs(ctx, req.ClipHash, &tenantID)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to get clip URLs from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to get clip URLs: %v", err)
-	}
-
-	return resp, nil
+	return clip, nil
 }
 
 // DeleteClip proxies clip deletion to Foghorn
@@ -2877,7 +4358,17 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 		return nil, err
 	}
 
-	resp, err := s.foghornClient.StopDVR(ctx, req.DvrHash, &tenantID)
+	var streamID *string
+	var streamIDValue string
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT stream_id::text
+		FROM commodore.dvr_recordings
+		WHERE dvr_hash = $1 AND tenant_id = $2
+	`, req.DvrHash, tenantID).Scan(&streamIDValue); err == nil && streamIDValue != "" {
+		streamID = &streamIDValue
+	}
+
+	resp, err := s.foghornClient.StopDVR(ctx, req.DvrHash, &tenantID, streamID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to stop DVR via Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to stop DVR: %v", err)
@@ -2924,9 +4415,9 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	args := []interface{}{tenantID}
 	argIdx := 2
 
-	if internalName := req.GetInternalName(); internalName != "" {
-		whereClause += fmt.Sprintf(" AND d.internal_name = $%d", argIdx)
-		args = append(args, internalName)
+	if streamID := req.GetStreamId(); streamID != "" {
+		whereClause += fmt.Sprintf(" AND d.stream_id = $%d", argIdx)
+		args = append(args, streamID)
 		argIdx++
 	}
 
@@ -2945,7 +4436,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 
 	// Base query - join with streams to get title
 	query := fmt.Sprintf(`
-		SELECT d.id, d.dvr_hash, d.internal_name, COALESCE(st.title, d.internal_name),
+		SELECT d.id, d.dvr_hash, d.playback_id, d.internal_name, d.stream_id::text, COALESCE(st.title, d.internal_name),
 		       d.retention_until, d.created_at, d.updated_at
 		FROM commodore.dvr_recordings d
 		LEFT JOIN commodore.streams st ON d.stream_id = st.id
@@ -2970,11 +4461,11 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	var recordings []*pb.DVRInfo
 	for rows.Next() {
 		var (
-			id, dvrHash, internalName, title string
-			retentionUntil                   sql.NullTime
-			createdAt, updatedAt             time.Time
+			id, dvrHash, playbackID, internalName, streamID, title string
+			retentionUntil                                         sql.NullTime
+			createdAt, updatedAt                                   time.Time
 		)
-		if err := rows.Scan(&id, &dvrHash, &internalName, &title,
+		if err := rows.Scan(&id, &dvrHash, &playbackID, &internalName, &streamID, &title,
 			&retentionUntil, &createdAt, &updatedAt); err != nil {
 			s.logger.WithError(err).Warn("Error scanning DVR recording")
 			continue
@@ -2983,7 +4474,9 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 		recording := &pb.DVRInfo{
 			Id:           &id,
 			DvrHash:      dvrHash,
+			PlaybackId:   &playbackID,
 			InternalName: internalName,
+			StreamId:     &streamID,
 			Title:        &title,
 			CreatedAt:    timestamppb.New(createdAt),
 			UpdatedAt:    timestamppb.New(updatedAt),
@@ -3042,23 +4535,8 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	return resp, nil
 }
 
-// GetDVRStatus proxies DVR status check to Foghorn
-func (s *CommodoreServer) GetDVRStatus(ctx context.Context, req *pb.GetDVRStatusRequest) (*pb.DVRInfo, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
-	resp, err := s.foghornClient.GetDVRStatus(ctx, req.DvrHash)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to get DVR status from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to get DVR status: %v", err)
-	}
-
-	return resp, nil
-}
-
 // ============================================================================
-// VIEWER SERVICE (Commodore → Foghorn proxy)
+// VIEWER SERVICE (Commodore → Foghorn proxy with enrichment)
 // ============================================================================
 
 // ResolveViewerEndpoint proxies viewer endpoint resolution to Foghorn
@@ -3068,7 +4546,23 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	resp, err := s.foghornClient.ResolveViewerEndpoint(ctx, req.ContentType, req.ContentId, req.ViewerIp)
+	outCtx := ctx
+	if md, ok := metadata.FromIncomingContext(ctx); ok && md != nil {
+		forward := metadata.MD{}
+		for _, key := range []string{"x-payment", "payment-signature", "x402-paid"} {
+			if values := md.Get(key); len(values) > 0 {
+				forward.Set(key, values...)
+			}
+		}
+		if len(forward) > 0 {
+			if existing, ok := metadata.FromOutgoingContext(ctx); ok {
+				forward = metadata.Join(existing, forward)
+			}
+			outCtx = metadata.NewOutgoingContext(ctx, forward)
+		}
+	}
+
+	resp, err := s.foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to resolve viewer endpoint: %v", err)
@@ -3076,36 +4570,41 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 
 	// Enrich metadata with stream info from Commodore's database
 	// For live streams, Foghorn doesn't have title/description - we do
-	if req.ContentType == "live" && resp.Metadata != nil {
-		var title, description sql.NullString
-		err := s.db.QueryRowContext(ctx, `
-			SELECT title, description FROM commodore.streams WHERE internal_name = $1
-		`, req.ContentId).Scan(&title, &description)
-
-		if err == nil {
-			if title.Valid && title.String != "" {
-				resp.Metadata.Title = &title.String
-			}
-			if description.Valid && description.String != "" {
-				resp.Metadata.Description = &description.String
-			}
+	if resp.Metadata != nil {
+		isLive := resp.Metadata.GetIsLive() || strings.EqualFold(resp.Metadata.GetContentType(), "live")
+		if !isLive {
+			return resp, nil
 		}
-		// Silently ignore errors - enrichment is best-effort, don't fail the request
-	}
-
-	return resp, nil
-}
-
-// GetStreamMeta proxies stream metadata fetch to Foghorn
-func (s *CommodoreServer) GetStreamMeta(ctx context.Context, req *pb.StreamMetaRequest) (*pb.StreamMetaResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
-	resp, err := s.foghornClient.GetStreamMeta(ctx, req)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to get stream meta from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to get stream meta: %v", err)
+		streamID := resp.Metadata.GetStreamId()
+		if streamID != "" {
+			var title, description sql.NullString
+			if tenantID := resp.Metadata.GetTenantId(); tenantID != "" {
+				err := s.db.QueryRowContext(ctx, `
+					SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+				`, streamID, tenantID).Scan(&title, &description)
+				if err == nil {
+					if title.Valid && title.String != "" {
+						resp.Metadata.Title = &title.String
+					}
+					if description.Valid && description.String != "" {
+						resp.Metadata.Description = &description.String
+					}
+				}
+			} else {
+				err := s.db.QueryRowContext(ctx, `
+					SELECT title, description FROM commodore.streams WHERE id = $1
+				`, streamID).Scan(&title, &description)
+				if err == nil {
+					if title.Valid && title.String != "" {
+						resp.Metadata.Title = &title.String
+					}
+					if description.Valid && description.String != "" {
+						resp.Metadata.Description = &description.String
+					}
+				}
+			}
+			// Silently ignore errors - enrichment is best-effort, don't fail the request
+		}
 	}
 
 	return resp, nil
@@ -3124,15 +4623,33 @@ func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *pb.Ing
 		return nil, status.Errorf(codes.Internal, "failed to resolve ingest endpoint: %v", err)
 	}
 
-	// Enrich metadata with stream info from Commodore's database if we have internal name
+	// Enrich metadata with stream info from Commodore's database (best-effort)
 	if resp.Metadata != nil && resp.Metadata.StreamId != "" {
-		var title sql.NullString
-		err := s.db.QueryRowContext(ctx, `
-			SELECT title FROM commodore.streams WHERE internal_name = $1
-		`, resp.Metadata.StreamId).Scan(&title)
-
-		if err == nil && title.Valid && title.String != "" {
-			resp.Metadata.StreamId = title.String // Use title as display name if available
+		var title, description sql.NullString
+		if resp.Metadata.TenantId != "" {
+			err := s.db.QueryRowContext(ctx, `
+				SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
+			`, resp.Metadata.StreamId, resp.Metadata.TenantId).Scan(&title, &description)
+			if err == nil {
+				if title.Valid && title.String != "" {
+					resp.Metadata.Title = &title.String
+				}
+				if description.Valid && description.String != "" {
+					resp.Metadata.Description = &description.String
+				}
+			}
+		} else {
+			err := s.db.QueryRowContext(ctx, `
+				SELECT title, description FROM commodore.streams WHERE id = $1
+			`, resp.Metadata.StreamId).Scan(&title, &description)
+			if err == nil {
+				if title.Valid && title.String != "" {
+					resp.Metadata.Title = &title.String
+				}
+				if description.Valid && description.String != "" {
+					resp.Metadata.Description = &description.String
+				}
+			}
 		}
 		// Silently ignore errors - enrichment is best-effort
 	}
@@ -3224,7 +4741,7 @@ func (s *CommodoreServer) sendVerificationEmail(email, token string) error {
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASS")
+	smtpPass := os.Getenv("SMTP_PASSWORD")
 
 	if smtpHost == "" {
 		s.logger.Warn("SMTP not configured, skipping verification email")
@@ -3240,9 +4757,9 @@ func (s *CommodoreServer) sendVerificationEmail(email, token string) error {
 		fromEmail = "noreply@frameworks.network"
 	}
 
-	baseURL := os.Getenv("WEBAPP_PUBLIC_URL")
+	baseURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
 	if baseURL == "" {
-		baseURL = "http://localhost:18090/app"
+		return fmt.Errorf("WEBAPP_PUBLIC_URL is required")
 	}
 	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", baseURL, url.QueryEscape(token))
 
@@ -3265,7 +4782,7 @@ func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASS")
+	smtpPass := os.Getenv("SMTP_PASSWORD")
 
 	if smtpHost == "" {
 		s.logger.Warn("SMTP not configured, skipping password reset email")
@@ -3281,9 +4798,9 @@ func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
 		fromEmail = "noreply@frameworks.network"
 	}
 
-	baseURL := os.Getenv("WEBAPP_PUBLIC_URL")
+	baseURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
 	if baseURL == "" {
-		baseURL = "http://localhost:18090/app"
+		return fmt.Errorf("WEBAPP_PUBLIC_URL is required")
 	}
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, url.QueryEscape(token))
 
@@ -3298,17 +4815,6 @@ func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
 	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
 	msg := []byte(fmt.Sprintf("To: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s", email, subject, body))
 	return smtp.SendMail(smtpHost+":"+smtpPort, auth, fromEmail, []string{email}, msg)
-}
-
-// generateRandomString generates a random alphanumeric string
-func generateRandomString(length int) string {
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, length)
-	rand.Read(b)
-	for i := range b {
-		b[i] = charset[int(b[i])%len(charset)]
-	}
-	return string(b)
 }
 
 // ============================================================================
@@ -3328,9 +4834,26 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 		return nil, err
 	}
 
+	// Check if tenant is suspended (prepaid balance < -$10)
+	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
+		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+		// Continue anyway - don't block on suspension check failure
+	} else if suspended {
+		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to upload videos")
+	}
+
 	// Generate VOD hash (Commodore is authoritative)
 	vodHash := generateVodHash()
 	vodID := uuid.New().String()
+	artifactInternalName, playbackID, err := s.generateUniqueArtifactIdentifiers(ctx)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"filename":  req.Filename,
+			"error":     err,
+		}).Error("Failed to generate artifact identifiers for VOD upload")
+		return nil, status.Errorf(codes.Internal, "failed to generate VOD identifiers: %v", err)
+	}
 
 	// Resolve retention (default 90 days for VOD)
 	retentionUntil := time.Now().Add(90 * 24 * time.Hour)
@@ -3338,11 +4861,11 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	// Register in commodore.vod_assets (business registry)
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.vod_assets (
-			id, tenant_id, user_id, vod_hash,
+			id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
 			retention_until, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-	`, vodID, tenantID, userID, vodHash,
+	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), req.Filename, req.GetContentType(), req.SizeBytes,
 		retentionUntil)
 
@@ -3364,14 +4887,16 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &pb.CreateVodUploadRequest{
-		TenantId:    tenantID,
-		UserId:      userID,
-		Filename:    req.Filename,
-		SizeBytes:   req.SizeBytes,
-		ContentType: req.ContentType,
-		Title:       req.Title,
-		Description: req.Description,
-		VodHash:     &vodHash, // Pass the hash we generated
+		TenantId:             tenantID,
+		UserId:               userID,
+		Filename:             req.Filename,
+		SizeBytes:            req.SizeBytes,
+		ContentType:          req.ContentType,
+		Title:                req.Title,
+		Description:          req.Description,
+		VodHash:              &vodHash, // Pass the hash we generated
+		PlaybackId:           &playbackID,
+		ArtifactInternalName: &artifactInternalName,
 	}
 
 	// Call Foghorn for S3 multipart upload setup
@@ -3382,6 +4907,9 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 		return nil, status.Errorf(codes.Internal, "failed to initiate VOD upload: %v", err)
 	}
 
+	if resp != nil && resp.PlaybackId == "" {
+		resp.PlaybackId = playbackID
+	}
 	return resp, nil
 }
 
@@ -3395,6 +4923,13 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if tenant is suspended (prepaid balance < -$10)
+	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
+		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+	} else if suspended {
+		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to complete uploads")
 	}
 
 	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
@@ -3459,22 +4994,23 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 
 	// Query business metadata from Commodore registry ONLY - no Foghorn call
 	var (
-		id                       string
-		vodHash                  string
-		title, description       sql.NullString
-		filename                 string
-		contentType              sql.NullString
-		sizeBytes                sql.NullInt64
-		retentionUntil           sql.NullTime
-		createdAt, updatedAt     time.Time
+		id                   string
+		vodHash              string
+		playbackID           string
+		title, description   sql.NullString
+		filename             string
+		contentType          sql.NullString
+		sizeBytes            sql.NullInt64
+		retentionUntil       sql.NullTime
+		createdAt, updatedAt time.Time
 	)
 	err = s.db.QueryRowContext(ctx, `
-		SELECT id, vod_hash, title, description, filename, content_type,
+		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
 		       size_bytes, retention_until, created_at, updated_at
 		FROM commodore.vod_assets
 		WHERE vod_hash = $1 AND tenant_id = $2
 	`, req.ArtifactHash, tenantID).Scan(
-		&id, &vodHash, &title, &description, &filename, &contentType,
+		&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
 		&sizeBytes, &retentionUntil, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -3490,6 +5026,7 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 	asset := &pb.VodAssetInfo{
 		Id:           id,
 		ArtifactHash: vodHash,
+		PlaybackId:   &playbackID,
 		Filename:     filename,
 		Status:       pb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
 		CreatedAt:    timestamppb.New(createdAt),
@@ -3541,7 +5078,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 
 	// Base query
 	query := `
-		SELECT id, vod_hash, title, description, filename, content_type,
+		SELECT id, vod_hash, playback_id, title, description, filename, content_type,
 		       size_bytes, retention_until, created_at, updated_at
 		FROM commodore.vod_assets
 		WHERE tenant_id = $1`
@@ -3567,16 +5104,17 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	var assets []*pb.VodAssetInfo
 	for rows.Next() {
 		var (
-			id                       string
-			vodHash                  string
-			title, description       sql.NullString
-			filename                 string
-			contentType              sql.NullString
-			sizeBytes                sql.NullInt64
-			retentionUntil           sql.NullTime
-			createdAt, updatedAt     time.Time
+			id                   string
+			vodHash              string
+			playbackID           string
+			title, description   sql.NullString
+			filename             string
+			contentType          sql.NullString
+			sizeBytes            sql.NullInt64
+			retentionUntil       sql.NullTime
+			createdAt, updatedAt time.Time
 		)
-		if err := rows.Scan(&id, &vodHash, &title, &description, &filename, &contentType,
+		if err := rows.Scan(&id, &vodHash, &playbackID, &title, &description, &filename, &contentType,
 			&sizeBytes, &retentionUntil, &createdAt, &updatedAt); err != nil {
 			s.logger.WithError(err).Warn("Error scanning VOD asset")
 			continue
@@ -3587,6 +5125,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 		asset := &pb.VodAssetInfo{
 			Id:           id,
 			ArtifactHash: vodHash,
+			PlaybackId:   &playbackID,
 			Filename:     filename,
 			Status:       pb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
 			CreatedAt:    timestamppb.New(createdAt),
@@ -3689,4 +5228,163 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 	}).Info("Deleted VOD asset")
 
 	return resp, nil
+}
+
+// TerminateTenantStreams stops all active streams for a suspended tenant.
+// Called by Purser when prepaid balance drops below -$10.
+// Forwards to Foghorn which sends stop_sessions to affected nodes.
+func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.TerminateTenantStreamsRequest) (*pb.TerminateTenantStreamsResponse, error) {
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": req.TenantId,
+		"reason":    req.Reason,
+	}).Info("Received tenant stream termination request from Purser")
+
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "foghorn client not configured")
+	}
+
+	// Forward to Foghorn
+	foghornResp, err := s.foghornClient.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
+	if err != nil {
+		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to terminate tenant streams via Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to terminate streams: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":           req.TenantId,
+		"streams_terminated":  foghornResp.StreamsTerminated,
+		"sessions_terminated": foghornResp.SessionsTerminated,
+	}).Info("Tenant streams terminated successfully")
+
+	return &pb.TerminateTenantStreamsResponse{
+		StreamsTerminated:  foghornResp.StreamsTerminated,
+		SessionsTerminated: foghornResp.SessionsTerminated,
+		StreamNames:        foghornResp.StreamNames,
+	}, nil
+}
+
+// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
+func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.InvalidateTenantCacheRequest) (*pb.InvalidateTenantCacheResponse, error) {
+	if req.TenantId == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": req.TenantId,
+		"reason":    req.Reason,
+	}).Info("Received tenant cache invalidation request from Purser")
+
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "foghorn client not configured")
+	}
+
+	// Forward to Foghorn
+	foghornResp, err := s.foghornClient.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
+	if err != nil {
+		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to invalidate tenant cache via Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to invalidate cache: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":           req.TenantId,
+		"entries_invalidated": foghornResp.EntriesInvalidated,
+	}).Info("Tenant cache invalidated successfully")
+
+	return &pb.InvalidateTenantCacheResponse{
+		EntriesInvalidated: foghornResp.EntriesInvalidated,
+	}, nil
+}
+
+// ============================================================================
+// CROSS-SERVICE: BILLING DATA ACCESS
+// Called by Purser to avoid cross-service database access.
+// ============================================================================
+
+// GetTenantUserCount returns active and total user counts for a tenant.
+// Called by Purser billing job for user-based billing calculations.
+func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *pb.GetTenantUserCountRequest) (*pb.GetTenantUserCountResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	var activeCount, totalCount int32
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE is_active = true),
+			COUNT(*)
+		FROM commodore.users
+		WHERE tenant_id = $1
+	`, tenantID).Scan(&activeCount, &totalCount)
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"error":     err,
+		}).Error("Failed to get tenant user count")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.GetTenantUserCountResponse{
+		ActiveCount: activeCount,
+		TotalCount:  totalCount,
+	}, nil
+}
+
+// GetTenantPrimaryUser returns the primary user info for a tenant.
+// Called by Purser billing job for billing notifications and invoices.
+// Returns the first admin user, or the first user if no admin exists.
+func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetTenantPrimaryUserRequest) (*pb.GetTenantPrimaryUserResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	var userID, email string
+	var firstName, lastName sql.NullString
+
+	// Try to find an admin first, then fall back to any user
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, email, first_name, last_name
+		FROM commodore.users
+		WHERE tenant_id = $1 AND is_active = true AND email IS NOT NULL AND email <> ''
+		ORDER BY
+			CASE WHEN role = 'admin' THEN 0 ELSE 1 END,
+			created_at ASC
+		LIMIT 1
+	`, tenantID).Scan(&userID, &email, &firstName, &lastName)
+
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "no users found for tenant")
+	}
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"error":     err,
+		}).Error("Failed to get tenant primary user")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Build display name
+	name := ""
+	if firstName.Valid && firstName.String != "" {
+		name = firstName.String
+	}
+	if lastName.Valid && lastName.String != "" {
+		if name != "" {
+			name += " "
+		}
+		name += lastName.String
+	}
+
+	return &pb.GetTenantPrimaryUserResponse{
+		UserId: userID,
+		Email:  email,
+		Name:   name,
+	}, nil
 }

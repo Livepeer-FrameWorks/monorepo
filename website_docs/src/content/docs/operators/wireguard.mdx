@@ -15,23 +15,33 @@ This manual guide is for advanced users who need custom configurations or want t
 
 A robust mesh network is the backbone of any distributed system. FrameWorks uses WireGuard to create a secure, high-performance private network that connects all your backend services across different regions and clouds.
 
+<Aside type="note">
+The IP ranges and configs below are **examples**. If you use Privateer, prefer configuring the mesh via the `wireguard` section of your `cluster.yaml` and let Privateer manage peers.
+</Aside>
+
+<Aside type="note" title="Privateer uses a different mesh range">
+Privateer (Quartermaster) currently allocates WireGuard IPs from **10.200.0.0/16**. The manual examples below use **10.18.0.0/16** from the deployment checklist. If you plan to move to Privateer later, either align your manual mesh to 10.200.0.0/16 now or be prepared to re-address the mesh.
+</Aside>
+
 ## Overview
 
-FrameWorks requires a WireGuard mesh network to securely connect backend infrastructure nodes (Central and Regional tiers) across geographic locations. This creates a private overlay network for service-to-service communication.
+FrameWorks uses a WireGuard mesh to secure service-to-service traffic between backend infrastructure nodes (Central, Regional, and databases). A mesh is **required for multi-node backend clusters**. Single-node backend deployments can run without a mesh.
 
 **Note:** Edge streaming nodes do not participate in this mesh.
 
 ### Network Architecture
 
-The mesh uses a structured IP allocation for backend infrastructure:
+The manual mesh uses a structured IP allocation for backend infrastructure:
 
 ```
-10.99.0.0/16 - FrameWorks WireGuard Mesh (Backend Infrastructure Only)
-├── 10.99.0.x  - Central control nodes
-├── 10.99.1.x  - Regional frontend nodes
-├── 10.99.2.x  - Reserved
-└── 10.99.3.x  - Database cluster nodes
+10.18.0.0/16 - FrameWorks Manual WireGuard Mesh (Backend Infrastructure Only)
+├── 10.18.0.x  - Central control nodes
+├── 10.18.1.x  - Regional service nodes
+├── 10.18.2.x  - YugabyteDB nodes
+└── 10.18.3.x  - ClickHouse nodes
 ```
+
+**Reserved for future tenant meshes (manual plan):** `10.19.0.0/16` (subdivide per tenant, e.g. `/20` blocks).
 
 Edge streaming nodes are **not** part of this mesh—they communicate over the public internet.
 
@@ -80,131 +90,33 @@ echo "Public key: $(sudo cat public.key)"
 
 ## Configuration
 
-### Central Control Node (10.99.0.10)
+### Manual Mesh Template (Full Mesh)
 
-**Create `/etc/wireguard/wg0.conf`:**
+Use a full mesh with **/32 AllowedIPs per peer**. Each node should only route its own WireGuard IP.
 
-```ini
-[Interface]
-PrivateKey = <central-private-key>
-Address = 10.99.0.10/16
-ListenPort = 51820
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
-
-# Database Cluster Nodes
-[Peer]
-PublicKey = <db1-public-key>
-AllowedIPs = 10.99.3.10/32
-Endpoint = <db1-public-ip>:51820
-PersistentKeepalive = 25
-
-[Peer]
-PublicKey = <db2-public-key>
-AllowedIPs = 10.99.3.11/32
-Endpoint = <db2-public-ip>:51820
-PersistentKeepalive = 25
-
-[Peer]
-PublicKey = <db3-public-key>
-AllowedIPs = 10.99.3.12/32
-Endpoint = <db3-public-ip>:51820
-PersistentKeepalive = 25
-
-# Regional Frontend Nodes
-[Peer]
-PublicKey = <regional-eu-public-key>
-AllowedIPs = 10.99.1.10/32
-Endpoint = <regional-eu-public-ip>:51820
-PersistentKeepalive = 25
-
-[Peer]
-PublicKey = <regional-us-public-key>
-AllowedIPs = 10.99.1.11/32
-Endpoint = <regional-us-public-ip>:51820
-PersistentKeepalive = 25
-```
-
-### Regional Frontend Node (10.99.1.10)
-
-**Create `/etc/wireguard/wg0.conf`:**
+**Create `/etc/wireguard/wg0.conf` on each backend node:**
 
 ```ini
 [Interface]
-PrivateKey = <regional-eu-private-key>
-Address = 10.99.1.10/16
+PrivateKey = <node-private-key>
+Address = <node-wireguard-ip>/16
 ListenPort = 51820
-
-# Central Control
-[Peer]
-PublicKey = <central-public-key>
-AllowedIPs = 10.99.0.0/24
-Endpoint = <central-public-ip>:51820
-PersistentKeepalive = 25
-
-# Database Cluster (direct access)
-[Peer]
-PublicKey = <db1-public-key>
-AllowedIPs = 10.99.3.10/32
-Endpoint = <db1-public-ip>:51820
-PersistentKeepalive = 25
-
-[Peer]
-PublicKey = <db2-public-key>
-AllowedIPs = 10.99.3.11/32
-Endpoint = <db2-public-ip>:51820
-PersistentKeepalive = 25
-
-[Peer]
-PublicKey = <db3-public-key>
-AllowedIPs = 10.99.3.12/32
-Endpoint = <db3-public-ip>:51820
-PersistentKeepalive = 25
 ```
 
-### Database Cluster Node (10.99.3.10)
-
-**Create `/etc/wireguard/wg0.conf`:**
+**Peer entries (repeat for each peer):**
 
 ```ini
-[Interface]
-PrivateKey = <db1-private-key>
-Address = 10.99.3.10/16
-ListenPort = 51820
-
-# Central Control
 [Peer]
-PublicKey = <central-public-key>
-AllowedIPs = 10.99.0.0/24
-Endpoint = <central-public-ip>:51820
-PersistentKeepalive = 25
-
-# Regional Nodes (direct database access)
-[Peer]
-PublicKey = <regional-eu-public-key>
-AllowedIPs = 10.99.1.10/32
-Endpoint = <regional-eu-public-ip>:51820
-PersistentKeepalive = 25
-
-[Peer]
-PublicKey = <regional-us-public-key>
-AllowedIPs = 10.99.1.11/32
-Endpoint = <regional-us-public-ip>:51820
-PersistentKeepalive = 25
-
-# Other Database Nodes (cluster communication)
-[Peer]
-PublicKey = <db2-public-key>
-AllowedIPs = 10.99.3.11/32
-Endpoint = <db2-public-ip>:51820
-PersistentKeepalive = 25
-
-[Peer]
-PublicKey = <db3-public-key>
-AllowedIPs = 10.99.3.12/32
-Endpoint = <db3-public-ip>:51820
+PublicKey = <peer-public-key>
+Endpoint = <peer-public-ip>:51820
+AllowedIPs = <peer-wireguard-ip>/32
 PersistentKeepalive = 25
 ```
+
+**Notes:**
+- Use **/32 AllowedIPs per peer** to avoid routing the whole mesh through one node.
+- NAT masquerade is **not** required for a standard full mesh.
+- If a node is behind NAT, keep `PersistentKeepalive` enabled.
 
 ## Managing the Mesh
 
@@ -245,6 +157,11 @@ sudo wg show wg0
 sudo wg show wg0 dump
 ```
 
+## Name Resolution
+
+Manual mesh deployments should use `/etc/hosts` or internal DNS for backend service names.
+Privateer provides local DNS for mesh hostnames (default `:5353`) and publishes service records from Quartermaster.
+
 ## Firewall Configuration
 
 ### iptables Rules
@@ -271,44 +188,13 @@ sudo iptables-save > /etc/iptables/rules.v4
 sudo ufw allow 51820/udp
 
 # Allow mesh network traffic
-sudo ufw allow from 10.99.0.0/16
+sudo ufw allow from 10.18.0.0/16
 
 # Enable UFW
 sudo ufw enable
 ```
 
-### Service-Specific Rules
-
-**Central Control Node:**
-```bash
-# Allow API access from mesh only
-sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 18001:18010 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 18001:18010 -j DROP
-```
-
-**Edge Streaming Node:**
-```bash
-# Allow public RTMP and HTTP
-sudo iptables -A INPUT -p tcp --dport 1935 -j ACCEPT  # RTMP
-sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT  # HTTP Media
-
-# Allow management from central only
-sudo iptables -A INPUT -s 10.99.0.0/24 -p tcp --dport 4242 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 4242 -j DROP
-```
-
-**Database Cluster Node:**
-```bash
-# Allow database access from mesh only
-sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 5433 -j ACCEPT  # YugabyteDB
-sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 9000 -j ACCEPT  # ClickHouse
-sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 2181 -j ACCEPT  # Zookeeper
-
-# Block external database access
-sudo iptables -A INPUT -p tcp --dport 5433 -j DROP
-sudo iptables -A INPUT -p tcp --dport 9000 -j DROP
-sudo iptables -A INPUT -p tcp --dport 2181 -j DROP
-```
+Service ports differ by component. Use the port table in `operators/architecture` and restrict internal services to the mesh CIDR.
 
 ## Testing and Validation
 
@@ -318,13 +204,14 @@ sudo iptables -A INPUT -p tcp --dport 2181 -j DROP
 
 ```bash
 # From any node, ping other mesh nodes
-ping 10.99.0.10  # Central
-ping 10.99.1.10  # Regional EU
-ping 10.99.3.10  # Database-1
+ping 10.18.0.1   # Central
+ping 10.18.1.21  # Regional EU
+ping 10.18.2.11  # YugabyteDB-1
+ping 10.18.3.11  # ClickHouse-1
 
 # Test with specific packet sizes
-ping -s 1400 10.99.0.10
-ping -s 8192 10.99.3.10
+ping -s 1400 10.18.0.1
+ping -s 8192 10.18.2.11
 ```
 
 ### Bandwidth Testing
@@ -339,7 +226,7 @@ sudo apt install iperf3
 iperf3 -s
 
 # From source node (client)
-iperf3 -c 10.99.x.x -t 30
+iperf3 -c 10.18.x.x -t 30
 ```
 
 ### Service Testing
@@ -348,13 +235,13 @@ iperf3 -c 10.99.x.x -t 30
 
 ```bash
 # YugabyteDB connection test
-telnet 10.99.3.10 5433
+telnet 10.18.2.11 5433
 
 # ClickHouse connection test  
-telnet 10.99.3.10 9000
+telnet 10.18.3.11 9000
 
 # HTTP service test
-curl http://10.99.0.10:18001/health
+curl http://10.18.0.1:18001/health
 ```
 
 ### Monitoring Commands
@@ -398,7 +285,7 @@ ss -tuln | grep :51820
 **Services can't reach each other:**
 1. Verify WireGuard interface is up: `ip addr show wg0`
 2. Check routing table: `ip route show table all`
-3. Test mesh connectivity: `ping 10.99.x.x`
+3. Test mesh connectivity: `ping 10.18.x.x`
 4. Verify firewall allows service ports
 
 ### Debug Commands
@@ -412,8 +299,8 @@ ip addr show wg0
 ip route show dev wg0
 
 # Network troubleshooting
-traceroute 10.99.x.x
-mtr 10.99.x.x
+traceroute 10.18.x.x
+mtr 10.18.x.x
 tcpdump -i wg0
 
 # Log analysis
@@ -426,11 +313,9 @@ sudo tail -f /var/log/syslog | grep -i wireguard
 **Optimize for throughput:**
 
 ```ini
-# Add to [Interface] section
-MTU = 1420
-PreUp = echo 'net.core.default_qdisc = fq' >> /etc/sysctl.conf
-PreUp = echo 'net.ipv4.tcp_congestion_control = bbr' >> /etc/sysctl.conf
-PreUp = sysctl -p
+# /etc/sysctl.d/99-wireguard.conf
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
 ```
 
 **Optimize for low latency:**
@@ -439,6 +324,12 @@ PreUp = sysctl -p
 # Reduce keepalive intervals
 PersistentKeepalive = 15
 
-# Add to interface config
-PostUp = echo 0 > /proc/sys/net/ipv4/conf/wg0/rp_filter
+# Optional: disable reverse path filtering for wg0 if routing is asymmetric
+# /etc/sysctl.d/99-wireguard.conf
+net.ipv4.conf.wg0.rp_filter = 0
+```
+
+Apply sysctl changes:
+```bash
+sudo sysctl --system
 ```

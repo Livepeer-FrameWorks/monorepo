@@ -20,6 +20,10 @@ func GenerateFragments(dir string, specs []ServiceSpec, overwrite bool) error {
 		return err
 	}
 	for _, s := range specs {
+		if s.Role == "observability" {
+			fmt.Fprintf(os.Stderr, "WARNING: %s requires manual setup (volumes, configs not yet supported by generator)\n", s.Name)
+			continue
+		}
 		name := fmt.Sprintf("svc-%s.yml", s.Name)
 		path := filepath.Join(dir, name)
 		if !overwrite {
@@ -28,10 +32,15 @@ func GenerateFragments(dir string, specs []ServiceSpec, overwrite bool) error {
 			}
 		}
 		m := ComposeModel{Version: "3.9", Services: map[string]map[string]any{}}
+		deployName := s.Deploy
+		if deployName == "" {
+			deployName = s.Name
+		}
 		svc := map[string]any{
 			"image":          s.Image,
-			"container_name": s.Name,
+			"container_name": fmt.Sprintf("frameworks-%s", deployName),
 			"restart":        "unless-stopped",
+			"env_file":       []string{".central.env"},
 		}
 		if len(s.Ports) > 0 {
 			svc["ports"] = s.Ports

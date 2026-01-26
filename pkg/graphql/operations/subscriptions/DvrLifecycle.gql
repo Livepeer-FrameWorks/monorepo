@@ -1,0 +1,20 @@
+# Real-time DVR recording lifecycle updates from start to completion
+# Tracks recording status, progress, manifest paths, and error states
+subscription DvrLifecycle($streamId: ID!) {
+  liveDvrLifecycle(streamId: $streamId) {
+    status
+    dvrHash
+    playbackId
+    manifestPath
+    startedAt
+    endedAt
+    sizeBytes
+    segmentCount
+    error
+    nodeId
+    streamId
+    stream {
+      streamId
+    }
+  }
+}

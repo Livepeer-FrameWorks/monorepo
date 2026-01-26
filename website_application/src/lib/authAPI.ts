@@ -10,7 +10,7 @@ interface User {
 }
 
 // API configuration for authentication endpoints
-const AUTH_URL = import.meta.env.VITE_AUTH_URL || "http://localhost:18090/auth";
+const AUTH_URL = import.meta.env.VITE_AUTH_URL ?? "";
 export { AUTH_URL };
 
 export const authAPI = axios.create({

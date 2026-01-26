@@ -192,7 +192,7 @@ const initialState: PlayerControllerState = {
  *   let containerEl: HTMLElement;
  *
  *   const playerStore = createPlayerControllerStore({
- *     contentId: 'my-stream',
+ *     contentId: 'pk_...',
  *     contentType: 'live',
  *     gatewayUrl: 'https://gateway.example.com/graphql',
  *   });
@@ -270,6 +270,7 @@ export function createPlayerControllerStore(
       store.update(prev => ({
         ...prev,
         streamState,
+        metadata: controller!.getMetadata(),
         isEffectivelyLive: controller!.isEffectivelyLive(),
         shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
       }));

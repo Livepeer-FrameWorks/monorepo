@@ -18,18 +18,20 @@ import type {
 import { browser } from "$app/environment";
 
 // Type aliases for subscription results
-type StreamEventData = NonNullable<StreamEvents$result["streamEvents"]>;
+type StreamEventData = NonNullable<StreamEvents$result["liveStreamEvents"]>;
 type ViewerMetricData = NonNullable<
-  ViewerMetricsStream$result["viewerMetrics"]
+  ViewerMetricsStream$result["liveViewerMetrics"]
 >;
-type SystemHealthData = NonNullable<SystemHealth$result["systemHealth"]>;
+type SystemHealthData = NonNullable<SystemHealth$result["liveSystemHealth"]>;
 type TrackListEventData = NonNullable<
-  TrackListUpdates$result["trackListUpdates"]
+  TrackListUpdates$result["liveTrackListUpdates"]
 >;
 type ClipLifecycleEventData = NonNullable<
-  ClipLifecycle$result["clipLifecycle"]
+  ClipLifecycle$result["liveClipLifecycle"]
 >;
-type DvrLifecycleEventData = NonNullable<DvrLifecycle$result["dvrLifecycle"]>;
+type DvrLifecycleEventData = NonNullable<
+  DvrLifecycle$result["liveDvrLifecycle"]
+>;
 
 // Real-time per-client connection event from ViewerMetrics subscription
 interface StreamMetric {
@@ -49,14 +51,14 @@ interface StreamMetric {
   // Client-side aggregated counts (maintained by tracking connect/disconnect)
   activeConnections?: number;
 
-  // From StreamEvents bufferEvent (rich health diagnostics)
-  bufferState?: string;       // "FULL", "EMPTY", "DRY", "RECOVER"
-  streamBufferMs?: number;    // Actual buffer depth in milliseconds
-  streamJitterMs?: number;    // Max jitter across tracks
-  maxKeepawaMs?: number;      // Viewer lag from live edge
+  // Optional health fields parsed from StreamEvent payload (best effort)
+  bufferState?: string;
+  streamBufferMs?: number;
+  streamJitterMs?: number;
+  maxKeepawaMs?: number;
   hasIssues?: boolean;
   issuesDescription?: string;
-  mistIssues?: string;        // Raw Mist issue string like "HLSnoaudio!"
+  mistIssues?: string;
   qualityTier?: string;
   trackCount?: number;
 }
@@ -83,6 +85,7 @@ interface ConnectionStatus {
 interface StreamData {
   id: string;
   name: string;
+  status?: string;
   metrics?: {
     isLive?: boolean;
   } | null;
@@ -150,49 +153,64 @@ export function initializeWebSocket(): void {
         return;
       }
 
-      if (result.data?.streamEvents) {
-        const event = result.data.streamEvents;
+      if (result.data?.liveStreamEvents) {
+        const event = result.data.liveStreamEvents;
+        const streamId = event.streamId;
+        if (!streamId) return;
 
-        // Extract stream name from the payload (check all three event types)
-        const streamName = event.lifecycleUpdate?.internalName || event.endEvent?.streamName || event.bufferEvent?.streamName;
-        if (!streamName) return;
+        const payload =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as Record<string, unknown>)
+            : null;
 
-        // Handle buffer events - rich health diagnostics
-        if (event.bufferEvent) {
-          streamMetrics.update((metrics) => ({
-            ...metrics,
-            [streamName]: {
-              ...metrics[streamName],
-              bufferState: event.bufferEvent?.bufferState ?? undefined,
-              streamBufferMs: event.bufferEvent?.streamBufferMs ?? undefined,
-              streamJitterMs: event.bufferEvent?.streamJitterMs ?? undefined,
-              maxKeepawaMs: event.bufferEvent?.maxKeepawaMs ?? undefined,
-              hasIssues: event.bufferEvent?.hasIssues ?? undefined,
-              issuesDescription: event.bufferEvent?.issuesDescription ?? undefined,
-              mistIssues: event.bufferEvent?.mistIssues ?? undefined,
-              qualityTier: event.bufferEvent?.qualityTier ?? undefined,
-              trackCount: event.bufferEvent?.trackCount ?? undefined,
-              lastUpdate: new Date(),
-            },
-          }));
+        const bufferState =
+          (payload?.bufferState as string | undefined) ??
+          (payload?.buffer_state as string | undefined);
+        const qualityTier =
+          (payload?.qualityTier as string | undefined) ??
+          (payload?.quality_tier as string | undefined);
+        const trackCount =
+          (payload?.trackCount as number | undefined) ??
+          (payload?.track_count as number | undefined);
+        const streamBufferMs =
+          (payload?.streamBufferMs as number | undefined) ??
+          (payload?.stream_buffer_ms as number | undefined);
+        const streamJitterMs =
+          (payload?.streamJitterMs as number | undefined) ??
+          (payload?.stream_jitter_ms as number | undefined);
+        const maxKeepawaMs =
+          (payload?.maxKeepawaMs as number | undefined) ??
+          (payload?.max_keepawa_ms as number | undefined);
+        const hasIssues =
+          (payload?.hasIssues as boolean | undefined) ??
+          (payload?.has_issues as boolean | undefined);
+        const issuesDescription =
+          (payload?.issuesDescription as string | undefined) ??
+          (payload?.issues_description as string | undefined);
+        const mistIssues =
+          (payload?.mistIssues as string | undefined) ??
+          (payload?.mist_issues as string | undefined);
 
-          realtimeEvents.update((events) => {
-            const newEvents = [event, ...events.slice(0, 99)];
-            return newEvents;
-          });
-          return;
-        }
-
-        // Determine stream status from lifecycle/end payload
-        const isLive = event.lifecycleUpdate?.status === "live";
-        const status = event.endEvent ? "OFFLINE" : (isLive ? "LIVE" : "OFFLINE");
+        const isLive =
+          event.type === "STREAM_START" ||
+          (event.status ? event.status === "LIVE" : false);
+        const status = event.status ?? (isLive ? "LIVE" : "OFFLINE");
 
         streamMetrics.update((metrics) => ({
           ...metrics,
-          [streamName]: {
-            ...metrics[streamName],
-            status,
-            bufferState: event.lifecycleUpdate?.bufferState ?? metrics[streamName]?.bufferState,
+          [streamId]: {
+            ...metrics[streamId],
+            status: event.status ?? metrics[streamId]?.status,
+            bufferState: bufferState ?? metrics[streamId]?.bufferState,
+            qualityTier: qualityTier ?? metrics[streamId]?.qualityTier,
+            trackCount: trackCount ?? metrics[streamId]?.trackCount,
+            streamBufferMs: streamBufferMs ?? metrics[streamId]?.streamBufferMs,
+            streamJitterMs: streamJitterMs ?? metrics[streamId]?.streamJitterMs,
+            maxKeepawaMs: maxKeepawaMs ?? metrics[streamId]?.maxKeepawaMs,
+            hasIssues: hasIssues ?? metrics[streamId]?.hasIssues,
+            issuesDescription:
+              issuesDescription ?? metrics[streamId]?.issuesDescription,
+            mistIssues: mistIssues ?? metrics[streamId]?.mistIssues,
             lastUpdate: new Date(),
           },
         }));
@@ -200,27 +218,26 @@ export function initializeWebSocket(): void {
         // Update realtimeStreams store with latest stream status
         realtimeStreams.update((currentStreams) => {
           const existingStreamIndex = currentStreams.findIndex(
-            (s) => s.id === streamName,
+            (s) => s.id === streamId,
           );
           if (existingStreamIndex !== -1) {
-            // Update existing stream
             const updatedStreams = [...currentStreams];
             updatedStreams[existingStreamIndex] = {
               ...updatedStreams[existingStreamIndex],
+              status,
               metrics: { isLive },
             };
             return updatedStreams;
-          } else {
-            // Add new stream if not found (or if it's a new "LIVE" event)
-            return [
-              ...currentStreams,
-              {
-                id: streamName,
-                name: streamName,
-                metrics: { isLive },
-              },
-            ];
           }
+          return [
+            ...currentStreams,
+            {
+              id: streamId,
+              name: streamId,
+              status,
+              metrics: { isLive },
+            },
+          ];
         });
 
         realtimeEvents.update((events) => {
@@ -249,7 +266,7 @@ export function subscribeToStreamMetrics(streamId: string): () => void {
   try {
     const store = new ViewerMetricsStreamStore();
     viewerMetricsStores[streamId] = store;
-    store.listen({ stream: streamId });
+    store.listen({ streamId });
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
@@ -260,9 +277,9 @@ export function subscribeToStreamMetrics(streamId: string): () => void {
         return;
       }
 
-      if (result.data?.viewerMetrics) {
-        const metrics = result.data.viewerMetrics;
-        const streamName = metrics.internalName;
+      if (result.data?.liveViewerMetrics) {
+        const metrics = result.data.liveViewerMetrics;
+        const streamName = metrics.streamId;
 
         streamMetrics.update((currentMetrics) => {
           const existing = currentMetrics[streamName] || {
@@ -285,7 +302,7 @@ export function subscribeToStreamMetrics(streamId: string): () => void {
               protocol: metrics.protocol ?? undefined,
               bandwidthInBps: metrics.bandwidthInBps ?? undefined,
               bandwidthOutBps: metrics.bandwidthOutBps ?? undefined,
-              timestamp: metrics.timestamp ?? undefined,
+              timestamp: Date.now(),
               lastUpdate: new Date(),
               activeConnections,
             },
@@ -327,8 +344,8 @@ export function subscribeToSystemHealth(): () => void {
         return;
       }
 
-      if (result.data?.systemHealth) {
-        const health = result.data.systemHealth;
+      if (result.data?.liveSystemHealth) {
+        const health = result.data.liveSystemHealth;
 
         nodeMetrics.update((metrics) => ({
           ...metrics,
@@ -371,7 +388,7 @@ export function subscribeToTrackListUpdates(streamId: string): () => void {
   try {
     const store = new TrackListUpdatesStore();
     trackListStores[streamId] = store;
-    store.listen({ stream: streamId });
+    store.listen({ streamId });
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
@@ -382,11 +399,11 @@ export function subscribeToTrackListUpdates(streamId: string): () => void {
         return;
       }
 
-      if (result.data?.trackListUpdates) {
-        const update = result.data.trackListUpdates;
+      if (result.data?.liveTrackListUpdates) {
+        const update = result.data.liveTrackListUpdates;
         trackListUpdates.update((current) => ({
           ...current,
-          [update.streamName]: update,
+          [update.streamId]: update,
         }));
       }
     });
@@ -417,7 +434,7 @@ export function subscribeToClipLifecycle(streamId: string): () => void {
   try {
     const store = new ClipLifecycleStore();
     clipLifecycleStores[streamId] = store;
-    store.listen({ stream: streamId });
+    store.listen({ streamId });
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
@@ -428,8 +445,8 @@ export function subscribeToClipLifecycle(streamId: string): () => void {
         return;
       }
 
-      if (result.data?.clipLifecycle) {
-        const event = result.data.clipLifecycle;
+      if (result.data?.liveClipLifecycle) {
+        const event = result.data.liveClipLifecycle;
         clipLifecycleEvents.update((events) => {
           const existingIndex = events.findIndex(
             (e) => e.clipHash === event.clipHash,
@@ -470,7 +487,7 @@ export function subscribeToDvrLifecycle(streamId: string): () => void {
   try {
     const store = new DvrLifecycleStore();
     dvrLifecycleStores[streamId] = store;
-    store.listen({ stream: streamId });
+    store.listen({ streamId });
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
@@ -481,8 +498,8 @@ export function subscribeToDvrLifecycle(streamId: string): () => void {
         return;
       }
 
-      if (result.data?.dvrLifecycle) {
-        const event = result.data.dvrLifecycle;
+      if (result.data?.liveDvrLifecycle) {
+        const event = result.data.liveDvrLifecycle;
         dvrLifecycleEvents.update((events) => {
           const existingIndex = events.findIndex(
             (e) => e.dvrHash === event.dvrHash,

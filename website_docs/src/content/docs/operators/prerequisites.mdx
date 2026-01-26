@@ -20,7 +20,7 @@ For testing or small-scale deployments, you can run a consolidated stack on a si
 
 **Central Tier:**
 - CPU: 8+ cores
-- RAM: 32GB+ (64GB recommended for YugabyteDB)
+- RAM: 32GB+ (64GB recommended if running database services on the same node)
 - Disk: 500GB+ SSD
 - Network: 1Gbps+ connectivity
 
@@ -43,7 +43,7 @@ For testing or small-scale deployments, you can run a consolidated stack on a si
 
 **Native Deployment:**
 - `systemd` for service management.
-- PostgreSQL client tools.
+- PostgreSQL client tools (or Postgres-compatible).
 - Basic build tools (GCC, Make, Git) for native compilation.
 
 **Both:**
@@ -55,11 +55,11 @@ For testing or small-scale deployments, you can run a consolidated stack on a si
 
 For multi-host deployments, you need:
 
-1. **WireGuard Mesh Network** - Secure communication between all hosts. See [WireGuard Mesh Setup](/operators/wireguard) for configuration.
+1. **WireGuard Mesh Network** - Secure communication between backend infrastructure nodes (central/regional/database). See [WireGuard Mesh Setup](/operators/wireguard) for configuration.
 
-2. **DNS/Hosts Configuration** - Internal name resolution via `/etc/hosts` or Privateer's built-in DNS.
+2. **DNS/Hosts Configuration** - Internal name resolution via `/etc/hosts`, or Privateer’s built‑in DNS (status: testing).
 
-3. **Firewall Rules** - See [WireGuard Mesh Setup](/operators/wireguard#firewall-configuration) for required ports.
+3. **Firewall Rules** - See [WireGuard Mesh Setup](/operators/wireguard) for mesh port guidance.
 
 ## SSH Access
 
@@ -90,29 +90,29 @@ Configure `~/.ssh/config` for convenient access:
 ```
 # Central Tier
 Host central-01
-    HostName 10.0.1.10
+    HostName 10.18.0.10
     User admin
     IdentityFile ~/.ssh/frameworks_ed25519
 
 Host central-02
-    HostName 10.0.1.11
+    HostName 10.18.0.11
     User admin
     IdentityFile ~/.ssh/frameworks_ed25519
 
 # Regional Tier
 Host regional-eu-01
-    HostName 10.1.1.10
+    HostName 10.18.1.10
     User admin
     IdentityFile ~/.ssh/frameworks_ed25519
 
 Host regional-us-01
-    HostName 10.2.1.10
+    HostName 10.18.1.11
     User admin
     IdentityFile ~/.ssh/frameworks_ed25519
 
 # Edge Nodes
 Host edge-eu-01
-    HostName 10.3.1.10
+    HostName <edge-public-ip>
     User admin
     IdentityFile ~/.ssh/frameworks_ed25519
 ```
@@ -138,8 +138,8 @@ admin ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker
 FrameWorks requires several external services. See [External Services](/operators/external-services) for detailed setup guides.
 
 **Required:**
-- Cloudflare (DNS management required for Central/Regional tiers - *self-hosted Anycast DNS planned*)
-- SSL/TLS certificates (ACME/Let's Encrypt managed via Navigator/Caddy)
+- Cloudflare (required if using Navigator-managed DNS; self-hosted Anycast DNS planned)
+- SSL/TLS certificates (ACME/Let's Encrypt managed via Navigator/Caddy, or bring your own)
 - SMTP provider (email notifications)
 
 **Optional:**
@@ -151,9 +151,9 @@ FrameWorks requires several external services. See [External Services](/operator
 Once prerequisites are complete:
 
 1. **Create Cluster Manifest:** See [Cluster Manifest Reference](/operators/cluster-manifest)
-2. **Deploy Infrastructure:** `frameworks cluster provision --manifest cluster.yaml --components infrastructure`
-3. **Initialize Databases:** `frameworks cluster init --manifest cluster.yaml`
-4. **Deploy Applications:** `frameworks cluster provision --manifest cluster.yaml --components applications`
+2. **Deploy Infrastructure:** `frameworks cluster provision --manifest cluster.yaml --only infrastructure`
+3. **Initialize Databases:** `frameworks cluster init all --manifest cluster.yaml`
+4. **Deploy Applications:** `frameworks cluster provision --manifest cluster.yaml --only applications`
 5. **Verify Health:** `frameworks cluster doctor --manifest cluster.yaml`
 
 See [CLI Reference](/operators/cli-reference) for complete command documentation.

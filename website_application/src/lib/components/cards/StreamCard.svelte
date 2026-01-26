@@ -5,6 +5,7 @@
 
 	interface StreamCardData {
 		id: string;
+		streamId?: string;
 		name: string;
 		metrics?: {
 			status?: string | null;
@@ -29,8 +30,9 @@
 
 	const status = $derived(stream.metrics?.status);
 	const isLive = $derived(status === StreamStatus.LIVE);
+	const displayStreamId = $derived(stream.streamId || stream.id);
 	const displayName = $derived(
-		stream.name || `Stream ${stream.id.slice(0, 8)}`
+		stream.name || `Stream ${displayStreamId.slice(0, 8)}`
 	);
 </script>
 

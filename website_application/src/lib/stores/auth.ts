@@ -327,6 +327,56 @@ function createAuthStore() {
         return { success: false, error: errorMessage };
       }
     },
+
+    async walletLogin(
+      address: string,
+      message: string,
+      signature: string,
+    ): Promise<LoginResponse> {
+      update((state) => ({ ...state, loading: true, error: null }));
+
+      try {
+        // POST to /auth/wallet-login - backend sets httpOnly cookies
+        const response = await authAPI.post<{ user: User; expires_at: string }>(
+          "/wallet-login",
+          { address, message, signature },
+        );
+
+        const { user } = response.data;
+
+        // Store user in localStorage for client-side access
+        localStorage.setItem("user", JSON.stringify(user));
+
+        set({
+          isAuthenticated: true,
+          user,
+          loading: false,
+          error: null,
+          initialized: true,
+        });
+
+        // Initialize WebSocket
+        initializeWebSocket();
+
+        return { success: true };
+      } catch (error: unknown) {
+        const errorMessage =
+          error &&
+          typeof error === "object" &&
+          "response" in error &&
+          error.response &&
+          typeof error.response === "object" &&
+          "data" in error.response &&
+          error.response.data &&
+          typeof error.response.data === "object" &&
+          "error" in error.response.data &&
+          typeof error.response.data.error === "string"
+            ? error.response.data.error
+            : "Wallet login failed";
+        update((state) => ({ ...state, loading: false, error: errorMessage }));
+        return { success: false, error: errorMessage };
+      }
+    },
   };
 }
 

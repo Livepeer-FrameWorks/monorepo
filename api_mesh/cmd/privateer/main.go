@@ -26,14 +26,16 @@ func main() {
 		qmGRPCAddr = "quartermaster:19002"
 	}
 
-	token := os.Getenv("ENROLLMENT_TOKEN")
-	// We also accept SERVICE_TOKEN for now
-	if token == "" {
-		token = os.Getenv("SERVICE_TOKEN")
-	}
+	serviceToken := os.Getenv("SERVICE_TOKEN")
+	enrollmentToken := os.Getenv("ENROLLMENT_TOKEN")
 
-	if token == "" {
-		logger.Fatal("ENROLLMENT_TOKEN or SERVICE_TOKEN is required")
+	if serviceToken == "" {
+		if enrollmentToken != "" {
+			logger.Warn("SERVICE_TOKEN missing; falling back to ENROLLMENT_TOKEN for auth (not recommended)")
+			serviceToken = enrollmentToken
+		} else {
+			logger.Fatal("SERVICE_TOKEN is required")
+		}
 	}
 
 	dnsPort := 5353
@@ -42,6 +44,32 @@ func main() {
 			dnsPort = port
 		}
 	}
+
+	listenPort := 51820
+	if p := os.Getenv("MESH_LISTEN_PORT"); p != "" {
+		if port, err := strconv.Atoi(p); err == nil {
+			listenPort = port
+		}
+	}
+
+	syncInterval := 30 * time.Second
+	if d := os.Getenv("PRIVATEER_SYNC_INTERVAL"); d != "" {
+		if parsed, err := time.ParseDuration(d); err == nil {
+			syncInterval = parsed
+		}
+	}
+
+	syncTimeout := 10 * time.Second
+	if d := os.Getenv("PRIVATEER_SYNC_TIMEOUT"); d != "" {
+		if parsed, err := time.ParseDuration(d); err == nil {
+			syncTimeout = parsed
+		}
+	}
+
+	nodeType := os.Getenv("MESH_NODE_TYPE")
+	nodeName := os.Getenv("MESH_NODE_NAME")
+	externalIP := os.Getenv("MESH_EXTERNAL_IP")
+	internalIP := os.Getenv("MESH_INTERNAL_IP")
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("privateer", version.Version)
@@ -58,9 +86,16 @@ func main() {
 	// Config
 	cfg := agent.Config{
 		QuartermasterGRPCAddr: qmGRPCAddr,
-		ServiceToken:          token,
-		SyncInterval:          30 * time.Second,
+		ServiceToken:          serviceToken,
+		EnrollmentToken:       enrollmentToken,
+		SyncInterval:          syncInterval,
+		SyncTimeout:           syncTimeout,
 		InterfaceName:         os.Getenv("MESH_INTERFACE"), // Defaults to wg0
+		NodeType:              nodeType,
+		NodeName:              nodeName,
+		ExternalIP:            externalIP,
+		InternalIP:            internalIP,
+		ListenPort:            listenPort,
 		DNSPort:               dnsPort,
 		Logger:                logger,
 		Metrics:               agentMetrics,

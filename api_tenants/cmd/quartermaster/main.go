@@ -9,7 +9,9 @@ import (
 
 	qmgrpc "frameworks/api_tenants/internal/grpc"
 	"frameworks/api_tenants/internal/handlers"
-	"frameworks/pkg/clients/navigator" // Import the navigator client
+	decklogclient "frameworks/pkg/clients/decklog"
+	"frameworks/pkg/clients/navigator"
+	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
@@ -68,9 +70,10 @@ func main() {
 
 	if navigatorURL != "" {
 		navigatorClient, err = navigator.NewClient(navigator.Config{
-			Addr:    navigatorURL,
-			Timeout: 5 * time.Second,
-			Logger:  logger,
+			Addr:         navigatorURL,
+			Timeout:      5 * time.Second,
+			Logger:       logger,
+			ServiceToken: serviceToken,
 		})
 		if err != nil {
 			logger.WithError(err).Error("Failed to create Navigator client - DNS features will be disabled")
@@ -79,6 +82,40 @@ func main() {
 		}
 	} else {
 		logger.Info("NAVIGATOR_URL not set - DNS features will be disabled")
+	}
+
+	// Create Decklog gRPC client for service events
+	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
+	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
+		Target:        decklogGRPCAddr,
+		AllowInsecure: config.GetEnvBool("DECKLOG_ALLOW_INSECURE", true),
+		Timeout:       5 * time.Second,
+		Source:        "quartermaster",
+		ServiceToken:  serviceToken,
+	}, logger)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
+		decklogClient = nil
+	} else {
+		defer decklogClient.Close()
+		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
+	}
+
+	// Create Purser gRPC client for billing status lookups (cross-service via gRPC, not DB)
+	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
+	var purserClient *purserclient.GRPCClient
+	purserClient, err = purserclient.NewGRPCClient(purserclient.GRPCConfig{
+		GRPCAddr:     purserGRPCAddr,
+		Timeout:      5 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Purser gRPC client - billing status lookups will use defaults")
+		purserClient = nil
+	} else {
+		defer purserClient.Close()
+		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
 	// Initialize handlers (for health poller)
@@ -108,6 +145,8 @@ func main() {
 			ServiceToken:    serviceToken,
 			JWTSecret:       []byte(jwtSecret),
 			NavigatorClient: navigatorClient,
+			DecklogClient:   decklogClient,
+			PurserClient:    purserClient,
 			Metrics:         serverMetrics,
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
@@ -147,7 +186,12 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
 			AdvertiseHost:  &advertiseHost,
-			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		})
 	}()
 

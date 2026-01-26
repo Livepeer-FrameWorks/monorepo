@@ -30,11 +30,18 @@
     TableHeader,
     TableRow,
   } from "$lib/components/ui/table";
+  import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+  } from "$lib/components/ui/select";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
   import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
   import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
+  import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
 
   // Houdini stores
   const streamsStore = new GetStreamsConnectionStore();
@@ -48,6 +55,9 @@
 
   let isAuthenticated = false;
   let user: any = null;
+  let timeRange = $state("7d");
+  let currentRange = $derived(resolveTimeRange(timeRange));
+  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) => ["24h", "7d", "30d"].includes(option.value));
 
   // Derived state from Houdini stores
   let loading = $derived($streamsStore.fetching || $platformOverviewStore.fetching);
@@ -64,47 +74,101 @@
     })
   );
 
-  let platformOverview = $derived($platformOverviewStore.data?.platformOverview ?? null);
-  let analyticsData = $derived($streamAnalyticsStore.data?.stream?.analytics ?? null);
-  let viewerMetrics = $derived($streamAnalyticsStore.data?.stream?.viewerTimeSeriesConnection?.edges?.map(e => e.node) ?? []);
+  let platformOverview = $derived($platformOverviewStore.data?.analytics?.overview ?? null);
+
+  let streamDailyEdges = $derived(
+    $streamAnalyticsStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ?? []
+  );
+  let latestStreamDaily = $derived.by(() => (streamDailyEdges.length ? streamDailyEdges[0].node : null));
+
+  let viewerHourEdges = $derived(
+    $streamAnalyticsStore.data?.analytics?.usage?.streaming?.viewerHoursHourlyConnection?.edges ?? []
+  );
+  let health5mEdges = $derived(
+    $streamAnalyticsStore.data?.analytics?.health?.streamHealth5mConnection?.edges ?? []
+  );
+
+  // Stream analytics summary (MV-backed range aggregates)
+  let streamAnalyticsSummary = $derived(
+    $streamAnalyticsStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummary ?? null
+  );
+
+  const useDailyTrend = $derived(currentRange.days > 7);
+
+  let viewerMetrics = $derived.by(() => {
+    if (useDailyTrend) {
+      return streamDailyEdges
+        .map((e) => ({ timestamp: e.node.day, viewers: e.node.uniqueViewers ?? 0 }))
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    }
+    return viewerHourEdges
+      .map((e) => ({ timestamp: e.node.hour, viewers: e.node.uniqueViewers ?? 0 }))
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  });
+
+  let healthRangeLabel = $derived(currentRange.days > 7 ? "Last 24 Hours" : currentRange.label);
+  let qualityRangeLabel = $derived(currentRange.label);
+
   let qualityTierData = $derived.by(() => {
-    const edges = $streamAnalyticsStore.data?.stream?.qualityDailyConnection?.edges ?? [];
-    if (edges.length === 0) return null;
-    // Aggregate all daily records into a single summary
-    type QualityEdge = NonNullable<typeof edges>[0];
-    return edges.reduce(
-      (acc: { tier1080pMinutes: number; tier720pMinutes: number; tier480pMinutes: number; tierSdMinutes: number }, edge: QualityEdge) => ({
-        tier1080pMinutes: acc.tier1080pMinutes + (edge.node.tier1080pMinutes || 0),
-        tier720pMinutes: acc.tier720pMinutes + (edge.node.tier720pMinutes || 0),
-        tier480pMinutes: acc.tier480pMinutes + (edge.node.tier480pMinutes || 0),
-        tierSdMinutes: acc.tierSdMinutes + (edge.node.tierSdMinutes || 0),
-      }),
-      { tier1080pMinutes: 0, tier720pMinutes: 0, tier480pMinutes: 0, tierSdMinutes: 0 }
-    );
+    const rangeQuality = streamAnalyticsSummary?.rangeQuality;
+    if (!rangeQuality) return null;
+    return {
+      tier2160pMinutes: rangeQuality.tier2160pMinutes ?? 0,
+      tier1440pMinutes: rangeQuality.tier1440pMinutes ?? 0,
+      tier1080pMinutes: rangeQuality.tier1080pMinutes ?? 0,
+      tier720pMinutes: rangeQuality.tier720pMinutes ?? 0,
+      tier480pMinutes: rangeQuality.tier480pMinutes ?? 0,
+      tierSdMinutes: rangeQuality.tierSdMinutes ?? 0,
+    };
   });
 
   // Aggregate codec data for chart
   type CodecData = { codec: string; minutes: number };
 
   let codecData = $derived.by((): CodecData[] => {
-    const edges = $streamAnalyticsStore.data?.stream?.qualityDailyConnection?.edges ?? [];
-    if (edges.length === 0) return [];
-
-    // Sum minutes by codec
-    let h264 = 0;
-    let h265 = 0;
-    // Note: If you add more codecs to the backend query, add them here
-    type QualityEdge = NonNullable<typeof edges>[0];
-
-    edges.forEach((edge: QualityEdge) => {
-      h264 += edge.node.codecH264Minutes || 0;
-      h265 += edge.node.codecH265Minutes || 0;
-    });
-
+    const rangeQuality = streamAnalyticsSummary?.rangeQuality;
+    if (!rangeQuality) return [];
     return [
-      { codec: 'H.264', minutes: h264 },
-      { codec: 'H.265', minutes: h265 },
-    ].filter(d => d.minutes > 0);
+      { codec: "H.264", minutes: rangeQuality.codecH264Minutes ?? 0 },
+      { codec: "H.265", minutes: rangeQuality.codecH265Minutes ?? 0 },
+    ].filter((d) => d.minutes > 0);
+  });
+
+  let analyticsData = $derived.by(() => {
+    const metrics = selectedStream?.metrics;
+    const summary = streamAnalyticsSummary;
+    const fallbackAvgBitrate =
+      health5mEdges.length > 0
+        ? Math.round(
+            health5mEdges.reduce((sum, edge) => sum + (edge.node.avgBitrate ?? 0), 0) /
+              health5mEdges.length
+          )
+        : null;
+    const resolution =
+      metrics?.primaryWidth && metrics?.primaryHeight
+        ? `${metrics.primaryWidth}x${metrics.primaryHeight}`
+        : null;
+    return {
+      // Range aggregates (summary)
+      totalViews: summary?.rangeTotalViews ?? latestStreamDaily?.totalViews ?? null,
+      peakViewers: summary?.rangePeakConcurrentViewers ?? null,
+      avgViewers: summary?.rangeAvgViewers ?? null,
+      uniqueViewers: summary?.rangeUniqueViewers ?? latestStreamDaily?.uniqueViewers ?? null,
+      totalSessionDuration: summary?.rangeViewerHours != null ? summary.rangeViewerHours * 3600 : null,
+      uniqueCountries: summary?.rangeUniqueCountries ?? latestStreamDaily?.uniqueCountries ?? null,
+      uniqueCities: latestStreamDaily?.uniqueCities ?? null,
+      avgBufferHealth: summary?.rangeAvgBufferHealth ?? null,
+      avgBitrate: summary?.rangeAvgBitrate ?? fallbackAvgBitrate,
+
+      // Current snapshot (stream metrics)
+      currentResolution: resolution,
+      currentCodec: metrics?.primaryCodec ?? null,
+      bitrateKbps: metrics?.primaryBitrate ? metrics.primaryBitrate / 1000 : null,
+      currentFps: metrics?.primaryFps ?? null,
+      qualityTier: metrics?.qualityTier ?? null,
+      currentBufferState: metrics?.bufferState ?? null,
+      currentIssues: metrics?.issuesDescription ?? null,
+    };
   });
 
   // Mutable selected stream state
@@ -142,22 +206,26 @@
 
   async function loadData() {
     try {
-      const timeRange = {
-        start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-        end: new Date().toISOString()
-      };
+      const range = resolveTimeRange(timeRange);
+      currentRange = range;
 
       // Load streams and platform overview in parallel
       await Promise.all([
         streamsStore.fetch(),
-        platformOverviewStore.fetch({ variables: { timeRange } }).catch(() => null),
+        platformOverviewStore
+          .fetch({ variables: { timeRange: { start: range.start, end: range.end }, days: range.days } })
+          .catch(() => null),
       ]);
 
       // Select first stream if available (use unmasked streams)
       if (streams.length > 0) {
-        selectedStream = streams[0];
-        await loadAnalyticsForStream(selectedStream.id);
-        startRealTimeSubscriptions();
+        if (!selectedStream) {
+          selectedStream = streams[0];
+        }
+        if (selectedStream) {
+          await loadAnalyticsForStream(selectedStream, range);
+          startRealTimeSubscriptions();
+        }
       }
     } catch (error) {
       console.error("Failed to load data:", error);
@@ -165,26 +233,21 @@
     }
   }
 
-  async function loadAnalyticsForStream(streamId: string) {
-    if (!streamId) return;
+  async function loadAnalyticsForStream(stream: StreamData, rangeOverride?: ReturnType<typeof resolveTimeRange>) {
+    if (!stream?.id) return;
 
-    const timeRange = {
-      start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-      end: new Date().toISOString()
-    };
-    // Longer range for quality tier daily aggregates (7 days)
-    const qualityTimeRange = {
-      start: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
-      end: new Date().toISOString()
-    };
-
+    const range = rangeOverride ?? resolveTimeRange(timeRange);
+    currentRange = range;
+    const hourlyFirst = range.days <= 7 ? range.days * 24 : 24 * 7;
+    const healthFirst = range.days <= 7 ? Math.min(range.days * 24 * 12, 1000) : 288;
     try {
       await streamAnalyticsStore.fetch({
         variables: {
-          id: streamId,
-          timeRange,
-          qualityTimeRange,
-          interval: "5m"
+          id: stream.id,
+          streamId: stream.id,
+          timeRange: { start: range.start, end: range.end },
+          hourlyFirst,
+          healthFirst,
         }
       }).catch(() => null);
     } catch (error) {
@@ -199,21 +262,21 @@
     if (!selectedStream || !user) return;
 
     viewerMetricsSub.unlisten();
-    viewerMetricsSub.listen({ stream: selectedStream.id });
+    viewerMetricsSub.listen({ streamId: selectedStream.id });
   }
 
   // Effect to handle viewer metrics subscription updates
   $effect(() => {
-    const event = $viewerMetricsSub.data?.viewerMetrics;
+    const event = $viewerMetricsSub.data?.liveViewerMetrics;
     if (event) {
       // Wrap mutations in untrack to prevent reading liveViewerActivity from creating a dependency
       untrack(() => {
         const newEvent: LiveViewerEvent = {
           action: event.action,
-          clientCity: event.clientCity,
-          clientCountry: event.clientCountry,
+          clientCity: event.clientCity ?? null,
+          clientCountry: event.clientCountry ?? null,
           protocol: event.protocol,
-          timestamp: event.timestamp,
+          timestamp: Date.now(),
           nodeId: event.nodeId,
         };
         liveViewerActivity = [newEvent, ...liveViewerActivity.slice(0, 9)];
@@ -227,7 +290,7 @@
   async function selectStream(stream: StreamData) {
     selectedStream = stream;
     liveViewerActivity = [];
-    await loadAnalyticsForStream(stream.id);
+    await loadAnalyticsForStream(stream, resolveTimeRange(timeRange));
     startRealTimeSubscriptions();
   }
 
@@ -273,6 +336,7 @@
   const WifiIcon = getIconComponent("Wifi");
   const DatabaseIcon = getIconComponent("Database");
   const ClockIcon = getIconComponent("Clock");
+  const CalendarIcon = getIconComponent("Calendar");
 
   // Derived stats
   function formatDuration(seconds: number | undefined | null) {
@@ -287,12 +351,12 @@
   const streamSummaryCards = $derived(
     analyticsData
       ? [
-          { key: "totalViews", label: "Total Views", value: formatNumber(analyticsData.totalViews), tone: "text-primary" },
-          { key: "peakViewers", label: "Peak Viewers", value: formatNumber(analyticsData.peakViewers), tone: "text-success" },
-          { key: "avgViewers", label: "Avg Viewers", value: Math.round(analyticsData.avgViewers ?? 0), tone: "text-accent-purple" },
-          { key: "uniqueViewers", label: "Unique Viewers", value: formatNumber(analyticsData.uniqueViewers), tone: "text-warning" },
-          { key: "sessionDuration", label: "Session Duration", value: formatDuration(analyticsData.totalSessionDuration), tone: "text-info" },
-        ]
+          hasValue(analyticsData.totalViews) && { key: "totalViews", label: "Total Views", value: formatNumber(analyticsData.totalViews), tone: "text-primary" },
+          hasValue(analyticsData.peakViewers) && { key: "peakViewers", label: "Peak Viewers", value: formatNumber(analyticsData.peakViewers), tone: "text-success" },
+          hasValue(analyticsData.avgViewers) && { key: "avgViewers", label: "Avg Viewers", value: Math.round(analyticsData.avgViewers ?? 0), tone: "text-accent-purple" },
+          hasValue(analyticsData.uniqueViewers) && { key: "uniqueViewers", label: "Unique Viewers", value: formatNumber(analyticsData.uniqueViewers), tone: "text-warning" },
+          hasValue(analyticsData.totalSessionDuration) && { key: "sessionDuration", label: "Viewer Hours", value: formatDuration(analyticsData.totalSessionDuration), tone: "text-info" },
+        ].filter(Boolean) as { key: string; label: string; value: string | number; tone: string }[]
       : [],
   );
 
@@ -300,7 +364,7 @@
     analyticsData
       ? [
           analyticsData.uniqueCountries && { key: "countries", label: "Countries", value: analyticsData.uniqueCountries, tone: "text-info" },
-          analyticsData.uniqueCities && { key: "cities", label: "Cities", value: analyticsData.uniqueCities, tone: "text-accent-purple" },
+          analyticsData.uniqueCities && { key: "cities", label: "Daily Cities", value: analyticsData.uniqueCities, tone: "text-accent-purple" },
           hasValue(analyticsData.avgBufferHealth) && {
             key: "bufferHealth", label: "Buffer Health",
             value: `${Math.round((analyticsData.avgBufferHealth ?? 0) * 100)}%`,
@@ -315,6 +379,55 @@
         ].filter(Boolean) as { key: string; label: string; value: string | number; tone: string }[]
       : [],
   );
+
+  // Operational metrics from streamAnalyticsSummary
+  const operationalMetrics = $derived(
+    streamAnalyticsSummary
+      ? [
+          hasValue(streamAnalyticsSummary.rangeTotalSessions) && {
+            key: "sessions", label: "Total Sessions",
+            value: formatNumber(streamAnalyticsSummary.rangeTotalSessions),
+            tone: "text-info",
+          },
+          hasValue(streamAnalyticsSummary.rangeAvgConnectionTime) && {
+            key: "avgConnTime", label: "Avg Connection",
+            value: formatDuration(streamAnalyticsSummary.rangeAvgConnectionTime),
+            tone: "text-success",
+          },
+          hasValue(streamAnalyticsSummary.rangePacketLossRate) && {
+            key: "packetLoss", label: "Packet Loss",
+            value: `${((streamAnalyticsSummary.rangePacketLossRate ?? 0) * 100).toFixed(2)}%`,
+            tone: streamAnalyticsSummary.rangePacketLossRate && streamAnalyticsSummary.rangePacketLossRate < 0.01 ? "text-success" : streamAnalyticsSummary.rangePacketLossRate && streamAnalyticsSummary.rangePacketLossRate < 0.05 ? "text-warning" : "text-destructive",
+          },
+          hasValue(streamAnalyticsSummary.rangeAvgSessionSeconds) && {
+            key: "avgSession", label: "Avg Session",
+            value: formatDuration(streamAnalyticsSummary.rangeAvgSessionSeconds),
+            tone: "text-accent-purple",
+          },
+        ].filter(Boolean) as { key: string; label: string; value: string | number; tone: string }[]
+      : [],
+  );
+
+  // Quality tier daily trend data
+  const qualityTierDailyEdges = $derived(
+    $streamAnalyticsStore.data?.analytics?.usage?.streaming?.qualityTierDailyConnection?.edges ?? []
+  );
+
+  // Transform quality tier daily data for trend visualization
+  const qualityTierTrendData = $derived.by(() => {
+    if (!qualityTierDailyEdges.length) return [];
+    return qualityTierDailyEdges
+      .map(e => ({
+        date: e.node.day,
+        tier2160p: e.node.tier2160pMinutes ?? 0,
+        tier1440p: e.node.tier1440pMinutes ?? 0,
+        tier1080p: e.node.tier1080pMinutes ?? 0,
+        tier720p: e.node.tier720pMinutes ?? 0,
+        tier480p: e.node.tier480pMinutes ?? 0,
+        tierSd: e.node.tierSdMinutes ?? 0,
+      }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  });
 
   const hasVideoQuality = $derived(
     !!(analyticsData?.currentResolution || analyticsData?.currentCodec || analyticsData?.bitrateKbps || analyticsData?.currentFps),
@@ -341,6 +454,17 @@
       </div>
     </div>
     <div class="flex items-center gap-2">
+      <Select value={timeRange} onValueChange={(value) => { timeRange = value; loadData(); }} type="single">
+        <SelectTrigger class="min-w-[150px]">
+          <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
+          {currentRange.label}
+        </SelectTrigger>
+        <SelectContent>
+          {#each timeRangeOptions as option (option.value)}
+            <SelectItem value={option.value}>{option.label}</SelectItem>
+          {/each}
+        </SelectContent>
+      </Select>
       <Button href={resolve("/analytics/usage")} variant="outline" size="sm" class="gap-2">
         <TrendingUpIcon class="w-4 h-4" />
         Usage
@@ -365,6 +489,12 @@
 
       <!-- Platform Overview Stats -->
       {#if platformOverview}
+        <div class="px-4 sm:px-6 lg:px-8 py-2 bg-muted/30 border-b border-[hsl(var(--tn-fg-gutter)/0.2)] flex items-center justify-between">
+          <span class="text-xs text-muted-foreground uppercase tracking-wide">Platform Overview</span>
+          <Badge variant="outline" class="text-[10px] px-1.5 py-0 text-muted-foreground border-muted-foreground/30">
+            {currentRange.label}
+          </Badge>
+        </div>
         <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
           <div>
             <DashboardMetricCard
@@ -444,7 +574,7 @@
                       {stream.name}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline" class="{stream.metrics?.status === StreamStatus.LIVE ? 'bg-success/10 text-success border-success/20' : 'bg-muted text-muted-foreground'}">
+                      <Badge variant="outline" class={stream.metrics?.status === StreamStatus.LIVE ? 'bg-success/10 text-success border-success/20' : 'bg-muted text-muted-foreground'}>
                         {stream.metrics?.status || "offline"}
                       </Badge>
                     </TableCell>
@@ -500,6 +630,21 @@
                     <p class="text-xs text-muted-foreground uppercase tracking-wide mb-3">Quality & Reach</p>
                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {#each qualityMetricsCards as stat (stat.key)}
+                        <div class="p-2 text-center border border-border/50 bg-background/50">
+                          <p class="text-[10px] text-muted-foreground uppercase">{stat.label}</p>
+                          <p class="text-sm font-semibold {stat.tone}">{stat.value}</p>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+
+                <!-- Operational Metrics -->
+                {#if operationalMetrics.length > 0}
+                  <div class="pt-3 border-t border-border/30">
+                    <p class="text-xs text-muted-foreground uppercase tracking-wide mb-3">Operational</p>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {#each operationalMetrics as stat (stat.key)}
                         <div class="p-2 text-center border border-border/50 bg-background/50">
                           <p class="text-[10px] text-muted-foreground uppercase">{stat.label}</p>
                           <p class="text-sm font-semibold {stat.tone}">{stat.value}</p>
@@ -565,12 +710,12 @@
         {#if selectedStream}
           <div class="slab">
             <div class="slab-header">
-              <h3>Viewer Trend</h3>
+              <h3>{useDailyTrend ? "Viewer Trend (Daily)" : "Viewer Trend (Hourly)"}</h3>
             </div>
             <div class="slab-body--padded">
               {#if viewerMetrics.length > 0}
                 <ViewerTrendChart
-                  data={viewerMetrics.map(m => ({ timestamp: m.timestamp, viewers: m.viewerCount }))}
+                  data={viewerMetrics}
                   height={240}
                   title=""
                 />
@@ -578,7 +723,7 @@
                 <EmptyState
                   iconName="Users"
                   title="No viewer data"
-                  description="No viewer data was recorded for the selected stream in the last 24 hours. Ensure the stream is live and has active viewers."
+                  description={`No viewer data was recorded for the selected stream in ${currentRange.label.toLowerCase()}. Ensure the stream is live and has active viewers.`}
                   actionText="View Stream"
                   onAction={() => goto(resolve(`/streams/${selectedStream!.id}`))}
                 />
@@ -597,7 +742,7 @@
         {#if selectedStream}
           <div class="slab">
             <div class="slab-header">
-              <h3>Quality Distribution (7 Days)</h3>
+              <h3>Quality Distribution ({qualityRangeLabel})</h3>
             </div>
             <div class="slab-body--padded">
               {#if qualityTierData && (qualityTierData.tier1080pMinutes > 0 || qualityTierData.tier720pMinutes > 0 || qualityTierData.tier480pMinutes > 0 || qualityTierData.tierSdMinutes > 0)}
@@ -615,11 +760,51 @@
           </div>
         {/if}
 
+        <!-- Quality Tier Daily Trend Slab -->
+        {#if selectedStream && qualityTierTrendData.length > 1}
+          <div class="slab">
+            <div class="slab-header">
+              <h3>Quality Trend ({qualityRangeLabel})</h3>
+            </div>
+            <div class="slab-body--padded">
+              <div class="space-y-3">
+                {#each ['tier1080p', 'tier720p', 'tier480p'] as tier}
+                  {@const tierLabel = tier === 'tier1080p' ? '1080p' : tier === 'tier720p' ? '720p' : '480p'}
+                  {@const tierColor = tier === 'tier1080p' ? 'text-success' : tier === 'tier720p' ? 'text-info' : 'text-warning'}
+                  {@const totalMinutes = qualityTierTrendData.reduce((sum, d) => sum + (d[tier as keyof typeof d] as number || 0), 0)}
+                  {#if totalMinutes > 0}
+                    <div class="flex items-center gap-3">
+                      <span class="text-xs font-medium {tierColor} w-12">{tierLabel}</span>
+                      <div class="flex-1 h-6 flex items-end gap-px">
+                        {#each qualityTierTrendData as day}
+                          {@const value = day[tier as keyof typeof day] as number || 0}
+                          {@const maxValue = Math.max(...qualityTierTrendData.map(d => d[tier as keyof typeof d] as number || 0))}
+                          {@const heightPercent = maxValue > 0 ? (value / maxValue) * 100 : 0}
+                          <div
+                            class="flex-1 bg-current opacity-60 hover:opacity-100 transition-opacity"
+                            style="height: {Math.max(heightPercent, 4)}%"
+                            title="{new Date(day.date).toLocaleDateString()}: {value} min"
+                          ></div>
+                        {/each}
+                      </div>
+                      <span class="text-xs text-muted-foreground w-16 text-right">{formatNumber(totalMinutes)}m</span>
+                    </div>
+                  {/if}
+                {/each}
+              </div>
+              <div class="flex justify-between text-[10px] text-muted-foreground mt-2 pt-2 border-t border-border/30">
+                <span>{new Date(qualityTierTrendData[0]?.date).toLocaleDateString()}</span>
+                <span>{new Date(qualityTierTrendData[qualityTierTrendData.length - 1]?.date).toLocaleDateString()}</span>
+              </div>
+            </div>
+          </div>
+        {/if}
+
         <!-- Codec Distribution Slab -->
         {#if selectedStream}
           <div class="slab">
             <div class="slab-header">
-              <h3>Codec Usage (7 Days)</h3>
+              <h3>Codec Usage ({qualityRangeLabel})</h3>
             </div>
             <div class="slab-body--padded">
               {#if codecData.length > 0}
@@ -643,6 +828,9 @@
             <div class="slab-header">
               <div class="flex items-center gap-2">
                 <h3>Live Activity</h3>
+                <Badge variant="outline" class="bg-success/10 text-success border-success/30 text-[10px] px-1.5 py-0">
+                  LIVE
+                </Badge>
                 <div class="w-2 h-2 rounded-full {liveActivityPulse ? 'bg-success animate-ping' : 'bg-muted-foreground/50'}"></div>
               </div>
             </div>

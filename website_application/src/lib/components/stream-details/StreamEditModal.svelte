@@ -23,12 +23,12 @@
   } = $props();
 
   let formData = $state({
-    name: stream?.name || "",
-    description: stream?.description || "",
-    record: stream?.record || false,
+    name: "",
+    description: "",
+    record: false,
   });
 
-  // Reset form when stream changes
+  // Sync form when stream changes
   $effect(() => {
     if (stream) {
       formData = {

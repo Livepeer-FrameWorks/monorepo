@@ -17,10 +17,10 @@ export type GatewayStatus = 'idle' | 'loading' | 'ready' | 'error';
 export interface GatewayClientConfig {
   /** Gateway GraphQL endpoint URL */
   gatewayUrl: string;
-  /** Content type to resolve */
-  contentType: ContentType;
   /** Content identifier (stream name) */
   contentId: string;
+  /** Optional content type (no longer required for resolution) */
+  contentType?: ContentType;
   /** Optional auth token for private streams */
   authToken?: string;
   /** Maximum retry attempts (default: 3) */
@@ -51,8 +51,8 @@ const CIRCUIT_BREAKER_TIMEOUT_MS = 30000;  // Half-open after 30 seconds
 type CircuitBreakerState = 'closed' | 'open' | 'half-open';
 
 const RESOLVE_VIEWER_QUERY = `
-  query ResolveViewer($contentType: String!, $contentId: String!) {
-    resolveViewerEndpoint(contentType: $contentType, contentId: $contentId) {
+  query ResolveViewer($contentId: String!) {
+    resolveViewerEndpoint(contentId: $contentId) {
       primary { nodeId baseUrl protocol url geoDistance loadScore outputs }
       fallbacks { nodeId baseUrl protocol url geoDistance loadScore outputs }
       metadata { contentType contentId title description durationSeconds status isLive viewers recordingSizeBytes clipSource createdAt }
@@ -110,8 +110,7 @@ async function fetchWithRetry(
  * ```typescript
  * const client = new GatewayClient({
  *   gatewayUrl: 'https://gateway.example.com/graphql',
- *   contentType: 'live',
- *   contentId: 'my-stream',
+ *   contentId: 'pk_...', // playbackId (view key)
  * });
  *
  * client.on('statusChange', ({ status }) => console.log('Status:', status));
@@ -288,7 +287,6 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
 
     const {
       gatewayUrl,
-      contentType,
       contentId,
       authToken,
       maxRetries = DEFAULT_MAX_RETRIES,
@@ -296,8 +294,8 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
     } = this.config;
 
     // Validate required params
-    if (!gatewayUrl || !contentType || !contentId) {
-      const error = 'Missing required parameters: gatewayUrl, contentType, or contentId';
+    if (!gatewayUrl || !contentId) {
+      const error = 'Missing required parameters: gatewayUrl or contentId';
       this.setStatus('error', error);
       throw new Error(error);
     }
@@ -320,7 +318,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
           },
           body: JSON.stringify({
             query: RESOLVE_VIEWER_QUERY,
-            variables: { contentType, contentId },
+            variables: { contentId },
           }),
           signal: ac.signal,
         },

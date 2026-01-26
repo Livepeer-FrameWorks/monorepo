@@ -2,7 +2,7 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { get } from "svelte/store";
   import { auth } from "$lib/stores/auth";
-  import { fragment, GetNodesConnectionStore, GetNodePerformance5mStore, SystemHealthStore, NodeCoreFieldsStore, PageInfoFieldsStore } from "$houdini";
+  import { fragment, GetNodesConnectionStore, GetNodePerformance5mStore, GetNodeMetricsStore, SystemHealthStore, NodeCoreFieldsStore, PageInfoFieldsStore } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -14,11 +14,26 @@
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
   import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+  } from "$lib/components/ui/table";
+  import {
     Select,
     SelectTrigger,
     SelectContent,
     SelectItem,
   } from "$lib/components/ui/select";
+  import {
+    Tooltip,
+    TooltipContent,
+    TooltipTrigger,
+  } from "$lib/components/ui/tooltip";
+  import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import { formatBytes, formatTimestamp, formatPercentage } from "$lib/utils/formatters.js";
 
   // Icons
   const ServerIcon = getIconComponent("Server");
@@ -29,10 +44,12 @@
   const MemoryStickIcon = getIconComponent("MemoryStick");
   const ActivityIcon = getIconComponent("Activity");
   const RadioIcon = getIconComponent("Radio");
+  const CalendarIcon = getIconComponent("Calendar");
 
   // Houdini stores
   const nodesStore = new GetNodesConnectionStore();
   const nodePerformanceStore = new GetNodePerformance5mStore();
+  const nodeMetricsStore = new GetNodeMetricsStore();
   const systemHealthSub = new SystemHealthStore();
 
   // Fragment stores for unmasking nested data
@@ -43,7 +60,7 @@
   let loadingMore = $state(false);
 
   // System health type from subscription
-  type SystemHealthEvent = NonNullable<SystemHealth$result["systemHealth"]>;
+  type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
   // Match structure expected by NodeCard
   interface SystemHealthData {
     event: SystemHealthEvent;
@@ -53,7 +70,12 @@
   let isAuthenticated = false;
 
   // Derived state from Houdini stores
-  let loading = $derived($nodesStore.fetching || $nodePerformanceStore.fetching);
+  let showRawMetrics = $state(false);
+  let hasNodesData = $derived(!!$nodesStore.data);
+  let loading = $derived(
+    ($nodesStore.fetching || $nodePerformanceStore.fetching || (showRawMetrics && $nodeMetricsStore.fetching)) &&
+      !hasNodesData
+  );
 
   // Get masked nodes from edges
   let maskedNodes = $derived(
@@ -74,10 +96,30 @@
     $nodesStore.data?.nodesConnection?.totalCount ?? 0
   );
   let systemHealth = $state<Record<string, SystemHealthData>>({});
+  let rawMetricsNodeId = $state<string | null>(null);
+  let showRawDetails = $state(false);
+  let rawMetrics = $derived(
+    $nodeMetricsStore.data?.analytics?.infra?.nodeMetricsConnection?.edges?.map(e => e.node) ?? []
+  );
+  let rawMetricsDisplayCount = $state(30);
+  let loadingMoreRawMetrics = $state(false);
+  let rawMetricsHasNextPage = $derived(
+    $nodeMetricsStore.data?.analytics?.infra?.nodeMetricsConnection?.pageInfo?.hasNextPage ?? false
+  );
+  let hasMoreRawMetrics = $derived(rawMetrics.length > rawMetricsDisplayCount);
+  let selectedRawNode = $derived(
+    nodes.find((node) => (node.nodeId ?? node.id) === rawMetricsNodeId) ?? null
+  );
+
+  $effect(() => {
+    if (!rawMetricsNodeId && nodes.length > 0) {
+      rawMetricsNodeId = nodes[0]?.nodeId ?? null;
+    }
+  });
 
   // Aggregate performance stats from 5-minute node performance data
   let performanceStats = $derived.by(() => {
-    const edges = $nodePerformanceStore.data?.nodePerformance5mConnection?.edges ?? [];
+    const edges = $nodePerformanceStore.data?.analytics?.infra?.nodePerformance5mConnection?.edges ?? [];
     if (edges.length === 0) {
       return { avgCpu: 0, maxCpu: 0, avgMemory: 0, maxMemory: 0, totalBandwidth: 0, avgStreams: 0, maxStreams: 0, dataPoints: 0 };
     }
@@ -116,6 +158,9 @@
   let clusterFilter = $state("all");
   let sortBy = $state<"nodeName" | "clusterId" | "region" | "status" | "health">("nodeName");
   let sortOrder = $state<"asc" | "desc">("asc");
+  let timeRange = $state("24h");
+  let currentRange = $derived(resolveTimeRange(timeRange));
+  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) => ["24h", "7d"].includes(option.value));
 
   const statusFilterLabels: Record<string, string> = {
     all: "All Status",
@@ -144,14 +189,17 @@
 
   async function loadNodeData() {
     try {
-      // Fetch nodes and performance data (last 24 hours)
-      const now = new Date();
-      const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      const timeRange = { start: dayAgo.toISOString(), end: now.toISOString() };
+      const range = resolveTimeRange(timeRange);
+      currentRange = range;
+      const timeRangeInput = { start: range.start, end: range.end };
+      const perfFirst = Math.min(range.days * 24 * 12, 1000);
 
       await Promise.all([
         nodesStore.fetch(),
-        nodePerformanceStore.fetch({ variables: { timeRange, first: 300 } }).catch(() => null),
+        nodePerformanceStore.fetch({ variables: { timeRange: timeRangeInput, first: perfFirst } }).catch(() => null),
+        showRawMetrics && rawMetricsNodeId
+          ? nodeMetricsStore.fetch({ variables: { nodeId: rawMetricsNodeId, timeRange: timeRangeInput, first: 200 } }).catch(() => null)
+          : Promise.resolve(),
       ]);
 
       if ($nodesStore.errors?.length) {
@@ -162,6 +210,57 @@
       console.error("Failed to load node data:", error);
       toast.error("Failed to load node data. Please refresh the page.");
     }
+  }
+
+  async function loadRawMetrics(nodeId: string | null = rawMetricsNodeId) {
+    if (!nodeId) return;
+    const range = resolveTimeRange(timeRange);
+    currentRange = range;
+    const timeRangeInput = { start: range.start, end: range.end };
+    rawMetricsDisplayCount = 30;
+    await nodeMetricsStore.fetch({ variables: { nodeId, timeRange: timeRangeInput, first: 200 } }).catch(() => null);
+  }
+
+  function handleTimeRangeChange(value: string) {
+    timeRange = value;
+    loadNodeData();
+  }
+
+  function toggleRawMetrics() {
+    showRawMetrics = !showRawMetrics;
+    if (showRawMetrics) {
+      loadRawMetrics();
+    }
+  }
+
+  function handleRawNodeChange(value: string) {
+    rawMetricsNodeId = value;
+    if (showRawMetrics) {
+      loadRawMetrics(value);
+    }
+  }
+
+  async function loadMoreRawMetrics() {
+    if (rawMetrics.length > rawMetricsDisplayCount) {
+      rawMetricsDisplayCount = Math.min(rawMetricsDisplayCount + 30, rawMetrics.length);
+      return;
+    }
+    if (!rawMetricsHasNextPage || loadingMoreRawMetrics) return;
+    try {
+      loadingMoreRawMetrics = true;
+      await nodeMetricsStore.loadNextPage();
+    } catch (error) {
+      console.error("Failed to load more raw metrics:", error);
+    } finally {
+      loadingMoreRawMetrics = false;
+    }
+  }
+
+  function formatUsage(used?: number | null, total?: number | null) {
+    if (used === null || used === undefined || total === null || total === undefined || total === 0) {
+      return "—";
+    }
+    return `${formatBytes(used)} / ${formatBytes(total)} (${formatPercentage(used, total)})`;
   }
 
   async function loadMoreNodes() {
@@ -191,7 +290,7 @@
   // Use untrack to prevent effect loops when mutating state
   // Note: nodeId is the database UUID (enriched by Foghorn), node is the logical name
   $effect(() => {
-    const healthData = $systemHealthSub.data?.systemHealth;
+    const healthData = $systemHealthSub.data?.liveSystemHealth;
     if (healthData) {
       untrack(() => {
         // Use nodeId (database UUID) directly if available, fallback to name lookup
@@ -217,16 +316,10 @@
     const health = systemHealth[nodeId];
     if (health) return health.event.status;
 
-    // Fallback to database status from the node record
+    // Fallback to liveState from node record (ClickHouse live_nodes)
     const node = nodes.find((n) => n.id === nodeId);
-    if (node?.status) {
-      // Normalize database status to match subscription format
-      const dbStatus = node.status.toLowerCase();
-      if (dbStatus === "active" || dbStatus === "online") return "HEALTHY";
-      if (dbStatus === "degraded") return "DEGRADED";
-      if (dbStatus === "inactive" || dbStatus === "offline") return "UNHEALTHY";
-      return node.status.toUpperCase();
-    }
+    if (node?.liveState?.isHealthy === true) return "HEALTHY";
+    if (node?.liveState?.isHealthy === false) return "UNHEALTHY";
 
     return "UNKNOWN";
   }
@@ -369,14 +462,27 @@
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
-    <div class="flex items-center gap-3">
-      <HardDriveIcon class="w-5 h-5 text-primary" />
-      <div>
-        <h1 class="text-xl font-bold text-foreground">Nodes</h1>
-        <p class="text-sm text-muted-foreground">
-          Manage self-hosted nodes and subscribed cluster capacity
-        </p>
+    <div class="flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <HardDriveIcon class="w-5 h-5 text-primary" />
+        <div>
+          <h1 class="text-xl font-bold text-foreground">Nodes</h1>
+          <p class="text-sm text-muted-foreground">
+            Manage self-hosted nodes and subscribed cluster capacity
+          </p>
+        </div>
       </div>
+      <Select value={timeRange} onValueChange={handleTimeRangeChange} type="single">
+        <SelectTrigger class="min-w-[150px]">
+          <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
+          {currentRange.label}
+        </SelectTrigger>
+        <SelectContent>
+          {#each timeRangeOptions as option (option.value)}
+            <SelectItem value={option.value}>{option.label}</SelectItem>
+          {/each}
+        </SelectContent>
+      </Select>
     </div>
   </div>
 
@@ -489,6 +595,147 @@
           </div>
         </div>
       {/if}
+
+      <!-- Raw Metrics (per node) -->
+      <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
+        <div class="slab-header">
+          <div class="flex items-center gap-2">
+            <ActivityIcon class="w-4 h-4 text-info" />
+            <h3>Raw Node Metrics</h3>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-muted-foreground">{currentRange.label}</span>
+            <Button variant="outline" size="sm" onclick={toggleRawMetrics}>
+              {showRawMetrics ? "Hide" : "Show"}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onclick={() => (showRawDetails = !showRawDetails)}
+              disabled={!showRawMetrics}
+            >
+              {showRawDetails ? "Less" : "Details"}
+            </Button>
+          </div>
+        </div>
+        {#if showRawMetrics}
+          <div class="slab-body--padded">
+            <div class="flex flex-wrap items-center gap-3 mb-4">
+              <span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Node</span>
+              <Select value={rawMetricsNodeId ?? ""} onValueChange={handleRawNodeChange} type="single">
+                <SelectTrigger class="min-w-[260px]">
+                  {selectedRawNode?.nodeName ?? selectedRawNode?.nodeId ?? "Select a node..."}
+                </SelectTrigger>
+                <SelectContent>
+                  {#each nodes as node (node.nodeId ?? node.id)}
+                    {#if node?.nodeId || node?.id}
+                      <SelectItem value={node.nodeId ?? node.id}>
+                        {node.nodeName ?? node.nodeId ?? node.id}
+                      </SelectItem>
+                    {/if}
+                  {/each}
+                </SelectContent>
+              </Select>
+              <span class="text-xs text-muted-foreground">
+                {Math.min(rawMetricsDisplayCount, rawMetrics.length)} of {rawMetrics.length}{#if rawMetricsHasNextPage}+{/if} samples
+              </span>
+            </div>
+
+            {#if rawMetrics.length === 0}
+              <div class="text-sm text-muted-foreground py-6">
+                No raw metrics available for this node in the selected time range.
+              </div>
+            {:else}
+              <div class="border border-border/30 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Time</TableHead>
+                      <TableHead>Node</TableHead>
+                      <TableHead class="text-right">CPU</TableHead>
+                      <TableHead class="text-right">Memory</TableHead>
+                      <TableHead class="text-right">Disk</TableHead>
+                      {#if showRawDetails}
+                        <TableHead class="text-right">SHM</TableHead>
+                      {/if}
+                      <TableHead class="text-right">Net RX</TableHead>
+                      <TableHead class="text-right">Net TX</TableHead>
+                      {#if showRawDetails}
+                        <TableHead class="text-right">Up</TableHead>
+                        <TableHead class="text-right">Down</TableHead>
+                      {/if}
+                      <TableHead class="text-right">Conns</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {#each rawMetrics.slice(0, rawMetricsDisplayCount) as metric, i (`${metric.timestamp ?? metric.nodeId}-${i}`)}
+                      <TableRow>
+                        <TableCell class="text-xs text-muted-foreground font-mono">
+                          {metric.timestamp ? formatTimestamp(metric.timestamp) : "N/A"}
+                        </TableCell>
+                        <TableCell class="text-xs font-mono">
+                          {metric.nodeId ?? "N/A"}
+                        </TableCell>
+                        <TableCell class="text-xs text-right">
+                          {metric.cpuUsage != null ? `${metric.cpuUsage.toFixed(1)}%` : "—"}
+                        </TableCell>
+                        <TableCell class="text-xs text-right">
+                          {formatUsage(metric.memoryUsed, metric.memoryTotal)}
+                        </TableCell>
+                        <TableCell class="text-xs text-right">
+                          {formatUsage(metric.diskUsed, metric.diskTotal)}
+                        </TableCell>
+                        {#if showRawDetails}
+                          <TableCell class="text-xs text-right">
+                            {formatUsage(metric.shmUsed, metric.shmTotal)}
+                          </TableCell>
+                        {/if}
+                        <TableCell class="text-xs text-right">
+                          {metric.networkRx != null ? formatBytes(metric.networkRx) : "—"}
+                        </TableCell>
+                        <TableCell class="text-xs text-right">
+                          {metric.networkTx != null ? formatBytes(metric.networkTx) : "—"}
+                        </TableCell>
+                        {#if showRawDetails}
+                          <TableCell class="text-xs text-right">
+                            {metric.upSpeed != null ? `${formatBytes(metric.upSpeed)}/s` : "—"}
+                          </TableCell>
+                          <TableCell class="text-xs text-right">
+                            {metric.downSpeed != null ? `${formatBytes(metric.downSpeed)}/s` : "—"}
+                          </TableCell>
+                        {/if}
+                        <TableCell class="text-xs text-right">
+                          {metric.connectionsCurrent ?? "—"}
+                        </TableCell>
+                        <TableCell class="text-xs">
+                          {metric.status ?? "—"}
+                        </TableCell>
+                      </TableRow>
+                    {/each}
+                  </TableBody>
+                </Table>
+              </div>
+              {#if hasMoreRawMetrics || rawMetricsHasNextPage}
+                <div class="slab-actions">
+                  <Button
+                    variant="ghost"
+                    class="w-full"
+                    onclick={loadMoreRawMetrics}
+                    disabled={loadingMoreRawMetrics}
+                  >
+                    {loadingMoreRawMetrics ? "Loading..." : "Load More Samples"}
+                  </Button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+        {:else}
+          <div class="slab-body--padded text-sm text-muted-foreground">
+            Enable raw metrics to inspect per‑node samples and validate infrastructure telemetry.
+          </div>
+        {/if}
+      </div>
 
       <SectionDivider class="my-8" />
 
@@ -606,11 +853,19 @@
 
         <!-- Nodes Grid -->
         <div class="slab col-span-full">
-          <div class="slab-header">
+          <div class="slab-header flex items-center justify-between">
             <div class="flex items-center gap-2">
               <ServerIcon class="w-4 h-4 text-info" />
               <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Nodes ({filteredNodes.length}{#if hasMoreNodes} of {totalNodeCount}+{:else if totalNodeCount > 0} of {totalNodeCount}{/if})</h3>
             </div>
+            <Tooltip>
+              <TooltipTrigger class="text-[10px] uppercase tracking-wide text-muted-foreground border border-border/50 px-2 py-1">
+                Admin/Owner
+              </TooltipTrigger>
+              <TooltipContent>
+                Network identifiers and host details are visible only to cluster owners or admins.
+              </TooltipContent>
+            </Tooltip>
           </div>
           <div class="slab-body--padded">
             {#if filteredNodes.length === 0}

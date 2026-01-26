@@ -805,6 +805,7 @@
 
   /* Grid cells separated by seams */
   .dashboard-grid > * {
+    min-width: 0; /* Allow grid items to shrink below content size for overflow-x-auto */
     border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
   }
 

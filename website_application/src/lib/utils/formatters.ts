@@ -28,6 +28,32 @@ export function formatDuration(seconds: number): string {
   return `${remainingSeconds}s`;
 }
 
+export function decodeRelayId(
+  value: string | null | undefined,
+  expectedType?: string,
+): string | null {
+  if (!value) return null;
+
+  const atobFn =
+    typeof globalThis !== "undefined"
+      ? (globalThis as { atob?: (input: string) => string }).atob
+      : undefined;
+
+  if (!atobFn) return value;
+
+  let decoded = "";
+  try {
+    decoded = atobFn(value);
+  } catch {
+    return value;
+  }
+
+  const parts = decoded.split(":", 2);
+  if (parts.length !== 2 || !parts[1]) return value;
+  if (expectedType && parts[0] !== expectedType) return value;
+  return parts[1];
+}
+
 export function formatDate(date: string | Date): string {
   if (!date) return "N/A";
 
@@ -106,6 +132,19 @@ export function formatExpiry(date: string | Date | null | undefined): string {
     month: "short",
     day: "numeric",
   });
+}
+
+/**
+ * Check if a date has expired (is in the past).
+ * Returns false for null/undefined dates (interpreted as "never expires").
+ */
+export function isExpired(date: string | Date | null | undefined): boolean {
+  if (!date) return false;
+
+  const dateObj = typeof date === "string" ? new Date(date) : date;
+  if (isNaN(dateObj.getTime())) return false;
+
+  return dateObj.getTime() < Date.now();
 }
 
 export function formatTimestamp(timestamp: string | Date): string {

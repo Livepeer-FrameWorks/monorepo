@@ -65,7 +65,15 @@ func newDNSDoctorCmd() *cobra.Command {
 			// This mirrors the logic in api_dns (Navigator)
 			serviceMap := map[string]string{
 				"edge":    "edge",
+				"ingest":  "ingest",
+				"play":    "play",
+				"bridge":  "api",
 				"gateway": "api",
+				"api":     "api",
+				"app":     "app",
+				"website": "@",
+				"docs":    "docs",
+				"forms":   "forms",
 			}
 
 			for _, node := range nodesResp.Nodes {
@@ -77,6 +85,9 @@ func newDNSDoctorCmd() *cobra.Command {
 				// Assuming node.NodeType maps roughly to our service roles
 				if subdomain, ok := serviceMap[node.NodeType]; ok {
 					fqdn := fmt.Sprintf("%s.%s", subdomain, domain)
+					if subdomain == "" || subdomain == "@" {
+						fqdn = domain
+					}
 					expectedIPs[fqdn] = append(expectedIPs[fqdn], *node.ExternalIp)
 				}
 			}
@@ -136,6 +147,7 @@ func getQuartermasterGRPCClient() (*quartermaster.GRPCClient, error) {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 	ctxConfig := config.GetCurrent(cfg)
+	ctxConfig.Auth = config.ResolveAuth(ctxConfig)
 
 	grpcAddr, err := config.RequireEndpoint(ctxConfig, "quartermaster_grpc_addr", ctxConfig.Endpoints.QuartermasterGRPCAddr, false)
 	if err != nil {
@@ -143,8 +155,9 @@ func getQuartermasterGRPCClient() (*quartermaster.GRPCClient, error) {
 	}
 
 	return quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr: grpcAddr,
-		Logger:   logging.NewLogger(),
+		GRPCAddr:     grpcAddr,
+		Logger:       logging.NewLogger(),
+		ServiceToken: ctxConfig.Auth.ServiceToken,
 	})
 }
 

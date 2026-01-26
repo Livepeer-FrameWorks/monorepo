@@ -1,8 +1,7 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
-  import { Switch } from "$lib/components/ui/switch";
   import * as Popover from "$lib/components/ui/popover";
-  import { BookOpen, HelpCircle } from "lucide-svelte";
+  import { BookOpen, Database, HelpCircle } from "lucide-svelte";
   import type { VariableDefinition } from "$lib/graphql/services/gqlParser";
   import { getVariableHint } from "$lib/graphql/services/gqlParser";
 
@@ -10,7 +9,10 @@
     description?: string;
     variables: VariableDefinition[];
     fragments: string[];
+    tips?: Array<{ title: string; body: string }>;
   }
+
+  type PanelView = 'templates' | 'schema' | null;
 
   interface Props {
     showQueryEditor: boolean;
@@ -19,7 +21,8 @@
     demoMode: boolean;
     loading: boolean;
     queryHelp?: QueryHelp;
-    onOpenLibrary: () => void;
+    activePanel?: PanelView;
+    onPanelChange: (panel: PanelView) => void;
     onToggleQuery: () => void;
     onToggleCode: () => void;
     onClearHistory: () => void;
@@ -34,7 +37,8 @@
     demoMode,
     loading,
     queryHelp,
-    onOpenLibrary,
+    activePanel = null,
+    onPanelChange,
     onToggleQuery,
     onToggleCode,
     onClearHistory,
@@ -43,8 +47,16 @@
   }: Props = $props();
 
   let hasHelp = $derived(
-    queryHelp && (queryHelp.description || queryHelp.variables.length > 0 || queryHelp.fragments.length > 0)
+    queryHelp &&
+    (queryHelp.description ||
+      queryHelp.variables.length > 0 ||
+      queryHelp.fragments.length > 0 ||
+      (queryHelp.tips && queryHelp.tips.length > 0))
   );
+
+  function togglePanel(panel: PanelView) {
+    onPanelChange(activePanel === panel ? null : panel);
+  }
 </script>
 
 <!-- Header with controls -->
@@ -52,13 +64,24 @@
   class="flex items-center justify-between border-b border-border bg-card p-4"
 >
   <div class="flex space-x-4">
-    <!-- Query Library trigger -->
+    <!-- Templates button -->
     <button
-      class="flex items-center gap-2 px-3 py-1 text-sm transition-colors text-foreground hover:bg-muted/50"
-      onclick={onOpenLibrary}
+      class="flex items-center gap-2 px-3 py-1 text-sm transition-colors {activePanel === 'templates' ? 'text-primary bg-muted/30' : 'text-foreground hover:bg-muted/50'}"
+      onclick={() => togglePanel('templates')}
+      title={activePanel === 'templates' ? 'Hide Templates' : 'Show Templates'}
     >
       <BookOpen class="w-4 h-4" />
-      <span>Library</span>
+      <span>Templates</span>
+    </button>
+
+    <!-- Schema button -->
+    <button
+      class="flex items-center gap-2 px-3 py-1 text-sm transition-colors {activePanel === 'schema' ? 'text-primary bg-muted/30' : 'text-foreground hover:bg-muted/50'}"
+      onclick={() => togglePanel('schema')}
+      title={activePanel === 'schema' ? 'Hide Schema' : 'Show Schema'}
+    >
+      <Database class="w-4 h-4" />
+      <span>Schema</span>
     </button>
 
     <!-- Query Help popover -->
@@ -73,7 +96,7 @@
             <span>Help</span>
           </button>
         </Popover.Trigger>
-        <Popover.Content class="w-80 max-h-96 overflow-y-auto" align="start">
+        <Popover.Content class="w-80 max-w-[calc(100vw-2rem)] max-h-96 overflow-y-auto" align="start">
           <div class="space-y-3">
             {#if queryHelp?.description}
               <div>
@@ -118,6 +141,21 @@
                 </div>
               </div>
             {/if}
+
+            {#if queryHelp?.tips && queryHelp.tips.length > 0}
+              <div class="border-t border-border/50"></div>
+              <div>
+                <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Tips</h4>
+                <div class="space-y-2 text-xs text-muted-foreground">
+                  {#each queryHelp.tips as tip (tip.title)}
+                    <div>
+                      <p class="text-foreground text-xs font-medium">{tip.title}</p>
+                      <p class="text-xs text-muted-foreground">{tip.body}</p>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
           </div>
         </Popover.Content>
       </Popover.Root>
@@ -153,17 +191,26 @@
     {/if}
   </div>
 
-  <div class="flex items-center space-x-3">
-    <div class="flex items-center space-x-2">
-      <Switch
-        checked={demoMode}
-        onCheckedChange={onDemoModeChange}
-        id="demo-mode-toggle"
-      />
-      <label for="demo-mode-toggle" class="text-xs text-foreground">
-        {demoMode ? "Demo Mode" : "Demo"}
-      </label>
-    </div>
+    <div class="flex items-center space-x-3">
+      <div class="flex items-center space-x-2">
+        <span class="text-xs text-muted-foreground">Sandbox</span>
+        <button
+          type="button"
+          class="relative h-7 w-20 border rounded-none shadow-inner transition-colors {demoMode ? 'bg-emerald-500/20 border-emerald-500/40' : 'bg-muted/50 border-border'}"
+          onclick={() => onDemoModeChange(!demoMode)}
+          aria-pressed={demoMode}
+        >
+          <span class="absolute inset-0 flex items-center justify-between px-2 text-[10px] uppercase tracking-wide">
+            <span class="{demoMode ? 'text-foreground' : 'text-muted-foreground'}">On</span>
+            <span class="{!demoMode ? 'text-foreground' : 'text-muted-foreground'}">Off</span>
+          </span>
+          <span
+            class="absolute top-0.5 h-6 w-8 bg-foreground/90 border border-border/40 rounded-none transition-all"
+            class:left-0.5={!demoMode}
+            class:right-0.5={demoMode}
+          ></span>
+        </button>
+      </div>
 
     <Button class="gap-2" onclick={onExecute} disabled={loading}>
       <span>{loading ? "Running..." : "Execute"}</span>

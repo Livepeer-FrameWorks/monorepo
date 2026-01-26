@@ -1,0 +1,47 @@
+# Default owner
+* @stronk-dev
+
+# Gateway & GraphQL
+/api_gateway/ @stronk-dev
+/pkg/graphql/ @stronk-dev
+
+# Control plane
+/api_control/ @stronk-dev
+/api_tenants/ @stronk-dev
+/api_billing/ @stronk-dev
+
+# Data & Analytics
+/api_analytics_ingest/ @stronk-dev
+/api_analytics_query/ @stronk-dev
+/api_firehose/ @stronk-dev
+
+# Media pipeline
+/api_balancing/ @stronk-dev
+/api_sidecar/ @stronk-dev
+
+# Network & Infrastructure
+/api_dns/ @stronk-dev
+/api_mesh/ @stronk-dev
+
+# Realtime & Support
+/api_realtime/ @stronk-dev
+/api_ticketing/ @stronk-dev
+/api_forms/ @stronk-dev
+
+# Shared packages
+/pkg/ @stronk-dev
+
+# Frontend
+/website_application/ @stronk-dev
+/website_marketing/ @stronk-dev
+/website_docs/ @stronk-dev
+/npm_player/ @stronk-dev
+/npm_studio/ @stronk-dev
+
+# CLI & Infrastructure
+/cli/ @stronk-dev
+/config/ @stronk-dev
+/infrastructure/ @stronk-dev
+
+# CI/CD & GitHub
+/.github/ @stronk-dev

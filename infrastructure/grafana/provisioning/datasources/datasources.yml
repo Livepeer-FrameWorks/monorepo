@@ -4,6 +4,7 @@ datasources:
   # Prometheus datasource for metrics
   - name: Prometheus
     type: prometheus
+    uid: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
@@ -12,14 +13,15 @@ datasources:
   # ClickHouse datasource for analytics
   - name: ClickHouse
     type: grafana-clickhouse-datasource
+    uid: clickhouse
     access: proxy
     url: http://clickhouse:8123
-    database: frameworks
+    database: periscope
     user: frameworks
     secureJsonData:
       password: frameworks_dev
     jsonData:
-      defaultDatabase: frameworks
+      defaultDatabase: periscope
       port: 8123
       server: clickhouse
       username: frameworks
@@ -30,6 +32,7 @@ datasources:
   # PostgreSQL datasource for state data
   - name: PostgreSQL
     type: postgres
+    uid: postgres
     access: proxy
     url: postgres:5432
     database: frameworks
@@ -41,4 +44,4 @@ datasources:
       maxOpenConns: 10
       maxIdleConns: 2
       connMaxLifetime: 14400
-    editable: true 
+    editable: true

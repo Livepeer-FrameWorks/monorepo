@@ -1,0 +1,18 @@
+mutation LinkWallet($input: WalletLoginInput!) {
+  linkWallet(input: $input) {
+    ... on WalletIdentity {
+      id
+      address
+      createdAt
+      lastAuthAt
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

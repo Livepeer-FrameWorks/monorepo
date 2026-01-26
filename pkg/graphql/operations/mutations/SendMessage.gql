@@ -1,0 +1,21 @@
+mutation SendMessage($input: SendMessageInput!) {
+  sendMessage(input: $input) {
+    ... on Message {
+      id
+      conversationId
+      content
+      sender
+      createdAt
+    }
+    ... on ValidationError {
+      message
+      code
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+  }
+}

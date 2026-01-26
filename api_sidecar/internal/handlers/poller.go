@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -35,6 +36,8 @@ type ClipInfo struct {
 	S3URL        string
 	SegmentCount int  // Number of segments (for DVR recordings)
 	HasDtsh      bool // True if .dtsh index file exists locally
+	AccessCount  int
+	LastAccessed time.Time
 }
 
 // PrometheusMonitor handles monitoring of MistServer Prometheus endpoints
@@ -1328,6 +1331,12 @@ func scanLocalArtifacts(basePath string) (uint64, int) {
 	totalSize += dvrSize
 	artifactCount += dvrCount
 
+	// Scan VOD directory
+	vodDir := fmt.Sprintf("%s/vod", basePath)
+	vodSize, vodCount := scanVODDirectory(vodDir, newArtifactIndex)
+	totalSize += vodSize
+	artifactCount += vodCount
+
 	// Update the PrometheusMonitor artifact index atomically
 	if prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
@@ -1342,6 +1351,67 @@ func scanLocalArtifacts(basePath string) (uint64, int) {
 	}
 
 	return totalSize, artifactCount
+}
+
+// scanVODDirectory scans the VOD directory for user-uploaded assets
+func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64, int) {
+	if _, err := os.Stat(vodDir); os.IsNotExist(err) {
+		return 0, 0
+	}
+
+	var totalSize uint64
+	artifactCount := 0
+
+	entries, err := os.ReadDir(vodDir)
+	if err != nil {
+		monitorLogger.WithError(err).Error("Failed to read VOD directory")
+		return 0, 0
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		ext := filepath.Ext(name)
+		if ext == "" {
+			continue
+		}
+		hash := strings.TrimSuffix(name, ext)
+		if len(hash) != 32 || !isHex(hash) {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		filePath := fmt.Sprintf("%s/%s", vodDir, name)
+		vodInfo := &ClipInfo{
+			FilePath:     filePath,
+			StreamName:   "", // VOD assets are not tied to a live stream name
+			Format:       strings.TrimPrefix(ext, "."),
+			SizeBytes:    uint64(info.Size()),
+			CreatedAt:    info.ModTime(),
+			SegmentCount: 0,
+			HasDtsh:      false,
+		}
+		artifactIndex[hash] = vodInfo
+		totalSize += uint64(info.Size())
+		artifactCount++
+	}
+
+	return totalSize, artifactCount
+}
+
+func isHex(value string) bool {
+	if value == "" {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // scanClipsDirectory scans the clips directory for clip artifacts
@@ -1394,12 +1464,14 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 								}
 
 								clipInfo := &ClipInfo{
-									FilePath:   filePath,
-									StreamName: streamName,
-									Format:     format,
-									SizeBytes:  uint64(fileInfo.Size()),
-									CreatedAt:  fileInfo.ModTime(),
-									HasDtsh:    hasDtsh,
+									FilePath:     filePath,
+									StreamName:   streamName,
+									Format:       format,
+									SizeBytes:    uint64(fileInfo.Size()),
+									CreatedAt:    fileInfo.ModTime(),
+									HasDtsh:      hasDtsh,
+									AccessCount:  0,
+									LastAccessed: fileInfo.ModTime(),
 								}
 
 								artifactIndex[clipHash] = clipInfo
@@ -1443,12 +1515,14 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 							}
 
 							clipInfo := &ClipInfo{
-								FilePath:   filePath,
-								StreamName: streamName,
-								Format:     format,
-								SizeBytes:  uint64(fileInfo.Size()),
-								CreatedAt:  fileInfo.ModTime(),
-								HasDtsh:    hasDtsh,
+								FilePath:     filePath,
+								StreamName:   streamName,
+								Format:       format,
+								SizeBytes:    uint64(fileInfo.Size()),
+								CreatedAt:    fileInfo.ModTime(),
+								HasDtsh:      hasDtsh,
+								AccessCount:  0,
+								LastAccessed: fileInfo.ModTime(),
 							}
 
 							artifactIndex[clipHash] = clipInfo
@@ -1563,6 +1637,8 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 							CreatedAt:    fileInfo.ModTime(),
 							SegmentCount: segmentCount,
 							HasDtsh:      hasDtsh,
+							AccessCount:  0,
+							LastAccessed: fileInfo.ModTime(),
 						}
 
 						artifactIndex[dvrHash] = dvrInfo
@@ -1596,6 +1672,18 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 			CreatedAt:  clipInfo.CreatedAt.Unix(),
 			Format:     clipInfo.Format,
 			HasDtsh:    clipInfo.HasDtsh,
+			AccessCount: func() uint64 {
+				if clipInfo.AccessCount < 0 {
+					return 0
+				}
+				return uint64(clipInfo.AccessCount)
+			}(),
+			LastAccessed: func() int64 {
+				if clipInfo.LastAccessed.IsZero() {
+					return 0
+				}
+				return clipInfo.LastAccessed.Unix()
+			}(),
 		}
 
 		// Add S3 URL if available
@@ -1607,6 +1695,20 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 	}
 
 	return artifacts
+}
+
+// touchArtifactAccess updates access metadata for a known artifact hash.
+func touchArtifactAccess(hash string) {
+	if hash == "" || prometheusMonitor == nil {
+		return
+	}
+
+	prometheusMonitor.mutex.Lock()
+	if clipInfo, ok := prometheusMonitor.artifactIndex[hash]; ok {
+		clipInfo.AccessCount++
+		clipInfo.LastAccessed = time.Now()
+	}
+	prometheusMonitor.mutex.Unlock()
 }
 
 // convertNodeAPIToMistTrigger converts MistServer JSON API response to MistTrigger
@@ -1786,16 +1888,18 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 
 	// Node is healthy if: we got MistServer data AND CPU <= 90% AND RAM <= 90% AND SHM <= 90%
-	isHealthy := jsonData != nil && cpuPercent <= 90 && memPercent <= 90 && shmPercent <= 90
+	hasMistData := jsonData != nil
+	isHealthy := hasMistData && cpuPercent <= 90 && memPercent <= 90 && shmPercent <= 90
 	nodeUpdate.IsHealthy = isHealthy
 
 	logger.WithFields(logging.Fields{
-		"node_id":     nodeID,
-		"cpu_percent": cpuPercent,
-		"mem_percent": memPercent,
-		"shm_percent": shmPercent,
-		"is_healthy":  isHealthy,
-	}).Debug("Node health determination")
+		"node_id":       nodeID,
+		"has_mist_data": hasMistData,
+		"cpu_percent":   cpuPercent,
+		"mem_percent":   memPercent,
+		"shm_percent":   shmPercent,
+		"is_healthy":    isHealthy,
+	}).Info("Node health determination")
 
 	// Populate full Streams map from MistServer data
 	// This is CRITICAL for load balancing - balancer checks stream.Inputs > 0
@@ -2096,7 +2200,7 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 					// Resolution tier
 					var resolution string
 					if primaryHeight >= 2160 {
-						resolution = "4K"
+						resolution = "2160p"
 					} else if primaryHeight >= 1440 {
 						resolution = "1440p"
 					} else if primaryHeight >= 1080 {

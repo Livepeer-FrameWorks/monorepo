@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"time"
 )
@@ -27,15 +29,14 @@ type APIToken struct {
 // ValidateAPIToken validates a developer API token
 func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 	var token APIToken
-
 	// Get token from database
 	err := db.QueryRow(`
-		SELECT id, tenant_id, user_id, token_value, token_name, 
+		SELECT id, tenant_id, user_id, token_name,
 		       permissions, is_active, expires_at, created_at
 		FROM commodore.api_tokens 
 		WHERE token_value = $1 AND is_active = true
-	`, tokenValue).Scan(
-		&token.ID, &token.TenantID, &token.UserID, &token.TokenValue,
+	`, hashToken(tokenValue)).Scan(
+		&token.ID, &token.TenantID, &token.UserID,
 		&token.TokenName, &token.Permissions, &token.IsActive,
 		&token.ExpiresAt, &token.CreatedAt,
 	)
@@ -54,6 +55,11 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 	}
 
 	return &token, nil
+}
+
+func hashToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
 }
 
 // HasPermission checks if an API token has a specific permission

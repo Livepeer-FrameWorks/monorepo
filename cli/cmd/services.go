@@ -42,6 +42,7 @@ func newQMGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
 		return nil, fwcfg.Context{}, err
 	}
 	ctxCfg := fwcfg.GetCurrent(cfg)
+	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
 
 	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "quartermaster_grpc_addr", ctxCfg.Endpoints.QuartermasterGRPCAddr, false)
 	if err != nil {
@@ -49,9 +50,10 @@ func newQMGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
 	}
 
 	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr: grpcAddr,
-		Timeout:  15 * time.Second,
-		Logger:   logging.NewLogger(),
+		GRPCAddr:     grpcAddr,
+		Timeout:      15 * time.Second,
+		Logger:       logging.NewLogger(),
+		ServiceToken: ctxCfg.Auth.ServiceToken,
 	})
 	if err != nil {
 		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
@@ -355,6 +357,7 @@ func newServicesUpCmd() *cobra.Command {
 	var dir string
 	var only string
 	var sshTarget string
+	var sshKey string
 	cmd := &cobra.Command{Use: "up", Short: "Start selected central services", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
@@ -375,7 +378,7 @@ func newServicesUpCmd() *cobra.Command {
 		dockerArgs = append(dockerArgs, "--env-file", ".central.env", "up", "-d")
 		var out, errOut string
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSH(sshTarget, "docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
 		} else {
 			_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
 		}
@@ -389,6 +392,7 @@ func newServicesUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory containing generated compose")
 	cmd.Flags().StringVar(&only, "only", "", "comma-separated services to start")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH")
+	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
 	return cmd
 }
 
@@ -396,6 +400,7 @@ func newServicesDownCmd() *cobra.Command {
 	var dir string
 	var only string
 	var sshTarget string
+	var sshKey string
 	var yes bool
 	cmd := &cobra.Command{Use: "down", Short: "Stop selected central services", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
@@ -449,7 +454,7 @@ func newServicesDownCmd() *cobra.Command {
 			dockerArgs = append(dockerArgs, "--env-file", ".central.env", "down")
 			var out, errOut string
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSH(sshTarget, "docker", dockerArgs, dir)
+				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
 			} else {
 				_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
 			}
@@ -465,7 +470,7 @@ func newServicesDownCmd() *cobra.Command {
 			dockerArgs := []string{"compose", "-f", fmt.Sprintf("svc-%s.yml", s), "--env-file", ".central.env", "stop", s}
 			var out, errOut string
 			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSH(sshTarget, "docker", dockerArgs, dir)
+				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
 			} else {
 				_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
 			}
@@ -479,6 +484,7 @@ func newServicesDownCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory containing generated compose")
 	cmd.Flags().StringVar(&only, "only", "", "comma-separated services to stop")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH")
+	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
 	return cmd
 }
@@ -487,6 +493,7 @@ func newServicesStatusCmd() *cobra.Command {
 	var dir string
 	var only string
 	var sshTarget string
+	var sshKey string
 	cmd := &cobra.Command{Use: "status", Short: "Show service container status", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
@@ -506,7 +513,7 @@ func newServicesStatusCmd() *cobra.Command {
 		dockerArgs = append(dockerArgs, "--env-file", ".central.env", "ps")
 		var out, errOut string
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSH(sshTarget, "docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
 		} else {
 			_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
 		}
@@ -520,6 +527,7 @@ func newServicesStatusCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory containing generated compose")
 	cmd.Flags().StringVar(&only, "only", "", "comma-separated services to filter")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH")
+	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
 	return cmd
 }
 
@@ -529,6 +537,7 @@ func newServicesLogsCmd() *cobra.Command {
 	var follow bool
 	var tail int
 	var sshTarget string
+	var sshKey string
 	cmd := &cobra.Command{Use: "logs", Short: "Show service logs", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
@@ -557,7 +566,7 @@ func newServicesLogsCmd() *cobra.Command {
 		}
 		var out, errOut string
 		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSH(sshTarget, "docker", dockerArgs, dir)
+			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", dockerArgs, dir)
 		} else {
 			_, out, errOut, err = xexec.Run("docker", dockerArgs, dir)
 		}
@@ -573,5 +582,6 @@ func newServicesLogsCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&follow, "follow", false, "follow logs (tail) ")
 	cmd.Flags().IntVar(&tail, "tail", 200, "number of lines to show (per service)")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH")
+	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
 	return cmd
 }

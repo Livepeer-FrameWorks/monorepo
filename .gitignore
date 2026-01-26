@@ -1,3 +1,6 @@
+# Private runbook (environment-specific, do not commit)
+PRIVATE_RUNBOOK.md
+
 # Operating System
 .DS_Store
 Thumbs.db
@@ -100,4 +103,7 @@ scripts/env/env
 
 # Project Specific
 mistserver.conf.bak
-infrastructure/nginx/logs/ 
+infrastructure/nginx/logs/
+
+# Dead code analysis reports
+reports/

@@ -1,44 +1,54 @@
 profiles:
   central-all:
     - quartermaster
-    - gateway
+    - bridge
     - commodore
+    - purser
+    - periscope-ingest
+    - periscope-query
     - foghorn
     - decklog
-    - periscope_ingest
-    - periscope_query
-    - purser
     - signalman
+    - navigator
+    - helmsman
+    - steward
+    - chartroom
+    - foredeck
+    - logbook
   control-core:
     - quartermaster
-    - gateway
+    - bridge
     - commodore
   routing-only:
     - foghorn
     - decklog
     - signalman
   analytics-suite:
-    - periscope_ingest
-    - periscope_query
+    - periscope-ingest
+    - periscope-query
   billing-only:
     - purser
+  observability:
+    - prometheus
+    - grafana
+    - metabase
 
 services:
   quartermaster:
     name: quartermaster
     title: Quartermaster
     role: control
-    image: frameworks/quartermaster:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-quartermaster:latest
     ports: ["18002:18002"]
     health:
       protocol: http
       path: /health
       port: 18002
-  gateway:
-    name: gateway
-    title: Gateway (Bridge)
+  bridge:
+    name: bridge
+    title: Bridge (Gateway)
     role: control
-    image: frameworks/gateway:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-bridge:latest
     ports: ["18000:18000"]
     health:
       protocol: http
@@ -48,7 +58,7 @@ services:
     name: commodore
     title: Commodore (Control API)
     role: control
-    image: frameworks/commodore:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-commodore:latest
     ports: ["18001:18001"]
     health:
       protocol: http
@@ -58,7 +68,7 @@ services:
     name: foghorn
     title: Foghorn (Routing)
     role: routing
-    image: frameworks/foghorn:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-foghorn:latest
     ports: ["18008:18008","18019:18019"]
     health:
       protocol: http
@@ -68,7 +78,7 @@ services:
     name: decklog
     title: Decklog (Firehose)
     role: routing
-    image: frameworks/decklog:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-decklog:latest
     ports: ["18006:18006"]
     health:
       protocol: grpc
@@ -77,27 +87,27 @@ services:
     name: signalman
     title: Signalman (WebSocket fan-out)
     role: routing
-    image: frameworks/signalman:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-signalman:latest
     ports: ["18009:18009"]
     health:
       protocol: http
       path: /health
       port: 18009
-  periscope_ingest:
-    name: periscope_ingest
+  periscope-ingest:
+    name: periscope-ingest
     title: Periscope Ingest
     role: analytics
-    image: frameworks/periscope-ingest:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-periscope-ingest:latest
     ports: ["18005:18005"]
     health:
       protocol: http
       path: /health
       port: 18005
-  periscope_query:
-    name: periscope_query
+  periscope-query:
+    name: periscope-query
     title: Periscope Query
     role: analytics
-    image: frameworks/periscope-query:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-periscope-query:latest
     ports: ["18004:18004"]
     health:
       protocol: http
@@ -107,10 +117,104 @@ services:
     name: purser
     title: Purser (Billing)
     role: billing
-    image: frameworks/purser:latest
+    image: ghcr.io/livepeer-frameworks/frameworks-purser:latest
     ports: ["18003:18003"]
     health:
       protocol: http
       path: /health
       port: 18003
+  navigator:
+    name: navigator
+    title: Navigator (DNS & Certs)
+    role: infra
+    image: ghcr.io/livepeer-frameworks/frameworks-navigator:latest
+    ports: ["18010:18010","18011:18011"]
+    health:
+      protocol: http
+      path: /health
+      port: 18010
+  helmsman:
+    name: helmsman
+    title: Helmsman (Sidecar)
+    role: routing
+    image: ghcr.io/livepeer-frameworks/frameworks-helmsman:latest
+    ports: ["18007:18007"]
+    health:
+      protocol: http
+      path: /health
+      port: 18007
+  steward:
+    name: steward
+    title: Steward (Forms)
+    role: support
+    image: ghcr.io/livepeer-frameworks/frameworks-forms:latest
+    deploy: forms
+    ports: ["18032:18032"]
+    health:
+      protocol: http
+      path: /health
+      port: 18032
+  chartroom:
+    name: chartroom
+    title: Chartroom (Dashboard)
+    role: interface
+    image: ghcr.io/livepeer-frameworks/frameworks-webapp:latest
+    deploy: webapp
+    ports: ["18030:18030"]
+    health:
+      protocol: http
+      path: /health
+      port: 18030
+  foredeck:
+    name: foredeck
+    title: Foredeck (Marketing)
+    role: interface
+    image: ghcr.io/livepeer-frameworks/frameworks-website:latest
+    deploy: website
+    ports: ["18031:18031"]
+    health:
+      protocol: http
+      path: /health
+      port: 18031
+  logbook:
+    name: logbook
+    title: Logbook (Docs)
+    role: interface
+    image: ghcr.io/livepeer-frameworks/frameworks-website-docs:latest
+    deploy: docs
+    ports: ["18033:18033"]
+    health:
+      protocol: http
+      path: /health
+      port: 18033
 
+  prometheus:
+    name: prometheus
+    title: Prometheus (Metrics)
+    role: observability
+    image: prom/prometheus:latest
+    ports: ["9090:9090"]
+    health:
+      protocol: http
+      path: /-/healthy
+      port: 9090
+  grafana:
+    name: grafana
+    title: Grafana (Dashboards)
+    role: observability
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    health:
+      protocol: http
+      path: /api/health
+      port: 3000
+  metabase:
+    name: metabase
+    title: Metabase (BI Analytics)
+    role: observability
+    image: metabase/metabase:latest
+    ports: ["3001:3000"]
+    health:
+      protocol: http
+      path: /api/health
+      port: 3000

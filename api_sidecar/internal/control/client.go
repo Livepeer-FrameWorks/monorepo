@@ -18,6 +18,7 @@ import (
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
 
 	"github.com/google/uuid"
@@ -74,17 +75,6 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 			}
 		}
 	}()
-}
-
-// ResolveClipHash resolves a clip hash to tenant and stream info via gRPC (replaces HTTP)
-func ResolveClipHash(ctx context.Context, clipHash string) (*pb.ClipHashResponse, error) {
-	client := currentClient
-	if client == nil {
-		return nil, fmt.Errorf("gRPC client not connected")
-	}
-
-	req := &pb.ClipHashRequest{ClipHash: clipHash}
-	return client.ResolveClipHash(ctx, req)
 }
 
 // GetCurrentNodeID returns the current node ID for building triggers
@@ -358,6 +348,9 @@ func runClient(addr string, logger logging.Logger) error {
 				if dtshSyncRequestHandler != nil {
 					go dtshSyncRequestHandler(x.DtshSyncRequest)
 				}
+			case *pb.ControlMessage_StopSessionsRequest:
+				// Handle stop sessions request from Foghorn (billing suspension)
+				go handleStopSessions(logger, x.StopSessionsRequest)
 			}
 		}
 	}()
@@ -1012,6 +1005,7 @@ func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeByt
 		LocalPath: localPath,
 		SizeBytes: sizeBytes,
 		Error:     errMsg,
+		NodeId:    currentNodeID,
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostComplete{DefrostComplete: complete}}
@@ -1173,4 +1167,46 @@ func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_SyncComplete{SyncComplete: complete}}
 	return stream.Send(msg)
+}
+
+// handleStopSessions terminates all sessions for the given streams on this node
+// Called when a tenant is suspended due to insufficient balance
+func handleStopSessions(logger logging.Logger, req *pb.StopSessionsRequest) {
+	if len(req.StreamNames) == 0 {
+		return
+	}
+
+	cfg := currentConfig
+	if cfg == nil {
+		logger.Warn("config not initialized; cannot stop sessions")
+		return
+	}
+
+	mistClient := mist.NewClient(logger)
+	if cfg.MistServerURL != "" {
+		mistClient.BaseURL = cfg.MistServerURL
+	}
+
+	logger.WithFields(logging.Fields{
+		"tenant_id":     req.TenantId,
+		"reason":        req.Reason,
+		"stream_count":  len(req.StreamNames),
+		"stream_names":  req.StreamNames,
+	}).Info("Stopping sessions for suspended tenant")
+
+	// Use batch stop_sessions API
+	err := mistClient.StopSessionsMultiple(req.StreamNames)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"tenant_id":    req.TenantId,
+			"stream_names": req.StreamNames,
+			"error":        err,
+		}).Error("Failed to stop sessions via MistServer API")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"tenant_id":    req.TenantId,
+		"stream_names": req.StreamNames,
+	}).Info("Successfully stopped sessions for suspended tenant")
 }

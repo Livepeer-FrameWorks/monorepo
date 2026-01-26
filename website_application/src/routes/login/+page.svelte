@@ -11,6 +11,7 @@
   import { Turnstile } from "svelte-turnstile";
   import { RadioGroup, RadioGroupItem } from "$lib/components/ui/radio-group";
   import { Label } from "$lib/components/ui/label";
+  import WalletConnect from "$lib/components/WalletConnect.svelte";
 
   let email = $state("");
   let password = $state("");
@@ -318,6 +319,9 @@
           Create account
         </Button>
       </div>
+
+      <!-- Wallet Login Option -->
+      <WalletConnect mode="login" />
     </div>
   </div>
 </section>

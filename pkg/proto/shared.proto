@@ -38,6 +38,9 @@ message CreateClipRequest {
   optional int64 expires_at = 12;   // Unix timestamp (seconds) for auto-deletion
   optional string clip_hash = 13;   // Pre-generated hash from Commodore (if provided, Foghorn uses it)
   optional string user_id = 14;     // User who created the clip (for Decklog events)
+  optional string stream_id = 15;  // Public stream ID (UUID)
+  optional string playback_id = 16; // Pre-generated playback ID (Commodore)
+  optional string artifact_internal_name = 17; // Pre-generated artifact routing name (Commodore)
 }
 
 // CreateClipResponse - response from clip creation
@@ -49,6 +52,7 @@ message CreateClipResponse {
   string node_id = 4;
   string request_id = 5;
   string clip_hash = 6;
+  string playback_id = 7;      // Public playback key (artifact playback ID)
 }
 
 // ClipInfo - full clip details
@@ -56,7 +60,7 @@ message CreateClipResponse {
 message ClipInfo {
   string id = 1;
   string clip_hash = 2;
-  string stream_name = 3;
+  string stream_id = 3;       // Public stream ID (UUID)
   string title = 4;
   string description = 5;
   int64 start_time = 6;       // Resolved start time (seconds)
@@ -65,7 +69,6 @@ message ClipInfo {
   string storage_path = 9;
   optional int64 size_bytes = 10;
   string status = 11;
-  int32 access_count = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
   // NEW: Original request parameters for audit/display
@@ -73,12 +76,15 @@ message ClipInfo {
   optional string requested_params = 16;  // JSON blob of original request params
   optional string storage_location = 17;  // "local" or "s3"
   optional google.protobuf.Timestamp expires_at = 18;
+  string playback_id = 20;                // Public playback key (artifact playback ID)
+  reserved 12, 19;
+  reserved "access_count", "last_accessed";
 }
 
 // GetClipsRequest - request to list clips
 message GetClipsRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;  // filter by stream
+  optional string stream_id = 2;      // filter by stream (UUID)
   common.CursorPaginationRequest pagination = 3;
 }
 
@@ -92,19 +98,6 @@ message GetClipsResponse {
 message GetClipRequest {
   string clip_hash = 1;
   string tenant_id = 2;  // Required for tenant isolation
-}
-
-// GetClipURLsRequest - request to get viewing URLs for a clip
-message GetClipURLsRequest {
-  string clip_hash = 1;
-  string tenant_id = 2;  // Required for tenant isolation
-}
-
-// ClipViewingURLs - URLs for viewing a clip
-// Source: pkg/api/foghorn/types.go:ClipViewingURLs
-message ClipViewingURLs {
-  map<string, string> urls = 1;
-  optional google.protobuf.Timestamp expires_at = 2;
 }
 
 // DeleteClipRequest - request to delete a clip
@@ -141,12 +134,14 @@ message StartDVRResponse {
   string ingest_host = 3;
   string storage_host = 4;
   string storage_node_id = 5;
+  string playback_id = 6;      // Public playback key (artifact playback ID)
 }
 
 // StopDVRRequest - request to stop DVR recording
 message StopDVRRequest {
   string dvr_hash = 1;
   string tenant_id = 2;  // Required for tenant isolation
+  optional string stream_id = 3; // Public stream ID (UUID)
 }
 
 // StopDVRResponse - response from stopping DVR
@@ -165,12 +160,6 @@ message DeleteDVRRequest {
 message DeleteDVRResponse {
   bool success = 1;
   string message = 2;
-}
-
-// GetDVRStatusRequest - request to get DVR status
-message GetDVRStatusRequest {
-  string dvr_hash = 1;
-  string tenant_id = 2;  // Required for tenant isolation
 }
 
 // DVRInfo - full DVR recording details
@@ -196,12 +185,14 @@ message DVRInfo {
   // Business metadata (from Commodore registry)
   optional string id = 17;     // UUID from commodore.dvr_recordings
   optional string title = 18;  // Stream title or custom title
+  optional string stream_id = 19; // Public stream ID (UUID)
+  optional string playback_id = 20; // Public playback key (artifact playback ID)
 }
 
 // ListDVRRecordingsRequest - request to list DVR recordings
 message ListDVRRecordingsRequest {
   string tenant_id = 1;
-  optional string internal_name = 2;
+  optional string stream_id = 2;  // filter by stream (UUID)
   common.CursorPaginationRequest pagination = 3;
 }
 
@@ -218,7 +209,8 @@ message ListDVRRecordingsResponse {
 
 // ViewerEndpointRequest - request to resolve viewer endpoint
 message ViewerEndpointRequest {
-  string content_type = 1;  // live|dvr|clip
+  reserved 1;
+  reserved "content_type";
   string content_id = 2;
   optional string viewer_ip = 3;
 }
@@ -288,6 +280,7 @@ message PlaybackMetadata {
   string dvr_status = 9;
   string dvr_source_uri = 10;
   string tenant_id = 11;
+  optional string stream_id = 21;  // Public stream ID (UUID)
   string content_id = 12;
   string content_type = 13;
   optional string title = 14;
@@ -330,10 +323,12 @@ message IngestEndpoint {
 
 // IngestMetadata - metadata about the stream for ingest
 message IngestMetadata {
-  string stream_id = 1;        // Internal stream name
-  string stream_key = 2;       // Original stream key
+  string stream_id = 1;        // Public stream ID (UUID)
+  string stream_key = 2;       // Original stream key (ingest key)
   string tenant_id = 3;
   bool recording_enabled = 4;
+  optional string title = 5;
+  optional string description = 6;
 }
 
 // IngestEndpointResponse - response with resolved ingest endpoints
@@ -341,56 +336,6 @@ message IngestEndpointResponse {
   IngestEndpoint primary = 1;
   repeated IngestEndpoint fallbacks = 2;
   optional IngestMetadata metadata = 3;
-}
-
-// ============================================================================
-// STREAM META MESSAGES
-// Used by both Foghorn and Commodore services
-// ============================================================================
-
-// StreamMetaRequest - request for stream metadata
-message StreamMetaRequest {
-  string internal_name = 1;
-  optional string content_type = 2;  // live|dvr|clip
-  bool include_raw = 3;
-  optional string target_node_id = 4;
-  optional string target_base_url = 5;
-}
-
-// TrackSummary - summary of a media track
-message TrackSummary {
-  string id = 1;
-  string type = 2;
-  string codec = 3;
-  optional int32 channels = 4;
-  optional int32 rate = 5;
-  optional int32 width = 6;
-  optional int32 height = 7;
-  optional int32 bitrate_bps = 8;
-  optional int64 now_ms = 9;
-  optional int64 last_ms = 10;
-  optional int64 first_ms = 11;
-}
-
-// MetaSummary - summary of stream metadata
-message MetaSummary {
-  bool is_live = 1;
-  int64 buffer_window_ms = 2;
-  int64 jitter_ms = 3;
-  int64 unix_offset_ms = 4;
-  optional int64 now_ms = 5;
-  optional int64 last_ms = 6;
-  optional int32 width = 7;
-  optional int32 height = 8;
-  optional int32 version = 9;
-  string type = 10;
-  repeated TrackSummary tracks = 11;
-}
-
-// StreamMetaResponse - response with stream metadata
-message StreamMetaResponse {
-  MetaSummary meta_summary = 1;
-  bytes raw = 2;  // Optional raw JSON from MistServer
 }
 
 // ============================================================================
@@ -418,6 +363,8 @@ message CreateVodUploadRequest {
   optional string title = 6;
   optional string description = 7;
   optional string vod_hash = 8;  // Pre-generated by Commodore (if provided, Foghorn uses it)
+  optional string playback_id = 9;          // Pre-generated playback ID (Commodore)
+  optional string artifact_internal_name = 10; // Pre-generated artifact routing name (Commodore)
 }
 
 // CreateVodUploadResponse - multipart upload instructions
@@ -428,6 +375,7 @@ message CreateVodUploadResponse {
   int64 part_size = 4;           // Recommended part size (bytes)
   repeated VodUploadPart parts = 5;  // Presigned URLs for each part
   google.protobuf.Timestamp expires_at = 6;  // When URLs expire
+  string playback_id = 7;        // Public playback key (artifact playback ID)
 }
 
 // VodUploadPart - presigned URL for a single part
@@ -525,6 +473,7 @@ message VodAssetInfo {
 
   // Error info
   optional string error_message = 19;
+  optional string playback_id = 20; // Public playback key (artifact playback ID)
 }
 
 // VodMetadata - metadata extracted from video file (returned by validation)
@@ -539,4 +488,28 @@ message VodMetadata {
   optional float fps = 8;
   optional int32 audio_channels = 9;
   optional int32 audio_sample_rate = 10;
+}
+
+// ============================================================================
+// WEBHOOK MESSAGES
+// Generic webhook envelope for routing external webhooks through the gateway
+// to internal services. Signature verification happens in the receiving service.
+// ============================================================================
+
+// WebhookRequest - envelope for routing webhooks from Gateway to internal services
+// The Gateway packages raw HTTP into this message and routes via gRPC.
+// Signature verification is the responsibility of the receiving service.
+message WebhookRequest {
+  string provider = 1;              // Provider identifier: "stripe", "mollie", "github", etc.
+  bytes body = 2;                   // Raw HTTP request body
+  map<string, string> headers = 3;  // HTTP headers (includes signature headers like Stripe-Signature)
+  string source_ip = 4;             // Client IP address for logging/rate limiting
+  int64 received_at = 5;            // Unix timestamp when Gateway received the request
+}
+
+// WebhookResponse - response from internal service back to Gateway
+message WebhookResponse {
+  bool success = 1;                 // Whether the webhook was processed successfully
+  string error = 2;                 // Error message if processing failed
+  int32 status_code = 3;            // HTTP status code to return to the provider (200, 400, 401, 500)
 }

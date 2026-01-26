@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	fwcfg "frameworks/cli/internal/config"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -35,7 +36,7 @@ func newClusterProvisionCmd() *cobra.Command {
 Phase Options (--only):
   infrastructure  - Provision Postgres, Kafka, Zookeeper, ClickHouse
   applications    - Provision FrameWorks services
-  interfaces      - Provision Nginx, webapp, website
+  interfaces      - Provision Nginx/Caddy, Chartroom, Foredeck, Logbook
   all             - Provision everything (default)
 
 Provisioning is idempotent - safe to run multiple times.
@@ -169,10 +170,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			}
 
 			// Build config for this task
-			config := buildTaskConfig(task, runtimeData)
+			config := buildTaskConfig(task, manifest, runtimeData)
 
 			// Provision based on task type
-			if err := provisionTask(ctx, task, host, sshPool, force, ignoreValidation, runtimeData); err != nil {
+			if err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData); err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Provisioning failed for %s: %v\n", task.Name, err)
 				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
@@ -185,7 +186,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			// Bootstrap Logic: Run after Quartermaster is healthy
 			if task.Type == "quartermaster" {
 				fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
-				token, err := runBootstrap(ctx, manifest)
+				token, serviceToken, qmGRPCAddr, err := runBootstrap(ctx, manifest)
 				if err != nil {
 					fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Bootstrap failed: %v\n", err)
 					fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
@@ -195,9 +196,12 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 				fmt.Fprintln(cmd.OutOrStdout(), "    ✓ System Tenant bootstrapped")
 				// Store token and gRPC address for Privateer
 				runtimeData["enrollment_token"] = token
-				// Compute Quartermaster gRPC address for Privateer
-				qmGRPCAddr := fmt.Sprintf("%s:19002", host.Address)
-				runtimeData["quartermaster_grpc_addr"] = qmGRPCAddr
+				if serviceToken != "" {
+					runtimeData["service_token"] = serviceToken
+				}
+				if qmGRPCAddr != "" {
+					runtimeData["quartermaster_grpc_addr"] = qmGRPCAddr
+				}
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "    ✓ %s provisioned\n", task.Name)
@@ -210,7 +214,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 }
 
 // buildTaskConfig creates a ServiceConfig for a task
-func buildTaskConfig(task *orchestrator.Task, runtimeData map[string]interface{}) provisioner.ServiceConfig {
+func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}) provisioner.ServiceConfig {
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",
 		Version:  "stable",
@@ -218,9 +222,101 @@ func buildTaskConfig(task *orchestrator.Task, runtimeData map[string]interface{}
 		Metadata: make(map[string]interface{}),
 	}
 
+	config.DeployName = task.Type
+
 	// Copy runtime data
 	for k, v := range runtimeData {
 		config.Metadata[k] = v
+	}
+
+	if manifest != nil {
+		// Service overrides
+		if svc, ok := manifest.Services[task.Name]; ok {
+			if svc.Mode != "" {
+				config.Mode = svc.Mode
+			}
+			if svc.Version != "" {
+				config.Version = svc.Version
+			}
+			if svc.Image != "" {
+				config.Image = svc.Image
+			}
+			if svc.BinaryURL != "" {
+				config.BinaryURL = svc.BinaryURL
+			}
+			if svc.EnvFile != "" {
+				config.EnvFile = svc.EnvFile
+			}
+			if port, err := resolvePort(task.Name, svc); err == nil && port != 0 {
+				config.Port = port
+			}
+		}
+		// Interface overrides
+		if iface, ok := manifest.Interfaces[task.Name]; ok {
+			if iface.Mode != "" {
+				config.Mode = iface.Mode
+			}
+			if iface.Version != "" {
+				config.Version = iface.Version
+			}
+			if iface.Image != "" {
+				config.Image = iface.Image
+			}
+			if iface.BinaryURL != "" {
+				config.BinaryURL = iface.BinaryURL
+			}
+			if iface.EnvFile != "" {
+				config.EnvFile = iface.EnvFile
+			}
+			if port, err := resolvePort(task.Name, iface); err == nil && port != 0 {
+				config.Port = port
+			}
+		}
+		// Infrastructure overrides
+		switch task.Type {
+		case "postgres":
+			if manifest.Infrastructure.Postgres != nil {
+				if manifest.Infrastructure.Postgres.Mode != "" {
+					config.Mode = manifest.Infrastructure.Postgres.Mode
+				}
+				if manifest.Infrastructure.Postgres.Version != "" {
+					config.Version = manifest.Infrastructure.Postgres.Version
+				}
+				if manifest.Infrastructure.Postgres.Port != 0 {
+					config.Port = manifest.Infrastructure.Postgres.Port
+				}
+			}
+		case "clickhouse":
+			if manifest.Infrastructure.ClickHouse != nil {
+				if manifest.Infrastructure.ClickHouse.Mode != "" {
+					config.Mode = manifest.Infrastructure.ClickHouse.Mode
+				}
+				if manifest.Infrastructure.ClickHouse.Version != "" {
+					config.Version = manifest.Infrastructure.ClickHouse.Version
+				}
+				if manifest.Infrastructure.ClickHouse.Port != 0 {
+					config.Port = manifest.Infrastructure.ClickHouse.Port
+				}
+			}
+		case "kafka":
+			if manifest.Infrastructure.Kafka != nil {
+				if manifest.Infrastructure.Kafka.Mode != "" {
+					config.Mode = manifest.Infrastructure.Kafka.Mode
+				}
+				if manifest.Infrastructure.Kafka.Version != "" {
+					config.Version = manifest.Infrastructure.Kafka.Version
+				}
+			}
+		case "zookeeper":
+			if manifest.Infrastructure.Zookeeper != nil {
+				if manifest.Infrastructure.Zookeeper.Mode != "" {
+					config.Mode = manifest.Infrastructure.Zookeeper.Mode
+				}
+				if manifest.Infrastructure.Zookeeper.Version != "" {
+					config.Version = manifest.Infrastructure.Zookeeper.Version
+				}
+			}
+		}
 	}
 
 	// Override for infrastructure
@@ -268,36 +364,14 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 }
 
 // provisionTask provisions a single task
-func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, force, ignoreValidation bool, runtimeData map[string]interface{}) error {
+func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}) error {
 	// Get provisioner from registry
 	prov, err := provisioner.GetProvisioner(task.Type, pool)
 	if err != nil {
 		return fmt.Errorf("failed to get provisioner: %w", err)
 	}
 
-	// Build service config
-	config := provisioner.ServiceConfig{
-		Mode:     "docker", // Default to docker for applications
-		Version:  "stable", // Use stable channel from gitops
-		Port:     provisioner.ServicePorts[task.Type],
-		Metadata: make(map[string]interface{}),
-	}
-
-	// Inject runtime data (e.g. enrollment token)
-	for k, v := range runtimeData {
-		config.Metadata[k] = v
-	}
-
-	// Override for infrastructure (stay native)
-	if task.Phase == orchestrator.PhaseInfrastructure {
-		config.Mode = "native"
-		config.Version = "latest"
-	}
-
-	// Native override for Privateer
-	if task.Type == "privateer" {
-		config.Mode = "native"
-	}
+	config := buildTaskConfig(task, manifest, runtimeData)
 
 	// Provision
 	if err := prov.Provision(ctx, host, config); err != nil {
@@ -316,17 +390,76 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	return nil
 }
 
+func resolveTaskPort(task *orchestrator.Task, manifest *inventory.Manifest) int {
+	if manifest == nil {
+		return 0
+	}
+
+	// Infrastructure ports
+	switch task.Type {
+	case "postgres":
+		if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Port != 0 {
+			return manifest.Infrastructure.Postgres.Port
+		}
+	case "clickhouse":
+		if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Port != 0 {
+			return manifest.Infrastructure.ClickHouse.Port
+		}
+	case "kafka":
+		if manifest.Infrastructure.Kafka != nil {
+			for _, broker := range manifest.Infrastructure.Kafka.Brokers {
+				if task.Name == fmt.Sprintf("kafka-broker-%d", broker.ID) && broker.Port != 0 {
+					return broker.Port
+				}
+			}
+		}
+	case "zookeeper":
+		if manifest.Infrastructure.Zookeeper != nil {
+			for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
+				if task.Name == fmt.Sprintf("zookeeper-%d", node.ID) && node.Port != 0 {
+					return node.Port
+				}
+			}
+		}
+	}
+
+	// Application services
+	if svc, ok := manifest.Services[task.Name]; ok {
+		if p, err := resolvePort(task.Name, svc); err == nil {
+			return p
+		}
+	}
+
+	// Interfaces
+	if iface, ok := manifest.Interfaces[task.Name]; ok {
+		if p, err := resolvePort(task.Name, iface); err == nil {
+			return p
+		}
+	}
+
+	return 0
+}
+
 // runBootstrap connects to Quartermaster and generates an infrastructure token
-func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, error) {
+func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, string, string, error) {
 	serviceToken := os.Getenv("SERVICE_TOKEN")
 	if serviceToken == "" {
-		return "", fmt.Errorf("SERVICE_TOKEN env var required for bootstrapping")
+		if cfg, _, err := fwcfg.Load(); err == nil {
+			cliCtx := fwcfg.GetCurrent(cfg)
+			cliCtx.Auth = fwcfg.ResolveAuth(cliCtx)
+			serviceToken = cliCtx.Auth.ServiceToken
+		}
+	}
+	if serviceToken == "" {
+		return "", "", "", fmt.Errorf("service token required for bootstrapping (set SERVICE_TOKEN or run 'frameworks login')")
 	}
 
 	var qmHost string
+	var qmSvc inventory.ServiceConfig
 	for name, svc := range manifest.Services {
 		if name == "quartermaster" {
 			qmHost = svc.Host
+			qmSvc = svc
 			if qmHost == "" && len(svc.Hosts) > 0 {
 				qmHost = svc.Hosts[0]
 			}
@@ -336,17 +469,22 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 
 	host, ok := manifest.GetHost(qmHost)
 	if !ok {
-		return "", fmt.Errorf("quartermaster host not found in manifest")
+		return "", "", "", fmt.Errorf("quartermaster host not found in manifest")
 	}
 
 	// Use gRPC client instead of HTTP
-	grpcAddr := fmt.Sprintf("%s:19002", host.Address)
+	grpcPort := 19002
+	if qmSvc.GRPCPort != 0 {
+		grpcPort = qmSvc.GRPCPort
+	}
+	grpcAddr := fmt.Sprintf("%s:%d", host.Address, grpcPort)
 	client, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr: grpcAddr,
-		Logger:   logging.NewLogger(),
+		GRPCAddr:     grpcAddr,
+		Logger:       logging.NewLogger(),
+		ServiceToken: serviceToken,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+		return "", "", "", fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
 	defer client.Close()
 
@@ -354,7 +492,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 	var systemTenantID string
 	tenantsResp, err := client.ListTenants(ctx, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to get tenants from Quartermaster: %w", err)
+		return "", "", "", fmt.Errorf("failed to get tenants from Quartermaster: %w", err)
 	}
 
 	for _, t := range tenantsResp.Tenants {
@@ -374,7 +512,7 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 		}
 		createTenantResp, err := client.CreateTenant(ctx, createTenantReq)
 		if err != nil {
-			return "", fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", err)
+			return "", "", "", fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", err)
 		}
 		systemTenantID = createTenantResp.Tenant.Id
 		fmt.Printf("    ✓ Created System Tenant with ID: %s\n", systemTenantID)
@@ -384,7 +522,19 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 
 	// 2. Ensure Cluster is Registered
 	clusterID := fmt.Sprintf("%s-%s", manifest.Type, manifest.Profile)
-	baseURL := fmt.Sprintf("http://%s:18002", host.Address)
+	basePort := 18002
+	if qmSvc.Port != 0 {
+		basePort = qmSvc.Port
+	}
+	baseURL := fmt.Sprintf("http://%s:%d", host.Address, basePort)
+	// Prefer Bridge (Gateway) public URL if present in manifest
+	if bridgeSvc, ok := manifest.Services["bridge"]; ok && bridgeSvc.Enabled {
+		if bridgeSvc.Port != 0 {
+			if bridgeHost, ok := manifest.GetHost(bridgeSvc.Host); ok {
+				baseURL = fmt.Sprintf("http://%s:%d", bridgeHost.Address, bridgeSvc.Port)
+			}
+		}
+	}
 
 	// Check if cluster exists
 	_, err = client.GetCluster(ctx, clusterID)
@@ -398,11 +548,11 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 		}
 		_, err = client.CreateCluster(ctx, createClusterReq)
 		if err != nil {
-			return "", fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
+			return "", "", "", fmt.Errorf("failed to register cluster '%s': %w", clusterID, err)
 		}
 		fmt.Printf("    ✓ Registered Cluster: %s\n", clusterID)
 	} else if err != nil {
-		return "", fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
+		return "", "", "", fmt.Errorf("failed to check cluster '%s': %w", clusterID, err)
 	} else {
 		fmt.Printf("  ✓ Cluster '%s' already registered.\n", clusterID)
 	}
@@ -420,6 +570,9 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 		}
 
 		externalIP := hostInfo.Address
+		if hostInfo.ExternalIP != "" {
+			externalIP = hostInfo.ExternalIP
+		}
 		_, err := client.CreateNode(ctx, &pb.CreateNodeRequest{
 			NodeId:     hostName,
 			ClusterId:  clusterID,
@@ -430,11 +583,96 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 		if err != nil {
 			// Ignore duplicate errors (node already exists)
 			if !strings.Contains(err.Error(), "duplicate") && !strings.Contains(err.Error(), "already exists") {
-				return "", fmt.Errorf("failed to register node %s: %w", hostName, err)
+				return "", "", "", fmt.Errorf("failed to register node %s: %w", hostName, err)
 			}
 			fmt.Printf("    ✓ Node already exists: %s\n", hostName)
 		} else {
 			fmt.Printf("    ✓ Registered node: %s (%s)\n", hostName, nodeType)
+		}
+	}
+
+	// 3b. Register public service endpoints for DNS (Bridge + interfaces)
+	fmt.Printf("  Registering public service endpoints...\n")
+	for name, svc := range manifest.Services {
+		if !svc.Enabled {
+			continue
+		}
+		serviceType, ok := publicServiceType(name)
+		if !ok {
+			continue
+		}
+		hostName := svc.Host
+		if hostName == "" && len(svc.Hosts) > 0 {
+			hostName = svc.Hosts[0]
+		}
+		if hostName == "" {
+			continue
+		}
+		hostInfo, ok := manifest.GetHost(hostName)
+		if !ok {
+			continue
+		}
+		externalIP := hostInfo.Address
+		if hostInfo.ExternalIP != "" {
+			externalIP = hostInfo.ExternalIP
+		}
+		nodeID := fmt.Sprintf("%s-%s", hostName, serviceType)
+		nodeName := fmt.Sprintf("%s-%s", hostName, serviceType)
+		_, err := client.CreateNode(ctx, &pb.CreateNodeRequest{
+			NodeId:     nodeID,
+			ClusterId:  clusterID,
+			NodeName:   nodeName,
+			NodeType:   serviceType,
+			ExternalIp: &externalIP,
+		})
+		if err != nil {
+			if !strings.Contains(err.Error(), "duplicate") && !strings.Contains(err.Error(), "already exists") {
+				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, err)
+			}
+			fmt.Printf("    ✓ Public node already exists: %s\n", nodeID)
+		} else {
+			fmt.Printf("    ✓ Registered public node: %s (%s)\n", nodeID, serviceType)
+		}
+	}
+	for name, iface := range manifest.Interfaces {
+		if !iface.Enabled {
+			continue
+		}
+		serviceType, ok := publicServiceType(name)
+		if !ok {
+			continue
+		}
+		hostName := iface.Host
+		if hostName == "" && len(iface.Hosts) > 0 {
+			hostName = iface.Hosts[0]
+		}
+		if hostName == "" {
+			continue
+		}
+		hostInfo, ok := manifest.GetHost(hostName)
+		if !ok {
+			continue
+		}
+		externalIP := hostInfo.Address
+		if hostInfo.ExternalIP != "" {
+			externalIP = hostInfo.ExternalIP
+		}
+		nodeID := fmt.Sprintf("%s-%s", hostName, serviceType)
+		nodeName := fmt.Sprintf("%s-%s", hostName, serviceType)
+		_, err := client.CreateNode(ctx, &pb.CreateNodeRequest{
+			NodeId:     nodeID,
+			ClusterId:  clusterID,
+			NodeName:   nodeName,
+			NodeType:   serviceType,
+			ExternalIp: &externalIP,
+		})
+		if err != nil {
+			if !strings.Contains(err.Error(), "duplicate") && !strings.Contains(err.Error(), "already exists") {
+				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, err)
+			}
+			fmt.Printf("    ✓ Public node already exists: %s\n", nodeID)
+		} else {
+			fmt.Printf("    ✓ Registered public node: %s (%s)\n", nodeID, serviceType)
 		}
 	}
 
@@ -450,11 +688,11 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, er
 
 	resp, err := client.CreateBootstrapToken(ctx, infrastructureTokenReq)
 	if err != nil {
-		return "", fmt.Errorf("failed to create infrastructure bootstrap token: %w", err)
+		return "", "", "", fmt.Errorf("failed to create infrastructure bootstrap token: %w", err)
 	}
 
 	fmt.Printf("    ✓ Generated Infrastructure Token: %s\n", resp.Token.Id)
-	return resp.Token.Token, nil
+	return resp.Token.Token, serviceToken, grpcAddr, nil
 }
 
 // getDefaultPort returns default port for a service type
@@ -471,4 +709,22 @@ func getDefaultPort(serviceType string) int {
 	}
 
 	return 8080 // Default
+}
+
+// publicServiceType maps public-facing services to DNS node types.
+func publicServiceType(serviceName string) (string, bool) {
+	switch serviceName {
+	case "bridge":
+		return "api", true
+	case "chartroom":
+		return "app", true
+	case "foredeck":
+		return "website", true
+	case "logbook":
+		return "docs", true
+	case "steward":
+		return "forms", true
+	default:
+		return "", false
+	}
 }

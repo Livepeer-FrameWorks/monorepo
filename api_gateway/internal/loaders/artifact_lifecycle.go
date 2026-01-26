@@ -125,17 +125,3 @@ func (l *ArtifactLifecycleLoader) PrimeMany(tenantID string, states []*pb.Artifa
 		l.cache[key] = state
 	}
 }
-
-// Context key for storing the loader
-type artifactLoaderKey struct{}
-
-// WithArtifactLoader stores an artifact loader in the context
-func WithArtifactLoader(ctx context.Context, loader *ArtifactLifecycleLoader) context.Context {
-	return context.WithValue(ctx, artifactLoaderKey{}, loader)
-}
-
-// ArtifactLoaderFromContext retrieves the artifact loader from context
-func ArtifactLoaderFromContext(ctx context.Context) *ArtifactLifecycleLoader {
-	loader, _ := ctx.Value(artifactLoaderKey{}).(*ArtifactLifecycleLoader)
-	return loader
-}

@@ -1,0 +1,30 @@
+# Fetch paginated usage records by cluster and usage type for billing analysis
+query GetUsageRecords(
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $after: String
+) {
+  usageRecordsConnection(timeRange: $timeRange, page: { first: $first, after: $after }) {
+    edges {
+      cursor
+      node {
+        id
+        clusterId
+        clusterName
+        usageType
+        usageValue
+        createdAt
+        periodStart
+        periodEnd
+        granularity
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

@@ -13,6 +13,8 @@
   Chart.register(DoughnutController, ArcElement, Tooltip, Legend);
 
   interface QualityTierData {
+    tier2160pMinutes: number;
+    tier1440pMinutes: number;
     tier1080pMinutes: number;
     tier720pMinutes: number;
     tier480pMinutes: number;
@@ -30,9 +32,11 @@
   let chart: Chart | null = null;
 
   const tierColors = {
-    "1080p": "rgb(34, 197, 94)",   // success green
-    "720p": "rgb(59, 130, 246)",   // primary blue
-    "480p": "rgb(234, 179, 8)",    // warning yellow
+    "2160p": "rgb(14, 165, 233)",  // sky
+    "1440p": "rgb(34, 197, 94)",   // green
+    "1080p": "rgb(59, 130, 246)",  // blue
+    "720p": "rgb(234, 179, 8)",    // yellow
+    "480p": "rgb(249, 115, 22)",   // orange
     "SD": "rgb(148, 163, 184)",    // muted gray
   };
 
@@ -48,6 +52,8 @@
     if (!ctx) return;
 
     const totalMinutes =
+      data.tier2160pMinutes +
+      data.tier1440pMinutes +
       data.tier1080pMinutes +
       data.tier720pMinutes +
       data.tier480pMinutes +
@@ -59,16 +65,20 @@
     const config: ChartConfiguration<"doughnut", number[], string> = {
       type: "doughnut",
       data: {
-        labels: ["1080p", "720p", "480p", "SD"],
+        labels: ["2160p", "1440p", "1080p", "720p", "480p", "SD"],
         datasets: [
           {
             data: [
+              data.tier2160pMinutes,
+              data.tier1440pMinutes,
               data.tier1080pMinutes,
               data.tier720pMinutes,
               data.tier480pMinutes,
               data.tierSdMinutes,
             ],
             backgroundColor: [
+              tierColors["2160p"],
+              tierColors["1440p"],
               tierColors["1080p"],
               tierColors["720p"],
               tierColors["480p"],
@@ -164,7 +174,9 @@
 
   const hasData = $derived(
     data &&
-      (data.tier1080pMinutes > 0 ||
+      (data.tier2160pMinutes > 0 ||
+        data.tier1440pMinutes > 0 ||
+        data.tier1080pMinutes > 0 ||
         data.tier720pMinutes > 0 ||
         data.tier480pMinutes > 0 ||
         data.tierSdMinutes > 0)

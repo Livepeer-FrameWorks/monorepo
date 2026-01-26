@@ -1,0 +1,12 @@
+query GetPrepaidBalance($currency: String = "USD") {
+  prepaidBalance(currency: $currency) {
+    id
+    tenantId
+    balanceCents
+    currency
+    lowBalanceThresholdCents
+    isLowBalance
+    createdAt
+    updatedAt
+  }
+}

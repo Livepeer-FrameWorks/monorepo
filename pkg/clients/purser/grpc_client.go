@@ -22,6 +22,11 @@ type GRPCClient struct {
 	payment        pb.PaymentServiceClient
 	usage          pb.UsageServiceClient
 	clusterPricing pb.ClusterPricingServiceClient
+	prepaid        pb.PrepaidServiceClient
+	webhook        pb.WebhookServiceClient
+	stripe         pb.StripeServiceClient
+	mollie         pb.MollieServiceClient
+	x402           pb.X402ServiceClient
 	logger         logging.Logger
 }
 
@@ -95,6 +100,11 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		payment:        pb.NewPaymentServiceClient(conn),
 		usage:          pb.NewUsageServiceClient(conn),
 		clusterPricing: pb.NewClusterPricingServiceClient(conn),
+		prepaid:        pb.NewPrepaidServiceClient(conn),
+		webhook:        pb.NewWebhookServiceClient(conn),
+		stripe:         pb.NewStripeServiceClient(conn),
+		mollie:         pb.NewMollieServiceClient(conn),
+		x402:           pb.NewX402ServiceClient(conn),
 		logger:         config.Logger,
 	}, nil
 }
@@ -105,6 +115,19 @@ func (c *GRPCClient) Close() error {
 		return c.conn.Close()
 	}
 	return nil
+}
+
+// ============================================================================
+// CROSS-SERVICE BILLING STATUS
+// ============================================================================
+
+// GetTenantBillingStatus returns lightweight billing status for cross-service checks.
+// Used by Commodore (ValidateStreamKey, isTenantSuspended) and Quartermaster (ValidateTenant).
+// Returns: billing_model, is_suspended, is_balance_negative, balance_cents
+func (c *GRPCClient) GetTenantBillingStatus(ctx context.Context, tenantID string) (*pb.GetTenantBillingStatusResponse, error) {
+	return c.billing.GetTenantBillingStatus(ctx, &pb.GetTenantBillingStatusRequest{
+		TenantId: tenantID,
+	})
 }
 
 // ============================================================================
@@ -219,13 +242,13 @@ func (c *GRPCClient) GetBillingStatus(ctx context.Context, tenantID string) (*pb
 // ============================================================================
 
 // GetUsageRecords returns usage records for a tenant with cursor pagination
-func (c *GRPCClient) GetUsageRecords(ctx context.Context, tenantID, clusterID, usageType, billingMonth string, pagination *pb.CursorPaginationRequest) (*pb.UsageRecordsResponse, error) {
+func (c *GRPCClient) GetUsageRecords(ctx context.Context, tenantID, clusterID, usageType string, timeRange *pb.TimeRange, pagination *pb.CursorPaginationRequest) (*pb.UsageRecordsResponse, error) {
 	return c.usage.GetUsageRecords(ctx, &pb.GetUsageRecordsRequest{
-		TenantId:     tenantID,
-		ClusterId:    clusterID,
-		UsageType:    usageType,
-		BillingMonth: billingMonth,
-		Pagination:   pagination,
+		TenantId:   tenantID,
+		ClusterId:  clusterID,
+		UsageType:  usageType,
+		TimeRange:  timeRange,
+		Pagination: pagination,
 	})
 }
 
@@ -246,6 +269,16 @@ func (c *GRPCClient) GetTenantUsage(ctx context.Context, tenantID, startDate, en
 	})
 }
 
+// GetUsageAggregates returns rollup-backed usage aggregates for charts
+func (c *GRPCClient) GetUsageAggregates(ctx context.Context, tenantID string, timeRange *pb.TimeRange, granularity string, usageTypes []string) (*pb.GetUsageAggregatesResponse, error) {
+	return c.usage.GetUsageAggregates(ctx, &pb.GetUsageAggregatesRequest{
+		TenantId:    tenantID,
+		TimeRange:   timeRange,
+		Granularity: granularity,
+		UsageTypes:  usageTypes,
+	})
+}
+
 // ============================================================================
 // CLUSTER PRICING OPERATIONS
 // ============================================================================
@@ -257,11 +290,13 @@ func (c *GRPCClient) GetClusterPricing(ctx context.Context, clusterID string) (*
 	})
 }
 
-// GetClustersPricingBatch returns pricing configs for multiple clusters
-func (c *GRPCClient) GetClustersPricingBatch(ctx context.Context, clusterIDs []string) (map[string]*pb.ClusterPricing, error) {
-	resp, err := c.clusterPricing.GetClustersPricingBatch(ctx, &pb.GetClustersPricingBatchRequest{
-		ClusterIds: clusterIDs,
-	})
+// GetClustersPricingBatch returns pricing configs for multiple clusters with eligibility info.
+func (c *GRPCClient) GetClustersPricingBatch(ctx context.Context, tenantID string, clusterIDs []string) (map[string]*pb.ClusterPricing, error) {
+	req := &pb.GetClustersPricingBatchRequest{ClusterIds: clusterIDs}
+	if tenantID != "" {
+		req.TenantId = &tenantID
+	}
+	resp, err := c.clusterPricing.GetClustersPricingBatch(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -308,4 +343,250 @@ func (c *GRPCClient) CancelClusterSubscription(ctx context.Context, tenantID, cl
 		ClusterId: clusterID,
 	})
 	return err
+}
+
+// ListMarketplaceClusterPricings returns paginated cluster pricings filtered by tenant tier level.
+// Used as the primary marketplace query - Gateway enriches with Quartermaster metadata.
+func (c *GRPCClient) ListMarketplaceClusterPricings(ctx context.Context, req *pb.ListMarketplaceClusterPricingsRequest) (*pb.ListMarketplaceClusterPricingsResponse, error) {
+	return c.clusterPricing.ListMarketplaceClusterPricings(ctx, req)
+}
+
+// ============================================================================
+// PREPAID BALANCE OPERATIONS
+// ============================================================================
+
+// GetPrepaidBalance returns the current prepaid balance for a tenant
+func (c *GRPCClient) GetPrepaidBalance(ctx context.Context, tenantID string, currency string) (*pb.PrepaidBalance, error) {
+	return c.prepaid.GetPrepaidBalance(ctx, &pb.GetPrepaidBalanceRequest{
+		TenantId: tenantID,
+		Currency: currency,
+	})
+}
+
+// InitializePrepaidBalance creates a new prepaid balance for a tenant
+func (c *GRPCClient) InitializePrepaidBalance(ctx context.Context, tenantID string, currency string, initialBalanceCents, thresholdCents int64) (*pb.PrepaidBalance, error) {
+	return c.prepaid.InitializePrepaidBalance(ctx, &pb.InitializePrepaidBalanceRequest{
+		TenantId:                 tenantID,
+		Currency:                 currency,
+		InitialBalanceCents:      initialBalanceCents,
+		LowBalanceThresholdCents: thresholdCents,
+	})
+}
+
+// InitializePrepaidAccount creates subscription + prepaid balance for wallet provisioning.
+// Called by Commodore during GetOrCreateWalletUser to avoid cross-service DB inserts.
+// Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
+func (c *GRPCClient) InitializePrepaidAccount(ctx context.Context, tenantID, currency string) (*pb.InitializePrepaidAccountResponse, error) {
+	return c.prepaid.InitializePrepaidAccount(ctx, &pb.InitializePrepaidAccountRequest{
+		TenantId: tenantID,
+		Currency: currency,
+	})
+}
+
+// TopupBalance adds funds to a tenant's prepaid balance
+func (c *GRPCClient) TopupBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*pb.BalanceTransaction, error) {
+	return c.prepaid.TopupBalance(ctx, &pb.TopupBalanceRequest{
+		TenantId:      tenantID,
+		AmountCents:   amountCents,
+		Currency:      currency,
+		Description:   description,
+		ReferenceId:   referenceID,
+		ReferenceType: referenceType,
+	})
+}
+
+// DeductBalance removes funds from a tenant's prepaid balance
+func (c *GRPCClient) DeductBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*pb.BalanceTransaction, error) {
+	return c.prepaid.DeductBalance(ctx, &pb.DeductBalanceRequest{
+		TenantId:      tenantID,
+		AmountCents:   amountCents,
+		Currency:      currency,
+		Description:   description,
+		ReferenceId:   referenceID,
+		ReferenceType: referenceType,
+	})
+}
+
+// AdjustBalance manually adjusts a tenant's prepaid balance (admin only)
+func (c *GRPCClient) AdjustBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*pb.BalanceTransaction, error) {
+	return c.prepaid.AdjustBalance(ctx, &pb.AdjustBalanceRequest{
+		TenantId:      tenantID,
+		AmountCents:   amountCents,
+		Currency:      currency,
+		Description:   description,
+		ReferenceId:   referenceID,
+		ReferenceType: referenceType,
+	})
+}
+
+// ListBalanceTransactions returns transaction history for a tenant
+func (c *GRPCClient) ListBalanceTransactions(ctx context.Context, tenantID string, transactionType *string, timeRange *pb.TimeRange, pagination *pb.CursorPaginationRequest) (*pb.ListBalanceTransactionsResponse, error) {
+	return c.prepaid.ListBalanceTransactions(ctx, &pb.ListBalanceTransactionsRequest{
+		TenantId:        tenantID,
+		TransactionType: transactionType,
+		TimeRange:       timeRange,
+		Pagination:      pagination,
+	})
+}
+
+// CreateCardTopup creates a pending card top-up and returns a checkout URL
+func (c *GRPCClient) CreateCardTopup(ctx context.Context, req *pb.CreateCardTopupRequest) (*pb.CreateCardTopupResponse, error) {
+	return c.prepaid.CreateCardTopup(ctx, req)
+}
+
+// CreateCryptoTopup generates a crypto deposit address for prepaid balance top-up
+func (c *GRPCClient) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryptoTopupRequest) (*pb.CreateCryptoTopupResponse, error) {
+	return c.prepaid.CreateCryptoTopup(ctx, req)
+}
+
+// GetCryptoTopup returns the status of a crypto top-up
+func (c *GRPCClient) GetCryptoTopup(ctx context.Context, topupID string) (*pb.CryptoTopup, error) {
+	return c.prepaid.GetCryptoTopup(ctx, &pb.GetCryptoTopupRequest{TopupId: topupID})
+}
+
+// PromoteToPaid upgrades a prepaid account to postpaid billing
+func (c *GRPCClient) PromoteToPaid(ctx context.Context, tenantID, tierID string) (*pb.PromoteToPaidResponse, error) {
+	return c.prepaid.PromoteToPaid(ctx, &pb.PromoteToPaidRequest{
+		TenantId: tenantID,
+		TierId:   tierID,
+	})
+}
+
+// ============================================================================
+// WEBHOOK OPERATIONS
+// ============================================================================
+
+// ProcessWebhook forwards an incoming webhook to Purser for processing.
+// This is called by the Gateway's webhook router - signature verification
+// happens in Purser (secrets stay there).
+func (c *GRPCClient) ProcessWebhook(ctx context.Context, req *pb.WebhookRequest) (*pb.WebhookResponse, error) {
+	return c.webhook.ProcessWebhook(ctx, req)
+}
+
+// ============================================================================
+// STRIPE OPERATIONS
+// ============================================================================
+
+// CreateStripeCheckoutSession creates a Stripe Checkout Session for subscription setup
+func (c *GRPCClient) CreateStripeCheckoutSession(ctx context.Context, tenantID, tierID, billingPeriod, successURL, cancelURL string) (*pb.CreateStripeCheckoutResponse, error) {
+	return c.stripe.CreateCheckoutSession(ctx, &pb.CreateStripeCheckoutRequest{
+		TenantId:      tenantID,
+		TierId:        tierID,
+		BillingPeriod: billingPeriod,
+		SuccessUrl:    successURL,
+		CancelUrl:     cancelURL,
+	})
+}
+
+// CreateStripeBillingPortal creates a Stripe Billing Portal session for subscription management
+func (c *GRPCClient) CreateStripeBillingPortal(ctx context.Context, tenantID, returnURL string) (*pb.CreateBillingPortalResponse, error) {
+	return c.stripe.CreateBillingPortalSession(ctx, &pb.CreateBillingPortalRequest{
+		TenantId:  tenantID,
+		ReturnUrl: returnURL,
+	})
+}
+
+// SyncStripeSubscription syncs subscription state from Stripe (admin/debug)
+func (c *GRPCClient) SyncStripeSubscription(ctx context.Context, tenantID string) (*pb.TenantSubscription, error) {
+	return c.stripe.SyncSubscription(ctx, &pb.SyncStripeSubscriptionRequest{
+		TenantId: tenantID,
+	})
+}
+
+// ============================================================================
+// MOLLIE OPERATIONS
+// ============================================================================
+
+// CreateMollieFirstPayment creates a Mollie first payment to establish a mandate.
+// After successful payment, a SEPA DD mandate is created for recurring billing.
+func (c *GRPCClient) CreateMollieFirstPayment(ctx context.Context, tenantID, tierID, method, redirectURL string) (*pb.CreateMollieFirstPaymentResponse, error) {
+	return c.mollie.CreateFirstPayment(ctx, &pb.CreateMollieFirstPaymentRequest{
+		TenantId:    tenantID,
+		TierId:      tierID,
+		Method:      method,
+		RedirectUrl: redirectURL,
+	})
+}
+
+// CreateMollieSubscription creates a Mollie subscription after mandate is valid
+func (c *GRPCClient) CreateMollieSubscription(ctx context.Context, tenantID, tierID, mandateID, description string) (*pb.CreateMollieSubscriptionResponse, error) {
+	return c.mollie.CreateMollieSubscription(ctx, &pb.CreateMollieSubscriptionRequest{
+		TenantId:    tenantID,
+		TierId:      tierID,
+		MandateId:   mandateID,
+		Description: description,
+	})
+}
+
+// ListMollieMandates lists available payment mandates for a tenant
+func (c *GRPCClient) ListMollieMandates(ctx context.Context, tenantID string) (*pb.ListMollieMandatesResponse, error) {
+	return c.mollie.ListMandates(ctx, &pb.ListMollieMandatesRequest{
+		TenantId: tenantID,
+	})
+}
+
+// CancelMollieSubscription cancels a Mollie subscription
+func (c *GRPCClient) CancelMollieSubscription(ctx context.Context, tenantID, subscriptionID string) error {
+	_, err := c.mollie.CancelMollieSubscription(ctx, &pb.CancelMollieSubscriptionRequest{
+		TenantId:       tenantID,
+		SubscriptionId: subscriptionID,
+	})
+	return err
+}
+
+// ============================================================================
+// BILLING DETAILS OPERATIONS
+// ============================================================================
+
+// GetBillingDetails returns billing details for a tenant
+func (c *GRPCClient) GetBillingDetails(ctx context.Context, tenantID string) (*pb.BillingDetails, error) {
+	return c.subscription.GetBillingDetails(ctx, &pb.GetBillingDetailsRequest{
+		TenantId: tenantID,
+	})
+}
+
+// UpdateBillingDetails updates billing details for a tenant
+func (c *GRPCClient) UpdateBillingDetails(ctx context.Context, req *pb.UpdateBillingDetailsRequest) (*pb.BillingDetails, error) {
+	return c.subscription.UpdateBillingDetails(ctx, req)
+}
+
+// ============================================================================
+// X402 PAYMENT OPERATIONS
+// ============================================================================
+
+// GetPaymentRequirements returns x402 payment requirements for a 402 response.
+// Called by Gateway when returning HTTP 402 to include payment options.
+func (c *GRPCClient) GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*pb.PaymentRequirements, error) {
+	return c.x402.GetPaymentRequirements(ctx, &pb.GetPaymentRequirementsRequest{
+		TenantId: tenantID,
+		Resource: resource,
+	})
+}
+
+// VerifyX402Payment verifies an x402 payment payload without settling.
+// Returns validity status, payer address, amount, and whether billing details are required.
+func (c *GRPCClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.VerifyX402PaymentResponse, error) {
+	return c.x402.VerifyX402Payment(ctx, &pb.VerifyX402PaymentRequest{
+		TenantId: tenantID,
+		Payment:  payment,
+		ClientIp: clientIP,
+	})
+}
+
+// SettleX402Payment settles an x402 payment on-chain and credits the tenant's balance.
+// Returns transaction hash, credited amount, and new balance.
+func (c *GRPCClient) SettleX402Payment(ctx context.Context, tenantID string, payment *pb.X402PaymentPayload, clientIP string) (*pb.SettleX402PaymentResponse, error) {
+	return c.x402.SettleX402Payment(ctx, &pb.SettleX402PaymentRequest{
+		TenantId: tenantID,
+		Payment:  payment,
+		ClientIp: clientIP,
+	})
+}
+
+// GetTenantX402Address returns the per-tenant x402 deposit address.
+// Creates a new address on first call for a tenant.
+func (c *GRPCClient) GetTenantX402Address(ctx context.Context, tenantID string) (*pb.GetTenantX402AddressResponse, error) {
+	return c.x402.GetTenantX402Address(ctx, &pb.GetTenantX402AddressRequest{
+		TenantId: tenantID,
+	})
 }

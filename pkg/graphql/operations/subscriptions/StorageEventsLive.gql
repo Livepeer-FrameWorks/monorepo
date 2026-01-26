@@ -1,0 +1,18 @@
+# Real-time storage operations for clips/DVR
+# Tracks freeze/defrost lifecycle and storage usage
+subscription StorageEventsLive($streamId: ID) {
+  liveStorageEvents(streamId: $streamId) {
+    timestamp
+    streamId
+    assetHash
+    action
+    assetType
+    sizeBytes
+    s3Url
+    localPath
+    nodeId
+    durationMs
+    warmDurationMs
+    error
+  }
+}

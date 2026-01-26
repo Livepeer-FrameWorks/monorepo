@@ -168,3 +168,112 @@ func (e *ClusterSubscriptionStatus) UnmarshalGQL(v interface{}) error {
 	}
 	return nil
 }
+
+// ============================================================================
+// MESSAGING ENUM MARSHALING
+// ============================================================================
+
+// MarshalGQL implements the graphql.Marshaler interface for ConversationStatus
+func (e ConversationStatus) MarshalGQL(w io.Writer) {
+	var s string
+	switch e {
+	case ConversationStatus_CONVERSATION_STATUS_OPEN:
+		s = "OPEN"
+	case ConversationStatus_CONVERSATION_STATUS_RESOLVED:
+		s = "RESOLVED"
+	case ConversationStatus_CONVERSATION_STATUS_PENDING:
+		s = "PENDING"
+	default:
+		s = "OPEN"
+	}
+	io.WriteString(w, strconv.Quote(s))
+}
+
+// UnmarshalGQL implements the graphql.Unmarshaler interface for ConversationStatus
+func (e *ConversationStatus) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+	switch str {
+	case "OPEN":
+		*e = ConversationStatus_CONVERSATION_STATUS_OPEN
+	case "RESOLVED":
+		*e = ConversationStatus_CONVERSATION_STATUS_RESOLVED
+	case "PENDING":
+		*e = ConversationStatus_CONVERSATION_STATUS_PENDING
+	default:
+		return fmt.Errorf("%s is not a valid ConversationStatus", str)
+	}
+	return nil
+}
+
+// MarshalGQL implements the graphql.Marshaler interface for MessageSender
+func (e MessageSender) MarshalGQL(w io.Writer) {
+	var s string
+	switch e {
+	case MessageSender_MESSAGE_SENDER_USER:
+		s = "USER"
+	case MessageSender_MESSAGE_SENDER_AGENT:
+		s = "AGENT"
+	default:
+		s = "USER"
+	}
+	io.WriteString(w, strconv.Quote(s))
+}
+
+// UnmarshalGQL implements the graphql.Unmarshaler interface for MessageSender
+func (e *MessageSender) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+	switch str {
+	case "USER":
+		*e = MessageSender_MESSAGE_SENDER_USER
+	case "AGENT":
+		*e = MessageSender_MESSAGE_SENDER_AGENT
+	default:
+		return fmt.Errorf("%s is not a valid MessageSender", str)
+	}
+	return nil
+}
+
+// ============================================================================
+// CRYPTO ASSET ENUM MARSHALING
+// ============================================================================
+
+// MarshalGQL implements the graphql.Marshaler interface for CryptoAsset
+func (e CryptoAsset) MarshalGQL(w io.Writer) {
+	var s string
+	switch e {
+	case CryptoAsset_CRYPTO_ASSET_ETH:
+		s = "ETH"
+	case CryptoAsset_CRYPTO_ASSET_USDC:
+		s = "USDC"
+	case CryptoAsset_CRYPTO_ASSET_LPT:
+		s = "LPT"
+	default:
+		s = "ETH"
+	}
+	io.WriteString(w, strconv.Quote(s))
+}
+
+// UnmarshalGQL implements the graphql.Unmarshaler interface for CryptoAsset
+func (e *CryptoAsset) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+	switch str {
+	case "ETH":
+		*e = CryptoAsset_CRYPTO_ASSET_ETH
+	case "USDC":
+		*e = CryptoAsset_CRYPTO_ASSET_USDC
+	case "LPT":
+		*e = CryptoAsset_CRYPTO_ASSET_LPT
+	default:
+		return fmt.Errorf("%s is not a valid CryptoAsset", str)
+	}
+	return nil
+}

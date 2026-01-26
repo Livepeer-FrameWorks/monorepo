@@ -82,7 +82,7 @@
             <h4 class="text-sm font-medium text-foreground">React Player Component</h4>
           </div>
           <p class="text-xs text-muted-foreground mb-3">
-            Embed using the <code class="bg-muted px-1 rounded">@livepeer-frameworks/player</code> NPM package
+            Embed using the <code class="bg-muted px-1 rounded">@livepeer-frameworks/player-react</code> NPM package
           </p>
           <Textarea
             readonly

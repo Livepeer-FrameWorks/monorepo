@@ -8,11 +8,11 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="tip" title="Automated DNS Management">
-**Navigator (`api_dns`)** provides automated DNS management for FrameWorks. It syncs DNS records based on Quartermaster node inventory:
-- **Single healthy node** → A record (direct IP)
-- **Multiple healthy nodes** → Cloudflare load balancer pool with geo-routing
+**Navigator (`api_dns`)** provides automated DNS management for FrameWorks. It syncs DNS records based on Quartermaster node inventory (nodes with external IPs):
+- **Single node** → A record (direct IP)
+- **Multiple nodes** → Cloudflare load balancer pool with geo-routing
 
-Navigator also handles ACME certificate issuance via DNS-01 validation.
+Navigator also handles ACME certificate issuance via DNS-01 validation (platform-managed subdomains only).
 </Aside>
 
 FrameWorks automates the complex dance of DNS records and SSL certificates so you don't have to. Using the Navigator service, the platform ensures your public endpoints are always in sync with your active infrastructure.
@@ -26,18 +26,21 @@ Robust DNS is the first line of defense for reliability and performance. FrameWo
 - **DNS layer (Cloudflare)**: Infrastructure-level geo-routing to nearest region
 - **Application layer (Foghorn)**: Capacity-aware routing to optimal edge node
 
-> **Note**: While FrameWorks currently leverages Cloudflare for ease of deployment, the architecture is designed to support a transition to a fully self-hosted Anycast DNS solution in the future.
+> **Note**: Cloudflare is the current DNS provider for convenience, but Navigator is designed to move to a fully self-hosted Anycast DNS layer in the future.
 
 ### How Navigator Works
 
 Navigator (`api_dns`) automatically manages Cloudflare DNS based on node inventory from Quartermaster:
 
-1. Polls Quartermaster for active nodes with external IPs
-2. Groups nodes by role (edge, gateway, etc.)
+1. Quartermaster triggers a DNS sync (for example, when nodes are created/registered)
+2. Navigator fetches nodes for that service type and filters to those with external IPs
 3. Updates Cloudflare DNS:
    - Single node → A record
    - Multiple nodes → Load balancer pool with geo-steering
-4. Handles ACME certificate issuance via DNS-01 challenges
+4. Applies proxying rules (default: app, website, docs)
+5. Handles ACME certificate issuance via DNS-01 challenges
+
+If no nodes are returned for a service type, Navigator skips changes to avoid removing working DNS during a transient outage.
 
 ### Verifying DNS State
 
@@ -51,6 +54,8 @@ This checks:
 - Each subdomain resolves to expected IPs from inventory
 - Reports mismatches between public DNS and Quartermaster
 
+By default, the CLI assumes `frameworks.network` if `--domain` is not provided.
+
 ---
 
 ## Recommended DNS Structure
@@ -59,20 +64,26 @@ This checks:
 
 | Subdomain | Purpose | Service |
 |-----------|---------|---------|
-| `example.com` | Marketing site | Static |
-| `app.example.com` | Web console | Webapp |
+| `example.com` | Marketing site | Foredeck (Website) |
+| `app.example.com` | Web console | Chartroom (Webapp) |
 | `api.example.com` | GraphQL API | Bridge |
 | `play.example.com` | Viewer routing | Foghorn |
 | `ingest.example.com` | Stream ingest | Edge nodes |
+| `edge.example.com` | Edge pool domain | Edge nodes |
+| `docs.example.com` | Docs site | Logbook (Docs) |
+| `forms.example.com` | Forms API | Steward (Forms) |
 
-### Internal Services (WireGuard Mesh)
+Navigator only manages subdomains for service types that exist in Quartermaster inventory. If you want separate `ingest` or `play` domains, register nodes with those types; otherwise use the `edge` pool.
 
-These services communicate over the WireGuard mesh and do **not** need public DNS:
+### Internal Services (Private Network / Mesh)
+
+These services communicate over the private network or WireGuard mesh (Privateer) and do **not** need public DNS.
+Edge nodes do **not** join the mesh.
 
 - Commodore, Purser, Periscope, Quartermaster, Signalman
 - PostgreSQL, ClickHouse, Kafka, Zookeeper
 
-Configure via environment variables with mesh IPs:
+Configure via environment variables with private/mesh IPs:
 ```bash
 export COMMODORE_URL=http://10.0.1.10:18001
 export PURSER_URL=http://10.0.1.11:18003
@@ -83,7 +94,7 @@ export PURSER_URL=http://10.0.1.11:18003
 Tenant-specific subdomains CNAME to the shared infrastructure:
 
 ```
-tenant1.example.com         → CNAME → play.example.com
+tenant1.example.com         → CNAME → play.example.com (or edge.example.com)
 tenant1.ingest.example.com  → CNAME → ingest.example.com
 ```
 
@@ -95,13 +106,22 @@ Navigator requires a Cloudflare API token with these permissions:
 
 - **Zone.DNS**: Edit
 - **Account.Load Balancers**: Edit (for multi-node setups)
-- **Zone.Load Balancers**: Edit
 
 Environment variables for Navigator:
 ```bash
 CLOUDFLARE_API_TOKEN="your-api-token"
 CLOUDFLARE_ZONE_ID="your-zone-id"
 CLOUDFLARE_ACCOUNT_ID="your-account-id"
+```
+
+Optional environment variables:
+```bash
+# Cloudflare proxy defaults (comma-separated service types)
+NAVIGATOR_PROXY_SERVICES="app,website,docs"
+
+# Certificate issuance
+ACME_ENV="production"              # or "staging"
+NAVIGATOR_CERT_ALLOWED_SUFFIXES="example.com"
 ```
 
 ---

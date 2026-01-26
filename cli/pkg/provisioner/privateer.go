@@ -125,16 +125,18 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 	// Extract secrets from Metadata
 	qmGRPCAddr, _ := config.Metadata["quartermaster_grpc_addr"].(string)
 	token, _ := config.Metadata["enrollment_token"].(string)
+	serviceToken, _ := config.Metadata["service_token"].(string)
 	dnsPort, _ := config.Metadata["dns_port"].(string)
 	if dnsPort == "" {
 		dnsPort = "5353"
 	}
 
 	envContent := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s
+SERVICE_TOKEN=%s
 ENROLLMENT_TOKEN=%s
 DNS_PORT=%s
 MESH_INTERFACE=wg0
-`, qmGRPCAddr, token, dnsPort)
+`, qmGRPCAddr, serviceToken, token, dnsPort)
 
 	// Upload Env File
 	tmpEnv := filepath.Join(os.TempDir(), "privateer.env")

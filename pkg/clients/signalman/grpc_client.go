@@ -359,3 +359,8 @@ func (c *GRPCClient) SubscribeToSystem() error {
 func (c *GRPCClient) SubscribeToAll() error {
 	return c.Subscribe(pb.Channel_CHANNEL_ALL)
 }
+
+// SubscribeToMessaging subscribes to the messaging channel
+func (c *GRPCClient) SubscribeToMessaging() error {
+	return c.Subscribe(pb.Channel_CHANNEL_MESSAGING)
+}

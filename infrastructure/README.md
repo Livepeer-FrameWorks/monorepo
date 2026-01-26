@@ -2,12 +2,16 @@
 
 Dev-only configuration used by the root `docker-compose.yml`. These files help you run the full stack locally. Production deployment uses the CLI's edge templates.
 
-## What’s Here (used by dev compose)
+## What's Here
+
+**Used by dev compose:**
 - `nginx/default.conf` — Dev reverse proxy for app, GraphQL, websocket and media endpoints
-- `prometheus/*` — Prometheus config and rules for local metrics
-- `grafana/*` — Provisioning and dashboards for local Grafana
-- `clickhouse/*` — ClickHouse users and server config used by dev compose
+- `clickhouse/*` — ClickHouse users and server config
 - `mistserver.conf` — MistServer config for local media tests
+
+**Used by CLI deployments (staging/prod):**
+- `prometheus/*` — Prometheus config and rules
+- `grafana/*` — Provisioning and dashboards
 
 ## How To Use It (local dev)
 - From the repo root, start the stack: `docker-compose up -d`

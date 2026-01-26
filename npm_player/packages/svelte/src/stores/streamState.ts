@@ -82,7 +82,7 @@ const initialState: StreamState = {
  *
  *   const streamState = createStreamStateManager({
  *     mistBaseUrl: 'https://mist.example.com',
- *     streamName: 'my-stream',
+ *     streamName: 'pk_...', // playbackId (view key)
  *   });
  *
  *   // Access values

@@ -8,6 +8,7 @@
   // Define stream data interface matching Houdini types
   export interface PrimaryStreamData {
     id: string;
+    streamId?: string;
     name: string;
     streamKey: string;
     metrics?: {
@@ -30,6 +31,7 @@
   // Derive status from metrics edge
   const status = $derived(stream?.metrics?.status);
   const isLive = $derived(status === StreamStatus.LIVE);
+  const displayStreamId = $derived(stream?.streamId || stream?.id || "");
 </script>
 
 {#if stream}
@@ -38,7 +40,7 @@
     <div class="flex items-center justify-between mb-3">
       <div class="flex items-center gap-2">
         <h3 class="font-semibold text-foreground">
-          {stream.name || `Stream ${stream.id.slice(0, 8)}`}
+          {stream.name || `Stream ${displayStreamId.slice(0, 8)}`}
         </h3>
         <Button
           href={resolve(`/streams/${stream.id}`)}

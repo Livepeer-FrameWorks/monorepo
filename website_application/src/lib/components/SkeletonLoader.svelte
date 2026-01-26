@@ -38,7 +38,7 @@
     custom: "skeleton",
   };
 
-  const containerClass = inline ? "inline-flex" : "space-y-2";
+  const containerClass = $derived(inline ? "inline-flex" : "space-y-2");
 </script>
 
 <div class={containerClass}>

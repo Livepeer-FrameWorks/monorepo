@@ -57,8 +57,8 @@ FrameWorks ships official player and browser-ingest packages:
 
 Principles
 - Strict service boundaries (no cross‑DB reads)
-- Shared types in `pkg/models`
-- Time‑series in ClickHouse; control/aggregates in Postgres
+- Time‑serie/data-plane in ClickHouse; control/aggregates in Postgres
+- Type safety by reusing the gRPC types straight from the emitter. Passthrough and leave source data intact as much as possible, with optional enrichment fields
 
 ## Quick Start
 
@@ -82,9 +82,7 @@ Endpoints (local)
 - App via Nginx: http://localhost:18090
 - Web Console: http://localhost:18030
 - Marketing site: http://localhost:18031
-- Grafana: http://localhost:3000 (admin/frameworks_dev)
-- Prometheus: http://localhost:9091
-- Listmonk (Admin): http://localhost:9000
+- Listmonk (Admin): http://localhost:9001
 - MistServer: http://localhost:4242 (RTMP: 1935, HTTP: 8080)
 - Kafka (external): localhost:29092
 - Postgres: localhost:5432
@@ -101,7 +99,7 @@ Endpoints (local)
 | Control | Quartermaster (gRPC) | 19002 | gRPC API |
 | Control | Purser | 18003 | Health/Metrics |
 | Control | Purser (gRPC) | 19003 | gRPC API |
-| Data | Periscope Query | 18004 | HTTP API |
+| Data | Periscope Query | 18004 | HTTP health/metrics only |
 | Data | Periscope Query (gRPC) | 19004 | gRPC API |
 | Data | Periscope Ingest | 18005 | Kafka consumer |
 | Data | Decklog | 18006 | gRPC |
@@ -126,15 +124,18 @@ Endpoints (local)
 | Realtime | Signalman | 18009 | WebSocket hub |
 | Realtime | Signalman (gRPC) | 19005 | gRPC API |
 | Support | Nginx | 18090 | Reverse proxy |
-| Support | Prometheus | 9091 | Metrics |
-| Support | Grafana | 3000 | Dashboards |
-| Support | Listmonk | 9000 | Newsletter Admin |
+| Support | Prometheus | 9091 | Metrics (CLI deployment only) |
+| Support | Grafana | 3000 | Dashboards (CLI deployment only) |
+| Support | Metabase | 3001 | BI Analytics (CLI deployment only) |
+| Support | Listmonk | 9001 | Newsletter Admin |
+| Support | Chatwoot | 18092 | Support dashboard (via Nginx: /support) |
 | UI | Web Console | 18030 | Application UI |
 | UI | Marketing Site | 18031 | Public site |
-| Support | Forms API | 18032 | Contact forms (not in dev compose) |
+| Support | Forms API | 18032 | Contact forms |
 | Deferred | Lookout (api_incidents) | 18013 | Incident management (use Prometheus/Grafana instead) |
 | Planned | Parlor (api_rooms) | 18014 | Channel rooms for interactive features |
-| Planned | Deckhand (api_ticketing) | 18015 | Support ticketing |
+| Support | Deckhand (api_ticketing) | 18015 | Support ticketing |
+| Support | Deckhand (gRPC) | 19006 | Support gRPC API |
 
 ## Configuration
 

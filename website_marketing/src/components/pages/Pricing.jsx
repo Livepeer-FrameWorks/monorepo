@@ -128,9 +128,29 @@ const enterpriseTier = {
   bullets: [
     'Custom feature development and white-label solutions',
     'Private deployments or co-managed operations with our engineers',
-    'Unlimited bandwidth backed by dedicated GPU infrastructure',
+    'Committed bandwidth and GPU pools with reserved capacity',
     'Custom SLAs with training, consulting, and on-call support',
     'Flexible billing arrangements tailored to your organization',
+  ],
+}
+
+const payAsYouGo = {
+  name: 'Account Balance',
+  price: 'Usage-based',
+  badge: 'Agent-Ready',
+  description: 'Connect your wallet or add a card. Your balance covers storage, transcoding, and delivered minutes at the same rates as subscription tiers.',
+  features: [
+    'Add funds via card or crypto (ETH, USDC, LPT)',
+    'Wallet authentication (no email required)',
+    'Same usage rates as subscription tiers',
+    'MCP server for AI agents',
+    'x402 protocol support',
+  ],
+  howItWorks: [
+    'Connect wallet or create account',
+    'Add funds to your balance',
+    'Usage deducted automatically',
+    'Top up again when low',
   ],
 }
 
@@ -146,8 +166,8 @@ const gpuFeatureMatrix = [
     },
   },
   {
-    feature: 'AI processing',
-    description: 'Advanced video analysis, clipping, and inference workloads.',
+    feature: 'Live AI Processing',
+    description: 'AI transcription, video analysis, automated highlights, and real-time V2V transformations.',
     status: 'pipeline',
     statusNote: 'Pipeline: AI assist is in development; limited to internal and pilot workloads.',
     tiers: {
@@ -160,6 +180,8 @@ const gpuFeatureMatrix = [
   {
     feature: 'Multi-stream compositing',
     description: 'Combine multiple streams with studio-style mixing and effects.',
+    status: 'pipeline',
+    statusNote: 'Pipeline: compositing is in active development with limited pilot access.',
     tiers: {
       free: 'Only self-hosting',
       supporter: 'Only self-hosting',
@@ -178,32 +200,32 @@ const tierColumns = [
 
 const deploymentOptions = [
   {
-    id: 'self-hosted',
-    title: 'Self-hosted edge network',
-    tagline: 'Own every node',
-    tone: 'accent',
-    icon: HomeIcon,
-    summary: 'Operate ingest, control plane, and delivery on your hardware with FrameWorks automation.',
+    id: 'managed-pipeline',
+    title: 'Fully Hosted (SaaS)',
+    tagline: 'We run everything',
+    tone: 'purple',
+    icon: CloudIcon,
+    summary: 'We operate the control plane, edge, and ops so your team can focus on shipping streams.',
     modal: {
       description:
-        'Keep everything sovereign by running Mist ingest, delivery, and the FrameWorks control plane inside your footprint. We provide the automation, observability, and guardrails. You keep the keys.',
+        'Let FrameWorks run ingest, delivery, observability, and GPU orchestration while your team focuses on product. You keep full visibility.',
       bullets: [
-        'Declarative configs for bare metal, VMs, or Kubernetes with drift detection and safe rollbacks.',
-        'Joint dashboards, runbooks, and on-call assistance without surrendering shell access.',
-        'Optional burst into hosted GPU, CDN, or orchestration capacity when traffic surges.',
+        'SLO-backed operations with shared runbooks and direct-to-engineer escalation.',
+        'Managed load balancers, CDN federation, and GPU scheduling with per-tier usage breakdowns.',
+        'Service credits to expand into new regions, workloads, or codecs without retooling pipelines.',
       ],
     },
   },
   {
     id: 'hybrid-network',
-    title: 'Hybrid network federation',
-    tagline: 'Blend your POPs with ours',
+    title: 'Hybrid (Self-hosted Edge)',
+    tagline: 'Shared control',
     tone: 'green',
     icon: GlobeAltIcon,
-    summary: 'Blend your POPs with FrameWorks GPU, AI, and CDN services for elastic failover.',
+    summary: 'You run edge nodes. We run the control plane and hosted burst capacity.',
     modal: {
       description:
-        'Federate your existing POPs with FrameWorks so you can shift workloads between your sites and ours with one control plane and one set of dashboards.',
+        'Federate your POPs with FrameWorks so you can shift workloads between your sites and ours with one control plane and one set of dashboards.',
       bullets: [
         'Automatic failover and traffic steering with full audit trails and policy controls.',
         'Unified dashboards for bandwidth, viewer load, GPU draw, and AI usage across every region.',
@@ -212,19 +234,19 @@ const deploymentOptions = [
     },
   },
   {
-    id: 'managed-pipeline',
-    title: 'Managed FrameWorks pipeline',
-    tagline: 'We operate the stack',
-    tone: 'purple',
-    icon: CloudIcon,
-    summary: 'Hand ingest, load balancing, delivery, and observability to our SRE crews.',
+    id: 'self-hosted',
+    title: 'Fully Self-Hosted',
+    tagline: 'You run it all',
+    tone: 'accent',
+    icon: HomeIcon,
+    summary: 'Run control plane, databases, and edge on your infrastructure — with or without our support.',
     modal: {
       description:
-        'Let FrameWorks SREs run ingest, delivery, observability, and GPU orchestration while your team focuses on shipping. You keep full visibility and control.',
+        'Keep everything sovereign by running Mist ingest, delivery, and the FrameWorks control plane inside your footprint. We provide automation, observability, and guardrails.',
       bullets: [
-        'SLO-backed operations with shared runbooks, paging rotations, and direct-to-engineer escalation.',
-        'Managed load balancers, CDN federation, GPU scheduling, and AI pipelines with per-tier usage breakdowns.',
-        'Service credits to expand into new regions, workloads, or codecs without retooling pipelines.',
+        'Declarative configs for bare metal, VMs, or Kubernetes with drift detection and safe rollbacks.',
+        'Joint dashboards, runbooks, and on-call assistance without surrendering shell access.',
+        'Optional burst into hosted GPU, CDN, or orchestration capacity when traffic surges.',
       ],
     },
   },
@@ -234,7 +256,7 @@ const deploymentOptions = [
     tagline: 'Co-managed scale',
     tone: 'yellow',
     icon: BuildingOfficeIcon,
-    summary: 'Reserved clusters, private consoles, and compliance workflows tailored to regulated industries.',
+    summary: 'Any operating model with reserved clusters, private consoles, and compliance workflows.',
     modal: {
       description:
         'Design custom deployments alongside our engineers when you need dedicated capacity, compliance, and co-managed operations across regulated environments.',
@@ -272,6 +294,21 @@ const faqs = [
     question: 'What if we outgrow the published tiers?',
     answer:
       'Enterprise engagements unlock private deployments, custom SLAs, security reviews, and co-managed operations. We scope the stack with you so you retain control while leaning on our crews.',
+  },
+  {
+    question: 'What is pay-as-you-go billing?',
+    answer:
+      'Add funds to your account via card or crypto. Usage (storage, transcoding, delivered minutes) is deducted automatically — no invoices, no monthly commitment. Top up again when your balance runs low.',
+  },
+  {
+    question: 'Can I use FrameWorks without an email account?',
+    answer:
+      'Yes. Connect an Ethereum wallet to authenticate — your wallet address is your identity. You can optionally add an email later for notifications.',
+  },
+  {
+    question: 'How do AI agents access FrameWorks?',
+    answer:
+      'Agents authenticate via wallet signature or API token, then use the MCP server or GraphQL API. Usage is charged to your account balance automatically.',
   },
 ]
 
@@ -323,21 +360,21 @@ const pricingHeroAccents = [
 
 const pricingHeroHighlights = [
   {
-    title: 'Self-hosting included',
-    description: 'Deploy the full FrameWorks control plane on your infrastructure with no licensing fees.',
-    tone: 'accent',
+    title: 'Zero licensing fees',
+    description: 'Self-host the full stack with no per-seat, per-core, or per-stream licensing. Public domain code.',
+    tone: 'purple',
     icon: HomeIcon,
   },
   {
-    title: 'Hosted capacity on demand',
-    description: 'Burst into Livepeer-backed GPU and bandwidth pools whenever viewership spikes.',
-    tone: 'green',
+    title: 'Developer-first pricing',
+    description: 'Relay-style GraphQL API and typed SDKs included in every tier. Build faster, pay less.',
+    tone: 'accent',
     icon: CloudIcon,
   },
   {
-    title: 'Transparent overages',
-    description: 'Published rates for GPU minutes and delivered bandwidth. No hidden multipliers.',
-    tone: 'yellow',
+    title: 'Deep analytics included',
+    description: 'See exactly why viewer X connected to edge Y. QoE metrics and routing decisions in every plan.',
+    tone: 'green',
     icon: BanknotesIcon,
   },
 ]
@@ -444,7 +481,7 @@ const Pricing = () => {
             pricing
           </>
         }
-        description="Start free with full self-hosting capabilities. Upgrade as you grow for hosted services, dedicated bandwidth, and GPU processing across FrameWorks and the Livepeer network."
+        description="Start hosted, go hybrid, or run everything yourself. Every tier supports self-hosting; higher tiers add hosted services, reserved pools, and GPU processing."
         support={
           <IconList
             items={pricingHeroHighlights.map((highlight) => {
@@ -474,7 +511,7 @@ const Pricing = () => {
           >
             <HeadlineStack
               eyebrow="Free tier"
-              title="Start free with the self-hosted control plane"
+              title="Start free with full self-hosting (control plane included)"
               subtitle="Deploy FrameWorks on your own infrastructure and keep sovereignty over your workloads."
               align="left"
               underlineAlign="start"
@@ -559,6 +596,50 @@ const Pricing = () => {
           >
             <MarketingBand surface="none">
               <HeadlineStack
+                eyebrow="No subscription required"
+                title="Pay As You Go"
+                subtitle="Top up your balance and pay for what you use. Perfect for automation, agents, and usage-based workflows."
+                align="left"
+                underlineAlign="start"
+              />
+              <PricingTierOutline
+                tone="cyan"
+                badge={payAsYouGo.badge}
+                name={payAsYouGo.name}
+                price={payAsYouGo.price}
+                description={payAsYouGo.description}
+                actions={
+                  <CTACluster align="start">
+                    <MarketingCTAButton intent="primary" href={config.appUrl} label="Connect Wallet" external />
+                    <MarketingCTAButton intent="secondary" href={config.appUrl} label="Add Funds" external />
+                  </CTACluster>
+                }
+                className="mt-8"
+                sections={[
+                  {
+                    title: "What's included",
+                    items: payAsYouGo.features,
+                  },
+                  {
+                    title: 'How it works',
+                    items: payAsYouGo.howItWorks,
+                    bullet: 'number',
+                  },
+                ]}
+              />
+            </MarketingBand>
+          </motion.div>
+        </SectionContainer>
+
+        <SectionContainer className="mt-6">
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingBand surface="none">
+              <HeadlineStack
                 eyebrow="Need more?"
                 title="Go Enterprise"
                 subtitle={enterpriseTier.headline}
@@ -625,9 +706,9 @@ const Pricing = () => {
           >
             <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
               <HeadlineStack
-                eyebrow="Hybrid model"
-                title="Build your own network, or use ours"
-                subtitle="Mix self-hosted infrastructure with FrameWorks hosted services and Livepeer-backed GPU capacity."
+                eyebrow="Operating models"
+                title="SaaS → Hybrid → Fully self-hosted"
+                subtitle="Choose the level of control you want: fully hosted, self-hosted edge, or the entire stack."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

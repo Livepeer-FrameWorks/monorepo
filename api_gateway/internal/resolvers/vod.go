@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	"frameworks/pkg/globalid"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/pagination"
@@ -73,7 +75,8 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 		ID:           resp.UploadId,
 		ArtifactID:   resp.ArtifactId,
 		ArtifactHash: resp.ArtifactHash,
-		PartSize:     int(resp.PartSize),
+		PlaybackID:   resp.PlaybackId,
+		PartSize:     float64(resp.PartSize),
 		Parts:        resp.Parts, // VodUploadPart autobind
 		ExpiresAt:    resp.ExpiresAt.AsTime(),
 	}, nil
@@ -342,8 +345,16 @@ func (r *Resolver) buildVodAssetsConnection(assets []*model.VodAsset, pagination
 		totalCount = len(assets)
 	}
 
+	edgeNodes := make([]*model.VodAsset, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
 	return &model.VodAssetsConnection{
 		Edges:      edges,
+		Nodes:      edgeNodes,
 		PageInfo:   pageInfo,
 		TotalCount: totalCount,
 	}
@@ -372,9 +383,18 @@ func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
 		status = model.VodAssetStatusUploading // default fallback
 	}
 
+	if p.ExpiresAt != nil && p.ExpiresAt.AsTime().Before(time.Now()) {
+		status = model.VodAssetStatusDeleted
+	}
+
+	vodID := p.ArtifactHash
+	if vodID == "" {
+		vodID = p.Id
+	}
 	asset := &model.VodAsset{
-		ID:              p.Id,
+		ID:              globalid.Encode(globalid.TypeVodAsset, vodID),
 		ArtifactHash:    p.ArtifactHash,
+		PlaybackID:      "",
 		Status:          status,
 		StorageLocation: p.StorageLocation,
 		CreatedAt:       p.CreatedAt.AsTime(),
@@ -382,6 +402,9 @@ func protoToVodAsset(p *pb.VodAssetInfo) *model.VodAsset {
 	}
 
 	// Optional fields
+	if p.PlaybackId != nil && *p.PlaybackId != "" {
+		asset.PlaybackID = *p.PlaybackId
+	}
 	if p.Title != "" {
 		asset.Title = &p.Title
 	}

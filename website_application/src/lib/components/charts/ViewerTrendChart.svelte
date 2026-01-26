@@ -36,9 +36,18 @@
     mini?: boolean;
     height?: number;
     title?: string;
+    seriesLabel?: string;
+    valueFormatter?: (value: number) => string;
   }
 
-  let { data = [], mini = false, height = 200, title = "" }: Props = $props();
+  let {
+    data = [],
+    mini = false,
+    height = 200,
+    title = "",
+    seriesLabel = "Viewers",
+    valueFormatter = (value: number) => `${value} viewers`,
+  }: Props = $props();
 
   let canvas = $state<HTMLCanvasElement>();
   let chart: Chart | null = null;
@@ -66,7 +75,7 @@
         labels: sortedData.map((d) => new Date(d.timestamp)),
         datasets: [
           {
-            label: "Viewers",
+            label: seriesLabel,
             data: sortedData.map((d) => d.viewers),
             borderColor: "rgb(59, 130, 246)",
             backgroundColor: "rgba(59, 130, 246, 0.1)",
@@ -112,7 +121,7 @@
                 const date = new Date(x);
                 return date.toLocaleString();
               },
-              label: (context) => `${context.parsed.y} viewers`,
+              label: (context) => valueFormatter(context.parsed.y as number),
             },
           },
           legend: {

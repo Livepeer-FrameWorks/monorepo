@@ -22,10 +22,23 @@ npm i @livepeer-frameworks/player-svelte
 <div style="width: 100%; height: 500px;">
   <Player
     contentType="live"
-    contentId="my-stream"
+    contentId="pk_..." // playbackId
     options={{ gatewayUrl: 'https://your-bridge/graphql' }}
   />
 </div>
+```
+
+Notes:
+- There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
+
+### Direct MistServer Node (mistUrl)
+
+```svelte
+<Player
+  contentType="live"
+  contentId="pk_..."
+  options={{ mistUrl: 'https://edge.example.com' }}
+/>
 ```
 
 ### Styles

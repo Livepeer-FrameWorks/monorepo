@@ -7,8 +7,8 @@ const INITIAL_DELAY_MS = 500;
 
 interface Params {
   gatewayUrl: string;
-  contentType: ContentType;
   contentId: string;
+  contentType?: ContentType;
   authToken?: string;
 }
 
@@ -51,7 +51,7 @@ export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authTok
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    if (!gatewayUrl || !contentType || !contentId) return;
+    if (!gatewayUrl || !contentId) return;
     setStatus('loading');
     setError(null);
     abortRef.current?.abort();
@@ -62,8 +62,8 @@ export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authTok
       try {
         const graphqlEndpoint = gatewayUrl.replace(/\/$/, '');
         const query = `
-          query ResolveViewer($contentType: String!, $contentId: String!) {
-            resolveViewerEndpoint(contentType: $contentType, contentId: $contentId) {
+          query ResolveViewer($contentId: String!) {
+            resolveViewerEndpoint(contentId: $contentId) {
               primary { nodeId baseUrl protocol url geoDistance loadScore outputs }
               fallbacks { nodeId baseUrl protocol url geoDistance loadScore outputs }
               metadata { contentType contentId title description durationSeconds status isLive viewers recordingSizeBytes clipSource createdAt }
@@ -76,7 +76,7 @@ export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authTok
             'Content-Type': 'application/json',
             ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
-          body: JSON.stringify({ query, variables: { contentType, contentId } }),
+          body: JSON.stringify({ query, variables: { contentId } }),
           signal: ac.signal,
         });
         if (!res.ok) throw new Error(`Gateway GQL error ${res.status}`);
@@ -111,10 +111,9 @@ export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authTok
     })();
 
     return () => ac.abort();
-  }, [gatewayUrl, contentType, contentId, authToken]);
+  }, [gatewayUrl, contentId, authToken]);
 
   return { endpoints, status, error };
 }
 
 export default useViewerEndpoints;
-

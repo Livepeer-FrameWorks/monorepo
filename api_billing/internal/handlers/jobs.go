@@ -1,32 +1,23 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"math/big"
-	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
+	"frameworks/pkg/billing"
+	decklog "frameworks/pkg/clients/decklog"
 	"frameworks/pkg/config"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
+	pb "frameworks/pkg/proto"
 )
 
 // isClusterMetered checks if a cluster is metered based on the metered clusters list
@@ -42,19 +33,159 @@ func isClusterMetered(meteredClusters []string, primaryClusterID string) bool {
 	return false
 }
 
+// calculateCharges computes base and metered charges based on usage and pricing rules.
+func calculateCharges(usageData map[string]float64, basePrice float64, meteringEnabled bool, overageRates models.OverageRates, storageAllocation, bandwidthAllocation models.AllocationDetails, customPricing models.CustomPricing, customAllocations models.AllocationDetails) (baseAmount, meteredAmount float64) {
+	// Base price (custom override if provided)
+	baseAmount = basePrice
+	if customPricing.BasePrice > 0 {
+		baseAmount = customPricing.BasePrice
+	}
+
+	if !meteringEnabled {
+		return baseAmount, 0
+	}
+
+	// Effective allocations (custom overrides bandwidth allocation)
+	effectiveBandwidthAllocation := bandwidthAllocation
+	if customAllocations.Limit != nil {
+		effectiveBandwidthAllocation = customAllocations
+	}
+
+	// Effective overage rates (custom overrides defaults)
+	effectiveOverageRates := overageRates
+	if customPricing.OverageRates.Bandwidth.UnitPrice > 0 {
+		effectiveOverageRates.Bandwidth = customPricing.OverageRates.Bandwidth
+	}
+	if customPricing.OverageRates.Storage.UnitPrice > 0 {
+		effectiveOverageRates.Storage = customPricing.OverageRates.Storage
+	}
+	if customPricing.OverageRates.Compute.UnitPrice > 0 {
+		effectiveOverageRates.Compute = customPricing.OverageRates.Compute
+	}
+	if customPricing.OverageRates.Processing.H264RatePerMin > 0 {
+		effectiveOverageRates.Processing = customPricing.OverageRates.Processing
+	}
+
+	// 1) Bandwidth (delivered minutes)
+	viewerMinutes := usageData["viewer_hours"] * 60
+	if effectiveBandwidthAllocation.Limit != nil && viewerMinutes > 0 && effectiveOverageRates.Bandwidth.UnitPrice > 0 {
+		billable := viewerMinutes - *effectiveBandwidthAllocation.Limit
+		if billable > 0 {
+			meteredAmount += billable * effectiveOverageRates.Bandwidth.UnitPrice
+		}
+	}
+
+	// 2) Storage overage (average_storage_gb preferred)
+	storageUsage := usageData["average_storage_gb"]
+	if storageUsage == 0 {
+		storageUsage = usageData["recording_gb"]
+	}
+	if storageAllocation.Limit != nil && storageUsage > 0 && effectiveOverageRates.Storage.UnitPrice > 0 {
+		billable := storageUsage - *storageAllocation.Limit
+		if billable > 0 {
+			meteredAmount += billable * effectiveOverageRates.Storage.UnitPrice
+		}
+	}
+
+	// 3) Compute overage (GPU hours)
+	gpuHours := usageData["gpu_hours"]
+	if gpuHours > 0 && effectiveOverageRates.Compute.UnitPrice > 0 {
+		meteredAmount += gpuHours * effectiveOverageRates.Compute.UnitPrice
+	}
+
+	// 4) Processing/transcoding overage (per-codec pricing)
+	processingRates := effectiveOverageRates.Processing
+	if processingRates.H264RatePerMin > 0 {
+		baseRate := processingRates.H264RatePerMin
+		calcCodecCost := func(seconds float64, codec string) float64 {
+			if seconds <= 0 {
+				return 0
+			}
+			minutes := seconds / 60
+			mult := processingRates.GetCodecMultiplier(codec)
+			return minutes * baseRate * mult
+		}
+
+		meteredAmount += calcCodecCost(usageData["livepeer_h264_seconds"], "h264")
+		meteredAmount += calcCodecCost(usageData["livepeer_vp9_seconds"], "vp9")
+		meteredAmount += calcCodecCost(usageData["livepeer_av1_seconds"], "av1")
+		meteredAmount += calcCodecCost(usageData["livepeer_hevc_seconds"], "hevc")
+		meteredAmount += calcCodecCost(usageData["native_av_h264_seconds"], "h264")
+		meteredAmount += calcCodecCost(usageData["native_av_vp9_seconds"], "vp9")
+		meteredAmount += calcCodecCost(usageData["native_av_av1_seconds"], "av1")
+		meteredAmount += calcCodecCost(usageData["native_av_hevc_seconds"], "hevc")
+		meteredAmount += calcCodecCost(usageData["native_av_aac_seconds"], "aac")
+		meteredAmount += calcCodecCost(usageData["native_av_opus_seconds"], "opus")
+	}
+
+	return baseAmount, meteredAmount
+}
+
+// loadUsageMeta fetches the latest usage_details JSON with geo breakdown for the period.
+func loadUsageMeta(db *sql.DB, tenantID string, periodStart, periodEnd time.Time) map[string]interface{} {
+	var raw []byte
+	err := db.QueryRow(`
+		SELECT usage_details
+		FROM purser.usage_records
+		WHERE tenant_id = $1
+		  AND period_start < $3
+		  AND period_end > $2
+		  AND usage_details ? 'geo_breakdown'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, tenantID, periodStart, periodEnd).Scan(&raw)
+	if err != nil {
+		return nil
+	}
+	var meta map[string]interface{}
+	if json.Unmarshal(raw, &meta) != nil {
+		return nil
+	}
+	return meta
+}
+
+func loadSubscriptionPeriod(db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time) {
+	var start, end sql.NullTime
+	err := db.QueryRow(`
+		SELECT billing_period_start, billing_period_end
+		FROM purser.tenant_subscriptions
+		WHERE tenant_id = $1 AND status = 'active'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, tenantID).Scan(&start, &end)
+	if err == nil && start.Valid && end.Valid && end.Time.After(start.Time) {
+		return start.Time, end.Time
+	}
+
+	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	periodEnd := periodStart.AddDate(0, 1, 0)
+	return periodStart, periodEnd
+}
+
+// CommodoreClient is the interface for Commodore gRPC client used by JobManager and PurserServer
+type CommodoreClient interface {
+	TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, error)
+	InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, error)
+	GetTenantUserCount(ctx context.Context, tenantID string) (*pb.GetTenantUserCountResponse, error)
+	GetTenantPrimaryUser(ctx context.Context, tenantID string) (*pb.GetTenantPrimaryUserResponse, error)
+}
+
 // JobManager handles background billing jobs
 type JobManager struct {
-	db            *sql.DB
-	logger        logging.Logger
-	emailService  *EmailService
-	cryptoMonitor *CryptoMonitor
-	kafkaConsumer *kafka.Consumer
-	stopCh        chan struct{}
-	billingTopic  string
+	db               *sql.DB
+	logger           logging.Logger
+	emailService     *EmailService
+	cryptoMonitor    *CryptoMonitor
+	gasWalletMonitor *GasWalletMonitor
+	x402Reconciler   *X402Reconciler
+	kafkaConsumer    *kafka.Consumer
+	stopCh           chan struct{}
+	billingTopic     string
+	commodoreClient  CommodoreClient
 }
 
 // NewJobManager creates a new job manager
-func NewJobManager(database *sql.DB, log logging.Logger) *JobManager {
+func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient) *JobManager {
 	// Initialize Kafka consumer
 	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "kafka:9092"), ",")
 	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "local")
@@ -71,14 +202,19 @@ func NewJobManager(database *sql.DB, log logging.Logger) *JobManager {
 		// Don't fatal here, allow API to start without consumer if needed
 	}
 
+	includeTestnets := config.GetEnv("X402_INCLUDE_TESTNETS", "false") == "true"
+
 	return &JobManager{
-		db:            database,
-		logger:        log,
-		emailService:  NewEmailService(log),
-		cryptoMonitor: NewCryptoMonitor(database, log),
-		kafkaConsumer: consumer,
-		stopCh:        make(chan struct{}),
-		billingTopic:  billingTopic,
+		db:               database,
+		logger:           log,
+		emailService:     NewEmailService(log),
+		cryptoMonitor:    NewCryptoMonitor(database, log, decklogSvc),
+		gasWalletMonitor: NewGasWalletMonitor(log),
+		x402Reconciler:   NewX402Reconciler(database, log, includeTestnets),
+		kafkaConsumer:    consumer,
+		stopCh:           make(chan struct{}),
+		billingTopic:     billingTopic,
+		commodoreClient:  commodoreClient,
 	}
 }
 
@@ -99,14 +235,23 @@ func (jm *JobManager) Start(ctx context.Context) {
 	// Start crypto payment monitor
 	go jm.cryptoMonitor.Start(ctx)
 
+	// Start gas wallet balance monitor (Prometheus metric: gas_wallet_balance_eth)
+	go jm.gasWalletMonitor.Start(ctx)
+
+	// Start x402 settlement reconciler (confirms or fails pending settlements)
+	go jm.x402Reconciler.Start(ctx)
+
 	// Start invoice generation job
 	go jm.runInvoiceGeneration(ctx)
 
 	// Start payment retry job
 	go jm.runPaymentRetry(ctx)
 
-	// Start crypto sweep job
-	go jm.runCryptoSweep(ctx)
+	// NOTE: Crypto sweeps happen OFFLINE with the master seed
+	// The server only has xpub - cannot sign transactions
+
+	// Start usage rollup + purge job
+	go jm.runUsageRollups(ctx)
 
 	// Start wallet cleanup job
 	go jm.runWalletCleanup(ctx)
@@ -116,6 +261,8 @@ func (jm *JobManager) Start(ctx context.Context) {
 func (jm *JobManager) Stop() {
 	jm.logger.Info("Stopping billing job manager")
 	jm.cryptoMonitor.Stop()
+	jm.gasWalletMonitor.Stop()
+	jm.x402Reconciler.Stop()
 	if jm.kafkaConsumer != nil {
 		jm.kafkaConsumer.Close()
 	}
@@ -138,17 +285,365 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		return err
 	}
 
-	// Update invoice draft after processing
-	if err := jm.updateInvoiceDraft(summary.TenantID); err != nil {
-		jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to update invoice draft")
+	// Check billing model to determine processing path
+	billingModel, err := jm.getTenantBillingModel(summary.TenantID)
+	if err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to get billing model, defaulting to postpaid")
+		billingModel = "postpaid"
+	}
+
+	if billingModel == "prepaid" {
+		// Prepaid: deduct usage cost from balance
+		if err := jm.processPrepaidUsage(summary); err != nil {
+			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to process prepaid usage")
+		}
+	} else {
+		// Postpaid: update invoice draft
+		if err := jm.updateInvoiceDraft(summary.TenantID); err != nil {
+			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to update invoice draft")
+		}
 	}
 
 	jm.logger.WithFields(logging.Fields{
-		"tenant_id": summary.TenantID,
-		"period":    summary.Period,
+		"tenant_id":     summary.TenantID,
+		"period":        summary.Period,
+		"billing_model": billingModel,
 	}).Info("Processed usage summary from Kafka")
 
 	return nil
+}
+
+// getTenantBillingModel returns the billing model for a tenant (prepaid or postpaid)
+func (jm *JobManager) getTenantBillingModel(tenantID string) (string, error) {
+	var billingModel string
+	err := jm.db.QueryRow(`
+		SELECT COALESCE(billing_model, 'postpaid')
+		FROM purser.tenant_subscriptions
+		WHERE tenant_id = $1 AND status = 'active'
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, tenantID).Scan(&billingModel)
+	if err == sql.ErrNoRows {
+		return "postpaid", nil // Default for tenants without subscription
+	}
+	return billingModel, err
+}
+
+// buildUsageDataFromSummary extracts usage metrics from a UsageSummary into a map
+// suitable for charge calculation. Reused by both prepaid and postpaid flows.
+func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
+	return map[string]float64{
+		"stream_hours":             summary.StreamHours,
+		"viewer_hours":             summary.ViewerHours,
+		"egress_gb":                summary.EgressGB,
+		"recording_gb":             summary.RecordingGB,
+		"peak_bandwidth_mbps":      summary.PeakBandwidthMbps,
+		"storage_gb":               summary.StorageGB,
+		"average_storage_gb":       summary.AverageStorageGB,
+		"clips_added":              float64(summary.ClipsAdded),
+		"clips_deleted":            float64(summary.ClipsDeleted),
+		"clip_storage_added_gb":    summary.ClipStorageAddedGB,
+		"clip_storage_deleted_gb":  summary.ClipStorageDeletedGB,
+		"dvr_added":                float64(summary.DvrAdded),
+		"dvr_deleted":              float64(summary.DvrDeleted),
+		"dvr_storage_added_gb":     summary.DvrStorageAddedGB,
+		"dvr_storage_deleted_gb":   summary.DvrStorageDeletedGB,
+		"vod_added":                float64(summary.VodAdded),
+		"vod_deleted":              float64(summary.VodDeleted),
+		"vod_storage_added_gb":     summary.VodStorageAddedGB,
+		"vod_storage_deleted_gb":   summary.VodStorageDeletedGB,
+		"max_viewers":              float64(summary.MaxViewers),
+		"total_streams":            float64(summary.TotalStreams),
+		"total_viewers":            float64(summary.TotalViewers),
+		"peak_viewers":             float64(summary.PeakViewers),
+		"unique_users":             float64(summary.UniqueUsers),
+		"unique_users_period":      float64(summary.UniqueUsersPeriod),
+		"livepeer_seconds":         summary.LivepeerSeconds,
+		"livepeer_segment_count":   float64(summary.LivepeerSegmentCount),
+		"livepeer_unique_streams":  float64(summary.LivepeerUniqueStreams),
+		"native_av_seconds":        summary.NativeAvSeconds,
+		"native_av_segment_count":  float64(summary.NativeAvSegmentCount),
+		"native_av_unique_streams": float64(summary.NativeAvUniqueStreams),
+		"livepeer_h264_seconds":    summary.LivepeerH264Seconds,
+		"livepeer_vp9_seconds":     summary.LivepeerVP9Seconds,
+		"livepeer_av1_seconds":     summary.LivepeerAV1Seconds,
+		"livepeer_hevc_seconds":    summary.LivepeerHEVCSeconds,
+		"native_av_h264_seconds":   summary.NativeAvH264Seconds,
+		"native_av_vp9_seconds":    summary.NativeAvVP9Seconds,
+		"native_av_av1_seconds":    summary.NativeAvAV1Seconds,
+		"native_av_hevc_seconds":   summary.NativeAvHEVCSeconds,
+		"native_av_aac_seconds":    summary.NativeAvAACSeconds,
+		"native_av_opus_seconds":   summary.NativeAvOpusSeconds,
+		"audio_seconds":            summary.AudioSeconds,
+		"video_seconds":            summary.VideoSeconds,
+		"api_requests":             summary.APIRequests,
+		"api_errors":               summary.APIErrors,
+		"api_duration_ms":          summary.APIDurationMs,
+		"api_complexity":           summary.APIComplexity,
+	}
+}
+
+// processPrepaidUsage calculates usage cost and deducts from prepaid balance
+func (jm *JobManager) processPrepaidUsage(summary models.UsageSummary) error {
+	// Get subscription tier info for pricing
+	var (
+		basePrice           float64
+		meteringEnabled     bool
+		overageRates        models.OverageRates
+		storageAllocation   models.AllocationDetails
+		bandwidthAllocation models.AllocationDetails
+		customPricing       models.CustomPricing
+		customAllocations   models.AllocationDetails
+	)
+
+	err := jm.db.QueryRow(`
+		SELECT bt.base_price, bt.metering_enabled,
+		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation,
+		       ts.custom_pricing, ts.custom_allocations
+		FROM purser.tenant_subscriptions ts
+		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
+		WHERE ts.tenant_id = $1 AND ts.status = 'active' AND bt.is_active = true
+		ORDER BY ts.created_at DESC
+		LIMIT 1
+	`, summary.TenantID).Scan(&basePrice, &meteringEnabled,
+		&overageRates, &storageAllocation, &bandwidthAllocation,
+		&customPricing, &customAllocations)
+
+	if err == sql.ErrNoRows {
+		jm.logger.WithField("tenant_id", summary.TenantID).Debug("No active subscription for prepaid usage")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get subscription: %w", err)
+	}
+
+	// Use the same usage data extraction as postpaid
+	usageData := buildUsageDataFromSummary(summary)
+
+	// Calculate metered usage cost (skip base price - that's monthly, not per-report)
+	_, meteredAmount := calculateCharges(usageData, 0, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
+
+	if meteredAmount <= 0 {
+		return nil // No billable usage in this report
+	}
+
+	// Convert to cents (meteredAmount is in dollars)
+	deductCents := int64(meteredAmount * 100)
+
+	// Deduct from prepaid balance
+	newBalanceCents, err := jm.deductPrepaidBalance(summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period))
+	if err != nil {
+		return fmt.Errorf("failed to deduct prepaid balance: %w", err)
+	}
+
+	jm.logger.WithFields(logging.Fields{
+		"tenant_id":         summary.TenantID,
+		"period":            summary.Period,
+		"deducted_cents":    deductCents,
+		"new_balance_cents": newBalanceCents,
+	}).Info("Deducted prepaid usage")
+
+	// Check if balance dropped below suspension threshold (-10.00 in default currency)
+	suspensionThreshold := int64(-1000)
+	if newBalanceCents < suspensionThreshold {
+		if err := jm.suspendTenantForBalance(summary.TenantID, newBalanceCents); err != nil {
+			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to suspend tenant for low balance")
+		}
+	}
+
+	return nil
+}
+
+// deductPrepaidBalance deducts amount from prepaid balance and returns new balance
+func (jm *JobManager) deductPrepaidBalance(tenantID string, amountCents int64, description string) (int64, error) {
+	var newBalance int64
+	currency := billing.DefaultCurrency()
+
+	// Use transaction to atomically update balance and record transaction
+	tx, err := jm.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	// Get or create prepaid balance record
+	var currentBalance int64
+	err = tx.QueryRow(`
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
+		VALUES ($1, 0, $2)
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+		RETURNING balance_cents
+	`, tenantID, currency).Scan(&currentBalance)
+	if err != nil && err != sql.ErrNoRows {
+		// Conflict means it exists, fetch current balance
+		err = tx.QueryRow(`
+			SELECT balance_cents FROM purser.prepaid_balances
+			WHERE tenant_id = $1 AND currency = $2
+		`, tenantID, currency).Scan(&currentBalance)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	// Deduct from balance (can go negative - accumulate debt)
+	newBalance = currentBalance - amountCents
+
+	// Update balance
+	_, err = tx.Exec(`
+		UPDATE purser.prepaid_balances
+		SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, tenantID, currency)
+	if err != nil {
+		return 0, err
+	}
+
+	// Record transaction
+	_, err = tx.Exec(`
+		INSERT INTO purser.balance_transactions (
+			tenant_id, amount_cents, balance_after_cents,
+			transaction_type, description, created_at
+		) VALUES ($1, $2, $3, 'usage', $4, NOW())
+	`, tenantID, -amountCents, newBalance, description)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	// If balance crossed zero (positive → non-positive), invalidate Foghorn cache
+	// This triggers soft gate for prepaid tenants with depleted balance
+	if currentBalance > 0 && newBalance <= 0 {
+		if jm.commodoreClient != nil {
+			ctx := context.Background()
+			_, err := jm.commodoreClient.InvalidateTenantCache(ctx, tenantID, "balance_crossed_zero")
+			if err != nil {
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":        tenantID,
+					"previous_balance": currentBalance,
+					"new_balance":      newBalance,
+					"error":            err,
+				}).Warn("Failed to invalidate tenant cache after balance crossed zero")
+			} else {
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":        tenantID,
+					"previous_balance": currentBalance,
+					"new_balance":      newBalance,
+				}).Info("Invalidated tenant cache: balance crossed zero")
+			}
+		}
+	}
+
+	return newBalance, nil
+}
+
+// getPrepaidBalance returns the current prepaid balance in cents for a tenant (0 if none exists)
+func (jm *JobManager) getPrepaidBalance(tenantID string) (int64, error) {
+	var balanceCents int64
+	currency := billing.DefaultCurrency()
+	err := jm.db.QueryRow(`
+		SELECT balance_cents FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2
+	`, tenantID, currency).Scan(&balanceCents)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return balanceCents, nil
+}
+
+// suspendTenantForBalance suspends a tenant due to negative prepaid balance
+// This function is called when balance drops below -$10 (threshold defined in processPrepaidUsage)
+func (jm *JobManager) suspendTenantForBalance(tenantID string, balanceCents int64) error {
+	// Update subscription status to 'suspended'
+	// This blocks NEW ingests/streams via Foghorn (which checks suspension status)
+	result, err := jm.db.Exec(`
+		UPDATE purser.tenant_subscriptions
+		SET status = 'suspended', updated_at = NOW()
+		WHERE tenant_id = $1 AND status = 'active'
+	`, tenantID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected > 0 {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"balance_cents": balanceCents,
+		}).Warn("Suspended tenant due to negative prepaid balance")
+
+		// Terminate all active streams for this tenant via Commodore -> Foghorn -> MistServer
+		if jm.commodoreClient != nil {
+			resp, err := jm.commodoreClient.TerminateTenantStreams(context.Background(), tenantID, "insufficient_balance")
+			if err != nil {
+				jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to terminate tenant streams on suspension")
+			} else {
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":           tenantID,
+					"streams_terminated":  resp.StreamsTerminated,
+					"sessions_terminated": resp.SessionsTerminated,
+					"stream_names":        resp.StreamNames,
+				}).Info("Terminated tenant streams due to insufficient balance")
+			}
+
+			// Invalidate media plane caches so suspension takes effect immediately for new requests
+			invalidateResp, err := jm.commodoreClient.InvalidateTenantCache(context.Background(), tenantID, "suspended")
+			if err != nil {
+				jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache on suspension")
+			} else {
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":           tenantID,
+					"entries_invalidated": invalidateResp.EntriesInvalidated,
+				}).Info("Invalidated media plane cache after suspension")
+			}
+		}
+
+		jm.notifyTenantSuspended(tenantID, balanceCents)
+	}
+
+	return nil
+}
+
+func (jm *JobManager) notifyTenantSuspended(tenantID string, balanceCents int64) {
+	if jm.emailService == nil {
+		return
+	}
+
+	var billingEmail string
+	err := jm.db.QueryRow(`
+		SELECT billing_email FROM purser.tenant_subscriptions
+		WHERE tenant_id = $1
+	`, tenantID).Scan(&billingEmail)
+	if err != nil {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"error":     err,
+		}).Warn("Failed to load billing email for suspension notification")
+		return
+	}
+	if billingEmail == "" {
+		jm.logger.WithField("tenant_id", tenantID).Warn("No billing email for suspension notification")
+		return
+	}
+
+	tenantName := ""
+	if tenantInfo, err := getTenantInfo(tenantID); err == nil && tenantInfo != nil {
+		tenantName = tenantInfo.Name
+	}
+
+	balance := float64(balanceCents) / 100
+	if err := jm.emailService.SendAccountSuspendedEmail(billingEmail, tenantName, balance, billing.DefaultCurrency()); err != nil {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"email":     billingEmail,
+			"error":     err,
+		}).Warn("Failed to send suspension notification email")
+	}
 }
 
 // runInvoiceGeneration generates monthly invoices for active tenants
@@ -175,16 +670,11 @@ func (jm *JobManager) generateMonthlyInvoices() {
 	jm.logger.Info("Running monthly invoice generation")
 
 	now := time.Now()
-	firstOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-
-	// Only run on the first day of the month
-	if now.Day() != 1 {
-		return
-	}
 
 	// Get all active tenant subscriptions with their tiers
 	rows, err := jm.db.Query(`
 		SELECT ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
+		       ts.billing_period_start, ts.billing_period_end,
 		       bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.billing_period,
 		       bt.metering_enabled, bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation,
 		       ts.custom_pricing, ts.custom_features, ts.custom_allocations
@@ -192,7 +682,10 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.status = 'active' 
 		  AND bt.is_active = true
-		  AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= $1)
+		  AND (
+			  (ts.billing_period_end IS NOT NULL AND ts.billing_period_end <= $1)
+			  OR (ts.billing_period_end IS NULL AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= $1))
+		  )
 	`, now)
 
 	if err != nil {
@@ -214,8 +707,10 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		var customPricing models.CustomPricing
 		var customFeatures models.BillingFeatures
 		var customAllocations models.AllocationDetails
+		var billingPeriodStart, billingPeriodEnd sql.NullTime
 
 		err := rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
+			&billingPeriodStart, &billingPeriodEnd,
 			&tierName, &displayName, &basePrice, &currency, &billingPeriod,
 			&meteringEnabled, &overageRates, &storageAllocation, &bandwidthAllocation,
 			&customPricing, &customFeatures, &customAllocations)
@@ -226,13 +721,27 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			continue
 		}
 
-		// Check if invoice already exists for this month
+		var periodStart, periodEnd time.Time
+		if billingPeriodStart.Valid && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(billingPeriodStart.Time) {
+			periodStart = billingPeriodStart.Time
+			periodEnd = billingPeriodEnd.Time
+		} else {
+			periodStart = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).AddDate(0, -1, 0)
+			periodEnd = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		}
+
+		if periodEnd.After(now) {
+			continue // Billing period not closed yet
+		}
+
+		// Check if a finalized invoice already exists for the previous month
 		var existingCount int
 		err = jm.db.QueryRow(`
 			SELECT COUNT(*) FROM purser.billing_invoices
-			WHERE tenant_id = $1 AND created_at >= $2
-		`, tenantID, firstOfMonth).Scan(&existingCount)
-
+			WHERE tenant_id = $1
+			  AND period_start = $2
+			  AND status != 'draft'
+		`, tenantID, periodStart).Scan(&existingCount)
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
 				"error":     err,
@@ -240,15 +749,22 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			}).Error("Error checking existing invoices")
 			continue
 		}
-
 		if existingCount > 0 {
-			continue // Invoice already exists for this month
+			continue // Invoice already finalized for this period
 		}
 
+		// Check for an existing draft invoice for the previous month
+		var draftInvoiceID string
+		_ = jm.db.QueryRow(`
+			SELECT id FROM purser.billing_invoices
+			WHERE tenant_id = $1
+			  AND period_start = $2
+			  AND status = 'draft'
+			LIMIT 1
+		`, tenantID, periodStart).Scan(&draftInvoiceID)
+
 		// Get usage data from the new usage_records table
-		// Use precise timestamp boundaries instead of billing_month string
-		prevMonthStart := firstOfMonth.AddDate(0, -1, 0) // First of previous month
-		prevMonthEnd := firstOfMonth                     // First of current month (exclusive)
+		// Use precise timestamp boundaries for the billing period
 		usageData := map[string]float64{}
 
 		// Fetch raw records to aggregate correctly (SUM vs MAX)
@@ -256,9 +772,9 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			SELECT usage_type, usage_value
 			FROM purser.usage_records
 			WHERE tenant_id = $1
-			  AND period_start >= $2
-			  AND period_end <= $3
-		`, tenantID, prevMonthStart, prevMonthEnd)
+			  AND period_start < $3
+			  AND period_end > $2
+		`, tenantID, periodStart, periodEnd)
 
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch usage data")
@@ -271,7 +787,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 				if err := usageRows.Scan(&usageType, &val); err == nil {
 					// Apply correct aggregation per type
 					switch usageType {
-					case "average_storage_gb", "peak_bandwidth_mbps", "max_viewers", "total_streams", "unique_users":
+					case "average_storage_gb", "peak_bandwidth_mbps", "max_viewers", "total_streams", "unique_users", "unique_users_period":
 						// State/Peak metrics: Take MAX
 						if val > usageData[usageType] {
 							usageData[usageType] = val
@@ -284,113 +800,12 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			}
 		}
 
-		// Calculate tier-based pricing
-		totalAmount := basePrice
-		var meteredAmount float64
-
-		// Apply custom pricing if available (for enterprise tiers)
-		if customPricing.BasePrice > 0 {
-			totalAmount = customPricing.BasePrice
-		}
-
-		// Calculate overage charges if metering is enabled
-		if meteringEnabled {
-			// Billing model: delivered_minutes (viewer × minutes)
-			// viewer_hours from usage data, convert to minutes
-			viewerMinutes := usageData["viewer_hours"] * 60
-
-			// Determine effective allocations (custom overrides tier defaults)
-			effectiveBandwidthAllocation := bandwidthAllocation
-			if customAllocations.Limit != nil {
-				// Custom allocation override for bandwidth (primary billing metric)
-				effectiveBandwidthAllocation = customAllocations
-			}
-
-			// Determine effective overage rates (custom pricing overrides tier defaults)
-			effectiveOverageRates := overageRates
-			if customPricing.OverageRates.Bandwidth.UnitPrice > 0 {
-				effectiveOverageRates.Bandwidth = customPricing.OverageRates.Bandwidth
-			}
-			if customPricing.OverageRates.Storage.UnitPrice > 0 {
-				effectiveOverageRates.Storage = customPricing.OverageRates.Storage
-			}
-			if customPricing.OverageRates.Compute.UnitPrice > 0 {
-				effectiveOverageRates.Compute = customPricing.OverageRates.Compute
-			}
-
-			// 1. Bandwidth (delivered minutes)
-			if effectiveBandwidthAllocation.Limit != nil && viewerMinutes > 0 {
-				includedMinutes := *effectiveBandwidthAllocation.Limit
-				billable := viewerMinutes - includedMinutes
-				if billable > 0 && effectiveOverageRates.Bandwidth.UnitPrice > 0 {
-					meteredAmount += billable * effectiveOverageRates.Bandwidth.UnitPrice
-				}
-			}
-
-			// 2. Storage overage
-			storageUsage := usageData["average_storage_gb"]
-			if storageUsage == 0 {
-				storageUsage = usageData["recording_gb"]
-			}
-			if storageAllocation.Limit != nil && storageUsage > 0 {
-				includedStorage := *storageAllocation.Limit
-				billable := storageUsage - includedStorage
-				if billable > 0 && effectiveOverageRates.Storage.UnitPrice > 0 {
-					meteredAmount += billable * effectiveOverageRates.Storage.UnitPrice
-				}
-			}
-
-			// 3. Compute overage (GPU hours)
-			gpuHours := usageData["gpu_hours"]
-			if gpuHours > 0 && effectiveOverageRates.Compute.UnitPrice > 0 {
-				// TODO: Get compute allocation limit when compute billing is implemented
-				// For now, charge all GPU hours at overage rate
-				meteredAmount += gpuHours * effectiveOverageRates.Compute.UnitPrice
-			}
-
-			// 4. Processing/Transcoding charges with per-codec pricing
-			processingRates := effectiveOverageRates.Processing
-			if customPricing.OverageRates.Processing.H264RatePerMin > 0 {
-				processingRates = customPricing.OverageRates.Processing
-			}
-
-			if processingRates.H264RatePerMin > 0 {
-				baseRate := processingRates.H264RatePerMin
-				var processingCost float64
-
-				// Helper to calculate cost for a codec
-				calcCodecCost := func(seconds float64, codec string) float64 {
-					if seconds <= 0 {
-						return 0
-					}
-					minutes := seconds / 60
-					multiplier := processingRates.GetCodecMultiplier(codec)
-					return minutes * baseRate * multiplier
-				}
-
-				// Livepeer per-codec costs
-				processingCost += calcCodecCost(usageData["livepeer_h264_seconds"], "h264")
-				processingCost += calcCodecCost(usageData["livepeer_vp9_seconds"], "vp9")
-				processingCost += calcCodecCost(usageData["livepeer_av1_seconds"], "av1")
-				processingCost += calcCodecCost(usageData["livepeer_hevc_seconds"], "hevc")
-
-				// Native AV per-codec costs (audio codecs return 0 due to 0.0 multiplier)
-				processingCost += calcCodecCost(usageData["native_av_h264_seconds"], "h264")
-				processingCost += calcCodecCost(usageData["native_av_vp9_seconds"], "vp9")
-				processingCost += calcCodecCost(usageData["native_av_av1_seconds"], "av1")
-				processingCost += calcCodecCost(usageData["native_av_hevc_seconds"], "hevc")
-				processingCost += calcCodecCost(usageData["native_av_aac_seconds"], "aac")   // 0.0x = FREE
-				processingCost += calcCodecCost(usageData["native_av_opus_seconds"], "opus") // 0.0x = FREE
-
-				meteredAmount += processingCost
-			}
-		}
-
-		totalAmount += meteredAmount
+		baseAmount, meteredAmount := calculateCharges(usageData, basePrice, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
+		totalAmount := baseAmount + meteredAmount
 
 		// Generate invoice
 		invoiceID := uuid.New().String()
-		dueDate := now.AddDate(0, 0, 14) // 14 days to pay
+		dueDate := periodEnd.AddDate(0, 0, 14) // 14 days to pay
 
 		// Determine invoice status
 		status := "pending"
@@ -398,18 +813,26 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			status = "paid"
 		}
 
-		// Create typed usage details
-		usageDetails := UsageDetails{
-			UsageData:   usageData,
-			PeriodStart: prevMonthStart,
-			PeriodEnd:   prevMonthEnd,
-			TierInfo: TierInfo{
-				TierID:          tierID,
-				TierName:        tierName,
-				DisplayName:     displayName,
-				BasePrice:       basePrice,
-				MeteringEnabled: meteringEnabled,
+		// Build usage details map with tier info and meta (geo, unique, avg viewers)
+		usageDetails := map[string]interface{}{
+			"usage_data":   usageData,
+			"period_start": periodStart,
+			"period_end":   periodEnd,
+			"tier_info": map[string]interface{}{
+				"tier_id":          tierID,
+				"tier_name":        tierName,
+				"display_name":     displayName,
+				"base_price":       basePrice,
+				"metering_enabled": meteringEnabled,
 			},
+		}
+
+		if meta := loadUsageMeta(jm.db, tenantID, periodStart, periodEnd); meta != nil {
+			for _, key := range []string{"geo_breakdown", "unique_countries", "unique_cities", "avg_viewers"} {
+				if v, ok := meta[key]; ok {
+					usageDetails[key] = v
+				}
+			}
 		}
 
 		// Marshal usage details
@@ -422,17 +845,35 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			continue
 		}
 
-		// Store the invoice with usage details
-		_, err = jm.db.Exec(`
-			INSERT INTO purser.billing_invoices (
-				id, tenant_id, amount, currency, status, due_date,
-				base_amount, metered_amount,
-				usage_details,
-				created_at, updated_at
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW()
-			)
-		`, invoiceID, tenantID, totalAmount, currency, status, dueDate, totalAmount-meteredAmount, meteredAmount, usageJSON)
+		// Store or finalize the invoice
+		if draftInvoiceID != "" {
+			_, err = jm.db.Exec(`
+				UPDATE purser.billing_invoices
+				SET amount = $1,
+					base_amount = $2,
+					metered_amount = $3,
+					currency = $4,
+					status = $5,
+					due_date = $6,
+					usage_details = $7,
+					period_start = $8,
+					period_end = $9,
+					updated_at = NOW()
+				WHERE id = $10
+			`, totalAmount, baseAmount, meteredAmount, currency, status, dueDate, usageJSON, periodStart, periodEnd, draftInvoiceID)
+			invoiceID = draftInvoiceID
+		} else {
+			_, err = jm.db.Exec(`
+				INSERT INTO purser.billing_invoices (
+					id, tenant_id, amount, currency, status, due_date,
+					base_amount, metered_amount,
+					usage_details, period_start, period_end,
+					created_at, updated_at
+				) VALUES (
+					$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()
+				)
+			`, invoiceID, tenantID, totalAmount, currency, status, dueDate, baseAmount, meteredAmount, usageJSON, periodStart, periodEnd)
+		}
 
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
@@ -443,13 +884,22 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			continue
 		}
 
-		// Update subscription next billing date
-		nextBillingDate := now.AddDate(0, 1, 0) // Next month
+		// Update subscription billing period + next billing date
+		periodDuration := periodEnd.Sub(periodStart)
+		if periodDuration <= 0 {
+			periodDuration = 30 * 24 * time.Hour
+		}
+		nextPeriodStart := periodEnd
+		nextPeriodEnd := periodEnd.Add(periodDuration)
+		nextBillingDate := nextPeriodEnd
 		_, err = jm.db.Exec(`
 			UPDATE purser.tenant_subscriptions 
-			SET next_billing_date = $1, updated_at = NOW()
-			WHERE tenant_id = $2
-		`, nextBillingDate, tenantID)
+			SET next_billing_date = $1,
+			    billing_period_start = $2,
+			    billing_period_end = $3,
+			    updated_at = NOW()
+			WHERE tenant_id = $4
+		`, nextBillingDate, nextPeriodStart, nextPeriodEnd, tenantID)
 
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update next billing date")
@@ -475,6 +925,13 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			for k, v := range usageData {
 				emailUsageDetails[k] = v
 			}
+			if meta := loadUsageMeta(jm.db, tenantID, periodStart, periodEnd); meta != nil {
+				for _, key := range []string{"geo_breakdown", "unique_countries", "unique_cities", "avg_viewers"} {
+					if v, ok := meta[key]; ok {
+						emailUsageDetails[key] = v
+					}
+				}
+			}
 			// Add unique users from usage details if available (need to fetch from records or summary)
 			// For now, usageData has the aggregates
 
@@ -491,6 +948,143 @@ func (jm *JobManager) generateMonthlyInvoices() {
 	jm.logger.WithFields(logging.Fields{
 		"invoices_generated": invoicesGenerated,
 	}).Info("Monthly invoice generation completed")
+}
+
+func (jm *JobManager) runUsageRollups(ctx context.Context) {
+	jm.logger.Info("Starting usage rollup job")
+
+	for {
+		nextRun := nextUTCStart(1)
+		timer := time.NewTimer(time.Until(nextRun))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-jm.stopCh:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		if err := jm.rollupAndPurgeUsage(ctx); err != nil {
+			jm.logger.WithError(err).Error("Usage rollup job failed")
+		}
+	}
+}
+
+func (jm *JobManager) rollupAndPurgeUsage(ctx context.Context) error {
+	now := time.Now()
+	hourlyCutoff := now.Add(-7 * 24 * time.Hour)
+	dailyCutoff := now.Add(-90 * 24 * time.Hour)
+
+	if err := jm.rollupUsageRecords(ctx, "hourly", "daily", "day", "1 day", hourlyCutoff); err != nil {
+		return err
+	}
+	if err := jm.rollupUsageRecords(ctx, "daily", "monthly", "month", "1 month", dailyCutoff); err != nil {
+		return err
+	}
+
+	if err := jm.purgeUsageRecords(ctx, "hourly", now.Add(-8*24*time.Hour)); err != nil {
+		return err
+	}
+	if err := jm.purgeUsageRecords(ctx, "daily", now.Add(-91*24*time.Hour)); err != nil {
+		return err
+	}
+
+	jm.logger.Info("Usage rollup + purge completed")
+	return nil
+}
+
+func (jm *JobManager) rollupUsageRecords(ctx context.Context, fromGranularity, toGranularity, truncUnit, interval string, cutoff time.Time) error {
+	maxTypes := "'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users', 'unique_users_period', 'peak_viewers', 'livepeer_unique_streams', 'native_av_unique_streams'"
+	avgTypes := "'average_storage_gb'"
+	query := fmt.Sprintf(`
+		WITH base AS (
+			SELECT tenant_id, cluster_id, usage_type,
+			       date_trunc('%s', period_start) AS period_start,
+			       date_trunc('%s', period_start) + INTERVAL '%s' AS period_end,
+			       usage_value
+			FROM purser.usage_records
+			WHERE granularity = $1
+			  AND period_start < $2
+		),
+		meta AS (
+			SELECT DISTINCT ON (tenant_id, cluster_id, period_start)
+			       tenant_id, cluster_id, period_start, usage_details
+			FROM (
+				SELECT tenant_id, cluster_id,
+				       date_trunc('%s', period_start) AS period_start,
+				       usage_details, created_at
+				FROM purser.usage_records
+				WHERE granularity = $1
+				  AND period_start < $2
+				  AND usage_details IS NOT NULL
+				  AND usage_details ? 'geo_breakdown'
+			) latest
+			ORDER BY tenant_id, cluster_id, period_start, created_at DESC
+		),
+		aggregated AS (
+			SELECT tenant_id, cluster_id, usage_type, period_start, period_end,
+			       CASE
+			           WHEN usage_type IN (%s) THEN MAX(usage_value)
+			           WHEN usage_type IN (%s) THEN AVG(usage_value)
+			           ELSE SUM(usage_value)
+			       END AS usage_value
+			FROM base
+			GROUP BY tenant_id, cluster_id, usage_type, period_start, period_end
+		)
+		INSERT INTO purser.usage_records (
+			tenant_id, cluster_id, usage_type, usage_value, usage_details,
+			period_start, period_end, granularity, created_at
+		)
+		SELECT a.tenant_id, a.cluster_id, a.usage_type, a.usage_value,
+		       COALESCE(m.usage_details, '{}'::jsonb),
+		       a.period_start, a.period_end, '%s', NOW()
+		FROM aggregated a
+		LEFT JOIN meta m
+		  ON m.tenant_id = a.tenant_id
+		 AND m.cluster_id = a.cluster_id
+		 AND m.period_start = a.period_start
+		ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
+			usage_value = EXCLUDED.usage_value,
+			usage_details = EXCLUDED.usage_details,
+			granularity = EXCLUDED.granularity,
+			updated_at = NOW()
+	`, truncUnit, truncUnit, interval, truncUnit, maxTypes, avgTypes, toGranularity)
+
+	_, err := jm.db.ExecContext(ctx, query, fromGranularity, cutoff)
+	if err != nil {
+		return fmt.Errorf("rollup %s -> %s failed: %w", fromGranularity, toGranularity, err)
+	}
+
+	jm.logger.WithFields(logging.Fields{
+		"from":   fromGranularity,
+		"to":     toGranularity,
+		"cutoff": cutoff,
+	}).Info("Rolled up usage records")
+
+	return nil
+}
+
+func (jm *JobManager) purgeUsageRecords(ctx context.Context, granularity string, cutoff time.Time) error {
+	_, err := jm.db.ExecContext(ctx, `
+		DELETE FROM purser.usage_records
+		WHERE granularity = $1
+		  AND period_start < $2
+	`, granularity, cutoff)
+	if err != nil {
+		return fmt.Errorf("purge %s usage records failed: %w", granularity, err)
+	}
+	return nil
+}
+
+func nextUTCStart(hour int) time.Time {
+	now := time.Now().UTC()
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, time.UTC)
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next
 }
 
 // runPaymentRetry retries failed payments and sends reminders
@@ -517,7 +1111,7 @@ func (jm *JobManager) runPaymentRetry(ctx context.Context) {
 func (jm *JobManager) retryFailedPayments() {
 	// Mark failed traditional payments for retry (crypto payments don't need retry)
 	_, err := jm.db.Exec(`
-		UPDATE billing_payments 
+		UPDATE purser.billing_payments
 		SET status = 'pending', updated_at = NOW()
 		WHERE status = 'failed' 
 		  AND method IN ('mollie')
@@ -539,10 +1133,10 @@ func (jm *JobManager) sendPaymentReminders() {
 	// Get overdue invoices with tenant subscription information
 	rows, err := jm.db.Query(`
 		SELECT bi.id, bi.tenant_id, bi.amount, bi.currency, bi.due_date,
-		       ts.billing_email
+		       ts.billing_email, bi.status
 		FROM purser.billing_invoices bi
 		JOIN purser.tenant_subscriptions ts ON bi.tenant_id = ts.tenant_id
-		WHERE bi.status = 'pending' 
+		WHERE bi.status IN ('pending', 'overdue')
 		  AND bi.due_date < NOW()
 		  AND bi.due_date > NOW() - INTERVAL '30 days'
 		  AND ts.status = 'active'
@@ -558,17 +1152,31 @@ func (jm *JobManager) sendPaymentReminders() {
 
 	var overdueCount int
 	for rows.Next() {
-		var invoiceID, tenantID, currency, billingEmail string
+		var invoiceID, tenantID, currency, billingEmail, invoiceStatus string
 		var amount float64
 		var dueDate time.Time
 
-		err := rows.Scan(&invoiceID, &tenantID, &amount, &currency, &dueDate, &billingEmail)
+		err := rows.Scan(&invoiceID, &tenantID, &amount, &currency, &dueDate, &billingEmail, &invoiceStatus)
 		if err != nil {
 			continue
 		}
 
 		overdueCount++
 		daysPastDue := int(time.Since(dueDate).Hours() / 24)
+
+		if invoiceStatus == "pending" {
+			_, err := jm.db.Exec(`
+				UPDATE purser.billing_invoices
+				SET status = 'overdue', updated_at = NOW()
+				WHERE id = $1 AND status = 'pending'
+			`, invoiceID)
+			if err != nil {
+				jm.logger.WithFields(logging.Fields{
+					"error":      err,
+					"invoice_id": invoiceID,
+				}).Warn("Failed to mark invoice overdue")
+			}
+		}
 
 		jm.logger.WithFields(logging.Fields{
 			"invoice_id":    invoiceID,
@@ -597,459 +1205,9 @@ func (jm *JobManager) sendPaymentReminders() {
 	}
 }
 
-// runCryptoSweep moves confirmed crypto payments to cold storage
-func (jm *JobManager) runCryptoSweep(ctx context.Context) {
-	ticker := time.NewTicker(6 * time.Hour) // Run every 6 hours
-	defer ticker.Stop()
-
-	jm.logger.Info("Starting crypto sweep job")
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-jm.stopCh:
-			return
-		case <-ticker.C:
-			jm.sweepCryptoFunds()
-		}
-	}
-}
-
-// sweepCryptoFunds moves crypto from payment wallets to cold storage
-func (jm *JobManager) sweepCryptoFunds() {
-	// Get used crypto wallets that haven't been swept
-	rows, err := jm.db.Query(`
-		SELECT cw.id, cw.asset, cw.wallet_address, bp.amount, bp.tx_id
-		FROM purser.crypto_wallets cw
-		JOIN purser.billing_payments bp ON bp.invoice_id = cw.invoice_id
-		WHERE cw.status = 'used' 
-		  AND bp.status = 'confirmed'
-		  AND bp.method LIKE 'crypto_%'
-		  AND bp.confirmed_at < NOW() - INTERVAL '1 hour'
-	`)
-
-	if err != nil {
-		jm.logger.WithFields(logging.Fields{
-			"error": err,
-		}).Error("Failed to fetch wallets for sweeping")
-		return
-	}
-	defer rows.Close()
-
-	var sweptCount int
-	for rows.Next() {
-		var walletID, asset, walletAddress, txID string
-		var amount float64
-
-		err := rows.Scan(&walletID, &asset, &walletAddress, &amount, &txID)
-		if err != nil {
-			continue
-		}
-
-		// Execute real crypto sweep transaction
-		sweepTxID, err := jm.executeCryptoSweep(asset, walletAddress, amount)
-		if err != nil {
-			jm.logger.WithFields(logging.Fields{
-				"error":          err,
-				"wallet_id":      walletID,
-				"asset":          asset,
-				"wallet_address": walletAddress,
-			}).Error("Failed to sweep crypto funds")
-			continue
-		}
-
-		// Mark wallet as swept with transaction ID
-		_, err = jm.db.Exec(`
-			UPDATE purser.crypto_wallets 
-			SET status = 'swept', updated_at = NOW()
-			WHERE id = $1
-		`, walletID)
-
-		if err == nil {
-			sweptCount++
-			jm.logger.WithFields(logging.Fields{
-				"wallet_id":      walletID,
-				"asset":          asset,
-				"wallet_address": walletAddress,
-				"amount":         amount,
-				"source_tx":      txID,
-				"sweep_tx":       sweepTxID,
-			}).Info("Successfully swept crypto funds to cold storage")
-		}
-	}
-
-	if sweptCount > 0 {
-		jm.logger.WithFields(logging.Fields{
-			"swept_count": sweptCount,
-		}).Info("Crypto fund sweep completed")
-	}
-}
-
-func (jm *JobManager) executeCryptoSweep(asset, fromAddress string, amount float64) (string, error) {
-	coldStorageAddress := os.Getenv(fmt.Sprintf("%s_COLD_STORAGE_ADDRESS", asset))
-	if coldStorageAddress == "" {
-		return "", fmt.Errorf("cold storage address not configured for %s", asset)
-	}
-
-	switch asset {
-	case "BTC":
-		return jm.sweepBitcoin(fromAddress, coldStorageAddress, amount)
-	case "ETH":
-		return jm.sweepEthereum(fromAddress, coldStorageAddress, amount)
-	case "USDC":
-		return jm.sweepUSDC(fromAddress, coldStorageAddress, amount)
-	case "LPT":
-		return jm.sweepLivepeer(fromAddress, coldStorageAddress, amount)
-	default:
-		return "", fmt.Errorf("unsupported asset for sweeping: %s", asset)
-	}
-}
-
-func (jm *JobManager) sweepBitcoin(fromAddress, toAddress string, amount float64) (string, error) {
-	// Get wallet private key using HD derivation from master seed
-	privateKey, err := jm.deriveWalletPrivateKey(fromAddress, "BTC")
-	if err != nil {
-		return "", fmt.Errorf("failed to derive Bitcoin private key: %v", err)
-	}
-
-	// Use BlockCypher API to create and sign transaction
-	apiKey := os.Getenv("BLOCKCYPHER_API_KEY")
-	if apiKey == "" {
-		return "", fmt.Errorf("BLOCKCYPHER_API_KEY not configured")
-	}
-
-	// Calculate transaction fee (simplified - use dynamic fee estimation in production)
-	feeInSatoshis := int64(10000) // 0.0001 BTC fee
-	amountInSatoshis := int64(amount*100000000) - feeInSatoshis
-
-	if amountInSatoshis <= 0 {
-		return "", fmt.Errorf("insufficient funds for transaction (amount: %f BTC, fee: 0.0001 BTC)", amount)
-	}
-
-	// Create transaction payload for BlockCypher with private key for signing
-	payload := BlockCypherTransactionRequest{
-		Inputs: []BlockCypherTransactionInput{
-			{Addresses: []string{fromAddress}},
-		},
-		Outputs: []BlockCypherTransactionOutput{
-			{
-				Addresses: []string{toAddress},
-				Value:     amountInSatoshis,
-			},
-		},
-		PrivateKeys: []string{privateKey}, // Include private key for signing
-	}
-
-	payloadBytes, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://api.blockcypher.com/v1/btc/main/txs/send?token=%s", apiKey) // Use send endpoint for signed transactions
-
-	// Create HTTP request
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to create Bitcoin transaction: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 201 {
-		return "", fmt.Errorf("BlockCypher API returned status %d", resp.StatusCode)
-	}
-
-	var txResponse struct {
-		TxHash string `json:"tx_hash"`
-		Hash   string `json:"hash"` // BlockCypher uses "hash" field
-		Error  string `json:"error"`
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	if err := json.Unmarshal(body, &txResponse); err != nil {
-		return "", fmt.Errorf("failed to parse Bitcoin transaction response: %v", err)
-	}
-
-	if txResponse.Error != "" {
-		return "", fmt.Errorf("Bitcoin transaction error: %s", txResponse.Error)
-	}
-
-	// Use the appropriate hash field from the response
-	txHash := txResponse.TxHash
-	if txHash == "" {
-		txHash = txResponse.Hash
-	}
-
-	jm.logger.WithFields(logging.Fields{
-		"from_address": fromAddress,
-		"to_address":   toAddress,
-		"amount_btc":   amount,
-		"tx_hash":      txHash,
-	}).Info("Bitcoin sweep transaction created successfully")
-
-	return txHash, nil
-}
-
-func (jm *JobManager) sweepEthereum(fromAddress, toAddress string, amount float64) (string, error) {
-	// Get wallet private key using HD derivation
-	privateKeyHex, err := jm.deriveWalletPrivateKey(fromAddress, "ETH")
-	if err != nil {
-		return "", fmt.Errorf("failed to derive Ethereum private key: %v", err)
-	}
-
-	// Parse private key
-	privateKey, err := crypto.HexToECDSA(privateKeyHex)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse private key: %v", err)
-	}
-
-	// Connect to Ethereum client
-	rpcURL := os.Getenv("ETHEREUM_RPC_URL")
-	if rpcURL == "" {
-		return "", fmt.Errorf("ETHEREUM_RPC_URL not configured")
-	}
-
-	client, err := ethclient.Dial(rpcURL)
-	if err != nil {
-		return "", fmt.Errorf("failed to connect to Ethereum client: %v", err)
-	}
-	defer client.Close()
-
-	// Get sender address from private key
-	publicKey := privateKey.Public()
-	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return "", fmt.Errorf("failed to cast public key to ECDSA")
-	}
-	fromAddr := crypto.PubkeyToAddress(*publicKeyECDSA)
-	toAddr := common.HexToAddress(toAddress)
-
-	// Get nonce
-	nonce, err := client.PendingNonceAt(context.Background(), fromAddr)
-	if err != nil {
-		return "", fmt.Errorf("failed to get nonce: %v", err)
-	}
-
-	// Convert amount to wei (1 ETH = 10^18 wei)
-	value := new(big.Int)
-	weiAmount := new(big.Float).SetFloat64(amount * 1e18)
-	weiAmount.Int(value)
-
-	// Get gas price
-	gasPrice, err := client.SuggestGasPrice(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("failed to get gas price: %v", err)
-	}
-
-	// Set gas limit for simple ETH transfer
-	gasLimit := uint64(21000)
-
-	// Check if we have enough balance for gas
-	balance, err := client.BalanceAt(context.Background(), fromAddr, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to get balance: %v", err)
-	}
-
-	gasCost := new(big.Int).Mul(gasPrice, big.NewInt(int64(gasLimit)))
-	totalCost := new(big.Int).Add(value, gasCost)
-
-	if balance.Cmp(totalCost) < 0 {
-		return "", fmt.Errorf("insufficient balance: have %s wei, need %s wei", balance.String(), totalCost.String())
-	}
-
-	// Create transaction
-	tx := types.NewTransaction(nonce, toAddr, value, gasLimit, gasPrice, nil)
-
-	// Get chain ID
-	chainID, err := client.NetworkID(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("failed to get chain ID: %v", err)
-	}
-
-	// Sign transaction
-	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to sign transaction: %v", err)
-	}
-
-	// Send transaction
-	err = client.SendTransaction(context.Background(), signedTx)
-	if err != nil {
-		return "", fmt.Errorf("failed to send transaction: %v", err)
-	}
-
-	txHash := signedTx.Hash().Hex()
-
-	jm.logger.WithFields(logging.Fields{
-		"from_address": fromAddr.Hex(),
-		"to_address":   toAddr.Hex(),
-		"amount_eth":   amount,
-		"amount_wei":   value.String(),
-		"gas_price":    gasPrice.String(),
-		"gas_limit":    gasLimit,
-		"nonce":        nonce,
-		"chain_id":     chainID.String(),
-		"tx_hash":      txHash,
-	}).Info("Ethereum sweep transaction sent successfully")
-
-	return txHash, nil
-}
-
-func (jm *JobManager) sweepUSDC(fromAddress, toAddress string, amount float64) (string, error) {
-	// USDC uses Ethereum infrastructure with ERC-20 token transfer
-	return jm.sweepERC20Token(fromAddress, toAddress, amount, "USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6)
-}
-
-func (jm *JobManager) sweepLivepeer(fromAddress, toAddress string, amount float64) (string, error) {
-	// LPT uses Ethereum infrastructure with ERC-20 token transfer
-	return jm.sweepERC20Token(fromAddress, toAddress, amount, "LPT", "0x58b6A8A3302369DAEc383334672404Ee733aB239", 18)
-}
-
-func (jm *JobManager) sweepERC20Token(fromAddress, toAddress string, amount float64, tokenSymbol, contractAddress string, decimals int) (string, error) {
-	// Get wallet private key using HD derivation
-	privateKeyHex, err := jm.deriveWalletPrivateKey(fromAddress, "ETH")
-	if err != nil {
-		return "", fmt.Errorf("failed to derive Ethereum private key for %s: %v", tokenSymbol, err)
-	}
-
-	// Parse private key
-	privateKey, err := crypto.HexToECDSA(privateKeyHex)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse private key: %v", err)
-	}
-
-	// Connect to Ethereum client
-	rpcURL := os.Getenv("ETHEREUM_RPC_URL")
-	if rpcURL == "" {
-		return "", fmt.Errorf("ETHEREUM_RPC_URL not configured")
-	}
-
-	client, err := ethclient.Dial(rpcURL)
-	if err != nil {
-		return "", fmt.Errorf("failed to connect to Ethereum client: %v", err)
-	}
-	defer client.Close()
-
-	// Get sender address from private key
-	publicKey := privateKey.Public()
-	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
-	if !ok {
-		return "", fmt.Errorf("failed to cast public key to ECDSA")
-	}
-	fromAddr := crypto.PubkeyToAddress(*publicKeyECDSA)
-	toAddr := common.HexToAddress(toAddress)
-	contractAddr := common.HexToAddress(contractAddress)
-
-	// Get nonce
-	nonce, err := client.PendingNonceAt(context.Background(), fromAddr)
-	if err != nil {
-		return "", fmt.Errorf("failed to get nonce: %v", err)
-	}
-
-	// Convert amount to token units (considering decimals)
-	tokenAmount := new(big.Int)
-	multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
-	amountFloat := new(big.Float).SetFloat64(amount)
-	amountFloat.Mul(amountFloat, new(big.Float).SetInt(multiplier))
-	amountFloat.Int(tokenAmount)
-
-	// Create ERC-20 transfer function call data
-	// transfer(address,uint256) = 0xa9059cbb
-	transferFnSignature := crypto.Keccak256([]byte("transfer(address,uint256)"))[:4]
-	paddedToAddr := common.LeftPadBytes(toAddr.Bytes(), 32)
-	paddedAmount := common.LeftPadBytes(tokenAmount.Bytes(), 32)
-
-	data := append(transferFnSignature, paddedToAddr...)
-	data = append(data, paddedAmount...)
-
-	// Get gas price
-	gasPrice, err := client.SuggestGasPrice(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("failed to get gas price: %v", err)
-	}
-
-	// Set gas limit for ERC-20 transfer (higher than ETH transfer)
-	gasLimit := uint64(100000)
-
-	// Check ETH balance for gas fees
-	balance, err := client.BalanceAt(context.Background(), fromAddr, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to get ETH balance: %v", err)
-	}
-
-	gasCost := new(big.Int).Mul(gasPrice, big.NewInt(int64(gasLimit)))
-	if balance.Cmp(gasCost) < 0 {
-		return "", fmt.Errorf("insufficient ETH balance for gas: have %s wei, need %s wei", balance.String(), gasCost.String())
-	}
-
-	// Create transaction (value = 0 for ERC-20 transfers)
-	tx := types.NewTransaction(nonce, contractAddr, big.NewInt(0), gasLimit, gasPrice, data)
-
-	// Get chain ID
-	chainID, err := client.NetworkID(context.Background())
-	if err != nil {
-		return "", fmt.Errorf("failed to get chain ID: %v", err)
-	}
-
-	// Sign transaction
-	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to sign transaction: %v", err)
-	}
-
-	// Send transaction
-	err = client.SendTransaction(context.Background(), signedTx)
-	if err != nil {
-		return "", fmt.Errorf("failed to send transaction: %v", err)
-	}
-
-	txHash := signedTx.Hash().Hex()
-
-	jm.logger.WithFields(logging.Fields{
-		"from_address":     fromAddr.Hex(),
-		"to_address":       toAddr.Hex(),
-		"amount":           amount,
-		"token_amount":     tokenAmount.String(),
-		"token_symbol":     tokenSymbol,
-		"contract_address": contractAddr.Hex(),
-		"decimals":         decimals,
-		"gas_price":        gasPrice.String(),
-		"gas_limit":        gasLimit,
-		"nonce":            nonce,
-		"chain_id":         chainID.String(),
-		"tx_hash":          txHash,
-	}).Info("ERC-20 token sweep transaction sent successfully")
-
-	return txHash, nil
-}
-
-// deriveWalletPrivateKey derives a private key for a given address and asset using HD wallet derivation
-func (jm *JobManager) deriveWalletPrivateKey(address, asset string) (string, error) {
-	// Get master seed from secure storage (not env vars!)
-	masterSeed := os.Getenv("MASTER_WALLET_SEED")
-	if masterSeed == "" {
-		return "", fmt.Errorf("MASTER_WALLET_SEED not configured - required for wallet key derivation")
-	}
-
-	// Use HMAC-SHA256 for key derivation (simplified HD wallet approach)
-	// In production, use proper BIP32/BIP44 HD wallet derivation
-	derivationData := fmt.Sprintf("%s:%s:%s", masterSeed, asset, address)
-	hash := sha256.Sum256([]byte(derivationData))
-
-	// Return hex-encoded private key
-	privateKey := hex.EncodeToString(hash[:])
-
-	jm.logger.WithFields(logging.Fields{
-		"address": address,
-		"asset":   asset,
-		"key_len": len(privateKey),
-	}).Info("Derived wallet private key")
-
-	return privateKey, nil
-}
+// NOTE: Crypto sweep operations are performed OFFLINE with the master seed.
+// The server only stores the xpub (extended public key) for address derivation.
+// See docs/operations/sweep-ceremony.md for the sweep process.
 
 // runWalletCleanup cleans up expired crypto wallets
 func (jm *JobManager) runWalletCleanup(ctx context.Context) {
@@ -1073,9 +1231,9 @@ func (jm *JobManager) runWalletCleanup(ctx context.Context) {
 // cleanupExpiredWallets marks expired crypto wallets as inactive
 func (jm *JobManager) cleanupExpiredWallets() {
 	result, err := jm.db.Exec(`
-		UPDATE purser.crypto_wallets 
+		UPDATE purser.crypto_wallets
 		SET status = 'expired', updated_at = NOW()
-		WHERE status = 'active' 
+		WHERE status = 'active'
 		  AND expires_at < NOW()
 	`)
 
@@ -1104,90 +1262,69 @@ func (jm *JobManager) cleanupExpiredWallets() {
 func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source string) error {
 	// Parse the period to get the actual start and end time of usage
 	// Format is expected to be "start_time_rfc3339/end_time_rfc3339"
-	var billingMonth string
 	var periodStart, periodEnd time.Time
 	parts := strings.Split(summary.Period, "/")
 	if len(parts) >= 2 {
 		var err error
 		periodStart, err = time.Parse(time.RFC3339, parts[0])
-		if err == nil {
-			billingMonth = periodStart.Format("2006-01")
+		if err != nil {
+			jm.logger.WithFields(logging.Fields{
+				"tenant_id": summary.TenantID,
+				"period":    summary.Period,
+				"source":    source,
+				"err":       err,
+			}).Warn("Failed to parse usage period start")
 		}
-		periodEnd, _ = time.Parse(time.RFC3339, parts[1])
+		periodEnd, err = time.Parse(time.RFC3339, parts[1])
+		if err != nil {
+			jm.logger.WithFields(logging.Fields{
+				"tenant_id": summary.TenantID,
+				"period":    summary.Period,
+				"source":    source,
+				"err":       err,
+			}).Warn("Failed to parse usage period end")
+		}
 	} else if len(parts) >= 1 {
 		// Try to parse at least start time
 		var err error
 		periodStart, err = time.Parse(time.RFC3339, parts[0])
 		if err == nil {
-			billingMonth = periodStart.Format("2006-01")
-			// Default end time to start time + 1 hour if not provided?
-			// Better to leave it zero/null or set to start time if we must
+			// Default end time to start time if not provided
 			periodEnd = periodStart
+		} else {
+			jm.logger.WithFields(logging.Fields{
+				"tenant_id": summary.TenantID,
+				"period":    summary.Period,
+				"source":    source,
+				"err":       err,
+			}).Warn("Failed to parse usage period")
 		}
 	}
 
 	// Fallback if parsing fails
-	if billingMonth == "" {
-		billingMonth = summary.Timestamp.Format("2006-01")
-		// Use timestamp for period start/end fallback to avoid NULL constraint violation if applicable
-		// But ideally we want the constraint to work, so we need distinct values if possible.
-		// For now, use timestamp.
+	if periodStart.IsZero() || periodEnd.IsZero() {
+		// Use timestamp for period start/end fallback
 		periodStart = summary.Timestamp
 		periodEnd = summary.Timestamp
 
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id": summary.TenantID,
 			"period":    summary.Period,
-		}).Warn("Failed to parse period for billing month/times, falling back to timestamp")
+		}).Warn("Failed to parse period for usage window, falling back to timestamp")
 	}
 
-	usageTypes := map[string]float64{
-		"stream_hours":            summary.StreamHours,
-		"viewer_hours":            summary.ViewerHours,
-		"egress_gb":               summary.EgressGB,
-		"recording_gb":            summary.RecordingGB,
-		"peak_bandwidth_mbps":     summary.PeakBandwidthMbps,
-		"storage_gb":              summary.StorageGB,
-		"average_storage_gb":      summary.AverageStorageGB,
-		"clips_added":             float64(summary.ClipsAdded),
-		"clips_deleted":           float64(summary.ClipsDeleted),
-		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
-		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
-		"dvr_added":               float64(summary.DvrAdded),
-		"dvr_deleted":             float64(summary.DvrDeleted),
-		"dvr_storage_added_gb":    summary.DvrStorageAddedGB,
-		"dvr_storage_deleted_gb":  summary.DvrStorageDeletedGB,
-		"vod_added":               float64(summary.VodAdded),
-		"vod_deleted":             float64(summary.VodDeleted),
-		"vod_storage_added_gb":    summary.VodStorageAddedGB,
-		"vod_storage_deleted_gb":  summary.VodStorageDeletedGB,
-		"max_viewers":             float64(summary.MaxViewers),
-		"total_streams":           float64(summary.TotalStreams),
-		"total_viewers":           float64(summary.TotalViewers),
-		"peak_viewers":            float64(summary.PeakViewers),
-		// Processing/transcoding usage for billing (legacy totals)
-		"livepeer_seconds":         summary.LivepeerSeconds,
-		"livepeer_segment_count":   float64(summary.LivepeerSegmentCount),
-		"livepeer_unique_streams":  float64(summary.LivepeerUniqueStreams),
-		"native_av_seconds":        summary.NativeAvSeconds,
-		"native_av_segment_count":  float64(summary.NativeAvSegmentCount),
-		"native_av_unique_streams": float64(summary.NativeAvUniqueStreams),
-		// Per-codec breakdown: Livepeer
-		"livepeer_h264_seconds": summary.LivepeerH264Seconds,
-		"livepeer_vp9_seconds":  summary.LivepeerVP9Seconds,
-		"livepeer_av1_seconds":  summary.LivepeerAV1Seconds,
-		"livepeer_hevc_seconds": summary.LivepeerHEVCSeconds,
-		// Per-codec breakdown: Native AV
-		"native_av_h264_seconds": summary.NativeAvH264Seconds,
-		"native_av_vp9_seconds":  summary.NativeAvVP9Seconds,
-		"native_av_av1_seconds":  summary.NativeAvAV1Seconds,
-		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
-		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
-		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
-		// Track type aggregates
-		"audio_seconds": summary.AudioSeconds,
-		"video_seconds": summary.VideoSeconds,
+	granularity := "hourly"
+	if !periodEnd.IsZero() && !periodStart.IsZero() {
+		duration := periodEnd.Sub(periodStart)
+		if duration >= 28*24*time.Hour {
+			granularity = "monthly"
+		} else if duration >= 24*time.Hour {
+			granularity = "daily"
+		}
 	}
+
+	// Use shared helper for usage data extraction
+	usageTypes := buildUsageDataFromSummary(summary)
 
 	// Build usage details JSONB
 	usageDetails := models.JSONB{
@@ -1196,6 +1333,7 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		"peak_viewers":            summary.PeakViewers,
 		"total_streams":           summary.TotalStreams,
 		"unique_users":            summary.UniqueUsers,
+		"unique_users_period":     summary.UniqueUsersPeriod,
 		"avg_viewers":             summary.AvgViewers,
 		"unique_countries":        summary.UniqueCountries,
 		"unique_cities":           summary.UniqueCities,
@@ -1236,6 +1374,12 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		// Track type aggregates
 		"audio_seconds": summary.AudioSeconds,
 		"video_seconds": summary.VideoSeconds,
+		// API usage aggregates
+		"api_requests":    summary.APIRequests,
+		"api_errors":      summary.APIErrors,
+		"api_duration_ms": summary.APIDurationMs,
+		"api_complexity":  summary.APIComplexity,
+		"api_breakdown":   summary.APIBreakdown,
 	}
 
 	// Upsert each usage type
@@ -1245,13 +1389,18 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		}
 
 		_, err := jm.db.Exec(`
-			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, billing_month, period_start, period_end, created_at)
+			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 			ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
-				usage_value = purser.usage_records.usage_value + EXCLUDED.usage_value,
+				usage_value = CASE
+					WHEN EXCLUDED.usage_type IN ('average_storage_gb', 'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'unique_users', 'unique_users_period', 'peak_viewers')
+						THEN GREATEST(purser.usage_records.usage_value, EXCLUDED.usage_value)
+					ELSE purser.usage_records.usage_value + EXCLUDED.usage_value
+				END,
 				usage_details = EXCLUDED.usage_details,
+				granularity = EXCLUDED.granularity,
 				updated_at = NOW()
-		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, billingMonth, periodStart, periodEnd)
+		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, periodStart, periodEnd, granularity)
 
 		if err != nil {
 			return fmt.Errorf("failed to upsert %s: %w", usageType, err)
@@ -1266,22 +1415,26 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 	var (
 		tierID              string
 		subscriptionStatus  string
+		tierName            string
+		displayName         string
 		basePrice           float64
+		currency            string
 		meteringEnabled     bool
 		overageRates        models.OverageRates
 		storageAllocation   models.AllocationDetails
 		bandwidthAllocation models.AllocationDetails
 		customPricing       models.CustomPricing
+		customAllocations   models.AllocationDetails
 	)
 
 	err := jm.db.QueryRow(`
-		SELECT ts.tier_id, ts.status, bt.base_price, bt.metering_enabled,
-		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation, ts.custom_pricing
+		SELECT ts.tier_id, ts.status, bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.metering_enabled,
+		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation, ts.custom_pricing, ts.custom_allocations
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.tenant_id = $1 AND ts.status = 'active' AND bt.is_active = true
-	`, tenantID).Scan(&tierID, &subscriptionStatus, &basePrice, &meteringEnabled,
-		&overageRates, &storageAllocation, &bandwidthAllocation, &customPricing)
+	`, tenantID).Scan(&tierID, &subscriptionStatus, &tierName, &displayName, &basePrice, &currency, &meteringEnabled,
+		&overageRates, &storageAllocation, &bandwidthAllocation, &customPricing, &customAllocations)
 
 	if err == sql.ErrNoRows {
 		jm.logger.WithField("tenant_id", tenantID).Info("No active subscription, skipping invoice draft")
@@ -1293,16 +1446,20 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 
 	// Get current billing period
 	now := time.Now()
-	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	periodEnd := periodStart.AddDate(0, 1, 0).Add(-time.Second)
+	periodStart, periodEnd := loadSubscriptionPeriod(jm.db, tenantID, now)
 
 	// Aggregate usage for current billing period using precise timestamps
 	rows, err := jm.db.Query(`
-		SELECT usage_type, SUM(usage_value) as total
+		SELECT usage_type,
+		       CASE
+			       WHEN usage_type IN ('average_storage_gb', 'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'unique_users', 'unique_users_period', 'peak_viewers')
+				       THEN MAX(usage_value)
+			       ELSE SUM(usage_value)
+		       END as total
 		FROM purser.usage_records
 		WHERE tenant_id = $1
-		  AND period_start >= $2
-		  AND period_end <= $3
+		  AND period_start < $3
+		  AND period_end > $2
 		GROUP BY usage_type
 	`, tenantID, periodStart, periodEnd)
 	if err != nil {
@@ -1310,8 +1467,7 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 	}
 	defer rows.Close()
 
-	var totalStreamHours, totalViewerHours, totalEgressGB, totalRecordingGB float64
-	var maxViewers, totalStreams int64
+	usageTotals := make(map[string]float64)
 	allUsageDetails := make(map[string]interface{})
 
 	for rows.Next() {
@@ -1320,75 +1476,119 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 		if err := rows.Scan(&usageType, &total); err != nil {
 			continue
 		}
+		usageTotals[usageType] = total
 		allUsageDetails[usageType] = total
+	}
 
-		switch usageType {
-		case "stream_hours":
-			totalStreamHours = total
-		case "viewer_hours":
-			totalViewerHours = total
-		case "egress_gb":
-			totalEgressGB = total
-		case "recording_gb":
-			totalRecordingGB = total
+	// Calculate charges (base + metered)
+	baseAmount, meteredAmount := calculateCharges(usageTotals, basePrice, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
+	grossAmount := baseAmount + meteredAmount
+
+	// Apply prepaid credit if available (for postpaid users with prepaid balance)
+	var prepaidCreditApplied float64
+	prepaidBalance, err := jm.getPrepaidBalance(tenantID)
+	if err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get prepaid balance for invoice")
+	} else if prepaidBalance > 0 && grossAmount > 0 {
+		// Convert gross amount to cents for comparison
+		grossAmountCents := int64(grossAmount * 100)
+		// Credit to apply is min of balance and gross amount
+		creditToApplyCents := prepaidBalance
+		if creditToApplyCents > grossAmountCents {
+			creditToApplyCents = grossAmountCents
+		}
+		// Deduct from prepaid balance
+		_, err := jm.deductPrepaidBalance(tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
+		if err != nil {
+			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to deduct prepaid balance for invoice credit")
+		} else {
+			prepaidCreditApplied = float64(creditToApplyCents) / 100.0
+			jm.logger.WithFields(logging.Fields{
+				"tenant_id":              tenantID,
+				"prepaid_credit_applied": prepaidCreditApplied,
+				"gross_amount":           grossAmount,
+			}).Info("Applied prepaid credit to invoice")
 		}
 	}
 
-	// Calculate charges
-	totalAmount := basePrice
-	if customPricing.BasePrice > 0 {
-		totalAmount = customPricing.BasePrice
-	}
+	// Net amount is gross minus credit applied
+	totalAmount := grossAmount - prepaidCreditApplied
 
-	if meteringEnabled {
-		// Bandwidth overage (delivered minutes = viewer_hours * 60)
-		deliveredMinutes := totalViewerHours * 60
-		if bandwidthAllocation.Limit != nil && overageRates.Bandwidth.UnitPrice > 0 {
-			billableMinutes := deliveredMinutes - *bandwidthAllocation.Limit
-			if billableMinutes > 0 {
-				totalAmount += billableMinutes * overageRates.Bandwidth.UnitPrice
+	// Build usage details map with tier info and meta (geo, unique, avg viewers)
+	usageDetails := map[string]interface{}{
+		"usage_data":   allUsageDetails,
+		"period_start": periodStart,
+		"period_end":   periodEnd,
+		"tier_info": map[string]interface{}{
+			"tier_id":          tierID,
+			"tier_name":        tierName,
+			"display_name":     displayName,
+			"base_price":       basePrice,
+			"metering_enabled": meteringEnabled,
+		},
+	}
+	if meta := loadUsageMeta(jm.db, tenantID, periodStart, periodEnd); meta != nil {
+		for _, key := range []string{"geo_breakdown", "unique_countries", "unique_cities", "avg_viewers"} {
+			if v, ok := meta[key]; ok {
+				usageDetails[key] = v
 			}
 		}
-
-		// Storage overage
-		storageUsage := totalRecordingGB
-		if storageAllocation.Limit != nil && overageRates.Storage.UnitPrice > 0 {
-			billableStorage := storageUsage - *storageAllocation.Limit
-			if billableStorage > 0 {
-				totalAmount += billableStorage * overageRates.Storage.UnitPrice
-			}
-		}
 	}
 
-	draftUsageDetails, _ := json.Marshal(allUsageDetails)
+	usageJSON, _ := json.Marshal(usageDetails)
 
-	// Upsert invoice draft
-	_, err = jm.db.Exec(`
-		INSERT INTO purser.invoice_drafts (
-			tenant_id, billing_period_start, billing_period_end,
-			stream_hours, egress_gb, recording_gb, max_viewers, total_streams,
-			calculated_amount, status, usage_details, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10, NOW(), NOW())
-		ON CONFLICT (tenant_id, billing_period_start) DO UPDATE SET
-			stream_hours = EXCLUDED.stream_hours,
-			egress_gb = EXCLUDED.egress_gb,
-			recording_gb = EXCLUDED.recording_gb,
-			max_viewers = EXCLUDED.max_viewers,
-			total_streams = EXCLUDED.total_streams,
-			calculated_amount = EXCLUDED.calculated_amount,
-			usage_details = EXCLUDED.usage_details,
+	// Upsert draft invoice in billing_invoices
+	dueDate := periodEnd.AddDate(0, 0, 14)
+	result, err := jm.db.Exec(`
+		UPDATE purser.billing_invoices
+		SET amount = $1,
+			base_amount = $2,
+			metered_amount = $3,
+			prepaid_credit_applied = $4,
+			currency = $5,
+			status = 'draft',
+			due_date = $6,
+			usage_details = $7,
+			period_start = $8,
+			period_end = $9,
 			updated_at = NOW()
-	`, tenantID, periodStart, periodEnd, totalStreamHours, totalEgressGB,
-		totalRecordingGB, maxViewers, totalStreams, totalAmount, draftUsageDetails)
+		WHERE tenant_id = $10
+		  AND status = 'draft'
+		  AND period_start = $8
+	`, totalAmount, baseAmount, meteredAmount, prepaidCreditApplied, currency, dueDate, usageJSON, periodStart, periodEnd, tenantID)
+
+	if err != nil {
+		return fmt.Errorf("failed to update invoice draft: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		_, err = jm.db.Exec(`
+			INSERT INTO purser.billing_invoices (
+				id, tenant_id, amount, currency, status, due_date,
+				base_amount, metered_amount, prepaid_credit_applied, usage_details,
+				period_start, period_end,
+				created_at, updated_at
+			) VALUES (
+				gen_random_uuid(), $1, $2, $3, 'draft', $4,
+				$5, $6, $7, $8, $9, $10, NOW(), NOW()
+			)
+		`, tenantID, totalAmount, currency, dueDate, baseAmount, meteredAmount, prepaidCreditApplied, usageJSON, periodStart, periodEnd)
+		if err != nil {
+			return fmt.Errorf("failed to insert invoice draft: %w", err)
+		}
+	}
 
 	if err != nil {
 		return fmt.Errorf("failed to upsert invoice draft: %w", err)
 	}
 
 	jm.logger.WithFields(logging.Fields{
-		"tenant_id":         tenantID,
-		"billing_period":    periodStart.Format("2006-01"),
-		"calculated_amount": totalAmount,
+		"tenant_id":              tenantID,
+		"billing_period":         periodStart.Format("2006-01"),
+		"gross_amount":           grossAmount,
+		"prepaid_credit_applied": prepaidCreditApplied,
+		"net_amount":             totalAmount,
 	}).Info("Updated invoice draft")
 
 	return nil

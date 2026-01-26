@@ -1,7 +1,0 @@
-# Generate temporary signed URLs for clip playback with expiration timestamp
-query GetClipViewingUrls($clipId: ID!) {
-  clipViewingUrls(clipId: $clipId) {
-    urls
-    expiresAt
-  }
-}

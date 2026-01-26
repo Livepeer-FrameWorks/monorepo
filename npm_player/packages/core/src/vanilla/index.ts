@@ -3,11 +3,11 @@
  *
  * @example
  * ```typescript
- * import { FrameWorksPlayer } from '@livepeer-frameworks/player/vanilla';
- * import '@livepeer-frameworks/player/player.css';
+ * import { FrameWorksPlayer } from '@livepeer-frameworks/player-core/vanilla';
+ * import '@livepeer-frameworks/player-core/player.css';
  *
  * const player = new FrameWorksPlayer('#player', {
- *   contentId: 'my-stream',
+ *   contentId: 'pk_...',
  *   contentType: 'live',
  *   gatewayUrl: 'https://gateway.example.com/graphql',
  * });

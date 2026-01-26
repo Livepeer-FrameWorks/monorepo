@@ -9,6 +9,11 @@ import (
 
 // RunSSH executes the equivalent of: ssh <target> 'cd <workdir> && <cmd> <args...>'
 func RunSSH(target string, cmd string, args []string, workdir string) (int, string, string, error) {
+	return RunSSHWithKey(target, "", cmd, args, workdir)
+}
+
+// RunSSHWithKey executes ssh with an optional private key.
+func RunSSHWithKey(target, keyPath string, cmd string, args []string, workdir string) (int, string, string, error) {
 	// Build remote shell command
 	// Use sh -lc to have a login-like shell with PATH and && chaining
 	var remoteCmd strings.Builder
@@ -24,7 +29,12 @@ func RunSSH(target string, cmd string, args []string, workdir string) (int, stri
 		remoteCmd.WriteString(shellQuote(a))
 	}
 
-	c := exec.Command("ssh", "-o", "BatchMode=yes", target, "sh", "-lc", remoteCmd.String())
+	sshArgs := []string{"-o", "BatchMode=yes"}
+	if strings.TrimSpace(keyPath) != "" {
+		sshArgs = append(sshArgs, "-i", keyPath)
+	}
+	sshArgs = append(sshArgs, target, "sh", "-lc", remoteCmd.String())
+	c := exec.Command("ssh", sshArgs...)
 	var outBuf, errBuf bytes.Buffer
 	c.Stdout = &outBuf
 	c.Stderr = &errBuf

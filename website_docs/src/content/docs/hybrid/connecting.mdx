@@ -10,19 +10,24 @@ Connecting your edge node is the final step in the setup process. Enrollment est
 
 ## Get an Enrollment Token
 
-You need a bootstrap token from an admin or from your tenant's dashboard.
+You need a bootstrap token from an admin, or from your tenant's dashboard (owner).
 
-**Via Dashboard:**
-1. Go to **Infrastructure → Nodes**
-2. Click **Add Node**
-3. Copy the enrollment token
+**Via Dashboard (tenant owner):**
+1. Go to **Infrastructure → Network**
+2. Click **Create Private Cluster**
+3. Copy the bootstrap token shown in the modal
 
 **Via CLI (admin):**
 ```bash
-frameworks admin bootstrap-tokens create --name "edge-node-1"
+frameworks admin bootstrap-tokens create \
+  --kind edge_node \
+  --tenant-id <TENANT_UUID> \
+  --cluster-id <CLUSTER_ID> \
+  --name "edge-node-1" \
+  --ttl 24h
 ```
 
-The token is a one-time-use credential that proves you're authorized to add nodes.
+By default, bootstrap tokens are single-use. Set `--usage-limit` if you need a reusable token.
 
 ## Enroll the Node
 
@@ -42,10 +47,10 @@ frameworks edge enroll --dir /opt/frameworks-edge
 This:
 1. Starts the MistServer, Helmsman, and Caddy containers
 2. Waits for HTTPS to become available
-3. Helmsman contacts Quartermaster with the bootstrap token
-4. Once enrolled, the node receives traffic from Foghorn
+3. Helmsman connects to Foghorn (gRPC) and sends the enrollment token
+4. Foghorn registers the node in Quartermaster and begins routing
 
-After enrollment, your node appears in the dashboard under **Infrastructure → Nodes**.
+After enrollment, your node appears in the dashboard under **Infrastructure → Network**.
 
 ## Verify Connection
 
@@ -59,7 +64,7 @@ This shows:
 - **Docker container status** for MistServer, Helmsman, and edge-proxy
 - **HTTPS health check** against your configured `EDGE_DOMAIN`
 
-For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Nodes** once enrolled.
+For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Network** once enrolled.
 
 ## How Traffic Gets Routed
 
@@ -77,10 +82,19 @@ Your node will receive traffic when:
 
 ## Ingesting to Your Node
 
-Streamers can push directly to your node instead of the default ingest:
+Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be exposed on the host; the default edge template only maps 80/443.
+
+Open/forward as needed:
+- **1935/tcp** (RTMP ingest)
+- **8889/udp** (SRT ingest)
+- **5554/tcp** (RTSP)
+
+Caddy listens on 80/443 and proxies HTTP traffic to MistServer on 8080.
+
+Direct RTMP ingest:
 
 ```
-rtmp://stream.yourdomain.com/live/{stream-key}
+rtmp://stream.yourdomain.com:1935/live/{stream-key}
 ```
 
 Or use the network's default ingest and let Foghorn route:
@@ -92,7 +106,7 @@ Both work. Direct ingest means lower latency to your node; network ingest means 
 
 ## Capacity and Capabilities
 
-Your node advertises what it can do:
+Your node advertises what it can do. Set these in `.edge.env`, and pass them through to the helmsman container (add them to `helmsman.environment` or add `env_file: .edge.env` in `docker-compose.edge.yml`):
 
 ```bash
 # In .edge.env
@@ -120,7 +134,7 @@ cd /opt/frameworks-edge
 docker compose -f docker-compose.edge.yml down
 ```
 
-When Helmsman stops, Foghorn automatically removes it from the load balancer registry. After 90 seconds without heartbeats, the node is marked stale and excluded from all routing decisions.
+When Helmsman stops, Foghorn stops receiving heartbeats. After 90 seconds without heartbeats, the node is marked stale and excluded from routing (the registry entry is retained).
 
 ## Troubleshooting Enrollment
 
@@ -134,7 +148,7 @@ Your server can't reach the control plane. Check firewalls, DNS, and outbound HT
 
 **"Node already enrolled"**
 
-This node was enrolled before. Edit `.edge.env` and clear the existing `HELMSMAN_CLUSTER_ID` and `HELMSMAN_NODE_ID` values, then try again.
+This usually means the node already has an identity. You can just start the stack again—no re‑enrollment required. If you need to move the node to a different cluster, revoke the old token, create a new one, and enroll again.
 
 **Node shows offline in dashboard**
 

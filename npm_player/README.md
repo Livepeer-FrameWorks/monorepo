@@ -143,7 +143,7 @@ function App() {
     <div style={{ width: '100%', height: '500px' }}>
       <Player
         contentType="live"            // 'live' | 'dvr' | 'clip'
-        contentId="internal-or-hash"  // stream internal name, DVR hash, or clip hash
+        contentId="pk_..."            // playbackId (live), dvrHash, or clipHash
         options={{ gatewayUrl: 'https://your-bridge/graphql' /* authToken optional */ }}
       />
     </div>
@@ -154,6 +154,7 @@ function App() {
 Notes:
 - Endpoint resolution (`resolveViewerEndpoint`) is public in the Gateway; no JWT or tenant header is required when using playback IDs.
 - For private or non‑public operations, pass `authToken` to authorize Gateway queries.
+- There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
 
 ### Lazy loading & prefetching
 
@@ -259,7 +260,7 @@ import { FrameWorksPlayer } from '@livepeer-frameworks/player-core';
 import '@livepeer-frameworks/player-core/player.css'; // or import from wrapper package
 
 const player = new FrameWorksPlayer('#player-container', {
-  contentId: 'my-stream',
+  contentId: 'pk_...',
   contentType: 'live',
   gatewayUrl: 'https://your-gateway/graphql',
   autoplay: true,
@@ -304,7 +305,7 @@ player.destroy();
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `contentId` | string | required | Stream name, DVR hash, or clip hash |
+| `contentId` | string | required | Playback ID (live) or DVR/clip hash |
 | `contentType` | 'live' \| 'dvr' \| 'clip' | required | Content type |
 | `gatewayUrl` | string | - | Gateway GraphQL endpoint |
 | `authToken` | string | - | Bearer token for private streams |
@@ -426,6 +427,27 @@ function App() {
 }
 ```
 
+### Direct MistServer Node (mistUrl)
+
+Bypass the Gateway and resolve directly from a specific MistServer node:
+
+```jsx
+import React from 'react';
+import { Player } from '@livepeer-frameworks/player-react';
+
+function App() {
+  return (
+    <div style={{ width: '100%', height: '500px' }}>
+      <Player
+        contentType="live"
+        contentId="pk_..."
+        options={{ mistUrl: 'https://edge.example.com' }}
+      />
+    </div>
+  );
+}
+```
+
 ### Raw WHEPPlayer Component
 
 Use WHEPPlayer directly for WHEP (WebRTC-HTTP Egress Protocol) streaming:
@@ -435,7 +457,7 @@ import React from 'react';
 import { WHEPPlayer } from '@livepeer-frameworks/player-react';
 
 function App() {
-  const whepUrl = "https://edge.example.com/view/webrtc/your-stream-name";
+  const whepUrl = "https://edge.example.com/webrtc/your-stream-name";
   
   return (
     <div style={{ width: '100%', height: '500px' }}>
@@ -452,13 +474,14 @@ function App() {
 | Prop | Type | Required | Description |
 |------|------|----------|-------------|
 | `contentType` | 'live' \| 'dvr' \| 'clip' | Yes | Content category |
-| `contentId` | string | Yes | Internal name or DVR/clip hash |
+| `contentId` | string | Yes | Playback ID (live) or DVR/clip hash |
 | `endpoints` | ContentEndpoints | No | Pre-resolved endpoints (skips Gateway) |
 | `thumbnailUrl` | string | No | Poster/overlay image |
 | `options` | PlayerOptions | No | See Options below |
 
 Options (PlayerOptions):
 - `gatewayUrl?`: string – Gateway GraphQL endpoint
+- `mistUrl?`: string – Direct MistServer base URL (bypasses Gateway)
 - `authToken?`: string – Bearer token (if required)
 - `autoplay?`: boolean
 - `muted?`: boolean
@@ -493,7 +516,7 @@ Options (PlayerOptions):
 
 | Prop | Type | Required | Description |
 |------|------|----------|-------------|
-| `whepUrl` | string | Yes | WHEP endpoint URL (e.g., "https://server.com/view/webrtc/streamName") |
+| `whepUrl` | string | Yes | WHEP endpoint URL (e.g., "https://server.com/webrtc/streamName") |
 | `autoPlay` | boolean | No | Whether to auto-play the stream (defaults to true) |
 | `muted` | boolean | No | Whether to start muted (defaults to true) |
 | `onError` | function | No | Callback function for error events |

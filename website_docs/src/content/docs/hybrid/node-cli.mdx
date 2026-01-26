@@ -46,7 +46,7 @@ This:
 2. Recreates containers with new images
 3. Preserves configuration and data
 
-For a specific version, edit `.edge.env` to pin image tags before running update.
+For a specific version, pin the image tags in `docker-compose.edge.yml` before running update.
 
 Check current version:
 ```bash
@@ -105,18 +105,17 @@ frameworks edge doctor
 
 Runs:
 - Host checks (ports, DNS, sysctls)
-- Container health
+- Container status
 - HTTPS reachability
-- Control plane connectivity
-- Event forwarding test
+- Remediation hints
 
 Network diagnostics:
 ```bash
 # Check connectivity to control plane
 frameworks context check
 
-# Test API endpoint
-curl -I %API_URL%/health
+# Test Foghorn HTTP endpoint
+curl -I $FOGHORN_URL/health
 ```
 
 ## Resource Usage
@@ -150,8 +149,8 @@ docker compose -f docker-compose.edge.yml restart
 
 Changes that require restart:
 - Capability toggles
-- Decklog/Commodore endpoints
-- Node identity
+- Foghorn endpoints / enrollment token
+- Storage configuration
 
 Changes that take effect immediately:
 - Most MistServer settings via its API
@@ -166,8 +165,8 @@ Changes that take effect immediately:
 **Recovery:**
 1. Install Docker on new host
 2. Run `frameworks edge preflight`
-3. Copy your `.edge.env`
-4. Run `frameworks edge init --dir .` to regenerate compose file
+3. Run `frameworks edge init --dir .` to generate compose/Caddyfile
+4. Copy your saved `.edge.env` into the directory
 5. Start with `frameworks edge enroll --dir .`
 
 ## Common Tasks
@@ -218,7 +217,7 @@ find /var/lib/mistserver/recordings -mtime +30 -delete
 
 For multiple nodes, consider:
 - Ansible playbooks using the CLI commands
-- Docker Swarm or Kubernetes with our Helm chart (coming soon)
+- Docker Swarm or Kubernetes (bring your own manifests)
 - Custom scripts wrapping `frameworks edge` commands
 
 Example health check script:

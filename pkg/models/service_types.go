@@ -55,6 +55,19 @@ type CountryMetrics struct {
 	EgressGB    float64 `json:"egress_gb"`
 }
 
+// APIUsageBreakdown represents API usage aggregates by auth and operation type.
+type APIUsageBreakdown struct {
+	AuthType      string  `json:"auth_type"`
+	OperationType string  `json:"operation_type"`
+	OperationName string  `json:"operation_name,omitempty"`
+	Requests      float64 `json:"requests"`
+	Errors        float64 `json:"errors"`
+	DurationMs    float64 `json:"duration_ms"`
+	Complexity    float64 `json:"complexity"`
+	UniqueUsers   float64 `json:"unique_users,omitempty"`
+	UniqueTokens  float64 `json:"unique_tokens,omitempty"`
+}
+
 // UsageSummary represents usage summary for billing
 type UsageSummary struct {
 	TenantID          string  `json:"tenant_id"`
@@ -65,20 +78,20 @@ type UsageSummary struct {
 	RecordingGB       float64 `json:"recording_gb"`
 	PeakBandwidthMbps float64 `json:"peak_bandwidth_mbps"`
 	// Storage and clip lifecycle metrics for billing
-	StorageGB            float64   `json:"storage_gb"`
-	AverageStorageGB     float64   `json:"average_storage_gb"`
-	ClipsAdded           int       `json:"clips_added"`
-	ClipsDeleted         int       `json:"clips_deleted"`
-	ClipStorageAddedGB   float64   `json:"clip_storage_added_gb"`
-	ClipStorageDeletedGB float64   `json:"clip_storage_deleted_gb"`
-	DvrAdded             int       `json:"dvr_added"`
-	DvrDeleted           int       `json:"dvr_deleted"`
-	DvrStorageAddedGB    float64   `json:"dvr_storage_added_gb"`
-	DvrStorageDeletedGB  float64   `json:"dvr_storage_deleted_gb"`
-	VodAdded             int       `json:"vod_added"`
-	VodDeleted           int       `json:"vod_deleted"`
-	VodStorageAddedGB    float64   `json:"vod_storage_added_gb"`
-	VodStorageDeletedGB  float64   `json:"vod_storage_deleted_gb"`
+	StorageGB            float64 `json:"storage_gb"`
+	AverageStorageGB     float64 `json:"average_storage_gb"`
+	ClipsAdded           int     `json:"clips_added"`
+	ClipsDeleted         int     `json:"clips_deleted"`
+	ClipStorageAddedGB   float64 `json:"clip_storage_added_gb"`
+	ClipStorageDeletedGB float64 `json:"clip_storage_deleted_gb"`
+	DvrAdded             int     `json:"dvr_added"`
+	DvrDeleted           int     `json:"dvr_deleted"`
+	DvrStorageAddedGB    float64 `json:"dvr_storage_added_gb"`
+	DvrStorageDeletedGB  float64 `json:"dvr_storage_deleted_gb"`
+	VodAdded             int     `json:"vod_added"`
+	VodDeleted           int     `json:"vod_deleted"`
+	VodStorageAddedGB    float64 `json:"vod_storage_added_gb"`
+	VodStorageDeletedGB  float64 `json:"vod_storage_deleted_gb"`
 	// Processing/transcoding usage metrics for billing
 	LivepeerSeconds       float64 `json:"livepeer_seconds"`         // Total Livepeer Gateway transcode seconds
 	LivepeerSegmentCount  int     `json:"livepeer_segment_count"`   // Number of segments transcoded via Livepeer
@@ -105,20 +118,27 @@ type UsageSummary struct {
 	AudioSeconds float64 `json:"audio_seconds"`
 	VideoSeconds float64 `json:"video_seconds"`
 
-	TotalStreams int `json:"total_streams"`
-	TotalViewers         int       `json:"total_viewers"`
-	ViewerHours          float64   `json:"viewer_hours"`
-	PeakViewers          int       `json:"peak_viewers"`
-	MaxViewers           int       `json:"max_viewers"`
-	UniqueUsers          int       `json:"unique_users"`
-	BillingMonth         string    `json:"billing_month"`
-	Timestamp            time.Time `json:"timestamp"`
+	TotalStreams      int       `json:"total_streams"`
+	TotalViewers      int       `json:"total_viewers"`
+	ViewerHours       float64   `json:"viewer_hours"`
+	PeakViewers       int       `json:"peak_viewers"`
+	MaxViewers        int       `json:"max_viewers"`
+	UniqueUsers       int       `json:"unique_users"`
+	UniqueUsersPeriod int       `json:"unique_users_period"`
+	Timestamp         time.Time `json:"timestamp"`
 
 	// Additional metrics from ClickHouse
 	AvgViewers      float64          `json:"avg_viewers"`
 	UniqueCountries int              `json:"unique_countries"`
 	UniqueCities    int              `json:"unique_cities"`
 	GeoBreakdown    []CountryMetrics `json:"geo_breakdown"` // Rich geo breakdown with viewers, hours, percentage
+
+	// API usage aggregates (from Gateway summaries)
+	APIRequests   float64             `json:"api_requests"`
+	APIErrors     float64             `json:"api_errors"`
+	APIDurationMs float64             `json:"api_duration_ms"`
+	APIComplexity float64             `json:"api_complexity"`
+	APIBreakdown  []APIUsageBreakdown `json:"api_breakdown,omitempty"`
 }
 
 // === COMMODORE SERVICE TYPES ===

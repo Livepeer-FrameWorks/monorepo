@@ -51,7 +51,10 @@
     ...rest
   }: Props = $props();
 
-  let visibleCount = $state(maxVisible);
+  let visibleCount = $state(0);
+  $effect(() => {
+    visibleCount = maxVisible;
+  });
 
   function getEventIcon(type: EventType): string {
     switch (type) {

@@ -11,7 +11,10 @@
 
   interface DeleteRecordingData {
     dvrHash: string;
-    internalName?: string | null;
+    streamId?: string | null;
+    stream?: {
+      streamId: string;
+    } | null;
   }
 
   interface Props {
@@ -23,6 +26,8 @@
   }
 
   let { open, recording, deleting, onConfirm, onCancel }: Props = $props();
+
+  const displayStreamId = $derived(recording?.stream?.streamId ?? recording?.streamId ?? null);
 </script>
 
 <Dialog
@@ -43,7 +48,7 @@
       <p class="text-sm text-muted-foreground">
         Are you sure you want to delete the recording for
         <span class="font-semibold text-foreground"
-          >"{recording?.internalName || recording?.dvrHash}"</span
+          >"{displayStreamId || recording?.dvrHash}"</span
         >?
       </p>
     </div>

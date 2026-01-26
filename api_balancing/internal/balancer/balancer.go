@@ -89,9 +89,9 @@ func (lb *LoadBalancer) compareBinaryHosts(host1, host2 [16]byte) bool {
 	return true
 }
 
-// GetAllNodes returns all nodes from unified state
+// GetAllNodes returns all nodes from unified state (including unhealthy/stale for debugging)
 func (lb *LoadBalancer) GetAllNodes() []state.EnhancedBalancerNodeSnapshot {
-	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+	snapshot := state.DefaultManager().GetAllNodesSnapshot()
 	if snapshot == nil {
 		return []state.EnhancedBalancerNodeSnapshot{}
 	}
@@ -368,6 +368,8 @@ func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapsh
 	}
 
 	// Check stream exists, has inputs, not replicated
+	// This runs during source selection (MistServer asking "where can I pull this stream from?")
+	// If no node has the stream with active inputs, MistServer falls back to push/local input
 	if streamName != "" {
 		stream, exists := snap.Streams[streamName]
 		if !exists || stream.Inputs == 0 {
@@ -379,7 +381,7 @@ func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapsh
 					}
 					return 0
 				}(),
-			}).Info("Stream not suitable for source: missing or no inputs")
+			}).Debug("Source lookup: node has no active input for stream (will try other nodes or fall back to push)")
 			if !exists {
 				return 0, rejectStreamMissing
 			}
@@ -531,4 +533,14 @@ func (lb *LoadBalancer) SetWeights(cpu, ram, bandwidth, geo, streamBonus uint64)
 // GetWeights returns current weights from unified state manager
 func (lb *LoadBalancer) GetWeights() map[string]uint64 {
 	return state.DefaultManager().GetWeights()
+}
+
+// GetStreamsByTenant returns all active streams for a specific tenant
+func (lb *LoadBalancer) GetStreamsByTenant(tenantID string) []*state.StreamState {
+	return state.DefaultManager().GetStreamsByTenant(tenantID)
+}
+
+// GetStreamInstances returns per-node instances for a specific stream
+func (lb *LoadBalancer) GetStreamInstances(internalName string) map[string]state.StreamInstanceState {
+	return state.DefaultManager().GetStreamInstances(internalName)
 }

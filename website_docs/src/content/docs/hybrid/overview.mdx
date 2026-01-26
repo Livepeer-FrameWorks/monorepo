@@ -15,7 +15,7 @@ Hybrid deployment is a cutting-edge feature currently in **active development an
 Hybrid edge nodes communicate with the FrameWorks network via public APIs (HTTP/gRPC). They do **not** participate in the internal WireGuard mesh (Privateer), which is reserved for backend infrastructure nodes.
 </Aside>
 
-The vision for FrameWorks' hybrid deployment is to offer the best of both worlds: the control of self-hosted infrastructure with the convenience of a managed services. This will enable you to do the heavy lifting on your own hardware, while the FrameWorks network handles crucial services like load balancing, analytics, and orchestration.
+The vision for FrameWorks' hybrid deployment is to offer the best of both worlds: the control of self-hosted infrastructure with the convenience of managed services. This will enable you to do the heavy lifting on your own hardware, while the FrameWorks network handles crucial services like load balancing, analytics, and orchestration.
 
 ## The Hybrid Vision
 
@@ -48,13 +48,13 @@ graph LR
     end
 
     MS -->|gRPC| FOG
-    FOG -->|HTTP| COM
+    FOG -->|gRPC| COM
     FOG -->|gRPC| DL
 ```
 
-1. **MistServer** handles the actual streaming: RTMP ingest, transcoding, HLS/DASH/WebRTC delivery
-2. **Helmsman** (our sidecar) forwards all triggers and metrics to Foghorn via gRPC
-3. **Foghorn** enriches events (GeoIP, tenant context), validates stream keys via Commodore (HTTP), and forwards to Decklog
+1. **MistServer** is the media engine: ingest, processing/transcoding (including Livepeer‑powered ABR when configured), and HLS/DASH/WebRTC delivery
+2. **Helmsman** (our sidecar) handles tight integration with Foghorn and forwards triggers/metrics via gRPC
+3. **Foghorn** enriches events (GeoIP, tenant context), validates stream keys via Commodore (gRPC), and forwards to Decklog
 4. **Decklog** receives enriched events from Foghorn and produces them to Kafka for analytics
 
 ## Prerequisites
@@ -63,14 +63,23 @@ Before you start:
 - A server with Docker and Docker Compose
 - Public IP (for viewers to reach you)
 - DNS record pointing to your server
-- Ports 80, 443, 1935, and 8080 available
-- FrameWorks account with node enrollment permissions
+- Ports available as needed (expose only what you use):
+  - **80/443** (HTTP/HTTPS)
+  - **1935** (RTMP ingest)
+  - **8080** (MistServer HTTP)
+  - **5554** (RTSP)
+  - **8889/udp** (SRT)
+  - **18203/udp** (WebRTC)
+  - **4200** (DTSC replication, Mist ↔ Mist)
+  - **4242** (Mist controller; keep internal/local)
+- A paid FrameWorks account with self-hosted clusters enabled, plus a CLI enrollment token to connect the node
 
 Hardware minimums:
-- 4 CPU cores
-- 8 GB RAM
-- 100 GB storage (more if you're doing recordings)
-- 1 Gbps network
+- **Starting point for light workloads** (scale with streams/transcodes):
+  - 4 CPU cores (or less for very low volume)
+  - 8 GB RAM
+  - 100 GB storage (more if you're doing recordings)
+  - 1 Gbps network
 
 ## Future Implementation Steps
 

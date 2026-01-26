@@ -1,16 +1,15 @@
 import { motion } from 'framer-motion'
+import { Cable, Coins } from 'lucide-react'
 import config from '../../config'
 import {
   ChartBarIcon,
   SparklesIcon,
   FilmIcon,
   GlobeAltIcon,
-  VideoCameraIcon,
-  LockOpenIcon,
   CpuChipIcon,
-  ServerStackIcon,
 } from '@heroicons/react/24/outline'
 import { Section, SectionContainer } from '@/components/ui/section'
+import StatusTag from '../shared/StatusTag'
 import {
   MarketingHero,
   MarketingBand,
@@ -27,7 +26,6 @@ import {
   MarketingCTAButton,
   MarketingStackedSeam,
   SectionDivider,
-  MarketingComparisonGrid
 } from '@/components/marketing'
 
 const About = () => {
@@ -108,29 +106,32 @@ const About = () => {
 
   const missionHighlights = [
     {
-      title: 'Hybrid control on your terms',
+      title: 'Developer-First Platform',
       description:
-        'Run your own edge network, extend it with hosted GPU features when you need them, and shift workloads whenever budgets or compliance demand it.',
-      icon: ServerStackIcon,
+        'Relay-style GraphQL API with typed SDKs. Player and StreamCrafter components for React and Svelte. Build with confidence.',
+      icon: null,
       tone: 'accent',
     },
     {
-      title: 'Unique Features',
-      description: 'Auto-discovery, multi-stream compositing, and AI workflows built for hybrid deployments.',
-      icon: SparklesIcon,
+      title: 'Unmatched Analytics',
+      description:
+        'Routing decisions, QoE metrics, player telemetry. See exactly why viewer X connected to edge Y.',
+      icon: null,
+      tone: 'green',
+    },
+    {
+      title: 'Sovereignty Without Pain',
+      description:
+        'Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.',
+      icon: null,
       tone: 'purple',
     },
     {
-      title: 'B2B Focus',
-      description: 'Custom integrations, compliance, and enterprise support for production video workloads.',
-      icon: ChartBarIcon,
-      tone: 'yellow',
-    },
-    {
-      title: 'Public Domain Licensed',
-      description: 'No attribution requirements or copyleft restrictions. Deploy commercially without lock-in.',
-      icon: LockOpenIcon,
-      tone: 'orange',
+      title: 'Agent-Native Platform',
+      description:
+        'MCP server, wallet auth, x402 payments. AI agents operate autonomously.',
+      icon: null,
+      tone: 'cyan',
     },
   ]
 
@@ -140,44 +141,16 @@ const About = () => {
     'Run it yourself, use our hosted services, or mix and match. Uncloud your infrastructure.',
   ]
 
-  const competitorComparison = [
-    {
-      name: 'Mux',
-      model: 'Cloud-only SaaS',
-      description: 'Per-minute billing with zero self-hosting. Your data lives on their infrastructure, forever. Scale = pay more.',
-      verdict: 'Vendor lock-in',
-    },
-    {
-      name: 'Wowza',
-      model: 'Per-node licensing',
-      description: '$195+/month per server instance. Java monolith, manual clustering, no native multi-tenancy. Scale = buy more licenses.',
-      verdict: 'Expensive at scale',
-    },
-    {
-      name: 'FrameWorks',
-      model: 'Sovereign Video Cloud',
-      description: 'Public domain licensed. Self-host for free or fall back to our infrastructure. Native multi-tenancy. Scale however you want.',
-      verdict: 'True ownership',
-      highlight: true,
-    },
-  ]
-
-  const differentiators = [
-    {
-      title: 'Livepeer Network Integration',
-      badge: 'Treasury Backed',
-      icon: VideoCameraIcon,
-      tone: 'accent',
-      description:
-        "Subsidized by the Livepeer treasury and powered by a decentralized video network for transcoding and AI processing.",
-    },
+  const pipelineFeatures = [
     {
       title: 'Auto-Discovery App',
       badge: 'Industry First',
       icon: SparklesIcon,
       tone: 'cyan',
       description:
-        'A drop-in app that automatically discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs. Zero configuration required.',
+        'A drop-in app that auto-discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs.',
+      status: 'pipeline',
+      statusNote: 'In active development with limited pilot access.',
     },
     {
       title: 'Multi-stream Compositing',
@@ -185,23 +158,9 @@ const About = () => {
       icon: FilmIcon,
       tone: 'purple',
       description:
-        'Combine multiple input streams into one composite output with picture-in-picture, overlays, and OBS-style mixing capabilities.',
-    },
-    {
-      title: 'Public Domain Licensed',
-      badge: 'Open Source',
-      icon: LockOpenIcon,
-      tone: 'yellow',
-      description:
-        'No attribution required, no copyleft restrictions - you truly own what you deploy, including for commercial use.',
-    },
-    {
-      title: 'Real-time Analytics and Monitoring',
-      badge: 'Live Updates',
-      icon: ChartBarIcon,
-      tone: 'green',
-      description:
-        'Live viewer counts, bandwidth monitoring, instant alerts, and performance metrics across your entire streaming network.',
+        'Combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.',
+      status: 'pipeline',
+      statusNote: 'In limited internal demos and pilot hardening.',
     },
     {
       title: 'Live AI Processing',
@@ -209,47 +168,82 @@ const About = () => {
       icon: CpuChipIcon,
       tone: 'orange',
       description:
-        'Real-time speech-to-text, object detection, content classification, and automated clipping with AI segmentation while you stream.',
+        'AI-native live video: transcribe, analyze, automate, and transform streams in real time.',
+      status: 'pipeline',
+      statusNote: 'In development with limited pilot workloads.',
     },
   ]
 
-  const differentiatorCards = differentiators.map((item) => ({
+  const pipelineCards = pipelineFeatures.map((item) => ({
     icon: item.icon,
     tone: item.tone,
     iconTone: item.tone,
     title: item.title,
     badge: item.badge,
     description: item.description,
+    meta: <StatusTag status={item.status} note={item.statusNote} />,
     hover: 'subtle',
     stripe: true,
   }))
 
-  const techColumns = [
+  const getTechInitial = (item) => {
+    if (item?.initial) return item.initial
+    const match = item?.label?.match(/[A-Za-z0-9]/)
+    return match ? match[0].toUpperCase() : ''
+  }
+
+  const techRows = [
     {
       title: 'Broad Support',
       items: [
-        { icon: '/mist.svg', label: 'MistServer - battle-tested media server' },
-        { icon: '/livepeer-light.svg', label: 'Livepeer Network - decentralized transcoding and AI' },
-        { icon: '/webrtc.svg', label: 'WebRTC, RTMP, SRT, HLS, DASH - every streaming protocol you need' },
+        { icon: '/mist.svg', label: 'MistServer - media server' },
+        { icon: '/livepeer-light.svg', label: 'Livepeer Network - decentralized transcoding + AI' },
+        { icon: '/webrtc.svg', label: 'WebRTC, RTMP, SRT, HLS, DASH - streaming protocols' },
       ],
     },
     {
-      title: 'Backend Infrastructure',
+      title: 'Core Infrastructure',
       items: [
-        { icon: '/go-lightblue.svg', label: 'Go - high-performance custom microservices' },
+        { icon: '/go-lightblue.svg', label: 'Go - service runtime' },
         { icon: '/kafka.svg', label: 'Apache Kafka - event streaming' },
-        { icon: '/postgres.svg', label: 'YugabyteDB - state and configuration' },
-        { icon: '/clickhouse.svg', label: 'ClickHouse - time-series analytics' },
+        { icon: '/zookeeper.png', label: 'Zookeeper - Kafka coordination' },
+        { icon: '/postgres.svg', label: 'YugabyteDB - distributed SQL' },
+        { icon: '/clickhouse.svg', label: 'ClickHouse - analytics store' },
+        { glyph: Cable, label: 'gRPC - service RPC' },
+        { icon: '/gql.svg', label: 'GraphQL - API gateway schema' },
+        { icon: '/wireguard.svg', label: 'WireGuard - mesh networking' },
+        { icon: '/powerdns.svg', label: 'PowerDNS - authoritative anycast DNS' },
+        { icon: '/lets-encrypt.svg', label: "ACME / Let's Encrypt - TLS certificates" },
+        { icon: '/hashicorp-vault.svg', label: 'HashiCorp Vault - secrets' },
+        { icon: '/redis.svg', label: 'Redis - caching' },
+        { icon: '/geoip.svg', label: 'MaxMind GeoIP - geo lookup' },
       ],
     },
     {
-      title: 'Deployment and Operations',
+      title: 'Operations and Observability',
       items: [
-        { icon: '/docker-mark-blue.svg', label: 'Docker - containerized deployment' },
-        { icon: '/websocket.svg', label: 'WebSockets - real-time updates' },
-        { icon: '/nginx.svg', label: 'Nginx - load balancing and SSL' },
-        { icon: '/prometheus.svg', label: 'Prometheus - monitoring and metrics' },
-        { icon: '/svelte.svg', label: 'SvelteKit - modern web interface' },
+        { icon: '/docker-mark-blue.svg', label: 'Docker - containers' },
+        { icon: '/nginx.svg', label: 'Nginx - reverse proxy' },
+        { icon: '/websocket.svg', label: 'WebSockets - real-time transport' },
+        { icon: '/prometheus.svg', label: 'Prometheus - metrics' },
+        { icon: '/grafana.svg', label: 'Grafana - dashboards' },
+        { icon: '/loki.svg', label: 'Loki - logs' },
+        { icon: '/victoriametrics.svg', label: 'VictoriaMetrics - metrics storage' },
+        { icon: '/metabase.svg', label: 'Metabase - BI' },
+      ],
+    },
+    {
+      title: 'Product and Ecosystem',
+      items: [
+        { icon: '/svelte.svg', label: 'SvelteKit - web app' },
+        { icon: '/reactjs.svg', label: 'React - SDKs' },
+        { icon: '/Astro.svg', label: 'Astro - docs framework' },
+        { icon: '/starlight.svg', label: 'Starlight - docs theme' },
+        { icon: '/stripe.svg', label: 'Stripe - payments provider' },
+        { icon: '/mollie.jpg', label: 'Mollie - payments provider' },
+        { glyph: Coins, label: 'x402 - crypto payments + auth', initial: 'x' },
+        { icon: '/chatwoot.svg', label: 'Chatwoot - support inbox' },
+        { icon: '/listmonk.svg', label: 'Listmonk - newsletter' },
       ],
     },
   ]
@@ -356,7 +350,7 @@ const About = () => {
               >
                 <MarketingBand surface="panel" className="mission-pillars">
                   <HeadlineStack
-                    title="Mission pillars"
+                    title="Core Pillars"
                     align="left"
                     underline={false}
                   />
@@ -391,53 +385,15 @@ const About = () => {
           >
             <MarketingBand surface="panel">
               <HeadlineStack
-                eyebrow="Comparison"
-                title="How FrameWorks compares"
-                subtitle="Most platforms force a choice between cloud lock-in or operational burden. We don't."
-                align="left"
-                underlineAlign="start"
-                actionsPlacement="inline"
-              />
-              <MarketingComparisonGrid
-                columns={3}
-                className="mt-8"
-                items={competitorComparison.map((item) => ({
-                  title: item.name,
-                  badge: item.model,
-                  description: item.description,
-                  featured: item.highlight,
-                  tone: item.highlight ? 'accent' : 'neutral',
-                  footnote: (
-                    <span className={item.highlight ? 'text-primary font-medium' : 'text-muted-foreground font-medium'}>
-                      {item.verdict}
-                    </span>
-                  ),
-                }))}
-              />
-            </MarketingBand>
-          </motion.div>
-        </SectionContainer>
-      </Section>
-
-      <Section className="bg-brand-surface-muted">
-        <SectionContainer>
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-          >
-            <MarketingBand surface="panel">
-              <HeadlineStack
-                eyebrow="Differentiators"
-                title="What makes FrameWorks different?"
-                subtitle="What sets FrameWorks apart from other streaming platforms."
+                eyebrow="Pipeline"
+                title="Coming Soon"
+                subtitle="Advanced features in active development for hybrid and self-hosted operators."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
               />
               <MarketingFeatureWall
-                items={differentiatorCards}
+                items={pipelineCards}
                 columns={3}
                 stackAt="md"
               />
@@ -466,26 +422,30 @@ const About = () => {
                   Production-ready components that scale with you, from ingest through analytics. Proven by MistServer operators and the Livepeer network.
                 </p>
               </HeadlineStack>
-              <MarketingGridSeam columns={3} stackAt="lg" className="marketing-tech-grid">
-                {techColumns.map((column) => (
-                  <div key={column.title} className="marketing-tech-column">
-                    <div className="marketing-tech-column__header">
-                      <span className="marketing-tech-column__title">{column.title}</span>
-                      {column.description ? (
-                        <p className="marketing-tech-column__description">{column.description}</p>
+              <MarketingGridSeam columns={1} className="marketing-tech-rows">
+                {techRows.map((row) => (
+                  <div key={row.title} className="marketing-tech-row">
+                    <div className="marketing-tech-row__header">
+                      <span className="marketing-tech-row__title">{row.title}</span>
+                      {row.description ? (
+                        <p className="marketing-tech-row__description">{row.description}</p>
                       ) : null}
                     </div>
-                    <ul className="marketing-tech-column__list">
-                      {column.items?.map((item) => (
-                        <li key={item.label} className="marketing-tech-column__item">
-                          <MarketingIconBadge variant="neutral" className="marketing-tech-column__icon">
+                    <ul className="marketing-tech-row__list">
+                      {row.items?.map((item) => (
+                        <li key={item.label} className="marketing-tech-row__item">
+                          <MarketingIconBadge variant="neutral" className="marketing-tech-row__icon">
                             {item.icon ? (
-                              <img src={item.icon} alt="" aria-hidden="true" className="marketing-tech-column__icon-image" />
+                              <img src={item.icon} alt="" aria-hidden="true" className="marketing-tech-row__icon-image" />
+                            ) : item.glyph ? (
+                              <item.glyph aria-hidden="true" className="marketing-tech-row__glyph" />
                             ) : (
-                              <span className="marketing-tech-column__dot" aria-hidden="true" />
+                              <span className="marketing-tech-row__initial" aria-hidden="true">
+                                {getTechInitial(item)}
+                              </span>
                             )}
                           </MarketingIconBadge>
-                          <span className="marketing-tech-column__text">{item.label}</span>
+                          <span className="marketing-tech-row__text">{item.label}</span>
                         </li>
                       ))}
                     </ul>

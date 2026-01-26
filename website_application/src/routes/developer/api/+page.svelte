@@ -14,7 +14,9 @@
     Plus,
     ChevronDown,
     ChevronUp,
+    Bot,
   } from "lucide-svelte";
+  import { getMcpEndpoint } from "$lib/config";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { Badge } from "$lib/components/ui/badge";
@@ -201,12 +203,21 @@
           <div class="hidden md:flex items-center gap-4">
             <div class="flex items-center gap-1.5">
               <span class="text-muted-foreground">HTTP</span>
-              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}</code>
+              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_HTTP_URL}</code>
             </div>
             <div class="flex items-center gap-1.5">
               <span class="text-muted-foreground">WS</span>
-              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_WS_URL || "ws://localhost:18000/graphql/"}</code>
+              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_WS_URL}</code>
             </div>
+            <a
+              href={resolve("/developer/sdks")}
+              class="flex items-center gap-1.5 hover:text-primary transition-colors"
+              title="MCP endpoint for AI agents"
+            >
+              <Bot class="w-3.5 h-3.5 text-success" />
+              <span class="text-muted-foreground hover:text-primary">MCP</span>
+              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{getMcpEndpoint()}</code>
+            </a>
           </div>
           {#if !isAuthenticated}
             <Button href={resolve("/login")} size="sm" class="gap-2">

@@ -9,8 +9,8 @@ import { Aside } from '@astrojs/starlight/components';
 
 FrameWorks offers a powerful GraphQL API that puts you in full control. Whether you need to programmatically create streams, manage keys, or pull detailed analytics, our API provides a unified interface for all platform operations.
 
-<Aside type="note" title="Same API everywhere">
-This API is identical whether you're using the managed service or self-hosting. Self-hosted deployments run the same Bridge (API Gateway) with the same GraphQL schema.
+<Aside type="note" title="Same schema everywhere">
+Managed and self-hosted deployments run the same Bridge (API Gateway) and GraphQL schema. Some fields may return null or errors if the backing service isn’t deployed.
 </Aside>
 
 ## GraphQL Endpoint
@@ -18,24 +18,33 @@ This API is identical whether you're using the managed service or self-hosting. 
 All API interactions are performed through a single GraphQL endpoint. This allows you to fetch exactly the data you need in a single request.
 
 ```
-%API_URL%
+%GATEWAY_URL%/graphql
+```
+
+Subscriptions use WebSocket:
+
+```
+%GATEWAY_URL%/graphql/ws
 ```
 
 All operations go through this single endpoint. Queries read data, mutations change it.
 
 ## Authentication
 
-Every request needs a token in the Authorization header:
+Most requests need a token in the Authorization header:
 
 ```
-Authorization: Bearer YOUR_TOKEN
+Authorization: Bearer YOUR_JWT_OR_API_TOKEN
 ```
 
-Get your token from **Developer → API** in the dashboard.
+Get your API token from **Developer → API** in the dashboard.
+
+The dashboard may authenticate via httpOnly cookies.  
+Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndpoint`, `serviceInstancesHealth` (queries only).
 
 ## Try It Out
 
-The dashboard has a built-in GraphQL explorer. Go to **Developer → API Explorer** to run queries against your account.
+The dashboard has a built-in GraphQL explorer. Go to **Developer → API** to run queries against your account.
 
 Or use any GraphQL client:
 - [Altair](https://altairgraphql.dev/)
@@ -50,25 +59,44 @@ Here are the most frequent operations you'll likely need when building your inte
 
 ```graphql
 query {
-  streams {
-    id
-    name
-    status
-    playbackId
-    createdAt
+  streamsConnection(page: { first: 20 }) {
+    edges {
+      node {
+        id
+        name
+        playbackId
+        createdAt
+        metrics {
+          status
+          currentViewers
+        }
+      }
+    }
   }
 }
 ```
 
 ### Create a Stream
 
+Most mutations return a **union** result. Always check `__typename`.
+
 ```graphql
 mutation {
   createStream(input: { name: "My New Stream" }) {
-    id
-    name
-    streamKey
-    playbackId
+    __typename
+    ... on Stream {
+      id
+      name
+      streamKey
+      playbackId
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+    }
   }
 }
 ```
@@ -77,15 +105,17 @@ mutation {
 
 ```graphql
 query {
-  stream(id: "stream-id-here") {
+  stream(id: "stream-global-id") {
     id
     name
     streamKey
     playbackId
     record
-    recordings {
-      id
+    metrics {
       status
+      currentViewers
+      isLive
+      updatedAt
     }
   }
 }
@@ -95,45 +125,63 @@ query {
 
 ```graphql
 mutation {
-  createStreamKey(streamId: "stream-id-here", input: { name: "OBS Key" }) {
-    id
-    keyValue
-    keyName
-    createdAt
+  createStreamKey(streamId: "stream-global-id", input: { name: "OBS Key" }) {
+    __typename
+    ... on StreamKey {
+      id
+      keyValue
+      keyName
+      createdAt
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on AuthError {
+      message
+    }
   }
 }
 ```
 
 ### Get Stream Analytics
 
-Analytics queries require you to specify a time range. Data is returned in aggregated form to help you visualize viewer engagement and bandwidth usage.
+Analytics queries require you to specify a time range. Data is returned in aggregated form to help you visualize viewer engagement and usage.
 
 ```graphql
 query {
-  streamAnalytics(
-    stream: "stream-internal-name"
-    timeRange: { start: "2024-01-01T00:00:00Z", end: "2024-01-02T00:00:00Z" }
-  ) {
-    currentViewers
-    peakViewers
-    totalSessionDuration
-    totalBandwidthGb
+  analytics {
+    usage {
+      streaming {
+        streamAnalyticsDailyConnection(
+          streamId: "stream-global-id"
+          timeRange: { start: "2024-01-01T00:00:00Z", end: "2024-01-07T00:00:00Z" }
+          page: { first: 30 }
+        ) {
+          edges {
+            node {
+              day
+              totalViews
+              uniqueViewers
+              egressBytes
+            }
+          }
+        }
+      }
+    }
   }
 }
 ```
 
-Note: The `stream` parameter uses the stream's internal name, not its ID.
+Note: analytics `streamId` filters use the Stream global ID (`Stream.id`). Responses return Relay IDs; use `Stream.streamId` for the public UUID used outside GraphQL.
 
 ## Playback Resolution
 
-When building a custom player, you should use the `resolveViewerEndpoint` query. This ensures your viewers are routed to the geographically closest and healthiest edge node for the best possible experience.
+When building a custom player, use the `resolveViewerEndpoint` query. This ensures your viewers are routed to the geographically closest and healthiest edge node for the best possible experience.
 
 ```graphql
 query {
-  resolveViewerEndpoint(
-    contentType: "live"
-    contentId: "stream-internal-name"
-  ) {
+  resolveViewerEndpoint(contentId: "pk_your_playback_id") {
     primary {
       nodeId
       baseUrl
@@ -141,7 +189,7 @@ query {
       url
       geoDistance
       loadScore
-      healthScore
+      outputs
     }
     fallbacks {
       nodeId
@@ -153,11 +201,10 @@ query {
       status
       isLive
       viewers
-      tenantId
-      contentId
-      contentType
       title
       description
+      contentId
+      contentType
     }
   }
 }
@@ -165,9 +212,13 @@ query {
 
 Returns a primary endpoint (optimal for the viewer's location) plus fallbacks. Use the primary endpoint first, fall back to others if it fails.
 
+`contentId` is a **playbackId** for live streams, VOD uploads, clips, and DVR recordings (not the raw hash).
+
+If the gateway can’t determine a viewer IP (for GeoIP routing), this query will error.
+
 ## Error Handling
 
-GraphQL errors come in the `errors` array:
+GraphQL errors come in the `errors` array. Mutation errors for unions are returned as typed objects (check `__typename`).
 
 ```json
 {
@@ -193,14 +244,14 @@ Common codes:
 
 ## SDKs
 
-No official SDKs yet. Use any GraphQL client in your language of choice.
+No official GraphQL SDK yet. Use any GraphQL client in your language of choice. An API Client SDK is planned (see **Developer → SDKs**).
 
 JavaScript example with `graphql-request`:
 
 ```javascript
 import { GraphQLClient, gql } from 'graphql-request';
 
-const client = new GraphQLClient('%API_URL%', {
+const client = new GraphQLClient('%GATEWAY_URL%/graphql', {
   headers: {
     Authorization: 'Bearer YOUR_TOKEN',
   },
@@ -208,16 +259,20 @@ const client = new GraphQLClient('%API_URL%', {
 
 const query = gql`
   query {
-    streams {
-      id
-      name
-      status
+    streamsConnection(first: 5) {
+      edges {
+        node {
+          id
+          name
+          playbackId
+        }
+      }
     }
   }
 `;
 
 const data = await client.request(query);
-console.log(data.streams);
+console.log(data.streamsConnection.edges.map((e) => e.node));
 ```
 
 ## Schema Reference

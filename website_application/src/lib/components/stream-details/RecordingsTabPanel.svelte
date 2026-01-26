@@ -2,16 +2,22 @@
   import { goto } from "$app/navigation";
   import { getIconComponent } from "$lib/iconUtils";
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
+  import { isExpired } from "$lib/utils/formatters.js";
   import { Button } from "$lib/components/ui/button";
-  import { getContentDeliveryUrls } from "$lib/config";
+  import { getContentDeliveryUrls, getShareUrl } from "$lib/config";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
 
   interface Recording {
     dvrHash: string;
-    internalName?: string | null;
+    playbackId?: string | null;
+    streamId?: string | null;
+    stream?: {
+      streamId: string;
+    } | null;
     manifestPath?: string | null;
     status?: string | null;
     createdAt?: string | null;
+    expiresAt?: string | null;
     durationSeconds?: number | null;
   }
 
@@ -25,14 +31,17 @@
 
   let expandedRecording = $state<string | null>(null);
 
-  // Get delivery URLs for a recording using dvrHash
-  function getRecordingUrls(dvrHash: string | undefined | null) {
-    if (!dvrHash) return null;
-    return getContentDeliveryUrls(dvrHash, "dvr");
+  // Get delivery URLs for a recording using playbackId
+  function getRecordingUrls(playbackId: string | undefined | null) {
+    if (!playbackId) return null;
+    return getContentDeliveryUrls(playbackId, "dvr");
   }
 
-  function playRecording(dvrHash: string) {
-    goto(`/view?type=dvr&id=${dvrHash}`);
+  function playRecording(playbackId: string) {
+    const url = getShareUrl(playbackId);
+    if (url) {
+      goto(url);
+    }
   }
 
   const DownloadIcon = getIconComponent("Download");
@@ -68,9 +77,11 @@
   {:else}
     <div class="slab-body--flush">
       {#each recordings as recording (recording.dvrHash)}
-        {@const urls = getRecordingUrls(recording.dvrHash)}
+        {@const urls = getRecordingUrls(recording.playbackId)}
         {@const isExpanded = expandedRecording === recording.dvrHash}
-        {@const isPlayable = recording.status && !['deleted', 'failed', 'processing', 'requested', 'queued'].includes(recording.status.toLowerCase())}
+        {@const isExpiredRecording = isExpired(recording.expiresAt)}
+        {@const isPlayable = !!recording.playbackId && !isExpiredRecording && recording.status && !['deleted', 'failed', 'processing', 'requested', 'queued'].includes(recording.status.toLowerCase())}
+        {@const displayStreamId = recording.stream?.streamId ?? recording.streamId}
         <div class="border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
           <!-- Recording header -->
           <div class="p-4">
@@ -78,7 +89,7 @@
               <div class="space-y-1">
                 <div class="flex items-center space-x-2">
                   <h5 class="text-base font-semibold text-foreground truncate max-w-md" title={recording.dvrHash}>
-                    {recording.internalName || recording.dvrHash}
+                    {displayStreamId || recording.dvrHash}
                   </h5>
                   <span
                     class="text-xs px-2 py-1 rounded-full font-medium {
@@ -102,7 +113,7 @@
                   <Button
                     variant="ghost"
                     size="sm"
-                    onclick={() => playRecording(recording.dvrHash)}
+                    onclick={() => recording.playbackId && playRecording(recording.playbackId)}
                     class="gap-2 border border-border/30"
                   >
                     <PlayIcon class="w-4 h-4" />
@@ -119,6 +130,8 @@
                     <DownloadIcon class="w-4 h-4" />
                     Download
                   </Button>
+                {:else if isExpiredRecording}
+                  <span class="text-xs text-muted-foreground italic">Expired</span>
                 {:else if !isPlayable}
                   <span class="text-xs text-muted-foreground italic">Not available</span>
                 {/if}
@@ -145,7 +158,7 @@
           {#if isExpanded && isPlayable}
             <div class="px-4 pb-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)] bg-muted/5">
               <PlaybackProtocols
-                contentId={recording.dvrHash}
+                contentId={recording.playbackId ?? ""}
                 contentType="dvr"
                 showPrimary={true}
                 showAdditional={true}

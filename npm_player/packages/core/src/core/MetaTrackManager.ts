@@ -45,7 +45,7 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecti
  * ```ts
  * const manager = new MetaTrackManager({
  *   mistBaseUrl: 'https://mist.example.com',
- *   streamName: 'my-stream',
+ *   streamName: 'pk_...', // playbackId (view key)
  * });
  *
  * manager.subscribe('1', (event) => {

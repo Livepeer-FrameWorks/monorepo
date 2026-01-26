@@ -167,48 +167,54 @@ func buildCursorPagination(opts *CursorPaginationOpts) *pb.CursorPaginationReque
 }
 
 // ============================================================================
-// Stream Analytics
+// Stream Analytics (Summary + Events)
 // ============================================================================
 
-// GetStreamAnalytics returns analytics for streams with cursor-based pagination
-func (c *GRPCClient) GetStreamAnalytics(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamAnalyticsResponse, error) {
-	req := &pb.GetStreamAnalyticsRequest{
-		TenantId:   tenantID,
+// GetStreamAnalyticsSummary returns MV-backed range aggregates for a stream.
+func (c *GRPCClient) GetStreamAnalyticsSummary(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts) (*pb.GetStreamAnalyticsSummaryResponse, error) {
+	req := &pb.GetStreamAnalyticsSummaryRequest{
+		TenantId:  tenantID,
+		StreamId:  streamID,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	return c.aggregated.GetStreamAnalyticsSummary(ctx, req)
+}
+
+// GetLiveUsageSummary returns near-real-time usage summary for billing dashboards.
+func (c *GRPCClient) GetLiveUsageSummary(ctx context.Context, tenantID string, timeRange *TimeRangeOpts) (*pb.GetLiveUsageSummaryResponse, error) {
+	req := &pb.GetLiveUsageSummaryRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	return c.aggregated.GetLiveUsageSummary(ctx, req)
+}
+
+// GetStreamEvents returns events for a specific stream with cursor pagination
+func (c *GRPCClient) GetStreamEvents(ctx context.Context, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamEventsResponse, error) {
+	return c.stream.GetStreamEvents(ctx, &pb.GetStreamEventsRequest{
+		StreamId:   streamID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	})
+}
+
+// GetBufferEvents returns buffer events for a specific stream
+func (c *GRPCClient) GetBufferEvents(ctx context.Context, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetBufferEventsResponse, error) {
+	return c.stream.GetBufferEvents(ctx, &pb.GetBufferEventsRequest{
+		StreamId:   streamID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	})
+}
+
+// GetStreamHealthMetrics returns stream health metrics
+func (c *GRPCClient) GetStreamHealthMetrics(ctx context.Context, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error) {
+	req := &pb.GetStreamHealthMetricsRequest{
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
 	if streamID != nil {
 		req.StreamId = streamID
-	}
-	return c.stream.GetStreamAnalytics(ctx, req)
-}
-
-// GetStreamEvents returns events for a specific stream with cursor pagination
-func (c *GRPCClient) GetStreamEvents(ctx context.Context, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamEventsResponse, error) {
-	return c.stream.GetStreamEvents(ctx, &pb.GetStreamEventsRequest{
-		InternalName: internalName,
-		TimeRange:    buildTimeRange(timeRange),
-		Pagination:   buildCursorPagination(opts),
-	})
-}
-
-// GetBufferEvents returns buffer events for a specific stream
-func (c *GRPCClient) GetBufferEvents(ctx context.Context, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetBufferEventsResponse, error) {
-	return c.stream.GetBufferEvents(ctx, &pb.GetBufferEventsRequest{
-		InternalName: internalName,
-		TimeRange:    buildTimeRange(timeRange),
-		Pagination:   buildCursorPagination(opts),
-	})
-}
-
-// GetStreamHealthMetrics returns stream health metrics
-func (c *GRPCClient) GetStreamHealthMetrics(ctx context.Context, internalName *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error) {
-	req := &pb.GetStreamHealthMetricsRequest{
-		TimeRange:  buildTimeRange(timeRange),
-		Pagination: buildCursorPagination(opts),
-	}
-	if internalName != nil {
-		req.InternalName = internalName
 	}
 	return c.stream.GetStreamHealthMetrics(ctx, req)
 }
@@ -250,28 +256,28 @@ func (c *GRPCClient) GetViewerMetrics(ctx context.Context, tenantID string, stre
 
 // GetViewerCountTimeSeries returns time-bucketed viewer counts for charts
 // interval should be "5m", "15m", "1h", or "1d"
-func (c *GRPCClient) GetViewerCountTimeSeries(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, interval string) (*pb.GetViewerCountTimeSeriesResponse, error) {
+func (c *GRPCClient) GetViewerCountTimeSeries(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, interval string) (*pb.GetViewerCountTimeSeriesResponse, error) {
 	req := &pb.GetViewerCountTimeSeriesRequest{
 		TenantId:  tenantID,
 		TimeRange: buildTimeRange(timeRange),
 		Interval:  interval,
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.viewer.GetViewerCountTimeSeries(ctx, req)
 }
 
 // GetGeographicDistribution returns aggregated geographic distribution of viewers
 // topN limits the number of results (default 10 if 0)
-func (c *GRPCClient) GetGeographicDistribution(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, topN int32) (*pb.GetGeographicDistributionResponse, error) {
+func (c *GRPCClient) GetGeographicDistribution(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, topN int32) (*pb.GetGeographicDistributionResponse, error) {
 	req := &pb.GetGeographicDistributionRequest{
 		TenantId:  tenantID,
 		TimeRange: buildTimeRange(timeRange),
 		TopN:      topN,
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.viewer.GetGeographicDistribution(ctx, req)
 }
@@ -281,11 +287,11 @@ func (c *GRPCClient) GetGeographicDistribution(ctx context.Context, tenantID str
 // ============================================================================
 
 // GetTrackListEvents returns track list updates for a specific stream
-func (c *GRPCClient) GetTrackListEvents(ctx context.Context, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetTrackListEventsResponse, error) {
+func (c *GRPCClient) GetTrackListEvents(ctx context.Context, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetTrackListEventsResponse, error) {
 	return c.track.GetTrackListEvents(ctx, &pb.GetTrackListEventsRequest{
-		InternalName: internalName,
-		TimeRange:    buildTimeRange(timeRange),
-		Pagination:   buildCursorPagination(opts),
+		StreamId:   streamID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
 	})
 }
 
@@ -294,13 +300,13 @@ func (c *GRPCClient) GetTrackListEvents(ctx context.Context, internalName string
 // ============================================================================
 
 // GetConnectionEvents returns connection events
-func (c *GRPCClient) GetConnectionEvents(ctx context.Context, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetConnectionEventsResponse, error) {
+func (c *GRPCClient) GetConnectionEvents(ctx context.Context, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetConnectionEventsResponse, error) {
 	req := &pb.GetConnectionEventsRequest{
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.connection.GetConnectionEvents(ctx, req)
 }
@@ -333,6 +339,17 @@ func (c *GRPCClient) GetNodeMetrics1H(ctx context.Context, nodeID *string, timeR
 	return c.node.GetNodeMetrics1H(ctx, req)
 }
 
+// GetNodeMetricsAggregated returns per-node aggregates for the requested time range.
+func (c *GRPCClient) GetNodeMetricsAggregated(ctx context.Context, nodeID *string, timeRange *TimeRangeOpts) (*pb.GetNodeMetricsAggregatedResponse, error) {
+	req := &pb.GetNodeMetricsAggregatedRequest{
+		TimeRange: buildTimeRange(timeRange),
+	}
+	if nodeID != nil {
+		req.NodeId = nodeID
+	}
+	return c.node.GetNodeMetricsAggregated(ctx, req)
+}
+
 // GetLiveNodes returns current state of nodes from live_nodes (ReplacingMergeTree)
 // Supports multi-tenant access for subscribed clusters via relatedTenantIDs
 func (c *GRPCClient) GetLiveNodes(ctx context.Context, nodeID *string, relatedTenantIDs []string) (*pb.GetLiveNodesResponse, error) {
@@ -350,14 +367,14 @@ func (c *GRPCClient) GetLiveNodes(ctx context.Context, nodeID *string, relatedTe
 // ============================================================================
 
 // GetRoutingEvents returns routing decision events
-func (c *GRPCClient) GetRoutingEvents(ctx context.Context, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
+func (c *GRPCClient) GetRoutingEvents(ctx context.Context, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
 	req := &pb.GetRoutingEventsRequest{
 		TimeRange:        buildTimeRange(timeRange),
 		Pagination:       buildCursorPagination(opts),
 		RelatedTenantIds: relatedTenantIDs,
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	// Dual-tenant attribution filters (RFC: routing-events-dual-tenant-attribution)
 	if subjectTenantID != nil {
@@ -385,17 +402,20 @@ func (c *GRPCClient) GetPlatformOverview(ctx context.Context, tenantID string, t
 // Clip Analytics
 // ============================================================================
 
-// GetClipEvents returns clip lifecycle events
-func (c *GRPCClient) GetClipEvents(ctx context.Context, internalName *string, stage *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetClipEventsResponse, error) {
+// GetClipEvents returns artifact lifecycle events (clip/dvr/vod)
+func (c *GRPCClient) GetClipEvents(ctx context.Context, streamID *string, stage *string, contentType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetClipEventsResponse, error) {
 	req := &pb.GetClipEventsRequest{
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if internalName != nil {
-		req.InternalName = internalName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	if stage != nil {
 		req.Stage = stage
+	}
+	if contentType != nil {
+		req.ContentType = contentType
 	}
 	return c.clip.GetClipEvents(ctx, req)
 }
@@ -409,13 +429,13 @@ func (c *GRPCClient) GetArtifactState(ctx context.Context, tenantID string, requ
 }
 
 // GetArtifactStates returns a list of artifact states with optional filtering
-func (c *GRPCClient) GetArtifactStates(ctx context.Context, tenantID string, internalName *string, contentType *string, stage *string, opts *CursorPaginationOpts) (*pb.GetArtifactStatesResponse, error) {
+func (c *GRPCClient) GetArtifactStates(ctx context.Context, tenantID string, streamID *string, contentType *string, stage *string, opts *CursorPaginationOpts) (*pb.GetArtifactStatesResponse, error) {
 	req := &pb.GetArtifactStatesRequest{
 		TenantId:   tenantID,
 		Pagination: buildCursorPagination(opts),
 	}
-	if internalName != nil {
-		req.InternalName = internalName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	if contentType != nil {
 		req.ContentType = contentType
@@ -447,27 +467,27 @@ func (c *GRPCClient) GetArtifactStatesByIDs(ctx context.Context, tenantID string
 // ============================================================================
 
 // GetStreamConnectionHourly returns hourly connection aggregates
-func (c *GRPCClient) GetStreamConnectionHourly(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamConnectionHourlyResponse, error) {
+func (c *GRPCClient) GetStreamConnectionHourly(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamConnectionHourlyResponse, error) {
 	req := &pb.GetStreamConnectionHourlyRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.aggregated.GetStreamConnectionHourly(ctx, req)
 }
 
 // GetClientMetrics5m returns 5-minute client metrics aggregates
-func (c *GRPCClient) GetClientMetrics5m(ctx context.Context, tenantID string, stream *string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetClientMetrics5MResponse, error) {
+func (c *GRPCClient) GetClientMetrics5m(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetClientMetrics5MResponse, error) {
 	req := &pb.GetClientMetrics5MRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	if nodeID != nil {
 		req.NodeId = nodeID
@@ -476,20 +496,20 @@ func (c *GRPCClient) GetClientMetrics5m(ctx context.Context, tenantID string, st
 }
 
 // GetQualityTierDaily returns daily quality tier distribution
-func (c *GRPCClient) GetQualityTierDaily(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetQualityTierDailyResponse, error) {
+func (c *GRPCClient) GetQualityTierDaily(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetQualityTierDailyResponse, error) {
 	req := &pb.GetQualityTierDailyRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.aggregated.GetQualityTierDaily(ctx, req)
 }
 
 // GetStorageUsage returns storage usage records
-func (c *GRPCClient) GetStorageUsage(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStorageUsageResponse, error) {
+func (c *GRPCClient) GetStorageUsage(ctx context.Context, tenantID string, nodeID *string, storageScope *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStorageUsageResponse, error) {
 	req := &pb.GetStorageUsageRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
@@ -498,18 +518,21 @@ func (c *GRPCClient) GetStorageUsage(ctx context.Context, tenantID string, nodeI
 	if nodeID != nil {
 		req.NodeId = nodeID
 	}
+	if storageScope != nil {
+		req.StorageScope = storageScope
+	}
 	return c.aggregated.GetStorageUsage(ctx, req)
 }
 
 // GetStorageEvents returns storage lifecycle events (freeze/defrost operations)
-func (c *GRPCClient) GetStorageEvents(ctx context.Context, tenantID string, internalName *string, assetType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStorageEventsResponse, error) {
+func (c *GRPCClient) GetStorageEvents(ctx context.Context, tenantID string, streamID *string, assetType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStorageEventsResponse, error) {
 	req := &pb.GetStorageEventsRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if internalName != nil {
-		req.InternalName = internalName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	if assetType != nil {
 		req.AssetType = assetType
@@ -518,12 +541,12 @@ func (c *GRPCClient) GetStorageEvents(ctx context.Context, tenantID string, inte
 }
 
 // GetStreamHealth5m returns 5-minute aggregated health metrics for a stream
-func (c *GRPCClient) GetStreamHealth5m(ctx context.Context, tenantID string, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamHealth5MResponse, error) {
+func (c *GRPCClient) GetStreamHealth5m(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamHealth5MResponse, error) {
 	req := &pb.GetStreamHealth5MRequest{
-		TenantId:     tenantID,
-		InternalName: internalName,
-		TimeRange:    buildTimeRange(timeRange),
-		Pagination:   buildCursorPagination(opts),
+		TenantId:   tenantID,
+		StreamId:   streamID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
 	}
 	return c.aggregated.GetStreamHealth5M(ctx, req)
 }
@@ -542,27 +565,27 @@ func (c *GRPCClient) GetNodePerformance5m(ctx context.Context, tenantID string, 
 }
 
 // GetViewerHoursHourly returns hourly viewer hours aggregates
-func (c *GRPCClient) GetViewerHoursHourly(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetViewerHoursHourlyResponse, error) {
+func (c *GRPCClient) GetViewerHoursHourly(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetViewerHoursHourlyResponse, error) {
 	req := &pb.GetViewerHoursHourlyRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.aggregated.GetViewerHoursHourly(ctx, req)
 }
 
 // GetViewerGeoHourly returns hourly geographic breakdown of viewers
-func (c *GRPCClient) GetViewerGeoHourly(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetViewerGeoHourlyResponse, error) {
+func (c *GRPCClient) GetViewerGeoHourly(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetViewerGeoHourlyResponse, error) {
 	req := &pb.GetViewerGeoHourlyRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if stream != nil {
-		req.Stream = stream
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.aggregated.GetViewerGeoHourly(ctx, req)
 }
@@ -578,15 +601,15 @@ func (c *GRPCClient) GetTenantDailyStats(ctx context.Context, tenantID string, d
 
 // GetProcessingUsage returns transcoding/processing usage records and daily summaries
 // Used for billing display and transcoding analytics pages
-func (c *GRPCClient) GetProcessingUsage(ctx context.Context, tenantID string, streamName *string, processType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, summaryOnly bool) (*pb.GetProcessingUsageResponse, error) {
+func (c *GRPCClient) GetProcessingUsage(ctx context.Context, tenantID string, streamID *string, processType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, summaryOnly bool) (*pb.GetProcessingUsageResponse, error) {
 	req := &pb.GetProcessingUsageRequest{
 		TenantId:    tenantID,
 		TimeRange:   buildTimeRange(timeRange),
 		Pagination:  buildCursorPagination(opts),
 		SummaryOnly: summaryOnly,
 	}
-	if streamName != nil {
-		req.StreamName = streamName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	if processType != nil {
 		req.ProcessType = processType
@@ -595,14 +618,14 @@ func (c *GRPCClient) GetProcessingUsage(ctx context.Context, tenantID string, st
 }
 
 // GetRebufferingEvents returns buffer state transition events
-func (c *GRPCClient) GetRebufferingEvents(ctx context.Context, tenantID string, internalName *string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetRebufferingEventsResponse, error) {
+func (c *GRPCClient) GetRebufferingEvents(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetRebufferingEventsResponse, error) {
 	req := &pb.GetRebufferingEventsRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if internalName != nil {
-		req.InternalName = internalName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	if nodeID != nil {
 		req.NodeId = nodeID
@@ -621,14 +644,34 @@ func (c *GRPCClient) GetTenantAnalyticsDaily(ctx context.Context, tenantID strin
 }
 
 // GetStreamAnalyticsDaily returns daily stream-level analytics rollups
-func (c *GRPCClient) GetStreamAnalyticsDaily(ctx context.Context, tenantID string, internalName *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamAnalyticsDailyResponse, error) {
+func (c *GRPCClient) GetStreamAnalyticsDaily(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamAnalyticsDailyResponse, error) {
 	req := &pb.GetStreamAnalyticsDailyRequest{
 		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
-	if internalName != nil {
-		req.InternalName = internalName
+	if streamID != nil {
+		req.StreamId = streamID
 	}
 	return c.aggregated.GetStreamAnalyticsDaily(ctx, req)
+}
+
+// GetAPIUsage returns API usage records and daily summaries
+func (c *GRPCClient) GetAPIUsage(ctx context.Context, tenantID string, authType *string, operationType *string, operationName *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, summaryOnly bool) (*pb.GetAPIUsageResponse, error) {
+	req := &pb.GetAPIUsageRequest{
+		TenantId:    tenantID,
+		TimeRange:   buildTimeRange(timeRange),
+		Pagination:  buildCursorPagination(opts),
+		SummaryOnly: summaryOnly,
+	}
+	if authType != nil {
+		req.AuthType = authType
+	}
+	if operationType != nil {
+		req.OperationType = operationType
+	}
+	if operationName != nil {
+		req.OperationName = operationName
+	}
+	return c.aggregated.GetAPIUsage(ctx, req)
 }

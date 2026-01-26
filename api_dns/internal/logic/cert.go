@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"frameworks/api_dns/internal/store"
@@ -51,6 +52,9 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	if domain == "" || email == "" {
 		return "", "", time.Time{}, fmt.Errorf("domain and email are required")
 	}
+	if !isDomainAllowed(domain) {
+		return "", "", time.Time{}, fmt.Errorf("domain is not allowed for certificate issuance")
+	}
 
 	// 1. Check Cache (DB) - with tenant context
 	cert, err := m.store.GetCertificate(ctx, tenantID, domain)
@@ -72,7 +76,12 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 
 	// 3. Initialize Lego config
 	config := lego.NewConfig(user)
-	config.CADirURL = lego.LEDirectoryProduction
+	switch strings.ToLower(os.Getenv("ACME_ENV")) {
+	case "staging":
+		config.CADirURL = lego.LEDirectoryStaging
+	default:
+		config.CADirURL = lego.LEDirectoryProduction
+	}
 	config.Certificate.KeyType = certcrypto.EC256
 
 	// 4. Create Lego client
@@ -140,6 +149,41 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	}
 
 	return newCert.CertPEM, newCert.KeyPEM, expiry, nil
+}
+
+func isDomainAllowed(domain string) bool {
+	domain = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(domain, ".")))
+	if domain == "" {
+		return false
+	}
+	if strings.HasPrefix(domain, "*.") {
+		domain = strings.TrimPrefix(domain, "*.")
+	}
+
+	env := strings.TrimSpace(os.Getenv("NAVIGATOR_CERT_ALLOWED_SUFFIXES"))
+	var suffixes []string
+	if env != "" {
+		for _, s := range strings.Split(env, ",") {
+			s = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(s, ".")))
+			if s != "" {
+				suffixes = append(suffixes, s)
+			}
+		}
+	} else if root := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN")); root != "" {
+		suffixes = []string{strings.ToLower(strings.TrimSuffix(root, "."))}
+	}
+
+	// If no allowlist is configured, allow all (dev mode).
+	if len(suffixes) == 0 {
+		return true
+	}
+
+	for _, suffix := range suffixes {
+		if domain == suffix || strings.HasSuffix(domain, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetCertificate retrieves a certificate from the store.

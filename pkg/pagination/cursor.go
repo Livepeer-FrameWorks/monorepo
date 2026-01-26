@@ -1,5 +1,5 @@
 // Package pagination provides cursor-based pagination utilities for gRPC services.
-// Cursors encode a stable position using timestamp + ID for keyset pagination.
+// Cursors encode a stable position using a timestamp (or explicit sort key) + ID for keyset pagination.
 // Supports bidirectional pagination (forward with first/after, backward with last/before).
 package pagination
 
@@ -21,7 +21,7 @@ const (
 )
 
 // Cursor represents a stable pagination position.
-// Uses timestamp + ID for keyset pagination (stable across inserts/deletes).
+// Uses timestamp (or an explicit sort key) + ID for keyset pagination.
 type Cursor struct {
 	Timestamp time.Time
 	ID        string
@@ -48,12 +48,18 @@ func DecodeCursor(encoded string) (*Cursor, error) {
 
 	raw := string(data)
 
-	// Parse "ts:{timestamp_ms}:id:{id}"
-	if !strings.HasPrefix(raw, "ts:") {
-		return nil, fmt.Errorf("invalid cursor format: missing ts prefix")
+	// Parse "ts:{timestamp_ms}:id:{id}" or "sk:{sort_key}:id:{id}"
+	var prefix string
+	switch {
+	case strings.HasPrefix(raw, "ts:"):
+		prefix = "ts:"
+	case strings.HasPrefix(raw, "sk:"):
+		prefix = "sk:"
+	default:
+		return nil, fmt.Errorf("invalid cursor format: missing ts/sk prefix")
 	}
 
-	parts := strings.SplitN(raw[3:], ":id:", 2)
+	parts := strings.SplitN(raw[len(prefix):], ":id:", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid cursor format: missing id segment")
 	}
@@ -72,6 +78,13 @@ func DecodeCursor(encoded string) (*Cursor, error) {
 // EncodeCursor is a convenience function to create and encode a cursor.
 func EncodeCursor(timestamp time.Time, id string) string {
 	return Cursor{Timestamp: timestamp, ID: id}.Encode()
+}
+
+// EncodeCursorWithSortKey creates a cursor using a non-time sort key.
+// Format: base64("sk:{sort_key}:id:{id}")
+func EncodeCursorWithSortKey(sortKey int64, id string) string {
+	raw := fmt.Sprintf("sk:%d:id:%s", sortKey, id)
+	return base64.StdEncoding.EncodeToString([]byte(raw))
 }
 
 // ClampLimit ensures limit is within valid bounds.

@@ -12,8 +12,7 @@ volumes:
   zookeeper_logs:
   kafka_data:
   clickhouse_data:
-  prometheus_data:
-  grafana_data:
+  chatwoot_redis_data:
 
 x-default-env: &default-env
   env_file:
@@ -91,6 +90,7 @@ services:
       - ./pkg/database/sql/schema/periscope.sql:/docker-entrypoint-initdb.d/50_init_periscope.sql:ro
       - ./pkg/database/sql/schema/listmonk.sql:/docker-entrypoint-initdb.d/60_init_listmonk.sql:ro
       - ./pkg/database/sql/schema/navigator.sql:/docker-entrypoint-initdb.d/70_init_navigator.sql:ro
+      - ./pkg/database/sql/schema/chatwoot.sql:/docker-entrypoint-initdb.d/75_init_chatwoot.sql:ro
       # Static Seeds (Prod)
       - ./pkg/database/sql/seeds/static/purser_tiers.sql:/docker-entrypoint-initdb.d/80_seed_purser_tiers.sql:ro
       # Demo Seeds (Dev/Demo only - loaded by default in this compose profile)
@@ -193,8 +193,7 @@ services:
       GEOIP_CACHE_SWR: ${GEOIP_CACHE_SWR}
       GEOIP_CACHE_NEG_TTL: ${GEOIP_CACHE_NEG_TTL}
       GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
-      # Decklog connection
-      DECKLOG_URL: ${DECKLOG_URL}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
       DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}
       # gRPC TLS configuration
       GRPC_USE_TLS: ${FOGHORN_GRPC_USE_TLS}
@@ -242,6 +241,8 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+      # Reduce ZooKeeper log noise.
+      ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
     volumes:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_logs:/var/lib/zookeeper/log
@@ -284,6 +285,9 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      # Reduce Kafka startup log spam (partition/leader state chatter).
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=ERROR,kafka.coordinator.group=ERROR,kafka.cluster=ERROR,state.change.logger=ERROR,kafka.log=ERROR"
     volumes:
       - kafka_data:/var/lib/kafka/data
     ports:
@@ -316,12 +320,16 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    environment:
+      KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
     entrypoint: [ '/bin/sh', '-c' ]
     command: |
       "
       echo 'Creating Kafka topics...'
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${ANALYTICS_KAFKA_TOPIC} --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${BILLING_KAFKA_TOPIC} --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${ANALYTICS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${SERVICE_EVENTS_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=604800000
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${BILLING_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${DECKLOG_DLQ_KAFKA_TOPIC} --partitions 3 --replication-factor 1 --config retention.ms=2592000000
       echo 'Topics created successfully'
       "
     networks:
@@ -718,25 +726,41 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      MOLLIE_API_KEY: ${MOLLIE_API_KEY}
       GIN_MODE: ${GIN_MODE}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
+      PURSER_HOST: ${PURSER_HOST}
       CLUSTER_ID: ${CLUSTER_ID}
-      # Optional: Crypto payment providers (uncomment when needed)
-      # - MOLLIE_API_KEY=${MOLLIE_API_KEY}
-      # - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY}
-      # - BLOCKCYPHER_API_KEY=${BLOCKCYPHER_API_KEY}
-      # - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
-      # - MASTER_WALLET_SEED=${MASTER_WALLET_SEED}
-      # Optional: Email/SMTP configuration (uncomment when needed)
-      # - SMTP_HOST=${SMTP_HOST}
-      # - SMTP_PORT=${SMTP_PORT}
-      # - SMTP_USER=${SMTP_USER}
-      # - SMTP_PASSWORD=${SMTP_PASSWORD}
-      # - FROM_EMAIL=${FROM_EMAIL}
-      # - FROM_NAME=${FROM_NAME}
-      # - WEBAPP_PUBLIC_URL=${WEBAPP_PUBLIC_URL}
+      KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      API_PUBLIC_URL: ${API_PUBLIC_URL}
+      WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL}
+      ALLOW_INSECURE_WEBHOOKS: ${ALLOW_INSECURE_WEBHOOKS}
+      # Crypto + x402 (optional)
+      HD_WALLET_XPUB: ${HD_WALLET_XPUB}
+      ETHERSCAN_API_KEY: ${ETHERSCAN_API_KEY}
+      BASESCAN_API_KEY: ${BASESCAN_API_KEY}
+      ARBISCAN_API_KEY: ${ARBISCAN_API_KEY}
+      CRYPTO_INCLUDE_TESTNETS: ${CRYPTO_INCLUDE_TESTNETS}
+      X402_GAS_WALLET_PRIVKEY: ${X402_GAS_WALLET_PRIVKEY}
+      X402_GAS_WALLET_ADDRESS: ${X402_GAS_WALLET_ADDRESS}
+      X402_INCLUDE_TESTNETS: ${X402_INCLUDE_TESTNETS}
+      ETH_RPC_ENDPOINT: ${ETH_RPC_ENDPOINT}
+      BASE_RPC_ENDPOINT: ${BASE_RPC_ENDPOINT}
+      ARBITRUM_RPC_ENDPOINT: ${ARBITRUM_RPC_ENDPOINT}
+      BASE_SEPOLIA_RPC_ENDPOINT: ${BASE_SEPOLIA_RPC_ENDPOINT}
+      ARBITRUM_SEPOLIA_RPC_ENDPOINT: ${ARBITRUM_SEPOLIA_RPC_ENDPOINT}
+      # Email/SMTP configuration (optional)
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      FROM_EMAIL: ${FROM_EMAIL}
+      FROM_NAME: ${FROM_NAME}
     depends_on:
       postgres:
         condition: service_healthy
@@ -1029,81 +1053,6 @@ services:
       retries: 3
       start_period: 10s
 
-  # Prometheus for metrics collection
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: frameworks-prometheus
-    hostname: prometheus
-    ports:
-      - "9091:9090"
-    volumes:
-      - prometheus_data:/prometheus
-      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./infrastructure/prometheus/rules:/etc/prometheus/rules:ro
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=30d'
-      - '--web.enable-lifecycle'
-      - '--web.enable-admin-api'
-    networks:
-      - frameworks
-    mem_limit: 1g
-    mem_reservation: 512m
-    cpus: 1.0
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
-    healthcheck:
-      test: wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  # Grafana for visualization
-  grafana:
-    <<: *default-env
-    image: grafana/grafana:latest
-    container_name: frameworks-grafana
-    hostname: grafana
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
-    depends_on:
-      prometheus:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-    networks:
-      - frameworks
-    mem_limit: 512m
-    mem_reservation: 256m
-    cpus: 1.0
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
-    healthcheck:
-      test: wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-
   # Listmonk Newsletter Manager
   listmonk:
     image: listmonk/listmonk:v4.0.1
@@ -1136,3 +1085,186 @@ services:
     networks:
       - frameworks
     restart: unless-stopped
+
+  # ============================================================================
+  # CHATWOOT - Customer Support Chat (Self-hosted)
+  # Provides live chat widget for webapp, agent dashboard for you
+  # ============================================================================
+
+  chatwoot:
+    <<: *default-env
+    image: chatwoot/chatwoot:v3.14.0
+    container_name: frameworks-chatwoot
+    hostname: chatwoot
+    # Run migrations on startup, then start the server
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        bundle exec rails db:chatwoot_prepare
+        bundle exec rails s -p 3000 -b '0.0.0.0'
+    environment:
+      # Core
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY}
+      FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:18092}
+      # Database
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: chatwoot
+      POSTGRES_USERNAME: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Redis (dedicated)
+      REDIS_URL: redis://chatwoot-redis:6379
+      # SMTP for notifications
+      SMTP_ADDRESS: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USERNAME: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_DOMAIN: ${CHATWOOT_SMTP_DOMAIN:-frameworks.com}
+      SMTP_AUTHENTICATION: login
+      SMTP_ENABLE_STARTTLS_AUTO: "true"
+      MAILER_SENDER_EMAIL: ${CHATWOOT_MAILER_EMAIL:-support@frameworks.com}
+      # Rails
+      RAILS_ENV: production
+      RAILS_LOG_TO_STDOUT: "true"
+      LOG_LEVEL: info
+    ports:
+      - "18092:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chatwoot-redis:
+        condition: service_healthy
+    networks:
+      - frameworks
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  chatwoot-worker:
+    <<: *default-env
+    image: chatwoot/chatwoot:v3.14.0
+    container_name: frameworks-chatwoot-worker
+    hostname: chatwoot-worker
+    command: bundle exec sidekiq -C config/sidekiq.yml
+    environment:
+      # Same as chatwoot main
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY}
+      FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:18092}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: chatwoot
+      POSTGRES_USERNAME: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      REDIS_URL: redis://chatwoot-redis:6379
+      SMTP_ADDRESS: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USERNAME: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_DOMAIN: ${CHATWOOT_SMTP_DOMAIN:-frameworks.com}
+      SMTP_AUTHENTICATION: login
+      SMTP_ENABLE_STARTTLS_AUTO: "true"
+      MAILER_SENDER_EMAIL: ${CHATWOOT_MAILER_EMAIL:-support@frameworks.com}
+      RAILS_ENV: production
+      RAILS_LOG_TO_STDOUT: "true"
+      LOG_LEVEL: info
+    depends_on:
+      chatwoot:
+        condition: service_healthy
+      chatwoot-redis:
+        condition: service_healthy
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  chatwoot-redis:
+    image: redis:7-alpine
+    container_name: frameworks-chatwoot-redis
+    hostname: chatwoot-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - chatwoot_redis_data:/data
+    networks:
+      - frameworks
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.25
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Deckhand - Support Enrichment Service
+  # Receives Chatwoot webhooks, enriches with tenant/billing context
+  deckhand:
+    <<: *default-env
+    container_name: frameworks-deckhand
+    build:
+      context: .
+      dockerfile: api_ticketing/Dockerfile
+    environment:
+      DECKHAND_PORT: ${DECKHAND_PORT:-18015}
+      DECKHAND_GRPC_PORT: ${DECKHAND_GRPC_PORT:-19006}
+      DECKHAND_WEBHOOK_RATE_LIMIT_PER_MIN: ${DECKHAND_WEBHOOK_RATE_LIMIT_PER_MIN:-600}
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      # Chatwoot integration
+      CHATWOOT_HOST: ${CHATWOOT_HOST:-chatwoot}
+      CHATWOOT_PORT: ${CHATWOOT_PORT:-3000}
+      CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-1}
+      CHATWOOT_INBOX_ID: ${CHATWOOT_INBOX_ID:-1}
+      CHATWOOT_API_TOKEN: ${CHATWOOT_API_TOKEN}
+      # gRPC addresses for enrichment
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR:-quartermaster:19002}
+      PURSER_GRPC_ADDR: ${PURSER_GRPC_ADDR:-purser:19003}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR:-decklog:18006}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+    ports:
+      - "18015:18015"
+    depends_on:
+      quartermaster:
+        condition: service_healthy
+      purser:
+        condition: service_started
+      chatwoot:
+        condition: service_healthy
+    networks:
+      - frameworks
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18015/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

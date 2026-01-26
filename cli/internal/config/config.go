@@ -29,8 +29,13 @@ func defaultEndpoints() Endpoints {
 		PurserGRPCAddr:        "localhost:19003",
 		SignalmanWSURL:        "ws://localhost:18009",
 		SignalmanGRPCAddr:     "localhost:19005",
-		NavigatorGRPCAddr:     "localhost:19010", // Navigator (DNS/certs) gRPC
+		NavigatorGRPCAddr:     "localhost:18011", // Navigator (DNS/certs) gRPC
 	}
+}
+
+// DefaultEndpoints returns the default endpoint set for local development.
+func DefaultEndpoints() Endpoints {
+	return defaultEndpoints()
 }
 
 func defaultContext() Context {
@@ -110,6 +115,26 @@ func GetCurrent(cfg Config) Context {
 		return c
 	}
 	return defaultContext()
+}
+
+// ResolveAuth merges context auth with ~/.frameworks/.env and OS env values.
+// SERVICE_TOKEN is preferred, then FW_API_TOKEN as a fallback for service auth.
+func ResolveAuth(ctx Context) Auth {
+	auth := ctx.Auth
+	envMap, _ := LoadEnvFile()
+	if auth.ServiceToken == "" {
+		if v := GetEnvValue("SERVICE_TOKEN", envMap); v != "" {
+			auth.ServiceToken = v
+		} else if v := GetEnvValue("FW_API_TOKEN", envMap); v != "" {
+			auth.ServiceToken = v
+		}
+	}
+	if auth.JWT == "" {
+		if v := GetEnvValue("FW_JWT", envMap); v != "" {
+			auth.JWT = v
+		}
+	}
+	return auth
 }
 
 // LoadEnvFile loads environment variables from a .env file.

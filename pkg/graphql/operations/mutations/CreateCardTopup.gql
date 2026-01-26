@@ -1,0 +1,7 @@
+mutation CreateCardTopup($input: CreateCardTopupInput!) {
+  createCardTopup(input: $input) {
+    topupId
+    checkoutUrl
+    expiresAt
+  }
+}

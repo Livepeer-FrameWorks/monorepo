@@ -1,0 +1,15 @@
+# Real-time stream lifecycle events including status changes and state transitions
+# Returns StreamSubscriptionEvent with rich proto payloads
+subscription StreamEvents($streamId: ID) {
+  liveStreamEvents(streamId: $streamId) {
+    eventId
+    streamId
+    nodeId
+    type
+    status
+    timestamp
+    details
+    payload
+    source
+  }
+}

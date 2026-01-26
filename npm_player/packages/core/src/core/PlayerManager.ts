@@ -349,6 +349,14 @@ export class PlayerManager {
     selectionSources.forEach((s, idx) => selectionIndexBySource.set(s, idx));
     const totalSources = selectionSources.length;
 
+    const requiredTracks: Array<'video' | 'audio'> = [];
+    if (streamInfo.meta.tracks.some((t) => t.type === 'video')) {
+      requiredTracks.push('video');
+    }
+    if (streamInfo.meta.tracks.some((t) => t.type === 'audio')) {
+      requiredTracks.push('audio');
+    }
+
     // Track seen player+sourceType pairs to avoid duplicates
     const seenPairs = new Set<string>();
 
@@ -437,6 +445,47 @@ export class PlayerManager {
             },
           });
           continue;
+        }
+
+        if (Array.isArray(tracktypes) && requiredTracks.length > 0) {
+          const missing = requiredTracks.filter((t) => !tracktypes.includes(t));
+          if (missing.length > 0) {
+            const priorityScore =
+              1 - player.capability.priority / Math.max(maxPriority, 1);
+            const sourceScore =
+              1 - sourceListIndex / Math.max(totalSources - 1, 1);
+            const playerScore = scorePlayer(
+              tracktypes,
+              player.capability.priority,
+              sourceListIndex,
+              {
+                maxPriority,
+                totalSources,
+                playerShortname: player.capability.shortname,
+                mimeType: source.type,
+                playbackMode: effectiveMode,
+              }
+            );
+
+            combinations.push({
+              player: player.capability.shortname,
+              playerName: player.capability.name,
+              source,
+              sourceIndex,
+              sourceType: source.type,
+              score: playerScore.total,
+              compatible: false,
+              incompatibleReason: `Missing required tracks: ${missing.join(', ')}`,
+              scoreBreakdown: {
+                trackScore: 0,
+                trackTypes: tracktypes,
+                priorityScore,
+                sourceScore,
+                weights: { tracks: 0.5, priority: 0.1, source: 0.05 },
+              },
+            });
+            continue;
+          }
         }
 
         // Compatible - calculate full score

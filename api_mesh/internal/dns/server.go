@@ -10,7 +10,8 @@ import (
 
 type Server struct {
 	logger  logging.Logger
-	server  *dns.Server
+	udp     *dns.Server
+	tcp     *dns.Server
 	records map[string][]string // hostname.internal. -> [IPs]
 	mu      sync.RWMutex
 	port    int
@@ -33,15 +34,27 @@ func (s *Server) Start() {
 	// Setup handler
 	dns.HandleFunc("internal.", s.handleInternal)
 
-	s.server = &dns.Server{Addr: fmt.Sprintf(":%d", s.port), Net: "udp"}
-	if err := s.server.ListenAndServe(); err != nil {
-		s.logger.WithError(err).Error("Failed to start DNS server")
-	}
+	s.udp = &dns.Server{Addr: fmt.Sprintf("127.0.0.1:%d", s.port), Net: "udp"}
+	s.tcp = &dns.Server{Addr: fmt.Sprintf("127.0.0.1:%d", s.port), Net: "tcp"}
+
+	go func() {
+		if err := s.udp.ListenAndServe(); err != nil {
+			s.logger.WithError(err).Error("Failed to start DNS UDP server")
+		}
+	}()
+	go func() {
+		if err := s.tcp.ListenAndServe(); err != nil {
+			s.logger.WithError(err).Error("Failed to start DNS TCP server")
+		}
+	}()
 }
 
 func (s *Server) Stop() {
-	if s.server != nil {
-		s.server.Shutdown()
+	if s.udp != nil {
+		s.udp.Shutdown()
+	}
+	if s.tcp != nil {
+		s.tcp.Shutdown()
 	}
 }
 

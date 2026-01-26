@@ -21,19 +21,19 @@ Deploying FrameWorks gives you full ownership of your video infrastructure. Whil
 cd cli/ && go build -o frameworks && sudo mv frameworks /usr/local/bin/
 
 # 2. Review prerequisites
-# See: prerequisites.md
+# See: /operators/prerequisites
 
 # 3. Create cluster manifest
-# See: ../cli/cluster-manifest.md
+# See: /operators/cluster-manifest
 
 # 4. Deploy infrastructure
-frameworks cluster provision --manifest cluster.yaml --components infrastructure
+frameworks cluster provision --manifest cluster.yaml --only infrastructure
 
 # 5. Initialize databases
-frameworks cluster init --manifest cluster.yaml
+frameworks cluster init all --manifest cluster.yaml
 
 # 6. Deploy applications
-frameworks cluster provision --manifest cluster.yaml --components applications
+frameworks cluster provision --manifest cluster.yaml --only applications
 
 # 7. Verify health
 frameworks cluster doctor --manifest cluster.yaml
@@ -54,7 +54,7 @@ See root `README.md` for local endpoints and ports.
 
 ### 1. CLI Deployment (Recommended)
 
-The FrameWorks CLI automates the complex orchestration of multi-tier infrastructure, handling everything from SSH keys to database migrations.
+The FrameWorks CLI automates the complex orchestration of multi-tier infrastructure, handling everything from SSH keys to database migrations (via internal provisioners; Ansible is used for some infrastructure components).
 
 **Features:**
 - Multi-host SSH deployment
@@ -71,10 +71,11 @@ The FrameWorks CLI automates the complex orchestration of multi-tier infrastruct
   <LinkCard title="External Services" href="/operators/external-services" description="Third-party integrations." />
 </CardGrid>
 
-### 2. Advanced/Manual Deployment
+### 2. Manual Deployment
 
-For deep understanding or custom scenarios:
-- [Bare Metal Reference](/operators/bare-metal)
+For operators who cannot or choose not to use the CLI:
+- [Manual Deployment](/operators/deployment-manual) - Step-by-step bare metal deployment guide
+- [Operations Reference](/operators/operations) - Post-deployment operations, debugging, tuning
 - [WireGuard Mesh Setup](/operators/wireguard)
 
 ## Architecture
@@ -82,8 +83,8 @@ For deep understanding or custom scenarios:
 For detailed architecture documentation including service tables, ports, deployment tiers, and data flow diagrams, see [Architecture Overview](/operators/architecture).
 
 **Quick Reference - Deployment Tiers:**
-- **Central Tier**: Commodore, Quartermaster, Purser, Navigator, Periscope + PostgreSQL, ClickHouse
-- **Regional Tier**: Bridge, Foghorn, Decklog, Signalman + Kafka
+- **Central Tier**: Commodore, Quartermaster, Purser, Periscope Query, Deckhand, Forms, Listmonk, Chatwoot + Redis, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse
+- **Regional Tier**: Bridge, Foghorn, Decklog, Periscope Ingest, Signalman + Kafka
 - **Edge Tier**: MistServer, Helmsman, Livepeer Gateway
 
 **External Dependencies:**
@@ -95,30 +96,30 @@ For detailed architecture documentation including service tables, ports, deploym
 ## Security
 
 ### Network Security
-- All inter-node communication over WireGuard VPN
+- Backend nodes (central/regional) communicate over a private mesh (WireGuard or equivalent). Edge nodes do not join the mesh.
+- When running more than one backend node, a private mesh is required for databases, Kafka, and service-to-service calls.
 - TLS termination varies by tier:
   - Development: Nginx reverse proxy (optional TLS)
   - Edge nodes: Caddy (automatic HTTPS via HTTP-01)
-  - Central/Regional: Navigator-issued certificates (DNS-01) or internal mesh
-- Internal services communicate over encrypted mesh
+  - Central/Regional: Navigator-issued certificates (DNS-01) or operator-managed proxies
 - Firewall rules restrict access to required ports
 
 ### Data Security
-- Database connections use TLS
-- Kafka inter-broker encryption enabled
-- Service-to-service authentication with JWT tokens
-- Secrets managed via environment variables or Vault
+- TLS at ingress (Caddy/Navigator/proxies) should be enabled; internal gRPC TLS is not enabled yet (RFC draft exists).
+- Kafka inter-broker encryption is not enabled yet; the mesh provides the current security boundary.
+- Service-to-service authentication uses `SERVICE_TOKEN` (RFC draft exists for stronger service identity).
+- Secrets are managed via environment variables (Vault RFC draft exists).
 
 ### Access Control
 - Multi-tenant isolation at application layer
-- Role-based access control (RBAC)
-- API rate limiting and DDoS protection
+- User roles exist, but API tokens are currently full-access; RBAC and finer permissions are planned.
+- API rate limiting is enforced at the gateway.
 - SSH key-based authentication for deployments
 
 ## Monitoring & Observability
 
 ### Metrics Collection
-- **Prometheus (dev) / vmagent (prod)** - Scrape exporters and remote_write to VictoriaMetrics
+- **VictoriaMetrics (or Prometheus)** - Scrape exporters and remote_write to VictoriaMetrics
 - **Grafana** - Dashboards with VictoriaMetrics, ClickHouse, PostgreSQL datasources
 - **Custom Metrics** - Business KPIs and streaming analytics
 
@@ -132,9 +133,6 @@ frameworks cluster doctor --manifest cluster.yaml
 # Detect service state
 frameworks cluster detect --manifest cluster.yaml
 
-# Validate specific service
-frameworks cluster validate postgres --manifest cluster.yaml
-
 # Diagnose network connectivity
 frameworks cluster diagnose network --manifest cluster.yaml
 
@@ -145,7 +143,6 @@ frameworks cluster diagnose resources --manifest cluster.yaml
 ### Logging
 - Structured JSON logging across all services
 - View logs via CLI: `frameworks cluster logs <service> --follow`
-- Centralized log aggregation with ELK stack (optional)
 - Log rotation and retention policies
 
 ## Operations

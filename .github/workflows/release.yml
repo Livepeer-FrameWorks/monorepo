@@ -31,6 +31,7 @@ jobs:
           - { name: signalman,         context: api_realtime,           dockerfile: api_realtime/Dockerfile }
           - { name: helmsman,          context: api_sidecar,            dockerfile: api_sidecar/Dockerfile }
           - { name: forms,             context: api_forms,              dockerfile: api_forms/Dockerfile }
+          - { name: deckhand,          context: api_ticketing,          dockerfile: api_ticketing/Dockerfile }
           - { name: navigator,         context: api_dns,                dockerfile: api_dns/Dockerfile }
     steps:
       - name: Checkout
@@ -307,6 +308,7 @@ jobs:
           - { name: helmsman,          context: api_sidecar,            cmd_path: ./cmd/helmsman }
           - { name: forms,             context: api_forms,              cmd_path: ./cmd/forms }
           - { name: navigator,         context: api_dns,                cmd_path: ./cmd/navigator }
+          - { name: deckhand,          context: api_ticketing,          cmd_path: ./cmd/deckhand }
           - { name: privateer,         context: api_mesh,               cmd_path: ./cmd/privateer }
         arch:
           - { goos: linux, goarch: amd64 }

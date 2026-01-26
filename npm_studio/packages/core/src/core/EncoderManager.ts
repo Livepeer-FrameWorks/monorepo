@@ -664,6 +664,68 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
   }
 
   /**
+   * Update the input stream (hot-swap tracks).
+   * Swaps to new tracks without reinitializing the encoder.
+   * Used when sources change while streaming.
+   */
+  async updateInputStream(stream: MediaStream): Promise<void> {
+    if (!this.isInitialized || !this.worker) {
+      throw new Error('EncoderManager not initialized');
+    }
+
+    const wasRunning = this.isRunning;
+    this.log('Updating input stream (hot-swap)', { wasRunning });
+
+    // Cancel existing readers to stop read loops
+    if (this.videoReader) {
+      try {
+        await this.videoReader.cancel();
+        this.videoReader.releaseLock();
+      } catch {
+        // Ignore - reader may already be closed
+      }
+      this.videoReader = null;
+    }
+
+    if (this.audioReader) {
+      try {
+        await this.audioReader.cancel();
+        this.audioReader.releaseLock();
+      } catch {
+        // Ignore - reader may already be closed
+      }
+      this.audioReader = null;
+    }
+
+    // Create new processors from new tracks
+    const videoTrack = stream.getVideoTracks()[0];
+    const audioTrack = stream.getAudioTracks()[0];
+
+    if (videoTrack) {
+      this.videoProcessor = new MediaStreamTrackProcessor({ track: videoTrack });
+    } else {
+      this.videoProcessor = null;
+    }
+
+    if (audioTrack) {
+      this.audioProcessor = new MediaStreamTrackProcessor({ track: audioTrack });
+    } else {
+      this.audioProcessor = null;
+    }
+
+    // Restart processing if we were running
+    if (wasRunning) {
+      if (this.videoProcessor) {
+        this.startVideoProcessing();
+      }
+      if (this.audioProcessor) {
+        this.startAudioProcessing();
+      }
+      this.log('Input stream updated, processing restarted');
+    }
+  }
+
+  /**
    * Flush encoder buffers.
    */
   async flush(): Promise<void> {

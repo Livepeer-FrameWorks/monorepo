@@ -40,6 +40,9 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
   private negotiatedVideoCodec: string | null = null;
   private negotiatedAudioCodec: string | null = null;
 
+  // WHIP resource URL returned in Location header (for DELETE on disconnect)
+  private resourceUrl: string | null = null;
+
   constructor(config: WhipClientConfig) {
     super();
     this.config = config;
@@ -341,6 +344,13 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unknown error');
         throw new Error(`WHIP request failed: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      // Store WHIP resource URL from Location header (per RFC 9725)
+      // This URL is used for DELETE on disconnect
+      this.resourceUrl = response.headers.get('Location');
+      if (this.resourceUrl) {
+        this.log('WHIP resource URL:', this.resourceUrl);
       }
 
       // Get and set remote description
@@ -935,6 +945,9 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       this.peerConnection.close();
       this.peerConnection = null;
     }
+
+    // Clear resource URL (note: DELETE should be sent before cleanup if needed)
+    this.resourceUrl = null;
   }
 
   /**
@@ -942,6 +955,19 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    */
   async disconnect(): Promise<void> {
     this.log('Disconnecting WHIP');
+
+    // Send DELETE to WHIP resource URL per RFC 9725
+    if (this.resourceUrl) {
+      try {
+        this.log('Sending DELETE to WHIP resource:', this.resourceUrl);
+        await fetch(this.resourceUrl, { method: 'DELETE' });
+      } catch (error) {
+        // Don't block disconnect on DELETE failure
+        this.log('Failed to delete WHIP resource (non-fatal)', error);
+      }
+      this.resourceUrl = null;
+    }
+
     this.cleanup();
     this.setState('disconnected');
   }

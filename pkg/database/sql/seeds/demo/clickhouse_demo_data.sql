@@ -1,1400 +1,612 @@
--- "Big Data" Seed for Periscope (ClickHouse)
--- Generates ~24h of high-resolution data for multiple streams and nodes to simulate a busy platform.
+-- Periscope V2 Demo Seed (ClickHouse)
+-- Generates recent time-series + lifecycle data for demo tenants, streams, and nodes.
 
 -- Constants
--- Tenant: 00000000-0000-0000-0000-000000000001
--- Stream: demo_live_stream_001 (standardized to match Go generators)
--- Node: edge-node-1 (Leiden)
+-- Tenant: 5eed517e-ba5e-da7a-517e-ba5eda7a0001
+-- Stream ID: 5eedfeed-11fe-ca57-feed-11feca570001
+-- Internal Name: demo_live_stream_001
+-- Cluster: central-primary
 
 -- =================================================================================================
--- 0. Live Streams (Real-time snapshot table - used by Platform Overview)
+-- 0. Stream Current State (stream_state_current)
 -- =================================================================================================
-INSERT INTO periscope.live_streams (
-    tenant_id, internal_name, node_id,
-    status, buffer_state, current_viewers, total_inputs,
+INSERT INTO periscope.stream_state_current (
+    tenant_id, stream_id, internal_name, node_id,
+    status, buffer_state,
+    current_viewers, total_inputs,
     uploaded_bytes, downloaded_bytes, viewer_seconds,
-    has_issues, track_count, quality_tier,
+    has_issues, issues_description, track_count, quality_tier,
     primary_width, primary_height, primary_fps, primary_codec, primary_bitrate,
     packets_sent, packets_lost, packets_retransmitted,
     started_at, updated_at
 ) VALUES (
-    '00000000-0000-0000-0000-000000000001',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
     'edge-node-1',
-    'offline',   -- Stream is not live (historical data only)
-    NULL,        -- No buffer state when offline
-    0,           -- No current viewers
-    0,           -- No inputs
-    52428800000, -- uploaded_bytes (~50GB historical)
-    1340000000000, -- downloaded_bytes (~1.2TB historical)
-    293550,      -- viewer_seconds (historical)
-    0,           -- has_issues
-    2,           -- track_count
-    '1080p60',   -- quality_tier (last known)
-    1920,        -- primary_width
-    1080,        -- primary_height
-    60.0,        -- primary_fps
-    'H264',      -- primary_codec
-    4500,        -- primary_bitrate (kbps)
-    0,           -- packets_sent
-    0,           -- packets_lost
-    0,           -- packets_retransmitted
-    NULL,        -- Not currently started
+    'offline',
+    'EMPTY',
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    NULL,
+    0,
+    NULL,
+    0,
+    0,
+    0.0,
+    NULL,
+    0,
+    0,
+    0,
+    0,
+    NULL,
     now()
 );
 
 -- =================================================================================================
--- 0b. Live Nodes (Real-time snapshot table - used by Infrastructure Dashboard)
+-- 0b. Node Current State (node_state_current)
 -- =================================================================================================
-INSERT INTO periscope.live_nodes (
-    tenant_id, node_id,
+INSERT INTO periscope.node_state_current (
+    tenant_id, cluster_id, node_id,
     cpu_percent, ram_used_bytes, ram_total_bytes,
     disk_used_bytes, disk_total_bytes,
     up_speed, down_speed,
     active_streams, is_healthy,
     latitude, longitude, location,
     metadata, updated_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'edge-node-1',
-    35.5,                    -- CPU usage %
-    4500000000,              -- ~4.2GB RAM used
-    16000000000,             -- 16GB total RAM
-    85000000000,             -- ~79GB disk used
-    500000000000,            -- 500GB total disk
-    125000000,               -- 125 Mbps upload
-    650000000,               -- 650 Mbps download
-    1,                       -- 1 active stream (demo_live_stream_001 when live)
-    1,                       -- healthy
-    52.1601,                 -- Leiden latitude
-    4.4970,                  -- Leiden longitude
-    'Leiden',
-    '{"cluster_id": "central-primary", "node_name": "edge-node-1", "region": "eu-west"}',
+) VALUES
+(   -- Local dev node
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-node-1',
+    15.2, 2100000000, 16000000000,
+    45000000000, 500000000000,
+    0, 0,
+    0, 1,
+    52.3676, 4.9041, 'Amsterdam',
+    '{"region":"local","node_name":"edge-node-1"}',
     now()
 );
 
+-- Regional nodes (offline for routing map visuals, show historical presence)
+INSERT INTO periscope.node_state_current (
+    tenant_id, cluster_id, node_id,
+    cpu_percent, ram_used_bytes, ram_total_bytes,
+    disk_used_bytes, disk_total_bytes,
+    up_speed, down_speed,
+    active_streams, is_healthy,
+    latitude, longitude, location,
+    metadata, updated_at
+) VALUES
+(
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-leiden',
+    0, 0, 16000000000,
+    0, 500000000000,
+    0, 0,
+    0, 0,
+    52.1601, 4.4970, 'Leiden',
+    '{"region":"eu-west","node_name":"edge-leiden"}',
+    now() - INTERVAL 1 DAY
+),
+(
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-ashburn',
+    0, 0, 16000000000,
+    0, 500000000000,
+    0, 0,
+    0, 0,
+    39.0438, -77.4874, 'Ashburn',
+    '{"region":"us-east","node_name":"edge-ashburn"}',
+    now() - INTERVAL 1 DAY
+),
+(
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'edge-singapore',
+    0, 0, 16000000000,
+    0, 500000000000,
+    0, 0,
+    0, 0,
+    1.3521, 103.8198, 'Singapore',
+    '{"region":"apac","node_name":"edge-singapore"}',
+    now() - INTERVAL 1 DAY
+);
+
 -- =================================================================================================
--- 1. Stream Health Metrics (High Res - 10s intervals for 24h)
+-- 1. Stream Event Log (stream_event_log)
 -- =================================================================================================
-INSERT INTO periscope.stream_health_metrics (
-    timestamp, tenant_id, internal_name, node_id,
-    bitrate, fps, width, height, codec,
-    buffer_health, buffer_state,
-    has_issues, issues_description, audio_codec, audio_bitrate
+INSERT INTO periscope.stream_event_log (
+    event_id, timestamp, tenant_id, stream_id, internal_name, node_id,
+    event_type, status, buffer_state,
+    track_count, quality_tier, primary_width, primary_height, primary_fps, primary_codec, primary_bitrate,
+    total_viewers, total_inputs, total_outputs, viewer_seconds,
+    request_url, protocol, latitude, longitude, location, country_code, city,
+    event_data
+) VALUES
+(
+    generateUUIDv4(), now() - INTERVAL 3 HOUR,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001', 'edge-leiden',
+    'stream_start', 'online', 'FULL',
+    2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
+    0, 1, 2, 0,
+    '/live/demo_live_stream_001/index.m3u8', 'HLS', 52.1601, 4.4970, 'Leiden', 'NL', 'Leiden',
+    '{"event":"stream_start","status":"online"}'
+),
+(
+    generateUUIDv4(), now() - INTERVAL 2 HOUR,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001', 'edge-leiden',
+    'stream_buffer', 'online', 'RECOVER',
+    2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
+    18, 1, 2, 7520,
+    '/live/demo_live_stream_001/index.m3u8', 'HLS', 52.1601, 4.4970, 'Leiden', 'NL', 'Leiden',
+    '{"event":"stream_buffer","buffer_state":"RECOVER"}'
+),
+(
+    generateUUIDv4(), now() - INTERVAL 90 MINUTE,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001', 'edge-leiden',
+    'track_list_update', 'online', 'FULL',
+    2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
+    24, 1, 2, 14500,
+    '/live/demo_live_stream_001/index.m3u8', 'HLS', 52.1601, 4.4970, 'Leiden', 'NL', 'Leiden',
+    '{"event":"track_list_update"}'
+),
+(
+    generateUUIDv4(), now() - INTERVAL 30 MINUTE,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001', 'edge-leiden',
+    'stream_end', 'offline', 'EMPTY',
+    2, '1080p60', 1920, 1080, 60.0, 'H264', 4500,
+    0, 0, 0, 293550,
+    '/live/demo_live_stream_001/index.m3u8', 'HLS', 52.1601, 4.4970, 'Leiden', 'NL', 'Leiden',
+    '{"event":"stream_end","status":"offline"}'
+);
+
+-- =================================================================================================
+-- 2. Stream Health Samples (stream_health_samples) - 6 hours of 10s samples
+-- =================================================================================================
+INSERT INTO periscope.stream_health_samples (
+    timestamp, tenant_id, stream_id, internal_name, node_id,
+    bitrate, fps, gop_size, width, height,
+    buffer_size, buffer_health, buffer_state,
+    codec, quality_tier, track_metadata,
+    frame_ms_max, frame_ms_min, frames_max, frames_min,
+    keyframe_ms_max, keyframe_ms_min,
+    issues_description, has_issues, track_count,
+    audio_channels, audio_sample_rate, audio_codec, audio_bitrate
 )
 SELECT
     toDateTime(now() - INTERVAL number * 10 SECOND) as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
-    'edge-node-1' as node_id,
+    'edge-leiden' as node_id,
 
-    -- Organic bitrate fluctuation (base 4.5Mbps = 4500 kbps + noise)
-    toUInt32(4500 + 500 * sin(number/100) + rand()%200) as bitrate,
-
-    -- Mostly stable 60fps, occasional dips
+    toUInt32(4500 + 500 * sin(number/120) + rand()%200) as bitrate,
     if(rand()%100 > 98, 55 + rand()%5, 60.0) as fps,
+    60 as gop_size,
     1920 as width,
     1080 as height,
-    'H264' as codec,
 
-    -- Buffer health (0-1)
+    toUInt32(2000 + rand()%400) as buffer_size,
     toFloat32(0.8 + 0.2 * abs(sin(number/200))) as buffer_health,
     multiIf(0.8 + 0.2 * abs(sin(number/200)) < 0.1, 'DRY', 0.8 + 0.2 * abs(sin(number/200)) < 0.5, 'RECOVER', 'FULL') as buffer_state,
 
-    toUInt8(if(rand()%100 > 95 AND rand()%20 > 10, 1, 0)) as has_issues,
-    if(rand()%100 > 95 AND rand()%20 > 10, 'High Packet Loss', NULL) as issues_description,
+    'H264' as codec,
+    '1080p60' as quality_tier,
+    '{"video":[{"codec":"H264","fps":60,"bitrate_kbps":4500,"width":1920,"height":1080}],"audio":[{"codec":"AAC"}]}' as track_metadata,
+
+    toFloat32(25 + rand()%5) as frame_ms_max,
+    toFloat32(12 + rand()%3) as frame_ms_min,
+    toUInt32(120 + rand()%10) as frames_max,
+    toUInt32(110 + rand()%10) as frames_min,
+
+    toFloat32(200 + rand()%50) as keyframe_ms_max,
+    toFloat32(140 + rand()%30) as keyframe_ms_min,
+
+    if(rand()%100 > 95, 'High Packet Loss', NULL) as issues_description,
+    toUInt8(if(rand()%100 > 95, 1, 0)) as has_issues,
+    2 as track_count,
+
+    2 as audio_channels,
+    48000 as audio_sample_rate,
     'AAC' as audio_codec,
     192000 as audio_bitrate
-FROM numbers(0, 8640); -- 24 hours * 6 blocks/min
+FROM numbers(0, 2160);
 
 -- =================================================================================================
--- 2. Connection Events - CONNECT events (5000 sessions)
+-- 3. Viewer Connection Events (viewer_connection_events) - connect + disconnect pairs
 -- =================================================================================================
-INSERT INTO periscope.connection_events (
-    event_id, timestamp, tenant_id, internal_name, session_id,
-    connection_addr, connector, node_id,
+INSERT INTO periscope.viewer_connection_events (
+    event_id, timestamp, tenant_id, stream_id, internal_name, session_id,
+    connection_addr, connector, node_id, request_url,
     country_code, city, latitude, longitude,
+    client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
     event_type, session_duration, bytes_transferred
 )
 SELECT
     generateUUIDv4() as event_id,
-    -- Random time in last 24h
-    toDateTime(now() - rand() % 86400) as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
+    toDateTime(now() - INTERVAL number * 60 SECOND) as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
     concat('session-', toString(number)) as session_id,
-
-    -- Random IP
-    concat(toString(rand()%255), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(rand()%255)) as connection_addr,
-
+    concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
     arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
-    'edge-node-1' as node_id,
-
-    -- Weighted Country Distribution
-    transform(
-        rand() % 10,
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-        ['US', 'US', 'US', 'NL', 'NL', 'GB', 'DE', 'FR', 'BR', 'JP'],
-        'US'
-    ) as country_code,
-
-    -- City mapping (simplified)
-    transform(
-        transform(rand() % 10, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], ['US', 'US', 'US', 'NL', 'NL', 'GB', 'DE', 'FR', 'BR', 'JP'], 'US'),
-        ['US', 'NL', 'GB', 'DE', 'FR', 'BR', 'JP'],
-        ['New York', 'Amsterdam', 'London', 'Berlin', 'Paris', 'Sao Paulo', 'Tokyo'],
-        'Unknown'
-    ) as city,
-
-    -- Lat/Lon centers with jitter
-    transform(
-        transform(rand() % 10, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], ['US', 'US', 'US', 'NL', 'NL', 'GB', 'DE', 'FR', 'BR', 'JP'], 'US'),
-        ['US', 'NL', 'GB', 'DE', 'FR', 'BR', 'JP'],
-        [40.71, 52.36, 51.50, 52.52, 48.85, -23.55, 35.67],
-        0.0
-    ) + (rand()%100 - 50)/100.0 as latitude,
-    transform(
-        transform(rand() % 10, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], ['US', 'US', 'US', 'NL', 'NL', 'GB', 'DE', 'FR', 'BR', 'JP'], 'US'),
-        ['US', 'NL', 'GB', 'DE', 'FR', 'BR', 'JP'],
-        [-74.00, 4.90, -0.12, 13.40, 2.35, -46.63, 139.65],
-        0.0
-    ) + (rand()%100 - 50)/100.0 as longitude,
-
+    'edge-leiden' as node_id,
+    '/live/demo_live_stream_001/index.m3u8' as request_url,
+    'US' as country_code,
+    'New York' as city,
+    40.71 + (rand()%100 - 50)/100.0 as latitude,
+    -74.00 + (rand()%100 - 50)/100.0 as longitude,
+    NULL as client_bucket_h3,
+    NULL as client_bucket_res,
+    NULL as node_bucket_h3,
+    NULL as node_bucket_res,
     'connect' as event_type,
     0 as session_duration,
     0 as bytes_transferred
-FROM numbers(0, 5000);
+FROM numbers(0, 600);
 
--- =================================================================================================
--- 2b. Connection Events - DISCONNECT events (required for billing MVs)
--- =================================================================================================
-INSERT INTO periscope.connection_events (
-    event_id, timestamp, tenant_id, internal_name, session_id,
-    connection_addr, connector, node_id,
+INSERT INTO periscope.viewer_connection_events (
+    event_id, timestamp, tenant_id, stream_id, internal_name, session_id,
+    connection_addr, connector, node_id, request_url,
     country_code, city, latitude, longitude,
+    client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
     event_type, session_duration, bytes_transferred
 )
 SELECT
     generateUUIDv4() as event_id,
-    -- Disconnect happens 1-60 minutes after connect
-    ce.timestamp + INTERVAL (60 + rand()%3540) SECOND as timestamp,
-    ce.tenant_id,
-    ce.internal_name,
-    ce.session_id,
-    ce.connection_addr,
-    ce.connector,
-    ce.node_id,
-    ce.country_code,
-    ce.city,
-    ce.latitude,
-    ce.longitude,
+    toDateTime(now() - INTERVAL number * 60 SECOND) + INTERVAL (30 + rand()%600) SECOND as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
+    'demo_live_stream_001' as internal_name,
+    concat('session-', toString(number)) as session_id,
+    concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
+    arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
+    'edge-leiden' as node_id,
+    '/live/demo_live_stream_001/index.m3u8' as request_url,
+    'US' as country_code,
+    'New York' as city,
+    40.71 + (rand()%100 - 50)/100.0 as latitude,
+    -74.00 + (rand()%100 - 50)/100.0 as longitude,
+    NULL as client_bucket_h3,
+    NULL as client_bucket_res,
+    NULL as node_bucket_h3,
+    NULL as node_bucket_res,
     'disconnect' as event_type,
-    60 + rand()%3540 as session_duration,  -- Session duration in seconds (1-60 minutes)
-    (50 + rand()%450) * 1000000 as bytes_transferred  -- 50-500 MB transferred
-FROM periscope.connection_events ce
-WHERE ce.event_type = 'connect'
-  AND ce.internal_name = 'demo_live_stream_001';
+    30 + rand()%600 as session_duration,
+    (50 + rand()%450) * 1000000 as bytes_transferred
+FROM numbers(0, 600);
 
 -- =================================================================================================
--- 3. Routing Events (For Network Map Lines)
--- Includes H3 bucket indices at resolution 5 (~25km hexagons)
--- H3 indices pre-computed using scripts/h3calc (uber/h3-go)
---
--- Cities (36 total across 6 regions):
---   NA: NYC, LA, CHI, MIA, SEA, TOR
---   EU: AMS, RTM, LON, MAN, BER, MUN, FRA, PAR, LYO, MAD, BCN, ROM, MIL, STO, WAR
---   APAC: TKY, OSA, SEO, SIN, SYD, MEL, MUM, BLR
---   SA: SAO, RIO, BUE, SCL
---   MEA: DXB, JNB, CAI
---
--- Edge Nodes (6):
---   edge-leiden (NL), edge-ashburn (US-VA), edge-frankfurt (DE),
---   edge-singapore (SG), edge-tokyo (JP), edge-saopaulo (BR)
+-- 4. Routing Decisions (routing_decisions)
 -- =================================================================================================
-INSERT INTO periscope.routing_events (
-    timestamp, tenant_id, internal_name, selected_node, status, details, score,
+INSERT INTO periscope.routing_decisions (
+    timestamp, tenant_id, stream_id, internal_name,
+    selected_node, status, details, score,
     client_ip, client_country, client_latitude, client_longitude,
     client_bucket_h3, client_bucket_res,
     node_latitude, node_longitude, node_name,
     node_bucket_h3, node_bucket_res,
-    routing_distance_km
+    selected_node_id, routing_distance_km,
+    stream_tenant_id, cluster_id,
+    latency_ms, candidates_count, event_type, source
 )
 SELECT
-    toDateTime(now() - INTERVAL number * 24 SECOND) as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
+    toDateTime(now() - INTERVAL number * 30 SECOND) as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
-
-    -- Select nearest edge node based on city region
-    arrayElement(
-        ['edge-ashburn', 'edge-ashburn', 'edge-ashburn', 'edge-ashburn', 'edge-ashburn', 'edge-ashburn',  -- NA cities -> Ashburn
-         'edge-leiden', 'edge-leiden', 'edge-leiden', 'edge-leiden',  -- NL/GB -> Leiden
-         'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt',  -- DE/FR/ES/IT -> Frankfurt
-         'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt',  -- More EU -> Frankfurt
-         'edge-tokyo', 'edge-tokyo', 'edge-tokyo',  -- JP/KR -> Tokyo
-         'edge-singapore', 'edge-singapore', 'edge-singapore', 'edge-singapore', 'edge-singapore',  -- SG/AU/IN -> Singapore
-         'edge-saopaulo', 'edge-saopaulo', 'edge-saopaulo', 'edge-saopaulo',  -- SA -> Sao Paulo
-         'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt'],  -- MEA -> Frankfurt (closest)
-        1 + (number % 36)
-    ) as selected_node,
-
+    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as selected_node,
     'success' as status,
     'geo-proximity' as details,
-    800 + rand() % 200 as score,  -- High score (good routing)
-
-    -- Client IP
+    800 + rand() % 200 as score,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as client_ip,
-
-    -- Client country (from city index)
-    arrayElement(
-        ['US', 'US', 'US', 'US', 'US', 'CA',  -- NA
-         'NL', 'NL', 'GB', 'GB',  -- NL/GB
-         'DE', 'DE', 'DE', 'FR', 'FR', 'ES', 'ES', 'IT', 'IT', 'SE', 'PL',  -- EU
-         'JP', 'JP', 'KR',  -- East Asia
-         'SG', 'AU', 'AU', 'IN', 'IN',  -- APAC
-         'BR', 'BR', 'AR', 'CL',  -- SA
-         'AE', 'ZA', 'EG'],  -- MEA
-        1 + (number % 36)
-    ) as client_country,
-
-    -- Client latitude (with small jitter)
-    arrayElement(
-        [40.71, 34.05, 41.88, 25.76, 47.61, 43.65,  -- NA
-         52.36, 51.92, 51.50, 53.48,  -- NL/GB
-         52.52, 48.14, 50.11, 48.85, 45.76, 40.42, 41.39, 41.90, 45.46, 59.33, 52.23,  -- EU
-         35.67, 34.69, 37.57,  -- East Asia
-         1.35, -33.87, -37.81, 19.08, 12.97,  -- APAC
-         -23.55, -22.91, -34.60, -33.45,  -- SA
-         25.20, -26.20, 30.04],  -- MEA
-        1 + (number % 36)
-    ) + (rand() % 100 - 50) / 500.0 as client_latitude,
-
-    -- Client longitude (with small jitter)
-    arrayElement(
-        [-74.01, -118.24, -87.63, -80.19, -122.33, -79.38,  -- NA
-         4.90, 4.48, -0.12, -2.24,  -- NL/GB
-         13.40, 11.58, 8.68, 2.35, 4.84, -3.70, 2.17, 12.50, 9.19, 18.07, 21.01,  -- EU
-         139.65, 135.50, 126.98,  -- East Asia
-         103.82, 151.21, 144.96, 72.88, 77.59,  -- APAC
-         -46.63, -43.17, -58.38, -70.67,  -- SA
-         55.27, 28.04, 31.24],  -- MEA
-        1 + (number % 36)
-    ) + (rand() % 100 - 50) / 500.0 as client_longitude,
-
-    -- Client H3 bucket (pre-computed via scripts/h3calc, resolution 5)
-    arrayElement(
-        [599718752904282111, 599711151885910015, 599654178070986751, 600186088295759871, 599697093384208383, 599745919646171135,  -- NA
-         599425793185021951, 599425957467521023, 599423697240981503, 599424170761125887,  -- NL/GB
-         599526121473572863, 599533816981225471, 599536111567503359, 599536505630752767, 599534014549721087,  -- DE/FR
-         599982373701943295, 599986204812771327, 599515334663208959, 599534678122168319, 599128723182059519, 599529866685054975,  -- ES/IT/SE/PL
-         599811782969655295, 599794658935046143, 599838696308473855,  -- JP/KR
-         600757819309817855, 602322242893774847, 602328092639231999, 600677175930126335, 600668999386136575,  -- SG/AU/IN
-         601935341502332927, 601945261803044863, 602407239222820863, 602123720915419135,  -- SA
-         600168505773391871, 602299504263167999, 600076239138455551],  -- MEA
-        1 + (number % 36)
-    ) as client_bucket_h3,
-    toUInt8(5) as client_bucket_res,
-
-    -- Node latitude (based on selected node)
-    arrayElement(
-        [39.04, 39.04, 39.04, 39.04, 39.04, 39.04,  -- Ashburn
-         52.16, 52.16, 52.16, 52.16,  -- Leiden
-         50.11, 50.11, 50.11, 50.11, 50.11, 50.11, 50.11, 50.11, 50.11, 50.11, 50.11,  -- Frankfurt
-         35.69, 35.69, 35.69,  -- Tokyo
-         1.35, 1.35, 1.35, 1.35, 1.35,  -- Singapore
-         -23.55, -23.55, -23.55, -23.55,  -- Sao Paulo
-         50.11, 50.11, 50.11],  -- Frankfurt (MEA)
-        1 + (number % 36)
-    ) as node_latitude,
-
-    -- Node longitude
-    arrayElement(
-        [-77.49, -77.49, -77.49, -77.49, -77.49, -77.49,  -- Ashburn
-         4.50, 4.50, 4.50, 4.50,  -- Leiden
-         8.68, 8.68, 8.68, 8.68, 8.68, 8.68, 8.68, 8.68, 8.68, 8.68, 8.68,  -- Frankfurt
-         139.69, 139.69, 139.69,  -- Tokyo
-         103.82, 103.82, 103.82, 103.82, 103.82,  -- Singapore
-         -46.63, -46.63, -46.63, -46.63,  -- Sao Paulo
-         8.68, 8.68, 8.68],  -- Frankfurt (MEA)
-        1 + (number % 36)
-    ) as node_longitude,
-
-    -- Node name
-    arrayElement(
-        ['edge-ashburn', 'edge-ashburn', 'edge-ashburn', 'edge-ashburn', 'edge-ashburn', 'edge-ashburn',
-         'edge-leiden', 'edge-leiden', 'edge-leiden', 'edge-leiden',
-         'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt',
-         'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt',
-         'edge-tokyo', 'edge-tokyo', 'edge-tokyo',
-         'edge-singapore', 'edge-singapore', 'edge-singapore', 'edge-singapore', 'edge-singapore',
-         'edge-saopaulo', 'edge-saopaulo', 'edge-saopaulo', 'edge-saopaulo',
-         'edge-frankfurt', 'edge-frankfurt', 'edge-frankfurt'],
-        1 + (number % 36)
-    ) as node_name,
-
-    -- Node H3 bucket (pre-computed via scripts/h3calc)
-    arrayElement(
-        [599729341072408575, 599729341072408575, 599729341072408575, 599729341072408575, 599729341072408575, 599729341072408575,  -- Ashburn
-         599425791037538303, 599425791037538303, 599425791037538303, 599425791037538303,  -- Leiden
-         599536111567503359, 599536111567503359, 599536111567503359, 599536111567503359, 599536111567503359,  -- Frankfurt
-         599536111567503359, 599536111567503359, 599536111567503359, 599536111567503359, 599536111567503359, 599536111567503359,
-         599811782969655295, 599811782969655295, 599811782969655295,  -- Tokyo
-         600757819309817855, 600757819309817855, 600757819309817855, 600757819309817855, 600757819309817855,  -- Singapore
-         601935341502332927, 601935341502332927, 601935341502332927, 601935341502332927,  -- Sao Paulo
-         599536111567503359, 599536111567503359, 599536111567503359],  -- Frankfurt (MEA)
-        1 + (number % 36)
-    ) as node_bucket_h3,
-    toUInt8(5) as node_bucket_res,
-
-    -- Approximate routing distance (km) based on city-to-node
-    toFloat64(arrayElement(
-        [350, 3900, 1100, 1600, 3900, 550,  -- NA to Ashburn
-         170, 80, 350, 500,  -- NL/GB to Leiden
-         400, 300, 0, 450, 500, 1500, 1200, 1000, 600, 1600, 1000,  -- EU to Frankfurt
-         0, 400, 1200,  -- JP/KR to Tokyo
-         0, 6300, 6000, 4100, 3900,  -- APAC to Singapore
-         0, 350, 2100, 2900,  -- SA to Sao Paulo
-         5200, 8500, 2900],  -- MEA to Frankfurt
-        1 + (number % 36)
-    ) + rand() % 50) as routing_distance_km
-
-FROM numbers(0, 3600);  -- 100 events per city = 3600 total
+    arrayElement(['US', 'NL', 'SG'], 1 + rand()%3) as client_country,
+    arrayElement([40.71, 52.36, 1.35], 1 + rand()%3) + (rand()%100 - 50)/500.0 as client_latitude,
+    arrayElement([-74.00, 4.90, 103.82], 1 + rand()%3) + (rand()%100 - 50)/500.0 as client_longitude,
+    NULL as client_bucket_h3,
+    NULL as client_bucket_res,
+    arrayElement([52.16, 39.04, 1.35], 1 + rand()%3) as node_latitude,
+    arrayElement([4.49, -77.49, 103.82], 1 + rand()%3) as node_longitude,
+    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_name,
+    NULL as node_bucket_h3,
+    NULL as node_bucket_res,
+    NULL as selected_node_id,
+    toFloat64(350 + rand()%500) as routing_distance_km,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as stream_tenant_id,
+    'central-primary' as cluster_id,
+    toFloat32(12 + rand()%30) as latency_ms,
+    toInt32(3 + rand()%5) as candidates_count,
+    'resolve_playback' as event_type,
+    'foghorn' as source
+FROM numbers(0, 300);
 
 -- =================================================================================================
--- 4. Track List Events (Stream Health Tab)
+-- 5. Track List Events (track_list_events)
 -- =================================================================================================
 INSERT INTO periscope.track_list_events (
-    timestamp, event_id, tenant_id, internal_name, node_id,
+    timestamp, event_id, tenant_id, stream_id, internal_name, node_id,
     track_list, track_count, video_track_count, audio_track_count,
     primary_width, primary_height, primary_fps, primary_video_codec, primary_video_bitrate,
-    quality_tier
-)
-VALUES
-(now(), generateUUIDv4(), '00000000-0000-0000-0000-000000000001', 'demo_live_stream_001', 'edge-node-1',
- '[{"trackName":"video_1","trackType":"video","codec":"H264","width":1920,"height":1080,"fps":60,"bitrateKbps":4500},{"trackName":"audio_1","trackType":"audio","codec":"AAC"}]',
- 2, 1, 1, 1920, 1080, 60.0, 'H264', 4500, '1080p60');  -- primary_video_bitrate in kbps
+    quality_tier,
+    primary_audio_channels, primary_audio_sample_rate, primary_audio_codec, primary_audio_bitrate
+) VALUES
+(   -- 1080p start
+    now() - INTERVAL 3 HOUR, generateUUIDv4(),
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001',
+    'edge-leiden',
+    '[{"trackName":"video_1","trackType":"video","codec":"H264","width":1920,"height":1080,"fps":60,"bitrateKbps":4500},{"trackName":"audio_1","trackType":"audio","codec":"AAC"}]',
+    2, 1, 1,
+    1920, 1080, 60.0, 'H264', 4500,
+    '1080p60',
+    2, 48000, 'AAC', 192000
+),
+(   -- 1440p upgrade
+    now() - INTERVAL 2 HOUR, generateUUIDv4(),
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001',
+    'edge-leiden',
+    '[{"trackName":"video_1","trackType":"video","codec":"H264","width":2560,"height":1440,"fps":60,"bitrateKbps":6500},{"trackName":"audio_1","trackType":"audio","codec":"AAC"}]',
+    2, 1, 1,
+    2560, 1440, 60.0, 'H264', 6500,
+    '1440p60',
+    2, 48000, 'AAC', 192000
+),
+(   -- 2160p peak
+    now() - INTERVAL 1 HOUR, generateUUIDv4(),
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001',
+    'edge-leiden',
+    '[{"trackName":"video_1","trackType":"video","codec":"H264","width":3840,"height":2160,"fps":60,"bitrateKbps":12000},{"trackName":"audio_1","trackType":"audio","codec":"AAC"}]',
+    2, 1, 1,
+    3840, 2160, 60.0, 'H264', 12000,
+    '2160p60',
+    2, 48000, 'AAC', 192000
+);
 
 -- =================================================================================================
--- 5. Node Metrics (Infrastructure Dashboard)
+-- 6. Node Metrics Samples (node_metrics_samples) - 12 hours of 1m samples
 -- =================================================================================================
-INSERT INTO periscope.node_metrics (
-    timestamp, tenant_id, node_id,
-    cpu_usage, ram_max, ram_current,
-    bandwidth_in, bandwidth_out, is_healthy,
-    latitude, longitude
+INSERT INTO periscope.node_metrics_samples (
+    timestamp, tenant_id, cluster_id, node_id,
+    cpu_usage, ram_max, ram_current, shm_total_bytes, shm_used_bytes,
+    disk_total_bytes, disk_used_bytes,
+    bandwidth_in, bandwidth_out, up_speed, down_speed,
+    connections_current, stream_count,
+    is_healthy, latitude, longitude,
+    metadata
 )
 SELECT
-    toDateTime(now() - INTERVAL number MINUTE) as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    'edge-node-1' as node_id,
-
-    -- Realistic load patterns
+    toDateTime(now() - INTERVAL number * 60 SECOND) as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    'central-primary' as cluster_id,
+    'edge-leiden' as node_id,
     toFloat32(30 + 20 * sin(number/120) + rand()%10) as cpu_usage,
     16000000000 as ram_max,
     4000000000 + (number * 50000) % 8000000000 as ram_current,
-
-    -- Bandwidth traffic
+    2000000000 as shm_total_bytes,
+    300000000 + (number * 10000) % 1500000000 as shm_used_bytes,
+    500000000000 as disk_total_bytes,
+    85000000000 + (number * 1000000) % 10000000000 as disk_used_bytes,
     100000000 + (rand() % 50000000) as bandwidth_in,
     500000000 + (rand() % 200000000) as bandwidth_out,
-
+    125000000 as up_speed,
+    650000000 as down_speed,
+    toUInt32(50 + rand()%30) as connections_current,
+    toUInt32(1 + rand()%3) as stream_count,
     1 as is_healthy,
     52.1601 as latitude,
-    4.4970 as longitude
-FROM numbers(0, 1440);
+    4.4970 as longitude,
+    '{"region":"eu-west"}' as metadata
+FROM numbers(0, 720);
 
 -- =================================================================================================
--- 6. Stream Events (Lifecycle Events for Stream Timeline + Viewer Snapshots)
+-- 7. Artifact Events + State (clips, DVR, VOD)
 -- =================================================================================================
--- 6a. Push start/end events
-INSERT INTO periscope.stream_events (
-    timestamp, event_id, tenant_id, internal_name, node_id,
-    event_type, event_data
-)
-SELECT
-    toDateTime(now() - INTERVAL number * 4 HOUR) as timestamp,
-    generateUUIDv4() as event_id,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    'demo_live_stream_001' as internal_name,
-    'edge-node-1' as node_id,
-    if(number % 2 = 0, 'PUSH_START', 'PUSH_END') as event_type,
-    if(number % 2 = 0, '{"codec":"H264","resolution":"1920x1080"}', '{"duration_seconds":14400}') as event_data
-FROM numbers(0, 12);
-
--- 6b. Viewer snapshot events (for peak concurrent and usage metrics)
--- These record the current viewer count at each interval
-INSERT INTO periscope.stream_events (
-    timestamp, event_id, tenant_id, internal_name, node_id,
-    event_type, total_viewers
-)
-SELECT
-    toDateTime(now() - INTERVAL number * 5 MINUTE) as timestamp,
-    generateUUIDv4() as event_id,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    'demo_live_stream_001' as internal_name,
-    'edge-node-1' as node_id,
-    'STREAM_BUFFER' as event_type,
-    -- Simulate realistic viewer patterns: base 30-50 with peaks up to 89
-    toUInt32(30 + abs(50 * sin(number / 20.0)) + rand() % 10) as total_viewers
-FROM numbers(0, 288);
-
--- =================================================================================================
--- 7. Client Metrics (5-minute aggregates for client-side QoE)
--- =================================================================================================
-INSERT INTO periscope.client_metrics (
-    timestamp, tenant_id, internal_name, node_id, session_id,
-    protocol, host, connection_time,
-    bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
-    packets_sent, packets_lost, packets_retransmitted, connection_quality
-)
-SELECT
-    toDateTime(now() - INTERVAL number * 5 MINUTE) as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    'demo_live_stream_001' as internal_name,
-    'edge-node-1' as node_id,
-    concat('session-', toString(rand() % 5000)) as session_id,
-    arrayElement(['HLS', 'WebRTC', 'DASH'], 1 + rand()%3) as protocol,
-    'edge-node-1.demo.frameworks.network' as host,
-    toFloat32(0.5 + rand() % 200 / 100.0) as connection_time,
-    toUInt64(1000000 + rand() % 5000000) as bandwidth_in,
-    toUInt64(50000 + rand() % 500000) as bandwidth_out,
-    toUInt64(50000000 + rand() % 500000000) as bytes_downloaded,
-    toUInt64(1000000 + rand() % 10000000) as bytes_uploaded,
-    toUInt64(2000 + rand() % 500) as packets_sent,
-    toUInt64(if(rand() % 100 > 95, rand() % 20, 0)) as packets_lost,
-    toUInt64(if(rand() % 100 > 90, rand() % 50, 0)) as packets_retransmitted,
-    toFloat32(0.85 + 0.15 * rand() / 4294967295) as connection_quality
-FROM numbers(0, 288); -- 24h at 5min intervals
-
--- =================================================================================================
--- 8. Clip Events (For Clips/DVR pages)
--- Note: Separate INSERTs because ClickHouse doesn't allow comments between VALUES rows
--- =================================================================================================
-
--- Clip 1: Completed
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
+INSERT INTO periscope.artifact_events (
+    timestamp, tenant_id, stream_id, internal_name, request_id,
     stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 HOUR,
-    '00000000-0000-0000-0000-000000000001',
+    ingest_node_id, percent, message,
+    file_path, s3_url, size_bytes, expires_at
+) VALUES
+(
+    now() - INTERVAL 6 HOUR,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
     'clip_demo_001',
-    'completed',
-    'clip',
-    toUnixTimestamp(now() - INTERVAL 3 HOUR),
-    toUnixTimestamp(now() - INTERVAL 2 HOUR - INTERVAL 55 MINUTE),
-    'edge-node-1',
-    100,
-    'Clip creation completed successfully',
-    '/clips/demo_clip_001.mp4',
-    's3://demo-bucket/clips/demo_clip_001.mp4',
-    125000000
-);
-
--- Clip 2: Processing
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 30 MINUTE,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'clip_demo_002',
-    'processing',
-    'clip',
-    toUnixTimestamp(now() - INTERVAL 1 HOUR),
-    toUnixTimestamp(now() - INTERVAL 55 MINUTE),
-    'edge-node-1',
-    65,
-    'Encoding video track...',
-    NULL,
-    NULL,
-    NULL
-);
-
--- DVR Recording: In Progress
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 10 MINUTE,
-    '00000000-0000-0000-0000-000000000001',
+    'done', 'clip', 1700000000, 1700003600,
+    'edge-leiden', 100, 'clip complete',
+    '/var/data/clips/clip_demo_001.mp4', 's3://demo/clips/clip_demo_001.mp4', 240000000,
+    toUnixTimestamp(now() + INTERVAL 7 DAY)
+),
+(
+    now() - INTERVAL 8 HOUR,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
     'dvr_demo_001',
-    'recording',
-    'dvr',
-    toUnixTimestamp(now() - INTERVAL 2 HOUR),
-    NULL,
-    'edge-node-1',
-    NULL,
-    'DVR recording in progress',
-    '/dvr/demo_live_stream_001/',
-    NULL,
-    450000000
-);
-
--- =================================================================================================
--- 8b. Demo Clip/DVR Events (Matching PostgreSQL Foghorn Seeds)
--- These match the physical files in infrastructure/demo-recordings
--- =================================================================================================
-
--- Demo Clip: Requested (matches foghorn.clips a1b2c3d4e5f6789012345678901234ab)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 HOUR - INTERVAL 5 MINUTE,
-    '00000000-0000-0000-0000-000000000001',
+    'done', 'dvr', 1700001000, 1700004600,
+    'edge-leiden', 100, 'dvr complete',
+    '/var/data/dvr/dvr_demo_001.m3u8', 's3://demo/dvr/dvr_demo_001.m3u8', 480000000,
+    toUnixTimestamp(now() + INTERVAL 14 DAY)
+),
+(
+    now() - INTERVAL 10 HOUR,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
-    'a1b2c3d4e5f6789012345678901234ab',
-    'requested',
-    'clip',
-    1702382400,  -- Dec 12, 2023 12:00:00 UTC
-    1702382410,  -- Dec 12, 2023 12:00:10 UTC (10 seconds)
-    'edge-node-1',
-    0,
-    'Clip creation requested',
-    NULL,
-    NULL,
-    NULL
+    'vod_demo_001',
+    'done', 'vod', NULL, NULL,
+    'edge-leiden', 100, 'vod uploaded',
+    '/var/data/vod/vod_demo_001.mp4', 's3://demo/vod/vod_demo_001.mp4', 800000000,
+    toUnixTimestamp(now() + INTERVAL 30 DAY)
 );
 
--- Demo Clip: Processing
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 HOUR - INTERVAL 3 MINUTE,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'a1b2c3d4e5f6789012345678901234ab',
-    'processing',
-    'clip',
-    1702382400,
-    1702382410,
-    'edge-node-1',
-    50,
-    'Transcoding video...',
-    NULL,
-    NULL,
-    NULL
-);
-
--- Demo Clip: Completed
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 HOUR,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'a1b2c3d4e5f6789012345678901234ab',
-    'completed',
-    'clip',
-    1702382400,
-    1702382410,
-    'edge-node-1',
-    100,
-    'Clip creation completed',
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
-    NULL,
-    140795
-);
-
--- Demo DVR: Requested (matches foghorn.dvr_requests fedcba98765432109876543210fedcba)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 4 HOUR,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'fedcba98765432109876543210fedcba',
-    'requested',
-    'dvr',
-    NULL,
-    NULL,
-    'edge-node-1',
-    0,
-    'DVR recording requested',
-    NULL,
-    NULL,
-    NULL
-);
-
--- Demo DVR: Completed
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 4 HOUR + INTERVAL 18 SECOND,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'fedcba98765432109876543210fedcba',
-    'completed',
-    'dvr',
-    NULL,
-    NULL,
-    'edge-node-1',
-    100,
-    'DVR recording completed',
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
-    NULL,
-    513176
-);
-
--- =================================================================================================
--- 8c. Deleted Clip/DVR Events (Matches PostgreSQL updates)
--- =================================================================================================
-
--- Deleted Demo Clip: Requested (2 days ago)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 DAY,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'b2c3d4e5f6789012345678901234bcde',
-    'requested',
-    'clip',
-    1702382400,
-    1702382410,
-    'edge-node-1',
-    0,
-    'Clip creation requested',
-    NULL,
-    NULL,
-    NULL
-);
-
--- Deleted Demo Clip: Completed (2 days ago)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 DAY + INTERVAL 10 SECOND,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'b2c3d4e5f6789012345678901234bcde',
-    'completed',
-    'clip',
-    1702382400,
-    1702382410,
-    'edge-node-1',
-    100,
-    'Clip creation completed',
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/b2c3d4e5f6789012345678901234bcde.mp4',
-    NULL,
-    140795
-);
-
--- Deleted Demo Clip: Deleted (1 day ago)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 1 DAY,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'b2c3d4e5f6789012345678901234bcde',
-    'deleted',
-    'clip',
-    1702382400,
-    1702382410,
-    'edge-node-1',
-    0,
-    'Clip deleted by user',
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/b2c3d4e5f6789012345678901234bcde.mp4',
-    NULL,
-    140795
-);
-
--- Deleted Demo DVR: Requested (2 days ago)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 DAY,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'gedcba98765432109876543210fedcbb',
-    'requested',
-    'dvr',
-    NULL,
-    NULL,
-    'edge-node-1',
-    0,
-    'DVR recording requested',
-    NULL,
-    NULL,
-    NULL
-);
-
--- Deleted Demo DVR: Completed (2 days ago)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 DAY + INTERVAL 30 SECOND,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'gedcba98765432109876543210fedcbb',
-    'completed',
-    'dvr',
-    NULL,
-    NULL,
-    'edge-node-1',
-    100,
-    'DVR recording completed',
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/gedcba98765432109876543210fedcbb.m3u8',
-    NULL,
-    1024000
-);
-
--- Deleted Demo DVR: Deleted (1 day ago)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 1 DAY,
-    '00000000-0000-0000-0000-000000000001',
-    'demo_live_stream_001',
-    'gedcba98765432109876543210fedcbb',
-    'deleted',
-    'dvr',
-    NULL,
-    NULL,
-    'edge-node-1',
-    0,
-    'DVR recording deleted',
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/gedcba98765432109876543210fedcbb.m3u8',
-    NULL,
-    1024000
-);
-
--- =================================================================================================
--- 8d. Live Artifacts (Current state for demo clip and DVR)
--- =================================================================================================
-
--- Demo Clip artifact state
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
+INSERT INTO periscope.artifact_state_current (
+    tenant_id, stream_id, request_id, internal_name,
     content_type, stage, progress_percent, error_message,
     requested_at, started_at, completed_at,
     clip_start_unix, clip_stop_unix,
     segment_count, manifest_path,
     file_path, s3_url, size_bytes,
-    processing_node_id, updated_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'a1b2c3d4e5f6789012345678901234ab',
+    processing_node_id,
+    updated_at, expires_at
+) VALUES
+(
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'clip_demo_001',
     'demo_live_stream_001',
-    'clip',
-    'completed',
-    100,
-    NULL,
-    now() - INTERVAL 2 HOUR - INTERVAL 5 MINUTE,
-    now() - INTERVAL 2 HOUR - INTERVAL 4 MINUTE,
-    now() - INTERVAL 2 HOUR,
-    1702382400,
-    1702382410,
-    NULL,
-    NULL,
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
-    NULL,
-    140795,
-    'edge-node-1',
-    now() - INTERVAL 2 HOUR
-);
-
--- Demo DVR artifact state
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'fedcba98765432109876543210fedcba',
+    'clip', 'done', 100, NULL,
+    now() - INTERVAL 6 HOUR, now() - INTERVAL 6 HOUR, now() - INTERVAL 6 HOUR,
+    1700000000, 1700003600,
+    1, NULL,
+    '/var/data/clips/clip_demo_001.mp4', 's3://demo/clips/clip_demo_001.mp4', 240000000,
+    'edge-leiden',
+    now(), now() + INTERVAL 7 DAY
+),
+(
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'dvr_demo_001',
     'demo_live_stream_001',
-    'dvr',
-    'completed',
-    100,
-    NULL,
-    now() - INTERVAL 4 HOUR,
-    now() - INTERVAL 4 HOUR,
-    now() - INTERVAL 4 HOUR + INTERVAL 18 SECOND,
-    NULL,
-    NULL,
-    2,  -- 2 HLS segments
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
-    NULL,
-    513176,
-    'edge-node-1',
-    now() - INTERVAL 4 HOUR + INTERVAL 18 SECOND
-);
-
--- Deleted Demo Clip artifact state (expired/hard-deleted, NOT frozen)
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'b2c3d4e5f6789012345678901234bcde',
+    'dvr', 'done', 100, NULL,
+    now() - INTERVAL 8 HOUR, now() - INTERVAL 8 HOUR, now() - INTERVAL 8 HOUR,
+    1700001000, 1700004600,
+    12, '/var/data/dvr/dvr_demo_001.m3u8',
+    '/var/data/dvr/dvr_demo_001.m3u8', 's3://demo/dvr/dvr_demo_001.m3u8', 480000000,
+    'edge-leiden',
+    now(), now() + INTERVAL 14 DAY
+),
+(
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'vod_demo_001',
     'demo_live_stream_001',
-    'clip',
-    'deleted',           -- Hard-deleted (expired)
-    100,
-    NULL,
-    now() - INTERVAL 2 DAY,
-    now() - INTERVAL 2 DAY,
-    now() - INTERVAL 2 DAY + INTERVAL 10 SECOND,
-    1702382400,
-    1702382410,
-    NULL,
-    NULL,
-    NULL,                -- file_path NULL (file deleted)
-    NULL,                -- s3_url NULL (was NOT frozen before deletion)
-    140795,              -- size_bytes preserved for billing history
-    'edge-node-1',
-    now() - INTERVAL 1 DAY,
-    now() - INTERVAL 1 DAY   -- expires_at in past (retention expired)
-);
-
--- Deleted Demo DVR artifact state (expired/hard-deleted, NOT frozen)
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'gedcba98765432109876543210fedcbb',
-    'demo_live_stream_001',
-    'dvr',
-    'deleted',           -- Hard-deleted (expired)
-    100,
-    NULL,
-    now() - INTERVAL 2 DAY,
-    now() - INTERVAL 2 DAY,
-    now() - INTERVAL 2 DAY + INTERVAL 30 SECOND,
-    NULL,
-    NULL,
-    2,
-    NULL,                -- manifest_path NULL (file deleted)
-    NULL,                -- file_path NULL (file deleted)
-    NULL,                -- s3_url NULL (was NOT frozen before deletion)
-    1024000,             -- size_bytes preserved for billing history
-    'edge-node-1',
-    now() - INTERVAL 1 DAY,
-    now() - INTERVAL 1 DAY   -- expires_at in past (retention expired)
-);
-
--- Demo VOD artifact state (completed upload)
--- VOD differs from clips/DVR: user uploads directly to S3, no stream association
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'vod_demo_hash_001_abcdef12345678',   -- vod_hash
-    'demo_product_video.mp4',              -- filename as internal_name
-    'vod',
-    'completed',
-    100,
-    NULL,
-    now() - INTERVAL 1 HOUR,               -- requested_at (upload initiated)
-    now() - INTERVAL 1 HOUR,               -- started_at
-    now() - INTERVAL 55 MINUTE,            -- completed_at
-    NULL,                                  -- no clip_start_unix for VOD
-    NULL,                                  -- no clip_stop_unix for VOD
-    NULL,                                  -- no segment_count for VOD
-    NULL,                                  -- no manifest_path for VOD
-    NULL,                                  -- file_path NULL (S3 storage)
-    's3://frameworks-vod/00000000-0000-0000-0000-000000000001/vod_demo_hash_001_abcdef12345678/demo_product_video.mp4',
-    52428800,                              -- 50 MB
-    NULL,                                  -- no processing_node_id for VOD
-    now() - INTERVAL 55 MINUTE,
-    now() + INTERVAL 30 DAY                -- 30-day retention
-);
-
--- Demo VOD artifact state (uploading/in-progress)
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'vod_demo_hash_002_fedcba98765432',   -- vod_hash
-    'webinar_recording.mp4',               -- filename
-    'vod',
-    'requested',                           -- upload in progress
-    0,
-    NULL,
-    now() - INTERVAL 5 MINUTE,
-    now() - INTERVAL 5 MINUTE,
-    NULL,                                  -- not completed yet
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,                                  -- no S3 URL yet
-    104857600,                             -- expected 100 MB
-    NULL,
-    now() - INTERVAL 5 MINUTE,
-    NULL
-);
-
--- Demo VOD artifact state (deleted)
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'vod_demo_hash_003_deleted123456',    -- vod_hash
-    'old_training_video.mp4',              -- filename
-    'vod',
-    'deleted',
-    100,
-    NULL,
-    now() - INTERVAL 7 DAY,
-    now() - INTERVAL 7 DAY,
-    now() - INTERVAL 7 DAY + INTERVAL 2 MINUTE,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,                                  -- S3 URL cleared on delete
-    31457280,                              -- 30 MB (preserved for billing)
-    NULL,
-    now() - INTERVAL 1 DAY,
-    now() - INTERVAL 1 DAY                 -- expired
+    'vod', 'done', 100, NULL,
+    now() - INTERVAL 10 HOUR, now() - INTERVAL 10 HOUR, now() - INTERVAL 10 HOUR,
+    NULL, NULL,
+    NULL, NULL,
+    '/var/data/vod/vod_demo_001.mp4', 's3://demo/vod/vod_demo_001.mp4', 800000000,
+    'edge-leiden',
+    now(), now() + INTERVAL 30 DAY
 );
 
 -- =================================================================================================
--- 8e. VOD Upload Events (Matching PostgreSQL Foghorn Seeds)
--- =================================================================================================
-
--- Demo VOD: Requested (1 day ago)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 1 DAY - INTERVAL 5 MINUTE,
-    '00000000-0000-0000-0000-000000000001',
-    NULL,  -- VOD has no stream association
-    'c3d4e5f678901234567890123456abcd',
-    'requested',
-    'vod',
-    NULL,
-    NULL,
-    NULL,  -- No ingest node for VOD
-    0,
-    'VOD upload initiated',
-    NULL,
-    NULL,
-    NULL
-);
-
--- Demo VOD: Processing (uploading to S3)
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 1 DAY - INTERVAL 3 MINUTE,
-    '00000000-0000-0000-0000-000000000001',
-    NULL,
-    'c3d4e5f678901234567890123456abcd',
-    'processing',
-    'vod',
-    NULL,
-    NULL,
-    NULL,
-    75,
-    'S3 multipart upload 75% complete',
-    NULL,
-    NULL,
-    52428800
-);
-
--- Demo VOD: Completed
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 1 DAY,
-    '00000000-0000-0000-0000-000000000001',
-    NULL,
-    'c3d4e5f678901234567890123456abcd',
-    'completed',
-    'vod',
-    NULL,
-    NULL,
-    'edge-node-1',  -- Defrosted to edge-node-1
-    100,
-    'VOD upload complete and warmed to edge',
-    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4',
-    's3://frameworks-storage/vod/00000000-0000-0000-0000-000000000001/c3d4e5f678901234567890123456abcd/product_demo_2024.mp4',
-    52428800
-);
-
--- Demo VOD (processing): Currently uploading
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 30 MINUTE,
-    '00000000-0000-0000-0000-000000000001',
-    NULL,
-    'd4e5f6789012345678901234567abcde',
-    'processing',
-    'vod',
-    NULL,
-    NULL,
-    NULL,
-    100,
-    'Upload complete, validating video format...',
-    NULL,
-    's3://frameworks-storage/vod/00000000-0000-0000-0000-000000000001/d4e5f6789012345678901234567abcde/webinar_recording.mp4',
-    104857600
-);
-
--- Demo VOD (failed): Validation failed
-INSERT INTO periscope.clip_events (
-    timestamp, tenant_id, internal_name, request_id,
-    stage, content_type, start_unix, stop_unix,
-    ingest_node_id, percent, message, file_path, s3_url, size_bytes
-) VALUES (
-    now() - INTERVAL 2 DAY,
-    '00000000-0000-0000-0000-000000000001',
-    NULL,
-    'e5f678901234567890123456789abcdf',
-    'failed',
-    'vod',
-    NULL,
-    NULL,
-    NULL,
-    0,
-    'Validation failed: Unsupported video format (AVI with DivX codec)',
-    NULL,
-    's3://frameworks-storage/vod/00000000-0000-0000-0000-000000000001/e5f678901234567890123456789abcdf/corrupted_file.avi',
-    15728640
-);
-
--- =================================================================================================
--- 8f. VOD Live Artifacts (Current state for demo VOD assets)
--- =================================================================================================
-
--- Demo VOD artifact state (ready)
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'c3d4e5f678901234567890123456abcd',
-    NULL,
-    'vod',
-    'completed',
-    100,
-    NULL,
-    now() - INTERVAL 1 DAY - INTERVAL 5 MINUTE,
-    now() - INTERVAL 1 DAY - INTERVAL 3 MINUTE,
-    now() - INTERVAL 1 DAY,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4',
-    's3://frameworks-storage/vod/00000000-0000-0000-0000-000000000001/c3d4e5f678901234567890123456abcd/product_demo_2024.mp4',
-    52428800,
-    'edge-node-1',
-    now() - INTERVAL 1 DAY,
-    now() + INTERVAL 30 DAY
-);
-
--- Demo VOD artifact state (processing)
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'd4e5f6789012345678901234567abcde',
-    NULL,
-    'vod',
-    'processing',
-    100,
-    NULL,
-    now() - INTERVAL 30 MINUTE,
-    now() - INTERVAL 28 MINUTE,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    's3://frameworks-storage/vod/00000000-0000-0000-0000-000000000001/d4e5f6789012345678901234567abcde/webinar_recording.mp4',
-    104857600,
-    NULL,
-    now() - INTERVAL 30 MINUTE,
-    now() + INTERVAL 30 DAY
-);
-
--- Demo VOD artifact state (failed)
-INSERT INTO periscope.live_artifacts (
-    tenant_id, request_id, internal_name,
-    content_type, stage, progress_percent, error_message,
-    requested_at, started_at, completed_at,
-    clip_start_unix, clip_stop_unix,
-    segment_count, manifest_path,
-    file_path, s3_url, size_bytes,
-    processing_node_id, updated_at, expires_at
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'e5f678901234567890123456789abcdf',
-    NULL,
-    'vod',
-    'failed',
-    0,
-    'Unsupported video format (AVI with DivX codec)',
-    now() - INTERVAL 2 DAY - INTERVAL 5 MINUTE,
-    now() - INTERVAL 2 DAY - INTERVAL 3 MINUTE,
-    now() - INTERVAL 2 DAY,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    's3://frameworks-storage/vod/00000000-0000-0000-0000-000000000001/e5f678901234567890123456789abcdf/corrupted_file.avi',
-    15728640,
-    NULL,
-    now() - INTERVAL 2 DAY,
-    now() - INTERVAL 1 DAY   -- Already expired
-);
-
--- =================================================================================================
--- 9. Storage Snapshots (For Storage Usage page)
+-- 8. Storage Snapshots + Storage Events
 -- =================================================================================================
 INSERT INTO periscope.storage_snapshots (
-    timestamp, tenant_id, node_id,
-    total_bytes, file_count, dvr_bytes, clip_bytes, vod_bytes,
+    timestamp, tenant_id, node_id, storage_scope,
+    total_bytes, file_count,
+    dvr_bytes, clip_bytes, vod_bytes,
     frozen_dvr_bytes, frozen_clip_bytes, frozen_vod_bytes
+) VALUES
+(
+    now(),
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'edge-leiden',
+    'hot',
+    160000000000,
+    320,
+    50000000000,
+    15000000000,
+    95000000000,
+    0, 0, 0
+),
+(
+    now(),
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'edge-leiden',
+    'cold',
+    120000000000,
+    280,
+    60000000000,
+    12000000000,
+    48000000000,
+    60000000000, 12000000000, 48000000000
+);
+
+INSERT INTO periscope.storage_events (
+    timestamp, tenant_id, stream_id, internal_name, asset_hash,
+    action, asset_type,
+    size_bytes, s3_url, local_path, node_id,
+    duration_ms, warm_duration_ms, error
+) VALUES
+(
+    now() - INTERVAL 6 HOUR,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001',
+    'clip_demo_001',
+    'store', 'clip',
+    240000000,
+    's3://demo/clips/clip_demo_001.mp4',
+    '/var/data/clips/clip_demo_001.mp4',
+    'edge-leiden',
+    5000, 0, NULL
+),
+(
+    now() - INTERVAL 10 HOUR,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    '5eedfeed-11fe-ca57-feed-11feca570001',
+    'demo_live_stream_001',
+    'vod_demo_001',
+    'store', 'vod',
+    800000000,
+    's3://demo/vod/vod_demo_001.mp4',
+    '/var/data/vod/vod_demo_001.mp4',
+    'edge-leiden',
+    8000, 0, NULL
+);
+
+-- =================================================================================================
+-- 9. Processing Events
+-- =================================================================================================
+INSERT INTO periscope.processing_events (
+    timestamp, tenant_id, node_id, stream_id, internal_name,
+    process_type, track_type, duration_ms,
+    input_codec, output_codec,
+    width, height, rendition_count,
+    input_bytes, output_bytes_total, output_bitrate_bps
 )
 SELECT
-    toDateTime(now() - INTERVAL number HOUR) as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    'edge-node-1' as node_id,
-    -- Growing storage over time (warm + frozen)
-    40000000000 + number * 500000000 as total_bytes,
-    140 + number * 2 as file_count,
-    -- Warm storage breakdown
-    20000000000 + number * 250000000 as dvr_bytes,
-    8000000000 + number * 100000000 as clip_bytes,
-    12000000000 + number * 150000000 as vod_bytes,
-    -- Frozen storage (subset moved to S3 cold storage)
-    5000000000 + number * 50000000 as frozen_dvr_bytes,
-    2000000000 + number * 25000000 as frozen_clip_bytes,
-    3000000000 + number * 35000000 as frozen_vod_bytes
-FROM numbers(0, 24);
-
--- =================================================================================================
--- 9b. Storage Events (Lifecycle tracking for freeze/defrost operations)
--- =================================================================================================
-
--- Clip freeze lifecycle (matches demo clip a1b2c3d4e5f6789012345678901234ab)
-INSERT INTO periscope.storage_events (timestamp, tenant_id, internal_name, asset_hash, action, asset_type, size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error)
-VALUES
-(now() - INTERVAL 2 HOUR + INTERVAL 5 MINUTE, '00000000-0000-0000-0000-000000000001', 'demo_live_stream_001', 'a1b2c3d4e5f6789012345678901234ab', 'freeze_started', 'clip', 140795, NULL, '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4', 'edge-node-1', NULL, NULL, NULL);
-
-INSERT INTO periscope.storage_events (timestamp, tenant_id, internal_name, asset_hash, action, asset_type, size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error)
-VALUES
-(now() - INTERVAL 2 HOUR + INTERVAL 8 MINUTE, '00000000-0000-0000-0000-000000000001', 'demo_live_stream_001', 'a1b2c3d4e5f6789012345678901234ab', 'frozen', 'clip', 140795, 's3://demo-bucket/clips/a1b2c3d4e5f6789012345678901234ab.mp4', '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4', 'edge-node-1', 2340, NULL, NULL);
-
--- DVR freeze lifecycle (matches demo DVR fedcba98765432109876543210fedcba)
-INSERT INTO periscope.storage_events (timestamp, tenant_id, internal_name, asset_hash, action, asset_type, size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error)
-VALUES
-(now() - INTERVAL 4 HOUR + INTERVAL 30 SECOND, '00000000-0000-0000-0000-000000000001', 'demo_live_stream_001', 'fedcba98765432109876543210fedcba', 'freeze_started', 'dvr', 513176, NULL, '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8', 'edge-node-1', NULL, NULL, NULL);
-
-INSERT INTO periscope.storage_events (timestamp, tenant_id, internal_name, asset_hash, action, asset_type, size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error)
-VALUES
-(now() - INTERVAL 4 HOUR + INTERVAL 2 MINUTE, '00000000-0000-0000-0000-000000000001', 'demo_live_stream_001', 'fedcba98765432109876543210fedcba', 'frozen', 'dvr', 513176, 's3://demo-bucket/dvr/fedcba98765432109876543210fedcba.m3u8', '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8', 'edge-node-1', 8750, NULL, NULL);
-
--- Defrost example (DVR was defrosted 1 hour ago)
-INSERT INTO periscope.storage_events (timestamp, tenant_id, internal_name, asset_hash, action, asset_type, size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error)
-VALUES
-(now() - INTERVAL 1 HOUR - INTERVAL 5 MINUTE, '00000000-0000-0000-0000-000000000001', 'demo_live_stream_001', 'fedcba98765432109876543210fedcba', 'defrost_started', 'dvr', 513176, 's3://demo-bucket/dvr/fedcba98765432109876543210fedcba.m3u8', NULL, 'edge-node-1', NULL, NULL, NULL);
-
-INSERT INTO periscope.storage_events (timestamp, tenant_id, internal_name, asset_hash, action, asset_type, size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error)
-VALUES
-(now() - INTERVAL 1 HOUR, '00000000-0000-0000-0000-000000000001', 'demo_live_stream_001', 'fedcba98765432109876543210fedcba', 'defrosted', 'dvr', 513176, 's3://demo-bucket/dvr/fedcba98765432109876543210fedcba.m3u8', '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8', 'edge-node-1', 3200, 180000, NULL);
-
--- =================================================================================================
--- 10. Quality Tier Daily (Direct insert for aggregation table - MVs don't backfill)
--- =================================================================================================
-INSERT INTO periscope.quality_tier_daily (
-    day, tenant_id, internal_name,
-    tier_1080p_minutes, tier_720p_minutes, tier_480p_minutes, tier_sd_minutes,
-    primary_tier, codec_h264_minutes, codec_h265_minutes, avg_bitrate, avg_fps
-)
-SELECT
-    toDate(now() - INTERVAL number DAY) as day,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
+    toDateTime(now() - INTERVAL number * 120 SECOND) as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    'edge-leiden' as node_id,
+    '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
-    -- Primarily 1080p streaming
-    toUInt32(180 + rand() % 60) as tier_1080p_minutes,
-    toUInt32(30 + rand() % 30) as tier_720p_minutes,
-    toUInt32(10 + rand() % 15) as tier_480p_minutes,
-    toUInt32(5 + rand() % 10) as tier_sd_minutes,
-    '1080p60' as primary_tier,
-    toUInt32(200 + rand() % 40) as codec_h264_minutes,
-    toUInt32(20 + rand() % 20) as codec_h265_minutes,
-    4500 as avg_bitrate,  -- 4.5 Mbps in kbps
-    60.0 as avg_fps
-FROM numbers(0, 7);
-
--- =================================================================================================
--- 11. Tenant Viewer Daily (Direct insert for platform overview)
--- =================================================================================================
-INSERT INTO periscope.tenant_viewer_daily (
-    day, tenant_id,
-    egress_gb, viewer_hours, unique_viewers, total_sessions
-)
-SELECT
-    toDate(now() - INTERVAL number DAY) as day,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    -- ~180GB egress per day
-    toFloat64(150 + rand() % 60) as egress_gb,
-    -- ~700 viewer hours per day
-    toFloat64(600 + rand() % 200) as viewer_hours,
-    -- ~350 unique viewers per day
-    toUInt32(300 + rand() % 100) as unique_viewers,
-    -- ~500 sessions per day
-    toUInt32(400 + rand() % 200) as total_sessions
-FROM numbers(0, 30);
-
--- =================================================================================================
--- 12. Process Billing (Transcoding usage for Livepeer and native AV processing)
--- =================================================================================================
-
--- Livepeer transcoding events (external gateway)
-INSERT INTO periscope.process_billing (
-    timestamp, tenant_id, node_id, stream_name,
-    process_type, duration_ms, input_codec, output_codec,
-    segment_number, width, height, rendition_count
-)
-SELECT
-    now() - INTERVAL (number * 30) MINUTE as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    'edge-node-1' as node_id,
-    'demo_live_stream_001' as stream_name,
-    'Livepeer' as process_type,
-    10000 as duration_ms,  -- 10 second segments
-    'h264' as input_codec,
-    'h264' as output_codec,
-    toInt32(number) as segment_number,
+    'transcode' as process_type,
+    'video' as track_type,
+    1500 + rand()%2000 as duration_ms,
+    'H264' as input_codec,
+    'H264' as output_codec,
     1920 as width,
     1080 as height,
-    3 as rendition_count  -- 1080p, 720p, 480p
-FROM numbers(0, 48);  -- 48 segments over 24 hours
-
--- MistProcAV (native local processing) events
-INSERT INTO periscope.process_billing (
-    timestamp, tenant_id, node_id, stream_name,
-    process_type, duration_ms, input_codec, output_codec,
-    segment_number, width, height, rendition_count,
-    input_frames, output_frames, decode_us_per_frame, transform_us_per_frame, encode_us_per_frame
-)
-SELECT
-    now() - INTERVAL (number * 45) MINUTE as timestamp,
-    '00000000-0000-0000-0000-000000000001' as tenant_id,
-    'edge-node-1' as node_id,
-    'demo_live_stream_002' as stream_name,
-    'AV' as process_type,
-    5000 as duration_ms,  -- 5 second segments
-    'h264' as input_codec,
-    'h264' as output_codec,
-    toInt32(number) as segment_number,
-    1280 as width,
-    720 as height,
-    1 as rendition_count,  -- Single output
-    300 as input_frames,
-    300 as output_frames,
-    850 as decode_us_per_frame,
-    120 as transform_us_per_frame,
-    1200 as encode_us_per_frame
-FROM numbers(0, 32);  -- 32 segments over 24 hours
-
--- Note: DVR/Clip billing is storage-based (via storage_snapshot table), not process-based
--- DVR segment events update live_artifacts.segment_count for UI responsiveness
+    3 as rendition_count,
+    4000000 + rand()%1000000 as input_bytes,
+    9000000 + rand()%2000000 as output_bytes_total,
+    4500000 as output_bitrate_bps
+FROM numbers(0, 120);
 
 -- =================================================================================================
--- Trigger Materialized View Aggregations
+-- 10. Materialized View Finalization (force rollups for demo)
 -- =================================================================================================
-OPTIMIZE TABLE periscope.process_billing_hourly FINAL;
-OPTIMIZE TABLE periscope.process_billing_daily FINAL;
+OPTIMIZE TABLE periscope.stream_viewer_5m FINAL;
 OPTIMIZE TABLE periscope.stream_health_5m FINAL;
-OPTIMIZE TABLE periscope.client_metrics_5m FINAL;
-OPTIMIZE TABLE periscope.node_metrics_1h FINAL;
-OPTIMIZE TABLE periscope.stream_connection_hourly FINAL;
-OPTIMIZE TABLE periscope.quality_tier_daily FINAL;
-OPTIMIZE TABLE periscope.tenant_connection_daily FINAL;
-OPTIMIZE TABLE periscope.clip_events_1h FINAL;
+OPTIMIZE TABLE periscope.stream_analytics_daily FINAL;
 OPTIMIZE TABLE periscope.viewer_hours_hourly FINAL;
-OPTIMIZE TABLE periscope.tenant_viewer_daily FINAL;
 OPTIMIZE TABLE periscope.viewer_geo_hourly FINAL;
-OPTIMIZE TABLE periscope.live_streams FINAL;
+OPTIMIZE TABLE periscope.viewer_city_hourly FINAL;
+OPTIMIZE TABLE periscope.quality_tier_daily FINAL;
+OPTIMIZE TABLE periscope.client_qoe_5m FINAL;
+OPTIMIZE TABLE periscope.stream_connection_hourly FINAL;
+OPTIMIZE TABLE periscope.processing_hourly FINAL;
+OPTIMIZE TABLE periscope.node_performance_5m FINAL;

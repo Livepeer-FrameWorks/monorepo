@@ -37,10 +37,9 @@ services:
       nofile:
         soft: 1048576
         hard: 1048576
+    env_file:
+      - .edge.env
     environment:
-      - EDGE_ENROLLMENT_TOKEN=${EDGE_ENROLLMENT_TOKEN}
-      - FOGHORN_CONTROL_ADDR=${FOGHORN_CONTROL_ADDR}
-      - FOGHORN_HTTP_BASE=${FOGHORN_HTTP_BASE}
       - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
       - MISTSERVER_URL=http://mistserver:8080
     expose:
@@ -50,4 +49,3 @@ services:
 volumes:
   caddy_data: {}
   caddy_config: {}
-

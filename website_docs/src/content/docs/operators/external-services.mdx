@@ -19,13 +19,16 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 - Cloudflare account
 - API token with permissions for DNS record management
 - Domain added to Cloudflare
+  - Required permissions: **Zone.DNS (Edit)** and **Account.Load Balancers (Edit)** (for multi-node)
 
 **What Navigator Automates:**
 - DNS record creation/updates based on Quartermaster node inventory
 - Smart routing: single node → A record, multiple nodes → load balancer pool
 - Pool and origin management
 - Geographic routing via Cloudflare load balancers
-- Stale origin cleanup when nodes go unhealthy
+- Removes origins that are no longer in inventory
+
+Navigator skips changes if no nodes are returned for a service type to avoid wiping DNS during transient outages.
 
 **Manual Steps:**
 1. Create Cloudflare account
@@ -37,6 +40,11 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
    export CLOUDFLARE_ZONE_ID="your-zone-id"
    export CLOUDFLARE_ACCOUNT_ID="your-account-id"
    ```
+5. Set your root domain:
+   ```bash
+   export NAVIGATOR_ROOT_DOMAIN="example.com"
+   export BRAND_DOMAIN="example.com"
+   ```
 
 **Future:** Self-hosted anycast DNS cluster (planned, requires ASN acquisition)
 
@@ -44,7 +52,7 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 
 ## SSL/TLS Certificates
 
-**Purpose:** HTTPS encryption for all services
+**Purpose:** HTTPS for public endpoints and platform-managed subdomains
 
 **Managed By:** Navigator (`api_dns`) - handles ACME certificate issuance and renewal
 
@@ -54,7 +62,7 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 - Certificate caching in PostgreSQL
 - Background renewal worker
 
-**No Manual Setup Required** - Navigator handles certificate lifecycle automatically.
+**Required Setup:** Navigator still needs Cloudflare credentials plus an allowed domain suffix list (`NAVIGATOR_CERT_ALLOWED_SUFFIXES`) or `NAVIGATOR_ROOT_DOMAIN`. In dev, the allowlist can be left empty to allow all.
 
 **Alternative Options:**
 - **Caddy** (automatic HTTPS) - for simpler deployments
@@ -66,26 +74,24 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 
 **Purpose:** IP geolocation for geographic routing and analytics
 
-**Provider:** MaxMind (GeoLite2 or GeoIP2)
+**Provider:** MaxMind (GeoLite2 or GeoIP2), DB-IP Lite, or IP2Location LITE
 
 **What You Need:**
-- MaxMind account (free or paid)
-- License key
+- Provider account (as required)
+- MMDB file
 
-**What CLI Automates:**
-- Database download
-- Periodic updates
-- Deployment to services (Foghorn, analytics)
+**What the platform uses:**
+- A local MMDB file on Foghorn nodes for geo-aware routing
+- Optional IP header enrichment if you already run geo-aware proxies
 
 **Manual Steps:**
-1. Sign up at https://www.maxmind.com
-2. Generate license key
-3. Set environment variable:
+1. Download a City/Country MMDB file from your provider
+2. Place it on Foghorn hosts and set:
    ```bash
-   export MAXMIND_LICENSE_KEY="your-key"
+   export GEOIP_MMDB_PATH="/var/lib/GeoIP/GeoLite2-City.mmdb"
    ```
 
-**Usage:** Foghorn uses GeoIP for intelligent routing decisions
+**Usage:** Foghorn uses GeoIP for intelligent routing decisions. If no MMDB is configured, GeoIP is disabled.
 
 ---
 
@@ -100,9 +106,7 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 - Verified sender domain (for production)
 
 **What's Automated:**
-- Email templates
-- Delivery handling
-- Error retry logic
+- Service-specific email templates and dispatch logic
 
 **Manual Steps:**
 1. Choose email provider
@@ -112,16 +116,20 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
    export SMTP_HOST="smtp.provider.com"
    export SMTP_PORT="587"
    export SMTP_USER="your-username"
-   export SMTP_PASS="your-password"
-   export SMTP_FROM="noreply@yourdomain.com"
+   export SMTP_PASSWORD="your-password"
+   export FROM_EMAIL="noreply@yourdomain.com"
+   export FROM_NAME="FrameWorks" # optional
+   export TO_EMAIL="ops@yourdomain.com" # Forms API inbox
    ```
 
 **Used By:**
 - Forms API (contact form submissions)
-- Billing (invoice notifications)
-- Auth (password resets - if implemented)
+- Billing (invoice/payment notifications)
+- Auth (email verification + password resets)
 
-**Optional:** System runs without email; notifications will be logged instead
+**Notes:**
+- Billing/Auth email flows skip sending if SMTP is not configured (warnings are logged).
+- Forms API requires SMTP + `TO_EMAIL`; otherwise contact submissions will fail.
 
 ---
 
@@ -129,12 +137,12 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 
 **Purpose:** Billing, subscriptions, payment handling
 
-**Provider:** Stripe
+**Providers:** Stripe (primary), Mollie (optional)
 
 **What You Need:**
-- Stripe account
-- API keys (publishable and secret)
-- Webhook signing secret
+- Stripe account and secret key (`STRIPE_SECRET_KEY`)
+- Stripe webhook signing secret (`STRIPE_WEBHOOK_SECRET`)
+- (Optional) Mollie API key (`MOLLIE_API_KEY`)
 
 **What's Automated:**
 - Webhook event handling
@@ -144,17 +152,20 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 **Manual Steps:**
 1. Create Stripe account at https://stripe.com
 2. Get API keys from dashboard
-3. Configure webhook endpoint: `https://yourdomain.com/api/webhooks/stripe`
-4. Set environment variables:
+3. Configure webhook endpoint: `https://yourdomain.com/webhooks/billing/stripe`
+4. (Optional) If using Mollie, configure: `https://yourdomain.com/webhooks/billing/mollie`
+5. Set environment variables:
    ```bash
    export STRIPE_SECRET_KEY="sk_live_..."
-   export STRIPE_PUBLISHABLE_KEY="pk_live_..."
    export STRIPE_WEBHOOK_SECRET="whsec_..."
+   export MOLLIE_API_KEY="live_xxx" # optional
    ```
 
 **Used By:** Purser (billing API)
 
 **Optional:** Not required for basic platform operation
+
+**Dev only:** If `STRIPE_WEBHOOK_SECRET` is not set, Stripe webhooks are rejected unless `ALLOW_INSECURE_WEBHOOKS=true` (not safe for production).
 
 ---
 
@@ -164,9 +175,9 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 |---------|----------|----------|--------------|
 | DNS | Cloudflare (recommended) | Yes | Navigator (api_dns) |
 | SSL/TLS | Let's Encrypt (ACME) | Yes | Navigator (api_dns) |
-| GeoIP | MaxMind | Recommended | CLI (download & updates) |
+| GeoIP | MaxMind / DB-IP / IP2Location | Recommended | Operator-managed (MMDB file) |
 | SMTP | Any provider | Optional | Platform (email delivery) |
-| Payments | Stripe | Optional | Purser (webhook handling) |
+| Payments | Stripe, Mollie | Optional | Purser (webhook handling) |
 
 ---
 
@@ -179,21 +190,33 @@ Complete list of required environment variables:
 export CLOUDFLARE_API_TOKEN="your-cloudflare-token"
 export CLOUDFLARE_ZONE_ID="your-zone-id"
 export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+export NAVIGATOR_ROOT_DOMAIN="example.com"
+export BRAND_DOMAIN="example.com"
+
+# Navigator DNS / cert behavior (optional)
+export NAVIGATOR_PROXY_SERVICES="app,website,docs"
+export NAVIGATOR_CERT_ALLOWED_SUFFIXES="example.com"
+export ACME_ENV="production"
 
 # GeoIP (Recommended)
-export MAXMIND_LICENSE_KEY="your-maxmind-key"
+export GEOIP_MMDB_PATH="/var/lib/GeoIP/GeoLite2-City.mmdb"
 
-# Email (Optional - platform runs without it)
+# Email (Optional for billing/auth; required for Forms)
 export SMTP_HOST="smtp.provider.com"
 export SMTP_PORT="587"
 export SMTP_USER="username"
-export SMTP_PASS="password"
-export SMTP_FROM="noreply@yourdomain.com"
+export SMTP_PASSWORD="password"
+export FROM_EMAIL="noreply@yourdomain.com"
+export FROM_NAME="FrameWorks"
+export TO_EMAIL="ops@yourdomain.com"
 
 # Stripe (Optional - only if using billing)
 export STRIPE_SECRET_KEY="sk_live_..."
-export STRIPE_PUBLISHABLE_KEY="pk_live_..."
 export STRIPE_WEBHOOK_SECRET="whsec_..."
+export ALLOW_INSECURE_WEBHOOKS="false" # dev-only: set true to bypass signature checks
+
+# Mollie (Optional)
+export MOLLIE_API_KEY="live_xxx"
 ```
 
 Store these securely using:
@@ -211,4 +234,4 @@ Store these securely using:
 4. Verify CLI can access external APIs
 5. Proceed with cluster provisioning
 
-For DNS operations, see [DNS Operations Guide](/cli/dns-operations)
+For DNS operations, see [DNS Automation](/operators/dns)

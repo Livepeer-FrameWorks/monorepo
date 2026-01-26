@@ -60,6 +60,28 @@ func TestCursorEncodeDecode(t *testing.T) {
 	}
 }
 
+func TestCursorEncodeDecodeSortKey(t *testing.T) {
+	sortKey := int64(5)
+	id := "tier-basic"
+
+	encoded := EncodeCursorWithSortKey(sortKey, id)
+	if encoded == "" {
+		t.Fatal("encoded cursor should not be empty")
+	}
+
+	cursor, err := DecodeCursor(encoded)
+	if err != nil {
+		t.Fatalf("failed to decode cursor: %v", err)
+	}
+
+	if got := cursor.Timestamp.UnixMilli(); got != sortKey {
+		t.Errorf("sort key mismatch: got %d, want %d", got, sortKey)
+	}
+	if cursor.ID != id {
+		t.Errorf("id mismatch: got %q, want %q", cursor.ID, id)
+	}
+}
+
 func TestDecodeCursorErrors(t *testing.T) {
 	tests := []struct {
 		name    string

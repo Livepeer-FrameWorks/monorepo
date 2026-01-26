@@ -21,18 +21,16 @@ func newContextInitCmd() *cobra.Command {
 	return &cobra.Command{Use: "init", Short: "Create default config with local endpoints", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := fwcfg.Config{}
 		path, _ := fwcfg.ConfigPath()
-		cfg = fwcfg.Config{Current: "local", Contexts: map[string]fwcfg.Context{"local": fwcfg.Context{Name: "local", Endpoints: fwcfg.Endpoints{
-			GatewayURL:         "http://localhost:18000",
-			QuartermasterURL:   "http://localhost:18002",
-			ControlURL:         "http://localhost:18001",
-			FoghornHTTPURL:     "http://localhost:18008",
-			FoghornGRPCAddr:    "localhost:18019",
-			DecklogGRPCAddr:    "localhost:18006",
-			PeriscopeQueryURL:  "http://localhost:18004",
-			PeriscopeIngestURL: "http://localhost:18005",
-			PurserURL:          "http://localhost:18003",
-			SignalmanWSURL:     "ws://localhost:18009",
-		}, Executor: fwcfg.Executor{Type: "local"}}}}
+		cfg = fwcfg.Config{
+			Current: "local",
+			Contexts: map[string]fwcfg.Context{
+				"local": {
+					Name:      "local",
+					Endpoints: fwcfg.DefaultEndpoints(),
+					Executor:  fwcfg.Executor{Type: "local"},
+				},
+			},
+		}
 		if err := fwcfg.Save(cfg, path); err != nil {
 			return err
 		}
@@ -92,16 +90,22 @@ func newContextShowCmd() *cobra.Command {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Context: %s\n", name)
 		ep := c.Endpoints
-		fmt.Fprintf(cmd.OutOrStdout(), "  gateway:         %s\n", ep.GatewayURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "  quartermaster:   %s\n", ep.QuartermasterURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "  control:         %s\n", ep.ControlURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "  foghorn http:    %s\n", ep.FoghornHTTPURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "  foghorn grpc:    %s\n", ep.FoghornGRPCAddr)
-		fmt.Fprintf(cmd.OutOrStdout(), "  decklog grpc:    %s\n", ep.DecklogGRPCAddr)
-		fmt.Fprintf(cmd.OutOrStdout(), "  periscope query: %s\n", ep.PeriscopeQueryURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "  periscope ingest:%s\n", ep.PeriscopeIngestURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "  purser:          %s\n", ep.PurserURL)
-		fmt.Fprintf(cmd.OutOrStdout(), "  signalman ws:    %s\n", ep.SignalmanWSURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  bridge (http):       %s\n", ep.GatewayURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  quartermaster http:  %s\n", ep.QuartermasterURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  commodore http:      %s\n", ep.ControlURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  foghorn http:        %s\n", ep.FoghornHTTPURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  periscope query:     %s\n", ep.PeriscopeQueryURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  periscope ingest:    %s\n", ep.PeriscopeIngestURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  purser http:         %s\n", ep.PurserURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  signalman ws:        %s\n", ep.SignalmanWSURL)
+		fmt.Fprintf(cmd.OutOrStdout(), "  commodore grpc:      %s\n", ep.CommodoreGRPCAddr)
+		fmt.Fprintf(cmd.OutOrStdout(), "  quartermaster grpc:  %s\n", ep.QuartermasterGRPCAddr)
+		fmt.Fprintf(cmd.OutOrStdout(), "  purser grpc:         %s\n", ep.PurserGRPCAddr)
+		fmt.Fprintf(cmd.OutOrStdout(), "  periscope grpc:      %s\n", ep.PeriscopeGRPCAddr)
+		fmt.Fprintf(cmd.OutOrStdout(), "  signalman grpc:      %s\n", ep.SignalmanGRPCAddr)
+		fmt.Fprintf(cmd.OutOrStdout(), "  foghorn grpc:        %s\n", ep.FoghornGRPCAddr)
+		fmt.Fprintf(cmd.OutOrStdout(), "  decklog grpc:        %s\n", ep.DecklogGRPCAddr)
+		fmt.Fprintf(cmd.OutOrStdout(), "  navigator grpc:      %s\n", ep.NavigatorGRPCAddr)
 		fmt.Fprintf(cmd.OutOrStdout(), "Executor: %s\n", c.Executor.Type)
 		return nil
 	}}
@@ -117,18 +121,14 @@ func newContextSetURLCmd() *cobra.Command {
 		cur := fwcfg.GetCurrent(cfg)
 		ep := cur.Endpoints
 		switch svc {
-		case "gateway":
+		case "bridge":
 			ep.GatewayURL = url
 		case "quartermaster":
 			ep.QuartermasterURL = url
-		case "control":
+		case "commodore":
 			ep.ControlURL = url
-		case "foghorn-http":
+		case "foghorn":
 			ep.FoghornHTTPURL = url
-		case "foghorn-grpc":
-			ep.FoghornGRPCAddr = url
-		case "decklog-grpc":
-			ep.DecklogGRPCAddr = url
 		case "periscope-query":
 			ep.PeriscopeQueryURL = url
 		case "periscope-ingest":
@@ -137,6 +137,22 @@ func newContextSetURLCmd() *cobra.Command {
 			ep.PurserURL = url
 		case "signalman-ws":
 			ep.SignalmanWSURL = url
+		case "commodore-grpc":
+			ep.CommodoreGRPCAddr = url
+		case "quartermaster-grpc":
+			ep.QuartermasterGRPCAddr = url
+		case "purser-grpc":
+			ep.PurserGRPCAddr = url
+		case "periscope-grpc":
+			ep.PeriscopeGRPCAddr = url
+		case "signalman-grpc":
+			ep.SignalmanGRPCAddr = url
+		case "foghorn-grpc":
+			ep.FoghornGRPCAddr = url
+		case "decklog-grpc":
+			ep.DecklogGRPCAddr = url
+		case "navigator-grpc":
+			ep.NavigatorGRPCAddr = url
 		default:
 			return fmt.Errorf("unknown service: %s", svc)
 		}

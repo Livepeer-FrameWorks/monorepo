@@ -8,6 +8,7 @@ import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
 import "common.proto";
+import "shared.proto";
 
 // ============================================================================
 // PURSER CONTROL PLANE - BILLING & SUBSCRIPTION MANAGEMENT
@@ -28,6 +29,11 @@ service BillingService {
   rpc CreateBillingTier(CreateBillingTierRequest) returns (BillingTier);
   rpc UpdateBillingTier(UpdateBillingTierRequest) returns (BillingTier);
 
+  // ===== CROSS-SERVICE BILLING STATUS =====
+  // Lightweight billing status check for service-to-service calls.
+  // Called by Commodore/Quartermaster to check suspension/balance status.
+  // Returns minimal info needed for gating decisions.
+  rpc GetTenantBillingStatus(GetTenantBillingStatusRequest) returns (GetTenantBillingStatusResponse);
 }
 
 // SubscriptionService handles tenant subscriptions
@@ -36,6 +42,13 @@ service SubscriptionService {
   rpc CreateSubscription(CreateSubscriptionRequest) returns (TenantSubscription);
   rpc UpdateSubscription(UpdateSubscriptionRequest) returns (TenantSubscription);
   rpc CancelSubscription(CancelSubscriptionRequest) returns (google.protobuf.Empty);
+
+  // ===== BILLING DETAILS MANAGEMENT =====
+  // Get billing details for a tenant (company, VAT, address)
+  rpc GetBillingDetails(GetBillingDetailsRequest) returns (BillingDetails);
+
+  // Update billing details for a tenant (required before payments in prepaid model)
+  rpc UpdateBillingDetails(UpdateBillingDetailsRequest) returns (BillingDetails);
 }
 
 // InvoiceService handles invoice management
@@ -68,6 +81,9 @@ service UsageService {
   // Get aggregated tenant usage for a date range
   rpc GetTenantUsage(TenantUsageRequest) returns (TenantUsageResponse);
 
+  // Get aggregated usage series for charts (rollup-backed)
+  rpc GetUsageAggregates(GetUsageAggregatesRequest) returns (GetUsageAggregatesResponse);
+
   // Check user limits for tenant (called by Commodore on registration)
   rpc CheckUserLimit(CheckUserLimitRequest) returns (CheckUserLimitResponse);
 }
@@ -95,6 +111,29 @@ service ClusterPricingService {
 
   // Cancel a cluster subscription
   rpc CancelClusterSubscription(CancelClusterSubscriptionRequest) returns (google.protobuf.Empty);
+
+  // List marketplace cluster pricings with tier filtering and pagination
+  // Primary query for marketplace - Gateway enriches with Quartermaster metadata
+  rpc ListMarketplaceClusterPricings(ListMarketplaceClusterPricingsRequest) returns (ListMarketplaceClusterPricingsResponse);
+}
+
+// ============================================================================
+// CROSS-SERVICE BILLING STATUS MESSAGES
+// ============================================================================
+
+// Lightweight billing status check for cross-service calls.
+// Used by Commodore (ValidateStreamKey, isTenantSuspended) and Quartermaster (ValidateTenant).
+message GetTenantBillingStatusRequest {
+  string tenant_id = 1;
+}
+
+// Minimal billing status for gating decisions.
+// This is NOT the full BillingStatusResponse - that's for user-facing dashboards.
+message GetTenantBillingStatusResponse {
+  string billing_model = 1;       // 'postpaid' or 'prepaid'
+  bool is_suspended = 2;          // subscription status = 'suspended' (balance < -$10)
+  bool is_balance_negative = 3;   // prepaid balance <= 0 (soft gate, return 402)
+  int64 balance_cents = 4;        // current balance (for display/logging)
 }
 
 // ============================================================================
@@ -135,10 +174,15 @@ message BillingTier {
   bool metering_enabled = 14;           // json:"metering_enabled"
   OverageRates overage_rates = 15;      // json:"overage_rates"
   bool is_active = 16;                  // json:"is_active"
-  int32 sort_order = 17;                // json:"sort_order"
+  int32 tier_level = 17;                // json:"tier_level"
   bool is_enterprise = 18;              // json:"is_enterprise"
   google.protobuf.Timestamp created_at = 19; // json:"created_at"
   google.protobuf.Timestamp updated_at = 20; // json:"updated_at"
+
+  // Stripe integration for direct checkout
+  optional string stripe_product_id = 21;       // Stripe Product ID
+  optional string stripe_price_id_monthly = 22; // Stripe Price ID for monthly billing
+  optional string stripe_price_id_yearly = 23;  // Stripe Price ID for yearly billing
 }
 
 // Matches pkg/models/billing.go:BillingFeatures (lines 12-19)
@@ -181,7 +225,7 @@ message CreateBillingTierRequest {
   string sla_level = 12;                // json:"sla_level"
   bool metering_enabled = 13;           // json:"metering_enabled"
   OverageRates overage_rates = 14;
-  int32 sort_order = 15;                // json:"sort_order"
+  int32 tier_level = 15;                // json:"tier_level"
   bool is_enterprise = 16;              // json:"is_enterprise"
 }
 
@@ -201,7 +245,7 @@ message UpdateBillingTierRequest {
   optional string sla_level = 12;       // json:"sla_level,omitempty"
   optional bool metering_enabled = 13;  // json:"metering_enabled,omitempty"
   optional OverageRates overage_rates = 14;
-  optional int32 sort_order = 15;       // json:"sort_order,omitempty"
+  optional int32 tier_level = 15;       // json:"tier_level,omitempty"
   optional bool is_enterprise = 16;     // json:"is_enterprise,omitempty"
   optional bool is_active = 17;         // json:"is_active,omitempty"
 }
@@ -218,6 +262,34 @@ message GetSubscriptionRequest {
 message GetSubscriptionResponse {
   TenantSubscription subscription = 1;  // json:"subscription,omitempty"
   string error = 2;                     // json:"error,omitempty"
+}
+
+// ============================================================================
+// BILLING DETAILS
+// ============================================================================
+// Tenant billing profile for invoicing (required before payments in prepaid model)
+
+message GetBillingDetailsRequest {
+  string tenant_id = 1;
+}
+
+message UpdateBillingDetailsRequest {
+  string tenant_id = 1;
+  optional string email = 2;            // Billing contact email
+  optional string company = 3;          // Company name for invoices
+  optional string vat_number = 4;       // VAT number (EU format: XX123456789)
+  optional BillingAddress address = 5;  // Structured billing address
+}
+
+// Complete billing details for a tenant
+message BillingDetails {
+  string tenant_id = 1;
+  string email = 2;                     // Billing contact email
+  string company = 3;                   // Company name for invoices
+  string vat_number = 4;                // VAT number (EU format: XX123456789)
+  BillingAddress address = 5;           // Structured billing address
+  bool is_complete = 6;                 // True if all required fields present (email + address)
+  google.protobuf.Timestamp updated_at = 7;
 }
 
 // Matches pkg/models/billing.go:TenantSubscription (lines 207-238)
@@ -241,6 +313,25 @@ message TenantSubscription {
   optional double tax_rate = 17;        // json:"tax_rate,omitempty"
   google.protobuf.Timestamp created_at = 18; // json:"created_at"
   google.protobuf.Timestamp updated_at = 19; // json:"updated_at"
+  optional google.protobuf.Timestamp billing_period_start = 20; // json:"billing_period_start,omitempty"
+  optional google.protobuf.Timestamp billing_period_end = 21;   // json:"billing_period_end,omitempty"
+
+  // Billing model: 'postpaid' (traditional invoicing) or 'prepaid' (balance-based)
+  // Wallet-only accounts MUST use prepaid (enforced at account creation)
+  string billing_model = 22;            // json:"billing_model"
+
+  // ===== STRIPE SUBSCRIPTION TRACKING =====
+  optional string stripe_customer_id = 23;         // Stripe Customer ID (cus_xxx)
+  optional string stripe_subscription_id = 24;     // Stripe Subscription ID (sub_xxx)
+  optional string stripe_subscription_status = 25; // active, past_due, canceled, trialing
+  optional google.protobuf.Timestamp stripe_current_period_end = 26;
+  int32 dunning_attempts = 27;                     // Failed payment retry count
+
+  // ===== MOLLIE SUBSCRIPTION TRACKING =====
+  optional string mollie_subscription_id = 28;     // Mollie Subscription ID (sub_xxx)
+
+  // ===== BILLING DETAILS =====
+  optional string billing_company = 29;            // Company name for invoices
 }
 
 // Matches pkg/models/billing.go:CustomPricing (lines 57-61)
@@ -269,6 +360,11 @@ message CreateSubscriptionRequest {
   CustomPricing custom_pricing = 6;     // json:"custom_pricing,omitempty"
   BillingFeatures custom_features = 7;  // json:"custom_features,omitempty"
   AllocationDetails custom_allocations = 8; // json:"custom_allocations,omitempty"
+  optional google.protobuf.Timestamp billing_period_start = 9; // json:"billing_period_start,omitempty"
+  optional google.protobuf.Timestamp billing_period_end = 10;  // json:"billing_period_end,omitempty"
+
+  // Billing model: 'postpaid' (default) or 'prepaid' (required for wallet accounts)
+  string billing_model = 11;            // json:"billing_model"
 }
 
 // Matches pkg/api/purser/types.go:UpdateSubscriptionRequest (lines 230-238)
@@ -281,6 +377,8 @@ message UpdateSubscriptionRequest {
   optional CustomPricing custom_pricing = 6;
   optional BillingFeatures custom_features = 7;
   optional AllocationDetails custom_allocations = 8;
+  optional google.protobuf.Timestamp billing_period_start = 9; // json:"billing_period_start,omitempty"
+  optional google.protobuf.Timestamp billing_period_end = 10;  // json:"billing_period_end,omitempty"
 }
 
 message CancelSubscriptionRequest {
@@ -308,6 +406,7 @@ message Invoice {
   double amount = 3;                    // json:"amount"
   double base_amount = 4;               // json:"base_amount"
   double metered_amount = 5;            // json:"metered_amount"
+  double prepaid_credit_applied = 15;   // json:"prepaid_credit_applied" - prepaid balance credit applied
   string currency = 6;                  // json:"currency"
   string status = 7;                    // json:"status"
   google.protobuf.Timestamp due_date = 8; // json:"due_date"
@@ -315,6 +414,8 @@ message Invoice {
   google.protobuf.Struct usage_details = 10; // json:"usage_details"
   google.protobuf.Timestamp created_at = 11; // json:"created_at"
   google.protobuf.Timestamp updated_at = 12; // json:"updated_at"
+  google.protobuf.Timestamp period_start = 13; // json:"period_start"
+  google.protobuf.Timestamp period_end = 14;   // json:"period_end"
 }
 
 // Matches pkg/api/purser/types.go:GetInvoicesRequest (lines 124-128)
@@ -429,7 +530,7 @@ message UsageSummary {
   double egress_gb = 5;
   double recording_gb = 6;
   double peak_bandwidth_mbps = 7;
-  string billing_month = 8;
+  reserved 8;
   google.protobuf.Timestamp timestamp = 9;
 
   // Processing/transcoding usage (from Livepeer Gateway and local AV processing)
@@ -481,12 +582,14 @@ message UsageSummary {
   int32 peak_viewers = 19;
   int32 max_viewers = 20;
   int32 unique_users = 21;
+  int32 unique_users_period = 27;
 
   // Additional ClickHouse metrics
   double avg_viewers = 22;
   int32 unique_countries = 23;
   int32 unique_cities = 24;
   repeated CountryMetrics geo_breakdown = 25;  // Rich geo breakdown with viewers, hours, percentage
+  string granularity = 26;                     // hourly, daily, monthly
 }
 
 // Matches pkg/api/purser/types.go:UsageIngestResponse (lines 104-108)
@@ -500,7 +603,7 @@ message GetUsageRecordsRequest {
   string tenant_id = 1;
   string cluster_id = 2;                // filter by cluster
   string usage_type = 3;                // filter by type
-  string billing_month = 4;             // filter by month
+  common.TimeRange time_range = 4;      // required time range
   common.CursorPaginationRequest pagination = 5;
 }
 
@@ -513,8 +616,10 @@ message UsageRecord {
   string usage_type = 5;                // json:"usage_type"
   double usage_value = 6;               // json:"usage_value"
   google.protobuf.Struct usage_details = 7; // json:"usage_details"
-  string billing_month = 8;             // json:"billing_month"
-  google.protobuf.Timestamp created_at = 9; // json:"created_at"
+  google.protobuf.Timestamp created_at = 8; // json:"created_at"
+  google.protobuf.Timestamp period_start = 9; // json:"period_start"
+  google.protobuf.Timestamp period_end = 10;  // json:"period_end"
+  string granularity = 11;              // json:"granularity"
 }
 
 // Matches pkg/api/purser/types.go:UsageRecordsResponse (lines 291-296)
@@ -525,11 +630,30 @@ message UsageRecordsResponse {
   common.CursorPaginationResponse pagination = 4;
 }
 
+message GetUsageAggregatesRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;      // required time range
+  string granularity = 3;              // hourly, daily, monthly
+  repeated string usage_types = 4;     // optional filter
+}
+
+message UsageAggregate {
+  string usage_type = 1;
+  google.protobuf.Timestamp period_start = 2;
+  google.protobuf.Timestamp period_end = 3;
+  double usage_value = 4;
+  string granularity = 5;
+}
+
+message GetUsageAggregatesResponse {
+  repeated UsageAggregate aggregates = 1;
+}
+
 // Matches pkg/api/purser/types.go:UsageFilters (lines 299-303)
 message UsageFilters {
   string cluster_id = 1;                // json:"cluster_id"
   string usage_type = 2;                // json:"usage_type"
-  string billing_month = 3;             // json:"billing_month"
+  common.TimeRange time_range = 3;      // json:"time_range"
 }
 
 // Matches pkg/api/purser/types.go:CheckUserLimitRequest (lines 22-25)
@@ -592,7 +716,7 @@ message ClusterPricing {
   google.protobuf.Struct metered_rates = 9; // Metered rate overrides
 
   // Access control
-  int32 required_tier_level = 10;       // 0=free, 1=supporter, 2=developer, etc.
+  int32 required_tier_level = 10;       // 0=no subscription required, 1=free, 2=supporter, 3=developer, 4=production, 5=enterprise
   bool is_platform_official = 11;       // Platform-operated cluster
   bool allow_free_tier = 12;            // Allow free tier subscribers
 
@@ -602,6 +726,10 @@ message ClusterPricing {
   // Timestamps
   google.protobuf.Timestamp created_at = 14;
   google.protobuf.Timestamp updated_at = 15;
+
+  // Eligibility info (populated for marketplace list)
+  bool is_eligible = 16;
+  optional string denial_reason = 17;
 }
 
 message GetClusterPricingRequest {
@@ -610,6 +738,7 @@ message GetClusterPricingRequest {
 
 message GetClustersPricingBatchRequest {
   repeated string cluster_ids = 1;
+  optional string tenant_id = 2;          // If set, eligibility will be computed for this tenant
 }
 
 message GetClustersPricingBatchResponse {
@@ -621,7 +750,7 @@ message SetClusterPricingRequest {
   string pricing_model = 2;             // free_unmetered, metered, monthly, tier_inherit, custom
   optional string base_price = 3;       // For monthly pricing
   optional string currency = 4;
-  optional int32 required_tier_level = 5;
+  optional int32 required_tier_level = 5; // 0=no subscription required, 1=free, 2=supporter, 3=developer, 4=production, 5=enterprise
   optional bool allow_free_tier = 6;
   google.protobuf.Struct metered_rates = 7;
   google.protobuf.Struct default_quotas = 8;
@@ -651,7 +780,7 @@ message CheckClusterAccessResponse {
   bool allowed = 1;                     // Can subscribe
   string denial_reason = 2;             // If not allowed, why
   int32 tenant_tier_level = 3;          // Tenant's current tier
-  int32 required_tier_level = 4;        // Cluster's required tier
+  int32 required_tier_level = 4;        // Cluster's required tier (0=no subscription required)
   string pricing_model = 5;             // Cluster's pricing model
   string estimated_cost = 6;            // Estimated cost (for display)
 }
@@ -660,6 +789,9 @@ message CreateClusterSubscriptionRequest {
   string tenant_id = 1;                 // Subscribing tenant
   string cluster_id = 2;                // Target cluster
   optional string invite_token = 3;     // For unlisted/private clusters
+  optional string success_url = 4;      // Redirect after successful payment (for paid clusters)
+  optional string cancel_url = 5;       // Redirect if user cancels checkout
+  optional string billing_email = 6;    // Email for Stripe customer (if creating new)
 }
 
 message ClusterSubscriptionResponse {
@@ -674,4 +806,575 @@ message ClusterSubscriptionResponse {
 message CancelClusterSubscriptionRequest {
   string tenant_id = 1;
   string cluster_id = 2;
+}
+
+// ============================================================================
+// MARKETPLACE CLUSTER PRICINGS
+// ============================================================================
+// Paginated listing of cluster pricings for marketplace display.
+// Filters by tenant's billing tier level. Gateway enriches with Quartermaster metadata.
+
+message ListMarketplaceClusterPricingsRequest {
+  string tenant_id = 1;                 // For tier level lookup
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListMarketplaceClusterPricingsResponse {
+  repeated MarketplaceClusterPricing pricings = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message MarketplaceClusterPricing {
+  string cluster_id = 1;
+  string pricing_model = 2;             // free_unmetered, metered, monthly, tier_inherit, custom
+  int32 monthly_price_cents = 3;        // Base price in cents (for monthly model)
+  string currency = 4;                  // ISO 4217 (e.g., "EUR")
+  int32 required_tier_level = 5;        // 0=no subscription required, 1=free, 2=supporter, 3=developer, 4=production, 5=enterprise
+  bool is_platform_official = 6;        // Platform-operated cluster
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// ============================================================================
+// PREPAID BALANCE SERVICE
+// ============================================================================
+// Balance-based billing for wallet accounts and autonomous agents.
+// Wallet-only accounts MUST use prepaid (enforced at account creation).
+// ============================================================================
+
+service PrepaidService {
+  // Get current prepaid balance for a tenant
+  rpc GetPrepaidBalance(GetPrepaidBalanceRequest) returns (PrepaidBalance);
+
+  // Top up balance (admin/system - crypto detection triggers this)
+  rpc TopupBalance(TopupBalanceRequest) returns (BalanceTransaction);
+
+  // Deduct balance (called by billing job during usage processing)
+  rpc DeductBalance(DeductBalanceRequest) returns (BalanceTransaction);
+
+  // Adjust balance (admin only - for refunds, corrections)
+  rpc AdjustBalance(AdjustBalanceRequest) returns (BalanceTransaction);
+
+  // List balance transaction history
+  rpc ListBalanceTransactions(ListBalanceTransactionsRequest) returns (ListBalanceTransactionsResponse);
+
+  // Initialize prepaid balance for a new tenant (called during wallet account creation)
+  rpc InitializePrepaidBalance(InitializePrepaidBalanceRequest) returns (PrepaidBalance);
+
+  // Initialize full prepaid account (subscription + balance) for a new tenant.
+  // Called by Commodore during wallet user provisioning (GetOrCreateWalletUser).
+  // Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
+  rpc InitializePrepaidAccount(InitializePrepaidAccountRequest) returns (InitializePrepaidAccountResponse);
+
+  // ===== CARD TOP-UP =====
+  // Create a Stripe/Mollie checkout session for prepaid balance top-up
+  // Returns checkout URL for user to complete payment
+  rpc CreateCardTopup(CreateCardTopupRequest) returns (CreateCardTopupResponse);
+
+  // Get status of a pending top-up (for polling after payment)
+  rpc GetPendingTopup(GetPendingTopupRequest) returns (PendingTopup);
+
+  // List pending/completed top-ups for a tenant
+  rpc ListPendingTopups(ListPendingTopupsRequest) returns (ListPendingTopupsResponse);
+
+  // ===== CRYPTO TOP-UP =====
+  // Create a crypto deposit address for prepaid balance top-up
+  // Returns HD-derived address for agent to send crypto
+  rpc CreateCryptoTopup(CreateCryptoTopupRequest) returns (CreateCryptoTopupResponse);
+
+  // Check status of a crypto top-up (for polling)
+  rpc GetCryptoTopup(GetCryptoTopupRequest) returns (CryptoTopup);
+
+  // ===== PROMOTION FLOW =====
+  // Upgrade from prepaid to postpaid billing after email verification
+  // Existing prepaid balance is carried forward as credit
+  rpc PromoteToPaid(PromoteToPaidRequest) returns (PromoteToPaidResponse);
+}
+
+// ============================================================================
+// PREPAID BALANCE MESSAGES
+// ============================================================================
+
+// Current balance state for a tenant
+message PrepaidBalance {
+  string id = 1;
+  string tenant_id = 2;
+  int64 balance_cents = 3;              // Current balance in cents
+  string currency = 4;                  // ISO 4217 (USD, EUR)
+  int64 low_balance_threshold_cents = 5; // Alert threshold
+  bool is_low_balance = 6;              // True if balance < threshold
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  int64 drain_rate_cents_per_hour = 9;  // Estimated spend rate per hour (based on last hour)
+}
+
+// Single balance transaction (top-up, usage, refund, etc.)
+message BalanceTransaction {
+  string id = 1;
+  string tenant_id = 2;
+  int64 amount_cents = 3;               // Positive = credit, negative = debit
+  int64 balance_after_cents = 4;        // Balance after this transaction
+  string transaction_type = 5;          // topup, usage, refund, adjustment
+  string description = 6;
+  optional string reference_id = 7;     // Links to crypto payment, usage record, etc.
+  optional string reference_type = 8;   // crypto_payment, usage_record, manual
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message GetPrepaidBalanceRequest {
+  string tenant_id = 1;
+  string currency = 2;                  // Optional, defaults to USD
+}
+
+message TopupBalanceRequest {
+  string tenant_id = 1;
+  int64 amount_cents = 2;               // Amount to add (must be positive)
+  string currency = 3;                  // Optional, defaults to USD
+  string description = 4;               // e.g., "Crypto top-up: 0.1 ETH"
+  optional string reference_id = 5;     // e.g., crypto_wallet_id
+  optional string reference_type = 6;   // e.g., "crypto_payment"
+}
+
+message DeductBalanceRequest {
+  string tenant_id = 1;
+  int64 amount_cents = 2;               // Amount to deduct (must be positive, will be stored as negative)
+  string currency = 3;                  // Optional, defaults to USD
+  string description = 4;               // e.g., "Usage: 2.5 viewer-hours @ $0.01/hr"
+  optional string reference_id = 5;     // e.g., usage_record_id
+  optional string reference_type = 6;   // e.g., "usage_record"
+}
+
+message AdjustBalanceRequest {
+  string tenant_id = 1;
+  int64 amount_cents = 2;               // Can be positive (credit) or negative (debit)
+  string currency = 3;                  // Optional, defaults to USD
+  string description = 4;               // Required - reason for adjustment
+  optional string reference_id = 5;
+  optional string reference_type = 6;
+}
+
+message ListBalanceTransactionsRequest {
+  string tenant_id = 1;
+  optional string transaction_type = 2; // Filter by type
+  common.TimeRange time_range = 3;
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message ListBalanceTransactionsResponse {
+  repeated BalanceTransaction transactions = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message InitializePrepaidBalanceRequest {
+  string tenant_id = 1;
+  string currency = 2;                  // Optional, defaults to USD
+  int64 initial_balance_cents = 3;      // Usually 0 for new wallet accounts
+  int64 low_balance_threshold_cents = 4; // Optional, defaults to 500 ($5)
+}
+
+// Initialize full prepaid account for wallet provisioning.
+// Creates subscription (billing_model=prepaid) + prepaid balance in one call.
+message InitializePrepaidAccountRequest {
+  string tenant_id = 1;
+  string currency = 2;                  // Optional, defaults to USD
+}
+
+message InitializePrepaidAccountResponse {
+  string subscription_id = 1;           // Created subscription UUID
+  string balance_id = 2;                // Created prepaid_balance UUID
+}
+
+// ============================================================================
+// CARD TOP-UP MESSAGES
+// ============================================================================
+
+// Request to create a card checkout session for prepaid top-up
+message CreateCardTopupRequest {
+  string tenant_id = 1;
+  int64 amount_cents = 2;               // Amount to top up (minimum $5 / 500 cents)
+  string currency = 3;                  // Optional, defaults to USD
+  string provider = 4;                  // "stripe" or "mollie"
+  string success_url = 5;               // Redirect after successful payment
+  string cancel_url = 6;                // Redirect if user cancels
+
+  // Optional billing details (for invoice generation)
+  optional string billing_email = 7;
+  optional string billing_name = 8;
+  optional string billing_company = 9;
+  optional string billing_vat_number = 10;
+  optional BillingAddress billing_address = 11;
+}
+
+// Response with checkout URL for user to complete payment
+message CreateCardTopupResponse {
+  string topup_id = 1;                  // Internal pending_topup ID
+  string checkout_url = 2;              // Stripe/Mollie checkout URL
+  string checkout_id = 3;               // Provider's checkout/payment ID
+  string provider = 4;                  // "stripe" or "mollie"
+  int64 amount_cents = 5;               // Amount that will be credited
+  string currency = 6;
+  google.protobuf.Timestamp expires_at = 7;  // When checkout expires
+}
+
+// Pending top-up record (maps to purser.pending_topups table)
+message PendingTopup {
+  string id = 1;
+  string tenant_id = 2;
+  string provider = 3;                  // "stripe" or "mollie"
+  string checkout_id = 4;               // Provider's checkout/payment ID
+  int64 amount_cents = 5;
+  string currency = 6;
+  string status = 7;                    // pending, completed, failed, expired
+  google.protobuf.Timestamp expires_at = 8;
+  optional google.protobuf.Timestamp completed_at = 9;
+  optional string balance_transaction_id = 10; // Set when completed
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message GetPendingTopupRequest {
+  // Lookup by either internal ID or provider checkout ID
+  oneof lookup {
+    string topup_id = 1;                // Internal pending_topup ID
+    string checkout_id = 2;             // Provider's checkout/payment ID
+  }
+  string provider = 3;                  // Required if using checkout_id lookup
+}
+
+message ListPendingTopupsRequest {
+  string tenant_id = 1;
+  optional string status = 2;           // Filter by status
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListPendingTopupsResponse {
+  repeated PendingTopup topups = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// ============================================================================
+// CRYPTO TOP-UP MESSAGES
+// ============================================================================
+
+// Supported crypto assets for top-up (ETH network only)
+enum CryptoAsset {
+  CRYPTO_ASSET_UNSPECIFIED = 0;
+  CRYPTO_ASSET_ETH = 1;      // Native ETH
+  CRYPTO_ASSET_USDC = 2;     // USDC on Ethereum
+  CRYPTO_ASSET_LPT = 3;      // Livepeer Token
+}
+
+message CreateCryptoTopupRequest {
+  string tenant_id = 1;
+  int64 expected_amount_cents = 2;     // Expected amount (for display, actual credited based on received)
+  CryptoAsset asset = 3;               // ETH, USDC, or LPT
+  string currency = 4;                 // Target currency for balance (USD, EUR) - defaults to USD
+}
+
+message CreateCryptoTopupResponse {
+  string topup_id = 1;                 // Internal tracking ID
+  string deposit_address = 2;          // HD-derived Ethereum address
+  CryptoAsset asset = 3;
+  string asset_symbol = 4;             // Human-readable: "ETH", "USDC", "LPT"
+  int64 expected_amount_cents = 5;     // Echo back expected amount
+  google.protobuf.Timestamp expires_at = 6;  // Address valid for 24h
+  string qr_code_data = 7;             // QR code as data URI (optional)
+}
+
+message GetCryptoTopupRequest {
+  string topup_id = 1;
+}
+
+// Crypto top-up status (similar to PendingTopup but for crypto)
+message CryptoTopup {
+  string id = 1;
+  string tenant_id = 2;
+  string deposit_address = 3;
+  CryptoAsset asset = 4;
+  string asset_symbol = 5;
+  int64 expected_amount_cents = 6;
+  string currency = 7;
+  string status = 8;                   // pending, confirming, completed, expired
+  int64 received_amount_wei = 9;       // Actual amount received (in wei/smallest unit)
+  int64 credited_amount_cents = 10;    // Amount credited to balance (after conversion)
+  string tx_hash = 11;                 // Blockchain transaction hash (when detected)
+  int32 confirmations = 12;            // Number of block confirmations
+  google.protobuf.Timestamp expires_at = 13;
+  google.protobuf.Timestamp detected_at = 14;   // When payment was first detected
+  google.protobuf.Timestamp completed_at = 15;  // When balance was credited
+  google.protobuf.Timestamp created_at = 16;
+}
+
+// ============================================================================
+// PROMOTION FLOW MESSAGES
+// ============================================================================
+
+// Request to upgrade from prepaid to postpaid billing
+// Called after user verifies email and selects a billing tier
+message PromoteToPaidRequest {
+  string tenant_id = 1;
+  string tier_id = 2;                  // Selected billing tier UUID
+}
+
+// Response confirming promotion was successful
+message PromoteToPaidResponse {
+  bool success = 1;
+  string message = 2;
+  string new_billing_model = 3;        // "postpaid" on success
+  int64 credit_balance_cents = 4;      // Prepaid balance carried forward as credit
+  string subscription_id = 5;          // New subscription ID
+}
+
+// ============================================================================
+// WEBHOOK SERVICE
+// ============================================================================
+// Generic webhook handler for external payment provider webhooks.
+// The Gateway routes webhooks to this service via gRPC, keeping Purser internal.
+// Signature verification is done here - secrets never leave this service.
+// ============================================================================
+
+service WebhookService {
+  // Process an incoming webhook from a payment provider
+  // The Gateway packages raw HTTP (body + headers) into WebhookRequest
+  // This service verifies the signature and processes the webhook
+  rpc ProcessWebhook(shared.WebhookRequest) returns (shared.WebhookResponse);
+}
+
+// ============================================================================
+// STRIPE CHECKOUT SERVICE
+// ============================================================================
+// Handles Stripe Checkout Sessions for subscription creation.
+// User clicks "Subscribe" → Gateway calls CreateStripeCheckoutSession
+// → Returns checkout URL → User completes on Stripe → Webhook updates subscription
+// ============================================================================
+
+service StripeService {
+  // Create a Stripe Checkout Session for subscription
+  rpc CreateCheckoutSession(CreateStripeCheckoutRequest) returns (CreateStripeCheckoutResponse);
+
+  // Create a Stripe billing portal session for managing subscription
+  rpc CreateBillingPortalSession(CreateBillingPortalRequest) returns (CreateBillingPortalResponse);
+
+  // Sync subscription status from Stripe (admin/debug)
+  rpc SyncSubscription(SyncStripeSubscriptionRequest) returns (TenantSubscription);
+}
+
+message CreateStripeCheckoutRequest {
+  string tenant_id = 1;                 // Subscribing tenant
+  string tier_id = 2;                   // Target billing tier
+  string billing_period = 3;            // "monthly" or "yearly"
+  string success_url = 4;               // Redirect after successful checkout
+  string cancel_url = 5;                // Redirect if user cancels
+}
+
+message CreateStripeCheckoutResponse {
+  string checkout_url = 1;              // Stripe Checkout URL to redirect user
+  string session_id = 2;                // Stripe Session ID (cs_xxx)
+}
+
+message CreateBillingPortalRequest {
+  string tenant_id = 1;
+  string return_url = 2;                // Where to redirect after portal
+}
+
+message CreateBillingPortalResponse {
+  string portal_url = 1;                // Stripe Billing Portal URL
+}
+
+message SyncStripeSubscriptionRequest {
+  string tenant_id = 1;
+}
+
+// ============================================================================
+// MOLLIE RECURRING PAYMENT SERVICE
+// ============================================================================
+// Handles Mollie first-payment flow for creating mandates.
+// iDEAL (one-off) → Creates SEPA Direct Debit mandate → Subscription auto-charges
+// ============================================================================
+
+service MollieService {
+  // Create first payment to establish mandate (iDEAL, card, etc.)
+  // After successful payment, mandate is created and subscription can be started
+  rpc CreateFirstPayment(CreateMollieFirstPaymentRequest) returns (CreateMollieFirstPaymentResponse);
+
+  // Create subscription after mandate is valid
+  rpc CreateMollieSubscription(CreateMollieSubscriptionRequest) returns (CreateMollieSubscriptionResponse);
+
+  // List available mandates for a tenant
+  rpc ListMandates(ListMollieMandatesRequest) returns (ListMollieMandatesResponse);
+
+  // Cancel a subscription
+  rpc CancelMollieSubscription(CancelMollieSubscriptionRequest) returns (google.protobuf.Empty);
+}
+
+message CreateMollieFirstPaymentRequest {
+  string tenant_id = 1;
+  string tier_id = 2;                   // For price display
+  string method = 3;                    // "ideal", "creditcard", "bancontact"
+  string redirect_url = 4;              // Redirect after payment
+  string webhook_url = 5;               // Optional override (normally auto-routed via Gateway)
+}
+
+message CreateMollieFirstPaymentResponse {
+  string payment_url = 1;               // Redirect user to this URL
+  string payment_id = 2;                // Mollie payment ID (tr_xxx)
+  string mollie_customer_id = 3;        // Created or existing customer ID (cst_xxx)
+}
+
+message CreateMollieSubscriptionRequest {
+  string tenant_id = 1;
+  string tier_id = 2;
+  string mandate_id = 3;                // Mandate ID from successful first payment
+  string description = 4;               // Subscription description
+}
+
+message CreateMollieSubscriptionResponse {
+  string subscription_id = 1;           // Mollie subscription ID (sub_xxx)
+  string status = 2;                    // active, pending, etc.
+  string next_payment_date = 3;         // ISO date of next charge
+}
+
+message ListMollieMandatesRequest {
+  string tenant_id = 1;
+}
+
+message MollieMandate {
+  string id = 1;                        // Internal UUID
+  string mollie_mandate_id = 2;         // Mollie mandate ID (mdt_xxx)
+  string mollie_customer_id = 3;        // Mollie customer ID (cst_xxx)
+  string status = 4;                    // valid, pending, invalid, revoked
+  string method = 5;                    // directdebit, creditcard
+  google.protobuf.Struct details = 6;   // Bank account / card details
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListMollieMandatesResponse {
+  repeated MollieMandate mandates = 1;
+}
+
+message CancelMollieSubscriptionRequest {
+  string tenant_id = 1;
+  string subscription_id = 2;           // Mollie subscription ID to cancel
+}
+
+// ============================================================================
+// X402 PROTOCOL SERVICE
+// ============================================================================
+// EIP-3009 "Transfer With Authorization" for programmatic USDC payments.
+// Enables AI agents to top up balance via signed messages without human intervention.
+// Only USDC/EURC supported (EIP-3009 tokens). ETH/LPT use deposit flow.
+//
+// Protocol flow:
+// 1. Gateway returns 402 + PaymentRequirements when balance insufficient
+// 2. Client signs EIP-3009 authorization, retries with X-PAYMENT header
+// 3. Gateway calls VerifyX402Payment to validate signature
+// 4. Gateway calls SettleX402Payment to submit tx and credit balance
+// ============================================================================
+
+service X402Service {
+  // Get payment requirements for 402 response (called by Gateway)
+  // Returns the payTo address and payment parameters for this tenant
+  rpc GetPaymentRequirements(GetPaymentRequirementsRequest) returns (PaymentRequirements);
+
+  // Verify an x402 payment without settling (signature + balance checks)
+  rpc VerifyX402Payment(VerifyX402PaymentRequest) returns (VerifyX402PaymentResponse);
+
+  // Settle an x402 payment (submit tx to blockchain, credit balance)
+  rpc SettleX402Payment(SettleX402PaymentRequest) returns (SettleX402PaymentResponse);
+
+  // Get or create the per-tenant x402 deposit address
+  rpc GetTenantX402Address(GetTenantX402AddressRequest) returns (GetTenantX402AddressResponse);
+}
+
+// ============================================================================
+// X402 MESSAGES
+// ============================================================================
+
+message GetPaymentRequirementsRequest {
+  string tenant_id = 1;
+  string resource = 2;                  // API resource being accessed (for logging)
+}
+
+// Payment requirements returned in 402 response
+// Matches x402 protocol spec: https://github.com/coinbase/x402
+message PaymentRequirements {
+  int32 x402_version = 1;               // Protocol version (1)
+  repeated PaymentRequirement accepts = 2;
+  string error = 3;                     // Optional error message
+  string topup_url = 4;                 // Human flow: redirect URL for manual top-up
+}
+
+message PaymentRequirement {
+  string scheme = 1;                    // "exact" (only supported scheme)
+  string network = 2;                   // "base" or "base-sepolia"
+  string max_amount_required = 3;       // uint256 as decimal string (USDC 6 decimals)
+  string pay_to = 4;                    // Our receiving address (per-tenant HD derived)
+  string asset = 5;                     // USDC contract address
+  int32 max_timeout_seconds = 6;        // Max time for settlement (60s default)
+  string resource = 7;                  // API resource being accessed
+  string description = 8;               // Human-readable description
+}
+
+// X-PAYMENT header payload from client
+message X402PaymentPayload {
+  int32 x402_version = 1;
+  string scheme = 2;                    // "exact"
+  string network = 3;                   // "base" or "base-sepolia"
+  X402ExactPayload payload = 4;
+}
+
+message X402ExactPayload {
+  string signature = 5;                 // EIP-712 signature (hex)
+  X402Authorization authorization = 6;
+}
+
+message X402Authorization {
+  string from = 1;                      // Payer address
+  string to = 2;                        // PayTo address (must match ours)
+  string value = 3;                     // Amount in USDC smallest units (6 decimals)
+  string valid_after = 4;               // Unix timestamp (uint256 as string)
+  string valid_before = 5;              // Unix timestamp (uint256 as string)
+  string nonce = 6;                     // Unique nonce (uint256 as hex)
+}
+
+message VerifyX402PaymentRequest {
+  string tenant_id = 1;
+  X402PaymentPayload payment = 2;
+  string client_ip = 3;                 // For VAT location evidence
+}
+
+message VerifyX402PaymentResponse {
+  bool valid = 1;
+  string error = 2;                     // Error message if not valid
+  string payer_address = 3;             // Recovered signer address
+  int64 amount_cents = 4;               // Amount in cents (after USDC→EUR conversion)
+  bool requires_billing_details = 5;    // True if amount >= €100 and no billing details
+  bool is_auth_only = 6;                // True if value=0 (authentication only, no payment)
+}
+
+message SettleX402PaymentRequest {
+  string tenant_id = 1;
+  X402PaymentPayload payment = 2;
+  string client_ip = 3;                 // For VAT location evidence
+}
+
+message SettleX402PaymentResponse {
+  bool success = 1;
+  string error = 2;                     // Error message if failed
+  string tx_hash = 3;                   // Blockchain transaction hash
+  int64 credited_cents = 4;             // Amount credited to balance
+  string currency = 5;                  // Currency of credited amount (EUR)
+  int64 new_balance_cents = 6;          // Balance after credit
+  string invoice_number = 7;            // Simplified invoice number (if generated)
+  bool is_auth_only = 8;                // True if value=0 (authentication only, no balance change)
+  string payer_address = 9;             // Payer wallet address (for tenant resolution)
+}
+
+message GetTenantX402AddressRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantX402AddressResponse {
+  string address = 1;                   // HD-derived Ethereum address
+  int32 derivation_index = 2;           // BIP44 derivation index
+  bool newly_created = 3;               // True if address was just assigned
 }

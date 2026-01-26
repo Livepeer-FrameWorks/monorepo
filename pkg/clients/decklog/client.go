@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	pb "frameworks/pkg/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Client represents a gRPC client for Decklog
@@ -208,6 +209,10 @@ func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
 			LoadBalancingData: data,
 		},
 	}
+	if data.GetStreamId() != "" {
+		streamID := data.GetStreamId()
+		trigger.StreamId = &streamID
+	}
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -235,6 +240,10 @@ func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
 			ClipLifecycleData: data,
 		},
 	}
+	if data.GetStreamId() != "" {
+		streamID := data.GetStreamId()
+		trigger.StreamId = &streamID
+	}
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -250,6 +259,18 @@ func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
 		"stage":     data.GetStage().String(),
 	}).Debug("Clip lifecycle data sent to Decklog")
 
+	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
+		pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+		data.GetClipHash(),
+		data.GetStreamId(),
+		clipStageToStatus(data.GetStage()),
+		int64Ptr(data.GetStartedAt()),
+		int64Ptr(data.GetCompletedAt()),
+		int64Ptr(data.GetExpiresAt()),
+		data.GetTenantId(),
+		data.GetUserId(),
+	))
+
 	return nil
 }
 
@@ -261,6 +282,10 @@ func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
 		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
 			DvrLifecycleData: data,
 		},
+	}
+	if data.GetStreamId() != "" {
+		streamID := data.GetStreamId()
+		trigger.StreamId = &streamID
 	}
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
@@ -276,6 +301,18 @@ func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
 		"dvr_hash": data.GetDvrHash(),
 		"status":   data.GetStatus().String(),
 	}).Debug("DVR lifecycle data sent to Decklog")
+
+	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
+		pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
+		data.GetDvrHash(),
+		data.GetStreamId(),
+		dvrStatusToStatus(data.GetStatus()),
+		int64Ptr(data.GetStartedAt()),
+		int64Ptr(data.GetEndedAt()),
+		int64Ptr(data.GetExpiresAt()),
+		data.GetTenantId(),
+		data.GetUserId(),
+	))
 
 	return nil
 }
@@ -304,7 +341,136 @@ func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
 		"status":   data.GetStatus().String(),
 	}).Debug("VOD lifecycle data sent to Decklog")
 
+	c.emitArtifactLifecycleEvent(buildArtifactLifecycleEvent(
+		pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+		data.GetVodHash(),
+		"",
+		vodStatusToStatus(data.GetStatus()),
+		int64Ptr(data.GetStartedAt()),
+		int64Ptr(data.GetCompletedAt()),
+		int64Ptr(data.GetExpiresAt()),
+		data.GetTenantId(),
+		data.GetUserId(),
+	))
+
 	return nil
+}
+
+func (c *BatchedClient) emitArtifactLifecycleEvent(event *pb.ServiceEvent) {
+	if c == nil || event == nil || c.client == nil {
+		return
+	}
+	if event.Source == "" {
+		event.Source = c.source
+	}
+	if event.Timestamp == nil {
+		event.Timestamp = timestamppb.Now()
+	}
+	go func(ev *pb.ServiceEvent) {
+		if _, err := c.client.SendServiceEvent(c.authContext(), ev); err != nil {
+			c.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit artifact lifecycle service event")
+		}
+	}(event)
+}
+
+func buildArtifactLifecycleEvent(
+	artifactType pb.ArtifactEvent_ArtifactType,
+	artifactID, streamID, status string,
+	startedAt, completedAt, expiresAt *int64,
+	tenantID, userID string,
+) *pb.ServiceEvent {
+	if artifactID == "" || tenantID == "" {
+		return nil
+	}
+
+	payload := &pb.ArtifactEvent{
+		ArtifactType: artifactType,
+		ArtifactId:   artifactID,
+		StreamId:     streamID,
+		Status:       status,
+	}
+	if startedAt != nil {
+		payload.StartedAt = startedAt
+	}
+	if completedAt != nil {
+		payload.CompletedAt = completedAt
+	}
+	if expiresAt != nil {
+		payload.ExpiresAt = expiresAt
+	}
+
+	return &pb.ServiceEvent{
+		EventType:    "artifact_lifecycle",
+		Source:       "foghorn",
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: "artifact",
+		ResourceId:   artifactID,
+		Payload:      &pb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
+	}
+}
+
+func clipStageToStatus(stage pb.ClipLifecycleData_Stage) string {
+	switch stage {
+	case pb.ClipLifecycleData_STAGE_REQUESTED:
+		return "requested"
+	case pb.ClipLifecycleData_STAGE_QUEUED:
+		return "queued"
+	case pb.ClipLifecycleData_STAGE_PROGRESS:
+		return "processing"
+	case pb.ClipLifecycleData_STAGE_DONE:
+		return "completed"
+	case pb.ClipLifecycleData_STAGE_FAILED:
+		return "failed"
+	case pb.ClipLifecycleData_STAGE_DELETED:
+		return "deleted"
+	default:
+		return "unknown"
+	}
+}
+
+func dvrStatusToStatus(status pb.DVRLifecycleData_Status) string {
+	switch status {
+	case pb.DVRLifecycleData_STATUS_STARTED:
+		return "started"
+	case pb.DVRLifecycleData_STATUS_RECORDING:
+		return "recording"
+	case pb.DVRLifecycleData_STATUS_STOPPED:
+		return "stopped"
+	case pb.DVRLifecycleData_STATUS_FAILED:
+		return "failed"
+	case pb.DVRLifecycleData_STATUS_DELETED:
+		return "deleted"
+	default:
+		return "unknown"
+	}
+}
+
+func vodStatusToStatus(status pb.VodLifecycleData_Status) string {
+	switch status {
+	case pb.VodLifecycleData_STATUS_REQUESTED:
+		return "requested"
+	case pb.VodLifecycleData_STATUS_UPLOADING:
+		return "uploading"
+	case pb.VodLifecycleData_STATUS_PROCESSING:
+		return "processing"
+	case pb.VodLifecycleData_STATUS_COMPLETED:
+		return "completed"
+	case pb.VodLifecycleData_STATUS_FAILED:
+		return "failed"
+	case pb.VodLifecycleData_STATUS_DELETED:
+		return "deleted"
+	default:
+		return "unknown"
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	if value <= 0 {
+		return nil
+	}
+	v := value
+	return &v
 }
 
 // Close gracefully shuts down the client
@@ -326,4 +492,79 @@ func (c *BatchedClient) Health(ctx context.Context, service string) (grpc_health
 		return grpc_health_v1.HealthCheckResponse_UNKNOWN, err
 	}
 	return resp.GetStatus(), nil
+}
+
+// SendAPIRequestBatch sends aggregated API request metrics to Decklog
+func (c *BatchedClient) SendAPIRequestBatch(data *pb.APIRequestBatch) error {
+	ctx := c.authContext()
+	trigger := &pb.MistTrigger{
+		TriggerType: "API_REQUEST_BATCH",
+		TriggerPayload: &pb.MistTrigger_ApiRequestBatch{
+			ApiRequestBatch: data,
+		},
+	}
+	_, err := c.client.SendEvent(ctx, trigger)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"source_node":     data.GetSourceNode(),
+			"aggregate_count": len(data.GetAggregates()),
+			"error":           err,
+		}).Error("Failed to send API request batch to Decklog")
+		return fmt.Errorf("failed to send API request batch: %w", err)
+	}
+
+	c.logger.WithFields(logging.Fields{
+		"source_node":     data.GetSourceNode(),
+		"aggregate_count": len(data.GetAggregates()),
+	}).Debug("API request batch sent to Decklog")
+
+	return nil
+}
+
+// SendMessageLifecycle sends messaging lifecycle data to Decklog for real-time UI updates
+func (c *BatchedClient) SendMessageLifecycle(data *pb.MessageLifecycleData) error {
+	ctx := c.authContext()
+	trigger := &pb.MistTrigger{
+		TriggerType: "MESSAGE_LIFECYCLE",
+		TenantId:    data.TenantId,
+		TriggerPayload: &pb.MistTrigger_MessageLifecycleData{
+			MessageLifecycleData: data,
+		},
+	}
+	_, err := c.client.SendEvent(ctx, trigger)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"conversation_id": data.GetConversationId(),
+			"event_type":      data.GetEventType().String(),
+			"error":           err,
+		}).Error("Failed to send message lifecycle data to Decklog")
+		return fmt.Errorf("failed to send message lifecycle data: %w", err)
+	}
+
+	c.logger.WithFields(logging.Fields{
+		"conversation_id": data.GetConversationId(),
+		"event_type":      data.GetEventType().String(),
+	}).Debug("Message lifecycle data sent to Decklog")
+
+	return nil
+}
+
+// SendServiceEvent sends a service-plane event to Decklog (service_events topic).
+func (c *BatchedClient) SendServiceEvent(event *pb.ServiceEvent) error {
+	ctx := c.authContext()
+	_, err := c.client.SendServiceEvent(ctx, event)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"event_type": event.GetEventType(),
+			"tenant_id":  event.GetTenantId(),
+			"error":      err,
+		}).Error("Failed to send service event to Decklog")
+		return fmt.Errorf("failed to send service event: %w", err)
+	}
+
+	c.logger.WithFields(logging.Fields{
+		"event_type": event.GetEventType(),
+		"tenant_id":  event.GetTenantId(),
+	}).Debug("Service event sent to Decklog")
+	return nil
 }

@@ -18,6 +18,12 @@ var triggerProcessor *triggers.Processor
 // This is intended for local/dev dashboard introspection.
 func SetTriggerProcessor(p *triggers.Processor) {
 	triggerProcessor = p
+	if clusterID != "" {
+		triggerProcessor.SetClusterID(clusterID)
+	}
+	if ownerTenantID != "" {
+		triggerProcessor.SetOwnerTenantID(ownerTenantID)
+	}
 }
 
 type streamContextCacheEntryView struct {
@@ -125,6 +131,6 @@ func HandleStreamContextCache(c *gin.Context) {
 			}(),
 			LastError: snap.LastError,
 		},
-		Entries:     entries,
+		Entries: entries,
 	})
 }

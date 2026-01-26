@@ -69,6 +69,8 @@ export interface PlayerOptions {
   hlsConfig?: HlsJsConfig;
   /** DASH.js configuration override (merged with defaults) */
   dashConfig?: DashJsConfig;
+  /** Video.js VHS configuration override (merged with defaults) */
+  vhsConfig?: VhsConfig;
   /** WebRTC configuration (ICE servers, etc.) */
   rtcConfig?: RTCConfiguration;
   /** String to append to all request URLs (auth tokens, tracking params) */
@@ -114,6 +116,22 @@ export interface DashJsConfig {
       useDefaultABRRules?: boolean;
     };
   };
+  [key: string]: unknown;
+}
+
+/** Video.js VHS (http-streaming) configuration subset */
+export interface VhsConfig {
+  /** Start with lowest quality for faster initial playback */
+  enableLowInitialPlaylist?: boolean;
+  /** Initial bandwidth estimate in bits per second (e.g., 5_000_000 for 5 Mbps) */
+  bandwidth?: number;
+  /** Persist bandwidth estimate in localStorage across sessions */
+  useBandwidthFromLocalStorage?: boolean;
+  /** Enable partial segment appends for lower latency */
+  handlePartialData?: boolean;
+  /** Time delta for live range safety calculations (seconds) */
+  liveRangeSafeTimeDelta?: number;
+  /** Pass-through for other VHS options */
   [key: string]: unknown;
 }
 
@@ -163,7 +181,17 @@ export interface ContentMetadata {
   durationSeconds?: number;
   thumbnailUrl?: string;
   createdAt?: string;
-  status?: 'AVAILABLE' | 'PROCESSING' | 'ERROR' | 'OFFLINE';
+  status?:
+    | 'AVAILABLE'
+    | 'PROCESSING'
+    | 'ERROR'
+    | 'OFFLINE'
+    | 'ONLINE'
+    | 'INITIALIZING'
+    | 'BOOTING'
+    | 'WAITING_FOR_DATA'
+    | 'SHUTTING_DOWN'
+    | 'INVALID';
   viewers?: number;
   isLive?: boolean;
   recordingSizeBytes?: number;
@@ -172,6 +200,19 @@ export interface ContentMetadata {
   dvrStatus?: 'recording' | 'completed';
   /** Native container format: mp4, m3u8, webm, etc. */
   format?: string;
+  /** MistServer authoritative snapshot (merged into this metadata) */
+  mist?: MistStreamInfo;
+  /** Parsed track summary (derived from Mist metadata when available) */
+  tracks?: Array<{
+    type: 'video' | 'audio' | 'meta';
+    codec?: string;
+    width?: number;
+    height?: number;
+    bitrate?: number;
+    fps?: number;
+    channels?: number;
+    sampleRate?: number;
+  }>;
 }
 
 export interface ContentEndpoints {
@@ -418,4 +459,5 @@ export interface PlayerMetadata {
     channels?: number;
     sampleRate?: number;
   }>;
+  mist?: MistStreamInfo;
 }

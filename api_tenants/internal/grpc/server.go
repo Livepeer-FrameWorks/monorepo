@@ -10,10 +10,11 @@ import (
 	"net"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
+	decklogclient "frameworks/pkg/clients/decklog"
 	"frameworks/pkg/clients/navigator"
+	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -44,16 +45,19 @@ type QuartermasterServer struct {
 	db              *sql.DB
 	logger          logging.Logger
 	navigatorClient *navigator.Client
+	decklogClient   *decklogclient.BatchedClient
+	purserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC, not DB)
 	metrics         *ServerMetrics
-	ipAllocMu       sync.Mutex // Mutex for WireGuard IP allocation to prevent race conditions
 }
 
 // NewQuartermasterServer creates a new Quartermaster gRPC server
-func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, metrics *ServerMetrics) *QuartermasterServer {
+func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, decklogClient *decklogclient.BatchedClient, purserClient *purserclient.GRPCClient, metrics *ServerMetrics) *QuartermasterServer {
 	return &QuartermasterServer{
 		db:              db,
 		logger:          logger,
 		navigatorClient: navigatorClient,
+		decklogClient:   decklogClient,
+		purserClient:    purserClient,
 		metrics:         metrics,
 	}
 }
@@ -71,6 +75,7 @@ func mapToStruct(m map[string]interface{}) *structpb.Struct {
 }
 
 // ValidateTenant validates a tenant and returns its features/limits
+// Billing info is fetched via Purser gRPC (no cross-service DB access)
 func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.ValidateTenantRequest) (*pb.ValidateTenantResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -82,11 +87,14 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.Valida
 
 	var name string
 	var isActive bool
+	var rateLimitPerMinute, rateLimitBurst int32
+
+	// Query ONLY quartermaster.tenants (no cross-service DB access)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT name, is_active
+		SELECT name, is_active, rate_limit_per_minute, rate_limit_burst
 		FROM quartermaster.tenants
 		WHERE id = $1
-	`, tenantID).Scan(&name, &isActive)
+	`, tenantID).Scan(&name, &isActive, &rateLimitPerMinute, &rateLimitBurst)
 
 	if err == sql.ErrNoRows {
 		return &pb.ValidateTenantResponse{
@@ -103,11 +111,39 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.Valida
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
+	// Get billing info via Purser gRPC (cross-service API call, not DB join)
+	var billingModel string
+	var isSuspended, isBalanceNegative bool
+
+	if s.purserClient != nil {
+		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+		if err != nil {
+			// Log but don't fail - billing info is supplementary
+			s.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID,
+				"error":     err,
+			}).Warn("Failed to get billing status from Purser, using defaults")
+			billingModel = "postpaid"
+		} else {
+			billingModel = billingStatus.BillingModel
+			isSuspended = billingStatus.IsSuspended
+			isBalanceNegative = billingStatus.IsBalanceNegative
+		}
+	} else {
+		// No Purser client configured - use defaults
+		billingModel = "postpaid"
+	}
+
 	return &pb.ValidateTenantResponse{
-		Valid:      isActive,
-		TenantId:   tenantID,
-		TenantName: name,
-		IsActive:   isActive,
+		Valid:              isActive,
+		TenantId:           tenantID,
+		TenantName:         name,
+		IsActive:           isActive,
+		RateLimitPerMinute: rateLimitPerMinute,
+		RateLimitBurst:     rateLimitBurst,
+		BillingModel:       billingModel,
+		IsSuspended:        isSuspended,
+		IsBalanceNegative:  isBalanceNegative,
 	}, nil
 }
 
@@ -127,7 +163,8 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
 		       primary_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
-		       is_active, created_at, updated_at
+		       is_active, created_at, updated_at,
+		       rate_limit_per_minute, rate_limit_burst
 		FROM quartermaster.tenants
 		WHERE id = $1
 	`, tenantID).Scan(
@@ -136,6 +173,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 		&tenant.DeploymentModel,
 		&primaryClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
 		&tenant.IsActive, &createdAt, &updatedAt,
+		&tenant.RateLimitPerMinute, &tenant.RateLimitBurst,
 	)
 
 	if err == sql.ErrNoRows {
@@ -400,18 +438,22 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		s.logger.WithField("cluster_id", clusterID).Debug("Auto-selected single active cluster for bootstrap")
 	}
 
-	// 2. Get or create service record by name (service_id = name for simplicity)
+	// 2. Get or create service record (service_id/type default to request type)
 	var serviceID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT service_id FROM quartermaster.services WHERE name = $1
+		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1
 	`, serviceType).Scan(&serviceID)
 
 	if err == sql.ErrNoRows {
 		serviceID = serviceType
+		defaultProtocol := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
+		if defaultProtocol == "" {
+			defaultProtocol = "http"
+		}
 		_, err = s.db.ExecContext(ctx, `
-			INSERT INTO quartermaster.services (service_id, name, plane, is_active, created_at, updated_at)
-			VALUES ($1, $2, 'control', true, NOW(), NOW())
-		`, serviceID, serviceType)
+			INSERT INTO quartermaster.services (service_id, name, plane, type, protocol, is_active, created_at, updated_at)
+			VALUES ($1, $2, 'control', $3, $4, true, NOW(), NOW())
+		`, serviceID, serviceType, serviceType, defaultProtocol)
 		if err != nil {
 			s.logger.WithError(err).WithField("service_type", serviceType).Error("Failed to create service")
 			return nil, status.Errorf(codes.Internal, "failed to create service: %v", err)
@@ -570,7 +612,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	args := []interface{}{serviceType}
 	argIdx := 2
 
-	whereClause := "WHERE s.type = $1 AND si.status = 'active'"
+	whereClause := "WHERE s.type = $1 AND si.status IN ('running','starting','active')"
 
 	if tenantID != "" {
 		// Authenticated: Filter by subscription OR ownership
@@ -613,7 +655,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 		       si.protocol, si.advertise_host, si.port, si.health_endpoint_override, si.status,
 		       si.last_health_check, si.created_at, si.updated_at
 		FROM quartermaster.service_instances si
-		JOIN quartermaster.services s ON si.service_id = s.id
+		JOIN quartermaster.services s ON si.service_id = s.service_id
 		%s
 		ORDER BY si.created_at %s, si.id %s
 		LIMIT $%d
@@ -697,7 +739,7 @@ func generateInstanceID(serviceType string) string {
 // TENANT SERVICE - Additional Methods
 // ============================================================================
 
-// ResolveTenant resolves a tenant by subdomain or custom domain
+// ResolveTenant resolves a tenant by subdomain or platform-managed domain (no BYO)
 func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *pb.ResolveTenantRequest) (*pb.ResolveTenantResponse, error) {
 	subdomain := req.GetSubdomain()
 	domain := req.GetDomain()
@@ -825,6 +867,36 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenan
 	return resp, nil
 }
 
+// ============================================================================
+// CROSS-SERVICE: BILLING BATCH PROCESSING
+// ============================================================================
+
+// ListActiveTenants returns all active tenant IDs for billing batch processing.
+// Called by Purser billing job to avoid cross-service DB access.
+func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *pb.ListActiveTenantsRequest) (*pb.ListActiveTenantsResponse, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id FROM quartermaster.tenants WHERE is_active = true
+	`)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var tenantIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan tenant ID")
+			continue
+		}
+		tenantIDs = append(tenantIDs, id)
+	}
+
+	return &pb.ListActiveTenantsResponse{
+		TenantIds: tenantIDs,
+	}, nil
+}
+
 // CreateTenant creates a new tenant
 func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTenantRequest) (*pb.CreateTenantResponse, error) {
 	name := req.GetName()
@@ -832,6 +904,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		return nil, status.Error(codes.InvalidArgument, "name required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	tenantID := uuid.New().String()
 	now := time.Now()
 
@@ -894,6 +967,34 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		return nil, status.Errorf(codes.Internal, "failed to commit tenant creation: %v", err)
 	}
 
+	changedFields := []string{"name"}
+	if req.GetSubdomain() != "" {
+		changedFields = append(changedFields, "subdomain")
+	}
+	if req.GetCustomDomain() != "" {
+		changedFields = append(changedFields, "custom_domain")
+	}
+	if req.GetLogoUrl() != "" {
+		changedFields = append(changedFields, "logo_url")
+	}
+	if req.GetPrimaryColor() != "" {
+		changedFields = append(changedFields, "primary_color")
+	}
+	if req.GetSecondaryColor() != "" {
+		changedFields = append(changedFields, "secondary_color")
+	}
+	if req.GetDeploymentTier() != "" {
+		changedFields = append(changedFields, "deployment_tier")
+	}
+	if req.GetDeploymentModel() != "" {
+		changedFields = append(changedFields, "deployment_model")
+	}
+
+	s.emitTenantEvent(eventTenantCreated, tenantID, userID, changedFields)
+	if defaultClusterID.Valid {
+		s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", "")
+	}
+
 	tenant := &pb.Tenant{
 		Id:                    tenantID,
 		Name:                  name,
@@ -920,49 +1021,63 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	var updates []string
 	var args []interface{}
 	argIdx := 1
+	changedFields := []string{}
+	var previousClusterID sql.NullString
+	if req.PrimaryClusterId != nil {
+		_ = s.db.QueryRowContext(ctx, `SELECT primary_cluster_id FROM quartermaster.tenants WHERE id = $1`, tenantID).Scan(&previousClusterID)
+	}
 
 	if req.Name != nil {
 		updates = append(updates, fmt.Sprintf("name = $%d", argIdx))
 		args = append(args, *req.Name)
 		argIdx++
+		changedFields = append(changedFields, "name")
 	}
 	if req.Subdomain != nil {
 		updates = append(updates, fmt.Sprintf("subdomain = $%d", argIdx))
 		args = append(args, *req.Subdomain)
 		argIdx++
+		changedFields = append(changedFields, "subdomain")
 	}
 	if req.CustomDomain != nil {
 		updates = append(updates, fmt.Sprintf("custom_domain = $%d", argIdx))
 		args = append(args, *req.CustomDomain)
 		argIdx++
+		changedFields = append(changedFields, "custom_domain")
 	}
 	if req.LogoUrl != nil {
 		updates = append(updates, fmt.Sprintf("logo_url = $%d", argIdx))
 		args = append(args, *req.LogoUrl)
 		argIdx++
+		changedFields = append(changedFields, "logo_url")
 	}
 	if req.PrimaryColor != nil {
 		updates = append(updates, fmt.Sprintf("primary_color = $%d", argIdx))
 		args = append(args, *req.PrimaryColor)
 		argIdx++
+		changedFields = append(changedFields, "primary_color")
 	}
 	if req.SecondaryColor != nil {
 		updates = append(updates, fmt.Sprintf("secondary_color = $%d", argIdx))
 		args = append(args, *req.SecondaryColor)
 		argIdx++
+		changedFields = append(changedFields, "secondary_color")
 	}
 	if req.PrimaryClusterId != nil {
 		updates = append(updates, fmt.Sprintf("primary_cluster_id = $%d", argIdx))
 		args = append(args, *req.PrimaryClusterId)
 		argIdx++
+		changedFields = append(changedFields, "primary_cluster_id")
 	}
 	if req.IsActive != nil {
 		updates = append(updates, fmt.Sprintf("is_active = $%d", argIdx))
 		args = append(args, *req.IsActive)
 		argIdx++
+		changedFields = append(changedFields, "is_active")
 	}
 
 	if len(updates) == 0 {
@@ -983,6 +1098,18 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 
+	if len(changedFields) > 0 {
+		s.emitTenantEvent(eventTenantUpdated, tenantID, userID, changedFields)
+	}
+	if req.PrimaryClusterId != nil {
+		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
+		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
+			s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
+		} else if newCluster == "" && previousClusterID.Valid {
+			s.emitClusterEvent(eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
+		}
+	}
+
 	// Fetch updated tenant
 	resp, err := s.GetTenant(ctx, &pb.GetTenantRequest{TenantId: tenantID})
 	if err != nil {
@@ -998,6 +1125,7 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE quartermaster.tenants SET is_active = FALSE, updated_at = NOW()
 		WHERE id = $1 AND is_active = TRUE
@@ -1013,6 +1141,7 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 	}
 
 	s.logger.WithField("tenant_id", tenantID).Info("Deleted tenant successfully")
+	s.emitTenantEvent(eventTenantDeleted, tenantID, userID, nil)
 	return &emptypb.Empty{}, nil
 }
 
@@ -1082,19 +1211,27 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	var updates []string
 	var args []interface{}
 	argIdx := 1
+	changedFields := []string{}
+	var previousClusterID sql.NullString
+	if req.PrimaryClusterId != nil {
+		_ = s.db.QueryRowContext(ctx, `SELECT primary_cluster_id FROM quartermaster.tenants WHERE id = $1`, tenantID).Scan(&previousClusterID)
+	}
 
 	if req.PrimaryClusterId != nil {
 		updates = append(updates, fmt.Sprintf("primary_cluster_id = $%d", argIdx))
 		args = append(args, *req.PrimaryClusterId)
 		argIdx++
+		changedFields = append(changedFields, "primary_cluster_id")
 	}
 	if req.DeploymentModel != nil {
 		updates = append(updates, fmt.Sprintf("deployment_model = $%d", argIdx))
 		args = append(args, *req.DeploymentModel)
 		argIdx++
+		changedFields = append(changedFields, "deployment_model")
 	}
 
 	if len(updates) == 0 {
@@ -1116,6 +1253,17 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 	}
 
 	s.logger.WithField("tenant_id", tenantID).Info("Updated tenant cluster successfully")
+	if len(changedFields) > 0 {
+		s.emitTenantEvent(eventTenantUpdated, tenantID, userID, changedFields)
+	}
+	if req.PrimaryClusterId != nil {
+		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
+		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
+			s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
+		} else if newCluster == "" && previousClusterID.Valid {
+			s.emitClusterEvent(eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
+		}
+	}
 	return &emptypb.Empty{}, nil
 }
 
@@ -1281,6 +1429,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	}
 
 	tenantID := middleware.GetTenantID(ctx)
+	ownerTenantID := strings.TrimSpace(req.GetOwnerTenantId())
 
 	builder := &pagination.KeysetBuilder{
 		TimestampColumn: "created_at",
@@ -1291,7 +1440,12 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	baseWhere := ""
 	baseCountArgs := []interface{}{}
 
-	if tenantID != "" {
+	if ownerTenantID != "" {
+		baseWhere = `
+			WHERE c.owner_tenant_id = $1
+		`
+		baseCountArgs = append(baseCountArgs, ownerTenantID)
+	} else if tenantID != "" {
 		baseWhere = `
 			WHERE (c.cluster_id IN (
 				SELECT tca.cluster_id FROM quartermaster.tenant_cluster_access tca
@@ -1441,6 +1595,7 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	// Determine deployment model (default to 'managed')
 	deploymentModel := req.GetDeploymentModel()
 	if deploymentModel == "" {
@@ -1486,6 +1641,12 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		return nil, err
 	}
 
+	tenantID := ownerTenantID
+	if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" {
+		tenantID = *cluster.OwnerTenantId
+	}
+	s.emitClusterEvent(eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+
 	return &pb.ClusterResponse{Cluster: cluster}, nil
 }
 
@@ -1496,6 +1657,7 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	var updates []string
 	var args []interface{}
 	argIdx := 1
@@ -1578,6 +1740,12 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 		return nil, err
 	}
 
+	tenantID := ""
+	if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" {
+		tenantID = *cluster.OwnerTenantId
+	}
+	s.emitClusterEvent(eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+
 	return &pb.ClusterResponse{Cluster: cluster}, nil
 }
 
@@ -1588,56 +1756,196 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.cluster_id, c.cluster_name, a.access_level, a.resource_limits
+	// Parse bidirectional pagination
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "a.created_at",
+		IDColumn:        "a.id",
+	}
+
+	baseWhere := "WHERE a.tenant_id = $1 AND c.is_active = true"
+	args := []interface{}{tenantID}
+	argIdx := 2
+
+	// Get total count
+	var total int32
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
 		FROM quartermaster.infrastructure_clusters c
 		JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id
-		WHERE a.tenant_id = $1 AND c.is_active = true
-		ORDER BY c.cluster_name
-	`, tenantID)
+		%s
+	`, baseWhere)
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Add keyset condition
+	where := baseWhere
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT c.cluster_id, c.cluster_name, a.access_level, a.resource_limits, a.created_at, a.id
+		FROM quartermaster.infrastructure_clusters c
+		JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id
+		%s
+		%s
+		LIMIT $%d
+	`, where, builder.OrderBy(params), len(args)+1)
+
+	args = append(args, params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	defer rows.Close()
 
 	var clusters []*pb.ClusterAccessEntry
+	type entryWithCursor struct {
+		entry     *pb.ClusterAccessEntry
+		createdAt time.Time
+		id        string
+	}
+	var entries []entryWithCursor
 	for rows.Next() {
 		var entry pb.ClusterAccessEntry
 		var resourceLimits sql.NullString
-		if err := rows.Scan(&entry.ClusterId, &entry.ClusterName, &entry.AccessLevel, &resourceLimits); err != nil {
+		var createdAt time.Time
+		var id string
+		if err := rows.Scan(&entry.ClusterId, &entry.ClusterName, &entry.AccessLevel, &resourceLimits, &createdAt, &id); err != nil {
 			continue
 		}
-		clusters = append(clusters, &entry)
+		entries = append(entries, entryWithCursor{entry: &entry, createdAt: createdAt, id: id})
 	}
 
-	return &pb.ClustersAccessResponse{Clusters: clusters}, nil
+	// Determine pagination info
+	resultsLen := len(entries)
+	if resultsLen > params.Limit {
+		entries = entries[:params.Limit]
+	}
+
+	// Reverse results for backward pagination
+	if params.Direction == pagination.Backward {
+		slices.Reverse(entries)
+	}
+
+	// Build cursors and extract entries
+	var startCursor, endCursor string
+	for _, e := range entries {
+		clusters = append(clusters, e.entry)
+	}
+	if len(entries) > 0 {
+		first := entries[0]
+		last := entries[len(entries)-1]
+		startCursor = pagination.EncodeCursor(first.createdAt, first.id)
+		endCursor = pagination.EncodeCursor(last.createdAt, last.id)
+	}
+
+	return &pb.ClustersAccessResponse{
+		Clusters:   clusters,
+		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+	}, nil
 }
 
 // ListClustersAvailable returns clusters available for tenant onboarding
 func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb.ListClustersAvailableRequest) (*pb.ClustersAvailableResponse, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT cluster_id, cluster_name, cluster_type, true as auto_enroll
+	// Parse bidirectional pagination
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "created_at",
+		IDColumn:        "cluster_id",
+	}
+
+	baseWhere := "WHERE is_active = true AND deployment_model = 'shared'"
+	var args []interface{}
+	argIdx := 1
+
+	// Get total count
+	var total int32
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_clusters %s`, baseWhere)
+	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Add keyset condition
+	where := baseWhere
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT cluster_id, cluster_name, cluster_type, true as auto_enroll, created_at
 		FROM quartermaster.infrastructure_clusters
-		WHERE is_active = true AND deployment_model = 'shared'
-		ORDER BY cluster_name
-	`)
+		%s
+		%s
+		LIMIT $%d
+	`, where, builder.OrderBy(params), len(args)+1)
+
+	args = append(args, params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	defer rows.Close()
 
-	var clusters []*pb.AvailableClusterEntry
+	type entryWithCursor struct {
+		entry     *pb.AvailableClusterEntry
+		createdAt time.Time
+		clusterID string
+	}
+	var entries []entryWithCursor
 	for rows.Next() {
 		var entry pb.AvailableClusterEntry
 		var clusterType string
-		if err := rows.Scan(&entry.ClusterId, &entry.ClusterName, &clusterType, &entry.AutoEnroll); err != nil {
+		var createdAt time.Time
+		if err := rows.Scan(&entry.ClusterId, &entry.ClusterName, &clusterType, &entry.AutoEnroll, &createdAt); err != nil {
 			continue
 		}
 		entry.Tiers = []string{clusterType}
-		clusters = append(clusters, &entry)
+		entries = append(entries, entryWithCursor{entry: &entry, createdAt: createdAt, clusterID: entry.ClusterId})
 	}
 
-	return &pb.ClustersAvailableResponse{Clusters: clusters}, nil
+	// Determine pagination info
+	resultsLen := len(entries)
+	if resultsLen > params.Limit {
+		entries = entries[:params.Limit]
+	}
+
+	// Reverse results for backward pagination
+	if params.Direction == pagination.Backward {
+		slices.Reverse(entries)
+	}
+
+	// Build cursors and extract entries
+	var clusters []*pb.AvailableClusterEntry
+	var startCursor, endCursor string
+	for _, e := range entries {
+		clusters = append(clusters, e.entry)
+	}
+	if len(entries) > 0 {
+		first := entries[0]
+		last := entries[len(entries)-1]
+		startCursor = pagination.EncodeCursor(first.createdAt, first.clusterID)
+		endCursor = pagination.EncodeCursor(last.createdAt, last.clusterID)
+	}
+
+	return &pb.ClustersAvailableResponse{
+		Clusters:   clusters,
+		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+	}, nil
 }
 
 // GrantClusterAccess grants a tenant access to a cluster
@@ -2023,7 +2331,7 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 		SELECT id, node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
 		       wireguard_ip, wireguard_public_key, region, availability_zone,
 		       latitude, longitude, cpu_cores, memory_gb, disk_gb,
-		       status, last_heartbeat, created_at, updated_at
+		       last_heartbeat, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes n
 		%s
 		%s
@@ -2171,63 +2479,7 @@ func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNode
 	return &pb.NodeResponse{Node: node}, nil
 }
 
-// UpdateNodeHealth updates a node's health status
-func (s *QuartermasterServer) UpdateNodeHealth(ctx context.Context, req *pb.UpdateNodeHealthRequest) (*emptypb.Empty, error) {
-	nodeID := req.GetNodeId()
-	if nodeID == "" {
-		return nil, status.Error(codes.InvalidArgument, "node_id required")
-	}
-
-	var updates []string
-	var args []interface{}
-	argIdx := 1
-
-	// Note: health_score column removed from schema - skip update
-	if req.Status != nil {
-		updates = append(updates, fmt.Sprintf("status = $%d", argIdx))
-		args = append(args, *req.Status)
-		argIdx++
-	}
-	if req.CpuUsage != nil {
-		updates = append(updates, fmt.Sprintf("cpu_usage_percent = $%d", argIdx))
-		args = append(args, *req.CpuUsage)
-		argIdx++
-	}
-	if req.MemoryUsage != nil {
-		updates = append(updates, fmt.Sprintf("memory_usage_mb = $%d", argIdx))
-		args = append(args, int(*req.MemoryUsage)) // Convert to int for MB
-		argIdx++
-	}
-	if req.DiskUsage != nil {
-		updates = append(updates, fmt.Sprintf("disk_usage_percent = $%d", argIdx))
-		args = append(args, *req.DiskUsage)
-		argIdx++
-	}
-	if req.Metadata != nil {
-		metadataJSON, err := json.Marshal(req.Metadata.AsMap())
-		if err == nil {
-			updates = append(updates, fmt.Sprintf("metadata = $%d", argIdx))
-			args = append(args, string(metadataJSON))
-			argIdx++
-		}
-	}
-
-	updates = append(updates, "last_heartbeat = NOW()", "updated_at = NOW()")
-	query := fmt.Sprintf("UPDATE quartermaster.infrastructure_nodes SET %s WHERE node_id = $%d", strings.Join(updates, ", "), argIdx)
-	args = append(args, nodeID)
-
-	result, err := s.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update node health: %v", err)
-	}
-
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "node not found")
-	}
-
-	return &emptypb.Empty{}, nil
-}
+// UpdateNodeHealth removed - health tracking moved to Lookout
 
 // ResolveNodeFingerprint resolves a node identity from fingerprint data.
 // Lookup priority:
@@ -2390,10 +2642,10 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		hostname = nodeID
 	}
 
-	// Create node with 'active' status
+	// Create node
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, tags, metadata, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'edge', '{}', '{}', 'active', NOW(), NOW())
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, tags, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'edge', '{}', '{}', NOW(), NOW())
 	`, uuid.New().String(), nodeID, resolvedClusterID, hostname)
 
 	if err != nil {
@@ -2439,6 +2691,136 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	return &pb.BootstrapEdgeNodeResponse{
 		NodeId:    nodeID,
 		TenantId:  tenantID.String,
+		ClusterId: resolvedClusterID,
+	}, nil
+}
+
+// BootstrapInfrastructureNode registers a general infrastructure node using a bootstrap token
+func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error) {
+	token := req.GetToken()
+	if token == "" {
+		return nil, status.Error(codes.InvalidArgument, "token required")
+	}
+	if req.GetNodeType() == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_type required")
+	}
+
+	// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
+	var tokenID string
+	var tenantID, clusterID sql.NullString
+	var usageLimit sql.NullInt32
+	var usageCount int32
+	var expiresAt time.Time
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at
+		FROM quartermaster.bootstrap_tokens
+		WHERE token = $1 AND kind = 'infrastructure_node'
+		  AND (
+		    (usage_limit IS NULL AND used_at IS NULL) OR
+		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
+		  )
+	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if time.Now().After(expiresAt) {
+		return nil, status.Error(codes.Unauthenticated, "token expired")
+	}
+
+	// Cluster enforcement: if token has a cluster_id binding, validate against target
+	targetClusterID := req.GetTargetClusterId()
+	tokenClusterID := clusterID.String
+	if tokenClusterID != "" && targetClusterID != "" && tokenClusterID != targetClusterID {
+		return nil, status.Errorf(codes.PermissionDenied,
+			"token is bound to cluster %s, cannot use for cluster %s", tokenClusterID, targetClusterID)
+	}
+
+	// Cluster resolution priority: token binding > request target > fallback
+	resolvedClusterID := tokenClusterID
+	if resolvedClusterID == "" {
+		resolvedClusterID = targetClusterID
+	}
+	if resolvedClusterID == "" {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT cluster_id FROM quartermaster.infrastructure_clusters
+			WHERE is_active = true
+			ORDER BY cluster_name LIMIT 1
+		`).Scan(&resolvedClusterID)
+		if err != nil || resolvedClusterID == "" {
+			return nil, status.Error(codes.Unavailable, "no active cluster available")
+		}
+	}
+
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		nodeID = "node-" + strings.ToLower(time.Now().Format("060102150405"))
+	}
+	hostname := req.GetHostname()
+	if hostname == "" {
+		hostname = nodeID
+	}
+
+	// Idempotent: if node already exists, return existing cluster binding
+	var existingClusterID string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1
+	`, nodeID).Scan(&existingClusterID)
+	if err == nil {
+		if existingClusterID != resolvedClusterID {
+			return nil, status.Errorf(codes.FailedPrecondition, "node already exists in cluster %s", existingClusterID)
+		}
+		var tenantResp *string
+		if tenantID.Valid && tenantID.String != "" {
+			tenantResp = &tenantID.String
+		}
+		return &pb.BootstrapInfrastructureNodeResponse{
+			NodeId:    nodeID,
+			TenantId:  tenantResp,
+			ClusterId: resolvedClusterID,
+		}, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Create node with 'active' status
+	var extIP interface{} = nil
+	if req.ExternalIp != nil && *req.ExternalIp != "" {
+		extIP = *req.ExternalIp
+	}
+	var intIP interface{} = nil
+	if req.InternalIp != nil && *req.InternalIp != "" {
+		intIP = *req.InternalIp
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, tags, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, '{}', '{}', NOW(), NOW())
+	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, req.GetNodeType(), extIP, intIP)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create node: %v", err)
+	}
+
+	// Update token usage
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.bootstrap_tokens
+		SET usage_count = usage_count + 1, used_at = NOW()
+		WHERE id = $1
+	`, tokenID)
+
+	var tenantResp *string
+	if tenantID.Valid && tenantID.String != "" {
+		tenantResp = &tenantID.String
+	}
+
+	return &pb.BootstrapInfrastructureNodeResponse{
+		NodeId:    nodeID,
+		TenantId:  tenantResp,
 		ClusterId: resolvedClusterID,
 	}, nil
 }
@@ -2656,11 +3038,12 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	// 1. Check if node exists and get current WireGuard IP
 	var currentWgIP sql.NullString
 	var externalIP, internalIP sql.NullString
+	var clusterID string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT wireguard_ip::text, external_ip::text, internal_ip::text
+		SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
-	`, nodeID).Scan(&currentWgIP, &externalIP, &internalIP)
+	`, nodeID).Scan(&currentWgIP, &externalIP, &internalIP, &clusterID)
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "node not found - please register the node first")
 	}
@@ -2668,13 +3051,16 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		return nil, status.Errorf(codes.Internal, "failed to get node info: %v", err)
 	}
 
-	// 2. Update public key and heartbeat if provided
-	if publicKey != "" {
+	// 2. Update public key, listen port, and heartbeat if provided
+	if publicKey != "" || req.GetListenPort() > 0 {
 		_, err = s.db.ExecContext(ctx, `
 			UPDATE quartermaster.infrastructure_nodes
-			SET wireguard_public_key = $1, last_heartbeat = NOW(), updated_at = NOW()
-			WHERE node_id = $2
-		`, publicKey, nodeID)
+			SET wireguard_public_key = COALESCE(NULLIF($1, ''), wireguard_public_key),
+			    wireguard_listen_port = COALESCE(NULLIF($2, 0), wireguard_listen_port),
+			    last_heartbeat = NOW(),
+			    updated_at = NOW()
+			WHERE node_id = $3
+		`, publicKey, req.GetListenPort(), nodeID)
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to update node public key")
 		}
@@ -2685,28 +3071,35 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	if currentWgIP.Valid && currentWgIP.String != "" {
 		wireguardIP = currentWgIP.String
 	} else {
-		// Allocate next IP in 10.200.0.0/16 range
-		// Use mutex to prevent race conditions during concurrent syncs
-		s.ipAllocMu.Lock()
-		newIP, err := s.allocateWireGuardIP(ctx)
-		s.ipAllocMu.Unlock()
+		// Allocate next IP in 10.200.0.0/16 range (transaction + advisory lock)
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to start allocation tx: %v", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "quartermaster_wireguard_ip"); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to acquire allocation lock: %v", err)
+		}
+		newIP, err := s.allocateWireGuardIPTx(ctx, tx)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to allocate WireGuard IP: %v", err)
 		}
-		_, err = s.db.ExecContext(ctx, `
+		if _, err = tx.ExecContext(ctx, `
 			UPDATE quartermaster.infrastructure_nodes
 			SET wireguard_ip = $1::inet, updated_at = NOW()
 			WHERE node_id = $2
-		`, newIP, nodeID)
-		if err != nil {
+		`, newIP, nodeID); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to save WireGuard IP: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit WireGuard IP allocation: %v", err)
 		}
 		wireguardIP = newIP
 	}
 
 	// 4. Get all peer nodes (same cluster, active, with WireGuard configured)
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT n.node_name, n.wireguard_public_key, n.external_ip::text, n.internal_ip::text, n.wireguard_ip::text
+		SELECT n.node_name, n.wireguard_public_key, n.external_ip::text, n.internal_ip::text, n.wireguard_ip::text, n.wireguard_listen_port
 		FROM quartermaster.infrastructure_nodes n
 		WHERE n.node_id != $1
 		  AND n.wireguard_public_key IS NOT NULL
@@ -2723,7 +3116,8 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	for rows.Next() {
 		var peer pb.InfrastructurePeer
 		var peerExtIP, peerIntIP, peerWgIP sql.NullString
-		if err := rows.Scan(&peer.NodeName, &peer.PublicKey, &peerExtIP, &peerIntIP, &peerWgIP); err != nil {
+		var peerListenPort sql.NullInt32
+		if err := rows.Scan(&peer.NodeName, &peer.PublicKey, &peerExtIP, &peerIntIP, &peerWgIP, &peerListenPort); err != nil {
 			continue
 		}
 		// Prefer external IP, fall back to internal IP
@@ -2734,7 +3128,11 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 			endpoint = peerIntIP.String
 		}
 		if endpoint != "" && peerWgIP.Valid {
-			peer.Endpoint = fmt.Sprintf("%s:%d", endpoint, 51820)
+			port := int32(51820)
+			if peerListenPort.Valid && peerListenPort.Int32 > 0 {
+				port = peerListenPort.Int32
+			}
+			peer.Endpoint = fmt.Sprintf("%s:%d", endpoint, port)
 			peer.AllowedIps = []string{peerWgIP.String + "/32"}
 			peer.KeepAlive = 25
 			peers = append(peers, &peer)
@@ -2751,7 +3149,8 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		WHERE si.status IN ('running', 'active')
 		  AND n.wireguard_ip IS NOT NULL
 		  AND n.status = 'active'
-	`)
+		  AND n.cluster_id = $1
+	`, clusterID)
 	if err == nil {
 		defer svcRows.Close()
 		for svcRows.Next() {
@@ -2780,10 +3179,10 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	}, nil
 }
 
-// allocateWireGuardIP finds the next available IP in the 10.200.0.0/16 range
-func (s *QuartermasterServer) allocateWireGuardIP(ctx context.Context) (string, error) {
+// allocateWireGuardIPTx finds the next available IP in the 10.200.0.0/16 range
+func (s *QuartermasterServer) allocateWireGuardIPTx(ctx context.Context, tx *sql.Tx) (string, error) {
 	var maxIP sql.NullString
-	err := s.db.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT wireguard_ip::text
 		FROM quartermaster.infrastructure_nodes
 		WHERE wireguard_ip IS NOT NULL
@@ -2838,13 +3237,15 @@ func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServ
 		var svc pb.Service
 		var createdAt, updatedAt time.Time
 		var serviceID, plane, description, healthCheckPath, dockerImage, version sql.NullString
+		var serviceType, serviceProtocol sql.NullString
 		var defaultPort sql.NullInt32
-		var dependencies, tagsJSON sql.NullString
+		var dependencies []string
+		var tagsJSON []byte
 
 		if err := rows.Scan(
 			&svc.Id, &serviceID, &svc.Name, &plane, &description, &defaultPort,
-			&healthCheckPath, &dockerImage, &version, &dependencies,
-			&tagsJSON, &svc.IsActive, &svc.Type, &svc.Protocol, &createdAt, &updatedAt,
+			&healthCheckPath, &dockerImage, &version, pq.Array(&dependencies),
+			&tagsJSON, &svc.IsActive, &serviceType, &serviceProtocol, &createdAt, &updatedAt,
 		); err != nil {
 			s.logger.WithError(err).Warn("Failed to scan service row")
 			continue
@@ -2872,19 +3273,21 @@ func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServ
 		if version.Valid {
 			svc.Version = &version.String
 		}
-		if dependencies.Valid && dependencies.String != "" {
-			// Parse JSON array of dependencies
-			var deps []string
-			if err := json.Unmarshal([]byte(dependencies.String), &deps); err == nil {
-				svc.Dependencies = deps
-			}
+		if len(dependencies) > 0 {
+			svc.Dependencies = dependencies
 		}
-		if tagsJSON.Valid && tagsJSON.String != "" {
+		if len(tagsJSON) > 0 {
 			// Parse tags as JSON into Struct
 			var tagsMap map[string]interface{}
-			if err := json.Unmarshal([]byte(tagsJSON.String), &tagsMap); err == nil {
+			if err := json.Unmarshal(tagsJSON, &tagsMap); err == nil {
 				svc.Tags = mapToStruct(tagsMap)
 			}
+		}
+		if serviceType.Valid {
+			svc.Type = serviceType.String
+		}
+		if serviceProtocol.Valid {
+			svc.Protocol = serviceProtocol.String
 		}
 
 		svc.CreatedAt = timestamppb.New(createdAt)
@@ -2909,7 +3312,7 @@ func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *pb.L
 		       cs.created_at, cs.updated_at,
 		       s.name as service_name, s.plane as service_plane
 		FROM quartermaster.cluster_services cs
-		LEFT JOIN quartermaster.services s ON s.id = cs.service_id
+		LEFT JOIN quartermaster.services s ON s.service_id = cs.service_id
 		WHERE cs.cluster_id = $1
 	`, clusterID)
 	if err != nil {
@@ -3215,6 +3618,73 @@ func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID s
 // HELPER FUNCTIONS
 // ============================================================================
 
+const (
+	eventTenantCreated                = "tenant_created"
+	eventTenantUpdated                = "tenant_updated"
+	eventTenantDeleted                = "tenant_deleted"
+	eventTenantClusterAssigned        = "tenant_cluster_assigned"
+	eventTenantClusterUnassigned      = "tenant_cluster_unassigned"
+	eventClusterCreated               = "cluster_created"
+	eventClusterUpdated               = "cluster_updated"
+	eventClusterDeleted               = "cluster_deleted"
+	eventClusterInviteCreated         = "cluster_invite_created"
+	eventClusterInviteRevoked         = "cluster_invite_revoked"
+	eventClusterSubscriptionRequested = "cluster_subscription_requested"
+	eventClusterSubscriptionApproved  = "cluster_subscription_approved"
+	eventClusterSubscriptionRejected  = "cluster_subscription_rejected"
+)
+
+func (s *QuartermasterServer) emitServiceEvent(event *pb.ServiceEvent) {
+	if s.decklogClient == nil || event == nil {
+		return
+	}
+
+	go func(ev *pb.ServiceEvent) {
+		if err := s.decklogClient.SendServiceEvent(ev); err != nil {
+			s.logger.WithError(err).WithField("event_type", ev.EventType).Warn("Failed to emit service event")
+		}
+	}(event)
+}
+
+func (s *QuartermasterServer) emitTenantEvent(eventType, tenantID, userID string, changedFields []string) {
+	payload := &pb.TenantEvent{
+		TenantId:      tenantID,
+		ChangedFields: changedFields,
+	}
+	event := &pb.ServiceEvent{
+		EventType:    eventType,
+		Timestamp:    timestamppb.Now(),
+		Source:       "quartermaster",
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: "tenant",
+		ResourceId:   tenantID,
+		Payload:      &pb.ServiceEvent_TenantEvent{TenantEvent: payload},
+	}
+	s.emitServiceEvent(event)
+}
+
+func (s *QuartermasterServer) emitClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) {
+	payload := &pb.ClusterEvent{
+		ClusterId:      clusterID,
+		TenantId:       tenantID,
+		InviteId:       inviteID,
+		SubscriptionId: subscriptionID,
+		Reason:         reason,
+	}
+	event := &pb.ServiceEvent{
+		EventType:    eventType,
+		Timestamp:    timestamppb.Now(),
+		Source:       "quartermaster",
+		TenantId:     tenantID,
+		UserId:       userID,
+		ResourceType: resourceType,
+		ResourceId:   resourceID,
+		Payload:      &pb.ServiceEvent_ClusterEvent{ClusterEvent: payload},
+	}
+	s.emitServiceEvent(event)
+}
+
 func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
 	var tenant pb.Tenant
 	var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
@@ -3303,7 +3773,7 @@ func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
 		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &region, &az,
 		&latitude, &longitude, &cpuCores, &memoryGB, &diskGB,
-		&node.Status, &lastHeartbeat, &createdAt, &updatedAt,
+		&lastHeartbeat, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -3360,7 +3830,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		       current_stream_count, current_viewer_count, current_bandwidth_mbps,
 		       health_status, is_active, is_default_cluster, created_at, updated_at,
-		       visibility, requires_approval, short_description, long_description, is_platform_cluster
+		       visibility, requires_approval, short_description
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1
 	`, clusterID)
@@ -3371,8 +3841,8 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	var createdAt, updatedAt time.Time
 	// Marketplace fields (pricing now in Purser)
 	var visibility string
-	var shortDescription, longDescription sql.NullString
-	var requiresApproval, isPlatformCluster bool
+	var shortDescription sql.NullString
+	var requiresApproval bool
 
 	err := row.Scan(
 		&cluster.Id, &cluster.ClusterId, &cluster.ClusterName, &cluster.ClusterType,
@@ -3381,7 +3851,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		&cluster.MaxBandwidthMbps, &cluster.CurrentStreamCount, &cluster.CurrentViewerCount,
 		&cluster.CurrentBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
 		&createdAt, &updatedAt,
-		&visibility, &requiresApproval, &shortDescription, &longDescription, &isPlatformCluster,
+		&visibility, &requiresApproval, &shortDescription,
 	)
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "cluster not found")
@@ -3409,10 +3879,6 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	if shortDescription.Valid {
 		cluster.ShortDescription = &shortDescription.String
 	}
-	if longDescription.Valid {
-		cluster.LongDescription = &longDescription.String
-	}
-	cluster.IsPlatformCluster = isPlatformCluster
 
 	return &cluster, nil
 }
@@ -3484,7 +3950,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		SELECT id, node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
 		       wireguard_ip, wireguard_public_key, region, availability_zone,
 		       latitude, longitude, cpu_cores, memory_gb, disk_gb,
-		       status, last_heartbeat, created_at, updated_at
+		       last_heartbeat, created_at, updated_at
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
 	`, nodeID)
@@ -3500,7 +3966,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		&node.Id, &node.NodeId, &node.ClusterId, &node.NodeName, &node.NodeType,
 		&internalIP, &externalIP, &wireguardIP, &wireguardPubKey, &region, &az,
 		&latitude, &longitude, &cpuCores, &memoryGB, &diskGB,
-		&node.Status, &lastHeartbeat, &createdAt, &updatedAt,
+		&lastHeartbeat, &createdAt, &updatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "node not found")
@@ -3567,42 +4033,104 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
 	}
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	publicOnly := tenantID == ""
+
+	// Parse bidirectional pagination
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// Build query with visibility filtering
-	// Public clusters visible to all, unlisted visible to subscribers, private only to owner
-	// Note: Pricing fields are fetched from Purser, not Quartermaster
-	query := `
-		SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
-		       c.max_concurrent_streams, c.max_concurrent_viewers, c.is_platform_cluster,
-		       c.current_stream_count, c.max_concurrent_streams,
-		       t.name as owner_name,
-		       COALESCE(a.subscription_status, '') as subscription_status,
-		       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed
-		FROM quartermaster.infrastructure_clusters c
-		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
-		LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $1
-		WHERE c.is_active = true
-		  AND (
-		      c.visibility = 'public'
-		      OR c.owner_tenant_id = $1
-		      OR (c.visibility = 'unlisted' AND a.id IS NOT NULL)
-		      OR (c.visibility = 'private' AND a.id IS NOT NULL)
-		  )
-	`
-
-	args := []interface{}{tenantID}
-
-	query += " ORDER BY c.is_platform_cluster DESC, c.cluster_name ASC"
-
-	// Apply pagination
-	var limit int32 = 50
-	if req.GetPagination() != nil && req.GetPagination().GetFirst() > 0 {
-		limit = req.GetPagination().GetFirst()
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "c.created_at",
+		IDColumn:        "c.cluster_id",
 	}
-	query += fmt.Sprintf(" LIMIT %d", limit+1) // +1 to check if there's more
+
+	// Build base WHERE with visibility filtering
+	var baseWhere string
+	var args []interface{}
+	argIdx := 1
+	if publicOnly {
+		baseWhere = `
+			WHERE c.is_active = true
+			  AND c.visibility = 'public'
+		`
+	} else {
+		baseWhere = `
+			WHERE c.is_active = true
+			  AND (
+			      c.visibility = 'public'
+			      OR c.owner_tenant_id = $1
+			      OR ((c.visibility = 'unlisted' OR c.visibility = 'private') AND a.id IS NOT NULL AND a.is_active = true)
+			  )
+		`
+		args = append(args, tenantID)
+		argIdx = 2
+	}
+
+	// Get total count
+	var total int32
+	var countQuery string
+	if publicOnly {
+		countQuery = fmt.Sprintf(`
+			SELECT COUNT(*)
+			FROM quartermaster.infrastructure_clusters c
+			%s
+		`, baseWhere)
+	} else {
+		countQuery = fmt.Sprintf(`
+			SELECT COUNT(*)
+			FROM quartermaster.infrastructure_clusters c
+			LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $1
+			%s
+		`, baseWhere)
+	}
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Add keyset condition
+	where := baseWhere
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	var query string
+	if publicOnly {
+		query = fmt.Sprintf(`
+			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
+			       c.max_concurrent_streams, c.max_concurrent_viewers,
+			       c.current_stream_count, c.max_concurrent_streams,
+			       t.name as owner_name,
+			       '' as subscription_status,
+			       false as is_subscribed,
+			       c.created_at
+			FROM quartermaster.infrastructure_clusters c
+			LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+			%s
+			%s
+			LIMIT $%d
+		`, where, builder.OrderBy(params), len(args)+1)
+	} else {
+		query = fmt.Sprintf(`
+			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
+			       c.max_concurrent_streams, c.max_concurrent_viewers,
+			       c.current_stream_count, c.max_concurrent_streams,
+			       t.name as owner_name,
+			       COALESCE(a.subscription_status, '') as subscription_status,
+			       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed,
+			       c.created_at
+			FROM quartermaster.infrastructure_clusters c
+			LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+			LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $1
+			%s
+			%s
+			LIMIT $%d
+		`, where, builder.OrderBy(params), len(args)+1)
+	}
+
+	args = append(args, params.Limit+1)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -3610,18 +4138,25 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 	}
 	defer rows.Close()
 
-	var clusters []*pb.MarketplaceClusterEntry
+	type entryWithCursor struct {
+		entry     *pb.MarketplaceClusterEntry
+		createdAt time.Time
+		clusterID string
+	}
+	var entries []entryWithCursor
 	for rows.Next() {
 		var entry pb.MarketplaceClusterEntry
 		var visibility string
 		var ownerName, shortDesc, subscriptionStatus sql.NullString
 		var currentStreams, maxStreams int32
+		var createdAt time.Time
 
 		if err := rows.Scan(
 			&entry.ClusterId, &entry.ClusterName, &shortDesc, &visibility, &entry.RequiresApproval,
-			&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers, &entry.IsPlatformCluster,
+			&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers,
 			&currentStreams, &maxStreams,
 			&ownerName, &subscriptionStatus, &entry.IsSubscribed,
+			&createdAt,
 		); err != nil {
 			continue
 		}
@@ -3642,24 +4177,39 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 			utilization := float64(currentStreams) / float64(maxStreams) * 100
 			entry.CurrentUtilization = &utilization
 		}
+		entry.CreatedAt = timestamppb.New(createdAt)
 
-		clusters = append(clusters, &entry)
+		entries = append(entries, entryWithCursor{entry: &entry, createdAt: createdAt, clusterID: entry.ClusterId})
 	}
 
-	// Build response with pagination info
-	resp := &pb.ListMarketplaceClustersResponse{
-		Clusters: clusters,
+	// Determine pagination info
+	resultsLen := len(entries)
+	if resultsLen > params.Limit {
+		entries = entries[:params.Limit]
 	}
 
-	// Check if there are more results
-	if int32(len(clusters)) > limit {
-		resp.Clusters = clusters[:limit]
-		resp.Pagination = &pb.CursorPaginationResponse{
-			HasNextPage: true,
-		}
+	// Reverse results for backward pagination
+	if params.Direction == pagination.Backward {
+		slices.Reverse(entries)
 	}
 
-	return resp, nil
+	// Build cursors and extract entries
+	var clusters []*pb.MarketplaceClusterEntry
+	var startCursor, endCursor string
+	for _, e := range entries {
+		clusters = append(clusters, e.entry)
+	}
+	if len(entries) > 0 {
+		first := entries[0]
+		last := entries[len(entries)-1]
+		startCursor = pagination.EncodeCursor(first.createdAt, first.clusterID)
+		endCursor = pagination.EncodeCursor(last.createdAt, last.clusterID)
+	}
+
+	return &pb.ListMarketplaceClustersResponse{
+		Clusters:   clusters,
+		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+	}, nil
 }
 
 // GetMarketplaceCluster returns a single marketplace cluster entry
@@ -3673,31 +4223,56 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 	if tenantID == "" {
 		tenantID = middleware.GetTenantID(ctx)
 	}
+	publicOnly := tenantID == ""
 
 	// Note: Pricing fields are fetched from Purser, not Quartermaster
-	row := s.db.QueryRowContext(ctx, `
-		SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
-		       c.max_concurrent_streams, c.max_concurrent_viewers, c.is_platform_cluster,
-		       c.current_stream_count, c.max_concurrent_streams,
-		       t.name as owner_name,
-		       COALESCE(a.subscription_status, '') as subscription_status,
-		       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed
-		FROM quartermaster.infrastructure_clusters c
-		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
-		LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $2
-		WHERE c.cluster_id = $1 AND c.is_active = true
-	`, clusterID, tenantID)
+	var row *sql.Row
+	if publicOnly {
+		row = s.db.QueryRowContext(ctx, `
+			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
+			       c.max_concurrent_streams, c.max_concurrent_viewers,
+			       c.current_stream_count, c.max_concurrent_streams,
+			       t.name as owner_name,
+			       '' as subscription_status,
+			       false as is_subscribed,
+			       c.created_at
+			FROM quartermaster.infrastructure_clusters c
+			LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+			WHERE c.cluster_id = $1 AND c.is_active = true AND c.visibility = 'public'
+		`, clusterID)
+	} else {
+		row = s.db.QueryRowContext(ctx, `
+			SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
+			       c.max_concurrent_streams, c.max_concurrent_viewers,
+			       c.current_stream_count, c.max_concurrent_streams,
+			       t.name as owner_name,
+			       COALESCE(a.subscription_status, '') as subscription_status,
+			       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed,
+			       c.created_at
+			FROM quartermaster.infrastructure_clusters c
+			LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+			LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $2
+			WHERE c.cluster_id = $1 AND c.is_active = true
+			  AND (
+			      c.visibility = 'public'
+			      OR c.owner_tenant_id = $2
+			      OR ((c.visibility = 'unlisted' OR c.visibility = 'private') AND a.id IS NOT NULL AND a.is_active = true)
+			  )
+		`, clusterID, tenantID)
+	}
 
 	var entry pb.MarketplaceClusterEntry
 	var visibility string
 	var ownerName, shortDesc, subscriptionStatus sql.NullString
 	var currentStreams, maxStreams int32
+	var createdAt time.Time
 
 	err := row.Scan(
 		&entry.ClusterId, &entry.ClusterName, &shortDesc, &visibility, &entry.RequiresApproval,
-		&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers, &entry.IsPlatformCluster,
+		&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers,
 		&currentStreams, &maxStreams,
 		&ownerName, &subscriptionStatus, &entry.IsSubscribed,
+		&createdAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "cluster not found")
@@ -3720,6 +4295,7 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 		utilization := float64(currentStreams) / float64(maxStreams) * 100
 		entry.CurrentUtilization = &utilization
 	}
+	entry.CreatedAt = timestamppb.New(createdAt)
 
 	return &entry, nil
 }
@@ -3738,6 +4314,7 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	userID := middleware.GetUserID(ctx)
 
 	// Verify ownership
 	var ownerTenantID sql.NullString
@@ -3785,11 +4362,6 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 		args = append(args, *req.ShortDescription)
 		argIdx++
 	}
-	if req.LongDescription != nil {
-		updates = append(updates, fmt.Sprintf("long_description = NULLIF($%d, '')", argIdx))
-		args = append(args, *req.LongDescription)
-		argIdx++
-	}
 
 	if len(updates) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "no fields to update")
@@ -3810,7 +4382,78 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 		return nil, err
 	}
 
+	s.emitClusterEvent(eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+
 	return &pb.ClusterResponse{Cluster: cluster}, nil
+}
+
+// GetClusterMetadataBatch returns metadata for multiple clusters (for Gateway enrichment).
+// Used by Gateway to enrich Purser's marketplace pricing data with cluster operational info.
+func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *pb.GetClusterMetadataBatchRequest) (*pb.GetClusterMetadataBatchResponse, error) {
+	clusterIDs := req.GetClusterIds()
+	if len(clusterIDs) == 0 {
+		return &pb.GetClusterMetadataBatchResponse{Clusters: map[string]*pb.ClusterMetadata{}}, nil
+	}
+
+	requestingTenantID := req.GetRequestingTenantId()
+
+	query := `
+		SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility,
+		       c.requires_approval, t.name AS owner_name,
+		       c.max_concurrent_streams, c.max_concurrent_viewers,
+		       c.current_stream_count,
+		       COALESCE(a.id IS NOT NULL, false) AS is_subscribed,
+		       COALESCE(a.subscription_status, 'none') AS subscription_status
+		FROM quartermaster.infrastructure_clusters c
+		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+		LEFT JOIN quartermaster.tenant_cluster_access a
+		    ON c.cluster_id = a.cluster_id AND a.tenant_id = $1
+		WHERE c.cluster_id = ANY($2) AND c.is_active = true`
+
+	rows, err := s.db.QueryContext(ctx, query, requestingTenantID, pq.Array(clusterIDs))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	clusters := make(map[string]*pb.ClusterMetadata)
+	for rows.Next() {
+		var meta pb.ClusterMetadata
+		var shortDescription, ownerName sql.NullString
+		var visibility, subscriptionStatus string
+		var maxStreams, maxViewers, currentStreams int32
+		var isSubscribed bool
+
+		if err := rows.Scan(
+			&meta.ClusterId, &meta.ClusterName, &shortDescription, &visibility,
+			&meta.RequiresApproval, &ownerName,
+			&maxStreams, &maxViewers, &currentStreams,
+			&isSubscribed, &subscriptionStatus,
+		); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan cluster metadata row")
+			continue
+		}
+
+		if shortDescription.Valid {
+			meta.ShortDescription = &shortDescription.String
+		}
+		meta.Visibility = visibility
+		if ownerName.Valid {
+			meta.OwnerName = &ownerName.String
+		}
+		meta.MaxConcurrentStreams = maxStreams
+		meta.MaxConcurrentViewers = maxViewers
+		if maxStreams > 0 {
+			utilization := float64(currentStreams) / float64(maxStreams) * 100
+			meta.CurrentUtilization = &utilization
+		}
+		meta.IsSubscribed = isSubscribed
+		meta.SubscriptionStatus = subscriptionStatus
+
+		clusters[meta.ClusterId] = &meta
+	}
+
+	return &pb.GetClusterMetadataBatchResponse{Clusters: clusters}, nil
 }
 
 // CreatePrivateCluster creates a private cluster for self-hosted edge
@@ -3823,6 +4466,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	clusterName := req.GetClusterName()
 	if clusterName == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_name required")
@@ -3912,6 +4556,9 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		return nil, err
 	}
 
+	s.emitClusterEvent(eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+
 	return &pb.CreatePrivateClusterResponse{
 		Cluster: cluster,
 		BootstrapToken: &pb.BootstrapToken{
@@ -3937,6 +4584,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 		return nil, status.Error(codes.InvalidArgument, "cluster_id, owner_tenant_id, and invited_tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	// Verify ownership and get cluster name
 	var dbOwnerID sql.NullString
 	var clusterName string
@@ -4010,6 +4658,8 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 		return nil, status.Errorf(codes.Internal, "failed to create invite: %v", err)
 	}
 
+	s.emitClusterEvent(eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", "")
+
 	return &pb.ClusterInvite{
 		Id:                id,
 		ClusterId:         clusterID,
@@ -4035,6 +4685,7 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *pb.R
 		return nil, status.Error(codes.InvalidArgument, "invite_id and owner_tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	// Verify invite exists and owner is correct
 	var clusterID string
 	var dbOwnerID sql.NullString
@@ -4060,6 +4711,8 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *pb.R
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to revoke invite: %v", err)
 	}
+
+	s.emitClusterEvent(eventClusterInviteRevoked, ownerTenantID, userID, clusterID, "cluster_invite", inviteID, inviteID, "", "")
 
 	return &emptypb.Empty{}, nil
 }
@@ -4088,16 +4741,50 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 		return nil, status.Error(codes.PermissionDenied, "only cluster owner can list invites")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	// Parse bidirectional pagination
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "i.created_at",
+		IDColumn:        "i.id",
+	}
+
+	baseWhere := "WHERE i.cluster_id = $1"
+	args := []interface{}{clusterID}
+	argIdx := 2
+
+	// Get total count
+	var total int32
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.cluster_invites i %s`, baseWhere)
+	if err := s.db.QueryRowContext(ctx, countQuery, clusterID).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Add keyset condition
+	where := baseWhere
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
 		SELECT i.id, i.cluster_id, i.invited_tenant_id, i.invite_token, i.access_level,
 		       i.resource_limits, i.status, i.created_by, i.created_at, i.expires_at, i.accepted_at,
 		       t.name as invited_tenant_name, c.cluster_name
 		FROM quartermaster.cluster_invites i
 		LEFT JOIN quartermaster.tenants t ON i.invited_tenant_id = t.id
 		LEFT JOIN quartermaster.infrastructure_clusters c ON i.cluster_id = c.cluster_id
-		WHERE i.cluster_id = $1
-		ORDER BY i.created_at DESC
-	`, clusterID)
+		%s
+		%s
+		LIMIT $%d
+	`, where, builder.OrderBy(params), len(args)+1)
+
+	args = append(args, params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -4142,7 +4829,30 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 		invites = append(invites, &invite)
 	}
 
-	return &pb.ListClusterInvitesResponse{Invites: invites}, nil
+	// Determine pagination info
+	resultsLen := len(invites)
+	if resultsLen > params.Limit {
+		invites = invites[:params.Limit]
+	}
+
+	// Reverse results for backward pagination
+	if params.Direction == pagination.Backward {
+		slices.Reverse(invites)
+	}
+
+	// Build cursors
+	var startCursor, endCursor string
+	if len(invites) > 0 {
+		first := invites[0]
+		last := invites[len(invites)-1]
+		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.Id)
+		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
+	}
+
+	return &pb.ListClusterInvitesResponse{
+		Invites:    invites,
+		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+	}, nil
 }
 
 // ListMyClusterInvites lists invites received by a tenant
@@ -4155,16 +4865,49 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	// Parse bidirectional pagination
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "i.created_at",
+		IDColumn:        "i.id",
+	}
+
+	baseWhere := "WHERE i.invited_tenant_id = $1 AND i.status = 'pending' AND (i.expires_at IS NULL OR i.expires_at > NOW())"
+	args := []interface{}{tenantID}
+	argIdx := 2
+
+	// Get total count
+	var total int32
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.cluster_invites i %s`, baseWhere)
+	if err := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Add keyset condition
+	where := baseWhere
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
 		SELECT i.id, i.cluster_id, i.invited_tenant_id, i.invite_token, i.access_level,
 		       i.resource_limits, i.status, i.created_by, i.created_at, i.expires_at, i.accepted_at,
 		       c.cluster_name
 		FROM quartermaster.cluster_invites i
 		JOIN quartermaster.infrastructure_clusters c ON i.cluster_id = c.cluster_id
-		WHERE i.invited_tenant_id = $1 AND i.status = 'pending'
-		  AND (i.expires_at IS NULL OR i.expires_at > NOW())
-		ORDER BY i.created_at DESC
-	`, tenantID)
+		%s
+		%s
+		LIMIT $%d
+	`, where, builder.OrderBy(params), len(args)+1)
+
+	args = append(args, params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -4206,7 +4949,30 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 		invites = append(invites, &invite)
 	}
 
-	return &pb.ListClusterInvitesResponse{Invites: invites}, nil
+	// Determine pagination info
+	resultsLen := len(invites)
+	if resultsLen > params.Limit {
+		invites = invites[:params.Limit]
+	}
+
+	// Reverse results for backward pagination
+	if params.Direction == pagination.Backward {
+		slices.Reverse(invites)
+	}
+
+	// Build cursors
+	var startCursor, endCursor string
+	if len(invites) > 0 {
+		first := invites[0]
+		last := invites[len(invites)-1]
+		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.Id)
+		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
+	}
+
+	return &pb.ListClusterInvitesResponse{
+		Invites:    invites,
+		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+	}, nil
 }
 
 // RequestClusterSubscription requests access to a cluster
@@ -4219,6 +4985,7 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -4331,7 +5098,18 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	}
 
 	// Fetch the created subscription
-	return s.getClusterSubscription(ctx, tenantID, clusterID)
+	sub, err := s.getClusterSubscription(ctx, tenantID, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	eventType := eventClusterSubscriptionRequested
+	if sub.SubscriptionStatus == pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE {
+		eventType = eventClusterSubscriptionApproved
+	}
+	s.emitClusterEvent(eventType, tenantID, userID, clusterID, "cluster_subscription", sub.Id, "", sub.Id, "")
+
+	return sub, nil
 }
 
 // AcceptClusterInvite accepts a cluster invite using the token
@@ -4344,6 +5122,7 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	inviteToken := req.GetInviteToken()
 	if inviteToken == "" {
 		return nil, status.Error(codes.InvalidArgument, "invite_token required")
@@ -4399,7 +5178,14 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
 	}
 
-	return s.getClusterSubscription(ctx, tenantID, clusterID)
+	sub, err := s.getClusterSubscription(ctx, tenantID, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.emitClusterEvent(eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", sub.Id, inviteID, sub.Id, "")
+
+	return sub, nil
 }
 
 // ListPendingSubscriptions lists pending subscription requests for a cluster
@@ -4426,7 +5212,40 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 		return nil, status.Error(codes.PermissionDenied, "only cluster owner can view pending subscriptions")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	// Parse bidirectional pagination
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "a.created_at",
+		IDColumn:        "a.id",
+	}
+
+	baseWhere := "WHERE a.cluster_id = $1 AND a.subscription_status = 'pending_approval'"
+	args := []interface{}{clusterID}
+	argIdx := 2
+
+	// Get total count
+	var total int32
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM quartermaster.tenant_cluster_access a
+		%s
+	`, baseWhere)
+	if err := s.db.QueryRowContext(ctx, countQuery, clusterID).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Add keyset condition
+	where := baseWhere
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		where += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	query := fmt.Sprintf(`
 		SELECT a.id, a.tenant_id, a.cluster_id, a.access_level, a.subscription_status,
 		       a.resource_limits, a.requested_at, a.approved_at, a.approved_by,
 		       a.rejection_reason, a.expires_at, a.created_at, a.updated_at,
@@ -4434,9 +5253,14 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 		FROM quartermaster.tenant_cluster_access a
 		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
 		JOIN quartermaster.tenants t ON a.tenant_id = t.id
-		WHERE a.cluster_id = $1 AND a.subscription_status = 'pending_approval'
-		ORDER BY a.requested_at ASC
-	`, clusterID)
+		%s
+		%s
+		LIMIT $%d
+	`, where, builder.OrderBy(params), len(args)+1)
+
+	args = append(args, params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -4451,7 +5275,30 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 		subscriptions = append(subscriptions, sub)
 	}
 
-	return &pb.ListPendingSubscriptionsResponse{Subscriptions: subscriptions}, nil
+	// Determine pagination info
+	resultsLen := len(subscriptions)
+	if resultsLen > params.Limit {
+		subscriptions = subscriptions[:params.Limit]
+	}
+
+	// Reverse results for backward pagination
+	if params.Direction == pagination.Backward {
+		slices.Reverse(subscriptions)
+	}
+
+	// Build cursors
+	var startCursor, endCursor string
+	if len(subscriptions) > 0 {
+		first := subscriptions[0]
+		last := subscriptions[len(subscriptions)-1]
+		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.Id)
+		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
+	}
+
+	return &pb.ListPendingSubscriptionsResponse{
+		Subscriptions: subscriptions,
+		Pagination:    pagination.BuildResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
+	}, nil
 }
 
 // ApproveClusterSubscription approves a pending subscription
@@ -4463,6 +5310,7 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 		return nil, status.Error(codes.InvalidArgument, "subscription_id and owner_tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	// Get subscription and verify ownership
 	var tenantID, clusterID string
 	var dbOwnerID sql.NullString
@@ -4491,7 +5339,14 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 		return nil, status.Errorf(codes.Internal, "failed to approve subscription: %v", err)
 	}
 
-	return s.getClusterSubscription(ctx, tenantID, clusterID)
+	sub, err := s.getClusterSubscription(ctx, tenantID, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.emitClusterEvent(eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, "")
+
+	return sub, nil
 }
 
 // RejectClusterSubscription rejects a pending subscription
@@ -4503,6 +5358,7 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 		return nil, status.Error(codes.InvalidArgument, "subscription_id and owner_tenant_id required")
 	}
 
+	userID := middleware.GetUserID(ctx)
 	// Get subscription and verify ownership
 	var tenantID, clusterID string
 	var dbOwnerID sql.NullString
@@ -4522,7 +5378,10 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 		return nil, status.Error(codes.PermissionDenied, "only cluster owner can reject subscriptions")
 	}
 
-	reason := req.Reason
+	reason := ""
+	if req.Reason != nil {
+		reason = *req.Reason
+	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE quartermaster.tenant_cluster_access
 		SET subscription_status = 'rejected', rejection_reason = $2, is_active = false, updated_at = NOW()
@@ -4532,7 +5391,14 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 		return nil, status.Errorf(codes.Internal, "failed to reject subscription: %v", err)
 	}
 
-	return s.getClusterSubscription(ctx, tenantID, clusterID)
+	sub, err := s.getClusterSubscription(ctx, tenantID, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.emitClusterEvent(eventClusterSubscriptionRejected, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason)
+
+	return sub, nil
 }
 
 // getClusterSubscription is a helper to fetch a subscription by tenant and cluster
@@ -4669,6 +5535,8 @@ type GRPCServerConfig struct {
 	ServiceToken    string
 	JWTSecret       []byte
 	NavigatorClient *navigator.Client
+	DecklogClient   *decklogclient.BatchedClient
+	PurserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC)
 	Metrics         *ServerMetrics
 }
 
@@ -4693,7 +5561,8 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
 			// Bootstrap is pre-auth (uses bootstrap tokens)
-			"/proto.BootstrapService/BootstrapEdgeNode",
+			"/quartermaster.BootstrapService/BootstrapEdgeNode",
+			"/quartermaster.BootstrapService/BootstrapInfrastructureNode",
 		},
 	})
 
@@ -4702,7 +5571,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	}
 
 	server := grpc.NewServer(opts...)
-	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.Metrics)
+	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.Metrics)
 
 	// Register all services
 	pb.RegisterTenantServiceServer(server, qmServer)

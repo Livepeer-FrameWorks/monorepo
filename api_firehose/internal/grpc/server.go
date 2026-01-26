@@ -36,27 +36,34 @@ type DecklogMetrics struct {
 
 type DecklogServer struct {
 	pb.UnimplementedDecklogServiceServer
-	producer kafka.ProducerInterface
-	logger   logging.Logger
-	metrics  *DecklogMetrics
+	producer           kafka.ProducerInterface
+	logger             logging.Logger
+	metrics            *DecklogMetrics
+	serviceEventsTopic string
 }
 
-func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics) *DecklogServer {
+func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics, serviceEventsTopic string) *DecklogServer {
+	if serviceEventsTopic == "" {
+		serviceEventsTopic = "service_events"
+	}
 	return &DecklogServer{
-		producer: producer,
-		logger:   logger,
-		metrics:  metrics,
+		producer:           producer,
+		logger:             logger,
+		metrics:            metrics,
+		serviceEventsTopic: serviceEventsTopic,
 	}
 }
 
 // convertProtobufToKafkaEvent converts any protobuf message to kafka.AnalyticsEvent with transparent JSON serialization
 func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, source, tenantID string) (*kafka.AnalyticsEvent, error) {
-	// Normalize tenantID: ensure valid UUID to avoid downstream CH failures
+	// Tenant ID should be enriched by Foghorn; do not normalize to zero UUID.
 	normalized := tenantID
 	if normalized == "" || !isValidUUID(normalized) {
-		normalized = "00000000-0000-0000-0000-000000000000"
 		// best-effort warning so we can trace missing enrichment
-		s.logger.WithFields(logging.Fields{"event_type": eventType}).Warn("Missing tenant_id; using zero UUID")
+		s.logger.WithFields(logging.Fields{
+			"event_type": eventType,
+			"tenant_id":  tenantID,
+		}).Warn("Missing or invalid tenant_id")
 		if s.metrics != nil && s.metrics.EventsIngested != nil {
 			s.metrics.EventsIngested.WithLabelValues(eventType, "tenant_missing").Inc()
 		}
@@ -100,6 +107,153 @@ func isValidUUID(s string) bool {
 
 func generateEventID() string {
 	return uuid.New().String()
+}
+
+// SendServiceEvent handles service-plane events and publishes to the service_events topic
+func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *pb.ServiceEvent) (*emptypb.Empty, error) {
+	start := time.Now()
+
+	if s.metrics != nil {
+		s.metrics.GRPCRequests.WithLabelValues("SendServiceEvent", "requested").Inc()
+	}
+
+	if event == nil {
+		return nil, fmt.Errorf("service event cannot be nil")
+	}
+
+	eventID := event.GetEventId()
+	if eventID == "" {
+		eventID = generateEventID()
+	}
+
+	eventType := event.GetEventType()
+	if eventType == "" {
+		eventType = "unknown"
+	}
+
+	tenantID := event.GetTenantId()
+	if tenantID == "" || !isValidUUID(tenantID) {
+		if s.metrics != nil && s.metrics.EventsIngested != nil {
+			s.metrics.EventsIngested.WithLabelValues(eventType, "tenant_missing").Inc()
+		}
+	}
+
+	timestamp := time.Now()
+	if event.Timestamp != nil {
+		timestamp = event.Timestamp.AsTime()
+	}
+
+	data, err := serviceEventPayloadToMap(event)
+	if err != nil {
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendServiceEvent", "conversion_error").Inc()
+		}
+		return nil, fmt.Errorf("failed to convert service event payload: %w", err)
+	}
+	if data == nil {
+		data = map[string]interface{}{}
+	}
+
+	serviceEvent := &kafka.ServiceEvent{
+		EventID:      eventID,
+		EventType:    eventType,
+		Timestamp:    timestamp,
+		Source:       event.GetSource(),
+		TenantID:     tenantID,
+		UserID:       event.GetUserId(),
+		ResourceType: event.GetResourceType(),
+		ResourceID:   event.GetResourceId(),
+		Data:         data,
+	}
+
+	payload, err := json.Marshal(serviceEvent)
+	if err != nil {
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendServiceEvent", "conversion_error").Inc()
+		}
+		return nil, fmt.Errorf("failed to marshal service event: %w", err)
+	}
+
+	headers := map[string]string{
+		"source":     serviceEvent.Source,
+		"event_type": serviceEvent.EventType,
+	}
+	if tenantID != "" {
+		headers["tenant_id"] = tenantID
+	}
+
+	kafkaStart := time.Now()
+	if err := s.producer.ProduceMessage(s.serviceEventsTopic, []byte(eventID), payload, headers); err != nil {
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendServiceEvent", "kafka_error").Inc()
+			s.metrics.KafkaMessages.WithLabelValues(s.serviceEventsTopic, "publish", "error").Inc()
+		}
+		return nil, fmt.Errorf("failed to publish service event: %w", err)
+	}
+
+	if s.metrics != nil {
+		s.metrics.EventsIngested.WithLabelValues(eventType, "processed").Inc()
+		s.metrics.ProcessingDuration.WithLabelValues(eventType).Observe(time.Since(start).Seconds())
+		s.metrics.GRPCRequests.WithLabelValues("SendServiceEvent", "success").Inc()
+		s.metrics.KafkaMessages.WithLabelValues(s.serviceEventsTopic, "publish", "success").Inc()
+		s.metrics.KafkaDuration.WithLabelValues("publish").Observe(time.Since(kafkaStart).Seconds())
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"event_type": eventType,
+		"tenant_id":  tenantID,
+		"event_id":   eventID,
+		"topic":      s.serviceEventsTopic,
+	}).Debug("Service event sent to Kafka")
+
+	return &emptypb.Empty{}, nil
+}
+
+func serviceEventPayloadToMap(event *pb.ServiceEvent) (map[string]interface{}, error) {
+	if event == nil {
+		return map[string]interface{}{}, nil
+	}
+
+	switch payload := event.GetPayload().(type) {
+	case *pb.ServiceEvent_ApiRequestBatch:
+		return protoMessageToMap(payload.ApiRequestBatch)
+	case *pb.ServiceEvent_AuthEvent:
+		return protoMessageToMap(payload.AuthEvent)
+	case *pb.ServiceEvent_TenantEvent:
+		return protoMessageToMap(payload.TenantEvent)
+	case *pb.ServiceEvent_ClusterEvent:
+		return protoMessageToMap(payload.ClusterEvent)
+	case *pb.ServiceEvent_StreamChangeEvent:
+		return protoMessageToMap(payload.StreamChangeEvent)
+	case *pb.ServiceEvent_StreamKeyEvent:
+		return protoMessageToMap(payload.StreamKeyEvent)
+	case *pb.ServiceEvent_BillingEvent:
+		return protoMessageToMap(payload.BillingEvent)
+	case *pb.ServiceEvent_SupportEvent:
+		return protoMessageToMap(payload.SupportEvent)
+	case *pb.ServiceEvent_ArtifactEvent:
+		return protoMessageToMap(payload.ArtifactEvent)
+	default:
+		return map[string]interface{}{}, nil
+	}
+}
+
+func protoMessageToMap(msg proto.Message) (map[string]interface{}, error) {
+	if msg == nil {
+		return map[string]interface{}{}, nil
+	}
+
+	b, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("marshal payload: %w", err)
+	}
+
+	var out map[string]interface{}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("unmarshal payload: %w", err)
+	}
+
+	return out, nil
 }
 
 // unwrapMistTrigger picks the inner payload and canonical (current-compatible) event type.
@@ -173,6 +327,11 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Messag
 		eventType = "process_billing"
 		if payload.ProcessBilling.TenantId != nil {
 			tenantID = *payload.ProcessBilling.TenantId
+		}
+	case *pb.MistTrigger_StorageSnapshot:
+		eventType = "storage_snapshot"
+		if payload.StorageSnapshot.TenantId != nil {
+			tenantID = *payload.StorageSnapshot.TenantId
 		}
 	case *pb.MistTrigger_VodLifecycleData:
 		eventType = "vod_lifecycle"
@@ -266,6 +425,8 @@ type GRPCServerConfig struct {
 	KeyFile       string
 	AllowInsecure bool
 	ServiceToken  string
+	// ServiceEventsTopic overrides the topic for ServiceEvent publishing.
+	ServiceEventsTopic string
 }
 
 // NewGRPCServer creates a new gRPC server with proper TLS configuration
@@ -296,7 +457,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(cfg.Logger)))
 
 	server := grpc.NewServer(opts...)
-	pb.RegisterDecklogServiceServer(server, NewDecklogServer(cfg.Producer, cfg.Logger, cfg.Metrics))
+	pb.RegisterDecklogServiceServer(server, NewDecklogServer(cfg.Producer, cfg.Logger, cfg.Metrics, cfg.ServiceEventsTopic))
 	// Register gRPC health checking service
 	hs := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(server, hs)

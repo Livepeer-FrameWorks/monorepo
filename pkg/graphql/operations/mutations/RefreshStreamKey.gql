@@ -1,0 +1,32 @@
+# Regenerate a new stream key for a stream
+mutation RefreshStreamKey($id: ID!) {
+  refreshStreamKey(id: $id) {
+    __typename
+    ... on Stream {
+      id
+      name
+      description
+      streamKey
+      playbackId
+      record
+      createdAt
+      updatedAt
+      metrics {
+        status
+        isLive
+        currentViewers
+        startedAt
+        updatedAt
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

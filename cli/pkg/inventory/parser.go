@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"frameworks/cli/pkg/servicedefs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -77,6 +78,15 @@ func (m *Manifest) Validate() error {
 
 	// Validate service host references
 	for name, svc := range m.Services {
+		if _, ok := servicedefs.Lookup(name); !ok {
+			return fmt.Errorf("unknown service '%s' (not in service registry)", name)
+		}
+		if _, ok := m.Interfaces[name]; ok {
+			return fmt.Errorf("service '%s' also defined in interfaces (duplicate name)", name)
+		}
+		if _, ok := m.Observability[name]; ok {
+			return fmt.Errorf("service '%s' also defined in observability (duplicate name)", name)
+		}
 		if svc.Host != "" {
 			if _, ok := m.Hosts[svc.Host]; !ok {
 				return fmt.Errorf("service '%s' host '%s' not found in hosts", name, svc.Host)
@@ -90,9 +100,27 @@ func (m *Manifest) Validate() error {
 	}
 
 	for name, iface := range m.Interfaces {
+		if _, ok := servicedefs.Lookup(name); !ok {
+			return fmt.Errorf("unknown interface '%s' (not in service registry)", name)
+		}
+		if _, ok := m.Observability[name]; ok {
+			return fmt.Errorf("interface '%s' also defined in observability (duplicate name)", name)
+		}
 		if iface.Host != "" {
 			if _, ok := m.Hosts[iface.Host]; !ok {
 				return fmt.Errorf("interface '%s' host '%s' not found in hosts", name, iface.Host)
+			}
+		}
+	}
+
+	// Validate observability services if provided
+	for name, obs := range m.Observability {
+		if _, ok := servicedefs.Lookup(name); !ok {
+			return fmt.Errorf("unknown observability service '%s' (not in service registry)", name)
+		}
+		if obs.Host != "" {
+			if _, ok := m.Hosts[obs.Host]; !ok {
+				return fmt.Errorf("observability '%s' host '%s' not found in hosts", name, obs.Host)
 			}
 		}
 	}
@@ -153,10 +181,6 @@ func LoadEdgeManifest(path string) (*EdgeManifest, error) {
 func (m *EdgeManifest) Validate() error {
 	if m.Version == "" {
 		return fmt.Errorf("version is required")
-	}
-
-	if m.Type != "edge" && m.Type != "" {
-		return fmt.Errorf("type must be 'edge' or empty, got: %s", m.Type)
 	}
 
 	if m.RootDomain == "" && m.PoolDomain == "" {

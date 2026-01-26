@@ -1,0 +1,372 @@
+---
+title: "MCP Integration"
+description: "AI agent access via Model Context Protocol."
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+FrameWorks exposes an MCP (Model Context Protocol) server for AI agent integration. Connect your AI tools to create streams, manage recordings, check billing, and query analytics.
+
+<Aside type="tip" title="What is MCP?">
+MCP is an open protocol for connecting AI models to external systems. It defines three primitives: **Resources** (data to read), **Tools** (actions to take), and **Prompts** (guided workflows). See [modelcontextprotocol.io](https://modelcontextprotocol.io).
+</Aside>
+
+## Endpoint
+
+```
+%GATEWAY_URL%/mcp
+```
+
+Discovery metadata: `/.well-known/mcp.json`
+
+## Connecting Your AI Client
+
+MCP works with any client that supports the protocol. Configuration varies by client.
+
+### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "frameworks": {
+      "url": "%GATEWAY_URL%/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving.
+
+### Claude Code CLI
+
+```bash
+claude mcp add frameworks %GATEWAY_URL%/mcp
+```
+
+### Other Clients
+
+Any MCP-compatible client can connect using the endpoint URL and authentication headers. The protocol is transport-agnostic (HTTP with SSE streaming).
+
+## Authentication
+
+Requests accept any of the following:
+
+**Bearer Token** (API token or JWT):
+```
+Authorization: Bearer YOUR_TOKEN
+```
+
+**Wallet Signature** (for autonomous agents):
+```
+X-Wallet-Address: 0x...
+X-Wallet-Signature: 0x...
+X-Wallet-Message: <signed message>
+```
+
+**x402 Auth‑Only** (wallet auth via payment header):
+```
+X-PAYMENT: <base64-encoded payload>
+```
+(`PAYMENT-SIGNATURE` is also accepted.)
+
+Get API tokens from **Developer → API** in the dashboard.
+Some resources and tools are public (e.g., `account://status`, `billing://pricing`, `resolve_playback_endpoint`, `get_payment_options`).
+
+## Resources
+
+Read-only data sources.
+
+| URI | Description |
+|-----|-------------|
+| `account://status` | Account status, blockers, and capabilities |
+| `billing://balance` | Prepaid balance, drain rate, estimated hours left |
+| `billing://pricing` | Current pricing rates |
+| `billing://transactions` | Recent balance transactions |
+| `streams://list` | List all streams |
+| `streams://{id}` | Stream details (relay ID or stream_id) |
+| `streams://{id}/health` | Stream health metrics |
+| `vod://list` | List all VOD assets |
+| `vod://{artifact_hash}` | VOD asset details (relay ID or artifact hash) |
+| `analytics://usage` | Current billing period usage |
+| `analytics://viewers` | Viewer metrics (last 24h) |
+| `analytics://geographic` | Geographic viewer distribution |
+| `nodes://list` | Infrastructure nodes |
+| `nodes://{id}` | Node details |
+| `support://conversations` | Support conversation list |
+| `support://conversations/{id}` | Support conversation details |
+| `knowledge://sources` | Curated documentation sources for video streaming |
+| `schema://catalog` | Curated GraphQL catalog (schema + templates) |
+
+### account://status
+
+Always read this first. Returns:
+
+```json
+{
+  "account_ready": true,
+  "blockers": [],
+  "capabilities": {
+    "create_stream": true,
+    "create_clip": true,
+    "read_analytics": true
+  },
+  "billing": {
+    "model": "prepaid",
+    "balance_cents": 5000,
+    "details_complete": true,
+    "low_balance_warning": false,
+    "drain_rate_cents_per_hour": 12
+  },
+  "rate_limits": {
+    "requests_per_minute": 120
+  }
+}
+```
+
+If `blockers` is non-empty, resolve them before billable operations.
+
+## Tools
+
+Actions the agent can perform. Some require billing details and positive balance.
+
+| Tool | Description | Requires |
+|------|-------------|----------|
+| `update_billing_details` | Set billing address | Auth |
+| `get_payment_options` | Get x402 payment options | None |
+| `submit_payment` | Submit x402 payment (auth-only or top-up) | None |
+| `topup_balance` | Request crypto deposit address | Billing details |
+| `check_topup` | Check crypto payment status | Auth |
+| `create_stream` | Create a new stream | Billing + Balance |
+| `update_stream` | Update stream settings | Auth |
+| `delete_stream` | Delete a stream | Auth |
+| `refresh_stream_key` | Generate new stream key | Auth |
+| `create_clip` | Create clip from stream | Billing + Balance |
+| `delete_clip` | Delete a clip | Auth |
+| `start_dvr` | Start DVR recording | Billing + Balance |
+| `stop_dvr` | Stop DVR recording | Auth |
+| `create_vod_upload` | Start a VOD upload | Billing + Balance |
+| `complete_vod_upload` | Finalize a VOD upload | Auth |
+| `abort_vod_upload` | Cancel an upload | Auth |
+| `delete_vod_asset` | Delete a VOD asset | Auth |
+| `resolve_playback_endpoint` | Get viewer playback URLs | None |
+| `diagnose_rebuffering` | Analyze rebuffering events | Auth |
+| `diagnose_buffer_health` | Analyze buffer health and dry events | Auth |
+| `diagnose_packet_loss` | Analyze packet loss (protocol-aware) | Auth |
+| `diagnose_routing` | Analyze CDN routing decisions | Auth |
+| `get_stream_health_summary` | Aggregated stream health metrics | Auth |
+| `get_anomaly_report` | Detect anomalies vs baseline | Auth |
+| `search_support_history` | Search support conversations | Auth |
+| `introspect_schema` | Explore the GraphQL schema | Auth |
+| `generate_query` | Generate a GraphQL query from templates | Auth |
+
+QoE tool responses use a consistent status enum: `healthy | warning | critical | no_data`.
+
+### Tool Parameters
+
+**update_billing_details**
+- `address_line1` (required): Street address
+- `city` (required): City
+- `postal_code` (required): Postal/ZIP code
+- `country` (required): ISO 3166-1 alpha-2 code
+- `email`, `company`, `vat_number`, `address_line2`: Optional
+
+**topup_balance**
+- `amount_cents` (required): Amount in cents
+- `asset`: USDC (default), ETH, or LPT
+
+**create_stream**
+- `name` (required): Stream display name
+- `description`, `record`, `public`: Optional
+
+**create_clip**
+- `stream_id` (required): Stream to clip from
+- `title` (required): Clip title
+- `description`, `start_sec`, `duration_sec`: Optional
+
+**resolve_playback_endpoint**
+- `content_id` (required): playback_id, stream_id, or Relay ID
+- `viewer_ip`: Optional geo-routing hint
+
+**create_vod_upload**
+- `filename` (required): Original filename
+- `size_bytes` (required): File size in bytes
+- `content_type`, `title`, `description`: Optional
+
+**complete_vod_upload**
+- `upload_id` (required): Upload session ID
+- `parts` (required): Array of `{ part_number, etag }`
+
+**abort_vod_upload**
+- `upload_id` (required): Upload session ID
+
+**delete_vod_asset**
+- `artifact_hash` (required): VOD relay ID or artifact hash
+
+### Preflight Errors
+
+Billable tools check requirements before executing. Failures include resolution guidance:
+
+```json
+{
+  "code": "BILLING_DETAILS_MISSING",
+  "message": "Billing details required before any payments",
+  "resolution": "Call update_billing_details with address_line1, city, postal_code, country",
+  "tool": "update_billing_details",
+  "required_fields": ["address_line1", "city", "postal_code", "country"]
+}
+```
+
+For `INSUFFICIENT_BALANCE`, the error includes x402 payment options:
+
+```json
+{
+  "code": "INSUFFICIENT_BALANCE",
+  "message": "Balance is 0 cents. Top up required to perform billable operations.",
+  "resolution": "Call topup_balance tool to add credits, OR pay via x402",
+  "tool": "topup_balance",
+  "x402_accepts": [
+    { "network": "base", "asset": "USDC", "pay_to": "0x...", "description": "USDC on Base" },
+    { "network": "arbitrum", "asset": "USDC", "pay_to": "0x...", "description": "USDC on Arbitrum" }
+  ]
+}
+```
+
+See [x402 Payments](#x402-payments) for how to pay inline.
+
+## Prompts
+
+Guided workflows for common tasks.
+
+| Prompt | Description | Arguments |
+|--------|-------------|-----------|
+| `onboarding` | Walk through account setup | None |
+| `create_live_stream` | Guide to create and start streaming | `stream_name` (optional) |
+| `troubleshoot_stream` | Diagnose stream issues | `stream_id` (required) |
+| `optimize_costs` | Analyze usage, suggest savings | None |
+| `capabilities` | Explain platform features | None |
+| `video_consultant` | Expert streaming consultant persona | None |
+| `diagnose_quality_issue` | Guided QoE troubleshooting workflow | `stream_id` (required), `symptom` (optional) |
+| `api_integration_assistant` | Guided API integration workflow | `goal` (optional) |
+
+## x402 Payments
+
+Agents with wallets can pay inline using the [x402 protocol](https://www.x402.org/).
+
+When a tool returns `INSUFFICIENT_BALANCE` with `x402_accepts`:
+
+1. Sign an EIP-3009 `transferWithAuthorization` for the required amount
+2. Retry the request with an `X-PAYMENT` (or `PAYMENT-SIGNATURE`) header containing the base64-encoded signed payload
+3. Server verifies signature and settles on-chain
+4. Original request proceeds with credited balance
+
+Decoded `X-PAYMENT` payload (before base64 encoding):
+
+```json
+{
+  "x402Version": 1,
+  "scheme": "exact",
+  "network": "base",
+  "payload": {
+    "signature": "0x...",
+    "authorization": {
+      "from": "0x<your-wallet>",
+      "to": "0x<pay_to-from-x402_accepts>",
+      "value": "1000000",
+      "validAfter": "0",
+      "validBefore": "1735689600",
+      "nonce": "0x..."
+    }
+  }
+}
+```
+
+Supported networks: Base, Arbitrum (USDC).
+
+## Manual Top-ups
+
+Alternatively, use the `topup_balance` tool:
+
+1. Call `topup_balance` with amount and asset (USDC, ETH, or LPT)
+2. Receive a deposit address and expiration time
+3. Send payment to the address
+4. Call `check_topup` to verify confirmation
+5. Balance updates automatically
+
+## Cost Awareness
+
+Active streams incur ongoing costs. Monitor via `billing://balance`:
+
+- `balance_cents`: Current balance
+- `drain_rate_cents_per_hour`: Current spend rate
+- `estimated_hours_left`: Time until depletion
+
+Streams fail if balance depletes mid-session. Top up proactively.
+
+## Video Consultant
+
+The MCP server includes expert-level video streaming diagnostics. Use the `video_consultant` prompt to activate this mode, which guides your AI through available tools and knowledge sources.
+
+### Knowledge Sources
+
+Read `knowledge://sources` to get curated entry points for video streaming documentation:
+
+```json
+{
+  "sources": [
+    { "name": "FrameWorks Docs", "index": "https://docs.framework.network/", "sitemap": "..." },
+    { "name": "MistServer Docs", "index": "https://docs.mistserver.org/", "sitemap": "..." },
+    { "name": "FFmpeg Wiki", "index": "https://trac.ffmpeg.org/wiki/TitleIndex" },
+    { "name": "OBS Wiki", "index": "https://obsproject.com/wiki/" }
+  ]
+}
+```
+
+Your AI can navigate these sitemaps to find codec guides, protocol references, and troubleshooting steps.
+
+### Diagnostic Tools
+
+| Tool | Use Case |
+|------|----------|
+| `diagnose_rebuffering` | Viewers experiencing buffering/stuttering |
+| `diagnose_buffer_health` | Quality fluctuations, dry buffer events |
+| `diagnose_routing` | CDN path issues, geographic performance |
+| `get_stream_health_summary` | Overall stream quality assessment |
+| `get_anomaly_report` | Detect sudden changes from baseline |
+
+Each tool returns structured results with status, metrics, analysis, and recommendations:
+
+```json
+{
+  "status": "warning",
+  "metrics": { "rebuffer_count": 47, "avg_rebuffer_duration_ms": 2340 },
+  "analysis": "Elevated rebuffering. 47 events in 1h indicates upstream issues.",
+  "recommendations": [
+    "Reduce encoder bitrate from 6.2 Mbps to 4.5 Mbps",
+    "Check upload connection stability"
+  ]
+}
+```
+
+### Support History
+
+Access past support conversations to find previous solutions:
+
+- `support://conversations` - List all conversations
+- `support://conversations/{id}` - Full conversation with messages
+- `search_support_history(query)` - Search by keyword
+
+### Example Workflow
+
+1. User reports: "My stream keeps buffering"
+2. AI reads `account://status` and `streams://{id}/health`
+3. AI calls `diagnose_rebuffering` and `diagnose_buffer_health`
+4. AI searches `search_support_history("buffering")` for similar past issues
+5. AI reads relevant docs from `knowledge://sources`
+6. AI provides root cause analysis and encoder recommendations

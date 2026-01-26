@@ -182,19 +182,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
               isOpen={isStatsOpen}
               onClose={handleStatsToggle}
               metadata={state.metadata}
-              streamState={state.streamState?.isOnline ? {
-                status: state.streamState.status,
-                viewers: state.metadata?.viewers,
-                tracks: state.streamState.streamInfo?.meta?.tracks
-                  ? Object.values(state.streamState.streamInfo.meta.tracks).map(t => ({
-                      type: t.type,
-                      codec: t.codec,
-                      width: t.width,
-                      height: t.height,
-                      bps: t.bps,
-                    }))
-                  : [],
-              } : null}
+              streamState={state.streamState}
               quality={state.playbackQuality}
               videoElement={state.videoElement}
               protocol={primaryEndpoint?.protocol}

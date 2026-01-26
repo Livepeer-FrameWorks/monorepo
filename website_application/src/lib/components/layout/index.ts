@@ -6,5 +6,4 @@
 export { default as Band } from "./Band.svelte";
 export { default as GridSeam } from "./GridSeam.svelte";
 export { default as FlowLayout } from "./FlowLayout.svelte";
-export { default as Panel } from "./Panel.svelte";
 export { default as SectionDivider } from "./SectionDivider.svelte";

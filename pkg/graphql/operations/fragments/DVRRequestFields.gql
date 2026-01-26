@@ -1,0 +1,24 @@
+# All fields available on DVRRequest type
+fragment DVRRequestFields on DVRRequest {
+  id
+  dvrHash
+  playbackId
+  streamId
+  stream {
+    streamId
+  }
+  title
+  createdAt
+  updatedAt
+  expiresAt
+  storageNodeId
+  status
+  startedAt
+  endedAt
+  durationSeconds
+  sizeBytes
+  manifestPath
+  errorMessage
+  storageLocation
+  isFrozen
+}

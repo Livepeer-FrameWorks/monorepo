@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package deckhand;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// DECKHAND - SUPPORT MESSAGING SERVICE
+//
+// Proxies to Chatwoot API for message storage, provides gRPC interface for Bridge.
+// Handles webhook events from Chatwoot and broadcasts via Decklog → Signalman.
+//
+// Called by:
+// - Gateway (GraphQL resolvers for messaging UI)
+//
+// Enriches conversations with context from:
+// - Quartermaster (tenant info)
+// - Purser (billing info)
+// ============================================================================
+
+// DeckhandService handles support messaging
+service DeckhandService {
+  // List all conversations for the authenticated tenant
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
+
+  // Search conversations for the authenticated tenant
+  rpc SearchConversations(SearchConversationsRequest) returns (SearchConversationsResponse);
+
+  // Get a single conversation by ID
+  rpc GetConversation(GetConversationRequest) returns (DeckhandConversation);
+
+  // Create a new conversation
+  rpc CreateConversation(CreateConversationRequest) returns (DeckhandConversation);
+
+  // List messages in a conversation
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+
+  // Send a message in a conversation
+  rpc SendMessage(SendMessageRequest) returns (DeckhandMessage);
+}
+
+// ============================================================================
+// REQUEST/RESPONSE MESSAGES
+// ============================================================================
+
+message ListConversationsRequest {
+  string tenant_id = 1;  // Extracted from auth context
+  int32 page = 2;
+  int32 per_page = 3;
+}
+
+message ListConversationsResponse {
+  repeated DeckhandConversation conversations = 1;
+  int32 total_count = 2;
+}
+
+message SearchConversationsRequest {
+  string tenant_id = 1;  // Extracted from auth context
+  string query = 2;
+  int32 page = 3;
+  int32 per_page = 4;
+}
+
+message SearchConversationsResponse {
+  repeated DeckhandConversation conversations = 1;
+  int32 total_count = 2;
+}
+
+message GetConversationRequest {
+  string conversation_id = 1;
+}
+
+message CreateConversationRequest {
+  string subject = 1;
+  string initial_message = 2;
+  map<string, string> custom_attributes = 3;
+}
+
+message ListMessagesRequest {
+  string conversation_id = 1;
+  int32 page = 2;
+  int32 per_page = 3;
+}
+
+message ListMessagesResponse {
+  repeated DeckhandMessage messages = 1;
+  int32 total_count = 2;
+}
+
+message SendMessageRequest {
+  string conversation_id = 1;
+  string content = 2;
+}
+
+// ============================================================================
+// DOMAIN MESSAGES
+// ============================================================================
+
+message DeckhandConversation {
+  string id = 1;
+  string subject = 2;
+  ConversationStatus status = 3;
+  DeckhandMessage last_message = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  int32 unread_count = 7;
+}
+
+message DeckhandMessage {
+  string id = 1;
+  string conversation_id = 2;
+  string content = 3;
+  MessageSender sender = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+enum ConversationStatus {
+  CONVERSATION_STATUS_UNSPECIFIED = 0;
+  CONVERSATION_STATUS_OPEN = 1;
+  CONVERSATION_STATUS_RESOLVED = 2;
+  CONVERSATION_STATUS_PENDING = 3;
+}
+
+enum MessageSender {
+  MESSAGE_SENDER_UNSPECIFIED = 0;
+  MESSAGE_SENDER_USER = 1;
+  MESSAGE_SENDER_AGENT = 2;
+}

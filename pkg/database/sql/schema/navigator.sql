@@ -2,7 +2,7 @@ CREATE SCHEMA IF NOT EXISTS navigator;
 
 CREATE TABLE IF NOT EXISTS navigator.certificates (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID, -- Optional: NULL for platform certificates, set for tenant custom domains
+    tenant_id UUID, -- Optional: NULL for platform certificates, set for tenant subdomains (platform-managed)
     domain TEXT NOT NULL,
     cert_pem TEXT NOT NULL,
     key_pem TEXT NOT NULL, -- Encrypted at rest (future) or restricted access
@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS navigator.certificates (
 
 -- Index for efficient tenant lookups
 CREATE INDEX IF NOT EXISTS idx_certificates_tenant ON navigator.certificates(tenant_id);
+-- Ensure platform-wide certs are unique (NULL tenant_id does not enforce uniqueness)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_certificates_platform_domain
+    ON navigator.certificates(domain)
+    WHERE tenant_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS navigator.acme_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -29,3 +33,7 @@ CREATE TABLE IF NOT EXISTS navigator.acme_accounts (
 
 -- Index for efficient tenant lookups
 CREATE INDEX IF NOT EXISTS idx_acme_accounts_tenant ON navigator.acme_accounts(tenant_id);
+-- Ensure platform-wide ACME accounts are unique
+CREATE UNIQUE INDEX IF NOT EXISTS idx_acme_accounts_platform_email
+    ON navigator.acme_accounts(email)
+    WHERE tenant_id IS NULL;

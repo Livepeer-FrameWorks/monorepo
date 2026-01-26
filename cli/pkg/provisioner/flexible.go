@@ -46,6 +46,14 @@ func (f *FlexibleProvisioner) Provision(ctx context.Context, host inventory.Host
 		return nil
 	}
 
+	// Allow explicit image/binary overrides from manifest
+	if config.Mode == "docker" && config.Image != "" {
+		return f.provisionDocker(ctx, host, config, &gitops.ServiceInfo{FullImage: config.Image})
+	}
+	if config.Mode == "native" && config.BinaryURL != "" {
+		return f.provisionNative(ctx, host, config, &gitops.ServiceInfo{Binaries: map[string]string{"*": config.BinaryURL}})
+	}
+
 	// Fetch manifest from gitops
 	channel, version := gitops.ResolveVersion(config.Version)
 	fetcher, err := gitops.NewFetcher(gitops.FetchOptions{})
@@ -78,14 +86,24 @@ func (f *FlexibleProvisioner) Provision(ctx context.Context, host inventory.Host
 func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventory.Host, config ServiceConfig, svcInfo *gitops.ServiceInfo) error {
 	fmt.Printf("Provisioning %s in Docker mode...\n", f.serviceName)
 
+	port := f.port
+	if config.Port != 0 {
+		port = config.Port
+	}
+
 	// Generate docker-compose.yml
+	envFile := config.EnvFile
+	if envFile == "" {
+		envFile = fmt.Sprintf("/etc/frameworks/%s.env", f.serviceName)
+	}
+
 	composeData := DockerComposeData{
 		ServiceName: f.serviceName,
 		Image:       svcInfo.FullImage, // image@sha256:digest format
-		Port:        f.port,
-		EnvFile:     fmt.Sprintf("/etc/frameworks/%s.env", f.serviceName),
+		Port:        port,
+		EnvFile:     envFile,
 		HealthCheck: &HealthCheckConfig{
-			Test:     []string{"CMD", "curl", "-f", fmt.Sprintf("http://localhost:%d%s", f.port, f.healthPath)},
+			Test:     []string{"CMD", "curl", "-f", fmt.Sprintf("http://localhost:%d%s", port, f.healthPath)},
 			Interval: "30s",
 			Timeout:  "10s",
 			Retries:  3,
@@ -146,8 +164,20 @@ func (f *FlexibleProvisioner) provisionDocker(ctx context.Context, host inventor
 func (f *FlexibleProvisioner) provisionNative(ctx context.Context, host inventory.Host, config ServiceConfig, svcInfo *gitops.ServiceInfo) error {
 	fmt.Printf("Provisioning %s in native mode...\n", f.serviceName)
 
-	// Get binary URL for current OS/arch
-	binaryURL, err := svcInfo.GetBinaryURL(runtime.GOOS, runtime.GOARCH)
+	// Get binary URL for current OS/arch (or explicit override)
+	binaryURL := config.BinaryURL
+	var err error
+	if binaryURL == "" {
+		// Allow wildcard "*" when using a single URL override via svcInfo.Binaries
+		if svcInfo.Binaries != nil {
+			if v, ok := svcInfo.Binaries["*"]; ok && v != "" {
+				binaryURL = v
+			}
+		}
+	}
+	if binaryURL == "" {
+		binaryURL, err = svcInfo.GetBinaryURL(runtime.GOOS, runtime.GOARCH)
+	}
 	if err != nil {
 		return fmt.Errorf("binary not available: %w", err)
 	}

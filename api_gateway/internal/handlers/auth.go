@@ -134,6 +134,66 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 	}
 }
 
+// WalletLogin handles wallet-based authentication
+func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Address   string `json:"address" binding:"required"`
+			Message   string `json:"message" binding:"required"`
+			Signature string `json:"signature" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
+			return
+		}
+
+		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature)
+		if err != nil {
+			h.logger.WithError(err).Debug("Wallet login failed")
+			errMsg := "wallet authentication failed"
+			if st, ok := status.FromError(err); ok {
+				grpcMsg := st.Message()
+				if strings.Contains(grpcMsg, "signature") || strings.Contains(grpcMsg, "expired") {
+					errMsg = grpcMsg
+				}
+			}
+			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
+			return
+		}
+
+		// Set all auth tokens as HttpOnly cookies (same as Login)
+		isDev := os.Getenv("ENV") == "development" ||
+			os.Getenv("BUILD_ENV") == "development" ||
+			os.Getenv("GO_ENV") == "development"
+		secure := !isDev
+		sameSite := http.SameSiteLaxMode
+
+		// Access token - short-lived, httpOnly
+		if resp.Token != "" {
+			c.SetSameSite(sameSite)
+			c.SetCookie(accessTokenCookie, resp.Token, accessTokenMaxAge, "/", "", secure, true)
+		}
+
+		// Refresh token - long-lived, httpOnly
+		if resp.RefreshToken != "" {
+			c.SetSameSite(sameSite)
+			c.SetCookie(refreshTokenCookie, resp.RefreshToken, refreshTokenMaxAge, "/", "", secure, true)
+		}
+
+		// Tenant ID - needed for multi-tenant isolation, httpOnly
+		if resp.User != nil && resp.User.TenantId != "" {
+			c.SetSameSite(sameSite)
+			c.SetCookie(tenantIDCookie, resp.User.TenantId, accessTokenMaxAge, "/", "", secure, true)
+		}
+
+		// Return user data (no tokens in body for security)
+		c.JSON(http.StatusOK, gin.H{
+			"user":       userToJSON(resp.User),
+			"expires_at": resp.ExpiresAt.AsTime(),
+		})
+	}
+}
+
 // Register handles user registration
 func (h *AuthHandlers) Register() gin.HandlerFunc {
 	return func(c *gin.Context) {

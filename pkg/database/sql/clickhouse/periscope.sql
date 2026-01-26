@@ -1,226 +1,155 @@
 -- ============================================================================
--- PERISCOPE CLICKHOUSE SCHEMA
--- Time-series analytics for streams, viewers, nodes, and clips
+-- PERISCOPE V2 CLICKHOUSE SCHEMA (GraphQL-first)
+-- Clean, normalized analytics schema designed to align with public GraphQL API.
 -- ============================================================================
 
 CREATE DATABASE IF NOT EXISTS periscope;
 USE periscope;
 
 -- ============================================================================
--- EVENT LOGS (high-cardinality, append-only)
--- Captures lifecycle and routing events emitted by the platform
+-- CORE STREAM EVENT LOG (normalized lifecycle + notable events)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS stream_events (
-    -- ===== COMMON FIELDS (ALL EVENTS) =====
+CREATE TABLE IF NOT EXISTS stream_event_log (
     event_id UUID,
     timestamp DateTime,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
-    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
     node_id LowCardinality(String),
-    event_type LowCardinality(String),
-    status Nullable(String),
-    
-    -- ===== PUSH EVENTS (push-start, push-end) =====
-    push_id Nullable(String),          -- PUSH_END only
-    push_target Nullable(String),      -- Both push events
-    target_uri_before Nullable(String), -- PUSH_END only
-    target_uri_after Nullable(String),  -- PUSH_END only
-    push_status Nullable(String),       -- PUSH_END only - JSON string
-    log_messages Nullable(String),      -- PUSH_END only - JSON array
-    
-    -- ===== STREAM LIFECYCLE (stream-buffer, stream-end) =====
-    buffer_state Nullable(String),      -- FULL, EMPTY, DRY, RECOVER
-    has_issues Nullable(Boolean),
+
+    event_type LowCardinality(String),      -- canonical event type (stream_lifecycle, stream_buffer, stream_end, etc.)
+    status Nullable(String),                -- stream status at time of event
+
+    -- Optional stream metrics captured at event time
+    buffer_state Nullable(String),
+    has_issues Nullable(UInt8),
     issues_description Nullable(String),
     track_count Nullable(UInt16),
     quality_tier Nullable(String),
     primary_width Nullable(UInt16),
     primary_height Nullable(UInt16),
     primary_fps Nullable(Float32),
-    
-    -- Stream end metrics (STREAM_END)
+    primary_codec Nullable(String),
+    primary_bitrate Nullable(UInt32),
+
     downloaded_bytes Nullable(UInt64),
     uploaded_bytes Nullable(UInt64),
     total_viewers Nullable(UInt32),
     total_inputs Nullable(UInt16),
     total_outputs Nullable(UInt16),
     viewer_seconds Nullable(UInt64),
-    
-    -- ===== STREAM INGEST EVENTS (stream-ingest) =====
+
+    -- Ingest / routing details (where present)
     stream_key Nullable(String),
     user_id Nullable(String),
-    hostname Nullable(String),
-    push_url Nullable(String),
-    protocol Nullable(String),          -- RTMP, SRT, WebRTC
-    
-    -- ===== RECORDING EVENTS (recording-end) =====
-    file_size Nullable(UInt64),
-    duration Nullable(UInt32),
-    output_file Nullable(String),
-    
-    -- ===== BANDWIDTH THRESHOLD EVENTS =====
-    current_bytes_per_sec Nullable(UInt64),
-    threshold_exceeded Nullable(Boolean),
-    threshold_value Nullable(UInt64),
-    
-    -- ===== GEOGRAPHIC DATA (various events) =====
+    request_url Nullable(String),
+    protocol Nullable(String),
+
+    -- Geo metadata (when present)
     latitude Nullable(Float64),
     longitude Nullable(Float64),
-    location Nullable(String),                    -- Node location name (push events)
-    country_code Nullable(FixedString(2)),        -- ISO country code (viewer/publisher)
-    city Nullable(String),                        -- City name (viewer/publisher)
-    
-    -- ===== FULL EVENT DATA =====
-    event_data String                   -- Complete JSON for anything we missed
+    location Nullable(String),
+    country_code Nullable(FixedString(2)),
+    city Nullable(String),
+
+    -- Full event payload (typed JSON)
+    event_data String
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (tenant_id, internal_name, timestamp)
+ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
--- Node selection and routing decisions
-CREATE TABLE IF NOT EXISTS routing_events (
-    -- ===== TIME & TENANT =====
-    timestamp DateTime,
-    tenant_id UUID,
-    internal_name String,               -- Stream UUID (normalized, no live+/vod+ prefix)
+-- ============================================================================
+-- STREAM VIEWER ROLLUPS (from stream_event_log.total_viewers)
+-- ============================================================================
 
-    -- ===== ROUTING DECISION =====
-    selected_node LowCardinality(String),
+CREATE TABLE IF NOT EXISTS stream_viewer_5m (
+    timestamp_5m DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    max_viewers UInt32,
+    avg_viewers Float32
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp_5m)
+ORDER BY (timestamp_5m, tenant_id, stream_id)
+TTL timestamp_5m + INTERVAL 180 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_viewer_5m_mv TO stream_viewer_5m AS
+SELECT
+    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
+    tenant_id,
+    stream_id,
+    max(total_viewers) AS max_viewers,
+    avg(total_viewers) AS avg_viewers
+FROM stream_event_log
+WHERE total_viewers IS NOT NULL
+GROUP BY timestamp_5m, tenant_id, stream_id;
+
+-- ============================================================================
+-- STREAM CURRENT STATE (live snapshot)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS stream_state_current (
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+
     status LowCardinality(String),
-    details String,
-    score Int64,                        -- Load balancing score
+    buffer_state LowCardinality(String),
 
-    -- ===== CLIENT LOCATION =====
-    client_ip String,
-    client_country FixedString(2),
-    client_latitude Float64,
-    client_longitude Float64,
-    client_bucket_h3 Nullable(UInt64),
-    client_bucket_res Nullable(UInt8),
+    current_viewers UInt32,
+    total_inputs UInt16,
 
-    -- ===== NODE LOCATION =====
-    node_latitude Float64,
-    node_longitude Float64,
-    node_name LowCardinality(String),
-    node_bucket_h3 Nullable(UInt64),
-    node_bucket_res Nullable(UInt8),
-    selected_node_id Nullable(String),
-    routing_distance_km Nullable(Float64),
+    uploaded_bytes UInt64,
+    downloaded_bytes UInt64,
+    viewer_seconds UInt64,
 
-    -- ===== DUAL-TENANT ATTRIBUTION =====
-    -- tenant_id = infra owner (cluster operator), stream_tenant_id = subject tenant (stream owner)
-    stream_tenant_id Nullable(UUID),
-    cluster_id LowCardinality(String) DEFAULT '',
+    has_issues Nullable(UInt8),
+    issues_description Nullable(String),
+    track_count Nullable(UInt16),
+    quality_tier Nullable(String),
+    primary_width Nullable(UInt16),
+    primary_height Nullable(UInt16),
+    primary_fps Nullable(Float32),
+    primary_codec Nullable(String),
+    primary_bitrate Nullable(UInt32),
 
-    -- ===== LATENCY =====
-    latency_ms Nullable(Float32)
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name)
-TTL timestamp + INTERVAL 90 DAY;
+    packets_sent Nullable(UInt64),
+    packets_lost Nullable(UInt64),
+    packets_retransmitted Nullable(UInt64),
 
--- Viewer connection lifecycle events
-CREATE TABLE IF NOT EXISTS connection_events (
-    -- ===== EVENT IDENTIFICATION =====
-    event_id UUID,
+    started_at Nullable(DateTime),
+    updated_at DateTime
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (tenant_id, stream_id);
+
+-- ============================================================================
+-- STREAM HEALTH SAMPLES (detailed QoE)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS stream_health_samples (
     timestamp DateTime,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
-    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
-    
-    -- ===== CONNECTION DETAILS =====
-    session_id String,
-    connection_addr String,
-    connector LowCardinality(String),   -- HLS, DASH, WebRTC, etc.
-    node_id LowCardinality(String),
-    request_url Nullable(String),       -- From USER_NEW webhook
-    
-    -- ===== GEOGRAPHIC DATA =====
-    country_code FixedString(2),
-    city LowCardinality(String),
-    latitude Float64,
-    longitude Float64,
-    client_bucket_h3 Nullable(UInt64),
-    client_bucket_res Nullable(UInt8),
-    node_bucket_h3 Nullable(UInt64),
-    node_bucket_res Nullable(UInt8),
-    
-    -- ===== SESSION METRICS =====
-    event_type LowCardinality(String),  -- connect, disconnect, error
-    session_duration UInt32,
-    bytes_transferred UInt64
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name)
-TTL timestamp + INTERVAL 90 DAY;
-
--- Node health and performance samples
-CREATE TABLE IF NOT EXISTS node_metrics (
-    -- ===== TIME & NODE IDENTIFICATION =====
-    timestamp DateTime,
-    tenant_id UUID,
-    node_id LowCardinality(String),
-    
-    -- ===== RESOURCE METRICS =====
-    cpu_usage Float32,
-    ram_max UInt64,
-    ram_current UInt64,
-    shm_total_bytes UInt64,
-    shm_used_bytes UInt64,
-    disk_total_bytes UInt64,
-    disk_used_bytes UInt64,
-    
-    -- ===== NETWORK METRICS =====
-    bandwidth_in UInt64,
-    bandwidth_out UInt64,
-    up_speed UInt64,
-    down_speed UInt64,
-    connections_current UInt32,
-    stream_count UInt32,
-    
-    -- ===== HEALTH METRICS =====
-    is_healthy UInt8,
-    
-    -- ===== GEOGRAPHIC DATA =====
-    latitude Float64,
-    longitude Float64,
-    
-    -- ===== ADDITIONAL METADATA =====
-    metadata JSON
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, node_id)
-TTL timestamp + INTERVAL 30 DAY;
-
--- Stream health metrics (encoder-level)
-CREATE TABLE IF NOT EXISTS stream_health_metrics (
-    -- ===== TIME & STREAM IDENTIFICATION =====
-    timestamp DateTime,
-    tenant_id UUID,
-    internal_name String,
-    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
     node_id LowCardinality(String),
 
-    -- ===== ENCODING METRICS (Nullable - may not exist for audio-only streams) =====
     bitrate Nullable(UInt32),
     fps Nullable(Float32),
     gop_size Nullable(UInt16),
     width Nullable(UInt16),
     height Nullable(UInt16),
 
-    -- ===== BUFFER HEALTH =====
     buffer_size Nullable(UInt32),
     buffer_health Nullable(Float32),
     buffer_state LowCardinality(String),
 
-    -- ===== CODEC & QUALITY =====
     codec Nullable(String),
-    quality_tier Nullable(String),      -- Rich quality string e.g. "1080p60 H264 @ 6Mbps"
+    quality_tier Nullable(String),
     track_metadata JSON,
 
-    -- ===== FRAME TIMING (Nullable - raw from MistServer track keys) =====
     frame_ms_max Nullable(Float32),
     frame_ms_min Nullable(Float32),
     frames_max Nullable(UInt32),
@@ -228,240 +157,24 @@ CREATE TABLE IF NOT EXISTS stream_health_metrics (
     keyframe_ms_max Nullable(Float32),
     keyframe_ms_min Nullable(Float32),
 
-    -- ===== HEALTH STATUS =====
     issues_description Nullable(String),
     has_issues Nullable(UInt8),
     track_count Nullable(UInt16),
 
-    -- ===== AUDIO METRICS (Nullable - may not exist for video-only streams) =====
     audio_channels Nullable(UInt8),
     audio_sample_rate Nullable(UInt32),
     audio_codec Nullable(String),
     audio_bitrate Nullable(UInt32)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name)
+ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 30 DAY;
 
--- Client-side QoE/transport metrics
-CREATE TABLE IF NOT EXISTS client_metrics (
-    -- ===== TIME & STREAM IDENTIFICATION =====
-    timestamp DateTime,
-    tenant_id UUID,
-    internal_name String,
-    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
-    session_id String,
-    node_id LowCardinality(String),
-    
-    -- ===== CONNECTION DETAILS =====
-    protocol LowCardinality(String),    -- HLS, DASH, WebRTC
-    host String,
-    connection_time Float32,
-    position Nullable(Float32),         -- Playback position
-    
-    -- ===== BANDWIDTH METRICS =====
-    bandwidth_in UInt64,
-    bandwidth_out UInt64,
-    bytes_downloaded UInt64,
-    bytes_uploaded UInt64,
-    
-    -- ===== NETWORK PERFORMANCE =====
-    packets_sent UInt64,
-    packets_lost UInt64,
-    packets_retransmitted UInt64,
-    connection_quality Nullable(Float32)
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (tenant_id, stream_id, timestamp)
-TTL timestamp + INTERVAL 90 DAY;
-
--- Aggregated client metrics (5m)
-CREATE TABLE IF NOT EXISTS client_metrics_5m (
-    timestamp_5m DateTime,
-    tenant_id UUID,
-    internal_name String,
-    node_id LowCardinality(String),
-    active_sessions UInt32,
-    avg_bw_in Float64,
-    avg_bw_out Float64,
-    avg_connection_time Float32,
-    pkt_loss_rate Nullable(Float32)
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(timestamp_5m)
-ORDER BY (timestamp_5m, tenant_id, internal_name, node_id)
-TTL timestamp_5m + INTERVAL 180 DAY;
-
--- Aggregation MV → client_metrics_5m
-CREATE MATERIALIZED VIEW IF NOT EXISTS client_metrics_5m_mv TO client_metrics_5m AS
-SELECT
-    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
-    tenant_id,
-    internal_name,
-    node_id,
-    count(DISTINCT session_id) as active_sessions,
-    avg(bandwidth_in) AS avg_bw_in,
-    avg(bandwidth_out) AS avg_bw_out,
-    avg(connection_time) AS avg_connection_time,
-    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate
-FROM client_metrics
-GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
-
--- Track inventory snapshots per stream
-CREATE TABLE IF NOT EXISTS track_list_events (
-    -- ===== TIME & STREAM IDENTIFICATION =====
-    timestamp DateTime,
-    event_id UUID,
-    tenant_id UUID,
-    internal_name String,
-    node_id LowCardinality(String),
-
-    -- ===== TRACK METADATA =====
-    track_list String,                  -- Complete track list JSON
-    track_count UInt16,
-    video_track_count UInt16,
-    audio_track_count UInt16,
-
-    -- ===== PRIMARY VIDEO TRACK (Nullable - may not exist for audio-only streams) =====
-    primary_width Nullable(UInt16),
-    primary_height Nullable(UInt16),
-    primary_fps Nullable(Float32),
-    primary_video_codec Nullable(String),
-    primary_video_bitrate Nullable(UInt32),
-    quality_tier Nullable(String),
-
-    -- ===== PRIMARY AUDIO TRACK (Nullable - may not exist for video-only streams) =====
-    primary_audio_channels Nullable(UInt8),
-    primary_audio_sample_rate Nullable(UInt32),
-    primary_audio_codec Nullable(String),
-    primary_audio_bitrate Nullable(UInt32)
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name)
-TTL timestamp + INTERVAL 90 DAY;
-
--- Hourly connection aggregates for bandwidth/session charts
-CREATE TABLE IF NOT EXISTS stream_connection_hourly (
-    hour DateTime,
-    tenant_id UUID,
-    internal_name String,
-    total_bytes AggregateFunction(sum, UInt64),
-    unique_viewers AggregateFunction(uniq, String),
-    total_sessions AggregateFunction(count, UInt8)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, internal_name)
-TTL hour + INTERVAL 365 DAY;
-
--- Aggregation MV → stream_connection_hourly
-CREATE MATERIALIZED VIEW IF NOT EXISTS stream_connection_hourly_mv TO stream_connection_hourly AS
-SELECT
-    toStartOfHour(timestamp) as hour,
-    tenant_id,
-    internal_name,
-    sumState(bytes_transferred) as total_bytes,
-    uniqState(session_id) as unique_viewers,
-    countState() as total_sessions
-FROM connection_events
-GROUP BY hour, tenant_id, internal_name;
-
--- 5-minute node performance rollups
-CREATE TABLE IF NOT EXISTS node_performance_5m (
-    timestamp_5m DateTime,
-    node_id LowCardinality(String),
-    avg_cpu Float32,
-    max_cpu Float32,
-    avg_memory Float32,
-    max_memory Float32,
-    total_bandwidth UInt64,
-    avg_streams Float32,
-    max_streams UInt32
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(timestamp_5m)
-ORDER BY (timestamp_5m, node_id)
-TTL timestamp_5m + INTERVAL 180 DAY;
-
--- Aggregation MV → node_performance_5m
-CREATE MATERIALIZED VIEW IF NOT EXISTS node_performance_5m_mv TO node_performance_5m AS
-SELECT
-    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) as timestamp_5m,
-    node_id,
-    avg(cpu_usage) as avg_cpu,
-    max(cpu_usage) as max_cpu,
-    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) as avg_memory,
-    max(if(ram_max > 0, ram_current / ram_max * 100, 0)) as max_memory,
-    sum(bandwidth_in + bandwidth_out) as total_bandwidth,
-    avg(stream_count) as avg_streams,
-    max(stream_count) as max_streams
-FROM node_metrics
-GROUP BY timestamp_5m, node_id;
-
--- 1-hour node performance rollups
-CREATE TABLE IF NOT EXISTS node_metrics_1h (
-    timestamp_1h DateTime,
-    node_id LowCardinality(String),
-    avg_cpu Float32,
-    peak_cpu Float32,
-    avg_memory Float32,
-    peak_memory Float32,
-    avg_disk Float32,
-    peak_disk Float32,
-    avg_shm Float32,
-    peak_shm Float32,
-    total_bandwidth_in UInt64,
-    total_bandwidth_out UInt64,
-    was_healthy UInt8
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(timestamp_1h)
-ORDER BY (timestamp_1h, node_id)
-TTL timestamp_1h + INTERVAL 365 DAY;
-
--- Aggregation MV → node_metrics_1h
--- Note: bandwidth_in/out are cumulative counters, so we compute delta (max - min) per hour
-CREATE MATERIALIZED VIEW IF NOT EXISTS node_metrics_1h_mv TO node_metrics_1h AS
-SELECT
-    toStartOfHour(timestamp) AS timestamp_1h,
-    node_id,
-    avg(cpu_usage) AS avg_cpu,
-    max(cpu_usage) AS peak_cpu,
-    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS avg_memory,
-    max(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS peak_memory,
-    avg(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS avg_disk,
-    max(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS peak_disk,
-    avg(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS avg_shm,
-    max(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS peak_shm,
-    max(bandwidth_in) - min(bandwidth_in) AS total_bandwidth_in,
-    max(bandwidth_out) - min(bandwidth_out) AS total_bandwidth_out,
-    if(avg(is_healthy) >= 0.5, 1, 0) AS was_healthy
-FROM node_metrics
-GROUP BY timestamp_1h, node_id;
-
--- Daily connection/bandwidth metrics per tenant
-CREATE TABLE IF NOT EXISTS tenant_connection_daily (
-    day Date,
-    tenant_id UUID,
-    total_bytes UInt64,
-    unique_sessions UInt32,
-    total_connections UInt32
-) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id)
-TTL day + INTERVAL 730 DAY;
-
--- Aggregation MV → tenant_connection_daily
-CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_connection_daily_mv TO tenant_connection_daily AS
-SELECT
-    toDate(timestamp) as day,
-    tenant_id,
-    sum(bytes_transferred) as total_bytes,
-    uniq(session_id) as unique_sessions,
-    count() as total_connections
-FROM connection_events
-GROUP BY day, tenant_id;
-
--- 5-minute stream health rollups
+-- 5m rollups for health
 CREATE TABLE IF NOT EXISTS stream_health_5m (
     timestamp_5m DateTime,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
     node_id LowCardinality(String),
     rebuffer_count UInt32,
@@ -474,14 +187,14 @@ CREATE TABLE IF NOT EXISTS stream_health_5m (
     quality_tier LowCardinality(String)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
-ORDER BY (timestamp_5m, tenant_id, internal_name, node_id)
+ORDER BY (timestamp_5m, tenant_id, stream_id, node_id)
 TTL timestamp_5m + INTERVAL 180 DAY;
 
--- Aggregation MV → stream_health_5m
 CREATE MATERIALIZED VIEW IF NOT EXISTS stream_health_5m_mv TO stream_health_5m AS
 SELECT
     toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
     tenant_id,
+    stream_id,
     internal_name,
     node_id,
     countIf(buffer_state = 'DRY') AS rebuffer_count,
@@ -492,15 +205,20 @@ SELECT
     ifNull(avg(buffer_health), 0) AS avg_buffer_health,
     countIf(buffer_state = 'DRY') AS buffer_dry_count,
     ifNull(argMax(
-        if(height >= 1080, '1080p+', if(height >= 720, '720p', if(height >= 480, '480p', 'SD'))), timestamp
+        if(height >= 2160, '2160p',
+          if(height >= 1440, '1440p',
+            if(height >= 1080, '1080p',
+              if(height >= 720, '720p',
+                if(height >= 480, '480p', 'SD'))))), timestamp
     ), 'Unknown') AS quality_tier
-FROM stream_health_metrics
-GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
+FROM stream_health_samples
+GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 
 -- Rebuffering events derived from health samples
 CREATE TABLE IF NOT EXISTS rebuffering_events (
     timestamp DateTime,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
     node_id LowCardinality(String),
     buffer_state LowCardinality(String),
@@ -509,28 +227,63 @@ CREATE TABLE IF NOT EXISTS rebuffering_events (
     rebuffer_end UInt8
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name)
+ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
--- Derivation MV → rebuffering_events
 CREATE MATERIALIZED VIEW IF NOT EXISTS rebuffering_events_mv TO rebuffering_events AS
 SELECT
     timestamp,
     tenant_id,
+    stream_id,
     internal_name,
     node_id,
     buffer_state,
-    lagInFrame(buffer_state) OVER (PARTITION BY tenant_id, internal_name ORDER BY timestamp) AS prev_state,
+    lagInFrame(buffer_state) OVER (PARTITION BY tenant_id, stream_id ORDER BY timestamp) AS prev_state,
     if(buffer_state = 'DRY' AND prev_state IN ('FULL', 'RECOVER'), 1, 0) AS rebuffer_start,
     if(buffer_state = 'RECOVER' AND prev_state = 'DRY', 1, 0) AS rebuffer_end
-FROM stream_health_metrics
+FROM stream_health_samples
 WHERE buffer_state IN ('FULL', 'DRY', 'RECOVER');
 
--- Daily quality tier distribution
+-- ============================================================================
+-- TRACK LIST EVENTS + QUALITY ROLLUPS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS track_list_events (
+    timestamp DateTime,
+    event_id UUID,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+
+    track_list String,
+    track_count UInt16,
+    video_track_count UInt16,
+    audio_track_count UInt16,
+
+    primary_width Nullable(UInt16),
+    primary_height Nullable(UInt16),
+    primary_fps Nullable(Float32),
+    primary_video_codec Nullable(String),
+    primary_video_bitrate Nullable(UInt32),
+    quality_tier Nullable(String),
+
+    primary_audio_channels Nullable(UInt8),
+    primary_audio_sample_rate Nullable(UInt32),
+    primary_audio_codec Nullable(String),
+    primary_audio_bitrate Nullable(UInt32)
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, stream_id, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
 CREATE TABLE IF NOT EXISTS quality_tier_daily (
     day Date,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
+    tier_2160p_minutes UInt32,
+    tier_1440p_minutes UInt32,
     tier_1080p_minutes UInt32,
     tier_720p_minutes UInt32,
     tier_480p_minutes UInt32,
@@ -538,284 +291,99 @@ CREATE TABLE IF NOT EXISTS quality_tier_daily (
     primary_tier LowCardinality(String),
     codec_h264_minutes UInt32,
     codec_h265_minutes UInt32,
+    codec_vp9_minutes UInt32,
+    codec_av1_minutes UInt32,
     avg_bitrate UInt32,
     avg_fps Float32
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id, internal_name)
+ORDER BY (day, tenant_id, stream_id)
 TTL day + INTERVAL 730 DAY;
 
--- Aggregation MV → quality_tier_daily
 CREATE MATERIALIZED VIEW IF NOT EXISTS quality_tier_daily_mv TO quality_tier_daily AS
 SELECT
     toDate(timestamp) as day,
     tenant_id,
+    stream_id,
     internal_name,
-    countIf(primary_height >= 1080) * 5 AS tier_1080p_minutes,
+    countIf(primary_height >= 2160) * 5 AS tier_2160p_minutes,
+    countIf(primary_height >= 1440 AND primary_height < 2160) * 5 AS tier_1440p_minutes,
+    countIf(primary_height >= 1080 AND primary_height < 1440) * 5 AS tier_1080p_minutes,
     countIf(primary_height >= 720 AND primary_height < 1080) * 5 AS tier_720p_minutes,
     countIf(primary_height >= 480 AND primary_height < 720) * 5 AS tier_480p_minutes,
     countIf(primary_height < 480) * 5 AS tier_sd_minutes,
     ifNull(argMax(quality_tier, timestamp), 'Unknown') AS primary_tier,
     countIf(primary_video_codec LIKE '%264%') * 5 AS codec_h264_minutes,
     countIf(primary_video_codec LIKE '%265%' OR primary_video_codec LIKE '%HEVC%') * 5 AS codec_h265_minutes,
+    countIf(lower(primary_video_codec) LIKE '%vp9%') * 5 AS codec_vp9_minutes,
+    countIf(lower(primary_video_codec) LIKE '%av1%') * 5 AS codec_av1_minutes,
     ifNull(toUInt32(avg(primary_video_bitrate)), 0) AS avg_bitrate,
     ifNull(avg(primary_fps), 0) AS avg_fps
 FROM track_list_events
 WHERE track_count > 0
-GROUP BY day, tenant_id, internal_name;
-
--- Clip orchestration events for visibility
-CREATE TABLE IF NOT EXISTS clip_events (
-    -- ===== TIME & STREAM IDENTIFICATION =====
-    timestamp DateTime,
-    tenant_id UUID,
-    internal_name String,
-    request_id String,
-    
-    -- ===== CLIP PROCESSING STAGE =====
-    stage LowCardinality(String),       -- requested, processing, completed, failed
-    content_type LowCardinality(String), -- 'clip' or 'dvr'
-    
-    -- ===== TIME RANGE =====
-    start_unix Nullable(Int64),         -- StartedAt from protobuf
-    stop_unix Nullable(Int64),          -- CompletedAt from protobuf
-    
-    -- ===== NODE ROUTING =====
-    ingest_node_id Nullable(String),    -- NodeId from protobuf
-    
-    -- ===== PROCESSING STATUS =====
-    percent Nullable(UInt32),           -- ProgressPercent from protobuf
-    message Nullable(String),           -- Error from protobuf
-    
-    -- ===== OUTPUT DETAILS =====
-    file_path Nullable(String),         -- FilePath from protobuf
-    s3_url Nullable(String),            -- S3Url from protobuf
-    size_bytes Nullable(UInt64),        -- SizeBytes from protobuf
-    expires_at Nullable(Int64)
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name, request_id)
-TTL timestamp + INTERVAL 90 DAY;
-
--- Storage usage snapshots (for accurate billing)
-CREATE TABLE IF NOT EXISTS storage_snapshots (
-    timestamp DateTime,
-    tenant_id UUID,
-    node_id LowCardinality(String),
-
-    -- ===== USAGE METRICS =====
-    total_bytes UInt64,
-    file_count UInt32,
-
-    -- ===== BREAKDOWN (by content type) =====
-    dvr_bytes UInt64,
-    clip_bytes UInt64,
-    vod_bytes UInt64,
-
-    -- ===== FROZEN BREAKDOWN (cold storage in S3) =====
-    frozen_dvr_bytes UInt64 DEFAULT 0,
-    frozen_clip_bytes UInt64 DEFAULT 0,
-    frozen_vod_bytes UInt64 DEFAULT 0
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, tenant_id, node_id)
-TTL timestamp + INTERVAL 90 DAY;
-
--- Hourly clip pipeline counts
-CREATE TABLE IF NOT EXISTS clip_events_1h (
-    hour DateTime,
-    tenant_id UUID,
-    internal_name String,
-    stage LowCardinality(String),
-    count UInt64
-) ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, internal_name, stage)
-TTL hour + INTERVAL 365 DAY;
-
--- Aggregation MV → clip_events_1h
-CREATE MATERIALIZED VIEW IF NOT EXISTS clip_events_1h_mv TO clip_events_1h AS
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    internal_name,
-    stage,
-    count() AS count
-FROM clip_events
-GROUP BY hour, tenant_id, internal_name, stage;
+GROUP BY day, tenant_id, stream_id, internal_name;
 
 -- ============================================================================
--- LIVE STATE TABLES (Real-time Current State)
--- Populated directly from Foghorn's state snapshot events
--- Uses ReplacingMergeTree - latest row per key wins
+-- VIEWER CONNECTIONS + SESSIONS
 -- ============================================================================
 
--- Current stream state from StreamLifecycleUpdate events
--- This is THE source of truth for stream status - simple SELECT, no aggregation
-CREATE TABLE IF NOT EXISTS live_streams (
+CREATE TABLE IF NOT EXISTS viewer_connection_events (
+    event_id UUID,
+    timestamp DateTime,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
+    session_id String,
+    connection_addr String,
+    connector LowCardinality(String),
     node_id LowCardinality(String),
+    request_url Nullable(String),
 
-    -- ===== STATUS (from StreamLifecycleUpdate) =====
-    status LowCardinality(String),           -- 'live', 'offline'
-    buffer_state LowCardinality(String),     -- FULL, EMPTY, DRY, RECOVER
-
-    -- ===== VIEWERS (FROM FOGHORN - already aggregated!) =====
-    current_viewers UInt32,
-    total_inputs UInt16,
-
-    -- ===== BANDWIDTH =====
-    uploaded_bytes UInt64,
-    downloaded_bytes UInt64,
-    viewer_seconds UInt64,
-
-    -- ===== HEALTH & QUALITY =====
-    has_issues Nullable(UInt8),
-    issues_description Nullable(String),
-    track_count Nullable(UInt16),
-    quality_tier Nullable(String),
-    primary_width Nullable(UInt16),
-    primary_height Nullable(UInt16),
-    primary_fps Nullable(Float32),
-    primary_codec Nullable(String),
-    primary_bitrate Nullable(UInt32),
-
-    -- ===== PACKET STATISTICS (from MistServer active_streams API: packsent/packloss/packretrans) =====
-    packets_sent Nullable(UInt64),
-    packets_lost Nullable(UInt64),
-    packets_retransmitted Nullable(UInt64),
-
-    -- ===== TIMING =====
-    started_at Nullable(DateTime),
-    updated_at DateTime
-
-) ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (tenant_id, internal_name);
-
--- Current node state from NodeLifecycleUpdate events
--- Simple SELECT for node health/resources
-CREATE TABLE IF NOT EXISTS live_nodes (
-    tenant_id UUID,
-    node_id String,
-
-    -- ===== RESOURCES =====
-    cpu_percent Float32,
-    ram_used_bytes UInt64,
-    ram_total_bytes UInt64,
-    disk_used_bytes UInt64,
-    disk_total_bytes UInt64,
-
-    -- ===== NETWORK =====
-    up_speed UInt64,
-    down_speed UInt64,
-
-    -- ===== STREAMS =====
-    active_streams UInt32,
-
-    -- ===== HEALTH =====
-    is_healthy UInt8,
-
-    -- ===== GEO =====
+    country_code FixedString(2),
+    city LowCardinality(String),
     latitude Float64,
     longitude Float64,
-    location String,
+    client_bucket_h3 Nullable(UInt64),
+    client_bucket_res Nullable(UInt8),
+    node_bucket_h3 Nullable(UInt64),
+    node_bucket_res Nullable(UInt8),
 
-    -- ===== OPERATIONAL METADATA =====
-    metadata JSON,
+    event_type LowCardinality(String),
+    session_duration UInt32,
+    bytes_transferred UInt64
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, stream_id, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
 
-    updated_at DateTime
-
-
-) ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (tenant_id, node_id);
-
--- Current artifact state (clips/DVR in progress)
--- Enables "what's the status of clip X?" queries without scanning clip_events
-CREATE TABLE IF NOT EXISTS live_artifacts (
+CREATE TABLE IF NOT EXISTS viewer_sessions_current (
     tenant_id UUID,
-    request_id String,                       -- clip_hash or dvr_hash
-    internal_name String,                    -- source stream
-
-    -- ===== ARTIFACT TYPE =====
-    content_type LowCardinality(String),     -- 'clip' or 'dvr'
-
-    -- ===== PROCESSING STATE =====
-    stage LowCardinality(String),            -- requested, queued, processing, completed, failed, deleted
-    progress_percent UInt8,
-    error_message Nullable(String),
-
-    -- ===== TIMING =====
-    requested_at DateTime,
-    started_at Nullable(DateTime),
-    completed_at Nullable(DateTime),
-
-    -- ===== TIME RANGE (clip boundaries) =====
-    clip_start_unix Nullable(Int64),
-    clip_stop_unix Nullable(Int64),
-
-    -- ===== DVR SPECIFIC =====
-    segment_count Nullable(UInt32),
-    manifest_path Nullable(String),
-
-    -- ===== OUTPUT =====
-    file_path Nullable(String),
-    s3_url Nullable(String),
-    size_bytes Nullable(UInt64),
-
-    -- ===== NODE =====
-    processing_node_id Nullable(String),
-
-    updated_at DateTime,
-    expires_at Nullable(DateTime)
-) ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (tenant_id, request_id);
-
--- ============================================================================
--- VIEWER SESSION TRACKING (for real-time current_viewers)
--- Tracks active viewer sessions for accurate real-time counts
--- ============================================================================
-
--- Active viewer sessions (connect without disconnect)
--- Used to calculate current_viewers at query time
--- Uses AggregatingMergeTree with SimpleAggregateFunction to properly merge connect/disconnect:
--- - connected_at uses max() so real timestamp (from connect) wins over epoch (from disconnect)
--- - disconnected_at uses max() so actual disconnect time wins over NULL (from connect)
--- - bytes/duration use max() to get final values from disconnect event
--- NOTE: Migration from old schema requires DROP + CREATE (schema change)
-CREATE TABLE IF NOT EXISTS viewer_sessions (
-    tenant_id UUID,
+    stream_id UUID,
     internal_name LowCardinality(String),
     session_id String,
 
-    -- ===== SESSION STATE =====
-    -- max() ensures: connect's real timestamp > disconnect's epoch(0)
     connected_at SimpleAggregateFunction(max, DateTime),
-    -- max() ensures: disconnect's timestamp > connect's NULL (NULL < any value)
     disconnected_at SimpleAggregateFunction(max, Nullable(DateTime)),
 
-    -- ===== CONNECTION DETAILS (use any - same for connect/disconnect) =====
     node_id SimpleAggregateFunction(any, LowCardinality(String)),
     connector SimpleAggregateFunction(any, LowCardinality(String)),
 
-    -- ===== GEOGRAPHIC DATA (use any - same for connect/disconnect) =====
     country_code SimpleAggregateFunction(any, FixedString(2)),
     city SimpleAggregateFunction(any, LowCardinality(String)),
     latitude SimpleAggregateFunction(any, Float64),
     longitude SimpleAggregateFunction(any, Float64),
 
-    -- ===== METRICS (use max - disconnect has final values) =====
     bytes_transferred SimpleAggregateFunction(max, UInt64),
     session_duration SimpleAggregateFunction(max, UInt32),
 
     last_updated SimpleAggregateFunction(max, DateTime)
 ) ENGINE = AggregatingMergeTree()
-ORDER BY (tenant_id, session_id);
+ORDER BY (tenant_id, stream_id, session_id);
 
--- Materialized view to track viewer connects
-CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_connect_mv TO viewer_sessions AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_connect_mv TO viewer_sessions_current AS
 SELECT
     tenant_id,
+    stream_id,
     internal_name,
     session_id,
     timestamp AS connected_at,
@@ -829,17 +397,16 @@ SELECT
     bytes_transferred,
     session_duration,
     timestamp AS last_updated
-FROM connection_events
+FROM viewer_connection_events
 WHERE event_type = 'connect' AND session_id != '';
 
--- Materialized view to track viewer disconnects
--- Sets connected_at to epoch(0) which will be overridden by connect's real value via max()
-CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_disconnect_mv TO viewer_sessions AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_disconnect_mv TO viewer_sessions_current AS
 SELECT
     tenant_id,
+    stream_id,
     internal_name,
     session_id,
-    toDateTime(0) AS connected_at,           -- max() ensures connect's real value wins
+    toDateTime(0) AS connected_at,
     timestamp AS disconnected_at,
     node_id,
     connector,
@@ -850,19 +417,124 @@ SELECT
     bytes_transferred,
     session_duration,
     timestamp AS last_updated
-FROM connection_events
+FROM viewer_connection_events
 WHERE event_type = 'disconnect' AND session_id != '';
 
+-- Client QoE samples
+CREATE TABLE IF NOT EXISTS client_qoe_samples (
+    timestamp DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    session_id String,
+    node_id LowCardinality(String),
+
+    protocol LowCardinality(String),
+    host String,
+    connection_time Float32,
+    position Nullable(Float32),
+
+    bandwidth_in UInt64,
+    bandwidth_out UInt64,
+    bytes_downloaded UInt64,
+    bytes_uploaded UInt64,
+
+    packets_sent UInt64,
+    packets_lost UInt64,
+    packets_retransmitted UInt64,
+    connection_quality Nullable(Float32)
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, stream_id, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
+CREATE TABLE IF NOT EXISTS client_qoe_5m (
+    timestamp_5m DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+    active_sessions UInt32,
+    avg_bw_in Float64,
+    avg_bw_out Float64,
+    avg_connection_time Float32,
+    pkt_loss_rate Nullable(Float32)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp_5m)
+ORDER BY (timestamp_5m, tenant_id, stream_id, node_id)
+TTL timestamp_5m + INTERVAL 180 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS client_qoe_5m_mv TO client_qoe_5m AS
+SELECT
+    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
+    tenant_id,
+    stream_id,
+    internal_name,
+    node_id,
+    count(DISTINCT session_id) as active_sessions,
+    avg(bandwidth_in) AS avg_bw_in,
+    avg(bandwidth_out) AS avg_bw_out,
+    avg(connection_time) AS avg_connection_time,
+    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate
+FROM client_qoe_samples
+GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
+
 -- ============================================================================
--- BILLING AGGREGATION TABLES (For accurate viewer_hours and geo breakdown)
--- These replace the previously non-existent tenant_viewer_daily and viewer_geo_hourly
+-- VIEWER USAGE ROLLUPS
 -- ============================================================================
 
--- Hourly viewer aggregates by country (foundation for billing + geo)
--- Uses AggregatingMergeTree with State functions for efficient multi-level rollups
+-- Tenant-level usage rollup (5-minute) for live billing dashboards
+CREATE TABLE IF NOT EXISTS tenant_usage_5m (
+    timestamp_5m DateTime,
+    tenant_id UUID,
+    unique_viewers AggregateFunction(uniq, String),
+    total_session_seconds AggregateFunction(sum, UInt64),
+    total_bytes AggregateFunction(sum, UInt64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(timestamp_5m)
+ORDER BY (timestamp_5m, tenant_id)
+TTL timestamp_5m + INTERVAL 30 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_5m_mv TO tenant_usage_5m AS
+SELECT
+    toStartOfFiveMinute(timestamp) AS timestamp_5m,
+    tenant_id,
+    uniqState(session_id) AS unique_viewers,
+    sumState(toUInt64(session_duration)) AS total_session_seconds,
+    sumState(bytes_transferred) AS total_bytes
+FROM viewer_connection_events
+WHERE event_type = 'disconnect'
+GROUP BY timestamp_5m, tenant_id;
+
+CREATE TABLE IF NOT EXISTS stream_connection_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    total_bytes AggregateFunction(sum, UInt64),
+    unique_viewers AggregateFunction(uniq, String),
+    total_sessions AggregateFunction(count, UInt64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, stream_id)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_connection_hourly_mv TO stream_connection_hourly AS
+SELECT
+    toStartOfHour(timestamp) as hour,
+    tenant_id,
+    stream_id,
+    internal_name,
+    sumState(bytes_transferred) as total_bytes,
+    uniqState(session_id) as unique_viewers,
+    countState() as total_sessions
+FROM viewer_connection_events
+GROUP BY hour, tenant_id, stream_id, internal_name;
+
 CREATE TABLE IF NOT EXISTS viewer_hours_hourly (
     hour DateTime,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
     country_code FixedString(2),
     unique_viewers AggregateFunction(uniq, String),
@@ -870,26 +542,23 @@ CREATE TABLE IF NOT EXISTS viewer_hours_hourly (
     total_bytes AggregateFunction(sum, UInt64)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, internal_name, country_code)
+ORDER BY (hour, tenant_id, stream_id, country_code)
 TTL hour + INTERVAL 365 DAY;
 
--- Aggregation MV → viewer_hours_hourly
--- Only counts complete sessions (disconnect events have accurate session_duration)
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_hours_hourly_mv TO viewer_hours_hourly AS
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
+    stream_id,
     internal_name,
     country_code,
     uniqState(session_id) AS unique_viewers,
     sumState(toUInt64(session_duration)) AS total_session_seconds,
     sumState(bytes_transferred) AS total_bytes
-FROM connection_events
+FROM viewer_connection_events
 WHERE event_type = 'disconnect'
-GROUP BY hour, tenant_id, internal_name, country_code;
+GROUP BY hour, tenant_id, stream_id, internal_name, country_code;
 
--- Daily tenant rollup for billing (viewer_hours per tenant per day)
--- Used by billing.go for viewer_hours calculation
 CREATE TABLE IF NOT EXISTS tenant_viewer_daily (
     day Date,
     tenant_id UUID,
@@ -902,7 +571,6 @@ PARTITION BY toYYYYMM(day)
 ORDER BY (day, tenant_id)
 TTL day + INTERVAL 730 DAY;
 
--- Aggregation MV → tenant_viewer_daily (rolls up from viewer_hours_hourly)
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_viewer_daily_mv TO tenant_viewer_daily AS
 SELECT
     toDate(hour) AS day,
@@ -914,8 +582,6 @@ SELECT
 FROM viewer_hours_hourly
 GROUP BY day, tenant_id;
 
--- Hourly geographic breakdown (viewer count + hours + egress per country)
--- Used by billing.go for geo_breakdown in email summaries
 CREATE TABLE IF NOT EXISTS viewer_geo_hourly (
     hour DateTime,
     tenant_id UUID,
@@ -928,7 +594,6 @@ PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, tenant_id, country_code)
 TTL hour + INTERVAL 365 DAY;
 
--- Aggregation MV → viewer_geo_hourly (rolls up from viewer_hours_hourly)
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_geo_hourly_mv TO viewer_geo_hourly AS
 SELECT
     hour,
@@ -940,130 +605,430 @@ SELECT
 FROM viewer_hours_hourly
 GROUP BY hour, tenant_id, country_code;
 
--- ============================================================================
--- ANALYTICS ROLLUP TABLES (For Dashboard Overview)
--- Pre-computed daily aggregates for efficient dashboard queries
--- ============================================================================
+CREATE TABLE IF NOT EXISTS viewer_city_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    country_code FixedString(2),
+    city LowCardinality(String),
+    latitude AggregateFunction(any, Float64),
+    longitude AggregateFunction(any, Float64),
+    unique_viewers AggregateFunction(uniq, String),
+    total_session_seconds AggregateFunction(sum, UInt64),
+    total_bytes AggregateFunction(sum, UInt64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, stream_id, country_code, city)
+TTL hour + INTERVAL 365 DAY;
 
--- Daily tenant-level analytics rollup
--- Used by GetPlatformOverview for tenant dashboard cards
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_city_hourly_mv TO viewer_city_hourly AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    stream_id,
+    internal_name,
+    country_code,
+    city,
+    anyState(latitude) AS latitude,
+    anyState(longitude) AS longitude,
+    uniqState(session_id) AS unique_viewers,
+    sumState(toUInt64(session_duration)) AS total_session_seconds,
+    sumState(bytes_transferred) AS total_bytes
+FROM viewer_connection_events
+WHERE event_type = 'disconnect' AND city != ''
+GROUP BY hour, tenant_id, stream_id, internal_name, country_code, city;
+
+-- Daily analytics rollups
 CREATE TABLE IF NOT EXISTS tenant_analytics_daily (
     day Date,
     tenant_id UUID,
-    -- Stream counts (from connection_events - streams with viewer activity)
     total_streams UInt32,
-    -- Viewer metrics
-    total_views UInt64,           -- COUNT of connect events
-    unique_viewers UInt32,        -- DISTINCT session_ids
-    -- Bandwidth
+    total_views UInt64,
+    unique_viewers UInt32,
     egress_bytes UInt64
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, tenant_id)
 TTL day + INTERVAL 730 DAY;
 
--- Aggregation MV → tenant_analytics_daily (from connection_events)
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_analytics_daily_mv TO tenant_analytics_daily AS
 SELECT
     toDate(timestamp) AS day,
     tenant_id,
-    uniq(internal_name) AS total_streams,
+    uniq(stream_id) AS total_streams,
     countIf(event_type = 'connect') AS total_views,
     uniq(session_id) AS unique_viewers,
     sum(bytes_transferred) AS egress_bytes
-FROM connection_events
+FROM viewer_connection_events
 GROUP BY day, tenant_id;
 
--- Daily stream-level analytics rollup
--- Used by GetStreamAnalytics for per-stream metrics (batch query)
 CREATE TABLE IF NOT EXISTS stream_analytics_daily (
     day Date,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
-    -- Viewer metrics
     total_views UInt64,
     unique_viewers UInt32,
-    -- Geographic diversity
     unique_countries UInt16,
     unique_cities UInt16,
-    -- Bandwidth
     egress_bytes UInt64
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id, internal_name)
+ORDER BY (day, tenant_id, stream_id)
 TTL day + INTERVAL 730 DAY;
 
--- Aggregation MV → stream_analytics_daily (from connection_events)
 CREATE MATERIALIZED VIEW IF NOT EXISTS stream_analytics_daily_mv TO stream_analytics_daily AS
 SELECT
     toDate(timestamp) AS day,
     tenant_id,
+    stream_id,
     internal_name,
     countIf(event_type = 'connect') AS total_views,
     uniq(session_id) AS unique_viewers,
     uniq(country_code) AS unique_countries,
     uniq(city) AS unique_cities,
     sum(bytes_transferred) AS egress_bytes
+FROM viewer_connection_events
+GROUP BY day, tenant_id, stream_id, internal_name;
 
-FROM connection_events
+-- ============================================================================
+-- ROUTING DECISIONS
+-- ============================================================================
 
-GROUP BY day, tenant_id, internal_name;
+CREATE TABLE IF NOT EXISTS routing_decisions (
+    timestamp DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
 
--- Storage lifecycle events (sync/eviction/cache)
--- Dual-storage model: S3 is authoritative backup, local disk is cache
+    selected_node LowCardinality(String),
+    status LowCardinality(String),
+    details String,
+    score Int64,
+
+    client_ip String,
+    client_country FixedString(2),
+    client_latitude Float64,
+    client_longitude Float64,
+    client_bucket_h3 Nullable(UInt64),
+    client_bucket_res Nullable(UInt8),
+
+    node_latitude Float64,
+    node_longitude Float64,
+    node_name LowCardinality(String),
+    node_bucket_h3 Nullable(UInt64),
+    node_bucket_res Nullable(UInt8),
+    selected_node_id Nullable(String),
+    routing_distance_km Nullable(Float64),
+
+    stream_tenant_id Nullable(UUID),
+    cluster_id LowCardinality(String) DEFAULT '',
+
+    latency_ms Nullable(Float32),
+    candidates_count Nullable(Int32),
+    event_type Nullable(String),
+    source Nullable(String)
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, stream_id, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- ============================================================================
+-- NODE STATE + METRICS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS node_state_current (
+    tenant_id UUID,
+    cluster_id LowCardinality(String),
+    node_id String,
+
+    cpu_percent Float32,
+    ram_used_bytes UInt64,
+    ram_total_bytes UInt64,
+    disk_used_bytes UInt64,
+    disk_total_bytes UInt64,
+
+    up_speed UInt64,
+    down_speed UInt64,
+
+    active_streams UInt32,
+    is_healthy UInt8,
+
+    latitude Float64,
+    longitude Float64,
+    location String,
+
+    metadata JSON,
+    updated_at DateTime
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (tenant_id, cluster_id, node_id);
+
+CREATE TABLE IF NOT EXISTS node_metrics_samples (
+    timestamp DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String),
+    node_id LowCardinality(String),
+
+    cpu_usage Float32,
+    ram_max UInt64,
+    ram_current UInt64,
+    shm_total_bytes UInt64,
+    shm_used_bytes UInt64,
+    disk_total_bytes UInt64,
+    disk_used_bytes UInt64,
+
+    bandwidth_in UInt64,
+    bandwidth_out UInt64,
+    up_speed UInt64,
+    down_speed UInt64,
+    connections_current UInt32,
+    stream_count UInt32,
+
+    is_healthy UInt8,
+    latitude Float64,
+    longitude Float64,
+
+    metadata JSON
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, cluster_id, node_id, timestamp)
+TTL timestamp + INTERVAL 30 DAY;
+
+CREATE TABLE IF NOT EXISTS node_performance_5m (
+    timestamp_5m DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String),
+    node_id LowCardinality(String),
+    avg_cpu Float32,
+    max_cpu Float32,
+    avg_memory Float32,
+    max_memory Float32,
+    total_bandwidth UInt64,
+    avg_streams Float32,
+    max_streams UInt32
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp_5m), tenant_id)
+ORDER BY (tenant_id, cluster_id, node_id, timestamp_5m)
+TTL timestamp_5m + INTERVAL 180 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS node_performance_5m_mv TO node_performance_5m AS
+SELECT
+    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) as timestamp_5m,
+    tenant_id,
+    cluster_id,
+    node_id,
+    avg(cpu_usage) as avg_cpu,
+    max(cpu_usage) as max_cpu,
+    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) as avg_memory,
+    max(if(ram_max > 0, ram_current / ram_max * 100, 0)) as max_memory,
+    sum(bandwidth_in + bandwidth_out) as total_bandwidth,
+    avg(stream_count) as avg_streams,
+    max(stream_count) as max_streams
+FROM node_metrics_samples
+GROUP BY timestamp_5m, tenant_id, cluster_id, node_id;
+
+CREATE TABLE IF NOT EXISTS node_metrics_1h (
+    timestamp_1h DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String),
+    node_id LowCardinality(String),
+    avg_cpu Float32,
+    peak_cpu Float32,
+    avg_memory Float32,
+    peak_memory Float32,
+    avg_disk Float32,
+    peak_disk Float32,
+    avg_shm Float32,
+    peak_shm Float32,
+    total_bandwidth_in UInt64,
+    total_bandwidth_out UInt64,
+    was_healthy UInt8
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp_1h), tenant_id)
+ORDER BY (tenant_id, cluster_id, node_id, timestamp_1h)
+TTL timestamp_1h + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS node_metrics_1h_mv TO node_metrics_1h AS
+SELECT
+    toStartOfHour(timestamp) AS timestamp_1h,
+    tenant_id,
+    cluster_id,
+    node_id,
+    avg(cpu_usage) AS avg_cpu,
+    max(cpu_usage) AS peak_cpu,
+    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS avg_memory,
+    max(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS peak_memory,
+    avg(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS avg_disk,
+    max(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS peak_disk,
+    avg(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS avg_shm,
+    max(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS peak_shm,
+    max(bandwidth_in) - min(bandwidth_in) AS total_bandwidth_in,
+    max(bandwidth_out) - min(bandwidth_out) AS total_bandwidth_out,
+    if(avg(is_healthy) >= 0.5, 1, 0) AS was_healthy
+FROM node_metrics_samples
+GROUP BY timestamp_1h, tenant_id, cluster_id, node_id;
+
+-- ============================================================================
+-- ARTIFACT EVENTS + STATE (clips, DVR, VOD)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS artifact_events (
+    timestamp DateTime,
+    tenant_id UUID,
+    stream_id UUID,
+    internal_name String,
+    request_id String,
+
+    stage LowCardinality(String),
+    content_type LowCardinality(String),
+
+    start_unix Nullable(Int64),
+    stop_unix Nullable(Int64),
+
+    ingest_node_id Nullable(String),
+
+    percent Nullable(UInt32),
+    message Nullable(String),
+
+    file_path Nullable(String),
+    s3_url Nullable(String),
+    size_bytes Nullable(UInt64),
+    expires_at Nullable(Int64)
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, stream_id, timestamp, request_id)
+TTL timestamp + INTERVAL 90 DAY;
+
+
+CREATE TABLE IF NOT EXISTS artifact_state_current (
+    tenant_id UUID,
+    stream_id UUID,
+    request_id String,
+    internal_name String,
+
+    content_type LowCardinality(String),
+    stage LowCardinality(String),
+    progress_percent UInt8,
+    error_message Nullable(String),
+
+    requested_at DateTime,
+    started_at Nullable(DateTime),
+    completed_at Nullable(DateTime),
+
+    clip_start_unix Nullable(Int64),
+    clip_stop_unix Nullable(Int64),
+
+    segment_count Nullable(UInt32),
+    manifest_path Nullable(String),
+
+    file_path Nullable(String),
+    s3_url Nullable(String),
+    size_bytes Nullable(UInt64),
+
+    processing_node_id Nullable(String),
+
+    updated_at DateTime,
+    expires_at Nullable(DateTime)
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (tenant_id, request_id);
+
+-- ============================================================================
+-- STORAGE SNAPSHOTS + LIFECYCLE
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS storage_snapshots (
+    timestamp DateTime,
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    storage_scope LowCardinality(String) DEFAULT 'hot',
+
+    total_bytes UInt64,
+    file_count UInt32,
+
+    dvr_bytes UInt64,
+    clip_bytes UInt64,
+    vod_bytes UInt64,
+
+    frozen_dvr_bytes UInt64 DEFAULT 0,
+    frozen_clip_bytes UInt64 DEFAULT 0,
+    frozen_vod_bytes UInt64 DEFAULT 0
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (timestamp, tenant_id, node_id)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- Storage usage hourly rollup (must be after storage_snapshots table)
+CREATE TABLE IF NOT EXISTS storage_usage_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    avg_total_bytes AggregateFunction(avg, UInt64),
+    avg_clip_bytes AggregateFunction(avg, UInt64),
+    avg_dvr_bytes AggregateFunction(avg, UInt64),
+    avg_vod_bytes AggregateFunction(avg, UInt64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id)
+TTL hour + INTERVAL 90 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS storage_usage_hourly_mv TO storage_usage_hourly AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    avgState(total_bytes) AS avg_total_bytes,
+    avgState(clip_bytes) AS avg_clip_bytes,
+    avgState(dvr_bytes) AS avg_dvr_bytes,
+    avgState(vod_bytes) AS avg_vod_bytes
+FROM storage_snapshots
+GROUP BY hour, tenant_id;
+
 CREATE TABLE IF NOT EXISTS storage_events (
     timestamp DateTime,
     tenant_id UUID,
+    stream_id UUID,
     internal_name String,
     asset_hash String,
 
-    -- ===== ACTION =====
-    action LowCardinality(String),      -- freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
-    asset_type LowCardinality(String),  -- clip, dvr
+    action LowCardinality(String),
+    asset_type LowCardinality(String),
 
-    -- ===== DETAILS =====
     size_bytes UInt64,
     s3_url Nullable(String),
     local_path Nullable(String),
     node_id LowCardinality(String),
-    duration_ms Nullable(Int64),        -- How long the operation took (sync/defrost)
-    warm_duration_ms Nullable(Int64),   -- For evicted: how long asset was cached before eviction
+    duration_ms Nullable(Int64),
+    warm_duration_ms Nullable(Int64),
     error Nullable(String)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name, asset_hash)
+ORDER BY (tenant_id, stream_id, timestamp, asset_hash)
 TTL timestamp + INTERVAL 90 DAY;
 
 -- ============================================================================
--- PROCESSING BILLING TABLES (For Livepeer Gateway and native transcoding)
--- Tracks transcoding usage for billing and analytics
+-- PROCESSING EVENTS + DAILY ROLLUPS
 -- ============================================================================
 
--- Raw process billing events (from Helmsman via Decklog)
-CREATE TABLE IF NOT EXISTS process_billing (
+CREATE TABLE IF NOT EXISTS processing_events (
     timestamp DateTime,
     tenant_id UUID,
     node_id LowCardinality(String),
-    stream_name String,
+    stream_id UUID,
+    internal_name String,
 
-    -- ===== PROCESS TYPE =====
-    process_type LowCardinality(String),    -- Livepeer, AV, FFmpeg
-    track_type LowCardinality(String),      -- audio, video (KEY FOR BILLING)
+    process_type LowCardinality(String),
+    track_type LowCardinality(String),
 
-    -- ===== DURATION/USAGE =====
-    duration_ms Int64,                      -- Segment duration or time since last event
+    duration_ms Int64,
 
-    -- ===== CODEC INFO =====
     input_codec Nullable(String),
     output_codec Nullable(String),
 
-    -- ===== LIVEPEER-SPECIFIC =====
     segment_number Nullable(Int32),
-    width Nullable(Int32),                  -- source width
-    height Nullable(Int32),                 -- source height
+    width Nullable(Int32),
+    height Nullable(Int32),
     rendition_count Nullable(Int32),
     broadcaster_url Nullable(String),
-    upload_time_us Nullable(Int64),         -- DEPRECATED: use turnaround_ms
+    upload_time_us Nullable(Int64),
     livepeer_session_id Nullable(String),
     segment_start_ms Nullable(Int64),
     input_bytes Nullable(Int64),
@@ -1071,61 +1036,55 @@ CREATE TABLE IF NOT EXISTS process_billing (
     attempt_count Nullable(Int32),
     turnaround_ms Nullable(Int64),
     speed_factor Nullable(Float64),
-    renditions_json Nullable(String),       -- JSON array: [{name, bytes}, ...]
+    renditions_json Nullable(String),
 
-    -- ===== MISTPROCAV-SPECIFIC =====
-    input_frames Nullable(Int64),           -- cumulative
-    output_frames Nullable(Int64),          -- cumulative
+    input_frames Nullable(Int64),
+    output_frames Nullable(Int64),
     decode_us_per_frame Nullable(Int64),
     transform_us_per_frame Nullable(Int64),
     encode_us_per_frame Nullable(Int64),
     is_final Nullable(UInt8),
-    input_frames_delta Nullable(Int64),     -- frames this window
-    output_frames_delta Nullable(Int64),    -- frames this window
-    input_bytes_delta Nullable(Int64),      -- bytes this window
-    output_bytes_delta Nullable(Int64),     -- bytes this window
+    input_frames_delta Nullable(Int64),
+    output_frames_delta Nullable(Int64),
+    input_bytes_delta Nullable(Int64),
+    output_bytes_delta Nullable(Int64),
     input_width Nullable(Int32),
     input_height Nullable(Int32),
     output_width Nullable(Int32),
     output_height Nullable(Int32),
-    input_fpks Nullable(Int32),             -- frames per 1000s (input)
-    output_fps_measured Nullable(Float64),  -- measured output FPS
-    sample_rate Nullable(Int32),            -- audio sample rate
-    channels Nullable(Int32),               -- audio channels
+    input_fpks Nullable(Int32),
+    output_fps_measured Nullable(Float64),
+    sample_rate Nullable(Int32),
+    channels Nullable(Int32),
     source_timestamp_ms Nullable(Int64),
     sink_timestamp_ms Nullable(Int64),
     source_advanced_ms Nullable(Int64),
     sink_advanced_ms Nullable(Int64),
-    rtf_in Nullable(Float64),               -- real-time factor in
-    rtf_out Nullable(Float64),              -- real-time factor out
+    rtf_in Nullable(Float64),
+    rtf_out Nullable(Float64),
     pipeline_lag_ms Nullable(Int64),
     output_bitrate_bps Nullable(Int64)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (tenant_id, stream_name, timestamp)
+ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
--- Hourly process billing rollup for efficient queries
--- Includes codec + track_type dimensions for per-codec billing
-CREATE TABLE IF NOT EXISTS process_billing_hourly (
+CREATE TABLE IF NOT EXISTS processing_hourly (
     hour DateTime,
     tenant_id UUID,
     process_type LowCardinality(String),
-    output_codec LowCardinality(String),     -- h264, vp9, av1, hevc, aac, opus, etc.
-    track_type LowCardinality(String),       -- audio or video
+    output_codec LowCardinality(String),
+    track_type LowCardinality(String),
 
-    -- ===== AGGREGATED METRICS =====
     total_duration_ms AggregateFunction(sum, Int64),
-    segment_count AggregateFunction(count, UInt8),
-    unique_streams AggregateFunction(uniq, String)
+    segment_count AggregateFunction(count, UInt64),
+    unique_streams AggregateFunction(uniq, UUID)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, tenant_id, process_type, output_codec, track_type)
 TTL hour + INTERVAL 365 DAY;
 
--- Aggregation MV → process_billing_hourly
--- Extracts and normalizes codec + track_type from raw events
-CREATE MATERIALIZED VIEW IF NOT EXISTS process_billing_hourly_mv TO process_billing_hourly AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS processing_hourly_mv TO processing_hourly AS
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
@@ -1134,17 +1093,14 @@ SELECT
     coalesce(track_type, 'video') AS track_type,
     sumState(duration_ms) AS total_duration_ms,
     countState() AS segment_count,
-    uniqState(stream_name) AS unique_streams
-FROM process_billing
+    uniqState(stream_id) AS unique_streams
+FROM processing_events
 GROUP BY hour, tenant_id, process_type, output_codec, track_type;
 
--- Daily tenant processing summary for billing
--- Per-codec columns for accurate billing with codec multipliers
-CREATE TABLE IF NOT EXISTS process_billing_daily (
+CREATE TABLE IF NOT EXISTS processing_daily (
     day Date,
     tenant_id UUID,
 
-    -- ===== LIVEPEER (EXTERNAL GATEWAY) - Per Codec =====
     livepeer_h264_seconds Float64,
     livepeer_vp9_seconds Float64,
     livepeer_av1_seconds Float64,
@@ -1152,7 +1108,6 @@ CREATE TABLE IF NOT EXISTS process_billing_daily (
     livepeer_segment_count UInt64,
     livepeer_unique_streams UInt32,
 
-    -- ===== NATIVE AV (LOCAL PROCESSING) - Per Codec =====
     native_av_h264_seconds Float64,
     native_av_vp9_seconds Float64,
     native_av_av1_seconds Float64,
@@ -1162,11 +1117,9 @@ CREATE TABLE IF NOT EXISTS process_billing_daily (
     native_av_segment_count UInt64,
     native_av_unique_streams UInt32,
 
-    -- ===== TRACK TYPE AGGREGATES (for quick audio vs video) =====
     audio_seconds Float64,
     video_seconds Float64,
 
-    -- ===== LEGACY TOTALS (backward compatibility) =====
     livepeer_seconds Float64,
     native_av_seconds Float64
 ) ENGINE = SummingMergeTree()
@@ -1174,34 +1127,169 @@ PARTITION BY toYYYYMM(day)
 ORDER BY (day, tenant_id)
 TTL day + INTERVAL 730 DAY;
 
--- Aggregation MV → process_billing_daily
--- Pivots hourly codec data into per-codec columns
-CREATE MATERIALIZED VIEW IF NOT EXISTS process_billing_daily_mv TO process_billing_daily AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS processing_daily_mv TO processing_daily AS
 SELECT
     toDate(hour) AS day,
     tenant_id,
-    -- Livepeer per-codec
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'h264') / 1000.0 AS livepeer_h264_seconds,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'vp9') / 1000.0 AS livepeer_vp9_seconds,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'av1') / 1000.0 AS livepeer_av1_seconds,
     sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS livepeer_hevc_seconds,
     toUInt64(countMergeIf(segment_count, process_type = 'Livepeer')) AS livepeer_segment_count,
     toUInt32(uniqMergeIf(unique_streams, process_type = 'Livepeer')) AS livepeer_unique_streams,
-    -- Native AV per-codec (video)
     sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'h264') / 1000.0 AS native_av_h264_seconds,
     sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'vp9') / 1000.0 AS native_av_vp9_seconds,
     sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'av1') / 1000.0 AS native_av_av1_seconds,
     sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS native_av_hevc_seconds,
-    -- Native AV per-codec (audio)
     sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'aac') / 1000.0 AS native_av_aac_seconds,
     sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'opus') / 1000.0 AS native_av_opus_seconds,
     toUInt64(countMergeIf(segment_count, process_type = 'AV')) AS native_av_segment_count,
     toUInt32(uniqMergeIf(unique_streams, process_type = 'AV')) AS native_av_unique_streams,
-    -- Track type aggregates
     sumMergeIf(total_duration_ms, track_type = 'audio') / 1000.0 AS audio_seconds,
     sumMergeIf(total_duration_ms, track_type = 'video') / 1000.0 AS video_seconds,
-    -- Legacy totals (backward compatibility)
     sumMergeIf(total_duration_ms, process_type = 'Livepeer') / 1000.0 AS livepeer_seconds,
     sumMergeIf(total_duration_ms, process_type = 'AV') / 1000.0 AS native_av_seconds
-FROM process_billing_hourly
+FROM processing_hourly
 GROUP BY day, tenant_id;
+
+-- ============================================================================
+-- INGEST ERRORS (DLQ)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS ingest_errors (
+    received_at DateTime,
+    event_id String,
+    event_type LowCardinality(String),
+    source LowCardinality(String),
+    tenant_id String,
+    stream_id String,
+    error String,
+    payload_json String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(received_at)
+ORDER BY (received_at, event_type, event_id)
+TTL received_at + INTERVAL 30 DAY;
+
+-- ============================================================================
+-- API REQUEST TRACKING (Rate Limiting & Agent Analytics)
+-- ============================================================================
+-- Tracks GraphQL API requests for usage analytics and billing.
+-- Enables tracking of agent vs. human usage patterns.
+-- See: docs/rfcs/agent-access.md
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS api_requests (
+    timestamp DateTime,
+    tenant_id UUID,
+    source_node Nullable(String),                     -- Gateway instance ID for aggregate batches
+
+    -- ===== AUTH TRACKING =====
+    auth_type LowCardinality(String) DEFAULT 'jwt',  -- 'jwt', 'api_token', 'wallet', 'anonymous'
+
+    -- ===== REQUEST DETAILS =====
+    operation_name Nullable(String),
+    operation_type LowCardinality(String),           -- 'query', 'mutation', 'subscription'
+    user_hashes Array(UInt64) DEFAULT [],
+    token_hashes Array(UInt64) DEFAULT [],
+
+    -- ===== AGGREGATE COUNTS (for batch writes) =====
+    -- For per-request writes: request_count=1, error_count=0 or 1
+    -- For aggregate writes: request_count=N, error_count=M
+    request_count UInt32 DEFAULT 1,
+    error_count UInt32 DEFAULT 0,
+    total_duration_ms UInt64 DEFAULT 0,              -- Sum of all request durations in aggregate
+    total_complexity UInt32 DEFAULT 0                -- Sum of all complexity scores in aggregate
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- Hourly rollups for API usage
+-- Uses AggregatingMergeTree to support unique actor counts without re-scanning raw requests
+CREATE TABLE IF NOT EXISTS api_usage_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    auth_type LowCardinality(String),
+    operation_type LowCardinality(String),
+    operation_name LowCardinality(String) DEFAULT '',
+    total_requests AggregateFunction(sum, UInt64),
+    total_errors AggregateFunction(sum, UInt64),
+    total_duration_ms AggregateFunction(sum, UInt64),
+    total_complexity AggregateFunction(sum, UInt64),
+    unique_users AggregateFunction(uniqCombined, UInt64),
+    unique_tokens AggregateFunction(uniqCombined, UInt64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, auth_type, operation_type, operation_name)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS api_usage_hourly_mv TO api_usage_hourly AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    auth_type,
+    operation_type,
+    coalesce(operation_name, '') AS operation_name,
+    sumState(toUInt64(request_count)) AS total_requests,
+    sumState(toUInt64(error_count)) AS total_errors,
+    sumState(toUInt64(total_duration_ms)) AS total_duration_ms,
+    sumState(toUInt64(total_complexity)) AS total_complexity,
+    uniqCombinedArrayState(user_hashes) AS unique_users,
+    uniqCombinedArrayState(token_hashes) AS unique_tokens
+FROM api_requests
+GROUP BY hour, tenant_id, auth_type, operation_type, operation_name;
+
+-- Daily rollups for billing and analytics
+CREATE TABLE IF NOT EXISTS api_usage_daily (
+    day Date,
+    tenant_id UUID,
+    auth_type LowCardinality(String),
+    operation_type LowCardinality(String),
+    operation_name LowCardinality(String) DEFAULT '',
+    total_requests AggregateFunction(sum, UInt64),
+    total_errors AggregateFunction(sum, UInt64),
+    total_duration_ms AggregateFunction(sum, UInt64),
+    total_complexity AggregateFunction(sum, UInt64),
+    unique_users AggregateFunction(uniqCombined, UInt64),
+    unique_tokens AggregateFunction(uniqCombined, UInt64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, tenant_id, auth_type, operation_type, operation_name)
+TTL day + INTERVAL 730 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS api_usage_daily_mv TO api_usage_daily AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    auth_type,
+    operation_type,
+    operation_name,
+    sumMergeState(total_requests) AS total_requests,
+    sumMergeState(total_errors) AS total_errors,
+    sumMergeState(total_duration_ms) AS total_duration_ms,
+    sumMergeState(total_complexity) AS total_complexity,
+    uniqCombinedMergeState(unique_users) AS unique_users,
+    uniqCombinedMergeState(unique_tokens) AS unique_tokens
+FROM api_usage_hourly
+GROUP BY day, tenant_id, auth_type, operation_type, operation_name;
+
+-- ============================================================================
+-- SERVICE EVENT AUDIT LOG (service_events topic)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS api_events (
+    tenant_id UUID,
+    event_type LowCardinality(String),
+    source LowCardinality(String),
+    user_id Nullable(UUID),
+    resource_type LowCardinality(String),
+    resource_id Nullable(String),
+    details String,
+    timestamp DateTime64(3),
+
+    INDEX idx_event_type event_type TYPE bloom_filter GRANULARITY 4,
+    INDEX idx_resource_type resource_type TYPE bloom_filter GRANULARITY 4
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (tenant_id, event_type, timestamp)
+TTL timestamp + INTERVAL 1 YEAR;

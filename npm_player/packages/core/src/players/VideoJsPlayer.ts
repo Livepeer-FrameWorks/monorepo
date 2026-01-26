@@ -154,6 +154,10 @@ export class VideoJsPlayerImpl extends BasePlayer {
       // When using custom controls (controls: false), disable ALL VideoJS UI elements
       const useVideoJsControls = options.controls === true;
 
+      // Android < 7 workaround: enable overrideNative for HLS
+      const androidMatch = navigator.userAgent.match(/android\s([\d.]*)/i);
+      const androidVersion = androidMatch ? parseFloat(androidMatch[1]) : null;
+
       // Build VideoJS options
       // NOTE: We disable UI components but NOT children array - that breaks playback
       const vjsOptions: Record<string, any> = {
@@ -169,17 +173,36 @@ export class VideoJsPlayerImpl extends BasePlayer {
         controlBar: useVideoJsControls,
         liveTracker: useVideoJsControls,
         // Don't set children: [] - that can break internal VideoJS components
-      };
 
-      // Android < 7 workaround: enable overrideNative for HLS
-      const androidMatch = navigator.userAgent.match(/android\s([\d.]*)/i);
-      const androidVersion = androidMatch ? parseFloat(androidMatch[1]) : null;
-      if (androidVersion && androidVersion < 7) {
-        console.debug('[VideoJS] Android < 7 detected, enabling overrideNative');
-        vjsOptions.html5 = { hls: { overrideNative: true } };
-        vjsOptions.nativeAudioTracks = false;
-        vjsOptions.nativeVideoTracks = false;
-      }
+        // VHS (http-streaming) configuration - AGGRESSIVE for fastest startup
+        html5: {
+          vhs: {
+            // AGGRESSIVE: Start with lower quality for instant playback
+            enableLowInitialPlaylist: true,
+
+            // AGGRESSIVE: Assume 5 Mbps initially
+            bandwidth: 5_000_000,
+
+            // Persist bandwidth across sessions for returning users
+            useBandwidthFromLocalStorage: true,
+
+            // Enable partial segment processing for lower latency
+            handlePartialData: true,
+
+            // AGGRESSIVE: Very tight live range
+            liveRangeSafeTimeDelta: 0.3,
+
+            // Allow user overrides via options.vhsConfig
+            ...options.vhsConfig,
+          },
+          // Android < 7 workaround
+          ...(androidVersion && androidVersion < 7 ? {
+            hls: { overrideNative: true }
+          } : {}),
+        },
+        nativeAudioTracks: androidVersion && androidVersion < 7 ? false : undefined,
+        nativeVideoTracks: androidVersion && androidVersion < 7 ? false : undefined,
+      };
 
       console.debug('[VideoJS] Creating player with options:', vjsOptions);
       this.videojsPlayer = videojs(video, vjsOptions);

@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-core",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "description": "Core streaming logic for StreamCrafter - framework agnostic WebCodecs-based browser streaming",
   "main": "dist/cjs/index.cjs",

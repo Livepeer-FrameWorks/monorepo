@@ -41,6 +41,7 @@ func main() {
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events")
+	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", "service_events")
 
 	producer, err := kafka.NewKafkaProducer(brokers, analyticsTopic, clusterID, logger)
 	if err != nil {
@@ -76,13 +77,14 @@ func main() {
 
 	// Create gRPC server
 	grpcServer, err := grpc.NewGRPCServer(grpc.GRPCServerConfig{
-		Producer:      producer,
-		Logger:        logger,
-		Metrics:       metrics,
-		CertFile:      certFile,
-		KeyFile:       keyFile,
-		AllowInsecure: allowInsecure,
-		ServiceToken:  serviceToken,
+		Producer:           producer,
+		Logger:             logger,
+		Metrics:            metrics,
+		CertFile:           certFile,
+		KeyFile:            keyFile,
+		AllowInsecure:      allowInsecure,
+		ServiceToken:       serviceToken,
+		ServiceEventsTopic: serviceEventsTopic,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create gRPC server")
@@ -129,7 +131,12 @@ func main() {
 			Port:           int32(pi),
 			AdvertiseHost:  &advertiseHost,
 			HealthEndpoint: &healthEndpoint,
-			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
 		} else {

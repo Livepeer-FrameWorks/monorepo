@@ -1,0 +1,34 @@
+query GetVodAssetsConnection($first: Int = 50, $after: String, $last: Int, $before: String) {
+  vodAssetsConnection(page: { first: $first, after: $after, last: $last, before: $before }) {
+    edges {
+      cursor
+      node {
+        id
+        artifactHash
+        playbackId
+        title
+        description
+        filename
+        status
+        storageLocation
+        sizeBytes
+        durationMs
+        resolution
+        videoCodec
+        audioCodec
+        bitrateKbps
+        createdAt
+        updatedAt
+        expiresAt
+        errorMessage
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

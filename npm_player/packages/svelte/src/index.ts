@@ -12,11 +12,11 @@
  * @example
  * ```svelte
  * <script>
- *   import { Player } from '@livepeer-frameworks/player/svelte';
+ *   import { Player } from '@livepeer-frameworks/player-svelte';
  * </script>
  *
  * <Player
- *   contentId="my-stream"
+ *   contentId="pk_..."
  *   contentType="live"
  *   options={{ gatewayUrl: "https://gateway.example.com/graphql", devMode: true }}
  *   autoplay

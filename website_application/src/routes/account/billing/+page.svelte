@@ -220,7 +220,7 @@
             <DashboardMetricCard
               icon={CreditCardIcon}
               iconColor="text-primary"
-              value={currentTier?.name || 'Free'}
+              value={currentTier?.displayName || 'Free'}
               valueColor="text-foreground"
               label="Current Plan"
             />
@@ -298,9 +298,9 @@
             </div>
             <div class="slab-body--padded">
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {#each availableTiers as tier (tier.id ?? tier.name)}
+                {#each availableTiers as tier (tier.id ?? tier.tierName ?? tier.displayName)}
                   <div class="p-4 border border-border/50 bg-muted/10 {currentTier?.id === tier.id ? 'ring-2 ring-primary' : ''}">
-                    <h4 class="text-lg font-semibold mb-2">{tier.name}</h4>
+                    <h4 class="text-lg font-semibold mb-2">{tier.displayName}</h4>
                     <div class="text-2xl font-bold text-primary mb-2">
                       {#if tier.isEnterprise}
                         <span class="text-lg">Contact us</span>

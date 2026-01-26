@@ -2,8 +2,10 @@ package graph
 
 import (
 	"context"
+	"strings"
 
 	"frameworks/api_gateway/internal/loaders"
+	gwmiddleware "frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/middleware"
 	pb "frameworks/pkg/proto"
 )
@@ -56,6 +58,77 @@ func (r *dVRRequestResolver) getLifecycleData(ctx context.Context, requestID str
 	}
 
 	return state
+}
+
+// resolveArtifactPlaybackID resolves an artifact playbackId from a content type + hash.
+// Best-effort: returns nil on lookup errors or missing mappings.
+func (r *Resolver) resolveArtifactPlaybackID(ctx context.Context, contentType, hash string) *string {
+	if hash == "" || gwmiddleware.IsDemoMode(ctx) || r == nil || r.Resolver == nil || r.Resolver.Clients == nil || r.Resolver.Clients.Commodore == nil {
+		return nil
+	}
+
+	lds := loaders.FromContext(ctx)
+	memo := (*loaders.Memoizer)(nil)
+	if lds != nil {
+		memo = lds.Memo
+	}
+
+	key := "artifact_playback:" + strings.ToLower(contentType) + ":" + hash
+	lookup := func() (interface{}, error) {
+		ct := strings.ToLower(contentType)
+		switch ct {
+		case "clip":
+			resp, err := r.Resolver.Clients.Commodore.ResolveClipHash(ctx, hash)
+			if err != nil || !resp.Found || resp.PlaybackId == "" {
+				return nil, err
+			}
+			return resp.PlaybackId, nil
+		case "dvr":
+			resp, err := r.Resolver.Clients.Commodore.ResolveDVRHash(ctx, hash)
+			if err != nil || !resp.Found || resp.PlaybackId == "" {
+				return nil, err
+			}
+			return resp.PlaybackId, nil
+		case "vod":
+			resp, err := r.Resolver.Clients.Commodore.ResolveVodHash(ctx, hash)
+			if err != nil || !resp.Found || resp.PlaybackId == "" {
+				return nil, err
+			}
+			return resp.PlaybackId, nil
+		default:
+			if resp, err := r.Resolver.Clients.Commodore.ResolveClipHash(ctx, hash); err == nil && resp.Found && resp.PlaybackId != "" {
+				return resp.PlaybackId, nil
+			}
+			if resp, err := r.Resolver.Clients.Commodore.ResolveDVRHash(ctx, hash); err == nil && resp.Found && resp.PlaybackId != "" {
+				return resp.PlaybackId, nil
+			}
+			if resp, err := r.Resolver.Clients.Commodore.ResolveVodHash(ctx, hash); err == nil && resp.Found && resp.PlaybackId != "" {
+				return resp.PlaybackId, nil
+			}
+			return nil, nil
+		}
+	}
+
+	if memo == nil {
+		val, err := lookup()
+		if err != nil || val == nil {
+			return nil
+		}
+		if s, ok := val.(string); ok && s != "" {
+			return &s
+		}
+		return nil
+	}
+
+	val, err := memo.GetOrLoad(key, lookup)
+	if err != nil || val == nil {
+		return nil
+	}
+	s, ok := val.(string)
+	if !ok || s == "" {
+		return nil
+	}
+	return &s
 }
 
 // formatMetricName formats a metric key for display in invoice line items

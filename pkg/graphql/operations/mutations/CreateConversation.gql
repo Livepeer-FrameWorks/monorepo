@@ -1,0 +1,16 @@
+mutation CreateConversation($input: CreateConversationInput!) {
+  createConversation(input: $input) {
+    ... on Conversation {
+      id
+      subject
+      status
+      unreadCount
+      createdAt
+      updatedAt
+    }
+    ... on ValidationError {
+      message
+      code
+    }
+  }
+}

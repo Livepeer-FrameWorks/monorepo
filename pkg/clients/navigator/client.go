@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 // Client represents a Navigator gRPC client
@@ -25,6 +26,26 @@ type Config struct {
 	Addr    string
 	Timeout time.Duration
 	Logger  logging.Logger
+	// ServiceToken for service-to-service auth (optional)
+	ServiceToken string
+}
+
+func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if serviceToken == "" {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+
+		md := metadata.MD{}
+		md.Set("authorization", "Bearer "+serviceToken)
+
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = metadata.Join(existingMD, md)
+		}
+
+		ctx = metadata.NewOutgoingContext(ctx, md)
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
 }
 
 // NewClient creates a new Navigator gRPC client
@@ -40,7 +61,13 @@ func NewClient(config Config) (*Client, error) {
 	defer cancel()
 
 	// For now, use insecure credentials for development. In production, use TLS.
-	conn, err := grpc.DialContext(ctx, config.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	conn, err := grpc.DialContext(
+		ctx,
+		config.Addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
+		grpc.WithBlock(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Navigator gRPC server: %w", err)
 	}

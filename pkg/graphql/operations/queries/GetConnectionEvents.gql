@@ -1,0 +1,51 @@
+# Fetch paginated viewer connection events with geographic and session details
+# Returns connect/disconnect events for analytics and monitoring
+query GetConnectionEvents(
+  $streamId: ID
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $after: String
+  $noCache: Boolean = false
+) {
+  analytics {
+    lifecycle {
+      connectionEventsConnection(streamId: $streamId, timeRange: $timeRange, noCache: $noCache, page: { first: $first, after: $after }) @paginate(mode: Infinite) {
+        edges {
+          cursor
+          node {
+            eventId
+            timestamp
+            streamId
+            stream {
+              streamId
+            }
+            sessionId
+            connectionAddr
+            connector
+            nodeId
+            countryCode
+            city
+            latitude
+            longitude
+            clientBucket {
+              h3Index
+              resolution
+            }
+            nodeBucket {
+              h3Index
+              resolution
+            }
+            eventType
+            sessionDurationSeconds
+            bytesTransferred
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

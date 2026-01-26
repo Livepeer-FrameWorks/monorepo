@@ -1,0 +1,35 @@
+name: RFC
+description: Propose a significant change or new feature
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One paragraph explaining the proposal
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why do we need this? What problem does it solve?
+    validations:
+      required: true
+  - type: textarea
+    id: design
+    attributes:
+      label: Proposed Design
+      description: How would this work? Include diagrams if helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider?
+  - type: input
+    id: rfc_doc
+    attributes:
+      label: RFC Document
+      description: Link to docs/rfcs/*.md if exists
+      placeholder: docs/rfcs/my-feature.md

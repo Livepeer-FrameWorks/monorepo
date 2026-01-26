@@ -1,0 +1,27 @@
+query GetRebufferingEventsConnection($streamId: ID, $nodeId: String, $timeRange: TimeRangeInput, $first: Int = 100, $after: String, $last: Int, $before: String, $noCache: Boolean = false) {
+  analytics {
+    health {
+      rebufferingEventsConnection(streamId: $streamId, nodeId: $nodeId, timeRange: $timeRange, noCache: $noCache, page: { first: $first, after: $after, last: $last, before: $before }) {
+        edges {
+          cursor
+          node {
+            timestamp
+            streamId
+            nodeId
+            bufferState
+            previousState
+            rebufferStart
+            rebufferEnd
+          }
+        }
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

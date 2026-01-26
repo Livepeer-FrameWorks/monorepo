@@ -6,6 +6,8 @@ import (
 
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
+	"frameworks/pkg/clients/deckhand"
+	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/clients/purser"
 	"frameworks/pkg/clients/quartermaster"
@@ -17,6 +19,8 @@ import (
 // ServiceClients holds all downstream service gRPC clients
 type ServiceClients struct {
 	Commodore     *commodore.GRPCClient
+	Deckhand      *deckhand.GRPCClient
+	Decklog       *decklog.BatchedClient
 	Periscope     *periscope.GRPCClient
 	Purser        *purser.GRPCClient
 	Quartermaster *quartermaster.GRPCClient
@@ -99,8 +103,37 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		return nil, fmt.Errorf("failed to create Signalman gRPC client: %w", err)
 	}
 
+	// Initialize Decklog gRPC client (for API usage tracking)
+	decklogClient, err := decklog.NewBatchedClient(decklog.BatchedClientConfig{
+		Target:        config.RequireEnv("DECKLOG_GRPC_ADDR"),
+		AllowInsecure: true, // Internal service communication
+		Timeout:       cfg.Timeout,
+		Source:        "bridge",
+		ServiceToken:  cfg.ServiceToken,
+	}, cfg.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Decklog gRPC client: %w", err)
+	}
+
+	// Initialize Deckhand gRPC client (for support messaging)
+	// Optional: only initialize if DECKHAND_GRPC_ADDR is configured
+	var deckhandClient *deckhand.GRPCClient
+	if deckhandAddr := config.GetEnv("DECKHAND_GRPC_ADDR", ""); deckhandAddr != "" {
+		deckhandClient, err = deckhand.NewGRPCClient(deckhand.GRPCConfig{
+			GRPCAddr:     deckhandAddr,
+			Timeout:      cfg.Timeout,
+			Logger:       cfg.Logger,
+			ServiceToken: cfg.ServiceToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Deckhand gRPC client: %w", err)
+		}
+	}
+
 	return &ServiceClients{
 		Commodore:     commodoreClient,
+		Deckhand:      deckhandClient,
+		Decklog:       decklogClient,
 		Periscope:     periscopeClient,
 		Purser:        purserClient,
 		Quartermaster: quartermasterClient,
@@ -115,6 +148,16 @@ func (c *ServiceClients) Close() error {
 	if c.Commodore != nil {
 		if err := c.Commodore.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("commodore: %w", err))
+		}
+	}
+	if c.Deckhand != nil {
+		if err := c.Deckhand.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("deckhand: %w", err))
+		}
+	}
+	if c.Decklog != nil {
+		if err := c.Decklog.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("decklog: %w", err))
 		}
 	}
 	if c.Periscope != nil {

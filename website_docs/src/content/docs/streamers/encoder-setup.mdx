@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 Getting your stream from your device to FrameWorks involves configuring your encoder. This guide provides detailed instructions for popular encoding software like OBS Studio and FFmpeg, along with advanced protocols such as SRT and WHIP. We'll help you optimize your settings for the best possible stream quality.
 
 <Aside type="note" title="Works everywhere">
-These encoder settings work identically whether you're using the managed FrameWorks service or self-hosting on your own infrastructure.
+These encoder settings are the same for managed and self‑hosted deployments. Ingest endpoints and exposed ports can differ, so use the URLs shown in your dashboard.
 </Aside>
 
 ## OBS Studio
@@ -91,6 +91,8 @@ srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller
 
 In OBS: **Settings → Stream → Service → Custom**, then paste the SRT URL in Server.
 
+If you’re self‑hosting, make sure the SRT port is exposed on your ingest endpoint (default is `%SRT_PORT%`).
+
 **FFmpeg with SRT:**
 ```bash
 ffmpeg -re -i input.mp4 \
@@ -104,19 +106,25 @@ ffmpeg -re -i input.mp4 \
 WHIP (WebRTC-HTTP Ingestion Protocol) provides a modern approach for browser-based ingestion, enabling real-time streaming with sub-second latency directly from your web browser or compatible software. The dashboard shows your specific WHIP URL on the stream details page.
 
 ```
-%WHIP_URL%/{stream-key}
+%INGEST_URL%/webrtc/{stream-key}
 ```
+
+If you’re self‑hosting behind a proxy, make sure the WHIP path is reachable on your ingest endpoint.
 
 ## Choosing the Right Bitrate
 
-Selecting the correct bitrate is key to stream stability. A higher bitrate improves quality but requires a stronger internet connection. Use these targets as a starting point:
+Selecting the correct bitrate is key to stream stability. A higher bitrate improves quality but requires a stronger internet connection. Use these ranges as a starting point:
 
-| Quality | Resolution | FPS | Bitrate |
-|---------|-----------|-----|---------|
-| Low | 720p | 30 | 2,500 kbps |
-| Medium | 1080p | 30 | 4,500 kbps |
-| High | 1080p | 60 | 6,000 kbps |
-| Very High | 1440p | 60 | 9,000 kbps |
+| Resolution | FPS | Bitrate Range |
+|-----------|-----|---------------|
+| 720p | 30 | 2,500–4,000 kbps |
+| 720p | 60 | 3,500–6,000 kbps |
+| 1080p | 30 | 3,500–6,000 kbps |
+| 1080p | 60 | 4,500–8,000 kbps |
+| 1440p | 30 | 5,000–15,000 kbps |
+| 1440p | 60 | 6,000–24,000 kbps |
+
+These ranges are FrameWorks recommendations; adjust based on content complexity and network stability.
 
 **Rule of thumb:** Your upload speed should be at least 2x your stream bitrate.
 

@@ -60,8 +60,9 @@ func main() {
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "signalman-group")
 	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
 	clientID := config.GetEnv("KAFKA_CLIENT_ID", "signalman")
-	topicsEnv := config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events")
-	topics := strings.Split(topicsEnv, ",")
+	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events")
+	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", "service_events")
+	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", "decklog_events_dlq")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 
@@ -71,12 +72,71 @@ func main() {
 	}
 	defer consumer.Close()
 
-	// Register Kafka message handler that routes to gRPC hub
-	msgHandler := func(ctx context.Context, msg kafka.Message) error {
+	var dlqProducer *kafka.KafkaProducer
+	dlqProducer, err = kafka.NewKafkaProducer(brokers, dlqTopic, clusterID, logger)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create DLQ Kafka producer (DLQ disabled)")
+		dlqProducer = nil
+	} else {
+		defer dlqProducer.Close()
+	}
+
+	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
+		return func(ctx context.Context, msg kafka.Message) error {
+			if err := handler(ctx, msg); err != nil {
+				if dlqProducer == nil {
+					return err
+				}
+
+				payload, encodeErr := kafka.EncodeDLQMessage(msg, err, consumerName)
+				if encodeErr != nil {
+					logger.WithError(encodeErr).WithFields(logging.Fields{
+						"topic":     msg.Topic,
+						"partition": msg.Partition,
+						"offset":    msg.Offset,
+					}).Error("Failed to encode DLQ payload")
+					return encodeErr
+				}
+
+				key := msg.Key
+				if len(key) == 0 {
+					key = []byte(fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset))
+				}
+
+				headers := map[string]string{
+					"source":         consumerName,
+					"original_topic": msg.Topic,
+				}
+
+				if produceErr := dlqProducer.ProduceMessage(dlqTopic, key, payload, headers); produceErr != nil {
+					logger.WithError(produceErr).WithFields(logging.Fields{
+						"topic":     msg.Topic,
+						"partition": msg.Partition,
+						"offset":    msg.Offset,
+					}).Error("Failed to publish message to DLQ")
+					return produceErr
+				}
+
+				logger.WithError(err).WithFields(logging.Fields{
+					"topic":     msg.Topic,
+					"partition": msg.Partition,
+					"offset":    msg.Offset,
+					"dlq_topic": dlqTopic,
+				}).Warn("Message sent to DLQ after handler error")
+
+				return nil
+			}
+
+			return nil
+		}
+	}
+
+	// Register Kafka message handler that routes analytics events to gRPC hub
+	analyticsHandler := func(ctx context.Context, msg kafka.Message) error {
 		var event kafka.AnalyticsEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			logger.WithError(err).Error("Failed to unmarshal analytics event")
-			return nil
+			return fmt.Errorf("unmarshal analytics event: %w", err)
 		}
 		// Map headers
 		for k, v := range msg.Headers {
@@ -110,15 +170,72 @@ func main() {
 		return nil
 	}
 
-	for _, topic := range topics {
-		consumer.AddHandler(topic, msgHandler)
+	// Register Kafka message handler for service events
+	serviceHandler := func(ctx context.Context, msg kafka.Message) error {
+		var event kafka.ServiceEvent
+		if err := json.Unmarshal(msg.Value, &event); err != nil {
+			logger.WithError(err).Error("Failed to unmarshal service event")
+			return fmt.Errorf("unmarshal service event: %w", err)
+		}
+
+		for k, v := range msg.Headers {
+			if k == "source" && event.Source == "" {
+				event.Source = v
+			}
+			if k == "tenant_id" && event.TenantID == "" {
+				event.TenantID = v
+			}
+			if k == "event_type" && event.EventType == "" {
+				event.EventType = v
+			}
+		}
+
+		// Service-plane events that should never hit real-time channels.
+		if event.EventType == "api_request_batch" {
+			return nil
+		}
+
+		channel := mapEventTypeToChannel(event.EventType)
+		eventType := mapEventTypeToProto(event.EventType)
+		if eventType == pb.EventType_EVENT_TYPE_UNSPECIFIED {
+			return nil
+		}
+
+		data := serviceEventToProtoData(event, logger)
+		if data == nil {
+			return fmt.Errorf("service event payload missing required data")
+		}
+
+		if channel == pb.Channel_CHANNEL_SYSTEM {
+			if event.TenantID != "" {
+				grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, data)
+			} else {
+				grpcHub.BroadcastInfrastructure(eventType, data)
+			}
+		} else if event.TenantID != "" {
+			grpcHub.BroadcastToTenant(event.TenantID, eventType, channel, data)
+		} else {
+			logger.WithFields(logging.Fields{
+				"event_type": event.EventType,
+				"channel":    channel,
+			}).Warn("Dropping service event without tenant_id for non-system channel")
+		}
+
+		return nil
 	}
+
+	consumer.AddHandler(analyticsTopic, wrapWithDLQ("signalman-analytics", analyticsHandler))
+	consumer.AddHandler(serviceEventsTopic, wrapWithDLQ("signalman-service", serviceHandler))
 
 	// Add health checks
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
+	if dlqProducer != nil {
+		healthChecker.AddCheck("kafka_dlq_producer", monitoring.KafkaProducerHealthCheck(dlqProducer.GetClient()))
+	}
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"KAFKA_BROKERS": strings.Join(brokers, ","),
-		"KAFKA_TOPICS":  topicsEnv,
+		"KAFKA_BROKERS":           strings.Join(brokers, ","),
+		"KAFKA_TOPICS":            strings.Join([]string{analyticsTopic, serviceEventsTopic}, ","),
+		"DECKLOG_DLQ_KAFKA_TOPIC": dlqTopic,
 	}))
 
 	// Start Kafka consumer
@@ -217,10 +334,14 @@ func main() {
 // mapEventTypeToChannel maps Kafka event types to gRPC channels
 func mapEventTypeToChannel(eventType string) pb.Channel {
 	switch eventType {
-	case "stream_lifecycle_update", "stream_track_list", "stream_buffer", "stream_end", "stream_source", "play_rewrite":
+	case "stream_lifecycle_update", "stream_track_list", "stream_buffer", "stream_end", "stream_source", "play_rewrite", "push_rewrite":
 		return pb.Channel_CHANNEL_STREAMS
 	case "node_lifecycle_update", "load_balancing":
 		return pb.Channel_CHANNEL_SYSTEM
+	case "storage_lifecycle", "storage_snapshot", "process_billing":
+		return pb.Channel_CHANNEL_ANALYTICS
+	case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
+		return pb.Channel_CHANNEL_MESSAGING
 	default:
 		return pb.Channel_CHANNEL_ANALYTICS
 	}
@@ -268,6 +389,15 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 		return pb.EventType_EVENT_TYPE_PUSH_END
 	case "recording_complete":
 		return pb.EventType_EVENT_TYPE_RECORDING_COMPLETE
+	case "storage_lifecycle":
+		return pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE
+	case "process_billing":
+		return pb.EventType_EVENT_TYPE_PROCESS_BILLING
+	case "storage_snapshot":
+		return pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT
+	// Messaging events
+	case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
+		return pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE
 	default:
 		return pb.EventType_EVENT_TYPE_UNSPECIFIED
 	}
@@ -327,7 +457,123 @@ func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.Ev
 		eventData.Payload = &pb.EventData_StreamLifecycle{StreamLifecycle: p.StreamLifecycleUpdate}
 	case *pb.MistTrigger_StreamBuffer:
 		eventData.Payload = &pb.EventData_StreamBuffer{StreamBuffer: p.StreamBuffer}
+	case *pb.MistTrigger_StorageLifecycleData:
+		eventData.Payload = &pb.EventData_StorageLifecycle{StorageLifecycle: p.StorageLifecycleData}
+	case *pb.MistTrigger_ProcessBilling:
+		eventData.Payload = &pb.EventData_ProcessBilling{ProcessBilling: p.ProcessBilling}
+	case *pb.MistTrigger_PlayRewrite:
+		eventData.Payload = &pb.EventData_PlayRewrite{PlayRewrite: p.PlayRewrite}
+	case *pb.MistTrigger_StreamSource:
+		eventData.Payload = &pb.EventData_StreamSource{StreamSource: p.StreamSource}
+	case *pb.MistTrigger_StorageSnapshot:
+		eventData.Payload = &pb.EventData_StorageSnapshot{StorageSnapshot: p.StorageSnapshot}
+	case *pb.MistTrigger_MessageLifecycleData:
+		eventData.Payload = &pb.EventData_MessageLifecycle{MessageLifecycle: p.MessageLifecycleData}
 	}
 
 	return eventData
+}
+
+func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *pb.EventData {
+	switch event.EventType {
+	case "message_received", "message_updated", "conversation_created", "conversation_updated":
+		ml := &pb.MessageLifecycleData{}
+		switch event.EventType {
+		case "message_received":
+			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED
+		case "message_updated":
+			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED
+		case "conversation_created":
+			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED
+		case "conversation_updated":
+			ml.EventType = pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED
+		}
+
+		if event.TenantID != "" {
+			tenantID := event.TenantID
+			ml.TenantId = &tenantID
+		}
+		if event.UserID != "" {
+			userID := event.UserID
+			ml.UserId = &userID
+		}
+
+		if convID := getString(event.Data, "conversation_id"); convID != "" {
+			ml.ConversationId = convID
+		} else {
+			return nil
+		}
+
+		if msgID := getString(event.Data, "message_id"); msgID != "" {
+			ml.MessageId = &msgID
+		}
+
+		if content := getString(event.Data, "content"); content != "" {
+			ml.Content = &content
+		}
+		if sender := getString(event.Data, "sender"); sender != "" {
+			ml.Sender = &sender
+		}
+		if status := getString(event.Data, "status"); status != "" {
+			ml.Status = &status
+		}
+		if subject := getString(event.Data, "subject"); subject != "" {
+			ml.Subject = &subject
+		}
+
+		ts := event.Timestamp
+		if unix, ok := getInt64(event.Data, "timestamp"); ok {
+			ts = time.Unix(unix, 0)
+		}
+		ml.Timestamp = ts.Unix()
+
+		return &pb.EventData{Payload: &pb.EventData_MessageLifecycle{MessageLifecycle: ml}}
+	default:
+		return nil
+	}
+}
+
+func getString(data map[string]interface{}, key string) string {
+	if data == nil {
+		return ""
+	}
+	if value, ok := data[key]; ok {
+		switch v := value.(type) {
+		case string:
+			return v
+		case fmt.Stringer:
+			return v.String()
+		}
+	}
+	return ""
+}
+
+func getInt64(data map[string]interface{}, key string) (int64, bool) {
+	if data == nil {
+		return 0, false
+	}
+	value, ok := data[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case int64:
+		return v, true
+	case int32:
+		return int64(v), true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	case float32:
+		return int64(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
 }

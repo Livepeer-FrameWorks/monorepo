@@ -50,7 +50,7 @@ import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
 function BroadcastPage() {
   return (
     <StreamCrafter
-      whipUrl="https://ingest.example.com/whip/your-stream-key"
+      whipUrl="https://ingest.example.com/webrtc/your-stream-key"
       initialProfile="broadcast"
       onStateChange={(state) => console.log('State:', state)}
     />
@@ -67,6 +67,22 @@ The component includes:
 - Connection status indicators
 - Auto-reconnection on failure
 
+### Gateway Mode (Stream Key + Gateway URL)
+
+If you want the SDK to resolve ingest endpoints for you, pass a **Gateway GraphQL URL** and a **stream key** instead of a direct WHIP URL:
+
+```tsx
+<StreamCrafter
+  gatewayUrl="https://api.example.com/graphql"
+  streamKey="sk_live_..."
+  initialProfile="broadcast"
+/>
+```
+
+Notes:
+- There is **no default gateway**; you must provide either `whipUrl` or (`gatewayUrl` + `streamKey`).
+- If both are provided, `whipUrl` takes priority.
+
 ### Svelte Component
 
 ```svelte
@@ -76,7 +92,7 @@ The component includes:
 </script>
 
 <StreamCrafter
-  whipUrl="https://ingest.example.com/whip/your-stream-key"
+  whipUrl="https://ingest.example.com/webrtc/your-stream-key"
   initialProfile="broadcast"
 />
 ```
@@ -104,7 +120,7 @@ function CustomBroadcaster() {
     stopStreaming,
     setQualityProfile,
   } = useStreamCrafterV2({
-    whipUrl: 'https://ingest.example.com/whip/stream-key',
+    whipUrl: 'https://ingest.example.com/webrtc/stream-key',
     profile: 'broadcast',
     reconnection: { enabled: true, maxAttempts: 5 },
     audioMixing: true,
@@ -134,7 +150,7 @@ function CustomBroadcaster() {
 
   onMount(() => {
     crafter.initialize({
-      whipUrl: 'https://ingest.example.com/whip/stream-key',
+      whipUrl: 'https://ingest.example.com/webrtc/stream-key',
       profile: 'broadcast',
     });
   });
@@ -159,7 +175,7 @@ import { StreamCrafterV2 } from '@livepeer-frameworks/streamcrafter-core';
 import '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
 
 const crafter = new StreamCrafterV2({
-  whipUrl: 'https://ingest.example.com/whip/stream-key',
+  whipUrl: 'https://ingest.example.com/webrtc/stream-key',
   profile: 'broadcast',
   debug: true,
 });

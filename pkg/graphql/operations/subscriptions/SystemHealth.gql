@@ -1,0 +1,19 @@
+# System health and resource utilization updates for all infrastructure nodes
+# Monitors CPU, memory, disk usage, and node status across the platform
+subscription SystemHealth {
+  liveSystemHealth {
+    nodeId
+    node
+    location
+    status
+    cpuTenths
+    isHealthy
+    ramMax
+    ramCurrent
+    diskTotalBytes
+    diskUsedBytes
+    shmTotalBytes
+    shmUsedBytes
+    timestamp
+  }
+}

@@ -1,0 +1,33 @@
+query GetBalanceTransactions($page: ConnectionInput, $transactionType: String) {
+  balanceTransactionsConnection(page: $page, transactionType: $transactionType) {
+    edges {
+      cursor
+      node {
+        id
+        tenantId
+        amountCents
+        balanceAfterCents
+        transactionType
+        description
+        referenceId
+        referenceType
+        createdAt
+      }
+    }
+    nodes {
+      id
+      amountCents
+      balanceAfterCents
+      transactionType
+      description
+      createdAt
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

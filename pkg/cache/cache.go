@@ -39,6 +39,17 @@ type Cache struct {
 	metrics MetricsHooks
 }
 
+// SnapshotEntry represents a point-in-time cache entry for debugging.
+type SnapshotEntry struct {
+	Key       string
+	Value     interface{}
+	Err       error
+	ExpiresAt time.Time
+	StaleAt   time.Time
+	LastUsed  time.Time
+	Negative  bool
+}
+
 func New(opts Options, hooks MetricsHooks) *Cache {
 	return &Cache{
 		items:   make(map[string]*entry),
@@ -178,6 +189,43 @@ func (c *Cache) Set(key string, val interface{}, ttl time.Duration) {
 	c.items[key] = e
 	c.evictIfNeeded()
 	c.mu.Unlock()
+}
+
+// Peek returns a cached value without triggering a load. Stale entries are allowed.
+func (c *Cache) Peek(key string) (interface{}, bool) {
+	now := time.Now()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.items[key]
+	if !ok {
+		return nil, false
+	}
+	if now.After(e.staleAt) {
+		return nil, false
+	}
+	if e.negative {
+		return nil, false
+	}
+	return e.value, true
+}
+
+// Snapshot returns a copy of current cache entries for debugging/inspection.
+func (c *Cache) Snapshot() []SnapshotEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]SnapshotEntry, 0, len(c.items))
+	for k, e := range c.items {
+		out = append(out, SnapshotEntry{
+			Key:       k,
+			Value:     e.value,
+			Err:       e.err,
+			ExpiresAt: e.expiresAt,
+			StaleAt:   e.staleAt,
+			LastUsed:  e.lastUsed,
+			Negative:  e.negative,
+		})
+	}
+	return out
 }
 
 func (c *Cache) Delete(key string) {

@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"time"
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/state"
@@ -18,185 +19,34 @@ import (
 // ContentResolution contains the result of resolving a playback request input
 type ContentResolution struct {
 	ContentType  string // "live", "clip", "dvr"
-	ContentId    string // Internal name (for live) or hash (for clip/dvr)
+	ContentId    string // Public view key (playback_id) for live/clip/dvr/vod
 	FixedNode    string // Storage node URL for VOD content, empty for live
 	FixedNodeID  string // Storage node ID for VOD content
 	TenantId     string
 	InternalName string // Original stream internal name (for clips/DVR: the source stream)
 }
 
-// ResolveContent determines content type and resolution strategy for any input.
-// Input can be: view key, clip hash, DVR hash, or internal name.
-// This is the unified resolution function that replaces scattered resolution logic.
+// ResolveContent determines content type and resolution strategy for a public playback ID.
+// Input must be a public playback ID (live or artifact).
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
 		return nil, fmt.Errorf("empty input")
 	}
 
-	// 1. Check if already prefixed (internal name format)
-	if strings.HasPrefix(input, "live+") {
-		internalName := strings.TrimPrefix(input, "live+")
-		return &ContentResolution{
-			ContentType:  "live",
-			ContentId:    internalName,
-			InternalName: internalName,
-		}, nil
-	}
-	if strings.HasPrefix(input, "vod+") {
-		hash := strings.TrimPrefix(input, "vod+")
-		// Need to determine if it's clip or DVR
-		res := &ContentResolution{
-			ContentId:    hash,
-			InternalName: hash,
-		}
-
-		// Check foghorn.artifacts for artifact type and internal_name
-		if db != nil {
-			var artifactType, internalName string
-			err := db.QueryRowContext(ctx, `
-				SELECT artifact_type, internal_name
-				FROM foghorn.artifacts
-				WHERE artifact_hash = $1 AND status != 'deleted'
-			`, hash).Scan(&artifactType, &internalName)
-			if err == nil {
-				res.ContentType = artifactType
-				res.InternalName = internalName
-			}
-		}
-
-		// Resolve tenant context from Commodore
-		if CommodoreClient != nil {
-			if res.ContentType == "clip" || res.ContentType == "" {
-				if resp, err := CommodoreClient.ResolveClipHash(ctx, hash); err == nil && resp.Found {
-					res.TenantId = resp.TenantId
-					res.ContentType = "clip"
-					if resp.InternalName != "" {
-						res.InternalName = resp.InternalName
-					}
-					return res, nil
-				}
-			}
-			if res.ContentType == "dvr" || res.ContentType == "" {
-				if resp, err := CommodoreClient.ResolveDVRHash(ctx, hash); err == nil && resp.Found {
-					res.TenantId = resp.TenantId
-					res.ContentType = "dvr"
-					if resp.InternalName != "" {
-						res.InternalName = resp.InternalName
-					}
-					return res, nil
-				}
-			}
-		}
-
-		// Default to clip if can't determine
-		if res.ContentType == "" {
-			res.ContentType = "clip"
-		}
-		return res, nil
-	}
-
-	// 2. Check VOD Artifacts in-memory (clip hashes, DVR hashes)
-	if host, artifact := state.DefaultManager().FindNodeByArtifactHash(input); host != "" {
-		res := &ContentResolution{
-			ContentId: input,
-			FixedNode: host,
-		}
-
-		// Get node ID from host URL
-		if loadBalancerInstance != nil {
-			res.FixedNodeID = loadBalancerInstance.GetNodeIDByHost(host)
-		}
-
-		// Get artifact type and internal_name from foghorn.artifacts
-		if db != nil {
-			var artifactType, internalName string
-			err := db.QueryRowContext(ctx, `
-				SELECT artifact_type, internal_name
-				FROM foghorn.artifacts
-				WHERE artifact_hash = $1 AND status != 'deleted'
-			`, input).Scan(&artifactType, &internalName)
-			if err == nil {
-				res.ContentType = artifactType
-				res.InternalName = internalName
-			}
-		}
-
-		// Resolve tenant context from Commodore
-		if CommodoreClient != nil {
-			if res.ContentType == "clip" || res.ContentType == "" {
-				if resp, err := CommodoreClient.ResolveClipHash(ctx, input); err == nil && resp.Found {
-					res.TenantId = resp.TenantId
-					res.ContentType = "clip"
-					if resp.InternalName != "" {
-						res.InternalName = resp.InternalName
-					}
-					return res, nil
-				}
-			}
-			if res.ContentType == "dvr" || res.ContentType == "" {
-				if resp, err := CommodoreClient.ResolveDVRHash(ctx, input); err == nil && resp.Found {
-					res.TenantId = resp.TenantId
-					res.ContentType = "dvr"
-					if resp.InternalName != "" {
-						res.InternalName = resp.InternalName
-					}
-					return res, nil
-				}
-			}
-		}
-
-		// Fallback: use artifact info if available
-		if artifact != nil && res.ContentType == "" {
-			res.ContentType = "clip" // Artifacts are primarily clips
-		}
-		return res, nil
-	}
-
-	// 3. Try Commodore for view key resolution (live streams)
+	// 1. Artifact playback_id (clip/dvr/vod)
 	if CommodoreClient != nil {
-		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil && resp.InternalName != "" {
-			return &ContentResolution{
-				ContentType:  "live",
-				ContentId:    resp.InternalName,
-				TenantId:     resp.TenantId,
-				InternalName: resp.InternalName,
-			}, nil
-		}
-	}
-
-	// 4. Check database directly for clip/DVR by hash (in case not in memory yet)
-	if db != nil {
-		// Check foghorn.artifacts + artifact_nodes for artifact info
-		var artifactType, internalName, nodeID string
-		err := db.QueryRowContext(ctx, `
-			SELECT a.artifact_type, a.internal_name, COALESCE(an.node_id, '')
-			FROM foghorn.artifacts a
-			LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
-			WHERE a.artifact_hash = $1 AND a.status != 'deleted'
-			LIMIT 1
-		`, input).Scan(&artifactType, &internalName, &nodeID)
-		if err == nil {
+		if resp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, input); err == nil && resp.Found {
 			res := &ContentResolution{
-				ContentType:  artifactType,
+				ContentType:  resp.ContentType,
 				ContentId:    input,
-				InternalName: internalName,
-				FixedNodeID:  nodeID,
+				TenantId:     resp.TenantId,
+				InternalName: resp.ArtifactInternalName,
 			}
-			// Get node URL
-			if nodeID != "" {
-				if outputs, ok := GetNodeOutputs(nodeID); ok {
-					res.FixedNode = outputs.BaseURL
-				}
-			}
-			// Resolve tenant context from Commodore
-			if CommodoreClient != nil {
-				if artifactType == "clip" {
-					if resp, err := CommodoreClient.ResolveClipHash(ctx, input); err == nil && resp.Found {
-						res.TenantId = resp.TenantId
-					}
-				} else if artifactType == "dvr" {
-					if resp, err := CommodoreClient.ResolveDVRHash(ctx, input); err == nil && resp.Found {
-						res.TenantId = resp.TenantId
+			if resp.ArtifactHash != "" {
+				if host, _ := state.DefaultManager().FindNodeByArtifactHash(resp.ArtifactHash); host != "" {
+					res.FixedNode = host
+					if loadBalancerInstance != nil {
+						res.FixedNodeID = loadBalancerInstance.GetNodeIDByHost(host)
 					}
 				}
 			}
@@ -204,12 +54,19 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 		}
 	}
 
-	// 5. Fallback: treat as internal name (live stream)
-	return &ContentResolution{
-		ContentType:  "live",
-		ContentId:    input,
-		InternalName: input,
-	}, nil
+	// 2. Live playback_id resolution
+	if CommodoreClient != nil {
+		if resp, err := CommodoreClient.ResolvePlaybackID(ctx, input); err == nil && resp.InternalName != "" {
+			return &ContentResolution{
+				ContentType:  "live",
+				ContentId:    input,
+				TenantId:     resp.TenantId,
+				InternalName: resp.InternalName,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("content not found")
 }
 
 // PlaybackDependencies contains dependencies needed for playback resolution
@@ -220,29 +77,56 @@ type PlaybackDependencies struct {
 	GeoLon float64
 }
 
-// ResolveClipPlayback resolves playback endpoints for a clip
-func ResolveClipPlayback(ctx context.Context, deps *PlaybackDependencies, clipHash string) (*pb.ViewerEndpointResponse, error) {
+// ResolveArtifactPlayback resolves playback endpoints for any artifact (clip/dvr/vod) using playback ID
+func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, playbackID string) (*pb.ViewerEndpointResponse, error) {
 	if deps.DB == nil {
 		return nil, fmt.Errorf("database not available")
 	}
+	if playbackID == "" {
+		return nil, fmt.Errorf("playback_id is required")
+	}
+	if CommodoreClient == nil {
+		return nil, fmt.Errorf("commodore client not available")
+	}
+
+	artifactResp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, playbackID)
+	if err != nil || !artifactResp.Found || artifactResp.ArtifactHash == "" || artifactResp.ContentType == "" {
+		return nil, fmt.Errorf("content not found")
+	}
+
+	contentType := strings.ToLower(artifactResp.ContentType)
+	artifactType := contentType
+	if contentType == "vod" {
+		artifactType = "upload"
+	}
 
 	// Query foghorn.artifacts for lifecycle state
-	var internalName, clipStatus string
+	var internalName string
+	var status string
+	var durationSeconds sql.NullInt64
 	var sizeBytes sql.NullInt64
 	var createdAt sql.NullTime
-	var clipFormat sql.NullString
+	var format sql.NullString
+	var storageLocation sql.NullString
+	var syncStatus sql.NullString
 
-	err := deps.DB.QueryRowContext(ctx, `
-		SELECT internal_name, status, size_bytes, created_at, format
+	err = deps.DB.QueryRowContext(ctx, `
+		SELECT COALESCE(internal_name, ''),
+		       status,
+		       duration_seconds,
+		       size_bytes,
+		       created_at,
+		       format,
+		       COALESCE(storage_location, ''),
+		       COALESCE(sync_status, '')
 		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND status != 'deleted'
-	`, clipHash).Scan(&internalName, &clipStatus, &sizeBytes, &createdAt, &clipFormat)
-
+		WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted'
+	`, artifactResp.ArtifactHash, artifactType).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("clip not found")
+			return nil, fmt.Errorf("%s not found", contentType)
 		}
-		return nil, fmt.Errorf("failed to query clip: %v", err)
+		return nil, fmt.Errorf("failed to query artifact: %v", err)
 	}
 
 	// Query foghorn.artifact_nodes for node assignment
@@ -250,31 +134,87 @@ func ResolveClipPlayback(ctx context.Context, deps *PlaybackDependencies, clipHa
 	err = deps.DB.QueryRowContext(ctx, `
 		SELECT node_id FROM foghorn.artifact_nodes
 		WHERE artifact_hash = $1 LIMIT 1
-	`, clipHash).Scan(&nodeID)
+	`, artifactResp.ArtifactHash).Scan(&nodeID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("clip storage node unknown: no node assignment found")
+			// No cached nodes - trigger defrost if asset is in S3
+			location := strings.ToLower(strings.TrimSpace(storageLocation.String))
+			sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
+			if location == "defrosting" {
+				return nil, NewDefrostingError(10, "defrost in progress")
+			}
+			if sync == "synced" || location == "s3" {
+				// Pick a storage node for defrost
+				nodeID, err = pickStorageNodeID()
+				if err != nil {
+					return nil, fmt.Errorf("storage node unknown: %v", err)
+				}
+				if _, err := StartDefrost(ctx, contentType, artifactResp.ArtifactHash, nodeID, 30*time.Second, controlLogger()); err != nil {
+					// If defrost already in progress, return retry
+					if defrostErr, ok := err.(*DefrostingError); ok {
+						return nil, defrostErr
+					}
+					return nil, fmt.Errorf("failed to start defrost: %v", err)
+				}
+				return nil, NewDefrostingError(10, "defrost started")
+			}
+			return nil, fmt.Errorf("storage node unknown: no node assignment found")
 		}
-		return nil, fmt.Errorf("clip storage node unknown: %v", err)
+		return nil, fmt.Errorf("storage node unknown: %v", err)
 	}
 	if nodeID == "" {
-		return nil, fmt.Errorf("clip storage node unknown: empty node_id")
+		return nil, fmt.Errorf("storage node unknown: empty node_id")
 	}
 
-	// Resolve business metadata from Commodore
-	var tenantID, title, description, streamName string
-	var clipDuration int64
-	if CommodoreClient != nil {
-		if resp, err := CommodoreClient.ResolveClipHash(ctx, clipHash); err == nil && resp.Found {
-			tenantID = resp.TenantId
-			streamName = resp.InternalName
+	tenantID := artifactResp.TenantId
+	streamID := artifactResp.StreamId
+	title := ""
+	description := ""
+	clipDurationMs := int64(0)
+	resolvedPlaybackID := playbackID
+
+	switch contentType {
+	case "clip":
+		if resp, err := CommodoreClient.ResolveClipHash(ctx, artifactResp.ArtifactHash); err == nil && resp.Found {
+			if resp.TenantId != "" {
+				tenantID = resp.TenantId
+			}
+			if resp.StreamId != "" {
+				streamID = resp.StreamId
+			}
+			if resp.InternalName != "" {
+				internalName = resp.InternalName
+			}
 			title = resp.Title
 			description = resp.Description
-			clipDuration = resp.Duration
+			clipDurationMs = resp.Duration
+			if resp.PlaybackId != "" {
+				resolvedPlaybackID = resp.PlaybackId
+			}
 		}
-	}
-	if streamName == "" {
-		streamName = internalName // Fallback to foghorn's internal_name
+	case "dvr":
+		if resp, err := CommodoreClient.ResolveDVRHash(ctx, artifactResp.ArtifactHash); err == nil && resp.Found {
+			if resp.TenantId != "" {
+				tenantID = resp.TenantId
+			}
+			if resp.StreamId != "" {
+				streamID = resp.StreamId
+			}
+			if resp.PlaybackId != "" {
+				resolvedPlaybackID = resp.PlaybackId
+			}
+		}
+	case "vod":
+		if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactResp.ArtifactHash); err == nil && resp.Found {
+			if resp.TenantId != "" {
+				tenantID = resp.TenantId
+			}
+			title = resp.Title
+			description = resp.Description
+			if resp.PlaybackId != "" {
+				resolvedPlaybackID = resp.PlaybackId
+			}
+		}
 	}
 
 	nodeOutputs, exists := GetNodeOutputs(nodeID)
@@ -282,13 +222,15 @@ func ResolveClipPlayback(ctx context.Context, deps *PlaybackDependencies, clipHa
 		return nil, fmt.Errorf("storage node outputs not available")
 	}
 
-	// Build URLs using clip hash (MistServer resolves via PLAY_REWRITE trigger)
+	// Build URLs using playback ID (MistServer resolves via PLAY_REWRITE trigger)
 	var protocol, endpointURL string
-	if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-		protocol = "hls"
-		endpointURL = ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, clipHash)
-	} else {
-		endpointURL = EnsureTrailingSlash(nodeOutputs.BaseURL) + clipHash + ".html"
+	formatValue := ""
+	if format.Valid {
+		formatValue = format.String
+	}
+	protocol, endpointURL = selectPrimaryArtifactOutput(nodeOutputs.Outputs, nodeOutputs.BaseURL, resolvedPlaybackID, formatValue)
+	if endpointURL == "" {
+		endpointURL = EnsureTrailingSlash(nodeOutputs.BaseURL) + resolvedPlaybackID + ".html"
 		protocol = "html"
 	}
 
@@ -299,20 +241,24 @@ func ResolveClipPlayback(ctx context.Context, deps *PlaybackDependencies, clipHa
 		Url:         endpointURL,
 		GeoDistance: 0,
 		LoadScore:   0,
-		Outputs:     BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, clipHash, false),
+		Outputs:     BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, resolvedPlaybackID, false),
 	}
 
 	metadata := &pb.PlaybackMetadata{
-		Status:      clipStatus,
-		IsLive:      false,
+		Status:      status,
+		IsLive:      contentType == "dvr" && status == "recording",
 		TenantId:    tenantID,
-		ContentId:   clipHash,
-		ContentType: "clip",
-		ClipSource:  &streamName,
+		ContentId:   resolvedPlaybackID,
+		ContentType: contentType,
 	}
-
-	if clipFormat.Valid && clipFormat.String != "" {
-		metadata.Format = &clipFormat.String
+	if streamID != "" {
+		metadata.StreamId = &streamID
+	}
+	if contentType == "dvr" {
+		metadata.DvrStatus = status
+	}
+	if contentType == "clip" && internalName != "" {
+		metadata.ClipSource = &internalName
 	}
 	if title != "" {
 		metadata.Title = &title
@@ -320,8 +266,11 @@ func ResolveClipPlayback(ctx context.Context, deps *PlaybackDependencies, clipHa
 	if description != "" {
 		metadata.Description = &description
 	}
-	if clipDuration > 0 {
-		d := int32(clipDuration / 1000)
+	if contentType == "clip" && clipDurationMs > 0 {
+		d := int32(clipDurationMs / 1000)
+		metadata.DurationSeconds = &d
+	} else if durationSeconds.Valid {
+		d := int32(durationSeconds.Int64)
 		metadata.DurationSeconds = &d
 	}
 	if sizeBytes.Valid {
@@ -330,6 +279,9 @@ func ResolveClipPlayback(ctx context.Context, deps *PlaybackDependencies, clipHa
 	if createdAt.Valid {
 		metadata.CreatedAt = timestamppb.New(createdAt.Time)
 	}
+	if format.Valid && format.String != "" {
+		metadata.Format = &format.String
+	}
 
 	return &pb.ViewerEndpointResponse{
 		Primary:   endpoint,
@@ -338,116 +290,37 @@ func ResolveClipPlayback(ctx context.Context, deps *PlaybackDependencies, clipHa
 	}, nil
 }
 
-// ResolveDVRPlayback resolves playback endpoints for a DVR recording
-func ResolveDVRPlayback(ctx context.Context, deps *PlaybackDependencies, dvrHash string) (*pb.ViewerEndpointResponse, error) {
-	if deps.DB == nil {
-		return nil, fmt.Errorf("database not available")
+func selectPrimaryArtifactOutput(outputs map[string]interface{}, baseURL, playbackID, format string) (string, string) {
+	if outputs == nil {
+		return "", ""
 	}
-
-	// Query foghorn.artifacts for lifecycle state
-	var internalName, dvrStatus string
-	var duration, recordingSize sql.NullInt64
-	var manifestPath, dvrFormat sql.NullString
-	var createdAt sql.NullTime
-
-	err := deps.DB.QueryRowContext(ctx, `
-		SELECT internal_name, status, duration_seconds, size_bytes, manifest_path, created_at, format
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND status IN ('recording', 'completed')
-	`, dvrHash).Scan(&internalName, &dvrStatus, &duration, &recordingSize, &manifestPath, &createdAt, &dvrFormat)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("DVR recording not found")
+	for _, key := range preferredArtifactOutputKeys(format) {
+		raw, ok := outputs[key]
+		if !ok {
+			continue
 		}
-		return nil, fmt.Errorf("failed to query DVR: %v", err)
-	}
-
-	// Query foghorn.artifact_nodes for node assignment
-	var nodeID string
-	err = deps.DB.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 LIMIT 1
-	`, dvrHash).Scan(&nodeID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("DVR storage node unknown: no node assignment found")
-		}
-		return nil, fmt.Errorf("DVR storage node unknown: %v", err)
-	}
-	if nodeID == "" {
-		return nil, fmt.Errorf("DVR storage node unknown: empty node_id")
-	}
-
-	// Resolve tenant context from Commodore
-	var tenantID string
-	if CommodoreClient != nil {
-		if resp, err := CommodoreClient.ResolveDVRHash(ctx, dvrHash); err == nil && resp.Found {
-			tenantID = resp.TenantId
+		if u := ResolveTemplateURL(raw, baseURL, playbackID); u != "" {
+			return strings.ToLower(key), u
 		}
 	}
+	return "", ""
+}
 
-	nodeOutputs, exists := GetNodeOutputs(nodeID)
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil, fmt.Errorf("storage node outputs not available")
+func preferredArtifactOutputKeys(format string) []string {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "m3u8":
+		return []string{"HLS", "DASH", "CMAF", "HDS"}
+	case "mp4":
+		return []string{"HTTP", "MP4", "HLS", "DASH", "CMAF"}
+	case "webm":
+		return []string{"HTTP", "WEBM", "HLS", "DASH", "CMAF"}
+	default:
+		return []string{"HTTP", "HLS", "DASH", "CMAF"}
 	}
-
-	// Build URLs using DVR hash (MistServer resolves via PLAY_REWRITE trigger)
-	var protocol, endpointURL string
-	if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-		protocol = "hls"
-		endpointURL = ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, dvrHash)
-	} else {
-		endpointURL = EnsureTrailingSlash(nodeOutputs.BaseURL) + dvrHash + ".html"
-		protocol = "html"
-	}
-
-	endpoint := &pb.ViewerEndpoint{
-		NodeId:      nodeID,
-		BaseUrl:     nodeOutputs.BaseURL,
-		Protocol:    protocol,
-		Url:         endpointURL,
-		GeoDistance: 0,
-		LoadScore:   0,
-		Outputs:     BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, dvrHash, false),
-	}
-
-	// DVR-in-progress: treat as live stream with seek-back capability
-	isLive := dvrStatus == "recording"
-
-	metadata := &pb.PlaybackMetadata{
-		Status:      dvrStatus,
-		IsLive:      isLive,
-		DvrStatus:   dvrStatus,
-		TenantId:    tenantID,
-		ContentId:   dvrHash,
-		ContentType: "dvr",
-	}
-
-	if dvrFormat.Valid && dvrFormat.String != "" {
-		metadata.Format = &dvrFormat.String
-	}
-
-	if duration.Valid {
-		d := int32(duration.Int64)
-		metadata.DurationSeconds = &d
-	}
-	if recordingSize.Valid {
-		metadata.RecordingSizeBytes = &recordingSize.Int64
-	}
-	if createdAt.Valid {
-		metadata.CreatedAt = timestamppb.New(createdAt.Time)
-	}
-
-	return &pb.ViewerEndpointResponse{
-		Primary:   endpoint,
-		Fallbacks: []*pb.ViewerEndpoint{},
-		Metadata:  metadata,
-	}, nil
 }
 
 // ResolveLivePlayback resolves playback endpoints for a live stream using load balancing
-func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string) (*pb.ViewerEndpointResponse, error) {
+func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string) (*pb.ViewerEndpointResponse, error) {
 	if deps.LB == nil {
 		return nil, fmt.Errorf("load balancer not available")
 	}
@@ -524,6 +397,9 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 		IsLive:      true,
 		ContentId:   viewKey,
 		ContentType: "live",
+	}
+	if streamID != "" {
+		metadata.StreamId = &streamID
 	}
 
 	// Enrich with stream state if available
