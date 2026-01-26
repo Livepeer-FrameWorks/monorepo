@@ -30,11 +30,14 @@ const Alert = React.forwardRef(({ className, variant, ...props }, ref) => (
 ))
 Alert.displayName = "Alert"
 
-const AlertTitle = React.forwardRef(({ className, ...props }, ref) => (
+const AlertTitle = React.forwardRef(({ className, children, ...props }, ref) => (
   <h5
     ref={ref}
     className={cn("mb-1 font-medium leading-none tracking-tight", className)}
-    {...props} />
+    {...props}
+  >
+    {children}
+  </h5>
 ))
 AlertTitle.displayName = "AlertTitle"
 

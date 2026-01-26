@@ -38,7 +38,6 @@
 
   interface Props {
     streamId: string;
-    streamName: string;
     isLive: boolean;
     health: StreamHealth | null;
     analytics?: StreamSummaryMetrics | null;
@@ -46,7 +45,7 @@
     onToggle?: () => void;
   }
 
-  let { streamId, streamName, isLive, health, analytics = null, collapsed = false, onToggle }: Props = $props();
+  let { streamId, isLive, health, analytics = null, collapsed = false, onToggle }: Props = $props();
 
   // Derive global health state
   let globalHealth = $derived.by((): HealthState => {
@@ -200,7 +199,7 @@
     <!-- Health Checks -->
     {#if isLive && healthChecks.length > 0}
       <div class="p-4 space-y-3 border-b border-border">
-        {#each healthChecks as check}
+        {#each healthChecks as check (check.name)}
           {@const Icon = getIconComponent(getCheckIcon(check.status))}
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">

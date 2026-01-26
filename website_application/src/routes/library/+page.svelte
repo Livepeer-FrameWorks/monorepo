@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { get } from "svelte/store";
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { page } from "$app/stores";
   import { auth } from "$lib/stores/auth";
   import {
@@ -26,8 +28,7 @@
     ClipCreationMode,
     StreamCoreFieldsStore
   } from "$houdini";
-  import type { ClipLifecycle$result, DvrLifecycle$result } from "$houdini";
-  import { toast } from "$lib/stores/toast.js";
+    import { toast } from "$lib/stores/toast.js";
   import { Button } from "$lib/components/ui/button";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
@@ -83,7 +84,7 @@
     expiresAt: string | null;
     isFrozen?: boolean;
     storageLocation?: string;
-    rawData: any;
+    rawData: ClipData | DvrData | VodData;
   }
 
   // Houdini stores
@@ -312,14 +313,14 @@
       eventKey: e.node.id ?? e.cursor,
       timestamp: e.node.timestamp,
       stage: e.node.stage,
-      type: (e.node as any).contentType as ArtifactType || "clips",
+      type: (e.node as { contentType?: string }).contentType as ArtifactType || "clips",
       message: e.node.message,
       percent: e.node.percent,
     })) ?? []
   );
   let liveLifecycleEvents = $state<LifecycleEventRow[]>([]);
   let mergedLifecycleEvents = $derived.by(() => {
-    const seen = new Set<string>();
+    const seen = new SvelteSet<string>();
     const merged: LifecycleEventRow[] = [];
     for (const event of [...liveLifecycleEvents, ...lifecycleEvents]) {
       const key = `${event.eventKey}-${event.stage}-${event.timestamp}`;
@@ -442,7 +443,7 @@
     loadingMore = true;
 
     try {
-      const promises: Promise<any>[] = [];
+      const promises: Promise<unknown>[] = [];
 
       // Load more based on current filter or load all if viewing all
       if (typeFilter === 'clips' || typeFilter === 'all') {
@@ -551,7 +552,7 @@
         toast.success("Clip deleted successfully!");
         loadData();
       }
-    } catch (error) {
+    } catch {
       toast.error("Failed to delete clip.");
     } finally {
       deletingClipId = "";
@@ -574,7 +575,7 @@
         toast.success("Recording deleted successfully!");
         loadData();
       }
-    } catch (error) {
+    } catch {
       toast.error("Failed to delete recording.");
     } finally {
       deletingDvrHash = "";
@@ -597,7 +598,7 @@
         toast.success("Video deleted successfully!");
         loadData();
       }
-    } catch (error) {
+    } catch {
       toast.error("Failed to delete video.");
     } finally {
       deletingVodId = "";
@@ -758,11 +759,6 @@
     return "Unknown";
   }
 
-  function isArtifactReady(artifact: UnifiedArtifact): boolean {
-    const s = artifact.status.toLowerCase();
-    return ["available", "completed", "ready"].includes(s) || !s;
-  }
-
   function canPlayArtifact(artifact: UnifiedArtifact): boolean {
     if (!artifact.playbackId) return false;
     if (isExpired(artifact.expiresAt)) return false;
@@ -775,7 +771,7 @@
   function playArtifact(artifact: UnifiedArtifact) {
     if (artifact.playbackId) {
       const url = getShareUrl(artifact.playbackId);
-      if (url) goto(url);
+      if (url) goto(resolve(url));
     }
   }
 
@@ -787,7 +783,7 @@
     } else {
       url.searchParams.set("type", type);
     }
-    goto(url.toString(), { replaceState: true, noScroll: true });
+    goto(resolve(url.toString()), { replaceState: true, noScroll: true });
   }
 
   // Icons
@@ -795,9 +791,7 @@
   const ScissorsIcon = getIconComponent("Scissors");
   const FilmIcon = getIconComponent("Film");
   const VideoIcon = getIconComponent("Video");
-  const PlusIcon = getIconComponent("Plus");
   const UploadIcon = getIconComponent("Upload");
-  const PlayIcon = getIconComponent("Play");
   const DownloadIcon = getIconComponent("Download");
   const Share2Icon = getIconComponent("Share2");
   const Trash2Icon = getIconComponent("Trash2");

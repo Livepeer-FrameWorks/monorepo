@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import { get } from "svelte/store";
+  import { SvelteMap } from "svelte/reactivity";
   import { auth } from "$lib/stores/auth";
   import { fragment, GetInfrastructureOverviewStore, SystemHealthStore, GetServiceInstancesConnectionStore, GetServiceInstancesHealthStore, NodeCoreFieldsStore } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
@@ -11,9 +12,7 @@
   import InfrastructureMetricCard from "$lib/components/shared/InfrastructureMetricCard.svelte";
   import NodePerformanceTable from "$lib/components/infrastructure/NodePerformanceTable.svelte";
   import ClusterCard from "$lib/components/infrastructure/ClusterCard.svelte";
-  import NodeCard from "$lib/components/infrastructure/NodeCard.svelte";
   import { Badge } from "$lib/components/ui/badge";
-  import { Band } from "$lib/components/layout";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import {
@@ -75,9 +74,6 @@
   let hasMoreInstances = $derived(
     $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.pageInfo?.hasNextPage ?? false
   );
-  let totalInstanceCount = $derived(
-    $serviceInstancesStore.data?.analytics?.infra?.serviceInstancesConnection?.totalCount ?? 0
-  );
 
   // Real-time system health data
   type SystemHealthEvent = NonNullable<SystemHealth$result["liveSystemHealth"]>;
@@ -101,11 +97,6 @@
     totalBandwidthOut: number;
   }
 
-  // Type for node metrics edge from the store (used for fallback health data)
-  type NodeMetrics1hConnection = NonNullable<
-    NonNullable<NonNullable<typeof $infrastructureStore.data>["analytics"]>["infra"]
-  >["nodeMetrics1hConnection"];
-  type NodeMetricsEdgeType = NonNullable<NodeMetrics1hConnection["edges"]>[0];
 
   // Derived performance metrics from the store data
   let nodePerformanceMetrics = $derived.by(() => {
@@ -243,7 +234,7 @@
       const metricsData = $infrastructureStore.data?.analytics?.infra?.nodeMetrics1hConnection?.edges ?? [];
       if (metricsData.length > 0) {
         // Get most recent metric for each node
-        const latestByNode = new Map<string, (typeof metricsData)[0]>();
+        const latestByNode = new SvelteMap<string, (typeof metricsData)[0]>();
         for (const edge of metricsData) {
           if (!edge?.node) continue;
           const nodeId = edge.node.nodeId;
@@ -368,46 +359,6 @@
       });
     }
   });
-
-  function getNodeStatus(nodeId: string) {
-    const health = systemHealth[nodeId];
-    if (!health) return "UNKNOWN";
-    return health.event.status;
-  }
-
-  function getNodeHealthScore(nodeId: string) {
-    const health = systemHealth[nodeId];
-    if (!health) return 0;
-
-    const event = health.event;
-
-    // Calculate resource usage percentages
-    const cpuPercent = event.cpuTenths / 10;
-    const memPercent = event.ramMax ? (event.ramCurrent! / event.ramMax) * 100 : 0;
-    const shmPercent = event.shmTotalBytes ? (event.shmUsedBytes! / event.shmTotalBytes) * 100 : 0;
-
-    // MistUtilHealth considers node degraded if any metric > 90%
-    // Health score = average of inverted usage (100 - usage)
-    const cpuScore = Math.max(0, 100 - cpuPercent);
-    const memScore = Math.max(0, 100 - memPercent);
-    const shmScore = Math.max(0, 100 - shmPercent);
-
-    // Average the scores (weight equally like MistUtilHealth does)
-    return Math.round((cpuScore + memScore + shmScore) / 3);
-  }
-
-  function formatCpuUsage(nodeId: string) {
-    const health = systemHealth[nodeId];
-    if (!health) return "0%";
-    return `${(health.event.cpuTenths / 10).toFixed(1)}%`;
-  }
-
-  function formatMemoryUsage(nodeId: string) {
-    const health = systemHealth[nodeId];
-    if (!health || !health.event.ramMax) return "0%";
-    const percent = (health.event.ramCurrent! / health.event.ramMax) * 100;
-    return `${Math.round(percent)}%`;
-  }
 
   function getStatusBadgeClass(status: string | null | undefined) {
     switch (status?.toLowerCase()) {

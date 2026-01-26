@@ -10,7 +10,6 @@
     SendMessageStore,
     LiveMessageReceivedStore
   } from "$houdini";
-  import type { LiveMessageReceived$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/textarea";

@@ -114,19 +114,6 @@
     }
   }
 
-  function formatAllocation(allocation: { limit?: number | null; unit?: string | null; unitPrice?: number | null } | null | undefined) {
-    if (!allocation?.limit) return null;
-    const limit = allocation.limit >= 1000
-      ? `${(allocation.limit / 1000).toFixed(0)}k`
-      : allocation.limit.toString();
-    return `${limit} ${allocation.unit || ''}`;
-  }
-
-  function formatOverageRate(rate: { unitPrice?: number | null; unit?: string | null } | null | undefined) {
-    if (!rate?.unitPrice) return null;
-    return `${formatCurrency(rate.unitPrice)}/${rate.unit || 'unit'}`;
-  }
-
   // Track which invoice is expanded
   let expandedInvoiceId = $state<string | null>(null);
 

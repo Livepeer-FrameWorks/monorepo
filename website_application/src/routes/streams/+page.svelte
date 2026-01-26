@@ -377,7 +377,7 @@
   
   // Navigate to watch page
   function watchStream(streamId: string) {
-    goto(`/view?type=live&id=${streamId}`);
+    goto(resolve(`/view?type=live&id=${streamId}`));
   }
 
   // Show delete confirmation
@@ -409,7 +409,7 @@
   const Trash2Icon = getIconComponent("Trash2");
   const PlayIcon = getIconComponent("Play");
   const Share2Icon = getIconComponent("Share2");
-  const ChevronDownIcon = getIconComponent("ChevronDown");
+  const _ChevronDownIcon = getIconComponent("ChevronDown");
   const ChevronUpIcon = getIconComponent("ChevronUp");
 </script>
 

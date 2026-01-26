@@ -39,7 +39,6 @@
   const ServerIcon = getIconComponent("Server");
   const HardDriveIcon = getIconComponent("HardDrive");
   const SearchIcon = getIconComponent("Search");
-  const RefreshCwIcon = getIconComponent("RefreshCw");
   const CpuIcon = getIconComponent("Cpu");
   const MemoryStickIcon = getIconComponent("MemoryStick");
   const ActivityIcon = getIconComponent("Activity");

@@ -96,4 +96,6 @@ const MarketingPartnerSurface = forwardRef(
   )
 )
 
+MarketingPartnerSurface.displayName = 'MarketingPartnerSurface'
+
 export default MarketingPartnerSurface

@@ -9,10 +9,7 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
 
   interface Stream {
-    id: string;
-    name: string;
     streamKey?: string | null;
-    playbackId?: string | null;
   }
 
   interface StreamKey {
@@ -27,8 +24,6 @@
   interface Props {
     stream: Stream;
     streamKeys?: StreamKey[];
-    onRefreshKey?: () => void;
-    refreshingKey?: boolean;
     onCreateKey?: () => void;
     onCopyKey?: (key: string) => void;
     onDeleteKey?: (keyId: string) => void;
@@ -38,8 +33,6 @@
   let {
     stream,
     streamKeys = [],
-    onRefreshKey,
-    refreshingKey = false,
     onCreateKey,
     onCopyKey,
     onDeleteKey,
@@ -90,12 +83,9 @@
     }
   }
 
-  const RefreshCwIcon = getIconComponent("RefreshCw");
   const CheckCircleIcon = getIconComponent("CheckCircle");
   const CopyIcon = getIconComponent("Copy");
-  const KeyIcon = getIconComponent("Key");
   const PlusIcon = getIconComponent("Plus");
-  const LoaderIcon = getIconComponent("Loader");
   const TrashIcon = getIconComponent("Trash2");
 </script>
 
@@ -109,7 +99,7 @@
       </p>
     </div>
     <div class="slab-body--flush">
-      {#each ingestProtocols as protocol}
+      {#each ingestProtocols as protocol (protocol.key)}
         {@const ProtocolIcon = getIconComponent(protocol.icon)}
         {@const url = ingestUrls[protocol.key as keyof typeof ingestUrls]}
         <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">

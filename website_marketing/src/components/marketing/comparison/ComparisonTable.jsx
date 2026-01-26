@@ -64,4 +64,6 @@ const ComparisonTable = forwardRef(
   )
 )
 
+ComparisonTable.displayName = 'ComparisonTable'
+
 export default ComparisonTable

@@ -203,11 +203,11 @@
           <div class="hidden md:flex items-center gap-4">
             <div class="flex items-center gap-1.5">
               <span class="text-muted-foreground">HTTP</span>
-              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_HTTP_URL}</code>
+              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as ImportMeta & { env: Record<string, string> }).env.VITE_GRAPHQL_HTTP_URL}</code>
             </div>
             <div class="flex items-center gap-1.5">
               <span class="text-muted-foreground">WS</span>
-              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_WS_URL}</code>
+              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as ImportMeta & { env: Record<string, string> }).env.VITE_GRAPHQL_WS_URL}</code>
             </div>
             <a
               href={resolve("/developer/sdks")}
@@ -361,7 +361,6 @@
 
 <!-- Create Token Modal -->
 {#if showCreateTokenModal}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
     onclick={(e) => {

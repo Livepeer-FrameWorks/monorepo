@@ -18,4 +18,6 @@ const CTACluster = forwardRef(
   )
 )
 
+CTACluster.displayName = 'CTACluster'
+
 export default CTACluster

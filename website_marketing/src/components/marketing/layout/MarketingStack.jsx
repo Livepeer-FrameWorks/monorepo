@@ -19,4 +19,6 @@ const MarketingStack = forwardRef(
   )
 )
 
+MarketingStack.displayName = 'MarketingStack'
+
 export default MarketingStack

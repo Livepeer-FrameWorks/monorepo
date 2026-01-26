@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { base } from "$app/paths";
+  import { base, resolve } from "$app/paths";
   import { navigationConfig, type NavigationItem } from "../navigation.js";
   import { createEventDispatcher, untrack } from "svelte";
   import { getIconComponent } from "../iconUtils";
@@ -144,7 +144,7 @@
     }
     // Navigate to active routes using SvelteKit client-side routing
     if (item.href && item.active === true) {
-      goto(safeResolve(item.href));
+      goto(resolve(safeResolve(item.href)));
     }
   }
 
@@ -235,7 +235,7 @@
               <!-- Dot indicators for collapsed mode -->
               {#if childInfo.count > 1}
                 <div class="flex justify-center gap-1 mt-1.5">
-                  {#each Array(childInfo.count) as _, i}
+                  {#each Array(childInfo.count) as _, i (i)}
                     <div
                       class="w-1.5 h-1.5 rounded-full transition-colors {i === childInfo.currentIndex
                         ? 'bg-primary'

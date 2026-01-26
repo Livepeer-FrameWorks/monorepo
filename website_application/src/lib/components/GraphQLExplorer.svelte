@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity';
   import {
     explorerService,
     type Template,
@@ -119,7 +120,7 @@
   } = $state(null);
   let queryTemplates: TemplateGroups | null = $state(null);
   let catalogSections = $state<ResolvedExplorerSection[] | null>(null);
-  let selectedTemplate: QueryTemplate | null = $state(null);
+  let _selectedTemplate: QueryTemplate | null = $state(null);
   let showCodeExamples = $state(false);
   let showQueryEditor = $state(true);
   let selectedLanguage = $state("javascript");
@@ -201,7 +202,7 @@
     try {
       schemaLoading = true;
       // Use cached schema when available to avoid duplicate network requests on navigation
-      schema = (await explorerService.getCachedSchema()) as any;
+      schema = await explorerService.getCachedSchema();
     } catch (error) {
       console.error("Failed to load schema:", error);
       toast.error("Failed to load GraphQL schema");
@@ -246,7 +247,7 @@
         operationType,
         demoMode
       );
-      response = explorerService.formatResponse(result) as any;
+      response = explorerService.formatResponse(result);
 
       // Add to history
       addToHistory(query, parsedVariables, response);
@@ -268,7 +269,7 @@
   }
 
   function selectTemplate(template: QueryTemplate) {
-    selectedTemplate = template;
+    _selectedTemplate = template;
     query = template.query;
     variables = JSON.stringify(template.variables, null, 2);
   }
@@ -293,7 +294,7 @@
   function loadFromHistory(historyItem: QueryHistoryItem) {
     query = historyItem.query;
     variables = JSON.stringify(historyItem.variables, null, 2);
-    response = historyItem.result as any;
+    response = historyItem.result as FormattedResponse;
   }
 
   function saveQueryHistory() {
@@ -376,7 +377,7 @@
     const start = withoutComments.indexOf("{");
     if (start === -1) return [];
 
-    const fields = new Set<string>();
+    const fields = new SvelteSet<string>();
     let depth = 0;
     let i = start;
     let inString = false;
@@ -472,7 +473,7 @@
   function handleSelectExample(example: ResolvedExplorerExample) {
     if (example.template) {
       const vars = example.variables ?? example.template.variables;
-      selectedTemplate = example.template;
+      _selectedTemplate = example.template;
       query = example.template.query;
       variables = JSON.stringify(vars, null, 2);
       return;
@@ -519,7 +520,7 @@
       {schema}
       {queryTemplates}
       {catalogSections}
-      queryHistory={queryHistory as any}
+      {queryHistory}
       loading={schemaLoading}
       onClose={() => handlePanelChange(null)}
       onSelectTemplate={selectTemplate}

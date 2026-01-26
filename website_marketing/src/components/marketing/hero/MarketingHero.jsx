@@ -92,6 +92,7 @@ const MarketingHero = ({
       )
     }
 
+    // eslint-disable-next-line no-unused-vars
     const { label, className: actionClassName, icon, key: actionKey, render, ...rest } = action
 
     if (!label) return null
@@ -108,7 +109,7 @@ const MarketingHero = ({
     )
   }
 
-  const heroVariables = useMemo(() => createHeroSurfaceStyle(seed), [seed, surface])
+  const heroVariables = useMemo(() => createHeroSurfaceStyle(seed), [seed])
   const hasMedia = Boolean(media)
   const mediaWrapperClass = cn(
     'marketing-hero__media',

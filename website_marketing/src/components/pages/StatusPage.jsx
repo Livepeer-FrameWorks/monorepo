@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import config from '../../config'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { MarketingHero, MarketingBand, MarketingSlab, MarketingSlabHeader, MarketingFinalCTA, MarketingScrollProgress, SectionDivider } from '@/components/marketing'
+import { MarketingHero, MarketingFinalCTA, MarketingScrollProgress, SectionDivider } from '@/components/marketing'
 import { Section, SectionContainer } from '@/components/ui/section'
 
 const pill = (label, cls) => (

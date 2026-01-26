@@ -184,7 +184,7 @@
 
             {#if showUrls}
               <div class="border-t border-border p-4 space-y-3 bg-muted/5">
-                {#each clipProtocols as protocol}
+                {#each clipProtocols as protocol (protocol.key)}
                   {@const ProtocolIcon = getIconComponent(protocol.icon)}
                   {@const url = clipUrls.primary[protocol.key]}
                   <div class="flex items-center gap-2">

@@ -26,7 +26,10 @@ const Navigation = () => {
   }
 
   useEffect(() => {
-    setIsMenuOpen(false)
+    if (isMenuOpen) {
+      setIsMenuOpen(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
 
   return (

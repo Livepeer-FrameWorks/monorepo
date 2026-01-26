@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import {
     Chart,
     LineController,
@@ -71,7 +72,7 @@
     if (!ctx) return;
 
     // Group data by country
-    const countryData = new Map<string, { timestamp: Date; viewerCount: number }[]>();
+    const countryData = new SvelteMap<string, { timestamp: Date; viewerCount: number }[]>();
 
     for (const point of data) {
       const country = point.countryCode;

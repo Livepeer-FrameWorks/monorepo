@@ -79,4 +79,6 @@ const HeadlineStack = forwardRef(
   }
 )
 
+HeadlineStack.displayName = 'HeadlineStack'
+
 export default HeadlineStack

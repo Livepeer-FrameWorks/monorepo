@@ -111,7 +111,7 @@ function buildSrtBaseUrl(): string {
 }
 
 // Build HTTP(S) base URL for edge delivery (direct non-HTTP protocols)
-function buildEdgeBaseUrl(): string {
+function _buildEdgeBaseUrl(): string {
   if (!config.edgeHostname) return "";
   const proto = config.edgeUseTls ? "https" : "http";
   const portPart = config.edgePort ? `:${config.edgePort}` : "";
@@ -283,7 +283,6 @@ export function getContentDeliveryUrls(
   }
 
   const playBase = buildPlayBaseUrl(); // Foghorn for HTTP protocols (307 redirects)
-  const edgeBase = buildEdgeBaseUrl(); // Direct edge for non-HTTP protocols
   const proto = config.edgeUseTls ? "s" : ""; // for srt/rtsp/rtmp/dtsc secure variants
   const wsProto = config.edgeUseTls ? "wss" : "ws";
 

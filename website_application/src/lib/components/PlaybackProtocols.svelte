@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
   import { getContentDeliveryUrls, PROTOCOL_INFO, type ContentType } from "$lib/config";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -82,7 +83,7 @@
         Playback URLs for this {contentType === "dvr" ? "recording" : contentType}.
       </p>
       <a
-        href={docsUrl}
+        href={resolve(docsUrl)}
         target="_blank"
         rel="noopener noreferrer"
         class="text-xs text-info hover:underline inline-flex items-center gap-1"
@@ -93,7 +94,7 @@
 
     <!-- Primary Protocols -->
     <div class="space-y-2">
-      {#each primaryProtocols as protocol}
+      {#each primaryProtocols as protocol (protocol.key)}
         {@const url = getUrl(protocol.key)}
         {#if url}
           <div class="flex items-center gap-2">
@@ -132,7 +133,7 @@
       <div class="pt-1">
         {#if showAdvanced}
           <div class="space-y-2 mb-2 pt-2 border-t border-border/40 animate-in slide-in-from-top-2 duration-200">
-            {#each additionalProtocols as protocol}
+            {#each additionalProtocols as protocol (protocol.key)}
               {@const url = getUrl(protocol.key)}
               {#if url}
                 <div class="flex items-center gap-2">

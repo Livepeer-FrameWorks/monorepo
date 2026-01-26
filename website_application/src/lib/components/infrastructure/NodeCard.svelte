@@ -39,7 +39,6 @@
     formatCpuUsage: (nodeId: string) => string;
     formatMemoryUsage: (nodeId: string) => string;
     formatDiskUsage: (nodeId: string) => string;
-    getStatusBadgeClass: (status: string | null | undefined) => string;
   }
 
   let {
@@ -50,7 +49,6 @@
     formatCpuUsage,
     formatMemoryUsage,
     formatDiskUsage,
-    getStatusBadgeClass,
   }: Props = $props();
 </script>
 

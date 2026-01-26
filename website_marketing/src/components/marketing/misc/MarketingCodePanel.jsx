@@ -59,4 +59,6 @@ const MarketingCodePanel = forwardRef(
   }
 )
 
+MarketingCodePanel.displayName = 'MarketingCodePanel'
+
 export default MarketingCodePanel

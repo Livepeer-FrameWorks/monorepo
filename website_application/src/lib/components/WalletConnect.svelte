@@ -3,14 +3,13 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { connect, getConnectors } from 'wagmi/actions';
-	import { wagmiConfig, getChainType } from '$lib/wallet/config';
+	import { wagmiConfig } from '$lib/wallet/config';
 	import {
 		setupWalletWatcher,
 		cleanupWalletWatcher,
 		signAuthMessage,
-		disconnectWallet,
-		getWalletState
-	} from '$lib/wallet/store';
+		disconnectWallet
+	} from '$lib/wallet/store.svelte';
 	import { auth } from '$lib/stores/auth';
 	import { Button } from '$lib/components/ui/button';
 
@@ -25,8 +24,6 @@
 	let loading = $state(false);
 	let error = $state('');
 	let connectors = $state<ReturnType<typeof getConnectors>>([]);
-
-	const walletState = getWalletState();
 
 	onMount(() => {
 		setupWalletWatcher();
@@ -80,13 +77,6 @@
 		}
 	}
 
-	function getConnectorIcon(connectorName: string): string {
-		const name = connectorName.toLowerCase();
-		if (name.includes('metamask')) return '/icons/metamask.svg';
-		if (name.includes('coinbase')) return '/icons/coinbase.svg';
-		if (name.includes('walletconnect')) return '/icons/walletconnect.svg';
-		return '/icons/wallet.svg';
-	}
 </script>
 
 <div class="wallet-connect">
@@ -102,7 +92,7 @@
 		</p>
 
 		<div class="flex flex-col gap-2">
-			{#each connectors as connector}
+			{#each connectors as connector (connector.id)}
 				<Button
 					type="button"
 					variant="outline"
@@ -112,8 +102,12 @@
 				>
 					{#if loading}
 						<div class="loading-spinner w-5 h-5"></div>
+					{:else if connector.icon}
+						<img src={connector.icon} alt="" class="w-5 h-5" />
 					{:else}
-						<img src={getConnectorIcon(connector.name)} alt="" class="w-5 h-5" onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+						<svg class="w-5 h-5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+						</svg>
 					{/if}
 					{connector.name}
 				</Button>

@@ -47,8 +47,8 @@
   let buildClientSchemaFn: typeof import('graphql').buildClientSchema | null = null;
   let getContextAtPositionFn: typeof import('graphql-language-service').getContextAtPosition | null = null;
   let offsetToPositionFn: typeof import('graphql-language-service').offsetToPosition | null = null;
-  let getHoverInformationFn: typeof import('graphql-language-service').getHoverInformation | null = null;
-  let getDiagnosticsFn: typeof import('graphql-language-service').getDiagnostics | null = null;
+  let _getHoverInformationFn: typeof import('graphql-language-service').getHoverInformation | null = null;
+  let _getDiagnosticsFn: typeof import('graphql-language-service').getDiagnostics | null = null;
 
   // Convert line/character position to string offset
   function positionToOffset(text: string, pos: { line: number; character: number }): number {
@@ -131,8 +131,8 @@
     buildClientSchemaFn = buildClientSchema;
     getContextAtPositionFn = getContextAtPosition;
     offsetToPositionFn = offsetToPosition;
-    getHoverInformationFn = getHoverInformation;
-    getDiagnosticsFn = getDiagnostics;
+    _getHoverInformationFn = getHoverInformation;
+    _getDiagnosticsFn = getDiagnostics;
 
     // Build initial GraphQL schema if available
     graphqlSchema = buildSchema(schema) || null;
@@ -197,7 +197,6 @@
         let start = pos;
         let end = pos;
         const text = line.text;
-        const lineOffset = pos - line.from;
 
         // Expand to word boundaries
         while (start > line.from && /[\w_]/.test(text[start - line.from - 1])) start--;
@@ -305,7 +304,7 @@
           const cursorPos = offsetToPositionFn(docText, cursorOffset);
           const context = getContextAtPositionFn(docText, cursorPos, graphqlSchema);
 
-          const unwrapInputType = (type: any) => {
+          const unwrapInputType = (type: unknown): unknown => {
             let current = type;
             while (current instanceof GraphQLNonNull || current instanceof GraphQLList) {
               current = current.ofType;
@@ -313,10 +312,11 @@
             return current;
           };
 
-          const getInputFields = (type: any) => {
+          const getInputFields = (type: unknown) => {
             const base = unwrapInputType(type);
             if (!base || !(base instanceof GraphQLInputObjectType)) return undefined;
-            return Object.values(base.getFields()).map((field: any) => ({
+            const fields = base.getFields();
+            return Object.values(fields).map((field) => ({
               name: field.name,
               type: String(field.type),
               description: field.description || undefined,
@@ -340,7 +340,7 @@
                 kind: 'field',
                 signature: `${parent}.${field.name}: ${String(field.type)}`,
                 description: field.description || undefined,
-                args: field.args?.map((arg: any) => ({
+                args: field.args?.map((arg) => ({
                   name: arg.name,
                   type: String(arg.type),
                   description: arg.description || undefined,
@@ -370,7 +370,7 @@
               nextInfo = {
                 kind: 'variable',
                 signature: String(typeInfo.type),
-                description: (typeInfo.type as any).description || undefined,
+                description: (typeInfo.type as unknown as { description?: string }).description || undefined,
               };
             } else if (kind === 'Directive' && step === 1 && typeInfo.directiveDef) {
               nextInfo = {
@@ -383,16 +383,16 @@
               nextInfo = {
                 kind: 'type',
                 signature: String(typeInfo.type),
-                description: (typeInfo.type as any).description || undefined,
+                description: (typeInfo.type as unknown as { description?: string }).description || undefined,
                 inputFields: base instanceof GraphQLInputObjectType
-                  ? Object.values(base.getFields()).map((field: any) => ({
+                  ? Object.values(base.getFields()).map((field) => ({
                       name: field.name,
                       type: String(field.type),
                       description: field.description || undefined,
                     }))
                   : undefined,
                 enumValues: base instanceof GraphQLEnumType
-                  ? base.getValues().map((value: any) => ({
+                  ? base.getValues().map((value) => ({
                       name: value.name,
                       description: value.description || undefined,
                     }))

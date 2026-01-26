@@ -58,6 +58,7 @@ const MarketingFeatureWall = forwardRef(
       items = [],
       columns = 4,
       stackAt = 'md',
+      // eslint-disable-next-line no-unused-vars
       gap = 'md',
       renderItem,
       variant = 'card',
@@ -271,7 +272,8 @@ const MarketingFeatureWall = forwardRef(
 
         if (animate) {
           const MotionComponent = motion(node.type)
-          const { className: childClassName, children: childChildren, ...restProps } = node.props
+          // eslint-disable-next-line no-unused-vars
+        const { className: childClassName, children: childChildren, ...restProps } = node.props
 
           return (
             <MotionComponent
@@ -371,5 +373,7 @@ const MarketingFeatureWall = forwardRef(
     )
   }
 )
+
+MarketingFeatureWall.displayName = 'MarketingFeatureWall'
 
 export default MarketingFeatureWall

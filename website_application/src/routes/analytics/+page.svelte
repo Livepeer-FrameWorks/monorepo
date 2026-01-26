@@ -14,11 +14,8 @@
     StreamCoreFieldsStore,
     StreamMetricsFieldsStore,
   } from "$houdini";
-  import type { ViewerMetricsStream$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { getIconComponent } from "$lib/iconUtils";
-  import LoadingCard from "$lib/components/LoadingCard.svelte";
-  import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
@@ -54,7 +51,7 @@
   const streamMetricsStore = new StreamMetricsFieldsStore();
 
   let isAuthenticated = false;
-  let user: any = null;
+  let user: unknown = null;
   let timeRange = $state("7d");
   let currentRange = $derived(resolveTimeRange(timeRange));
   const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) => ["24h", "7d", "30d"].includes(option.value));
@@ -106,7 +103,6 @@
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   });
 
-  let healthRangeLabel = $derived(currentRange.days > 7 ? "Last 24 Hours" : currentRange.label);
   let qualityRangeLabel = $derived(currentRange.label);
 
   let qualityTierData = $derived.by(() => {
@@ -304,15 +300,8 @@
     return num.toString();
   }
 
-  function hasValue(value: any): boolean {
+  function hasValue(value: unknown): boolean {
     return value !== null && value !== undefined;
-  }
-
-  function healthScoreClass(score: number) {
-    if (!hasValue(score)) return "";
-    if (score >= 0.9) return "text-success";
-    if (score >= 0.7) return "text-warning";
-    return "text-destructive";
   }
 
   function bufferStateClass(state: string | null | undefined) {
@@ -329,11 +318,8 @@
   // Icons
   const ChartLineIcon = getIconComponent("ChartLine");
   const UsersIcon = getIconComponent("Users");
-  const ZapIcon = getIconComponent("Zap");
   const TrendingUpIcon = getIconComponent("TrendingUp");
-  const GaugeIcon = getIconComponent("Gauge");
   const VideoIcon = getIconComponent("Video");
-  const WifiIcon = getIconComponent("Wifi");
   const DatabaseIcon = getIconComponent("Database");
   const ClockIcon = getIconComponent("Clock");
   const CalendarIcon = getIconComponent("Calendar");
@@ -768,7 +754,7 @@
             </div>
             <div class="slab-body--padded">
               <div class="space-y-3">
-                {#each ['tier1080p', 'tier720p', 'tier480p'] as tier}
+                {#each ['tier1080p', 'tier720p', 'tier480p'] as tier (tier)}
                   {@const tierLabel = tier === 'tier1080p' ? '1080p' : tier === 'tier720p' ? '720p' : '480p'}
                   {@const tierColor = tier === 'tier1080p' ? 'text-success' : tier === 'tier720p' ? 'text-info' : 'text-warning'}
                   {@const totalMinutes = qualityTierTrendData.reduce((sum, d) => sum + (d[tier as keyof typeof d] as number || 0), 0)}
@@ -776,7 +762,7 @@
                     <div class="flex items-center gap-3">
                       <span class="text-xs font-medium {tierColor} w-12">{tierLabel}</span>
                       <div class="flex-1 h-6 flex items-end gap-px">
-                        {#each qualityTierTrendData as day}
+                        {#each qualityTierTrendData as day (day.date)}
                           {@const value = day[tier as keyof typeof day] as number || 0}
                           {@const maxValue = Math.max(...qualityTierTrendData.map(d => d[tier as keyof typeof d] as number || 0))}
                           {@const heightPercent = maxValue > 0 ? (value / maxValue) * 100 : 0}

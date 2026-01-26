@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { getIconComponent } from "$lib/iconUtils";
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
   import { isExpired } from "$lib/utils/formatters.js";
@@ -24,10 +25,9 @@
   interface Props {
     recordings: Recording[];
     onEnableRecording?: () => void;
-    onCopyLink?: (url: string) => void;
   }
 
-  let { recordings, onEnableRecording, onCopyLink }: Props = $props();
+  let { recordings, onEnableRecording }: Props = $props();
 
   let expandedRecording = $state<string | null>(null);
 
@@ -40,7 +40,7 @@
   function playRecording(playbackId: string) {
     const url = getShareUrl(playbackId);
     if (url) {
-      goto(url);
+      goto(resolve(url));
     }
   }
 

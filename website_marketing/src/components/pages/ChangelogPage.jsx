@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import MarkdownView from '../shared/MarkdownView'
 import config from '../../config'
-import { MarketingHero, MarketingBand, MarketingSlab, MarketingFinalCTA, MarketingScrollProgress, SectionDivider } from '@/components/marketing'
+import { MarketingHero, MarketingFinalCTA, MarketingScrollProgress, SectionDivider } from '@/components/marketing'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Section, SectionContainer } from '@/components/ui/section'
 

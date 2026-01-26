@@ -71,7 +71,7 @@
         new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
-    const datasets: any[] = [];
+    const datasets: ChartConfiguration<"line">["data"]["datasets"] = [];
 
     if (showBufferHealth) {
       datasets.push({

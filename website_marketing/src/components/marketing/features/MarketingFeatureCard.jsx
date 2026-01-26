@@ -58,4 +58,6 @@ const MarketingFeatureCard = forwardRef(
   )
 )
 
+MarketingFeatureCard.displayName = 'MarketingFeatureCard'
+
 export default MarketingFeatureCard

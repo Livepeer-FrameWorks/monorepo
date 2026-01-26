@@ -158,7 +158,7 @@ function parseVariableDefinition(def: string): VariableDefinition | null {
 /**
  * Parse a default value string into a typed value
  */
-function parseDefaultValue(value: string, type: string): unknown {
+function parseDefaultValue(value: string, _type: string): unknown {
   // Handle null
   if (value === "null") return null;
 

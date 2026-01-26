@@ -20,7 +20,8 @@
 
   // Bot protection fields
   let phone_number = $state(""); // Honeypot - must remain empty
-  const turnstileSiteKey = (import.meta as any).env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
+  // @ts-expect-error - Vite env types not available in this context
+  const turnstileSiteKey = (import.meta as { env: Record<string, string> }).env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
   const defaultHumanCheck = turnstileSiteKey ? "robot" : "human";
 
   let human_check = $state(defaultHumanCheck); // "human" or "robot" - expect "human"
@@ -36,10 +37,10 @@
   const resetTurnstileWidget = () => {
     if (typeof window !== "undefined" && turnstileWidgetId) {
       try {
-        // @ts-ignore - turnstile global
+        // @ts-expect-error - turnstile global
         window?.turnstile?.reset?.(turnstileWidgetId);
-      } catch (err) {
-        console.warn("Turnstile reset failed", err);
+      } catch (_err) {
+        console.warn("Turnstile reset failed", _err);
       }
     }
   };
@@ -71,7 +72,7 @@
   });
 
   async function handleSubmit(event: Event) {
-    // @ts-ignore
+    // @ts-expect-error - event type
     event.preventDefault();
     event.stopPropagation();
 
@@ -110,9 +111,9 @@
       } else {
         error = result.error || "Login failed";
       }
-    } catch (err: any) {
-      console.error('Login error:', err);
-      error = err.message || "Login failed";
+    } catch (_err) {
+      console.error('Login error:', _err);
+      error = _err instanceof Error ? _err.message : "Login failed";
     } finally {
       loading = false;
       // Reset bot protection for next attempt
@@ -285,8 +286,7 @@
             <p class="text-destructive text-sm">{error}</p>
             {#if error.toLowerCase().includes("not verified") || error.toLowerCase().includes("verify")}
               <p class="mt-2 text-sm text-muted-foreground">
-                Need a new verification link?{" "}
-                <a
+                Need a new verification link? <a
                   href={resolve("/verify-email")}
                   class="text-info underline underline-offset-2 hover:text-primary"
                 >

@@ -1,21 +1,16 @@
 <script lang="ts">
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { fade, fly } from "svelte/transition";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
-  import {
-    Accordion,
-    AccordionContent,
-    AccordionItem,
-    AccordionTrigger,
-  } from "$lib/components/ui/accordion";
-  import { ChevronRight, ChevronDown, ArrowLeft, Play, X, Clock, BookOpen, Database, Search, FileCode, AlertTriangle, Hash, List } from "lucide-svelte";
+  import { ChevronRight, ChevronDown, ArrowLeft, Play, X, Clock, BookOpen, Database, Search, FileCode, AlertTriangle } from "lucide-svelte";
   import type {
     Template,
     TemplateGroups,
     ResolvedExplorerSection,
     ResolvedExplorerExample,
   } from "$lib/graphql/services/explorer";
-import { formatTypeString, getBaseTypeName, isScalarType, getObjectTypeFields } from "$lib/graphql/services/schemaUtils";
+import { formatTypeString, getBaseTypeName, isScalarType, getObjectTypeFields, type IntrospectedSchema } from "$lib/graphql/services/schemaUtils";
 
   interface TypeRef {
     name?: string;
@@ -40,19 +35,11 @@ import { formatTypeString, getBaseTypeName, isScalarType, getObjectTypeFields } 
     fields: SchemaField[];
   }
 
-interface Schema {
+type Schema = IntrospectedSchema & {
   queryType?: SchemaType;
   mutationType?: SchemaType;
   subscriptionType?: SchemaType;
-  types?: Array<{
-    name?: string;
-    kind?: string;
-    description?: string;
-    fields?: SchemaField[];
-    enumValues?: Array<{ name?: string; description?: string; isDeprecated?: boolean; deprecationReason?: string }>;
-    inputFields?: SchemaField[];
-  }>;
-}
+};
 
   interface QueryHistoryItem {
     id: number;
@@ -71,7 +58,6 @@ interface Schema {
     catalogSections?: ResolvedExplorerSection[] | null;
     queryHistory: QueryHistoryItem[];
     loading: boolean;
-    selectedTemplate?: Template | null;
     sidebarMode?: boolean; // When true, renders as inline sidebar instead of modal
     onClose: () => void;
     onSelectTemplate: (template: Template) => void;
@@ -88,7 +74,6 @@ interface Schema {
     catalogSections = null,
     queryHistory,
     loading,
-    selectedTemplate = null,
     sidebarMode = false,
     onClose,
     onSelectTemplate,
@@ -110,8 +95,6 @@ interface Schema {
   // Track expanded field for detail view (legacy, will be replaced by navigation)
   let expandedField = $state<string | null>(null);
 
-  // Accordion state - library + schema expanded by default
-  let accordionValue = $state<string[]>(["library", "schema"]);
 
   // Template search state
   let templateSearch = $state("");
@@ -126,9 +109,9 @@ interface Schema {
   let schemaSearch = $state("");
 
   // Schema section collapse state (all expanded by default)
-  let collapsedSections = $state<Set<string>>(new Set());
+  let collapsedSections: SvelteSet<string> = new SvelteSet();
   function toggleSection(section: string) {
-    const newSet = new Set(collapsedSections);
+    const newSet = new SvelteSet(collapsedSections);
     if (newSet.has(section)) {
       newSet.delete(section);
     } else {
@@ -279,7 +262,7 @@ interface Schema {
   }
 
   // Lazy type usage index - only computed when needed and cached
-  let cachedTypeUsageIndex: Map<string, UsedByRef[]> | null = null;
+  let cachedTypeUsageIndex: SvelteMap<string, UsedByRef[]> | null = null;
   let cachedSchemaRef: typeof schema = null;
 
   function buildTypeUsageIndex(): Map<string, UsedByRef[]> {
@@ -288,7 +271,7 @@ interface Schema {
       return cachedTypeUsageIndex;
     }
 
-    const index = new Map<string, UsedByRef[]>();
+    const index = new SvelteMap<string, UsedByRef[]>();
     if (!schema) return index;
 
     const addUsage = (typeName: string, ref: UsedByRef) => {
@@ -347,7 +330,7 @@ interface Schema {
     navigationStack = [...navigationStack, { kind: 'type', name: typeName }];
   }
 
-  function navigateToField(fieldName: string, parentType: string) {
+  function _navigateToField(fieldName: string, parentType: string) {
     navigationStack = [...navigationStack, { kind: 'field', name: fieldName, parentType }];
   }
 
@@ -363,7 +346,7 @@ interface Schema {
     }
   }
 
-  function navigateToRoot() {
+  function _navigateToRoot() {
     navigationStack = [{ kind: 'root', name: 'Schema' }];
   }
 
@@ -415,7 +398,7 @@ interface Schema {
     const baseName = getTypeBaseName(field.type);
     if (!baseName) return [];
 
-    return getObjectTypeFields(schema as any, baseName) || [];
+    return getObjectTypeFields(schema, baseName) || [];
   }
 
   function stopPropagation(event: Event) {

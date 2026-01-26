@@ -4,7 +4,6 @@
 
   // Minimal interface for cluster data that works with multiple query types
   interface ClusterData {
-    readonly id: string;
     readonly clusterId: string;
     readonly clusterName: string;
     readonly healthStatus: string;

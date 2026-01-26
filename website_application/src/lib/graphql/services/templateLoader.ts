@@ -30,17 +30,20 @@ export interface TemplateGroups {
 // Use Vite's import.meta.glob to load all .gql files at build time
 // The ?raw query imports the file content as a string
 // Files are in ../pkg/graphql/operations/ (shared between frontend and Go gateway)
-const gqlModules = import.meta.glob("../../../../pkg/graphql/operations/**/*.gql", {
-  query: "?raw",
-  import: "default",
-  eager: false, // Lazy load for better initial bundle size
-});
+const gqlModules = import.meta.glob(
+  "../../../../pkg/graphql/operations/**/*.gql",
+  {
+    query: "?raw",
+    import: "default",
+    eager: false, // Lazy load for better initial bundle size
+  },
+);
 
 // Cache for loaded templates
 let cachedTemplates: TemplateGroups | null = null;
 
 // Cache for fragment definitions (name -> raw content)
-let fragmentDefinitions: Map<string, string> = new Map();
+const fragmentDefinitions: Map<string, string> = new Map();
 
 // Clear cache on HMR to pick up changes
 if (import.meta.hot) {
@@ -221,7 +224,9 @@ function cleanFilePath(path: string): string {
     return "operations/" + match[1];
   }
   // Legacy fallback
-  return path.replace(/^\/src\/lib\//, "").replace(/^\.\.\/+pkg\/graphql\//, "");
+  return path
+    .replace(/^\/src\/lib\//, "")
+    .replace(/^\.\.\/+pkg\/graphql\//, "");
 }
 
 /**

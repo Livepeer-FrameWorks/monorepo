@@ -31,4 +31,6 @@ const TimelineBand = forwardRef(
   )
 )
 
+TimelineBand.displayName = 'TimelineBand'
+
 export default TimelineBand

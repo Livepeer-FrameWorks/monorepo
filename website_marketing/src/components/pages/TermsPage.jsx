@@ -1,6 +1,6 @@
 import { Section, SectionContainer } from '@/components/ui/section'
 import config from '../../config'
-import { MarketingHero, MarketingSlab, MarketingSlabHeader, MarketingScrollProgress, SectionDivider } from '@/components/marketing'
+import { MarketingHero, MarketingScrollProgress, SectionDivider } from '@/components/marketing'
 
 const termsSections = [
   {

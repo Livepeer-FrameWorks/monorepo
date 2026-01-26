@@ -59,7 +59,7 @@ function createErrorBoundaryStore() {
 
     handleGraphQLError(graphQLError: GraphQLErrorLike): void {
       let userMessage = "Failed to load data";
-      let additionalInfo = "";
+      const additionalInfo = "";
 
       if (graphQLError.networkError) {
         const hasStatusCode =

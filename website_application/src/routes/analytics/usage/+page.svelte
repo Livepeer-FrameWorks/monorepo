@@ -29,7 +29,6 @@
     SelectContent,
     SelectItem,
   } from "$lib/components/ui/select";
-  import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
   import StorageBreakdownChart from "$lib/components/charts/StorageBreakdownChart.svelte";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
@@ -118,7 +117,7 @@
   );
 
   // Helper to unmask nested allocation fields
-  function unmaskAllocation(masked: { readonly " $fragments": { AllocationFields: {} } } | null | undefined) {
+  function unmaskAllocation(masked: { readonly " $fragments": { AllocationFields: object } } | null | undefined) {
     if (!masked) return null;
     return get(fragment(masked, allocationFragmentStore));
   }
@@ -165,27 +164,27 @@
   // Aggregate API usage by auth type
   let apiUsageByAuthType = $derived.by(() => {
     const summaries = apiUsageSummaries;
-    const byAuth = new Map<string, { requests: number; errors: number; avgDuration: number; complexity: number; users: number; tokens: number }>();
+    const byAuth: Record<string, { requests: number; errors: number; avgDuration: number; complexity: number; users: number; tokens: number }> = {};
 
     for (const s of summaries) {
-      const existing = byAuth.get(s.authType) || { requests: 0, errors: 0, avgDuration: 0, complexity: 0, users: 0, tokens: 0 };
+      const existing = byAuth[s.authType] || { requests: 0, errors: 0, avgDuration: 0, complexity: 0, users: 0, tokens: 0 };
       existing.requests += s.totalRequests;
       existing.errors += s.totalErrors;
       existing.complexity += s.totalComplexity;
       existing.users = Math.max(existing.users, s.uniqueUsers);
       existing.tokens = Math.max(existing.tokens, s.uniqueTokens);
-      byAuth.set(s.authType, existing);
+      byAuth[s.authType] = existing;
     }
 
     // Calculate weighted average duration
-    for (const [auth, data] of byAuth) {
+    for (const [auth, data] of Object.entries(byAuth)) {
       const authSummaries = summaries.filter(s => s.authType === auth);
       const totalRequests = authSummaries.reduce((sum, s) => sum + s.totalRequests, 0);
       const weightedDuration = authSummaries.reduce((sum, s) => sum + s.avgDurationMs * s.totalRequests, 0);
       data.avgDuration = totalRequests > 0 ? weightedDuration / totalRequests : 0;
     }
 
-    return Array.from(byAuth.entries()).map(([authType, data]) => ({
+    return Object.entries(byAuth).map(([authType, data]) => ({
       authType,
       ...data
     }));
@@ -217,16 +216,16 @@
       if (edges.length === 0) return [];
 
       // Aggregate by hour across all streams/countries
-      const hourlyMap = new Map<string, number>();
+      const hourlyMap: Record<string, number> = {};
       for (const edge of edges) {
         const node = edge.node;
         if (!node?.hour) continue;
         const hour = node.hour;
-        const existing = hourlyMap.get(hour) || 0;
-        hourlyMap.set(hour, existing + (node.uniqueViewers || 0));
+        const existing = hourlyMap[hour] || 0;
+        hourlyMap[hour] = existing + (node.uniqueViewers || 0);
       }
 
-      return Array.from(hourlyMap.entries())
+      return Object.entries(hourlyMap)
         .map(([hour, viewers]) => ({ timestamp: hour, viewers }))
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     }
@@ -269,7 +268,7 @@
     if (edges.length === 0) return [];
 
     // Aggregate by stream
-    const streamMap = new Map<string, {
+    const streamMap: Record<string, {
       streamId: string;
       displayStreamId: string;
       totalViews: number;
@@ -277,14 +276,14 @@
       egressBytes: number;
       uniqueCountries: number;
       uniqueCities: number;
-    }>();
+    }> = {};
 
     for (const edge of edges) {
       const node = edge.node;
       if (!node?.streamId) continue;
 
       const displayStreamId = node.stream?.streamId ?? node.streamId;
-      const existing = streamMap.get(node.streamId);
+      const existing = streamMap[node.streamId];
       if (existing) {
         existing.totalViews += node.totalViews ?? 0;
         existing.uniqueViewers = Math.max(existing.uniqueViewers, node.uniqueViewers ?? 0);
@@ -295,7 +294,7 @@
           existing.displayStreamId = displayStreamId;
         }
       } else {
-        streamMap.set(node.streamId, {
+        streamMap[node.streamId] = {
           streamId: node.streamId,
           displayStreamId,
           totalViews: node.totalViews ?? 0,
@@ -303,13 +302,13 @@
           egressBytes: node.egressBytes ?? 0,
           uniqueCountries: node.uniqueCountries ?? 0,
           uniqueCities: node.uniqueCities ?? 0,
-        });
+        };
       }
     }
 
     // Sort by egress (cost driver) and take top 10
-    const totalEgress = Array.from(streamMap.values()).reduce((sum, s) => sum + s.egressBytes, 0);
-    return Array.from(streamMap.values())
+    const totalEgress = Object.values(streamMap).reduce((sum, s) => sum + s.egressBytes, 0);
+    return Object.values(streamMap)
       .map(s => ({
         ...s,
         egressGb: s.egressBytes / (1024 * 1024 * 1024),
@@ -474,8 +473,9 @@
           $billingStatusStore.errors?.[0]?.message ||
           "Failed to load data";
       }
-    } catch (err: any) {
-      error = err?.response?.data?.error || err?.message || "Failed to load usage and costs data";
+    } catch (err: unknown) {
+      const errObj = err as { response?: { data?: { error?: string } }; message?: string } | null;
+      error = errObj?.response?.data?.error || errObj?.message || "Failed to load usage and costs data";
       console.error("Failed to load usage and costs:", err);
     }
   }

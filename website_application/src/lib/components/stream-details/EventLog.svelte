@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SvelteDate } from "svelte/reactivity";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
 
@@ -51,6 +52,7 @@
     ...rest
   }: Props = $props();
 
+  // eslint-disable-next-line svelte/prefer-writable-derived -- visibleCount is modified by loadMore()
   let visibleCount = $state(0);
   $effect(() => {
     visibleCount = maxVisible;
@@ -112,14 +114,14 @@
 
   function formatDate(timestamp: string): string {
     const date = new Date(timestamp);
-    const now = new Date();
+    const now = new SvelteDate();
     const isToday = date.toDateString() === now.toDateString();
 
     if (isToday) {
       return "Today";
     }
 
-    const yesterday = new Date(now);
+    const yesterday = new SvelteDate(now.getTime());
     yesterday.setDate(yesterday.getDate() - 1);
     if (date.toDateString() === yesterday.toDateString()) {
       return "Yesterday";

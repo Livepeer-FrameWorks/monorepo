@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Link } from 'react-router-dom'
 import config from '../../config'
 import InfoTooltip from '../shared/InfoTooltip'
 import StatusTag from '../shared/StatusTag'
@@ -835,7 +834,14 @@ const Pricing = () => {
 
       {activeOption ? (
         <div className="pricing-architecture-modal" role="dialog" aria-modal="true" aria-label={`${activeOption.title} details`}>
-          <div className="pricing-architecture-modal__backdrop" onClick={() => setActiveOption(null)} />
+          <div
+          className="pricing-architecture-modal__backdrop"
+          onClick={() => setActiveOption(null)}
+          onKeyDown={(e) => e.key === 'Escape' && setActiveOption(null)}
+          role="button"
+          tabIndex={0}
+          aria-label="Close modal"
+        />
           <div className="pricing-architecture-modal__panel">
             <button
               type="button"

@@ -3,6 +3,7 @@
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
+  import { SvelteMap } from "svelte/reactivity";
   import {
     fragment,
     GetStreamStore,
@@ -51,7 +52,6 @@
   const streamMetricsStore = new StreamMetricsFieldsStore();
 
   // Types from Houdini - derive from the new healthStore
-  type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
   type HealthAnalytics = NonNullable<
     NonNullable<NonNullable<typeof $healthStore.data>["analytics"]>["health"]
   >;
@@ -61,14 +61,7 @@
   type HealthMetricType = NonNullable<HealthAnalytics["streamHealthConnection"]["edges"]>[0]["node"];
   type TrackListEventType = NonNullable<LifecycleAnalytics["trackListConnection"]["edges"]>[0]["node"];
   type BufferEventType = NonNullable<LifecycleAnalytics["bufferEventsConnection"]["edges"]>[0]["node"];
-  type RebufferingEventType = NonNullable<HealthAnalytics["rebufferingEventsConnection"]["edges"]>[0]["node"];
   type ClientMetric5mType = NonNullable<HealthAnalytics["clientQoeConnection"]["edges"]>[0]["node"];
-  type ViewerSessionType = NonNullable<
-    NonNullable<NonNullable<typeof $viewerSessionsStore.data>["analytics"]>["lifecycle"]
-  >["viewerSessionsConnection"]["edges"][0]["node"];
-  type RoutingEventType = NonNullable<
-    NonNullable<NonNullable<typeof $routingEventsStore.data>["analytics"]>["infra"]
-  >["routingEventsConnection"]["edges"][0]["node"];
 
   // page is a store; derive the current param value so it updates on navigation
   let streamId = $derived(page?.params?.id as string ?? "");
@@ -144,7 +137,7 @@
 
   // Per-node breakdown from client metrics
   let nodeBreakdown = $derived(() => {
-    const nodeMap = new Map<string, { sessions: number; packetLoss: number[]; quality: number[] }>();
+    const nodeMap = new SvelteMap<string, { sessions: number; packetLoss: number[]; quality: number[] }>();
 
     for (const metric of clientMetrics) {
       const nodeId = metric.nodeId ?? 'unknown';
@@ -209,14 +202,14 @@
 
   // Aggregate viewer geography from viewer sessions
   let viewerGeography = $derived.by(() => {
-    const countryMap = new Map<string, { count: number; cities: Map<string, number> }>();
+    const countryMap = new SvelteMap<string, { count: number; cities: SvelteMap<string, number> }>();
 
     for (const session of viewerSessions) {
       const country = session.countryCode || 'Unknown';
       const city = session.city || 'Unknown';
 
       if (!countryMap.has(country)) {
-        countryMap.set(country, { count: 0, cities: new Map() });
+        countryMap.set(country, { count: 0, cities: new SvelteMap() });
       }
       const countryData = countryMap.get(country)!;
       countryData.count++;
@@ -399,9 +392,10 @@
         error = "Stream not found";
         return;
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Ignore AbortErrors which happen on navigation/cancellation
-      if (err.name === 'AbortError' || err.message === 'aborted' || err.message === 'Aborted') {
+      const errObj = err as { name?: string; message?: string };
+      if (errObj.name === 'AbortError' || errObj.message === 'aborted' || errObj.message === 'Aborted') {
         return;
       }
       console.error("Failed to load stream:", err);
@@ -438,9 +432,10 @@
           },
         }).catch(() => null),
       ]);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Ignore AbortErrors which happen on navigation/cancellation
-      if (err.name === 'AbortError' || err.message === 'aborted' || err.message === 'Aborted') {
+      const errObj = err as { name?: string; message?: string };
+      if (errObj.name === 'AbortError' || errObj.message === 'aborted' || errObj.message === 'Aborted') {
         return;
       }
       console.error("Failed to load health data:", err);
@@ -1078,7 +1073,7 @@
 
                   {#if tracks.length > 0}
                     <div class="space-y-2">
-                      {#each tracks as track}
+                      {#each tracks as track (track?.trackName ?? Math.random())}
                         <div class="p-2 bg-muted/30 border border-border/30">
                           <div class="flex items-center justify-between mb-2">
                             <div class="flex items-center gap-2">
@@ -1409,7 +1404,7 @@
                 <span class="text-xs text-muted-foreground">{health5mData.length} intervals</span>
               </div>
               <div class="flex items-end gap-px h-12">
-                {#each health5mData as point}
+                {#each health5mData as point (point.timestamp)}
                   {@const maxRebuffers = Math.max(...health5mData.map(d => d.rebufferCount ?? 0), 1)}
                   {@const heightPct = (point.rebufferCount ?? 0) / maxRebuffers * 100}
                   <div
@@ -1427,7 +1422,7 @@
                 <span class="text-xs text-muted-foreground uppercase tracking-wide">Issues Over Time</span>
               </div>
               <div class="flex items-end gap-px h-12">
-                {#each health5mData as point}
+                {#each health5mData as point (point.timestamp)}
                   {@const maxIssues = Math.max(...health5mData.map(d => d.issueCount ?? 0), 1)}
                   {@const heightPct = (point.issueCount ?? 0) / maxIssues * 100}
                   <div
@@ -1446,7 +1441,7 @@
                 <span class="text-xs text-info font-mono">{health5mSummary ? (health5mSummary.avgBitrate / 1000).toFixed(1) : 0} kbps avg</span>
               </div>
               <div class="flex items-end gap-px h-12">
-                {#each health5mData as point}
+                {#each health5mData as point (point.timestamp)}
                   {@const maxBitrate = Math.max(...health5mData.map(d => d.avgBitrate ?? 0), 1)}
                   {@const heightPct = (point.avgBitrate ?? 0) / maxBitrate * 100}
                   <div

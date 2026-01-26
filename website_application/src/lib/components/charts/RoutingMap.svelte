@@ -4,7 +4,7 @@
   import { getIconComponent } from "$lib/iconUtils";
 
   // Leaflet is client-side only
-  let L: any;
+  let L: typeof import("leaflet") | null = null;
 
   // Icons for controls
   const MaximizeIcon = getIconComponent("Maximize2");

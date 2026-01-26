@@ -4,8 +4,8 @@
   import { getIconComponent } from "$lib/iconUtils";
 
   // Leaflet is client-side only
-  let L: any;
-  let leafletHeat: any;
+  let L: typeof import("leaflet") | null = null;
+  let _leafletHeat: unknown;
 
   // Icons for controls
   const MaximizeIcon = getIconComponent("Maximize2");
@@ -36,7 +36,7 @@
 
   let mapContainer = $state<HTMLElement>();
   let map: LeafletMap | null = null;
-  let heatLayer: any = null;
+  let heatLayer: L.HeatLayer | null = null;
 
   // UX state
   let isFullscreen = $state(false);

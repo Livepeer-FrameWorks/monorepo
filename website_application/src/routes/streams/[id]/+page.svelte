@@ -104,9 +104,9 @@
   const streamMetricsStore = new StreamMetricsFieldsStore();
 
   // Types from Houdini
-  type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
-  type StreamKeyType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeysConnection"]>["edges"]>[0]>["node"];
-  type RecordingType = NonNullable<NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]>[0]["node"];
+  type _StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
+  type _StreamKeyType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeysConnection"]>["edges"]>[0]>["node"];
+  type _RecordingType = NonNullable<NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]>[0]["node"];
   type TrackInfo = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
 
   // page is a store; derive the param so it stays in sync with navigation
@@ -881,7 +881,7 @@
   const SettingsIcon = getIconComponent("Settings");
   const BarChart2Icon = getIconComponent("BarChart2");
   const HeartIcon = getIconComponent("Heart");
-  const KeyIcon = getIconComponent("Key");
+  const _KeyIcon = getIconComponent("Key");
   const VideoIcon = getIconComponent("Video");
   const PlayIcon = getIconComponent("Play");
   const CalendarIcon = getIconComponent("Calendar");

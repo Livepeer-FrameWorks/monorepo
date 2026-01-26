@@ -79,7 +79,7 @@
       <CodeMirrorEditor
         bind:value={variables}
         language="json"
-        placeholder={"\u007B\u007D"}
+        placeholder={'{}'}
         minHeight="128px"
         onkeydown={handleVariablesKeydown}
       />
@@ -87,7 +87,7 @@
       <!-- SSR fallback -->
       <textarea
         bind:value={variables}
-        placeholder={"\u007B\u007D"}
+        placeholder={'{}'}
         class="w-full h-full text-sm font-mono bg-background p-3 text-foreground placeholder-muted-foreground resize-none border-0 focus:outline-none"
       ></textarea>
     {/if}

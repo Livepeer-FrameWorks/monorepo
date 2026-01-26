@@ -35,7 +35,7 @@ export const authService = {
       updateAuthToken(token);
       localStorage.setItem("user", JSON.stringify(user));
       return { token, user };
-    } catch (error) {
+    } catch {
       return null;
     }
   },
@@ -91,7 +91,7 @@ export const authService = {
   async logout(): Promise<void> {
     try {
       await authAPI.post("/logout");
-    } catch (e) {
+    } catch {
       // Ignore
     }
     // Clear localStorage data

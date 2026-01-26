@@ -81,8 +81,7 @@ export const navigationConfig: Record<string, NavigationItem> = {
         href: "/analytics",
         icon: "ChartLine",
         active: true,
-        description:
-          "Real-time metrics and streaming analytics overview",
+        description: "Real-time metrics and streaming analytics overview",
       },
       audience: {
         name: "Audience",

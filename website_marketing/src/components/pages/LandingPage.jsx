@@ -3,7 +3,6 @@ import SdkCodePreview from './SdkCodePreview'
 // Demo player wrapper with status/health integration
 import { Player as FrameworksPlayer } from '@livepeer-frameworks/player-react'
 import {
-  MarketingIconBadge,
   MarketingFinalCTA,
   MarketingScrollProgress,
   MarketingBand,
@@ -15,12 +14,11 @@ import {
   MarketingFeatureWall,
   MarketingHero,
   MarketingGridSplit,
-  MarketingStackedSeam,
   IconList,
   SectionDivider
 } from '@/components/marketing'
 import { Section, SectionContainer } from '@/components/ui/section'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import config from '../../config'
 import {
   ServerStackIcon,
@@ -28,11 +26,29 @@ import {
   ChartBarIcon,
 } from '@heroicons/react/24/outline'
 
+const generateGlitchStrips = () => {
+  const strips = []
+  for (let i = 0; i < 15; i++) {
+    strips.push({
+      stripHeight: 20 + Math.random() * 40,
+      rawGlitchX1: (Math.random() - 0.5) * 40,
+      rawGlitchX2: (Math.random() - 0.5) * 40,
+      glitchHue1: (Math.random() - 0.5) * 90,
+      glitchHue2: (Math.random() - 0.5) * 90,
+      animationDelayFactor: Math.random(),
+      animationDuration: 2000 + Math.random() * 3000,
+      animationName: `glitch-${(i % 6) + 5}`,
+    })
+  }
+  return strips
+}
+
 const LandingPage = () => {
-  const [showDemo, setShowDemo] = useState(false)
   const [showPlayer, setShowPlayer] = useState(false)
   const [logoAnimationComplete, setLogoAnimationComplete] = useState(false)
   const [demoState, setDemoState] = useState('booting')
+
+  const glitchStripData = useMemo(() => generateGlitchStrips(), [])
 
   useEffect(() => {
     // Preload logo image so glitch strips can start immediately
@@ -50,14 +66,9 @@ const LandingPage = () => {
       setLogoAnimationComplete(true)
     }, 4200) // 2000ms delay + 2200ms animation duration
 
-    const demoTimer = setTimeout(() => {
-      setShowDemo(true)
-    }, 1000)
-
     return () => {
       clearTimeout(playerTimer)
       clearTimeout(cleanupTimer)
-      clearTimeout(demoTimer)
     }
   }, [])
 
@@ -322,9 +333,6 @@ const LandingPage = () => {
                     }}
                   >
                     {(() => {
-                      const strips = [];
-                      let currentPosition = 0;
-
                       const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
                       let maxSafeTranslation, stripExtension;
 
@@ -341,38 +349,34 @@ const LandingPage = () => {
                         }
                       }
 
-                      for (let i = 0; i < 15; i++) {
-                        const stripHeight = 20 + Math.random() * 40;
-                        const rawGlitchX1 = (Math.random() - 0.5) * 40;
-                        const rawGlitchX2 = (Math.random() - 0.5) * 40;
-                        const glitchX1 = Math.max(-maxSafeTranslation, Math.min(maxSafeTranslation, rawGlitchX1));
-                        const glitchX2 = Math.max(-maxSafeTranslation, Math.min(maxSafeTranslation, rawGlitchX2));
-                        const glitchHue1 = (Math.random() - 0.5) * 90;
-                        const glitchHue2 = (Math.random() - 0.5) * 90;
-                        const animationDelay = i < 3 ? 0 : i < 8 ? Math.random() * 0.5 : Math.random() * 1.5;
-                        const animationDuration = 2000 + Math.random() * 3000;
-                        const animationName = `glitch-${(i % 6) + 5}`;
+                      let currentPosition = 0;
+                      return glitchStripData.map((data, i) => {
+                        const glitchX1 = Math.max(-maxSafeTranslation, Math.min(maxSafeTranslation, data.rawGlitchX1));
+                        const glitchX2 = Math.max(-maxSafeTranslation, Math.min(maxSafeTranslation, data.rawGlitchX2));
+                        const animationDelay = i < 3 ? 0 : i < 8 ? data.animationDelayFactor * 0.5 : data.animationDelayFactor * 1.5;
+                        const top = currentPosition;
+                        currentPosition += data.stripHeight;
 
-                        strips.push(
+                        return (
                           <div
                             key={i}
-                            className={`absolute${currentPosition === 0 ? ' rounded-t-xl' : i === 14 ? ' rounded-b-xl' : ''}`}
+                            className={`absolute${top === 0 ? ' rounded-t-xl' : i === 14 ? ' rounded-b-xl' : ''}`}
                             style={{
                               left: `-${stripExtension}px`,
                               right: `-${stripExtension}px`,
-                              top: `${currentPosition}px`,
-                              height: `${stripHeight}px`,
+                              top: `${top}px`,
+                              height: `${data.stripHeight}px`,
                               backgroundImage: 'url(/frameworks-dark-vertical-lockup.svg)',
                               backgroundSize: `calc(100% - ${stripExtension * 2}px) auto`,
-                              backgroundPosition: `${stripExtension}px -${currentPosition}px`,
+                              backgroundPosition: `${stripExtension}px -${top}px`,
                               backgroundRepeat: 'no-repeat',
-                              overflow: currentPosition === 0 || i === 14 ? 'hidden' : 'visible',
+                              overflow: top === 0 || i === 14 ? 'hidden' : 'visible',
                               '--glitch-x-1': `${glitchX1}px`,
                               '--glitch-x-2': `${glitchX2}px`,
-                              '--glitch-hue-1': `${glitchHue1}deg`,
-                              '--glitch-hue-2': `${glitchHue2}deg`,
-                              animationName: animationName,
-                              animationDuration: `${animationDuration}ms`,
+                              '--glitch-hue-1': `${data.glitchHue1}deg`,
+                              '--glitch-hue-2': `${data.glitchHue2}deg`,
+                              animationName: data.animationName,
+                              animationDuration: `${data.animationDuration}ms`,
                               animationDelay: `${animationDelay}s`,
                               animationIterationCount: 'infinite',
                               animationDirection: 'alternate',
@@ -381,11 +385,7 @@ const LandingPage = () => {
                             }}
                           />
                         );
-
-                        currentPosition += stripHeight;
-                      }
-
-                      return strips;
+                      });
                     })()}
                   </div>
                 </motion.div>

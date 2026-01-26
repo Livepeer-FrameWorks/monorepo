@@ -112,7 +112,7 @@
               <div>
                 <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Variables</h4>
                 <ul class="space-y-2">
-                  {#each queryHelp.variables as v}
+                  {#each queryHelp.variables as v (v.name)}
                     {@const hint = getVariableHint(v.name, v.type)}
                     <li class="text-sm">
                       <div class="flex items-baseline gap-2">
@@ -135,7 +135,7 @@
               <div>
                 <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">Fragments Used</h4>
                 <div class="flex flex-wrap gap-1">
-                  {#each queryHelp.fragments as frag}
+                  {#each queryHelp.fragments as frag (frag)}
                     <code class="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">{frag}</code>
                   {/each}
                 </div>

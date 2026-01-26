@@ -27,4 +27,6 @@ const MarketingBand = forwardRef(
   }
 )
 
+MarketingBand.displayName = 'MarketingBand'
+
 export default MarketingBand

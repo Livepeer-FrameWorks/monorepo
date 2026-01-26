@@ -35,4 +35,6 @@ const MarketingComparisonGrid = forwardRef(
   )
 )
 
+MarketingComparisonGrid.displayName = 'MarketingComparisonGrid'
+
 export default MarketingComparisonGrid

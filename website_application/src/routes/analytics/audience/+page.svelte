@@ -17,7 +17,6 @@
   import { Button } from "$lib/components/ui/button";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
-  import { NodeCard } from "$lib/components/cards";
   import CountryDistributionChart from "$lib/components/charts/CountryDistributionChart.svelte";
   import CountryTrendChart from "$lib/components/charts/CountryTrendChart.svelte";
   import GeoHeatmap from "$lib/components/charts/GeoHeatmap.svelte";
@@ -45,13 +44,6 @@
   const nodeCoreStore = new NodeCoreFieldsStore();
 
   // Types from Houdini
-  type NodeData = NonNullable<
-    NonNullable<NonNullable<typeof $nodesStore.data>["nodesConnection"]>["edges"]
-  >[0]["node"];
-  type RoutingEventsConnection = NonNullable<
-    NonNullable<NonNullable<typeof $routingEventsStore.data>["analytics"]>["infra"]
-  >["routingEventsConnection"];
-  type RoutingEventNode = NonNullable<RoutingEventsConnection["edges"]>[0]["node"];
   type ConnectionEventsConnection = NonNullable<
     NonNullable<NonNullable<typeof $connectionEventsStore.data>["analytics"]>["lifecycle"]
   >["connectionEventsConnection"];
@@ -197,22 +189,21 @@
     console.log('[routingMapData] computing, h3Ready:', h3Ready, 'events:', events.length);
 
     // Map nodes to dictionary for easier lookup
-    const nodeMap = new Map();
+    const nodeMap: Record<string, { id: string; name: string; lat: number; lng: number }> = {};
     nodes.forEach(n => {
       if (n.latitude && n.longitude) {
-        nodeMap.set(n.nodeName, {
+        nodeMap[n.nodeName] = {
           id: n.id,
           name: n.nodeName,
           lat: n.latitude,
           lng: n.longitude
-        });
+        };
       }
     });
 
-    const routes: any[] = [];
-    const activeNodes = new Set<string>();
+    const routes: { from: [number, number]; to: [number, number]; status: string | null | undefined; score: number | null | undefined; details: string | null | undefined }[] = [];
     const bucketPolys: { id: string; coords: [number, number][]; kind: 'client' | 'node' }[] = [];
-    const bucketSeen = new Set<string>();
+    const bucketSeen: Record<string, boolean> = {};
     const bucketStats: Record<string, { count: number; success: number; distanceSum: number; nodeSeen: boolean }> = {};
 
     // Log first event to debug bucket data
@@ -235,7 +226,7 @@
 
         // If event doesn't have node coordinates but has node name, try to look it up
         if ((!nodeLat || !nodeLng) && evt.selectedNode) {
-           const nodeInfo = nodeMap.get(evt.selectedNode);
+           const nodeInfo = nodeMap[evt.selectedNode];
            if (nodeInfo) {
              nodeLat = nodeInfo.lat;
              nodeLng = nodeInfo.lng;
@@ -250,7 +241,6 @@
             score: evt.score,
             details: evt.details
           });
-          if (evt.selectedNode) activeNodes.add(evt.selectedNode);
         }
 
         // Buckets -> polygons
@@ -258,8 +248,8 @@
         const clientPoly = bucketToPolygon(clientBucket);
         if (clientBucket && clientPoly) {
           const id = `c-${clientBucket.h3Index}`;
-          if (!bucketSeen.has(id)) {
-            bucketSeen.add(id);
+          if (!bucketSeen[id]) {
+            bucketSeen[id] = true;
             bucketPolys.push({ id, coords: clientPoly, kind: 'client' });
           }
           const statKey = clientBucket.h3Index!;
@@ -274,8 +264,8 @@
         const nodePoly = bucketToPolygon(nodeBucket);
         if (nodeBucket && nodePoly) {
           const id = `n-${nodeBucket.h3Index}`;
-          if (!bucketSeen.has(id)) {
-            bucketSeen.add(id);
+          if (!bucketSeen[id]) {
+            bucketSeen[id] = true;
             bucketPolys.push({ id, coords: nodePoly, kind: 'node' });
           }
         }
@@ -283,7 +273,7 @@
     });
 
     // Only pass nodes that are actually involved in routes or available
-    const displayNodes = Array.from(nodeMap.values());
+    const displayNodes = Object.values(nodeMap);
 
     return { routes, nodes: displayNodes, buckets: bucketPolys, bucketStats };
   });
@@ -442,9 +432,6 @@
     return nodes.slice(0, 12);
   });
 
-  const formatBucketId = (bucket?: { h3Index?: string | null } | null) =>
-    bucket?.h3Index ? bucket.h3Index.slice(0, 6) + '…' : '—';
-
   // Routing efficiency calculated from routing events
   interface RoutingEfficiency {
     efficiency: number;
@@ -480,44 +467,6 @@
       totalDecisions: routingEvents.length,
       avgDistance: totalDistance / routingEvents.length,
       avgLatency: latencyCount > 0 ? totalLatency / latencyCount : 0,
-    };
-  });
-
-  // Connection patterns calculated from connection events
-  interface ConnectionPatterns {
-    totalConnections: number;
-    totalDisconnections: number;
-    netConnections: number;
-    countryDistribution: Record<string, number>;
-    nodeDistribution: Record<string, number>;
-  }
-
-  let connectionPatterns = $derived.by((): ConnectionPatterns => {
-    let totalConnections = 0;
-    let totalDisconnections = 0;
-    const countryDistribution: Record<string, number> = {};
-    const nodeDistribution: Record<string, number> = {};
-
-    for (const event of connectionEvents) {
-      if (event.eventType === 'connect') {
-        totalConnections++;
-      } else if (event.eventType === 'disconnect') {
-        totalDisconnections++;
-      }
-      if (event.countryCode) {
-        countryDistribution[event.countryCode] = (countryDistribution[event.countryCode] || 0) + 1;
-      }
-      if (event.nodeId) {
-        nodeDistribution[event.nodeId] = (nodeDistribution[event.nodeId] || 0) + 1;
-      }
-    }
-
-    return {
-      totalConnections,
-      totalDisconnections,
-      netConnections: totalConnections - totalDisconnections,
-      countryDistribution,
-      nodeDistribution,
     };
   });
 
@@ -602,8 +551,8 @@
       if (connectionEventsResult.errors?.length) {
         console.error("Failed to load connection events:", connectionEventsResult.errors);
       }
-    } catch (err: any) {
-      error = err.message || "Failed to load data";
+    } catch (err: unknown) {
+      error = err instanceof Error ? err.message : "Failed to load data";
       console.error("Failed to load data:", err);
     }
   }
@@ -700,9 +649,7 @@
   const ActivityIcon = getIconComponent('Activity');
   const AlertCircleIcon = getIconComponent('AlertCircle');
   const ServerIcon = getIconComponent('Server');
-  const ZapIcon = getIconComponent('Zap');
   const ChartLineIcon = getIconComponent('ChartLine');
-  const MonitorIcon = getIconComponent('Monitor');
 </script>
 
 <svelte:head>

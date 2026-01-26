@@ -12,10 +12,9 @@
 
   interface Props {
     liveMetrics: Record<string, StreamMetrics>;
-    formatBytes: (bytes: number) => string;
   }
 
-  let { liveMetrics, formatBytes }: Props = $props();
+  let { liveMetrics }: Props = $props();
 
   let hasLiveStreams = $derived(Object.keys(liveMetrics).length > 0);
 

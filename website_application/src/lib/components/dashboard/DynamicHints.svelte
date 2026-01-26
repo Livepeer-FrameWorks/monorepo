@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
   import { getIconComponent } from "$lib/iconUtils";
 
   interface Props {
@@ -193,7 +194,7 @@
         <p class="text-muted-foreground text-sm mt-0.5">{currentHint.getDescription()}</p>
         {#if currentHint.link}
           <a
-            href={currentHint.link}
+            href={resolve(currentHint.link)}
             class="text-primary hover:underline text-sm inline-block mt-1"
           >
             {currentHint.linkText} →

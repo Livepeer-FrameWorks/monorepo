@@ -62,6 +62,40 @@
     minutes: number;
   }
 
+  interface StreamData {
+    name: string;
+    description?: string | null;
+    createdAt?: string | null;
+    updatedAt?: string | null;
+    metrics?: {
+      isLive?: boolean;
+    } | null;
+  }
+
+  interface StreamKeyData {
+    id?: string;
+    keyValue?: string;
+  }
+
+  interface RecordingData {
+    sizeBytes?: number | null;
+    isFrozen?: boolean;
+  }
+
+  interface ClipData {
+    sizeBytes?: number | null;
+    isFrozen?: boolean;
+  }
+
+  interface AnalyticsData {
+    peakViewers?: number | null;
+    totalSessionDuration?: number | null;
+    packetsSent?: number | null;
+    packetsLost?: number | null;
+    packetsRetrans?: number | null;
+    packetLossRate?: number | null;
+  }
+
   let {
     stream,
     streamKeys,
@@ -74,11 +108,11 @@
     qualityTierSummary = null,
     codecDistribution = [],
   }: {
-    stream: any;
-    streamKeys: any[];
-    recordings: any[];
-    clips?: any[];
-    analytics: any;
+    stream: StreamData;
+    streamKeys: StreamKeyData[];
+    recordings: RecordingData[];
+    clips?: ClipData[];
+    analytics: AnalyticsData | null;
     tracks?: TrackInfo | null;
     viewerMetrics?: ViewerMetric[];
     dailyAnalytics?: DailyAnalytics[];

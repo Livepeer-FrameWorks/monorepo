@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { resolve } from '$app/paths';
   import Player from '$lib/components/Player.svelte';
   import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -30,12 +31,11 @@
 
   // Derived display values from metadata
   let displayTitle = $derived(streamMetadata?.title || (contentType === 'live' ? 'Live Stream' : contentType === 'clip' ? 'Clip' : contentType === 'vod' ? 'VOD Asset' : contentType === 'dvr' ? 'DVR Recording' : 'Playback'));
-  let videoTrack = $derived(streamMetadata?.tracks?.find(t => t.type === 'video'));
-  let audioTrack = $derived(streamMetadata?.tracks?.find(t => t.type === 'audio'));
-  let resolutionLabel = $derived(videoTrack ? `${videoTrack.width}x${videoTrack.height}` : null);
-  let codecLabel = $derived(videoTrack?.codec || null);
-  let fpsLabel = $derived(videoTrack?.fps ? `${videoTrack.fps}fps` : null);
-  let bitrateLabel = $derived(videoTrack?.bitrate ? `${(videoTrack.bitrate / 1000).toFixed(0)} kbps` : null);
+  let _videoTrack = $derived(streamMetadata?.tracks?.find(t => t.type === 'video'));
+  let resolutionLabel = $derived(_videoTrack ? `${_videoTrack.width}x${_videoTrack.height}` : null);
+  let codecLabel = $derived(_videoTrack?.codec || null);
+  let fpsLabel = $derived(_videoTrack?.fps ? `${_videoTrack.fps}fps` : null);
+  let bitrateLabel = $derived(_videoTrack?.bitrate ? `${(_videoTrack.bitrate / 1000).toFixed(0)} kbps` : null);
 
   function handleMetadata(metadata: PlayerMetadata) {
     streamMetadata = metadata;
@@ -99,7 +99,7 @@
     if (window.history.length > 1) {
       window.history.back();
     } else {
-      goto('/');
+      goto(resolve('/'));
     }
   }
 </script>

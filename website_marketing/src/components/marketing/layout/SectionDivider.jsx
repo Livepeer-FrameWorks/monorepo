@@ -18,4 +18,6 @@ const SectionDivider = forwardRef(
   )
 )
 
+SectionDivider.displayName = 'SectionDivider'
+
 export default SectionDivider

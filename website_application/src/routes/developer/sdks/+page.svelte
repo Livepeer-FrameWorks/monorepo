@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
   import { Button } from "$lib/components/ui/button";
-  import { GridSeam } from "$lib/components/layout";
   import { getIconComponent } from "$lib/iconUtils";
   import { getDocsSiteUrl, getGithubUrl, getGraphqlHttpUrl, getMcpEndpoint, getRtmpServerUrl } from "$lib/config";
 
@@ -310,7 +310,7 @@ await controller.stopStreaming();`,
             <div>
               <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Features</h4>
               <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {#each playerSdk.features as feature}
+                {#each playerSdk.features as feature (feature)}
                   <div class="flex items-center gap-2 text-sm text-foreground">
                     <CheckIcon class="w-3.5 h-3.5 text-success shrink-0" />
                     <span>{feature}</span>
@@ -395,7 +395,7 @@ await controller.stopStreaming();`,
             <div>
               <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Features</h4>
               <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {#each studioSdk.features as feature}
+                {#each studioSdk.features as feature (feature)}
                   <div class="flex items-center gap-2 text-sm text-foreground">
                     <CheckIcon class="w-3.5 h-3.5 text-success shrink-0" />
                     <span>{feature}</span>
@@ -480,7 +480,7 @@ await controller.stopStreaming();`,
             <div>
               <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Capabilities</h4>
               <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {#each mcpServer.features as feature}
+                {#each mcpServer.features as feature (feature)}
                   <div class="flex items-center gap-2 text-sm text-foreground">
                     <CheckIcon class="w-3.5 h-3.5 text-success shrink-0" />
                     <span>{feature}</span>
@@ -523,7 +523,7 @@ await controller.stopStreaming();`,
           </div>
           <div class="slab-body--padded">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {#each upcomingSdks as sdk}
+              {#each upcomingSdks as sdk (sdk.name)}
                 {@const Icon = getIconByName(sdk.icon)}
                 <div class="border border-border/50 rounded-lg p-4 bg-muted/20">
                   <div class="flex items-center gap-3 mb-3">
@@ -553,7 +553,7 @@ await controller.stopStreaming();`,
           <div class="slab-body--padded">
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <a
-                href={docsBaseUrl}
+                href={resolve(docsBaseUrl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
@@ -567,7 +567,7 @@ await controller.stopStreaming();`,
               </a>
 
               <a
-                href={githubBaseUrl}
+                href={resolve(githubBaseUrl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
@@ -595,7 +595,7 @@ await controller.stopStreaming();`,
               </a>
 
               <a
-                href="/developer/api"
+                href={resolve("/developer/api")}
                 class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
               >
                 <Code2Icon class="w-5 h-5 text-muted-foreground group-hover:text-primary" />

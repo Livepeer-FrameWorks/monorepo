@@ -59,7 +59,7 @@
     lg: "w-8 h-8",
   } as const;
 
-  let sizeClass = $derived(sizeClasses[size] ?? sizeClasses.md);
+  let _sizeClass = $derived(sizeClasses[size] ?? sizeClasses.md);
 
   function getStateDescription(state: BufferState): string {
     switch (state) {
@@ -99,7 +99,7 @@
 {#if compact}
   <!-- Compact mode: just dots indicator with tooltip -->
   <div class="group relative flex items-center gap-1" title={getStateDescription(bufferState)}>
-    {#each Array(4) as _, i}
+    {#each Array(4) as _, i (i)}
       <div
         class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount ? bgClass : 'bg-muted-foreground/30'}"
       ></div>
@@ -111,7 +111,7 @@
     <div class="flex items-center space-x-1.5">
       <!-- Buffer state dots -->
       <div class="flex items-center gap-0.5">
-        {#each Array(4) as _, i}
+        {#each Array(4) as _, i (i)}
           <div
             class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount ? bgClass : 'bg-muted-foreground/30'}"
           ></div>

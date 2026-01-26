@@ -9,8 +9,6 @@ import {
 } from "$houdini";
 import type {
   StreamEvents$result,
-  ViewerMetricsStream$result,
-  SystemHealth$result,
   TrackListUpdates$result,
   ClipLifecycle$result,
   DvrLifecycle$result,
@@ -19,10 +17,6 @@ import { browser } from "$app/environment";
 
 // Type aliases for subscription results
 type StreamEventData = NonNullable<StreamEvents$result["liveStreamEvents"]>;
-type ViewerMetricData = NonNullable<
-  ViewerMetricsStream$result["liveViewerMetrics"]
->;
-type SystemHealthData = NonNullable<SystemHealth$result["liveSystemHealth"]>;
 type TrackListEventData = NonNullable<
   TrackListUpdates$result["liveTrackListUpdates"]
 >;

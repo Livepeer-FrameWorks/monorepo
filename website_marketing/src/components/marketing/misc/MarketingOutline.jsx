@@ -24,4 +24,6 @@ const MarketingOutline = forwardRef(
   )
 )
 
+MarketingOutline.displayName = 'MarketingOutline'
+
 export default MarketingOutline

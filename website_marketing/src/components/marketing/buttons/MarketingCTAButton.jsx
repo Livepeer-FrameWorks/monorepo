@@ -86,4 +86,6 @@ const MarketingCTAButton = forwardRef(
   }
 )
 
+MarketingCTAButton.displayName = 'MarketingCTAButton'
+
 export default MarketingCTAButton

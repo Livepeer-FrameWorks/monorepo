@@ -92,7 +92,7 @@
 				}));
 				totalTransactions = txResult.data.balanceTransactionsConnection.totalCount;
 			}
-		} catch (e) {
+		} catch {
 			toast.error('Failed to load balance data');
 		} finally {
 			loading = false;
@@ -120,7 +120,7 @@
 			if (result.data?.createCardTopup?.checkoutUrl) {
 				window.location.href = result.data.createCardTopup.checkoutUrl;
 			}
-		} catch (e) {
+		} catch {
 			toast.error('Failed to create checkout session');
 		} finally {
 			topupLoading = false;
@@ -152,7 +152,7 @@
 				};
 				toast.success('Deposit address created');
 			}
-		} catch (e) {
+		} catch {
 			toast.error('Failed to create deposit address');
 		} finally {
 			topupLoading = false;
@@ -250,7 +250,7 @@
 							{/if}
 							<p class="text-sm text-muted-foreground mt-4">
 								Balance is used for streaming, storage, and transcoding. API requests are free.
-								<a href={`${docsSiteUrl}/streamers/billing`} class="text-primary hover:underline" target="_blank" rel="noopener">Learn more</a>
+								<a href={resolve(`${docsSiteUrl}/streamers/billing`)} class="text-primary hover:underline" target="_blank" rel="noopener">Learn more</a>
 							</p>
 						{:else}
 							<p class="text-muted-foreground">No balance data available</p>
@@ -271,7 +271,7 @@
 						<div>
 							<label class="block text-sm font-medium text-muted-foreground mb-2">Amount (EUR)</label>
 							<div class="flex gap-2">
-								{#each [5, 10, 25, 50, 100] as amount}
+								{#each [5, 10, 25, 50, 100] as amount (amount)}
 									<Button
 										variant={topupAmount === amount ? 'default' : 'outline'}
 										size="sm"
@@ -320,7 +320,7 @@
 							<div>
 								<label class="block text-sm font-medium text-muted-foreground mb-2">Asset</label>
 								<div class="flex gap-2">
-									{#each ['ETH', 'USDC', 'LPT'] as asset}
+									{#each ['ETH', 'USDC', 'LPT'] as asset (asset)}
 										<Button
 											variant={cryptoAsset === asset ? 'default' : 'outline'}
 											size="sm"
@@ -386,7 +386,7 @@
 							<div class="p-4 text-center text-muted-foreground">No transactions yet</div>
 						{:else}
 							<div class="divide-y divide-[hsl(var(--tn-fg-gutter)/0.3)]">
-								{#each transactions as tx}
+								{#each transactions as tx (tx.id)}
 									{@const TxIcon = getTransactionIcon(tx.transactionType)}
 									<div class="flex items-center justify-between p-4">
 										<div class="flex items-center gap-3">

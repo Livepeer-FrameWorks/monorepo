@@ -14,7 +14,7 @@
     cleanupWalletWatcher,
     signAuthMessage,
     disconnectWallet
-  } from '$lib/wallet/store';
+  } from '$lib/wallet/store.svelte';
   import { LinkWalletStore, UnlinkWalletStore, LinkEmailStore, PromoteToPaidStore, GetPrepaidBalanceStore, GetBillingTiersStore, GetBillingDetailsStore, UpdateBillingDetailsStore } from '$houdini';
 
   let firstName = $state("");
@@ -338,7 +338,7 @@
         localStorage.setItem("user", JSON.stringify(user));
       }
       toast.success("Profile updated successfully");
-    } catch (e) {
+    } catch {
       toast.error("Failed to update profile");
     } finally {
       loading = false;
@@ -349,7 +349,7 @@
     try {
       await authAPI.post("/me/newsletter", { subscribe: newsletter });
       toast.success("Notification preference updated");
-    } catch (e) {
+    } catch {
       newsletter = !newsletter;
       toast.error("Failed to update preference");
     }
@@ -494,7 +494,7 @@
               </p>
             {:else}
               <div class="space-y-3 mb-4">
-                {#each linkedWallets as wallet}
+                {#each linkedWallets as wallet (wallet.id)}
                   <div class="flex items-center justify-between p-3 bg-muted/30 rounded-md">
                     <div>
                       <p class="font-mono text-sm font-medium">{formatAddress(wallet.address)}</p>
@@ -519,7 +519,7 @@
             {#if walletConnectors.length > 0}
               <div class="space-y-2">
                 <p class="text-sm text-muted-foreground">Add a wallet:</p>
-                {#each walletConnectors as connector}
+                {#each walletConnectors as connector (connector.id)}
                   <Button
                     variant="outline"
                     class="w-full justify-start"
@@ -610,7 +610,7 @@
                   bind:value={selectedTierId}
                   class="w-full p-2 border border-input rounded-md bg-background text-foreground"
                 >
-                  {#each billingTiers as tier}
+                  {#each billingTiers as tier (tier.id)}
                     <option value={tier.id}>
                       {tier.displayName} - {formatCurrency(tier.basePrice * 100)}/month
                     </option>

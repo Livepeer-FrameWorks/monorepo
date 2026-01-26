@@ -311,7 +311,6 @@
     {@const VideoIcon = getIconComponent('Video')}
     {@const ChartLineIcon = getIconComponent('ChartLine')}
     {@const CreditCardIcon = getIconComponent('CreditCard')}
-    {@const ZapIcon = getIconComponent('Zap')}
     {@const GlobeIcon = getIconComponent('Globe')}
     {@const GaugeIcon = getIconComponent('Gauge')}
     {@const ServerIcon = getIconComponent('Server')}

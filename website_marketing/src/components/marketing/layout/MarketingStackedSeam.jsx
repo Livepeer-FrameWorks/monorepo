@@ -29,4 +29,6 @@ const MarketingStackedSeam = forwardRef(
   }
 )
 
+MarketingStackedSeam.displayName = 'MarketingStackedSeam'
+
 export default MarketingStackedSeam

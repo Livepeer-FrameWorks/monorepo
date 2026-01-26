@@ -15,6 +15,7 @@ const MarketingGridSplit = forwardRef(
       bleed = false,
       seam = false,
       className,
+      // eslint-disable-next-line no-unused-vars
       style,
       ...props
     },
@@ -45,5 +46,7 @@ const MarketingGridSplit = forwardRef(
     )
   }
 )
+
+MarketingGridSplit.displayName = 'MarketingGridSplit'
 
 export default MarketingGridSplit

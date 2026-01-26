@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { get } from "svelte/store";
+  import { SvelteMap } from "svelte/reactivity";
   import {
     fragment,
     GetNodesConnectionStore,
@@ -40,7 +41,7 @@
   const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   // Helper to unmask bootstrap token
-  function unmaskBootstrapToken(masked: { readonly " $fragments": { BootstrapTokenFields: {} } } | null | undefined) {
+  function unmaskBootstrapToken(masked: { readonly " $fragments": { BootstrapTokenFields: object } } | null | undefined) {
     if (!masked) return null;
     return get(fragment(masked, bootstrapTokenStore));
   }
@@ -50,7 +51,6 @@
   let nodes = $derived(
     maskedNodes.map(node => get(fragment(node, nodeCoreStore)))
   );
-  let availableClusters = $derived($availableStore.data?.clustersAvailable ?? []);
   let mySubscriptions = $derived($subscriptionsStore.data?.mySubscriptions ?? []);
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
   let marketplaceClusters = $derived($marketplaceStore.data?.marketplaceClusters ?? []);
@@ -58,14 +58,12 @@
 
   let subscribedIds = $derived(new Set(mySubscriptions.map(c => c.clusterId)));
   let accessByCluster = $derived.by(() => {
-    const map = new Map<string, (typeof accessList)[number]>();
+    const map = new SvelteMap<string, (typeof accessList)[number]>();
     for (const entry of accessList) {
       map.set(entry.clusterId, entry);
     }
     return map;
   });
-
-  let loading = $derived($nodesStore.fetching || $availableStore.fetching || $accessStore.fetching);
   let mutating = $derived(
     $subscribeMutation.fetching ||
     $unsubscribeMutation.fetching ||
@@ -100,7 +98,9 @@
     ]);
   });
 
-  function clusterState(cluster: any) {
+  type MarketplaceClusterType = (typeof marketplaceClusters)[number];
+
+  function clusterState(cluster: MarketplaceClusterType) {
     const access = accessByCluster.get(cluster.clusterId);
     if (access?.accessLevel === "owner") return "owner";
     if (subscribedIds.has(cluster.clusterId)) return "subscribed";
@@ -117,7 +117,7 @@
     return pricingModel;
   }
 
-  async function toggleSubscription(cluster: any) {
+  async function toggleSubscription(cluster: MarketplaceClusterType) {
     const state = clusterState(cluster);
     if (state === "owner") return;
     const isSubscribed = state === "subscribed";
@@ -134,12 +134,14 @@
         accessStore.fetch(),
         marketplaceStore.fetch()
       ]);
-    } catch (e) {
+    } catch {
       toast.error("Failed to update subscription");
     }
   }
 
-  async function acceptInvite(invite: any) {
+  type ClusterInviteType = (typeof pendingInvites)[number];
+
+  async function acceptInvite(invite: ClusterInviteType) {
     if (!invite.inviteToken) {
       toast.error("Invalid invite token");
       return;
@@ -156,7 +158,7 @@
       } else {
         toast.error("Failed to accept invite");
       }
-    } catch (e) {
+    } catch {
       toast.error("Failed to accept invite");
     }
   }
@@ -186,7 +188,7 @@
       } else if (data?.__typename === "AuthError") {
         toast.error(data.message);
       }
-    } catch (e) {
+    } catch {
       toast.error("Failed to create cluster");
     }
   }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { resolve } from "$app/paths";
   import { getContentDeliveryUrls, getDocsSiteUrl } from "$lib/config";
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/textarea";
@@ -42,7 +43,7 @@
     <p class="text-xs text-muted-foreground/70 mt-1">
       Share these URLs with viewers to watch your stream.
       <a
-        href={`${getDocsSiteUrl()}/streamers/playback`}
+        href={resolve(`${getDocsSiteUrl()}/streamers/playback`)}
         target="_blank"
         rel="noopener noreferrer"
         class="text-info hover:underline inline-flex items-center gap-1"

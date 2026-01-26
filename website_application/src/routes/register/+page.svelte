@@ -173,8 +173,7 @@
       </div>
 
       <p class="text-muted-foreground">
-        Already have an account?{" "}
-        <a
+        Already have an account? <a
           href={resolve("/login")}
           class="text-info font-medium underline underline-offset-4 hover:text-primary transition-colors"
         >

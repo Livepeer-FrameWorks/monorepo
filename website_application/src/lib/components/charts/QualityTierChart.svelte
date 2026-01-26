@@ -134,7 +134,7 @@
             borderWidth: 1,
             padding: 12,
             callbacks: {
-              label: (context: any) => {
+              label: (context: { parsed: number; dataset: { data: number[] }; label: string }) => {
                 const value = context.parsed;
                 const total = (context.dataset.data as number[]).reduce(
                   (a: number, b: number) => a + b,

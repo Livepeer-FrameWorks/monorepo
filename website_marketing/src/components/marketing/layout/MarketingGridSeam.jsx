@@ -37,4 +37,6 @@ const MarketingGridSeam = forwardRef(
   )
 )
 
+MarketingGridSeam.displayName = 'MarketingGridSeam'
+
 export default MarketingGridSeam

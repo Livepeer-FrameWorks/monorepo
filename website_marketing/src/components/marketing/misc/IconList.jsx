@@ -40,4 +40,6 @@ const IconList = forwardRef(
   )
 )
 
+IconList.displayName = 'IconList'
+
 export default IconList
