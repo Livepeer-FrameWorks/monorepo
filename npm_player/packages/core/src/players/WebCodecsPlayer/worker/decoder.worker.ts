@@ -559,7 +559,7 @@ function handleReceive(msg: MainToWorkerMessage & { type: 'receive' }): void {
     } else {
       // Drop delta frames when decoder is overwhelmed
       pipeline.stats.framesDropped++;
-      totalFramesDropped++;
+      _totalFramesDropped++;
       logVerbose(`Dropped delta frame @ ${chunk.timestamp / 1000}ms (decoder queue: ${pipeline.decoder.decodeQueueSize})`);
     }
     return;
@@ -601,7 +601,7 @@ function _dropToNextKeyframe(pipeline: PipelineState): number {
   // Drop all frames before keyframe
   const dropped = pipeline.inputQueue.splice(0, keyframeIdx);
   pipeline.stats.framesDropped += dropped.length;
-  totalFramesDropped += dropped.length;
+  _totalFramesDropped += dropped.length;
 
   log(`Dropped ${dropped.length} frames to next keyframe`, 'warn');
 

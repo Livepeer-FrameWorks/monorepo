@@ -83,7 +83,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   currentTime,
   duration,
   isVisible = true,
-  _className,
+  className,
   onSeek,
   mistStreamInfo,
   disabled = false,

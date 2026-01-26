@@ -493,7 +493,7 @@
   let statusBadgeClass = $derived(getStatusBadgeClass(crafterState.state, crafterState.isReconnecting));
 </script>
 
-<div class="fw-sc-root {devMode ? 'fw-sc-root--devmode' : ''} {className}" oncontextmenu={handleContextMenu}>
+<div class="fw-sc-root {devMode ? 'fw-sc-root--devmode' : ''} {className}" oncontextmenu={handleContextMenu} role="application">
   <!-- Main content wrapper -->
   <div class="fw-sc-main {devMode ? 'flex-1 min-w-0' : 'w-full'}">
     <!-- Header -->

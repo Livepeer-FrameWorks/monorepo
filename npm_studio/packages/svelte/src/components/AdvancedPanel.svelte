@@ -174,7 +174,7 @@
     isWebCodecsActive = false,
     encoderStats = null,
     onUseWebCodecsChange,
-    _isWebCodecsAvailable = true,
+    isWebCodecsAvailable = true,
     encoderOverrides = {},
     onEncoderOverridesChange,
   }: Props = $props();
@@ -335,6 +335,7 @@
                 onclick={() => onAudioProcessingChange({ [toggle.key]: !audioProcessing[toggle.key] })}
                 role="switch"
                 aria-checked={audioProcessing[toggle.key]}
+                aria-label={toggle.label}
               >
                 <span class="fw-dev-mode-switch-thumb"></span>
               </button>
@@ -689,6 +690,7 @@
               disabled={ingestState === 'streaming'}
               role="switch"
               aria-checked={useWebCodecs}
+              aria-label="Use WebCodecs"
             >
               <span class="fw-dev-mode-switch-thumb"></span>
             </button>
