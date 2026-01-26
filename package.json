@@ -20,6 +20,6 @@
     "@typescript-eslint/parser": "^8",
     "@typescript-eslint/type-utils": "^8",
     "@typescript-eslint/utils": "^8",
-    "knip": "^5.78.0"
+    "knip": "^5.82.1"
   }
 }
