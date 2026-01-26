@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/player-svelte",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "type": "module",
   "description": "Svelte 5 components for FrameWorks streaming player",
   "svelte": "./dist/index.js",
