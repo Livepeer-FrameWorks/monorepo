@@ -8,6 +8,7 @@ on:
 
 jobs:
   go:
+    name: Go tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +27,7 @@ jobs:
       - run: make test
 
   frontend:
+    name: Frontend tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
