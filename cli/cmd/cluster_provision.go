@@ -79,7 +79,7 @@ func runProvision(cmd *cobra.Command, manifestPath, only string, dryRun, force, 
 	fmt.Fprintf(cmd.OutOrStdout(), "Phase: %s\n\n", only)
 
 	if dryRun {
-		fmt.Fprintln(cmd.OutOrStdout(), "[DRY-RUN MODE - No changes will be made]\n")
+		fmt.Fprintln(cmd.OutOrStdout(), "[DRY-RUN MODE - No changes will be made]")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)

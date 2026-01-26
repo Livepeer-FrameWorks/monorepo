@@ -77,7 +77,7 @@ func newDNSDoctorCmd() *cobra.Command {
 			}
 
 			for _, node := range nodesResp.Nodes {
-				if node.Status != "active" || node.ExternalIp == nil || *node.ExternalIp == "" {
+				if node.ExternalIp == nil || *node.ExternalIp == "" {
 					continue
 				}
 

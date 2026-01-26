@@ -497,8 +497,14 @@ func newAdminBootstrapTokensListCmd() *cobra.Command {
 			if t.UsedAt != nil {
 				used = " used"
 			}
-			tenant := t.TenantId
-			cluster := t.ClusterId
+			tenant := "<any>"
+			if t.TenantId != nil {
+				tenant = *t.TenantId
+			}
+			cluster := "<any>"
+			if t.ClusterId != nil {
+				cluster = *t.ClusterId
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) kind=%s tenant=%s cluster=%s expires=%s%s\n", t.Name, t.Id, t.Kind, tenant, cluster, t.ExpiresAt.AsTime().Format(time.RFC3339), used)
 		}
 		return nil
@@ -1312,7 +1318,7 @@ func newAdminNodesListCmd() *cobra.Command {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Nodes (%d)\n", len(resp.Nodes))
 		for _, n := range resp.Nodes {
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s cluster=%s status=%s\n", n.NodeName, n.NodeId, n.NodeType, n.ClusterId, n.Status)
+			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s cluster=%s\n", n.NodeName, n.NodeId, n.NodeType, n.ClusterId)
 		}
 		return nil
 	}}

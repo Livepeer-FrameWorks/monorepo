@@ -248,7 +248,7 @@ func (c *CaddyProvisioner) provisionDocker(ctx context.Context, host inventory.H
 		}
 	}
 
-	fmt.Printf("✓ Caddy provisioned in Docker mode\n", host.Address)
+	fmt.Printf("✓ Caddy provisioned in Docker mode on %s\n", host.Address)
 	return nil
 }
 
@@ -328,7 +328,7 @@ rm /tmp/caddy.tar.gz
 		return fmt.Errorf("failed to start Caddy service: %v (stderr: %s)", err, result.Stderr)
 	}
 
-	fmt.Printf("✓ Caddy provisioned in native mode\n", host.Address)
+	fmt.Printf("✓ Caddy provisioned in native mode on %s\n", host.Address)
 	return nil
 }
 

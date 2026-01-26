@@ -79,7 +79,7 @@ func runDiagnose(cmd *cobra.Command, manifestPath, component string) error {
 
 // diagnoseNetwork tests network connectivity
 func diagnoseNetwork(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Network Connectivity Diagnostics\n")
+	fmt.Fprintln(cmd.OutOrStdout(), "Network Connectivity Diagnostics")
 
 	hosts := make([]inventory.Host, 0, len(manifest.Hosts))
 	for _, h := range manifest.Hosts {
@@ -116,7 +116,7 @@ func diagnoseNetwork(ctx context.Context, cmd *cobra.Command, manifest *inventor
 
 // diagnoseResources checks resource usage on all hosts
 func diagnoseResources(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Resource Usage Diagnostics\n")
+	fmt.Fprintln(cmd.OutOrStdout(), "Resource Usage Diagnostics")
 
 	for hostname, host := range manifest.Hosts {
 		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.Address)
@@ -159,7 +159,7 @@ func diagnoseResources(ctx context.Context, cmd *cobra.Command, manifest *invent
 
 // diagnosePorts checks for port conflicts
 func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, pool *ssh.Pool) error {
-	fmt.Fprintln(cmd.OutOrStdout(), "Port Conflict Diagnostics\n")
+	fmt.Fprintln(cmd.OutOrStdout(), "Port Conflict Diagnostics")
 
 	// Check standard ports on each host
 	standardPorts := map[int]string{
@@ -228,7 +228,7 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		return fmt.Errorf("kafka not enabled in manifest")
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Kafka Diagnostics\n")
+	fmt.Fprintln(cmd.OutOrStdout(), "Kafka Diagnostics")
 
 	// Check first broker
 	if len(manifest.Infrastructure.Kafka.Brokers) == 0 {
