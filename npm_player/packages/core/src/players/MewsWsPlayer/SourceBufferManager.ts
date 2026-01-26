@@ -314,7 +314,7 @@ export class SourceBufferManager {
       try {
         // Make sure end time is never 0 (mews.js:376)
         this.sourceBuffer.remove(0, Math.max(0.1, currentTime - keepaway));
-      } catch (e) {
+      } catch {
         // Ignore errors during cleanup
       }
     });
@@ -343,7 +343,7 @@ export class SourceBufferManager {
         if (!isNaN(this.mediaSource.duration)) {
           this.sourceBuffer.remove(0, Infinity);
         }
-      } catch (e) {
+      } catch {
         // Ignore
       }
 
@@ -371,7 +371,7 @@ export class SourceBufferManager {
     if (this.sourceBuffer && this.mediaSource.readyState === 'open') {
       try {
         this.mediaSource.removeSourceBuffer(this.sourceBuffer);
-      } catch (e) {
+      } catch {
         // Ignore
       }
     }

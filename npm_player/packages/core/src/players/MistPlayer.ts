@@ -146,7 +146,7 @@ export class MistPlayerImpl extends BasePlayer {
         if (ref && typeof ref.unload === 'function') {
           ref.unload();
         }
-      } catch (e) {
+      } catch {
         // Ignore cleanup errors
       }
       try {

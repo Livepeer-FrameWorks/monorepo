@@ -183,7 +183,7 @@ export class WebSocketController {
           }
         };
 
-        this.ws.onerror = (event) => {
+        this.ws.onerror = (_event) => {
           this.log('WebSocket error');
           this.emit('error', new Error('WebSocket error'));
         };

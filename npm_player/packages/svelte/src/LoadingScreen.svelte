@@ -608,7 +608,7 @@
   {/each}
 
   <!-- Floating particles -->
-  {#each particles as particle, i}
+  {#each particles as particle, _i}
     <div
       class="particle"
       style="
@@ -623,7 +623,7 @@
   {/each}
 
   <!-- Animated bubbles -->
-  {#each bubbles as bubble, i}
+  {#each bubbles as bubble, _i}
     <div
       class="bubble"
       style="

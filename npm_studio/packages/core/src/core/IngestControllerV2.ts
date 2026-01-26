@@ -12,11 +12,11 @@ import { DeviceManager } from './DeviceManager';
 import { ScreenCapture } from './ScreenCapture';
 import { WhipClient } from './WhipClient';
 import { AudioMixer } from './AudioMixer';
-import { ReconnectionManager, DEFAULT_RECONNECTION_CONFIG } from './ReconnectionManager';
+import { ReconnectionManager } from './ReconnectionManager';
 import { SceneManager } from './SceneManager';
 import { EncoderManager, createEncoderConfig } from './EncoderManager';
-import { detectCapabilities, isWebCodecsSupported, isRTCRtpScriptTransformSupported } from './FeatureDetection';
-import { getEncoderSettings, getVideoConstraints, getAudioConstraints } from './MediaConstraints';
+import { detectCapabilities, isRTCRtpScriptTransformSupported } from './FeatureDetection';
+import { getVideoConstraints } from './MediaConstraints';
 import type {
   IngestControllerConfigV2,
   IngestControllerEventsV2,
@@ -29,7 +29,6 @@ import type {
   DeviceInfo,
   MediaSource,
   SourceType,
-  ReconnectionConfig,
   CompositorConfig,
   EncoderOverrides,
 } from '../types';
@@ -669,7 +668,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.log(`Changing quality profile: ${previousProfile} -> ${profile}`);
 
     // Update existing camera sources with new constraints
-    for (const [id, source] of this.sources) {
+    for (const [_id, source] of this.sources) {
       if (source.type === 'camera') {
         const videoTrack = source.stream.getVideoTracks()[0];
         if (videoTrack) {

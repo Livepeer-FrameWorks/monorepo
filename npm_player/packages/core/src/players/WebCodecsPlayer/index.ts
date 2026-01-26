@@ -27,7 +27,6 @@ import type {
   InfoMessage,
   OnTimeMessage,
   RawChunk,
-  LatencyProfileName,
   WebCodecsPlayerOptions,
   WebCodecsStats,
   MainToWorkerMessage,
@@ -36,7 +35,7 @@ import type {
 import { WebSocketController } from './WebSocketController';
 import { SyncController } from './SyncController';
 import { getPresentationTimestamp, isInitData } from './RawChunkParser';
-import { getLatencyProfile, mergeLatencyProfile, selectDefaultProfile } from './LatencyProfiles';
+import { mergeLatencyProfile, selectDefaultProfile } from './LatencyProfiles';
 import { createTrackGenerator, hasNativeMediaStreamTrackGenerator } from './polyfills/MediaStreamTrackGenerator';
 
 /**
@@ -213,7 +212,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
             }
           } else {
             // Use VideoDecoder.isConfigSupported()
-            result = await VideoDecoder.isConfigSupported(config as VideoDecoderConfig);
+            const videoResult = await VideoDecoder.isConfigSupported(config as VideoDecoderConfig);
+            result = { supported: videoResult.supported === true, config: videoResult.config };
           }
           break;
         }
@@ -221,7 +221,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
           // Audio requires numberOfChannels and sampleRate
           config.numberOfChannels = track.channels ?? 2;
           config.sampleRate = track.rate ?? 48000;
-          result = await AudioDecoder.isConfigSupported(config as AudioDecoderConfig);
+          const audioResult = await AudioDecoder.isConfigSupported(config as AudioDecoderConfig);
+          result = { supported: audioResult.supported === true, config: audioResult.config };
           break;
         }
         default:
@@ -948,7 +949,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       const tracksObj = msg.meta.tracks;
       this.log(`Info contains ${Object.keys(tracksObj).length} tracks`);
 
-      for (const [name, track] of Object.entries(tracksObj)) {
+      for (const [_name, track] of Object.entries(tracksObj)) {
         // Store track by its index for lookup when chunks arrive
         if (track.idx !== undefined) {
           this.tracksByIndex.set(track.idx, track);

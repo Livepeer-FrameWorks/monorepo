@@ -145,7 +145,7 @@ const SeekBar: React.FC<SeekBarProps> = ({
 
     // Fallback: If we have liveEdge, use it even if not marked as live
     // This handles cases where duration is Infinity but we have valid seekable data
-    if (Number.isFinite(liveEdge) && liveEdge > 0) {
+    if (liveEdge !== undefined && Number.isFinite(liveEdge) && liveEdge > 0) {
       const start = Number.isFinite(seekableStart) ? seekableStart : 0;
       const window = liveEdge - start;
       if (window > 0) {

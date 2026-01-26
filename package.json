@@ -9,7 +9,8 @@
   "workspaces": [
     "website_marketing",
     "website_application",
-    "npm_player"
+    "npm_player",
+    "npm_studio"
   ],
   "scripts": {
     "lint": "pnpm -r lint",

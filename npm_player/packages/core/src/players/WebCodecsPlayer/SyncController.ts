@@ -16,7 +16,6 @@
 
 import type {
   LatencyProfile,
-  BufferState,
   SyncState,
   TrackInfo,
 } from './types';
@@ -383,7 +382,7 @@ export class SyncController {
   /**
    * Register a new track
    */
-  addTrack(trackIndex: number, track: TrackInfo): void {
+  addTrack(_trackIndex: number, _track: TrackInfo): void {
     // Jitter tracking will be initialized on first chunk
   }
 

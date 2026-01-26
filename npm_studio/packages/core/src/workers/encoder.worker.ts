@@ -171,7 +171,7 @@ function postError(message: string, fatal: boolean, requestId?: string): void {
 // Encoder output handlers
 // ============================================================================
 
-function handleVideoOutput(chunk: EncodedVideoChunk, metadata?: EncodedVideoChunkMetadata): void {
+function handleVideoOutput(chunk: EncodedVideoChunk, _metadata?: EncodedVideoChunkMetadata): void {
   stats.video.framesEncoded++;
   stats.video.bytesEncoded += chunk.byteLength;
   stats.video.lastFrameTime = performance.now();
@@ -191,7 +191,7 @@ function handleVideoOutput(chunk: EncodedVideoChunk, metadata?: EncodedVideoChun
   postMessage({ type: 'encodedVideoChunk', data: chunkData }, [buffer]);
 }
 
-function handleAudioOutput(chunk: EncodedAudioChunk, metadata?: EncodedAudioChunkMetadata): void {
+function handleAudioOutput(chunk: EncodedAudioChunk, _metadata?: EncodedAudioChunkMetadata): void {
   stats.audio.samplesEncoded++;
   stats.audio.bytesEncoded += chunk.byteLength;
   stats.audio.lastSampleTime = performance.now();

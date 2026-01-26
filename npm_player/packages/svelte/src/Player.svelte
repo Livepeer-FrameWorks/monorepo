@@ -3,9 +3,8 @@
   Thin wrapper over PlayerController from @livepeer-frameworks/player-core
 -->
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import IdleScreen from './IdleScreen.svelte';
-  import LoadingScreen from './LoadingScreen.svelte';
   import SubtitleRenderer from './SubtitleRenderer.svelte';
   import PlayerControls from './PlayerControls.svelte';
   import SpeedIndicator from './SpeedIndicator.svelte';
@@ -22,7 +21,7 @@
     ContextMenuSeparator,
   } from './ui/context-menu';
   import { StatsIcon, SettingsIcon, PictureInPictureIcon } from './icons';
-  import { cn, type PlaybackMode, type ContentEndpoints, type ContentMetadata, type PlayerState, type PlayerStateContext, type ContentType, type EndpointInfo, type PlayerMetadata } from '@livepeer-frameworks/player-core';
+  import { cn, type PlaybackMode, type ContentEndpoints, type PlayerState, type PlayerStateContext, type ContentType, type EndpointInfo, type PlayerMetadata } from '@livepeer-frameworks/player-core';
   import { createPlayerControllerStore, type PlayerControllerStore } from './stores/playerController';
   import type { SkipDirection } from './SkipIndicator.svelte';
 

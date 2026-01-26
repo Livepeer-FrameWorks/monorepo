@@ -109,7 +109,7 @@ export class NativePlayerImpl extends BasePlayer {
 
     // Safari cannot play WebM - skip entirely
     // Reference: html5.js:28-29
-    if (mimetype === 'html5/video/webm' && browser.name === 'safari') {
+    if (mimetype === 'html5/video/webm' && browser.isSafari) {
       return false;
     }
 
@@ -262,7 +262,7 @@ export class NativePlayerImpl extends BasePlayer {
     // Use LiveDurationProxy for all live streams (non-WHEP)
     // WHEP handles its own live edge via signaling
     // This enables seeking and jump-to-live for native MP4/WebM/HLS live streams
-    const isLiveStream = streamInfo?.type === 'live' || !isFinite(streamInfo?.duration ?? Infinity);
+    const isLiveStream = streamInfo?.type === 'live';
     if (source.type !== 'whep' && isLiveStream) {
       this.setupLiveDurationProxy(video);
       this.setupAutoRecovery(video);

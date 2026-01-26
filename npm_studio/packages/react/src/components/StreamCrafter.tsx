@@ -25,7 +25,6 @@ import type {
   QualityProfile,
   MediaSource,
   ReconnectionState,
-  LayoutConfig,
   EncoderOverrides,
 } from '@livepeer-frameworks/streamcrafter-core';
 import { getAudioConstraints } from '@livepeer-frameworks/streamcrafter-core';
@@ -124,12 +123,6 @@ const SettingsIcon = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="3" />
     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-  </svg>
-);
-
-const ChevronDownIcon = ({ size = 14 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="6 9 12 15 18 9" />
   </svg>
 );
 
@@ -375,7 +368,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
 
   // Gateway-based ingest endpoint resolution (like useViewerEndpoints in player)
   const {
-    endpoints: gatewayEndpoints,
+    endpoints: _gatewayEndpoints,
     status: endpointStatus,
     error: endpointError,
     whipUrl: gatewayWhipUrl,
@@ -443,11 +436,9 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
     setSourceVolume,
     setPrimaryVideoSource,
     setMasterVolume,
-    getMasterVolume,
     stats,
     startStreaming,
     stopStreaming,
-    stopCapture,
     getController,
     // WebCodecs encoder
     useWebCodecs,
@@ -598,7 +589,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
   const canAddSource = state !== 'destroyed' && state !== 'error';
   const canStream = isCapturing && !isStreaming && resolvedWhipUrl;
   const hasCamera = sources.some(s => s.type === 'camera');
-  const hasScreen = sources.some(s => s.type === 'screen');
+  const _hasScreen = sources.some(s => s.type === 'screen');
   const statusText = getStatusText(state, reconnectionState);
   const statusBadgeClass = getStatusBadgeClass(state, isReconnecting);
 

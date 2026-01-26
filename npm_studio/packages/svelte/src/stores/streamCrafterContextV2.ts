@@ -128,7 +128,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
     encoderStats: null,
   };
 
-  const { subscribe, set, update } = writable<StreamCrafterV2State>(initialState);
+  const { subscribe, update } = writable<StreamCrafterV2State>(initialState);
   let controller: IngestControllerV2 | null = null;
   let encoderStatsCleanup: (() => void) | null = null;
 

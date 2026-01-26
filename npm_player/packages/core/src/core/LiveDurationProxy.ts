@@ -124,7 +124,6 @@ export class LiveDurationProxy {
 
     // Find valid seek range
     const bufferStart = buffered.start(0);
-    const bufferEnd = this.getBufferEnd();
     const liveEdge = this.getLiveEdge();
 
     // Clamp to valid range

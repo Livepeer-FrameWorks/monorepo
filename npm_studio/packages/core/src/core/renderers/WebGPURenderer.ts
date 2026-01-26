@@ -97,7 +97,7 @@ fn main(@location(0) texCoord: vec2f) -> @location(0) vec4f {
 }
 `;
 
-const TRANSITION_FRAGMENT_SHADER = /* wgsl */ `
+const _TRANSITION_FRAGMENT_SHADER = /* wgsl */ `
 struct TransitionUniforms {
   progress: f32,
   transitionType: u32, // 0=cut, 1=fade, 2-5=slide directions

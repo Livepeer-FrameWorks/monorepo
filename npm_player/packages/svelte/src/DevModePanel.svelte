@@ -11,8 +11,6 @@
     type MistStreamInfo,
     type PlaybackMode,
   } from '@livepeer-frameworks/player-core';
-  import Button from './ui/Button.svelte';
-  import Badge from './ui/Badge.svelte';
 
   /** Short labels for source types */
   const SOURCE_TYPE_LABELS: Record<string, string> = {
@@ -56,7 +54,7 @@
     videoElement = null,
     protocol = undefined,
     nodeId = undefined,
-    isVisible = true,
+    isVisible: _isVisible = true,
     isOpen: controlledIsOpen = undefined,
     onOpenChange = undefined,
   }: Props = $props();

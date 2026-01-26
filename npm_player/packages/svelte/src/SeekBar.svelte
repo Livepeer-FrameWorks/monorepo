@@ -240,7 +240,7 @@
     isDragging && 'fw-seek-track--active'
   )}>
     <!-- Buffered segments -->
-    {#each bufferedSegments as segment, index}
+    {#each bufferedSegments as segment, _index}
       <div
         class="fw-seek-buffered"
         style="left: {segment.startPercent}%; width: {segment.endPercent - segment.startPercent}%;"

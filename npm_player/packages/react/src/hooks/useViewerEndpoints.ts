@@ -44,7 +44,7 @@ async function fetchWithRetry(
   throw lastError ?? new Error('Gateway unreachable after retries');
 }
 
-export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authToken }: Params) {
+export function useViewerEndpoints({ gatewayUrl, contentType: _contentType, contentId, authToken }: Params) {
   const [endpoints, setEndpoints] = useState<ContentEndpoints | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);

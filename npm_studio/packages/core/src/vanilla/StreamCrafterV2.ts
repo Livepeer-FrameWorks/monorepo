@@ -18,7 +18,6 @@ import type {
   DeviceInfo,
   MediaSource,
   QualityProfile,
-  ReconnectionConfig,
   SourceAddedEvent,
   SourceRemovedEvent,
   SourceUpdatedEvent,

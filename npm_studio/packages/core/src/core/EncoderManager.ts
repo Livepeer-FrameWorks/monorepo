@@ -236,7 +236,7 @@ export class EncoderManager extends TypedEventEmitter<EncoderManagerEvents> {
           worker.removeEventListener('error', onError);
         };
 
-        const onMessage = (e: MessageEvent) => {
+        const onMessage = (_e: MessageEvent) => {
           // Worker loaded and sent a message - it's working
           if (!resolved) {
             resolved = true;

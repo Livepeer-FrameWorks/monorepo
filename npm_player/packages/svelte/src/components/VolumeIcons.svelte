@@ -1,7 +1,7 @@
 <script lang="ts">
   let {
     size = 16,
-    color = 'currentColor',
+    color: _color = 'currentColor',
     className = '',
     isMuted = false,
     volume = 1 // 0-1 range

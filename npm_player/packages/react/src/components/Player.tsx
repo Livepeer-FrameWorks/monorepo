@@ -1,6 +1,5 @@
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback } from "react";
 import IdleScreen from "./IdleScreen";
-import ThumbnailOverlay from "./ThumbnailOverlay";
 import TitleOverlay from "./TitleOverlay";
 import StatsPanel from "./StatsPanel";
 import PlayerControls from "./PlayerControls";
@@ -133,9 +132,6 @@ const PlayerInner: React.FC<PlayerProps> = ({
   // Buffering spinner: only during active playback
   const showBufferingSpinner = !state.shouldShowIdleScreen &&
     state.isBuffering && !state.error && state.hasPlaybackStarted;
-
-  // Click-to-play overlay support
-  const supportsOverlay = false;
 
   // ============================================================================
   // Waiting for Endpoint (shown as overlay, not early return)

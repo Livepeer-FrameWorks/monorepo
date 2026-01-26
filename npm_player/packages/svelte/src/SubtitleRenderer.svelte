@@ -78,7 +78,7 @@
   // State
   let liveCues = $state<SubtitleCue[]>([]);
   let displayedText = $state<string>('');
-  let lastCueId: string | null = null;
+  let _lastCueId: string | null = null;
   let unsubscribe: (() => void) | null = null;
 
   // Merged style
@@ -166,10 +166,10 @@
 
     if (activeCue) {
       displayedText = activeCue.text;
-      lastCueId = activeCue.id;
+      _lastCueId = activeCue.id;
     } else {
       displayedText = '';
-      lastCueId = null;
+      _lastCueId = null;
     }
   });
 

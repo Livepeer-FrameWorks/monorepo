@@ -27,7 +27,7 @@
     trackClassName = "",
     thumbClassName = "",
     showTrack = true,
-    hoverThumb = false,
+    hoverThumb: _hoverThumb = false,
     accentColor = false,
     oninput = undefined,
     ...rest

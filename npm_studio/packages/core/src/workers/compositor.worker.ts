@@ -24,7 +24,6 @@ import type {
   CompositorConfig,
   CompositorMainToWorker,
   CompositorWorkerToMain,
-  RendererStats,
   TransitionConfig,
   LayoutConfig,
   LayoutTransitionConfig,
@@ -457,7 +456,7 @@ async function handleSetRenderer(rendererType: RendererType): Promise<void> {
     await renderer.init(canvas, config);
 
     sendMessage({ type: 'rendererChanged', renderer: renderer.type });
-  } catch (error) {
+  } catch {
     // If requested renderer fails, fall back to Canvas2D
     console.warn(`[CompositorWorker] Failed to create ${rendererType} renderer, falling back to canvas2d`);
     renderer = createRenderer('canvas2d');

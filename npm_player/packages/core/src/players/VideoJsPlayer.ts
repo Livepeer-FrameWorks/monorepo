@@ -433,27 +433,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
     return v?.currentTime ?? 0;
   }
 
-  getDuration(): number {
-    const v = this.proxyElement || this.videoElement;
-    return v?.duration ?? 0;
-  }
-
-  getSeekableRange(): { start: number; end: number } | null {
-    if (this.videojsPlayer?.seekable) {
-      try {
-        const seekable = this.videojsPlayer.seekable();
-        if (seekable && seekable.length > 0) {
-          const start = seekable.start(0) + this.timeCorrection;
-          const end = seekable.end(seekable.length - 1) + this.timeCorrection;
-          if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
-            return { start, end };
-          }
-        }
-      } catch {}
-    }
-    return null;
-  }
-
   /**
    * Seek to time using VideoJS API (fixes backwards seeking in HLS).
    * Time should be in the corrected coordinate space (with firstms offset applied).

@@ -246,7 +246,7 @@ export class SubtitleManager {
     for (const cue of newCues) {
       try {
         textTrack.addCue(cue);
-      } catch (e) {
+      } catch {
         // Ignore errors from invalid cue timing
       }
     }

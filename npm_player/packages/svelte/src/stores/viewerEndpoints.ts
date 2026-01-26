@@ -5,7 +5,7 @@
  */
 
 import { writable, derived, type Readable } from 'svelte/store';
-import type { ContentEndpoints, EndpointInfo, ContentMetadata, ContentType } from '@livepeer-frameworks/player-core';
+import type { ContentEndpoints, ContentType } from '@livepeer-frameworks/player-core';
 
 export interface ViewerEndpointsOptions {
   gatewayUrl: string;

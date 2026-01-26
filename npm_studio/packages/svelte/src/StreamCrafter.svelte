@@ -38,10 +38,6 @@
     IngestStateContextV2,
     MediaSource,
     ReconnectionState,
-    Scene,
-    LayerTransform,
-    LayoutConfig,
-    TransitionConfig,
     CompositorConfig,
     EncoderOverrides,
   } from '@livepeer-frameworks/streamcrafter-core';
@@ -466,7 +462,7 @@
   let canAddSource = $derived(crafterState.state !== 'destroyed' && crafterState.state !== 'error');
   let canStream = $derived(crafterState.isCapturing && !crafterState.isStreaming && resolvedWhipUrl);
   let hasCamera = $derived(crafterState.sources.some((s) => s.type === 'camera'));
-  let hasScreen = $derived(crafterState.sources.some((s) => s.type === 'screen'));
+  let _hasScreen = $derived(crafterState.sources.some((s) => s.type === 'screen'));
 
   function getStatusText(state: IngestState, reconnState?: ReconnectionState | null): string {
     if (reconnState?.isReconnecting) {

@@ -1,9 +1,9 @@
 <script lang="ts">
   import { setContext } from 'svelte';
-  import { createStreamCrafterContextV2 as createStreamCrafterContext, type StreamCrafterContextV2Store as StreamCrafterContextStore } from '../stores/streamCrafterContextV2';
+  import { createStreamCrafterContextV2 as createStreamCrafterContext } from '../stores/streamCrafterContextV2';
 
   // Define prop types (similar to React's StreamCrafterProviderProps)
-  let { children, ...options }: {
+  let { children: _children, ...options }: {
     children?: any;
   } = $props();
 

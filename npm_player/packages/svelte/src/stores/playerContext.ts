@@ -4,7 +4,7 @@
  * Port of PlayerContext.tsx React context to Svelte 5 stores.
  */
 
-import { writable, derived, type Readable, type Writable } from 'svelte/store';
+import { writable, derived, type Readable } from 'svelte/store';
 import { getContext, setContext } from 'svelte';
 import { globalPlayerManager, type StreamInfo, type IPlayer } from '@livepeer-frameworks/player-core';
 

@@ -210,20 +210,6 @@ interface StatusOverlayProps {
   onRetry?: () => void;
 }
 
-function getStatusLabel(status?: StreamStatus): string {
-  switch (status) {
-    case 'ONLINE': return 'ONLINE';
-    case 'OFFLINE': return 'OFFLINE';
-    case 'INITIALIZING': return 'STARTING';
-    case 'BOOTING': return 'STARTING';
-    case 'WAITING_FOR_DATA': return 'WAITING';
-    case 'SHUTTING_DOWN': return 'ENDING';
-    case 'ERROR': return 'ERROR';
-    case 'INVALID': return 'ERROR';
-    default: return 'CONNECTING';
-  }
-}
-
 function StatusIcon({ status }: { status?: StreamStatus }) {
   const iconClass = "w-5 h-5";
 

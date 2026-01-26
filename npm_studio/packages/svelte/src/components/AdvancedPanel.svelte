@@ -174,7 +174,7 @@
     isWebCodecsActive = false,
     encoderStats = null,
     onUseWebCodecsChange,
-    isWebCodecsAvailable = true,
+    _isWebCodecsAvailable = true,
     encoderOverrides = {},
     onEncoderOverridesChange,
   }: Props = $props();
@@ -194,7 +194,7 @@
 
   let activeTab = $state<'audio' | 'stats' | 'info' | 'compositor'>('audio');
   let profileDefaults = $derived(getAudioConstraints(qualityProfile));
-  let videoTrackSettings = $derived(() => {
+  let videoTrackSettings = $derived.by(() => {
     const track = mediaStream?.getVideoTracks?.()[0];
     return track?.getSettings ? track.getSettings() : undefined;
   });

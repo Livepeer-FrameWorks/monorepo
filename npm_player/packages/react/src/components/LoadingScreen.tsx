@@ -297,7 +297,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
         // Fallback to synthetic sound if data URL fails
         createSyntheticHitmarkerSound();
       });
-    } catch (error) {
+    } catch {
       // Fallback to synthetic sound
       createSyntheticHitmarkerSound();
     }
@@ -372,7 +372,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
       oscillator2.stop(stopTime);
       noiseSource.stop(startTime + 0.02);
       
-    } catch (error) {
+    } catch {
       console.log('Audio context not available');
     }
   };

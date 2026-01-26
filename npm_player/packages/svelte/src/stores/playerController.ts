@@ -3,13 +3,12 @@
  * for declarative usage in Svelte 5 components.
  */
 
-import { writable, derived, type Readable, type Writable } from 'svelte/store';
+import { writable, derived, type Readable } from 'svelte/store';
 import {
   PlayerController,
   type PlayerControllerConfig,
   type PlayerState,
   type StreamState,
-  type StreamSource,
   type PlaybackQuality,
   type ContentEndpoints,
   type ContentMetadata,
@@ -322,7 +321,7 @@ export function createPlayerControllerStore(
       });
     }));
 
-    unsubscribers.push(controller.on('playerSelected', ({ player, source }) => {
+    unsubscribers.push(controller.on('playerSelected', ({ player: _player, source }) => {
       store.update(prev => ({
         ...prev,
         currentPlayerInfo: controller!.getCurrentPlayerInfo(),

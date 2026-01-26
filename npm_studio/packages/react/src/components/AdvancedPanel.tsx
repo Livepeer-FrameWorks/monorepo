@@ -8,7 +8,7 @@
  * - Info: WHIP URL, profile, sources
  */
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState } from 'react';
 import type {
   IngestState,
   IngestStats,
@@ -108,10 +108,6 @@ export interface AdvancedPanelProps {
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function cn(...classes: (string | undefined | false)[]): string {
-  return classes.filter(Boolean).join(' ');
-}
 
 function formatBitrate(bps: number): string {
   if (bps >= 1_000_000) {

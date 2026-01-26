@@ -20,7 +20,7 @@ import type {
   VideoDecoderInit,
   AudioDecoderInit,
 } from './types';
-import type { TrackInfo, PipelineStats, FrameTrackerStats } from '../types';
+import type { PipelineStats, FrameTrackerStats } from '../types';
 
 // ============================================================================
 // Global State
@@ -139,7 +139,7 @@ let statsTimer: ReturnType<typeof setInterval> | null = null;
 const STATS_INTERVAL_MS = 250;
 
 // Frame dropping stats (Phase 2B)
-let totalFramesDropped = 0;
+let _totalFramesDropped = 0;
 
 // Chrome-recommended decoder queue threshold
 // Per Chrome WebCodecs best practices: drop when decodeQueueSize > 2
@@ -521,7 +521,7 @@ function resetPipelineAfterError(pipeline: PipelineState): void {
 // ============================================================================
 
 function handleReceive(msg: MainToWorkerMessage & { type: 'receive' }): void {
-  const { idx, chunk, uid } = msg;
+  const { idx, chunk } = msg;
   const pipeline = pipelines.get(idx);
 
   if (!pipeline) {
@@ -587,7 +587,7 @@ function shouldDropFramesDueToDecoderPressure(pipeline: PipelineState): boolean 
  * Drop all frames up to the next keyframe in the input queue
  * Called when decoder is severely backed up
  */
-function dropToNextKeyframe(pipeline: PipelineState): number {
+function _dropToNextKeyframe(pipeline: PipelineState): number {
   if (pipeline.inputQueue.length === 0) return 0;
 
   // Find next keyframe in queue
@@ -998,13 +998,14 @@ function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerat
             };
             self.addEventListener('message', handler);
 
-            // Send frame to main thread
-            self.postMessage({
+            // Send frame to main thread (transfer AudioData)
+            const msg = {
               type: 'writeframe',
               idx,
               frame,
               uid: frameUid,
-            }, [frame]);
+            };
+            self.postMessage(msg, { transfer: [frame] });
           });
         },
         close: () => Promise.resolve(),
@@ -1020,6 +1021,7 @@ function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerat
       self.postMessage(message);
       log(`Set up frame relay for track ${idx} (Safari audio)`);
     }
+    // @ts-ignore - MediaStreamTrackGenerator may not be in standard types
   } else if (typeof MediaStreamTrackGenerator !== 'undefined') {
     // Chrome/Edge: use MediaStreamTrackGenerator in worker
     // @ts-ignore
@@ -1153,9 +1155,10 @@ function handleFrameStep(msg: MainToWorkerMessage & { type: 'framestep' }): void
 
   if (direction > 0) {
     // If we're stepping forward within history (after stepping back), use history
-    if (pipeline.historyCursor !== null && pipeline.historyCursor < pipeline.frameHistory.length - 1) {
-      pipeline.historyCursor += 1;
-      const entry = pipeline.frameHistory[pipeline.historyCursor];
+    const cursor = pipeline.historyCursor;
+    if (cursor !== null && cursor !== undefined && cursor < pipeline.frameHistory.length - 1) {
+      pipeline.historyCursor = cursor + 1;
+      const entry = pipeline.frameHistory[pipeline.historyCursor!];
       const clone = entry ? cloneVideoFrame(entry.frame) : null;
       if (!clone) {
         log(`FrameStep forward: failed to clone frame`);

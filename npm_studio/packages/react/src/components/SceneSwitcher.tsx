@@ -6,7 +6,7 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import type { Scene, TransitionConfig, TransitionType, EasingType } from '@livepeer-frameworks/streamcrafter-core';
+import type { Scene, TransitionConfig, TransitionType } from '@livepeer-frameworks/streamcrafter-core';
 
 export interface SceneSwitcherProps {
   scenes: Scene[];

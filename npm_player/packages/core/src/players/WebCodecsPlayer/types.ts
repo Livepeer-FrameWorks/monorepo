@@ -259,9 +259,10 @@ export interface ClosePipelineMessage {
 
 export interface FrameTimingMessage {
   type: 'frametiming';
-  action: 'setSpeed' | 'reset';
+  action: 'setSpeed' | 'reset' | 'setPaused';
   speed?: number;
   tweak?: number;
+  paused?: boolean;
   uid?: number;
 }
 
@@ -277,6 +278,20 @@ export interface DebuggingMessage {
   uid?: number;
 }
 
+export interface FrameStepMessage {
+  type: 'framestep';
+  direction: -1 | 1;
+  uid?: number;
+}
+
+export interface WriteFrameResponseMessage {
+  type: 'writeframe';
+  idx: number;
+  uid?: number;
+  status: 'ok' | 'error';
+  error?: string;
+}
+
 export type MainToWorkerMessage =
   | CreatePipelineMessage
   | ConfigurePipelineMessage
@@ -286,7 +301,9 @@ export type MainToWorkerMessage =
   | ClosePipelineMessage
   | FrameTimingMessage
   | SeekWorkerMessage
-  | DebuggingMessage;
+  | DebuggingMessage
+  | FrameStepMessage
+  | WriteFrameResponseMessage;
 
 // Worker -> Main thread messages
 export interface AddTrackMessage {
@@ -325,6 +342,7 @@ export interface SendEventMessage {
   type: 'sendevent';
   kind: string;
   message?: string;
+  time?: number;
   idx?: number;
   uid?: number;
 }
@@ -343,6 +361,13 @@ export interface AckMessage {
   error?: string;
 }
 
+export interface WriteFrameMessage {
+  type: 'writeframe';
+  idx: number;
+  frame: AudioData;
+  uid?: number;
+}
+
 export type WorkerToMainMessage =
   | AddTrackMessage
   | RemoveTrackMessage
@@ -351,7 +376,8 @@ export type WorkerToMainMessage =
   | LogMessage
   | SendEventMessage
   | StatsMessage
-  | AckMessage;
+  | AckMessage
+  | WriteFrameMessage;
 
 // ============================================================================
 // Stats Types

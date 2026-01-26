@@ -6,7 +6,6 @@
       type PlaybackMode,
       // Seeking utilities from core
       SPEED_PRESETS,
-      getLatencyTier,
       isMediaStreamSource,
       supportsPlaybackRate as coreSupportsPlaybackRate,
       calculateSeekableRange,
@@ -15,7 +14,6 @@
       calculateIsNearLive,
       isLiveContent,
       // Time formatting from core
-      formatTime,
       formatTimeDisplay,
     } from '@livepeer-frameworks/player-core';
 	  import SeekBar from './SeekBar.svelte';
@@ -119,7 +117,7 @@
   let showSettingsMenu = $state(false);
   let isNearLiveState = $state(true);
   let buffered: TimeRanges | undefined = $state(undefined);
-  let hasSeekToLive = false; // Track if we've auto-seeked to live
+  let _hasSeekToLive = false; // Track if we've auto-seeked to live
   let qualityValue = $state('auto');
   let captionValue = $state('none');
 
@@ -287,7 +285,7 @@
   // Reset seek-to-live flag when video element changes
   $effect(() => {
     if (video) {
-      hasSeekToLive = false;
+      _hasSeekToLive = false;
     }
   });
 
@@ -311,7 +309,7 @@
   }));
 
   // Seek value for slider
-  let seekValue = $derived.by(() => {
+  let _seekValue = $derived.by(() => {
     if (isLive) {
       const window = liveEdge - seekableStart;
       if (window <= 0) return 1000;
@@ -385,26 +383,6 @@
     v.muted = next === 0;
     volumeValue = next;
     isMuted = next === 0;
-  }
-
-  function handleSeekChange(val: number) {
-    if (disabled || !video) return;
-    if (isLive) {
-      const window = liveEdge - seekableStart;
-      const newTime = seekableStart + (val / 1000) * window;
-      if (onseek) {
-        onseek(newTime);
-      } else {
-        video.currentTime = newTime;
-      }
-    } else if (Number.isFinite(duration)) {
-      const newTime = (val / 1000) * duration;
-      if (onseek) {
-        onseek(newTime);
-      } else {
-        video.currentTime = newTime;
-      }
-    }
   }
 
   function handleFullscreen() {

@@ -4,7 +4,6 @@ import {
   cn,
   // Seeking utilities from core
   SPEED_PRESETS,
-  getLatencyTier,
   isMediaStreamSource,
   supportsPlaybackRate as coreSupportsPlaybackRate,
   calculateSeekableRange,
@@ -13,20 +12,16 @@ import {
   calculateIsNearLive,
   isLiveContent,
   // Time formatting from core
-  formatTime,
   formatTimeDisplay,
 } from "@livepeer-frameworks/player-core";
 import { Slider } from "../ui/slider";
 import SeekBar from "./SeekBar";
 import {
-  ClosedCaptionsIcon,
   FullscreenToggleIcon,
-  LiveIcon,
   PlayPauseIcon,
   SeekToLiveIcon,
   SkipBackIcon,
   SkipForwardIcon,
-  StatsIcon,
   VolumeIcon,
   SettingsIcon
 } from "./Icons";
@@ -88,7 +83,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   currentTime,
   duration,
   isVisible = true,
-  className,
+  _className,
   onSeek,
   mistStreamInfo,
   disabled = false,
@@ -107,8 +102,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   onTogglePlay,
   onToggleFullscreen,
   isFullscreen: propIsFullscreen,
-  isLoopEnabled: propIsLoopEnabled,
-  onToggleLoop,
+  isLoopEnabled: _propIsLoopEnabled,
+  onToggleLoop: _onToggleLoop,
   onJumpToLive,
 }) => {
   // Context fallback - prefer props passed from parent over context

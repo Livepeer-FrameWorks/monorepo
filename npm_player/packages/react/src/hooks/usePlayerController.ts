@@ -5,19 +5,16 @@
  * Manages the complete player lifecycle and provides reactive state.
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   PlayerController,
   type PlayerControllerConfig,
-  type PlayerControllerEvents,
   type PlayerState,
   type StreamState,
-  type StreamSource,
   type StreamInfo,
   type PlaybackQuality,
   type ContentEndpoints,
   type ContentMetadata,
-  type MistStreamInfo,
 } from '@livepeer-frameworks/player-core';
 
 // ============================================================================
@@ -330,7 +327,7 @@ export function usePlayerController(
       });
     }));
 
-    unsubs.push(controller.on('playerSelected', ({ player, source }) => {
+    unsubs.push(controller.on('playerSelected', ({ player: _player, source }) => {
       setState(prev => ({
         ...prev,
         currentPlayerInfo: controller.getCurrentPlayerInfo(),

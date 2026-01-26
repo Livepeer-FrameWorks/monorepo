@@ -299,7 +299,7 @@
     }
   }
 
-  let statusLabel = $derived(getStatusLabel(status));
+  let _statusLabel = $derived(getStatusLabel(status));
   let showRetry = $derived((status === 'ERROR' || status === 'INVALID') && onRetry);
   let showProgress = $derived(status === 'INITIALIZING' && percentage !== undefined);
   let displayMessage = $derived(error || message);
@@ -633,7 +633,7 @@
   {/each}
 
   <!-- Floating particles -->
-  {#each particles as particle, i}
+  {#each particles as particle, _i}
     <div
       class="particle"
       style="
@@ -648,7 +648,7 @@
   {/each}
 
   <!-- Animated bubbles -->
-  {#each bubbles as bubble, i}
+  {#each bubbles as bubble, _i}
     <div
       class="bubble"
       style="

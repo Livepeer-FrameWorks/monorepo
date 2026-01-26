@@ -1,4 +1,4 @@
-import type { TelemetryPayload, TelemetryOptions, PlaybackQuality, ContentType } from '../types';
+import type { TelemetryPayload, PlaybackQuality, ContentType } from '../types';
 
 /**
  * Generate a unique session ID

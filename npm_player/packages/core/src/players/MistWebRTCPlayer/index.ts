@@ -499,7 +499,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
   // Private methods
 
-  private async setupWebRTC(video: HTMLVideoElement, source: StreamSource, options: PlayerOptions): Promise<void> {
+  private async setupWebRTC(video: HTMLVideoElement, source: StreamSource, _options: PlayerOptions): Promise<void> {
     const sourceAny = source as any;
     const iceServers: RTCIceServer[] = sourceAny?.iceServers || [];
 

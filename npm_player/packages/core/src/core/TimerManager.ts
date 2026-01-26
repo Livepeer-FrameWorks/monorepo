@@ -140,7 +140,7 @@ export class TimerManager {
   stopAll(): void {
     const count = this.timers.size;
 
-    for (const [internalId, entry] of this.timers) {
+    for (const [_internalId, entry] of this.timers) {
       if (entry.isInterval) {
         clearInterval(entry.id);
       } else {

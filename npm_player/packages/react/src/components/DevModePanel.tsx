@@ -76,7 +76,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
   videoElement,
   protocol,
   nodeId,
-  isVisible = true,
+  isVisible: _isVisible = true,
   isOpen: controlledIsOpen,
   onOpenChange,
 }) => {
@@ -91,7 +91,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
     }
   }, [onOpenChange]);
   const [activeTab, setActiveTab] = useState<"config" | "stats">("config");
-  const [currentComboIndex, setCurrentComboIndex] = useState(0);
+  const [, setCurrentComboIndex] = useState(0);
   const [hoveredComboIndex, setHoveredComboIndex] = useState<number | null>(null);
   const [tooltipAbove, setTooltipAbove] = useState(false);
   const [showDisabledPlayers, setShowDisabledPlayers] = useState(false);
@@ -147,7 +147,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
               setPlayerStats(stats);
             }
           }
-        } catch (e) {
+        } catch {
           // Ignore errors
         }
       };

@@ -180,7 +180,7 @@ function extractHEVCProfile(init?: string): string | null {
         const profileIdc = bytes[i];
         if (profileIdc >= 1 && profileIdc <= 5) {
           // Valid profile IDC (1=Main, 2=Main10, 3=MainStill, 4=Range Extensions, 5=High Throughput)
-          const tierFlag = 0; // Assume main tier
+          // tierFlag assumed to be 0 (main tier)
           const levelIdc = bytes[i + 1] || 93; // Default to level 3.1
 
           // Format: hev1.{profile}.{tier_flag}{compatibility}.L{level}.{constraints}

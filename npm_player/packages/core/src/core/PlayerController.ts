@@ -9,12 +9,12 @@
  */
 
 import { TypedEventEmitter } from './EventEmitter';
-import { GatewayClient, GatewayStatus } from './GatewayClient';
+import { GatewayClient } from './GatewayClient';
 import { StreamStateClient } from './StreamStateClient';
 import { PlayerManager } from './PlayerManager';
 import { globalPlayerManager, ensurePlayersRegistered } from './PlayerRegistry';
 import { ABRController } from './ABRController';
-import { InteractionController, type InteractionControllerConfig } from './InteractionController';
+import { InteractionController } from './InteractionController';
 import { MistReporter } from './MistReporter';
 import { QualityMonitor } from './QualityMonitor';
 import { MetaTrackManager } from './MetaTrackManager';
@@ -25,7 +25,6 @@ import {
   canSeekStream,
   isMediaStreamSource,
   supportsPlaybackRate,
-  isLiveContent,
   getLatencyTier,
   type LatencyTier,
   type LiveThresholds,
@@ -368,7 +367,7 @@ export function buildStreamInfoFromEndpoints(
     if (typeof primary.outputs === 'string') {
       try {
         outputs = JSON.parse(primary.outputs);
-      } catch (e) {
+      } catch {
         console.warn('[buildStreamInfoFromEndpoints] Failed to parse outputs JSON');
         outputs = {};
       }
@@ -1693,7 +1692,6 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Check if values changed
     const seekableChanged = this._seekableStart !== seekableStart || this._liveEdge !== liveEdge;
-    const canSeekChanged = this._canSeek !== this._canSeek; // Already updated above
 
     this._seekableStart = seekableStart;
     this._liveEdge = liveEdge;
@@ -2581,7 +2579,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this.initializeSubControllers();
         this.emit('ready', { videoElement: el });
       },
-      onTimeUpdate: (t) => {
+      onTimeUpdate: (_t) => {
         if (this.isDestroyed) return;
         // Defensive: keep video element attached even if some other lifecycle cleared the container.
         // (Playback can continue even when detached, which looks like "audio only".)
@@ -2871,7 +2869,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         if (playerName === 'webcodecs') {
           this.suppressPlayPauseEvents(250);
         }
-        if (hasFrameStep && player) {
+        if (hasFrameStep && player && player.frameStep) {
           player.frameStep(direction, seconds);
           return true;
         }

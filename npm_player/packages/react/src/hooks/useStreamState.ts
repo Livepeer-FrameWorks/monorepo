@@ -264,7 +264,7 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
         }
       };
 
-      ws.onerror = (event) => {
+      ws.onerror = (_event) => {
         console.warn('[useStreamState] WebSocket error, falling back to HTTP polling');
         if (wsTimeoutRef.current) {
           clearTimeout(wsTimeoutRef.current);

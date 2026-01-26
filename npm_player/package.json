@@ -12,15 +12,24 @@
     "build:svelte": "pnpm --filter @livepeer-frameworks/player-svelte build",
     "dev": "pnpm exec concurrently \"pnpm run build:core -- --watch\" \"pnpm run playground:dev\"",
     "type-check": "pnpm -r type-check",
+    "lint": "eslint .",
+    "check": "pnpm type-check && pnpm lint",
     "playground:dev": "pnpm --filter playground run dev",
     "playground:build": "pnpm --filter playground run build",
     "clean": "rm -rf packages/*/dist packages/*/.svelte-kit"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",
+    "eslint": "^9.18.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-svelte": "^3.8.0",
+    "globals": "^16.2.0",
     "postcss-import": "^16.1.1",
     "postcss-prefix-selector": "^2.1.1",
-    "typescript": "^5.9.2"
+    "svelte-eslint-parser": "^0.43.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.22.0"
   },
   "author": "Livepeer FrameWorks",
   "license": "Unlicense"

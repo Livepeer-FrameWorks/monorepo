@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import type { SubtitleCue, MetaTrackEvent } from '../types';
 
 export interface SubtitleRendererProps {

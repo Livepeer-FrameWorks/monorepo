@@ -19,16 +19,6 @@ export interface PlaybackQualityStore extends Readable<PlaybackQuality | null> {
   destroy: () => void;
 }
 
-const initialQuality: PlaybackQuality = {
-  score: 100,
-  bitrate: 0,
-  bufferedAhead: 0,
-  frameDropRate: 0,
-  stallCount: 0,
-  latency: 0,
-  timestamp: Date.now(),
-};
-
 /**
  * Create a playback quality monitoring store.
  *

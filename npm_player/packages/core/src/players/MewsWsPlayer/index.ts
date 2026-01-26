@@ -919,7 +919,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
         this.sbManager?._do(() => {
           try {
             // Clear buffer for clean loop
-          } catch (e) {}
+          } catch {}
         });
       }
     });

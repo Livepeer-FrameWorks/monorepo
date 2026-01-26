@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { MetaTrackManager, type MetaTrackSubscription, type MetaTrackEvent } from '@livepeer-frameworks/player-core';
+import { MetaTrackManager, type MetaTrackEvent } from '@livepeer-frameworks/player-core';
 import type { UseMetaTrackOptions } from '../types';
 
 export interface UseMetaTrackReturn {

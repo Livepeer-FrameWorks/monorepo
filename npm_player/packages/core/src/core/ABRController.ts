@@ -201,7 +201,7 @@ export class ABRController {
         // D2: Hysteresis - require 1.5x headroom to upgrade
         // Once at a quality level, stay until bandwidth drops below 1.2x (not 1.0x)
         const shouldUpgrade = smoothedBandwidth >= targetBitrate * ABRController.UPGRADE_HEADROOM;
-        const canHoldHigher = smoothedBandwidth >= targetBitrate * ABRController.UPGRADE_HOLD_THRESHOLD;
+        const _canHoldHigher = smoothedBandwidth >= targetBitrate * ABRController.UPGRADE_HOLD_THRESHOLD;
 
         if (shouldUpgrade) {
           this.log(`ABR: bandwidth ${Math.round(smoothedBandwidth / 1000)}kbps >= ${Math.round(targetBitrate * ABRController.UPGRADE_HEADROOM / 1000)}kbps headroom -> upgrading to ${higherQuality.label}`);

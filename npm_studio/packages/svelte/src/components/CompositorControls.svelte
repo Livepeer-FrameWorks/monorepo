@@ -153,6 +153,7 @@
             {@const isActive = currentLayout?.mode === preset.mode}
             <div
               class="fw-sc-tooltip-wrapper"
+              role="presentation"
               onmouseenter={(e) => showTooltip(isActive ? `${preset.label} (click to swap)` : preset.label, e.currentTarget as HTMLElement)}
               onmouseleave={hideTooltip}
             >
@@ -270,6 +271,7 @@
             {@const isActive = currentScalingMode === sm.mode}
             <div
               class="fw-sc-tooltip-wrapper"
+              role="presentation"
               onmouseenter={(e) => showTooltip(sm.label, e.currentTarget as HTMLElement)}
               onmouseleave={hideTooltip}
             >
