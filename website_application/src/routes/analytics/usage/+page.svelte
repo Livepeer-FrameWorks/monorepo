@@ -1652,6 +1652,7 @@
                 </thead>
                 <tbody>
                   {#each usageSummary.geoBreakdown as country (country.countryCode)}
+                    {@const pct = geoTotalViewers > 0 ? (country.viewerCount / geoTotalViewers) * 100 : 0}
                     <tr class="border-b border-border/30 hover:bg-muted/10">
                       <td class="py-3 px-4">
                         <span class="font-medium">{getCountryName(country.countryCode)}</span>
@@ -1666,7 +1667,6 @@
                       <td class="py-3 px-4 text-right font-mono">
                         {country.egressGb.toFixed(1)} GB
                       </td>
-                      {@const pct = geoTotalViewers > 0 ? (country.viewerCount / geoTotalViewers) * 100 : 0}
                       <td class="py-3 px-4 text-right">
                         <div class="flex items-center justify-end gap-2">
                           <div class="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
