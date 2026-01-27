@@ -1127,12 +1127,8 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 	// Replace HOST with the actual node hostname
 	// Extract hostname from base URL (e.g., "https://mist-seattle.stronk.rocks" -> "mist-seattle.stronk.rocks")
 	hostname := nodeState.BaseURL
-	if strings.HasPrefix(hostname, "https://") {
-		hostname = strings.TrimPrefix(hostname, "https://")
-	}
-	if strings.HasPrefix(hostname, "http://") {
-		hostname = strings.TrimPrefix(hostname, "http://")
-	}
+	hostname = strings.TrimPrefix(hostname, "https://")
+	hostname = strings.TrimPrefix(hostname, "http://")
 
 	// Replace HOST placeholder with actual hostname
 	dtscURI := strings.Replace(dtscTemplate, "HOST", hostname, -1)

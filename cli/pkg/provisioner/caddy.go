@@ -115,7 +115,7 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 	if config.Mode == "native" {
 		_, err = c.RunCommand(ctx, host, "systemctl reload caddy") // Use = for err
 		if err != nil {
-			return fmt.Errorf("failed to reload caddy: %v", err)
+			return fmt.Errorf("failed to reload caddy: %w", err)
 		}
 	}
 
@@ -274,7 +274,7 @@ rm /tmp/caddy.tar.gz
 
 	result, err := c.ExecuteScript(ctx, host, installScript)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to install Caddy binary: %v (stderr: %s)", err, result.Stderr)
+		return fmt.Errorf("failed to install Caddy binary: %w (stderr: %s)", err, result.Stderr)
 	}
 
 	// Generate Systemd unit
@@ -312,20 +312,20 @@ rm /tmp/caddy.tar.gz
 	createUserCmd := "id -u caddy &>/dev/null || useradd -s /sbin/nologin -g caddy -d /var/www caddy"
 	_, err = c.RunCommand(ctx, host, createUserCmd)
 	if err != nil {
-		return fmt.Errorf("failed to create caddy user: %v", err)
+		return fmt.Errorf("failed to create caddy user: %w", err)
 	}
 
 	// Ensure /etc/caddy and /var/lib/caddy exist and are owned by caddy
 	_, err = c.RunCommand(ctx, host, "mkdir -p /etc/caddy /var/lib/caddy && chown -R caddy:caddy /etc/caddy /var/lib/caddy")
 	if err != nil {
-		return fmt.Errorf("failed to set caddy dirs: %v", err)
+		return fmt.Errorf("failed to set caddy dirs: %w", err)
 	}
 
 	// Enable and start service
 	enableCmd := "systemctl daemon-reload && systemctl enable caddy && systemctl start caddy"
 	result, err = c.RunCommand(ctx, host, enableCmd)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to start Caddy service: %v (stderr: %s)", err, result.Stderr)
+		return fmt.Errorf("failed to start Caddy service: %w (stderr: %s)", err, result.Stderr)
 	}
 
 	fmt.Printf("✓ Caddy provisioned in native mode on %s\n", host.Address)

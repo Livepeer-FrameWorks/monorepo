@@ -271,11 +271,10 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			Enabled:        true,
 			SteeringPolicy: "geo",
 		}
-		created, err := m.cfClient.CreateLoadBalancer(lb)
+		_, err := m.cfClient.CreateLoadBalancer(lb)
 		if err != nil {
 			return fmt.Errorf("failed to create LB: %w", err)
 		}
-		lbID = created.ID
 	} else {
 		// Update LB (Ensure it points to our pool)
 		// This is tricky if we don't have full details.

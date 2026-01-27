@@ -57,7 +57,7 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 	startCmd := "systemctl daemon-reload && systemctl enable frameworks-privateer && systemctl restart frameworks-privateer"
 	result, err := p.RunCommand(ctx, host, startCmd)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to start privateer: %s\nStderr: %s", err, result.Stderr)
+		return fmt.Errorf("failed to start privateer: %w\nStderr: %s", err, result.Stderr)
 	}
 
 	fmt.Printf("✓ Privateer provisioned on %s\n", host.Address)

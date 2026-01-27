@@ -231,7 +231,7 @@ func (dm *DVRManager) StartRecording(dvrHash, internalName, sourceURL string, co
 	// Create output directory
 	outputDir := filepath.Join(dm.storagePath, "dvr", internalName)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("failed to create DVR output directory: %v", err)
+		return fmt.Errorf("failed to create DVR output directory: %w", err)
 	}
 
 	// Create DVR job
@@ -257,7 +257,7 @@ func (dm *DVRManager) StartRecording(dvrHash, internalName, sourceURL string, co
 		if rmErr := os.RemoveAll(outputDir); rmErr != nil {
 			dm.logger.WithError(rmErr).WithField("path", outputDir).Warn("Failed to cleanup DVR directory after failed start")
 		}
-		return fmt.Errorf("failed to start DVR push: %v", err)
+		return fmt.Errorf("failed to start DVR push: %w", err)
 	}
 
 	// Store job
@@ -331,7 +331,7 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	// Attempt to create push
 	pushID, err := dm.createOrRecreatePush(job)
 	if err != nil {
-		return fmt.Errorf("failed to create initial push: %v", err)
+		return fmt.Errorf("failed to create initial push: %w", err)
 	}
 
 	job.PushID = pushID

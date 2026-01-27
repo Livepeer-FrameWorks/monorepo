@@ -499,7 +499,7 @@ func handleDiagnosePacketLoss(ctx context.Context, args DiagnosePacketLossInput,
 	}
 
 	status := packetLossStatus(protocolType, avgLoss)
-	analysis := fmt.Sprintf("Average packet loss: %.2f%% (max %.2f%%) across %d samples.", avgLoss*100, maxLoss*100, lossSamples)
+	var analysis string
 	recommendations := []string{
 		"Check network path for congestion or unstable uplink",
 		"Verify encoder bitrate is within available bandwidth",

@@ -19,9 +19,8 @@ func newContextCmd() *cobra.Command {
 
 func newContextInitCmd() *cobra.Command {
 	return &cobra.Command{Use: "init", Short: "Create default config with local endpoints", RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := fwcfg.Config{}
 		path, _ := fwcfg.ConfigPath()
-		cfg = fwcfg.Config{
+		cfg := fwcfg.Config{
 			Current: "local",
 			Contexts: map[string]fwcfg.Context{
 				"local": {

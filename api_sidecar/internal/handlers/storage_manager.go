@@ -525,7 +525,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	if asset.AssetType == AssetTypeClip {
 		// Check for SegmentUrls first (multi-file support for clip + dtsh)
 		if len(permResp.SegmentUrls) > 0 {
-			var totalUploaded int64
 			baseName := filepath.Base(asset.FilePath)
 
 			// Upload main file
@@ -537,8 +536,6 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				})
 				if err != nil {
 					uploadErr = fmt.Errorf("failed to upload clip: %w", err)
-				} else {
-					totalUploaded += int64(asset.SizeBytes)
 				}
 			} else {
 				uploadErr = fmt.Errorf("no URL provided for main clip file")

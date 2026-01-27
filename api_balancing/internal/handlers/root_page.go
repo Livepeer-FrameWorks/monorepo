@@ -1243,19 +1243,24 @@ func HandleRootPage(c *gin.Context) {
 				}
 
 				// Query nodes hosting this artifact
-				nodeRows, err := db.Query(`
-					SELECT node_id FROM foghorn.artifact_nodes
-					WHERE artifact_hash = $1 AND NOT is_orphaned
-				`, hash)
-				if err == nil {
+				art.NodeIDs = func() []string {
+					nodeRows, err := db.Query(`
+						SELECT node_id FROM foghorn.artifact_nodes
+						WHERE artifact_hash = $1 AND NOT is_orphaned
+					`, hash)
+					if err != nil {
+						return nil
+					}
+					defer nodeRows.Close()
+					var ids []string
 					for nodeRows.Next() {
 						var nodeID string
 						if err := nodeRows.Scan(&nodeID); err == nil {
-							art.NodeIDs = append(art.NodeIDs, nodeID)
+							ids = append(ids, nodeID)
 						}
 					}
-					nodeRows.Close()
-				}
+					return ids
+				}()
 
 				dbArtifacts = append(dbArtifacts, art)
 			}

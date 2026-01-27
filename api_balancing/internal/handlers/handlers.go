@@ -788,21 +788,24 @@ func HandleNodesOverview(c *gin.Context) {
 				}
 
 				// Query nodes hosting this artifact
-				nodeRows, err := db.Query(`
-					SELECT node_id FROM foghorn.artifact_nodes
-					WHERE artifact_hash = $1 AND NOT is_orphaned
-				`, hash)
-				if err == nil {
-					nodeIDs := []string{}
+				art["nodes"] = func() []string {
+					nodeRows, err := db.Query(`
+						SELECT node_id FROM foghorn.artifact_nodes
+						WHERE artifact_hash = $1 AND NOT is_orphaned
+					`, hash)
+					if err != nil {
+						return nil
+					}
+					defer nodeRows.Close()
+					var nodeIDs []string
 					for nodeRows.Next() {
 						var nodeID string
 						if err := nodeRows.Scan(&nodeID); err == nil {
 							nodeIDs = append(nodeIDs, nodeID)
 						}
 					}
-					nodeRows.Close()
-					art["nodes"] = nodeIDs
-				}
+					return nodeIDs
+				}()
 
 				artifacts = append(artifacts, art)
 			}
@@ -1419,8 +1422,15 @@ func deriveHelmsmanBase(base string) string {
 // durationMs is the time taken to resolve the routing decision (request processing latency)
 func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32) {
 
-	// Extract client IP (check X-Forwarded-For first, then X-Real-IP, then RemoteAddr)
-	clientIP := c.GetHeader("X-Forwarded-For")
+	// Extract client IP in priority order:
+	// 1. CF-Connecting-IP (Cloudflare's real client IP, most accurate when behind CF)
+	// 2. X-Forwarded-For (standard proxy header)
+	// 3. X-Real-IP (nginx convention)
+	// 4. Direct connection IP
+	clientIP := c.GetHeader("CF-Connecting-IP")
+	if clientIP == "" {
+		clientIP = c.GetHeader("X-Forwarded-For")
+	}
 	if clientIP == "" {
 		clientIP = c.GetHeader("X-Real-IP")
 	}
@@ -1446,12 +1456,6 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 				"longitude":    geoData.Longitude,
 			}).Info("Used GeoIP fallback for load balancing event")
 		}
-	}
-
-	// Extract real IP from CloudFlare (overrides X-Forwarded-For if present)
-	cfConnectingIP := c.GetHeader("CF-Connecting-IP")
-	if cfConnectingIP != "" {
-		clientIP = cfConnectingIP
 	}
 
 	// Determine NodeID for selected node if known
@@ -1520,7 +1524,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		Status:        status,
 		Details:       details,
 		Score:         score,
-		ClientIp:      "", // redact raw IP from emitted payload
+		ClientIp:      clientIP,
 		ClientCountry: country,
 		NodeLatitude: func() float64 {
 			if hasNodeBucket {
@@ -1936,12 +1940,8 @@ func resolveTemplateURL(raw interface{}, baseURL, streamName string) string {
 	s = strings.Replace(s, "$", streamName, -1)
 	if strings.Contains(s, "HOST") {
 		host := baseURL
-		if strings.HasPrefix(host, "https://") {
-			host = strings.TrimPrefix(host, "https://")
-		}
-		if strings.HasPrefix(host, "http://") {
-			host = strings.TrimPrefix(host, "http://")
-		}
+		host = strings.TrimPrefix(host, "https://")
+		host = strings.TrimPrefix(host, "http://")
 		host = strings.TrimSuffix(host, "/")
 		s = strings.Replace(s, "HOST", host, -1)
 	}
@@ -2145,7 +2145,7 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 	ctx := context.Background()
 	target, err := control.ResolveStream(ctx, viewKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve stream: %v", err)
+		return nil, fmt.Errorf("failed to resolve stream: %w", err)
 	}
 	if target.InternalName == "" {
 		return nil, fmt.Errorf("stream not found")

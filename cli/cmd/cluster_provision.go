@@ -86,7 +86,7 @@ func runProvision(cmd *cobra.Command, manifestPath, only string, dryRun, force, 
 	defer cancel()
 
 	// Convert only flag to phase
-	phase := orchestrator.PhaseAll
+	var phase orchestrator.Phase
 	switch only {
 	case "infrastructure":
 		phase = orchestrator.PhaseInfrastructure

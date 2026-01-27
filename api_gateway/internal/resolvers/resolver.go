@@ -124,7 +124,7 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 	}
 	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentID, ip)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve viewer endpoints: %v", err)
+		return nil, fmt.Errorf("failed to resolve viewer endpoints: %w", err)
 	}
 	return resp, nil
 }
@@ -150,7 +150,7 @@ func (r *Resolver) DoResolveIngestEndpoint(ctx context.Context, streamKey string
 	}
 	resp, err := r.Clients.Commodore.ResolveIngestEndpoint(ctx, streamKey, ip)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve ingest endpoints: %v", err)
+		return nil, fmt.Errorf("failed to resolve ingest endpoints: %w", err)
 	}
 	return resp, nil
 }

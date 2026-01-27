@@ -773,7 +773,7 @@ func waitForHTTPS(cmd *cobra.Command, domain string, timeout time.Duration) erro
 
 		if time.Now().After(deadline) {
 			if err != nil {
-				return fmt.Errorf("HTTPS check failed: %v", err)
+				return fmt.Errorf("HTTPS check failed: %w", err)
 			}
 			if resp != nil {
 				return fmt.Errorf("HTTPS not ready: status %d", resp.StatusCode)

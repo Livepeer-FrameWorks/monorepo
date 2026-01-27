@@ -156,9 +156,7 @@ func isDomainAllowed(domain string) bool {
 	if domain == "" {
 		return false
 	}
-	if strings.HasPrefix(domain, "*.") {
-		domain = strings.TrimPrefix(domain, "*.")
-	}
+	domain = strings.TrimPrefix(domain, "*.")
 
 	env := strings.TrimSpace(os.Getenv("NAVIGATOR_CERT_ALLOWED_SUFFIXES"))
 	var suffixes []string

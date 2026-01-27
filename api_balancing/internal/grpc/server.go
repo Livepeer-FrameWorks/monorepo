@@ -1323,11 +1323,6 @@ func (s *FoghornGRPCServer) handleX402ViewerPayment(ctx context.Context, tenantI
 		return false, nil
 	}
 
-	resourceID := strings.TrimPrefix(resourcePath, "viewer://")
-	if resourceID == "" {
-		resourceID = resourcePath
-	}
-
 	result, err := x402.SettleX402Payment(ctx, x402.SettlementOptions{
 		PaymentHeader: paymentHeader,
 		Resource:      resourcePath,
