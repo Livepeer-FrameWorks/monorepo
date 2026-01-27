@@ -11,13 +11,13 @@
  * - Latency tier: Protocol-based classification affecting live detection thresholds
  */
 
-import type { MistStreamInfo, MistTrackInfo } from '../types';
+import type { MistStreamInfo, MistTrackInfo } from "../types";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type LatencyTier = 'ultra-low' | 'low' | 'medium' | 'high';
+export type LatencyTier = "ultra-low" | "low" | "medium" | "high";
 
 export interface LiveThresholds {
   /** Seconds behind live edge to exit "LIVE" state (become clickable) */
@@ -66,13 +66,13 @@ export interface CanSeekParams {
  */
 export const LATENCY_TIERS: Record<LatencyTier, LiveThresholds> = {
   // WebRTC/WHEP: sub-second latency
-  'ultra-low': { exitLive: 2, enterLive: 0.5 },
+  "ultra-low": { exitLive: 2, enterLive: 0.5 },
   // MEWS (WebSocket MP4): 2-5s latency
-  'low': { exitLive: 5, enterLive: 1.5 },
+  low: { exitLive: 5, enterLive: 1.5 },
   // HLS/DASH: 10-30s latency (segment-based)
-  'medium': { exitLive: 15, enterLive: 5 },
+  medium: { exitLive: 15, enterLive: 5 },
   // Fallback for unknown protocols
-  'high': { exitLive: 30, enterLive: 10 },
+  high: { exitLive: 30, enterLive: 10 },
 };
 
 /**
@@ -97,30 +97,30 @@ export const DEFAULT_BUFFER_WINDOW_SEC = 60;
  * @returns Latency tier classification
  */
 export function getLatencyTier(sourceType?: string): LatencyTier {
-  if (!sourceType) return 'medium';
+  if (!sourceType) return "medium";
   const t = sourceType.toLowerCase();
 
   // Ultra-low: WebRTC protocols (sub-second latency)
-  if (t === 'whep' || t === 'webrtc' || t.includes('mist/webrtc')) {
-    return 'ultra-low';
+  if (t === "whep" || t === "webrtc" || t.includes("mist/webrtc")) {
+    return "ultra-low";
   }
 
   // Low: WebSocket-based streaming (2-5s latency)
-  if (t.startsWith('ws/') || t.startsWith('wss/')) {
-    return 'low';
+  if (t.startsWith("ws/") || t.startsWith("wss/")) {
+    return "low";
   }
 
   // Medium: HLS/DASH (segment-based, 10-30s latency)
-  if (t.includes('mpegurl') || t.includes('dash')) {
-    return 'medium';
+  if (t.includes("mpegurl") || t.includes("dash")) {
+    return "medium";
   }
 
   // Progressive MP4/WebM - use medium defaults
-  if (t.includes('video/mp4') || t.includes('video/webm')) {
-    return 'medium';
+  if (t.includes("video/mp4") || t.includes("video/webm")) {
+    return "medium";
   }
 
-  return 'medium';
+  return "medium";
 }
 
 /**
@@ -160,7 +160,14 @@ export function supportsPlaybackRate(video: HTMLVideoElement | null): boolean {
  * @returns Seekable range with start and live edge
  */
 export function calculateSeekableRange(params: SeekableRangeParams): SeekableRange {
-  const { isLive, video, mistStreamInfo, currentTime, duration, allowMediaStreamDvr = false } = params;
+  const {
+    isLive,
+    video,
+    mistStreamInfo,
+    currentTime,
+    duration,
+    allowMediaStreamDvr = false,
+  } = params;
 
   // VOD: full duration is seekable
   if (!isLive) {
@@ -183,8 +190,10 @@ export function calculateSeekableRange(params: SeekableRangeParams): SeekableRan
   if ((allowMediaStreamDvr || !isMediaStream) && mistStreamInfo?.meta?.tracks) {
     const tracks = Object.values(mistStreamInfo.meta.tracks) as MistTrackInfo[];
     if (tracks.length > 0) {
-      const firstmsValues = tracks.map(t => t.firstms).filter((v): v is number => v !== undefined);
-      const lastmsValues = tracks.map(t => t.lastms).filter((v): v is number => v !== undefined);
+      const firstmsValues = tracks
+        .map((t) => t.firstms)
+        .filter((v): v is number => v !== undefined);
+      const lastmsValues = tracks.map((t) => t.lastms).filter((v): v is number => v !== undefined);
 
       if (firstmsValues.length > 0 && lastmsValues.length > 0) {
         const firstms = Math.max(...firstmsValues);
@@ -273,11 +282,11 @@ export function calculateLiveThresholds(
   bufferWindowMs?: number
 ): LiveThresholds {
   // Determine tier from source type, or use ultra-low for WebRTC
-  const tier = sourceType ? getLatencyTier(sourceType) : (isWebRTC ? 'ultra-low' : 'medium');
+  const tier = sourceType ? getLatencyTier(sourceType) : isWebRTC ? "ultra-low" : "medium";
   const tierThresholds = LATENCY_TIERS[tier];
 
   // For medium/high tiers, scale thresholds based on buffer_window
-  if ((tier === 'medium' || tier === 'high') && bufferWindowMs && bufferWindowMs > 0) {
+  if ((tier === "medium" || tier === "high") && bufferWindowMs && bufferWindowMs > 0) {
     const bufferWindowSec = bufferWindowMs / 1000;
     // Scale thresholds proportionally to buffer, with reasonable bounds
     return {
@@ -356,7 +365,7 @@ export function isLiveContent(
 
   // MistServer type
   if (mistStreamInfo?.type) {
-    return mistStreamInfo.type === 'live';
+    return mistStreamInfo.type === "live";
   }
 
   // Fallback: non-finite duration indicates live

@@ -34,14 +34,18 @@
   }: $$Props = $props();
 
   // Colors based on accentColor prop
-  const rangeColorClass = $derived(accentColor ? "bg-[hsl(var(--tn-cyan,195_100%_50%))]" : "bg-white/90");
-  const thumbColorClass = $derived(accentColor ? "bg-[hsl(var(--tn-cyan,195_100%_50%))]" : "bg-white");
+  const rangeColorClass = $derived(
+    accentColor ? "bg-[hsl(var(--tn-cyan,195_100%_50%))]" : "bg-white/90"
+  );
+  const thumbColorClass = $derived(
+    accentColor ? "bg-[hsl(var(--tn-cyan,195_100%_50%))]" : "bg-white"
+  );
 
   function handleValueChange(newValue: number) {
     value = newValue;
     if (oninput) {
       // Defensive: ensure we pass a valid finite number (prevents NaN propagation)
-      if (typeof newValue === 'number' && Number.isFinite(newValue)) {
+      if (typeof newValue === "number" && Number.isFinite(newValue)) {
         oninput(newValue);
       }
     }

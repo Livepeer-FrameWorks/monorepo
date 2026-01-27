@@ -116,7 +116,11 @@
   }
 
   .bg-brand-surface-muted {
-    background-color: color-mix(in srgb, hsl(var(--brand-surface-strong)) 82%, rgba(18, 20, 34, 0.25));
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--brand-surface-strong)) 82%,
+      rgba(18, 20, 34, 0.25)
+    );
   }
 
   .bg-brand-surface-soft {
@@ -134,13 +138,13 @@
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
-    font-family: 'Inter', sans-serif;
+    font-family: "Inter", sans-serif;
     min-height: 100vh;
     overflow-x: hidden;
   }
 
   code {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: "JetBrains Mono", monospace;
   }
 }
 

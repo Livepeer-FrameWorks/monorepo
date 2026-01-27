@@ -1,19 +1,19 @@
-import { Children, forwardRef } from 'react'
-import { cn } from '@/lib/utils'
-import { renderSlot } from '../utils'
+import { Children, forwardRef } from "react";
+import { cn } from "@/lib/utils";
+import { renderSlot } from "../utils";
 
 const MarketingStackedSeam = forwardRef(
-  ({ items = [], children, gap = 'md', align = 'start', className, renderItem, ...props }, ref) => {
+  ({ items = [], children, gap = "md", align = "start", className, renderItem, ...props }, ref) => {
     const content = items.length
       ? items.map((item, index) => (renderItem ? renderItem(item, index) : renderSlot(item)))
-      : Children.toArray(children)
+      : Children.toArray(children);
 
     return (
       <div
         ref={ref}
         className={cn(
-          'marketing-stacked-seam',
-          gap && gap !== 'md' && `marketing-stacked-seam--gap-${gap}`,
+          "marketing-stacked-seam",
+          gap && gap !== "md" && `marketing-stacked-seam--gap-${gap}`,
           align && `marketing-stacked-seam--align-${align}`,
           className
         )}
@@ -25,10 +25,10 @@ const MarketingStackedSeam = forwardRef(
           </div>
         ))}
       </div>
-    )
+    );
   }
-)
+);
 
-MarketingStackedSeam.displayName = 'MarketingStackedSeam'
+MarketingStackedSeam.displayName = "MarketingStackedSeam";
 
-export default MarketingStackedSeam
+export default MarketingStackedSeam;

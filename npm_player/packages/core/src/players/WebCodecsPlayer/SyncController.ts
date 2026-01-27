@@ -14,17 +14,13 @@
  * - TypeScript types
  */
 
-import type {
-  LatencyProfile,
-  SyncState,
-  TrackInfo,
-} from './types';
-import { MultiTrackJitterTracker } from './JitterBuffer';
-import { getLatencyProfile } from './LatencyProfiles';
+import type { LatencyProfile, SyncState, TrackInfo } from "./types";
+import { MultiTrackJitterTracker } from "./JitterBuffer";
+import { getLatencyProfile } from "./LatencyProfiles";
 
 /** Events emitted by SyncController */
 export interface SyncControllerEvents {
-  speedchange: { speed: number; reason: 'catchup' | 'slowdown' | 'normal' };
+  speedchange: { speed: number; reason: "catchup" | "slowdown" | "normal" };
   bufferlow: { current: number; desired: number };
   bufferhigh: { current: number; desired: number };
   underrun: void;
@@ -33,9 +29,7 @@ export interface SyncControllerEvents {
   seekcomplete: { seekId: number };
 }
 
-type EventListener<K extends keyof SyncControllerEvents> = (
-  data: SyncControllerEvents[K]
-) => void;
+type EventListener<K extends keyof SyncControllerEvents> = (data: SyncControllerEvents[K]) => void;
 
 /** Seek state tracking */
 interface SeekState {
@@ -91,13 +85,15 @@ export class SyncController {
   private onSpeedChange?: (main: number, tweak: number) => void;
   private onFastForwardRequest?: (ms: number) => void;
 
-  constructor(options: {
-    profile?: LatencyProfile;
-    isLive?: boolean;
-    onSpeedChange?: (main: number, tweak: number) => void;
-    onFastForwardRequest?: (ms: number) => void;
-  } = {}) {
-    this.profile = options.profile ?? getLatencyProfile('low');
+  constructor(
+    options: {
+      profile?: LatencyProfile;
+      isLive?: boolean;
+      onSpeedChange?: (main: number, tweak: number) => void;
+      onFastForwardRequest?: (ms: number) => void;
+    } = {}
+  ) {
+    this.profile = options.profile ?? getLatencyProfile("low");
     this.isLive = options.isLive ?? true;
     this.onSpeedChange = options.onSpeedChange;
     this.onFastForwardRequest = options.onFastForwardRequest;
@@ -168,8 +164,10 @@ export class SyncController {
    */
   getDesiredBuffer(): number {
     // Chrome needs larger base buffer (per mews.js:482)
-    const isChrome = typeof navigator !== 'undefined' &&
-      /Chrome/.test(navigator.userAgent) && !/Edge|Edg/.test(navigator.userAgent);
+    const isChrome =
+      typeof navigator !== "undefined" &&
+      /Chrome/.test(navigator.userAgent) &&
+      !/Edge|Edg/.test(navigator.userAgent);
     const baseBuffer = isChrome ? 1000 : 100;
 
     const serverDelay = this.getServerDelay();
@@ -209,35 +207,37 @@ export class SyncController {
     //   - Buffer is more than jitter + safety margin (not stalled)
     //   - Buffer is less than 1s above desired
     //   - Cooldown period has passed
-    if (this.isLive &&
-        currentBufferMs < this.liveCatchupThresholdMs &&
-        currentBufferMs > Math.max(jitterMs * 1.1, jitterMs + 250) &&
-        (currentBufferMs - desired) < 1000 &&
-        (now - this.lastLiveCatchup) > this.liveCatchupCooldown) {
+    if (
+      this.isLive &&
+      currentBufferMs < this.liveCatchupThresholdMs &&
+      currentBufferMs > Math.max(jitterMs * 1.1, jitterMs + 250) &&
+      currentBufferMs - desired < 1000 &&
+      now - this.lastLiveCatchup > this.liveCatchupCooldown
+    ) {
       this.lastLiveCatchup = now;
       this.requestFastForward(this.liveCatchupRequestMs);
-      this.emit('livecatchup', { fastForwardMs: this.liveCatchupRequestMs });
+      this.emit("livecatchup", { fastForwardMs: this.liveCatchupRequestMs });
     }
 
     // Determine if speed adjustment needed
     if (ratio > this.profile.speedUpThreshold && this.isLive) {
       // Buffer too high - speed up to catch up to live edge
-      this.setTweakSpeed(this.profile.maxSpeedUp, 'catchup');
+      this.setTweakSpeed(this.profile.maxSpeedUp, "catchup");
     } else if (ratio < this.profile.speedDownThreshold) {
       // Buffer too low - slow down to build buffer
-      this.setTweakSpeed(this.profile.minSpeedDown, 'slowdown');
+      this.setTweakSpeed(this.profile.minSpeedDown, "slowdown");
 
       // Request additional data if critically low
       if (ratio < 0.3 && this.isLive) {
         this.requestFastForward(desired - currentBufferMs);
-        this.emit('underrun', undefined);
+        this.emit("underrun", undefined);
       }
 
-      this.emit('bufferlow', { current: currentBufferMs, desired });
+      this.emit("bufferlow", { current: currentBufferMs, desired });
     } else {
       // Buffer in acceptable range - return to normal speed
       if (this.tweakSpeed !== 1) {
-        this.setTweakSpeed(1, 'normal');
+        this.setTweakSpeed(1, "normal");
       }
     }
 
@@ -257,13 +257,14 @@ export class SyncController {
         desired,
         ratio: desired > 0 ? buffer / desired : 1,
       },
-      jitter: this.jitterTracker.getMax() > 0
-        ? {
-            current: 0, // Would need per-frame tracking
-            peak: 0,
-            weighted: this.jitterTracker.getMax(),
-          }
-        : { current: 0, peak: 0, weighted: 0 },
+      jitter:
+        this.jitterTracker.getMax() > 0
+          ? {
+              current: 0, // Would need per-frame tracking
+              peak: 0,
+              weighted: this.jitterTracker.getMax(),
+            }
+          : { current: 0, peak: 0, weighted: 0 },
       playbackSpeed: this.getCombinedSpeed(),
       serverTime: this.serverTime,
       serverDelay: this.getServerDelay(),
@@ -290,14 +291,11 @@ export class SyncController {
   /**
    * Set tweak speed (automatic adjustment)
    */
-  private setTweakSpeed(
-    speed: number,
-    reason: 'catchup' | 'slowdown' | 'normal'
-  ): void {
+  private setTweakSpeed(speed: number, reason: "catchup" | "slowdown" | "normal"): void {
     if (this.tweakSpeed !== speed) {
       this.tweakSpeed = speed;
       this.notifySpeedChange();
-      this.emit('speedchange', { speed: this.getCombinedSpeed(), reason });
+      this.emit("speedchange", { speed: this.getCombinedSpeed(), reason });
     }
   }
 
@@ -337,7 +335,7 @@ export class SyncController {
     // Reset jitter tracking on seek
     this.jitterTracker.reset();
 
-    this.emit('seekstart', { seekId: this.seekState.id, time: targetTimeMs });
+    this.emit("seekstart", { seekId: this.seekState.id, time: targetTimeMs });
 
     return this.seekState.id;
   }
@@ -355,7 +353,7 @@ export class SyncController {
   completeSeek(seekId: number): void {
     if (this.seekState.id === seekId) {
       this.seekState.active = false;
-      this.emit('seekcomplete', { seekId });
+      this.emit("seekcomplete", { seekId });
     }
   }
 
@@ -420,20 +418,14 @@ export class SyncController {
   // Event Emitter
   // ============================================================================
 
-  on<K extends keyof SyncControllerEvents>(
-    event: K,
-    listener: EventListener<K>
-  ): void {
+  on<K extends keyof SyncControllerEvents>(event: K, listener: EventListener<K>): void {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
     this.listeners.get(event)!.add(listener);
   }
 
-  off<K extends keyof SyncControllerEvents>(
-    event: K,
-    listener: EventListener<K>
-  ): void {
+  off<K extends keyof SyncControllerEvents>(event: K, listener: EventListener<K>): void {
     this.listeners.get(event)?.delete(listener);
   }
 

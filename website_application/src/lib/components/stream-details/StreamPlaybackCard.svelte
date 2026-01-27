@@ -10,16 +10,16 @@
 <div class="slab h-full shadow-none border-none">
   <div class="slab-header">
     <div class="flex items-center justify-between h-6">
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Playback Info</h3>
+      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+        Playback Info
+      </h3>
     </div>
   </div>
   <div class="slab-body--padded space-y-3">
     <div>
       <span class="text-sm text-muted-foreground">Playback ID</span>
       <div class="flex items-center space-x-2 mt-1">
-        <code
-          class="flex-1 min-w-0 px-3 py-2 text-xs font-mono text-info bg-muted/20 truncate"
-        >
+        <code class="flex-1 min-w-0 px-3 py-2 text-xs font-mono text-info bg-muted/20 truncate">
           {stream?.playbackId || "Not set"}
         </code>
         <button

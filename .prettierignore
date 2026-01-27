@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+.svelte-kit/
+**/.svelte-kit/
+
+# Generated code
+$houdini/
+**/$houdini/
+**/generated/
+*.gen.ts
+*.gen.js
+
+# Package manager
+pnpm-lock.yaml
+
+# Other
+coverage/
+.cache/
+*.min.js
+*.min.css
+
+# Binary/media files (*.ts here are MPEG transport streams, not TypeScript)
+infrastructure/demo-recordings/

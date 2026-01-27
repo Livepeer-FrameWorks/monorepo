@@ -28,7 +28,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
   thumbnailUrl = null,
   options,
   endpoints: propsEndpoints,
-  onStateChange
+  onStateChange,
 }) => {
   // ============================================================================
   // UI-only State (stays in wrapper)
@@ -38,7 +38,9 @@ const PlayerInner: React.FC<PlayerProps> = ({
   const [skipDirection, setSkipDirection] = useState<SkipDirection>(null);
 
   // Playback mode preference (persistent)
-  const [devPlaybackMode, setDevPlaybackMode] = useState<PlaybackMode>(options?.playbackMode || 'auto');
+  const [devPlaybackMode, setDevPlaybackMode] = useState<PlaybackMode>(
+    options?.playbackMode || "auto"
+  );
 
   // ============================================================================
   // PlayerController Hook - ALL business logic
@@ -78,31 +80,33 @@ const PlayerInner: React.FC<PlayerProps> = ({
       onStateChange?.(playerState);
     },
     onError: (error) => {
-      console.warn('[Player] Error:', error);
+      console.warn("[Player] Error:", error);
     },
   });
 
   // ============================================================================
   // Dev Mode Callbacks
   // ============================================================================
-  const handleDevSettingsChange = useCallback((settings: {
-    forcePlayer?: string;
-    forceType?: string;
-    forceSource?: number;
-  }) => {
-    // One-shot selection - controller handles the state
-    setDevModeOptions({
-      forcePlayer: settings.forcePlayer,
-      forceType: settings.forceType,
-      forceSource: settings.forceSource,
-    });
-  }, [setDevModeOptions]);
+  const handleDevSettingsChange = useCallback(
+    (settings: { forcePlayer?: string; forceType?: string; forceSource?: number }) => {
+      // One-shot selection - controller handles the state
+      setDevModeOptions({
+        forcePlayer: settings.forcePlayer,
+        forceType: settings.forceType,
+        forceSource: settings.forceSource,
+      });
+    },
+    [setDevModeOptions]
+  );
 
-  const handleModeChange = useCallback((mode: PlaybackMode) => {
-    setDevPlaybackMode(mode);
-    // Mode is a persistent preference
-    setDevModeOptions({ playbackMode: mode });
-  }, [setDevModeOptions]);
+  const handleModeChange = useCallback(
+    (mode: PlaybackMode) => {
+      setDevPlaybackMode(mode);
+      // Mode is a persistent preference
+      setDevModeOptions({ playbackMode: mode });
+    },
+    [setDevModeOptions]
+  );
 
   const handleReload = useCallback(() => {
     clearError();
@@ -110,7 +114,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
   }, [clearError, reload]);
 
   const handleStatsToggle = useCallback(() => {
-    setIsStatsOpen(prev => !prev);
+    setIsStatsOpen((prev) => !prev);
   }, []);
 
   // Clear skip indicator after animation
@@ -122,24 +126,29 @@ const PlayerInner: React.FC<PlayerProps> = ({
   // Derived Values
   // ============================================================================
   const primaryEndpoint = state.endpoints?.primary as EndpointInfo | undefined;
-  const isLegacyPlayer = state.currentPlayerInfo?.shortname === 'mist-legacy';
+  const isLegacyPlayer = state.currentPlayerInfo?.shortname === "mist-legacy";
   const useStockControls = options?.stockControls === true || isLegacyPlayer;
 
   // Title overlay visibility: show on hover or when paused
-  const showTitleOverlay = (state.isHovering || state.isPaused) &&
-    !state.shouldShowIdleScreen && !state.isBuffering && !state.error;
+  const showTitleOverlay =
+    (state.isHovering || state.isPaused) &&
+    !state.shouldShowIdleScreen &&
+    !state.isBuffering &&
+    !state.error;
 
   // Buffering spinner: only during active playback
-  const showBufferingSpinner = !state.shouldShowIdleScreen &&
-    state.isBuffering && !state.error && state.hasPlaybackStarted;
+  const showBufferingSpinner =
+    !state.shouldShowIdleScreen && state.isBuffering && !state.error && state.hasPlaybackStarted;
 
   // ============================================================================
   // Waiting for Endpoint (shown as overlay, not early return)
   // ============================================================================
-  const showWaitingForEndpoint = !state.endpoints?.primary && state.state !== 'booting';
+  const showWaitingForEndpoint = !state.endpoints?.primary && state.state !== "booting";
   const waitingMessage = options?.gatewayUrl
-    ? (state.state === 'gateway_loading' ? 'Resolving viewing endpoint...' : 'Waiting for endpoint...')
-    : 'Waiting for endpoint...';
+    ? state.state === "gateway_loading"
+      ? "Resolving viewing endpoint..."
+      : "Waiting for endpoint..."
+    : "Waiting for endpoint...";
 
   // ============================================================================
   // Render
@@ -159,10 +168,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
           onMouseMove={handleMouseMove}
         >
           {/* Player area */}
-          <div className={cn(
-            "relative",
-            options?.devMode ? "flex-1 min-w-0" : "w-full h-full"
-          )}>
+          <div className={cn("relative", options?.devMode ? "flex-1 min-w-0" : "w-full h-full")}>
             {/* Video container - PlayerController attaches here */}
             <div ref={containerRef} className="fw-player-container" />
 
@@ -207,9 +213,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
             )}
 
             {/* Speed indicator */}
-            {state.isHoldingSpeed && (
-              <SpeedIndicator isVisible={true} speed={state.holdSpeed} />
-            )}
+            {state.isHoldingSpeed && <SpeedIndicator isVisible={true} speed={state.holdSpeed} />}
 
             {/* Skip indicator */}
             <SkipIndicator
@@ -219,15 +223,13 @@ const PlayerInner: React.FC<PlayerProps> = ({
             />
 
             {/* Waiting for endpoint overlay */}
-            {showWaitingForEndpoint && (
-              <IdleScreen status="OFFLINE" message={waitingMessage} />
-            )}
+            {showWaitingForEndpoint && <IdleScreen status="OFFLINE" message={waitingMessage} />}
 
             {/* Idle screen */}
             {!showWaitingForEndpoint && state.shouldShowIdleScreen && (
               <IdleScreen
                 status={state.isEffectivelyLive ? state.streamState?.status : undefined}
-                message={state.isEffectivelyLive ? state.streamState?.message : 'Loading video...'}
+                message={state.isEffectivelyLive ? state.streamState?.message : "Loading video..."}
                 percentage={state.isEffectivelyLive ? state.streamState?.percentage : undefined}
               />
             )}
@@ -253,21 +255,29 @@ const PlayerInner: React.FC<PlayerProps> = ({
                 aria-live="assertive"
                 className={cn(
                   "fw-error-overlay",
-                  state.isPassiveError ? "fw-error-overlay--passive" : "fw-error-overlay--fullscreen"
+                  state.isPassiveError
+                    ? "fw-error-overlay--passive"
+                    : "fw-error-overlay--fullscreen"
                 )}
               >
-                <div className={cn(
-                  "fw-error-popup",
-                  state.isPassiveError ? "fw-error-popup--passive" : "fw-error-popup--fullscreen"
-                )}>
-                  <div className={cn(
-                    "fw-error-header",
-                    state.isPassiveError ? "fw-error-header--warning" : "fw-error-header--error"
-                  )}>
-                    <span className={cn(
-                      "fw-error-title",
-                      state.isPassiveError ? "fw-error-title--warning" : "fw-error-title--error"
-                    )}>
+                <div
+                  className={cn(
+                    "fw-error-popup",
+                    state.isPassiveError ? "fw-error-popup--passive" : "fw-error-popup--fullscreen"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "fw-error-header",
+                      state.isPassiveError ? "fw-error-header--warning" : "fw-error-header--error"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "fw-error-title",
+                        state.isPassiveError ? "fw-error-title--warning" : "fw-error-title--error"
+                      )}
+                    >
                       {state.isPassiveError ? "Warning" : "Error"}
                     </span>
                     <button
@@ -277,7 +287,12 @@ const PlayerInner: React.FC<PlayerProps> = ({
                       aria-label="Dismiss"
                     >
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <path d="M9 3L3 9M3 3L9 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                        <path
+                          d="M9 3L3 9M3 3L9 9"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                        />
                       </svg>
                     </button>
                   </div>
@@ -289,7 +304,10 @@ const PlayerInner: React.FC<PlayerProps> = ({
                       type="button"
                       className="fw-error-btn"
                       aria-label="Retry playback"
-                      onClick={() => { clearError(); retry(); }}
+                      onClick={() => {
+                        clearError();
+                        retry();
+                      }}
                     >
                       Retry
                     </button>
@@ -376,7 +394,17 @@ const PlayerInner: React.FC<PlayerProps> = ({
           <span>Picture-in-Picture</span>
         </ContextMenuItem>
         <ContextMenuItem onClick={toggleLoop} className="gap-2">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-70 flex-shrink-0">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="opacity-70 flex-shrink-0"
+          >
             <polyline points="17 1 21 5 17 9"></polyline>
             <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
             <polyline points="7 23 3 19 7 15"></polyline>

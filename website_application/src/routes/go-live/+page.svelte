@@ -7,12 +7,7 @@
   import { getIngestUrls, getDocsSiteUrl } from "$lib/config";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
-  import {
-    Select,
-    SelectTrigger,
-    SelectContent,
-    SelectItem,
-  } from "$lib/components/ui/select";
+  import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
   import {
     Dialog,
     DialogContent,
@@ -34,7 +29,7 @@
   let error = $state<string | null>(null);
   let advancedSettings = $state({
     enableCompositor: true,
-    compositorRenderer: 'auto' as 'auto' | 'webgl' | 'webgpu' | 'canvas2d',
+    compositorRenderer: "auto" as "auto" | "webgl" | "webgpu" | "canvas2d",
   });
 
   // Derived state
@@ -45,9 +40,7 @@
       return node;
     }) ?? []
   );
-  let selectedStream = $derived(
-    streams.find((s) => s?.id === selectedStreamId) ?? null
-  );
+  let selectedStream = $derived(streams.find((s) => s?.id === selectedStreamId) ?? null);
   let whipUrl = $derived.by(() => {
     if (!selectedStream?.streamKey) return null;
     const urls = getIngestUrls(selectedStream.streamKey);
@@ -113,9 +106,7 @@
         <GlobeIcon class="w-5 h-5 text-primary" />
         <div>
           <h1 class="text-xl font-bold text-foreground">Go Live</h1>
-          <p class="text-sm text-muted-foreground">
-            Stream directly from your browser with WebRTC
-          </p>
+          <p class="text-sm text-muted-foreground">Stream directly from your browser with WebRTC</p>
         </div>
       </div>
       <div class="flex items-center gap-3">
@@ -187,7 +178,7 @@
               <PlusIcon class="w-4 h-4" />
               New Stream
             </Button>
-            
+
             <div class="flex-1"></div>
 
             <!-- Advanced Settings Dialog -->
@@ -209,14 +200,19 @@
                     <Switch
                       id="compositor-mode"
                       checked={advancedSettings.enableCompositor}
-                      onCheckedChange={(v) => advancedSettings.enableCompositor = v}
+                      onCheckedChange={(v) => (advancedSettings.enableCompositor = v)}
                     />
                   </div>
                   <div class="grid gap-2">
                     <Label for="renderer-engine">Renderer Engine</Label>
                     <Select
                       value={advancedSettings.compositorRenderer}
-                      onValueChange={(v) => advancedSettings.compositorRenderer = v as 'auto' | 'webgl' | 'webgpu' | 'canvas2d'}
+                      onValueChange={(v) =>
+                        (advancedSettings.compositorRenderer = v as
+                          | "auto"
+                          | "webgl"
+                          | "webgpu"
+                          | "canvas2d")}
                       type="single"
                     >
                       <SelectTrigger id="renderer-engine">
@@ -245,7 +241,7 @@
             {#key `${advancedSettings.enableCompositor}-${advancedSettings.compositorRenderer}`}
               <div class="w-full min-h-full flex flex-col">
                 <StreamCrafter
-                  whipUrl={whipUrl}
+                  {whipUrl}
                   initialProfile="broadcast"
                   autoStartCamera={false}
                   showSettings={false}
@@ -276,26 +272,35 @@
               <div>
                 <h4 class="font-medium text-foreground mb-1">Sources & Mixing</h4>
                 <p class="text-muted-foreground">
-                  Click the camera/mic icons to enable your devices. Grant browser permissions when prompted.
+                  Click the camera/mic icons to enable your devices. Grant browser permissions when
+                  prompted.
                 </p>
               </div>
               <div>
                 <h4 class="font-medium text-foreground mb-1">Content Ingest</h4>
                 <p class="text-muted-foreground">
-                  Share your screen, a window, or a browser tab. Great for presentations and tutorials.
+                  Share your screen, a window, or a browser tab. Great for presentations and
+                  tutorials.
                 </p>
               </div>
               <div>
                 <h4 class="font-medium text-foreground mb-1">Start Streaming</h4>
                 <p class="text-muted-foreground">
-                  Click the Go Live button to start streaming. Your broadcast will be available immediately.
+                  Click the Go Live button to start streaming. Your broadcast will be available
+                  immediately.
                 </p>
               </div>
             </div>
-            
+
             <div class="mt-4 pt-4 border-t border-border/30 text-sm text-muted-foreground">
-              <strong>Embed StreamCrafter:</strong> You can drop this component into your website and even for non-FrameWorks media servers.
-              <a href={resolve(`${getDocsSiteUrl()}/streamers/ingest`)} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">Read the Docs</a>
+              <strong>Embed StreamCrafter:</strong> You can drop this component into your website
+              and even for non-FrameWorks media servers.
+              <a
+                href={resolve(`${getDocsSiteUrl()}/streamers/ingest`)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-primary hover:underline">Read the Docs</a
+              >
             </div>
           </div>
         {/if}

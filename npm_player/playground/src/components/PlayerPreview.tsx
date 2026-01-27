@@ -42,9 +42,7 @@ export function PlayerPreview() {
             </ErrorBoundary>
           ) : (
             <div className="flex h-full items-center justify-center">
-              <span className="text-sm text-muted-foreground">
-                Player unloaded
-              </span>
+              <span className="text-sm text-muted-foreground">Player unloaded</span>
             </div>
           )}
         </div>

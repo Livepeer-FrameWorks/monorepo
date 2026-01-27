@@ -24,19 +24,21 @@
 
   // Helper to resolve hrefs safely - prepend base path if configured
   function safeResolve(href: string | undefined): string {
-    if (!href) return '';
+    if (!href) return "";
     // Simply prepend base path (empty string by default, or configured base path)
     return base + href;
   }
 
   // Helper to get active children info for dot indicators in collapsed mode
-  function getActiveChildrenInfo(sectionKey: string): { count: number; currentIndex: number; isCurrentSection: boolean } {
+  function getActiveChildrenInfo(sectionKey: string): {
+    count: number;
+    currentIndex: number;
+    isCurrentSection: boolean;
+  } {
     const section = navigationConfig[sectionKey];
     if (!section?.children) return { count: 0, currentIndex: -1, isCurrentSection: false };
 
-    const activeChildren = Object.values(section.children).filter(
-      (child) => child.active === true
-    );
+    const activeChildren = Object.values(section.children).filter((child) => child.active === true);
 
     const currentIndex = activeChildren.findIndex(
       (child) => safeResolve(child.href) === currentPath
@@ -94,9 +96,7 @@
     if (!section?.children) return;
 
     const childEntries = Object.entries(section.children);
-    const activeChildren = childEntries.filter(
-      ([_, child]) => child.active === true,
-    );
+    const activeChildren = childEntries.filter(([_, child]) => child.active === true);
 
     if (activeChildren.length === 0) return;
 
@@ -107,13 +107,12 @@
 
     // Find current page index if we're already in this section
     const currentChildIndex = activeChildren.findIndex(
-      ([, child]) => safeResolve(child.href) === currentPath,
+      ([, child]) => safeResolve(child.href) === currentPath
     );
 
     if (currentChildIndex !== -1) {
       // We're in this section, go to next child
-      sectionChildIndex[sectionKey] =
-        (currentChildIndex + 1) % activeChildren.length;
+      sectionChildIndex[sectionKey] = (currentChildIndex + 1) % activeChildren.length;
     } else {
       // Not in this section, go to first child
       sectionChildIndex[sectionKey] = 0;
@@ -164,9 +163,7 @@
     return `${baseClass} ${childPadding}`;
   }
 
-  const SvelteComponent = $derived(
-    getIconComponent(navigationConfig.dashboard.icon),
-  );
+  const SvelteComponent = $derived(getIconComponent(navigationConfig.dashboard.icon));
 </script>
 
 <div
@@ -180,11 +177,9 @@
     <div class="mb-6">
       <button
         onclick={() => handleNavigation(navigationConfig.dashboard)}
-        class="{getItemClass(
-          navigationConfig.dashboard,
-          false,
-          currentPath,
-        )} w-full {collapsed ? 'justify-center relative' : ''}"
+        class="{getItemClass(navigationConfig.dashboard, false, currentPath)} w-full {collapsed
+          ? 'justify-center relative'
+          : ''}"
         title={collapsed ? navigationConfig.dashboard.name : ""}
       >
         <SvelteComponent class="w-5 h-5 flex-shrink-0 {collapsed ? '' : 'mr-3'}" />
@@ -206,7 +201,10 @@
             onclick={() => toggleSection(sectionKey)}
             class="nav-item w-full {collapsed
               ? 'flex-col items-center justify-center'
-              : 'justify-between'} {!hasActiveChildren ? 'disabled' : ''} {collapsed && childInfo.isCurrentSection ? 'active' : ''}"
+              : 'justify-between'} {!hasActiveChildren ? 'disabled' : ''} {collapsed &&
+            childInfo.isCurrentSection
+              ? 'active'
+              : ''}"
             title={collapsed ? section.name : ""}
           >
             <div class="flex items-center {collapsed ? '' : 'space-x-3'}">
@@ -217,7 +215,9 @@
             </div>
             {#if !collapsed}
               <svg
-                class="w-4 h-4 transform transition-transform duration-200 {isSectionExpanded(sectionKey)
+                class="w-4 h-4 transform transition-transform duration-200 {isSectionExpanded(
+                  sectionKey
+                )
                   ? 'rotate-90'
                   : ''}"
                 fill="none"
@@ -237,7 +237,8 @@
                 <div class="flex justify-center gap-1 mt-1.5">
                   {#each Array(childInfo.count) as _, i (i)}
                     <div
-                      class="w-1.5 h-1.5 rounded-full transition-colors {i === childInfo.currentIndex
+                      class="w-1.5 h-1.5 rounded-full transition-colors {i ===
+                      childInfo.currentIndex
                         ? 'bg-primary'
                         : 'bg-muted-foreground/30'}"
                     ></div>
@@ -270,15 +271,12 @@
 
                   <!-- Badges -->
                   {#if child.badge}
-                    <span class="badge badge-primary text-xs"
-                      >{child.badge}</span
-                    >
+                    <span class="badge badge-primary text-xs">{child.badge}</span>
                   {:else if child.active === "soon"}
                     <span class="badge badge-warning text-xs">Soon</span>
                   {:else if child.tier}
                     <span class="badge badge-danger text-xs">{child.tier}</span>
                   {/if}
-
                 </button>
               {/each}
             </div>

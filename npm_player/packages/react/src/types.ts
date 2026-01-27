@@ -1,17 +1,17 @@
 /**
  * React-specific types for FrameWorks player
  */
-import type React from 'react';
-import type { 
-  PlayerOptions, 
-  PlayerState, 
-  PlayerStateContext, 
+import type React from "react";
+import type {
+  PlayerOptions,
+  PlayerState,
+  PlayerStateContext,
   ContentEndpoints,
   MetaTrackSubscription,
   PlaybackQuality,
   QualityThresholds,
-  ContentType
-} from '@livepeer-frameworks/player-core';
+  ContentType,
+} from "@livepeer-frameworks/player-core";
 
 export interface PlayerProps {
   /** Content identifier or stream name */
@@ -132,4 +132,4 @@ export type {
   StreamStatus,
   EndpointInfo,
   ContentMetadata,
-} from '@livepeer-frameworks/player-core';
+} from "@livepeer-frameworks/player-core";

@@ -4,8 +4,8 @@
  * Wraps QualityMonitor for reactive quality metrics.
  */
 
-import { writable, derived, type Readable } from 'svelte/store';
-import { QualityMonitor, type PlaybackQuality } from '@livepeer-frameworks/player-core';
+import { writable, derived, type Readable } from "svelte/store";
+import { QualityMonitor, type PlaybackQuality } from "@livepeer-frameworks/player-core";
 
 export interface PlaybackQualityOptions {
   sampleInterval?: number;
@@ -38,7 +38,9 @@ export interface PlaybackQualityStore extends Readable<PlaybackQuality | null> {
  * </script>
  * ```
  */
-export function createPlaybackQualityMonitor(options: PlaybackQualityOptions = {}): PlaybackQualityStore {
+export function createPlaybackQualityMonitor(
+  options: PlaybackQualityOptions = {}
+): PlaybackQualityStore {
   const { sampleInterval = 500, enabled = true } = options;
 
   const store = writable<PlaybackQuality | null>(null);
@@ -105,23 +107,23 @@ export function createPlaybackQualityMonitor(options: PlaybackQualityOptions = {
 
 // Convenience derived stores
 export function createDerivedQualityScore(store: PlaybackQualityStore) {
-  return derived(store, $quality => $quality?.score ?? 100);
+  return derived(store, ($quality) => $quality?.score ?? 100);
 }
 
 export function createDerivedStallCount(store: PlaybackQualityStore) {
-  return derived(store, $quality => $quality?.stallCount ?? 0);
+  return derived(store, ($quality) => $quality?.stallCount ?? 0);
 }
 
 export function createDerivedFrameDropRate(store: PlaybackQualityStore) {
-  return derived(store, $quality => $quality?.frameDropRate ?? 0);
+  return derived(store, ($quality) => $quality?.frameDropRate ?? 0);
 }
 
 export function createDerivedBitrate(store: PlaybackQualityStore) {
-  return derived(store, $quality => $quality?.bitrate ?? 0);
+  return derived(store, ($quality) => $quality?.bitrate ?? 0);
 }
 
 export function createDerivedLatency(store: PlaybackQualityStore) {
-  return derived(store, $quality => $quality?.latency);
+  return derived(store, ($quality) => $quality?.latency);
 }
 
 export default createPlaybackQualityMonitor;

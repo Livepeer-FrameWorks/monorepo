@@ -4,26 +4,27 @@ Deckhand provides native in-app messaging for FrameWorks using Chatwoot as the b
 
 ## Status
 
-| Component | Status |
-|-----------|--------|
-| Deckhand service (gRPC + webhooks) | ✅ Implemented |
-| Chatwoot HTTP client | ✅ Implemented |
-| Webhook enrichment (Quartermaster, Purser) | ✅ Implemented |
-| Bridge resolvers (queries, mutations) | ✅ Implemented |
-| GraphQL types and schema | ✅ Implemented |
-| Frontend routes (`/messages`) | ✅ Implemented |
-| `ServiceEvent` in ipc.proto | ✅ Implemented |
-| `service_events` topic | ✅ Implemented |
-| `CHANNEL_MESSAGING` in Signalman | ✅ Implemented |
-| Real-time subscription wiring | ✅ Implemented |
-| Chatwoot docker-compose setup | ✅ Implemented |
-| Chatwoot admin configuration | ⚠️ Manual setup required |
+| Component                                  | Status                   |
+| ------------------------------------------ | ------------------------ |
+| Deckhand service (gRPC + webhooks)         | ✅ Implemented           |
+| Chatwoot HTTP client                       | ✅ Implemented           |
+| Webhook enrichment (Quartermaster, Purser) | ✅ Implemented           |
+| Bridge resolvers (queries, mutations)      | ✅ Implemented           |
+| GraphQL types and schema                   | ✅ Implemented           |
+| Frontend routes (`/messages`)              | ✅ Implemented           |
+| `ServiceEvent` in ipc.proto                | ✅ Implemented           |
+| `service_events` topic                     | ✅ Implemented           |
+| `CHANNEL_MESSAGING` in Signalman           | ✅ Implemented           |
+| Real-time subscription wiring              | ✅ Implemented           |
+| Chatwoot docker-compose setup              | ✅ Implemented           |
+| Chatwoot admin configuration               | ⚠️ Manual setup required |
 
 **Note:** Chatwoot requires Redis for background jobs; deploy Redis alongside Chatwoot.
 
 ### Manual Setup Required
 
 Chatwoot admin configuration must be done manually after deployment:
+
 1. Create API channel inbox (not website widget)
 2. Add custom attributes: `tenant_id`, `page_url`, `subject`
 3. Configure webhook URL: `http://deckhand:18015/webhooks/chatwoot`
@@ -52,12 +53,12 @@ Chatwoot admin configuration must be done manually after deployment:
 
 Deckhand acts as an adapter between FrameWorks and Chatwoot:
 
-| Concern | Without Deckhand | With Deckhand |
-|---------|------------------|---------------|
-| Chatwoot webhooks | Bridge receives (violates stateless) | Deckhand receives |
-| Enrichment logic | Bridge mixes concerns | Deckhand owns |
-| Real-time broadcast | Bridge → Signalman (awkward) | Deckhand → Decklog → Signalman |
-| Chatwoot HTTP client | Lives in Bridge | Lives in Deckhand |
+| Concern              | Without Deckhand                     | With Deckhand                  |
+| -------------------- | ------------------------------------ | ------------------------------ |
+| Chatwoot webhooks    | Bridge receives (violates stateless) | Deckhand receives              |
+| Enrichment logic     | Bridge mixes concerns                | Deckhand owns                  |
+| Real-time broadcast  | Bridge → Signalman (awkward)         | Deckhand → Decklog → Signalman |
+| Chatwoot HTTP client | Lives in Bridge                      | Lives in Deckhand              |
 
 Bridge stays a pure GraphQL gateway. Deckhand owns all Chatwoot integration.
 
@@ -66,6 +67,7 @@ Bridge stays a pure GraphQL gateway. Deckhand owns all Chatwoot integration.
 ### Deckhand Service (`api_ticketing/`)
 
 **gRPC Server** - Called by Bridge:
+
 - `ListConversations` - Paginated conversation list for tenant
 - `SearchConversations` - Search conversations for tenant
 - `GetConversation` - Single conversation by ID
@@ -75,9 +77,11 @@ Bridge stays a pure GraphQL gateway. Deckhand owns all Chatwoot integration.
 - `SendMessage` - User sends message
 
 **HTTP Webhook Handler** - Called by Chatwoot:
+
 - `POST /webhooks/chatwoot` - Receives `conversation_created`, `conversation_updated`, `message_created`, `message_updated` events
 
 **Chatwoot Client** - Proxies to Chatwoot API:
+
 - Contact management (find/create by tenant_id)
 - Conversation CRUD
 - Message sending
@@ -94,8 +98,10 @@ Webhook payload ──▶ page URL
 ```
 
 Agents see:
+
 ```markdown
 ## Customer Context
+
 **Tenant:** Acme Corp
 **Email:** billing@acme.com
 **Plan:** Pro (active)
@@ -152,8 +158,15 @@ type Conversation implements Node {
   updatedAt: Time!
 }
 
-enum ConversationStatus { OPEN RESOLVED PENDING }
-enum MessageSender { USER AGENT }
+enum ConversationStatus {
+  OPEN
+  RESOLVED
+  PENDING
+}
+enum MessageSender {
+  USER
+  AGENT
+}
 ```
 
 ## Configuration

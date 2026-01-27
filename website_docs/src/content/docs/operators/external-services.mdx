@@ -11,17 +11,19 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 
 **Purpose:** Domain management, geographic routing, load balancing
 
-**Required Provider:** Cloudflare (API support required for Navigator automation; *self-hosted Anycast planned*)
+**Required Provider:** Cloudflare (API support required for Navigator automation; _self-hosted Anycast planned_)
 
 **Managed By:** Navigator (`api_dns`) - automates DNS record management based on node inventory
 
 **What You Need:**
+
 - Cloudflare account
 - API token with permissions for DNS record management
 - Domain added to Cloudflare
   - Required permissions: **Zone.DNS (Edit)** and **Account.Load Balancers (Edit)** (for multi-node)
 
 **What Navigator Automates:**
+
 - DNS record creation/updates based on Quartermaster node inventory
 - Smart routing: single node → A record, multiple nodes → load balancer pool
 - Pool and origin management
@@ -31,6 +33,7 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 Navigator skips changes if no nodes are returned for a service type to avoid wiping DNS during transient outages.
 
 **Manual Steps:**
+
 1. Create Cloudflare account
 2. Add your domain to Cloudflare
 3. Generate API token
@@ -57,6 +60,7 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 **Managed By:** Navigator (`api_dns`) - handles ACME certificate issuance and renewal
 
 **What Navigator Automates:**
+
 - Certificate issuance via ACME (Let's Encrypt) with DNS-01 validation
 - Automatic renewal (monitors expiration, renews when < 30 days remaining)
 - Certificate caching in PostgreSQL
@@ -65,6 +69,7 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 **Required Setup:** Navigator still needs Cloudflare credentials plus an allowed domain suffix list (`NAVIGATOR_CERT_ALLOWED_SUFFIXES`) or `NAVIGATOR_ROOT_DOMAIN`. In dev, the allowlist can be left empty to allow all.
 
 **Alternative Options:**
+
 - **Caddy** (automatic HTTPS) - for simpler deployments
 - **nginx + certbot** (Let's Encrypt) - for manual management
 
@@ -77,14 +82,17 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 **Provider:** MaxMind (GeoLite2 or GeoIP2), DB-IP Lite, or IP2Location LITE
 
 **What You Need:**
+
 - Provider account (as required)
 - MMDB file
 
 **What the platform uses:**
+
 - A local MMDB file on Foghorn nodes for geo-aware routing
 - Optional IP header enrichment if you already run geo-aware proxies
 
 **Manual Steps:**
+
 1. Download a City/Country MMDB file from your provider
 2. Place it on Foghorn hosts and set:
    ```bash
@@ -102,13 +110,16 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 **Providers:** Fastmail, SendGrid, AWS SES, or any SMTP provider
 
 **What You Need:**
+
 - SMTP credentials (host, port, username, password)
 - Verified sender domain (for production)
 
 **What's Automated:**
+
 - Service-specific email templates and dispatch logic
 
 **Manual Steps:**
+
 1. Choose email provider
 2. Generate SMTP credentials or app password
 3. Set environment variables:
@@ -123,11 +134,13 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
    ```
 
 **Used By:**
+
 - Forms API (contact form submissions)
 - Billing (invoice/payment notifications)
 - Auth (email verification + password resets)
 
 **Notes:**
+
 - Billing/Auth email flows skip sending if SMTP is not configured (warnings are logged).
 - Forms API requires SMTP + `TO_EMAIL`; otherwise contact submissions will fail.
 
@@ -140,16 +153,19 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 **Providers:** Stripe (primary), Mollie (optional)
 
 **What You Need:**
+
 - Stripe account and secret key (`STRIPE_SECRET_KEY`)
 - Stripe webhook signing secret (`STRIPE_WEBHOOK_SECRET`)
 - (Optional) Mollie API key (`MOLLIE_API_KEY`)
 
 **What's Automated:**
+
 - Webhook event handling
 - Subscription management
 - Payment processing
 
 **Manual Steps:**
+
 1. Create Stripe account at https://stripe.com
 2. Get API keys from dashboard
 3. Configure webhook endpoint: `https://yourdomain.com/webhooks/billing/stripe`
@@ -171,13 +187,13 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 
 ## Summary
 
-| Service | Provider | Required | Automated by |
-|---------|----------|----------|--------------|
-| DNS | Cloudflare (recommended) | Yes | Navigator (api_dns) |
-| SSL/TLS | Let's Encrypt (ACME) | Yes | Navigator (api_dns) |
-| GeoIP | MaxMind / DB-IP / IP2Location | Recommended | Operator-managed (MMDB file) |
-| SMTP | Any provider | Optional | Platform (email delivery) |
-| Payments | Stripe, Mollie | Optional | Purser (webhook handling) |
+| Service  | Provider                      | Required    | Automated by                 |
+| -------- | ----------------------------- | ----------- | ---------------------------- |
+| DNS      | Cloudflare (recommended)      | Yes         | Navigator (api_dns)          |
+| SSL/TLS  | Let's Encrypt (ACME)          | Yes         | Navigator (api_dns)          |
+| GeoIP    | MaxMind / DB-IP / IP2Location | Recommended | Operator-managed (MMDB file) |
+| SMTP     | Any provider                  | Optional    | Platform (email delivery)    |
+| Payments | Stripe, Mollie                | Optional    | Purser (webhook handling)    |
 
 ---
 
@@ -220,6 +236,7 @@ export MOLLIE_API_KEY="live_xxx"
 ```
 
 Store these securely using:
+
 - Environment files (`.env`)
 - Secrets manager (production)
 - CI/CD secrets (automated deployments)

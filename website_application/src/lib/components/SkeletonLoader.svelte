@@ -19,12 +19,7 @@
     inline?: boolean;
   }
 
-  let {
-    type = "text",
-    class: className,
-    count = 1,
-    inline = false,
-  }: Props = $props();
+  let { type = "text", class: className, count = 1, inline = false }: Props = $props();
 
   const baseClasses: Record<SkeletonType, string> = {
     text: "skeleton-text",

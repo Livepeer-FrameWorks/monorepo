@@ -5,9 +5,9 @@
  * Extracted from useStreamState.ts for use in headless core.
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import { TimerManager } from './TimerManager';
-import type { StreamState, StreamStatus, MistStreamInfo } from '../types';
+import { TypedEventEmitter } from "./EventEmitter";
+import { TimerManager } from "./TimerManager";
+import type { StreamState, StreamStatus, MistStreamInfo } from "../types";
 
 // ============================================================================
 // Types
@@ -26,7 +26,7 @@ export interface StreamStateClientConfig {
 
 type StreamStateClientResolvedConfig = Omit<
   StreamStateClientConfig,
-  'pollInterval' | 'useWebSocket'
+  "pollInterval" | "useWebSocket"
 > & {
   pollInterval: number;
   useWebSocket: boolean;
@@ -50,9 +50,9 @@ export interface StreamStateClientEvents {
 const DEFAULT_POLL_INTERVAL = 3000;
 
 const initialState: StreamState = {
-  status: 'OFFLINE',
+  status: "OFFLINE",
   isOnline: false,
-  message: 'Connecting...',
+  message: "Connecting...",
   lastUpdate: 0,
 };
 
@@ -66,14 +66,14 @@ const initialState: StreamState = {
 function parseErrorToStatus(error: string): StreamStatus {
   const lowerError = error.toLowerCase();
 
-  if (lowerError.includes('offline')) return 'OFFLINE';
-  if (lowerError.includes('initializing')) return 'INITIALIZING';
-  if (lowerError.includes('booting')) return 'BOOTING';
-  if (lowerError.includes('waiting for data')) return 'WAITING_FOR_DATA';
-  if (lowerError.includes('shutting down')) return 'SHUTTING_DOWN';
-  if (lowerError.includes('invalid')) return 'INVALID';
+  if (lowerError.includes("offline")) return "OFFLINE";
+  if (lowerError.includes("initializing")) return "INITIALIZING";
+  if (lowerError.includes("booting")) return "BOOTING";
+  if (lowerError.includes("waiting for data")) return "WAITING_FOR_DATA";
+  if (lowerError.includes("shutting down")) return "SHUTTING_DOWN";
+  if (lowerError.includes("invalid")) return "INVALID";
 
-  return 'ERROR';
+  return "ERROR";
 }
 
 /**
@@ -81,25 +81,25 @@ function parseErrorToStatus(error: string): StreamStatus {
  */
 function getStatusMessage(status: StreamStatus, percentage?: number): string {
   switch (status) {
-    case 'ONLINE':
-      return 'Stream is online';
-    case 'OFFLINE':
-      return 'Stream is offline';
-    case 'INITIALIZING':
+    case "ONLINE":
+      return "Stream is online";
+    case "OFFLINE":
+      return "Stream is offline";
+    case "INITIALIZING":
       return percentage !== undefined
         ? `Initializing... ${Math.round(percentage * 10) / 10}%`
-        : 'Stream is initializing';
-    case 'BOOTING':
-      return 'Stream is starting up';
-    case 'WAITING_FOR_DATA':
-      return 'Waiting for stream data';
-    case 'SHUTTING_DOWN':
-      return 'Stream is shutting down';
-    case 'INVALID':
-      return 'Stream status is invalid';
-    case 'ERROR':
+        : "Stream is initializing";
+    case "BOOTING":
+      return "Stream is starting up";
+    case "WAITING_FOR_DATA":
+      return "Waiting for stream data";
+    case "SHUTTING_DOWN":
+      return "Stream is shutting down";
+    case "INVALID":
+      return "Stream status is invalid";
+    case "ERROR":
     default:
-      return 'Stream error';
+      return "Stream error";
   }
 }
 
@@ -161,14 +161,14 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
     const { mistBaseUrl, streamName, useWebSocket } = this.config;
 
     if (!mistBaseUrl || !streamName) {
-      console.warn('[StreamStateClient] Missing mistBaseUrl or streamName');
+      console.warn("[StreamStateClient] Missing mistBaseUrl or streamName");
       return;
     }
 
     // Reset state
     this.setState({
       ...initialState,
-      message: 'Connecting...',
+      message: "Connecting...",
       lastUpdate: Date.now(),
     });
 
@@ -176,21 +176,25 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
     const currentConnectionId = ++this.connectionId;
 
     // Debounce connection to prevent rapid reconnects during mount/unmount cycles
-    this.timers.start(() => {
-      // Check if this connection attempt is still valid
-      if (!this.isRunning || this.connectionId !== currentConnectionId) {
-        return;
-      }
-
-      // Always do initial HTTP poll to get full data (including sources)
-      // Then connect WebSocket for real-time updates
-      this.pollHttp().then(() => {
-        // Verify still valid before WebSocket connection
-        if (useWebSocket && this.isRunning && this.connectionId === currentConnectionId) {
-          this.connectWebSocket();
+    this.timers.start(
+      () => {
+        // Check if this connection attempt is still valid
+        if (!this.isRunning || this.connectionId !== currentConnectionId) {
+          return;
         }
-      });
-    }, StreamStateClient.CONNECTION_DEBOUNCE_MS, 'connect');
+
+        // Always do initial HTTP poll to get full data (including sources)
+        // Then connect WebSocket for real-time updates
+        this.pollHttp().then(() => {
+          // Verify still valid before WebSocket connection
+          if (useWebSocket && this.isRunning && this.connectionId === currentConnectionId) {
+            this.connectWebSocket();
+          }
+        });
+      },
+      StreamStateClient.CONNECTION_DEBOUNCE_MS,
+      "connect"
+    );
   }
 
   /**
@@ -287,15 +291,17 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
     try {
       // Convert http(s) to ws(s)
       const wsUrl = mistBaseUrl
-        .replace(/^http:/, 'ws:')
-        .replace(/^https:/, 'wss:')
-        .replace(/\/$/, '');
+        .replace(/^http:/, "ws:")
+        .replace(/^https:/, "wss:")
+        .replace(/\/$/, "");
 
-      const ws = new WebSocket(`${wsUrl}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`);
+      const ws = new WebSocket(
+        `${wsUrl}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`
+      );
       this.ws = ws;
 
       ws.onopen = () => {
-        console.debug('[StreamStateClient] WebSocket connected');
+        console.debug("[StreamStateClient] WebSocket connected");
       };
 
       ws.onmessage = (event) => {
@@ -303,12 +309,12 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
           const data = JSON.parse(event.data) as MistStreamInfo;
           this.processStreamInfo(data);
         } catch (e) {
-          console.warn('[StreamStateClient] Failed to parse WebSocket message:', e);
+          console.warn("[StreamStateClient] Failed to parse WebSocket message:", e);
         }
       };
 
       ws.onerror = () => {
-        console.warn('[StreamStateClient] WebSocket error, falling back to HTTP polling');
+        console.warn("[StreamStateClient] WebSocket error, falling back to HTTP polling");
         ws.close();
       };
 
@@ -320,11 +326,11 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
         // Disable WebSocket and switch to HTTP polling
         // This ensures pollHttp() schedules repeat polls (see line 365 condition)
         this.config.useWebSocket = false;
-        console.debug('[StreamStateClient] WebSocket closed, switching to HTTP polling');
+        console.debug("[StreamStateClient] WebSocket closed, switching to HTTP polling");
         this.pollHttp();
       };
     } catch (error) {
-      console.warn('[StreamStateClient] WebSocket connection failed:', error);
+      console.warn("[StreamStateClient] WebSocket connection failed:", error);
       // Disable WebSocket and switch to HTTP polling
       this.config.useWebSocket = false;
       this.pollHttp();
@@ -337,10 +343,10 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
     const { mistBaseUrl, streamName, pollInterval } = this.config;
 
     try {
-      const url = `${mistBaseUrl.replace(/\/$/, '')}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
+      const url = `${mistBaseUrl.replace(/\/$/, "")}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
       const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        method: "GET",
+        headers: { Accept: "application/json" },
       });
 
       if (!response.ok) {
@@ -360,21 +366,21 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
     } catch (error) {
       if (!this.isRunning) return;
 
-      const errorMessage = error instanceof Error ? error.message : 'Connection failed';
+      const errorMessage = error instanceof Error ? error.message : "Connection failed";
       this.setState({
         ...this.state,
-        status: 'ERROR',
+        status: "ERROR",
         isOnline: false,
         message: errorMessage,
         lastUpdate: Date.now(),
         error: errorMessage,
       });
-      this.emit('error', { error: errorMessage });
+      this.emit("error", { error: errorMessage });
     }
 
     // Schedule next poll
     if (this.isRunning && !this.config.useWebSocket) {
-      this.timers.start(() => this.pollHttp(), pollInterval, 'poll');
+      this.timers.start(() => this.pollHttp(), pollInterval, "poll");
     }
   }
 
@@ -402,8 +408,8 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
       // Merge new data with existing streamInfo to preserve source/tracks from initial fetch
       // WebSocket updates may not include source array
       const mergedStreamInfo: MistStreamInfo = {
-        ...this.state.streamInfo,  // Keep existing source/meta if present
-        ...data,                   // Override with new data
+        ...this.state.streamInfo, // Keep existing source/meta if present
+        ...data, // Override with new data
         // Explicitly preserve source if not in new data
         source: data.source || this.state.streamInfo?.source,
         // Merge meta to preserve tracks
@@ -416,9 +422,9 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
       };
 
       newState = {
-        status: 'ONLINE',
+        status: "ONLINE",
         isOnline: true,
-        message: 'Stream is online',
+        message: "Stream is online",
         lastUpdate: Date.now(),
         streamInfo: mergedStreamInfo,
       };
@@ -428,9 +434,9 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
 
     // Emit online/offline events on state transitions
     if (newState.isOnline && !this.wasOnline) {
-      this.emit('online', undefined as never);
+      this.emit("online", undefined as never);
     } else if (!newState.isOnline && this.wasOnline) {
-      this.emit('offline', undefined as never);
+      this.emit("offline", undefined as never);
     }
     this.wasOnline = newState.isOnline;
   }
@@ -449,7 +455,7 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
       prevState.lastUpdate !== state.lastUpdate;
 
     if (hasChanged) {
-      this.emit('stateChange', { state });
+      this.emit("stateChange", { state });
     }
   }
 }

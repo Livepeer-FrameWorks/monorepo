@@ -28,10 +28,7 @@
       "ignore": ["dist/**"]
     },
     "website_docs": {
-      "entry": [
-        "src/content/**/*.{md,mdx}",
-        "astro.config.mjs"
-      ],
+      "entry": ["src/content/**/*.{md,mdx}", "astro.config.mjs"],
       "project": ["src/**/*.{ts,astro,md,mdx}"],
       "ignore": ["dist/**", ".astro/**"]
     },
@@ -72,11 +69,6 @@
       "includeEntryExports": true
     }
   },
-  "exclude": [
-    "unlisted",
-    "binaries"
-  ],
-  "ignoreWorkspaces": [
-    "npm_player/playground"
-  ]
+  "exclude": ["unlisted", "binaries"],
+  "ignoreWorkspaces": ["npm_player/playground"]
 }

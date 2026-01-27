@@ -5,27 +5,29 @@ sidebar:
   order: 6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 FrameWorks billing is in beta. Today we offer a **Free shared cluster** and a **prepaid balance** model. Paid tiers below are planned as we roll out paid clusters.
 
 <Aside type="note">
-**Beta Pricing:** Current rates are beta pricing. As we scale, pricing may adjust—but you keep the allowances you signed up for throughout beta.
+  **Beta Pricing:** Current rates are beta pricing. As we scale, pricing may adjust—but you keep the
+  allowances you signed up for throughout beta.
 </Aside>
 
 ## What You Pay For
 
 Paid tiers use **resource-based billing**:
 
-| Resource | What It Measures |
-|----------|------------------|
-| **Delivered Minutes** | Total viewer playback time |
-| **Storage** | Average GB stored over the billing period |
+| Resource              | What It Measures                          |
+| --------------------- | ----------------------------------------- |
+| **Delivered Minutes** | Total viewer playback time                |
+| **Storage**           | Average GB stored over the billing period |
 
 The delivered minutes price is **all-inclusive**: bandwidth, transcoding, and ABR ladder generation. No separate encoding fees.
 
 <Aside type="tip">
-**API requests are free.** Stream creation, analytics queries, configuration changes—all API operations cost nothing. You only pay when viewers watch or you store recordings.
+  **API requests are free.** Stream creation, analytics queries, configuration changes—all API
+  operations cost nothing. You only pay when viewers watch or you store recordings.
 </Aside>
 
 ## Free Tier
@@ -33,6 +35,7 @@ The delivered minutes price is **all-inclusive**: bandwidth, transcoding, and AB
 Access to a shared cluster on a fair-use basis. No metering, no billing.
 
 **Included:**
+
 - Shared cluster access
 - Livepeer-backed transcoding
 - Analytics dashboard
@@ -40,6 +43,7 @@ Access to a shared cluster on a fair-use basis. No metering, no billing.
 - Recording (beta)
 
 **Limitations:**
+
 - 30-day recording retention (beta; plan-based in the future)
 - No GPU hours
 - Watermarked player
@@ -50,31 +54,31 @@ Access to a shared cluster on a fair-use basis. No metering, no billing.
 
 Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at the rates below.
 
-| Resource | Rate |
-|----------|------|
+| Resource          | Rate         |
+| ----------------- | ------------ |
 | Delivered Minutes | €0.00049/min |
-| Storage (avg GB) | €0.01/GB |
-| GPU Hours | €0.50/hr |
+| Storage (avg GB)  | €0.01/GB     |
+| GPU Hours         | €0.50/hr     |
 
 ## Metered Tiers (Planned)
 
 Paid tiers include monthly allocations with overage billing:
 
-| Tier | Base | Delivered Minutes | GPU Hours | Retention |
-|------|------|-------------------|-----------|-----------|
-| Supporter | €79 | 150K | 10 | 90 days |
-| Developer | €249 | 500K | 50 | 180 days |
-| Production | €999 | 2M | 250 | 365 days |
-| Enterprise | Custom | Custom | Custom | Custom |
+| Tier       | Base   | Delivered Minutes | GPU Hours | Retention |
+| ---------- | ------ | ----------------- | --------- | --------- |
+| Supporter  | €79    | 150K              | 10        | 90 days   |
+| Developer  | €249   | 500K              | 50        | 180 days  |
+| Production | €999   | 2M                | 250       | 365 days  |
+| Enterprise | Custom | Custom            | Custom    | Custom    |
 
 **Overages (metered tiers):**
 
-| Tier | Delivered Minutes | Storage (avg GB) | GPU Hours |
-|------|-------------------|------------------|-----------|
-| Supporter | €0.00049/min | €0.01/GB | €0.50/hr |
-| Developer | €0.00047/min | €0.008/GB | €0.50/hr |
-| Production | €0.00045/min | €0.005/GB | €0.50/hr |
-| Enterprise | Custom | Custom | Custom |
+| Tier       | Delivered Minutes | Storage (avg GB) | GPU Hours |
+| ---------- | ----------------- | ---------------- | --------- |
+| Supporter  | €0.00049/min      | €0.01/GB         | €0.50/hr  |
+| Developer  | €0.00047/min      | €0.008/GB        | €0.50/hr  |
+| Production | €0.00045/min      | €0.005/GB        | €0.50/hr  |
+| Enterprise | Custom            | Custom           | Custom    |
 
 ## Billing Models
 
@@ -84,11 +88,11 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 **Thresholds:**
 
-| Balance | Effect |
-|---------|--------|
-| Below €5 | Low balance warning |
+| Balance     | Effect                                       |
+| ----------- | -------------------------------------------- |
+| Below €5    | Low balance warning                          |
 | €0 or below | New ingests blocked; playback may return 402 |
-| Below -€10 | Account suspended; streams terminated |
+| Below -€10  | Account suspended; streams terminated        |
 
 ### Postpaid (Planned)
 
@@ -105,6 +109,7 @@ Pay via Stripe or Mollie. Funds credit immediately after checkout.
 Send ETH or USDC on Ethereum, Base, or Arbitrum. LPT is supported on Ethereum and Arbitrum.
 
 **Confirmations:**
+
 - Ethereum: 12 confirmations
 - Base: 10 confirmations
 - Arbitrum: 10 confirmations

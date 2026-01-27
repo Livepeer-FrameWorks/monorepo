@@ -3,7 +3,7 @@
   Port of src/components/SeekBar.tsx
 -->
 <script lang="ts">
-  import { cn } from '@livepeer-frameworks/player-core';
+  import { cn } from "@livepeer-frameworks/player-core";
 
   interface Props {
     /** Current playback time in seconds */
@@ -34,7 +34,7 @@
     buffered = undefined,
     disabled = false,
     onseek = undefined,
-    class: className = '',
+    class: className = "",
     isLive = false,
     seekableStart = 0,
     liveEdge = undefined,
@@ -96,29 +96,29 @@
 
   // Format time as MM:SS or HH:MM:SS
   function formatTime(seconds: number): string {
-    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
     const total = Math.floor(seconds);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
     if (hours > 0) {
-      return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
     }
-    return `${minutes}:${String(secs).padStart(2, '0')}`;
+    return `${minutes}:${String(secs).padStart(2, "0")}`;
   }
 
   // Format relative time for live streams
   function formatLiveTime(seconds: number, edge: number): string {
     const behindSeconds = edge - seconds;
-    if (behindSeconds < 1) return 'LIVE';
+    if (behindSeconds < 1) return "LIVE";
     const total = Math.floor(behindSeconds);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
     if (hours > 0) {
-      return `-${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      return `-${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
     }
-    return `-${minutes}:${String(secs).padStart(2, '0')}`;
+    return `-${minutes}:${String(secs).padStart(2, "0")}`;
   }
 
   // Calculate time from mouse position
@@ -130,7 +130,7 @@
 
     // Live with valid seekable window
     if (isLive && Number.isFinite(seekableWindow) && seekableWindow > 0) {
-      return seekableStart + (percent * seekableWindow);
+      return seekableStart + percent * seekableWindow;
     }
 
     // VOD with finite duration
@@ -144,7 +144,7 @@
       const start = Number.isFinite(seekableStart) ? seekableStart : 0;
       const window = liveEdge - start;
       if (window > 0) {
-        return start + (percent * window);
+        return start + percent * window;
       }
     }
 
@@ -189,16 +189,16 @@
 
     const handleDragEnd = () => {
       isDragging = false;
-      document.removeEventListener('mousemove', handleDragMove);
-      document.removeEventListener('mouseup', handleDragEnd);
+      document.removeEventListener("mousemove", handleDragMove);
+      document.removeEventListener("mouseup", handleDragEnd);
       if (commitOnRelease && dragTime !== null) {
         onseek?.(dragTime);
         dragTime = null;
       }
     };
 
-    document.addEventListener('mousemove', handleDragMove);
-    document.addEventListener('mouseup', handleDragEnd);
+    document.addEventListener("mousemove", handleDragMove);
+    document.addEventListener("mouseup", handleDragEnd);
 
     // Initial seek
     const time = getTimeFromPosition(e.clientX);
@@ -211,34 +211,36 @@
 
   let showThumb = $derived(isHovering || isDragging);
   let canShowTooltip = $derived(isLive ? seekableWindow > 0 : Number.isFinite(duration));
-  let ariaValueText = $derived(isLive ? formatLiveTime(displayTime, effectiveLiveEdge) : formatTime(displayTime));
+  let ariaValueText = $derived(
+    isLive ? formatLiveTime(displayTime, effectiveLiveEdge) : formatTime(displayTime)
+  );
 </script>
 
 <div
   bind:this={trackRef}
   class={cn(
-    'group relative w-full h-6 flex items-center cursor-pointer',
-    disabled && 'opacity-50 cursor-not-allowed',
+    "group relative w-full h-6 flex items-center cursor-pointer",
+    disabled && "opacity-50 cursor-not-allowed",
     className
   )}
   onmouseenter={() => !disabled && (isHovering = true)}
-  onmouseleave={() => { isHovering = false; isDragging = false; }}
+  onmouseleave={() => {
+    isHovering = false;
+    isDragging = false;
+  }}
   onmousemove={handleMouseMove}
   onclick={handleClick}
   onmousedown={handleMouseDown}
   role="slider"
   aria-label="Seek"
   aria-valuemin={isLive ? seekableStart : 0}
-  aria-valuemax={isLive ? effectiveLiveEdge : (duration || 100)}
+  aria-valuemax={isLive ? effectiveLiveEdge : duration || 100}
   aria-valuenow={displayTime}
   aria-valuetext={ariaValueText}
   tabindex={disabled ? -1 : 0}
 >
   <!-- Track background -->
-  <div class={cn(
-    'fw-seek-track',
-    isDragging && 'fw-seek-track--active'
-  )}>
+  <div class={cn("fw-seek-track", isDragging && "fw-seek-track--active")}>
     <!-- Buffered segments -->
     {#each bufferedSegments as segment, _index}
       <div
@@ -247,27 +249,18 @@
       ></div>
     {/each}
     <!-- Playback progress -->
-    <div
-      class="fw-seek-progress"
-      style="width: {progressPercent}%;"
-    ></div>
+    <div class="fw-seek-progress" style="width: {progressPercent}%;"></div>
   </div>
 
   <!-- Thumb -->
   <div
-    class={cn(
-      'fw-seek-thumb',
-      showThumb ? 'fw-seek-thumb--active' : 'fw-seek-thumb--hidden'
-    )}
+    class={cn("fw-seek-thumb", showThumb ? "fw-seek-thumb--active" : "fw-seek-thumb--hidden")}
     style="left: {progressPercent}%;"
   ></div>
 
   <!-- Hover time tooltip -->
   {#if isHovering && !isDragging && canShowTooltip}
-    <div
-      class="fw-seek-tooltip"
-      style="left: {hoverPosition}%;"
-    >
+    <div class="fw-seek-tooltip" style="left: {hoverPosition}%;">
       {isLive ? formatLiveTime(hoverTime, effectiveLiveEdge) : formatTime(hoverTime)}
     </div>
   {/if}

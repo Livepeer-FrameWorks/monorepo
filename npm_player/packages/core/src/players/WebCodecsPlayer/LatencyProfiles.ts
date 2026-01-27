@@ -10,7 +10,7 @@
  *   - If buffer < desired * speedDownThreshold → slow down to minSpeedDown
  */
 
-import type { LatencyProfile, LatencyProfileName } from './types';
+import type { LatencyProfile, LatencyProfileName } from "./types";
 
 /**
  * Ultra-low latency profile
@@ -19,15 +19,15 @@ import type { LatencyProfile, LatencyProfileName } from './types';
  * Trade-offs: May stutter on poor networks
  */
 export const ULTRA_LOW_PROFILE: LatencyProfile = {
-  name: 'Ultra Low Latency',
-  keepAway: 50,              // 50ms base buffer
-  jitterMultiplier: 1.0,     // Full jitter protection (no extra margin)
-  speedUpThreshold: 1.5,     // Speed up when buffer > 150% of desired
-  speedDownThreshold: 0.5,   // Slow down when buffer < 50% of desired
-  maxSpeedUp: 1.08,          // 8% speed up max
-  minSpeedDown: 0.95,        // 5% slow down max
-  audioBufferMs: 100,        // 100ms audio ring buffer
-  optimizeForLatency: true,  // Tell decoders to optimize for latency
+  name: "Ultra Low Latency",
+  keepAway: 50, // 50ms base buffer
+  jitterMultiplier: 1.0, // Full jitter protection (no extra margin)
+  speedUpThreshold: 1.5, // Speed up when buffer > 150% of desired
+  speedDownThreshold: 0.5, // Slow down when buffer < 50% of desired
+  maxSpeedUp: 1.08, // 8% speed up max
+  minSpeedDown: 0.95, // 5% slow down max
+  audioBufferMs: 100, // 100ms audio ring buffer
+  optimizeForLatency: true, // Tell decoders to optimize for latency
 };
 
 /**
@@ -37,14 +37,14 @@ export const ULTRA_LOW_PROFILE: LatencyProfile = {
  * Trade-offs: Balanced latency/stability
  */
 export const LOW_PROFILE: LatencyProfile = {
-  name: 'Low Latency',
-  keepAway: 100,             // 100ms base buffer
-  jitterMultiplier: 1.2,     // 20% extra jitter protection
-  speedUpThreshold: 2.0,     // Speed up when buffer > 200% of desired
-  speedDownThreshold: 0.6,   // Slow down when buffer < 60% of desired
-  maxSpeedUp: 1.05,          // 5% speed up max (legacy default)
-  minSpeedDown: 0.98,        // 2% slow down max (legacy default)
-  audioBufferMs: 150,        // 150ms audio ring buffer
+  name: "Low Latency",
+  keepAway: 100, // 100ms base buffer
+  jitterMultiplier: 1.2, // 20% extra jitter protection
+  speedUpThreshold: 2.0, // Speed up when buffer > 200% of desired
+  speedDownThreshold: 0.6, // Slow down when buffer < 60% of desired
+  maxSpeedUp: 1.05, // 5% speed up max (legacy default)
+  minSpeedDown: 0.98, // 2% slow down max (legacy default)
+  audioBufferMs: 150, // 150ms audio ring buffer
   optimizeForLatency: true,
 };
 
@@ -55,14 +55,14 @@ export const LOW_PROFILE: LatencyProfile = {
  * Trade-offs: Prioritizes stability over latency
  */
 export const BALANCED_PROFILE: LatencyProfile = {
-  name: 'Balanced',
-  keepAway: 200,             // 200ms base buffer
-  jitterMultiplier: 1.5,     // 50% extra jitter protection
-  speedUpThreshold: 2.5,     // Speed up when buffer > 250% of desired
-  speedDownThreshold: 0.5,   // Slow down when buffer < 50% of desired
-  maxSpeedUp: 1.03,          // 3% speed up max
-  minSpeedDown: 0.97,        // 3% slow down max
-  audioBufferMs: 200,        // 200ms audio ring buffer
+  name: "Balanced",
+  keepAway: 200, // 200ms base buffer
+  jitterMultiplier: 1.5, // 50% extra jitter protection
+  speedUpThreshold: 2.5, // Speed up when buffer > 250% of desired
+  speedDownThreshold: 0.5, // Slow down when buffer < 50% of desired
+  maxSpeedUp: 1.03, // 3% speed up max
+  minSpeedDown: 0.97, // 3% slow down max
+  audioBufferMs: 200, // 200ms audio ring buffer
   optimizeForLatency: false, // Let decoders optimize for quality
 };
 
@@ -73,14 +73,14 @@ export const BALANCED_PROFILE: LatencyProfile = {
  * Trade-offs: Maximum stability, higher latency
  */
 export const QUALITY_PROFILE: LatencyProfile = {
-  name: 'Quality Priority',
-  keepAway: 500,             // 500ms base buffer (legacy VOD default)
-  jitterMultiplier: 2.0,     // Double jitter protection
-  speedUpThreshold: 3.0,     // Speed up when buffer > 300% of desired
-  speedDownThreshold: 0.4,   // Slow down when buffer < 40% of desired
-  maxSpeedUp: 1.02,          // 2% speed up max
-  minSpeedDown: 0.98,        // 2% slow down max
-  audioBufferMs: 300,        // 300ms audio ring buffer
+  name: "Quality Priority",
+  keepAway: 500, // 500ms base buffer (legacy VOD default)
+  jitterMultiplier: 2.0, // Double jitter protection
+  speedUpThreshold: 3.0, // Speed up when buffer > 300% of desired
+  speedDownThreshold: 0.4, // Slow down when buffer < 40% of desired
+  maxSpeedUp: 1.02, // 2% speed up max
+  minSpeedDown: 0.98, // 2% slow down max
+  audioBufferMs: 300, // 300ms audio ring buffer
   optimizeForLatency: false,
 };
 
@@ -88,10 +88,10 @@ export const QUALITY_PROFILE: LatencyProfile = {
  * All available latency profiles
  */
 export const LATENCY_PROFILES: Record<LatencyProfileName, LatencyProfile> = {
-  'ultra-low': ULTRA_LOW_PROFILE,
-  'low': LOW_PROFILE,
-  'balanced': BALANCED_PROFILE,
-  'quality': QUALITY_PROFILE,
+  "ultra-low": ULTRA_LOW_PROFILE,
+  low: LOW_PROFILE,
+  balanced: BALANCED_PROFILE,
+  quality: QUALITY_PROFILE,
 };
 
 /**
@@ -103,7 +103,7 @@ export function getLatencyProfile(name?: LatencyProfileName): LatencyProfile {
   if (name && name in LATENCY_PROFILES) {
     return LATENCY_PROFILES[name];
   }
-  return LATENCY_PROFILES['low'];
+  return LATENCY_PROFILES["low"];
 }
 
 /**
@@ -116,7 +116,7 @@ export function mergeLatencyProfile(
   base: LatencyProfileName | LatencyProfile,
   custom?: Partial<LatencyProfile>
 ): LatencyProfile {
-  const baseProfile = typeof base === 'string' ? getLatencyProfile(base) : base;
+  const baseProfile = typeof base === "string" ? getLatencyProfile(base) : base;
 
   if (!custom) {
     return baseProfile;
@@ -140,12 +140,12 @@ export function selectDefaultProfile(
   preferLowLatency = false
 ): LatencyProfileName {
   if (!isLive) {
-    return 'quality';
+    return "quality";
   }
 
   if (preferLowLatency) {
-    return 'low';
+    return "low";
   }
 
-  return 'balanced';
+  return "balanced";
 }

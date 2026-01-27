@@ -2,7 +2,7 @@
  * VolumeSlider - Reusable volume slider component with popup and snap-to-100%
  */
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from "react";
 
 interface VolumeSliderProps {
   /** Current value (0-2 for 0-200%) */
@@ -34,23 +34,26 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
   const [popupPosition, setPopupPosition] = useState(0);
   const sliderRef = useRef<HTMLInputElement>(null);
 
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    let newValue = parseInt(e.target.value, 10) / 100;
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      let newValue = parseInt(e.target.value, 10) / 100;
 
-    // Snap to 100% if within threshold
-    if (Math.abs(newValue - 1) <= snapThreshold) {
-      newValue = 1;
-    }
+      // Snap to 100% if within threshold
+      if (Math.abs(newValue - 1) <= snapThreshold) {
+        newValue = 1;
+      }
 
-    onChange(newValue);
+      onChange(newValue);
 
-    // Update popup position
-    if (sliderRef.current) {
-      const rect = sliderRef.current.getBoundingClientRect();
-      const percent = (newValue - min) / (max - min);
-      setPopupPosition(percent * rect.width);
-    }
-  }, [onChange, min, max, snapThreshold]);
+      // Update popup position
+      if (sliderRef.current) {
+        const rect = sliderRef.current.getBoundingClientRect();
+        const percent = (newValue - min) / (max - min);
+        setPopupPosition(percent * rect.width);
+      }
+    },
+    [onChange, min, max, snapThreshold]
+  );
 
   const handleMouseDown = useCallback(() => {
     setIsDragging(true);
@@ -71,63 +74,65 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
   const isDefault = value === 1;
 
   return (
-    <div className={className} style={{ position: 'relative', flex: 1, minWidth: compact ? '60px' : '100px' }}>
+    <div
+      className={className}
+      style={{ position: "relative", flex: 1, minWidth: compact ? "60px" : "100px" }}
+    >
       {/* Popup tooltip */}
       {isDragging && (
         <div
           style={{
-            position: 'absolute',
-            bottom: '100%',
+            position: "absolute",
+            bottom: "100%",
             left: `${popupPosition}px`,
-            transform: 'translateX(-50%)',
-            marginBottom: '8px',
-            padding: '4px 8px',
-            background: isBoost ? '#e0af68' : isDefault ? '#9ece6a' : '#7aa2f7',
-            color: '#1a1b26',
-            borderRadius: '4px',
-            fontSize: '12px',
+            transform: "translateX(-50%)",
+            marginBottom: "8px",
+            padding: "4px 8px",
+            background: isBoost ? "#e0af68" : isDefault ? "#9ece6a" : "#7aa2f7",
+            color: "#1a1b26",
+            borderRadius: "4px",
+            fontSize: "12px",
             fontWeight: 600,
-            fontFamily: 'monospace',
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
+            fontFamily: "monospace",
+            whiteSpace: "nowrap",
+            pointerEvents: "none",
             zIndex: 100,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+            boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
           }}
         >
-          {displayValue}%
-          {isDefault && ' (default)'}
+          {displayValue}%{isDefault && " (default)"}
           {/* Arrow */}
           <div
             style={{
-              position: 'absolute',
-              top: '100%',
-              left: '50%',
-              transform: 'translateX(-50%)',
+              position: "absolute",
+              top: "100%",
+              left: "50%",
+              transform: "translateX(-50%)",
               width: 0,
               height: 0,
-              borderLeft: '6px solid transparent',
-              borderRight: '6px solid transparent',
-              borderTop: `6px solid ${isBoost ? '#e0af68' : isDefault ? '#9ece6a' : '#7aa2f7'}`,
+              borderLeft: "6px solid transparent",
+              borderRight: "6px solid transparent",
+              borderTop: `6px solid ${isBoost ? "#e0af68" : isDefault ? "#9ece6a" : "#7aa2f7"}`,
             }}
           />
         </div>
       )}
 
       {/* Slider track with 100% marker */}
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: "relative" }}>
         {/* 100% marker line */}
         <div
           style={{
-            position: 'absolute',
+            position: "absolute",
             left: `${(1 / max) * 100}%`,
-            top: '0',
-            bottom: '0',
-            width: '2px',
-            background: isDefault ? '#9ece6a' : 'rgba(158, 206, 106, 0.3)',
-            borderRadius: '1px',
+            top: "0",
+            bottom: "0",
+            width: "2px",
+            background: isDefault ? "#9ece6a" : "rgba(158, 206, 106, 0.3)",
+            borderRadius: "1px",
             zIndex: 1,
-            pointerEvents: 'none',
-            transform: 'translateX(-50%)',
+            pointerEvents: "none",
+            transform: "translateX(-50%)",
           }}
         />
         <input
@@ -143,11 +148,11 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
           onTouchStart={handleMouseDown}
           onTouchEnd={handleMouseUp}
           style={{
-            width: '100%',
-            height: '6px',
-            borderRadius: '3px',
-            cursor: 'pointer',
-            accentColor: isBoost ? '#e0af68' : '#7aa2f7',
+            width: "100%",
+            height: "6px",
+            borderRadius: "3px",
+            cursor: "pointer",
+            accentColor: isBoost ? "#e0af68" : "#7aa2f7",
           }}
         />
       </div>

@@ -27,6 +27,7 @@ frameworks edge preflight --domain stream.yourdomain.com
 ```
 
 This checks:
+
 - Docker and Docker Compose installed
 - Ports 80/443 available for HTTPS
 - DNS resolves (compare to this server's public IP)
@@ -35,6 +36,7 @@ This checks:
 - File descriptor limits won’t choke under load
 
 Note: if you plan to use direct ingest or non-HTTP protocols, open the MistServer ports you need:
+
 - **1935/tcp** (RTMP ingest)
 - **8889/udp** (SRT ingest)
 - **5554/tcp** (RTSP)
@@ -54,6 +56,7 @@ sudo frameworks edge tune --write
 ```
 
 This configures:
+
 - TCP buffer sizes and backlog tuning
 - Local port range for high connection counts
 - File descriptor limits
@@ -67,6 +70,7 @@ frameworks edge init --dir /opt/frameworks-edge \
 ```
 
 This creates:
+
 - `.edge.env` - Environment configuration
 - `docker-compose.edge.yml` - MistServer, Helmsman, and Caddy
 - `Caddyfile` - Reverse proxy with automatic HTTPS
@@ -108,11 +112,13 @@ frameworks edge enroll --dir /opt/frameworks-edge
 This starts the containers and enrolls the node if `EDGE_ENROLLMENT_TOKEN` is set.
 
 Check status:
+
 ```bash
 frameworks edge status --dir /opt/frameworks-edge
 ```
 
 You should see:
+
 - `mistserver` - Running
 - `helmsman` - Running
 - `caddy` - Running
@@ -123,6 +129,7 @@ You should see:
 ### MistServer
 
 The media server. Handles:
+
 - RTMP/SRT/WHIP ingest
 - HLS/DASH/WebRTC delivery
 - Recording (if enabled)
@@ -132,6 +139,7 @@ Web UI: `http://localhost:4242` (internal, not exposed by default). If you proxy
 ### Helmsman
 
 The sidecar. Does:
+
 - Forwards MistServer triggers to Foghorn for validation/routing
 - Collects client and node metrics for Foghorn
 - Reports node capacity and storage details
@@ -141,6 +149,7 @@ Health check: `curl http://localhost:18007/health`
 ### Caddy
 
 Reverse proxy. Provides:
+
 - Automatic HTTPS via Let’s Encrypt
 - Routes viewer traffic to MistServer
 - Terminates TLS

@@ -61,12 +61,8 @@
 
     // Group remaining as "Other" if there are more items
     if (sortedData.length > maxItems) {
-      const otherCount = sortedData
-        .slice(maxItems)
-        .reduce((sum, d) => sum + d.viewerCount, 0);
-      const otherPercentage = sortedData
-        .slice(maxItems)
-        .reduce((sum, d) => sum + d.percentage, 0);
+      const otherCount = sortedData.slice(maxItems).reduce((sum, d) => sum + d.viewerCount, 0);
+      const otherPercentage = sortedData.slice(maxItems).reduce((sum, d) => sum + d.percentage, 0);
       if (otherCount > 0) {
         chartData.push({
           countryCode: "Other",
@@ -79,7 +75,9 @@
     const config: ChartConfiguration<"doughnut"> = {
       type: "doughnut",
       data: {
-        labels: chartData.map((d) => d.countryCode === "Other" ? "Other" : getCountryName(d.countryCode)),
+        labels: chartData.map((d) =>
+          d.countryCode === "Other" ? "Other" : getCountryName(d.countryCode)
+        ),
         datasets: [
           {
             data: chartData.map((d) => d.viewerCount),
@@ -132,20 +130,25 @@
               },
               generateLabels: (chart) => {
                 const dataset = chart.data.datasets[0];
-                return chart.data.labels?.map((label, i) => {
-                  const item = chartData[i];
-                  const displayName = item?.countryCode === "Other" ? "Other" : getCountryName(item?.countryCode || "");
-                  return {
-                    text: `${displayName} (${item?.percentage.toFixed(1)}%)`,
-                    fillStyle: (dataset.backgroundColor as string[])[i],
-                    strokeStyle: (dataset.borderColor as string),
-                    fontColor: "rgb(226, 232, 240)",
-                    lineWidth: 0,
-                    pointStyle: "circle",
-                    hidden: false,
-                    index: i,
-                  };
-                }) || [];
+                return (
+                  chart.data.labels?.map((label, i) => {
+                    const item = chartData[i];
+                    const displayName =
+                      item?.countryCode === "Other"
+                        ? "Other"
+                        : getCountryName(item?.countryCode || "");
+                    return {
+                      text: `${displayName} (${item?.percentage.toFixed(1)}%)`,
+                      fillStyle: (dataset.backgroundColor as string[])[i],
+                      strokeStyle: dataset.borderColor as string,
+                      fontColor: "rgb(226, 232, 240)",
+                      lineWidth: 0,
+                      pointStyle: "circle",
+                      hidden: false,
+                      index: i,
+                    };
+                  }) || []
+                );
               },
             },
           },

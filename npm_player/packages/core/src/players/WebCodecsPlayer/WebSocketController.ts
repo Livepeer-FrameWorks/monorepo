@@ -19,11 +19,16 @@ import type {
   OnTimeMessage,
   RawChunk,
   TrackInfo,
-} from './types';
-import { parseRawChunk, formatChunkForLog } from './RawChunkParser';
+} from "./types";
+import { parseRawChunk, formatChunkForLog } from "./RawChunkParser";
 
 /** Connection states */
-export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+export type ConnectionState =
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "error";
 
 /** Event types emitted by WebSocketController */
 export interface WebSocketControllerEvents {
@@ -125,7 +130,7 @@ export class WebSocketController {
   private ws: WebSocket | null = null;
   private url: string;
   private options: Required<WebSocketControllerOptions>;
-  private state: ConnectionState = 'disconnected';
+  private state: ConnectionState = "disconnected";
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -143,32 +148,32 @@ export class WebSocketController {
    */
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (this.ws && this.state === 'connected') {
+      if (this.ws && this.state === "connected") {
         resolve();
         return;
       }
 
       this.intentionalClose = false;
-      this.setState('connecting');
+      this.setState("connecting");
 
       try {
         this.ws = new WebSocket(this.url);
-        this.ws.binaryType = 'arraybuffer';
+        this.ws.binaryType = "arraybuffer";
 
         // Connection timeout
         this.connectionTimer = setTimeout(() => {
-          if (this.state === 'connecting') {
-            this.log('Connection timeout');
+          if (this.state === "connecting") {
+            this.log("Connection timeout");
             this.ws?.close();
-            reject(new Error('Connection timeout'));
+            reject(new Error("Connection timeout"));
           }
         }, this.options.connectionTimeoutMs);
 
         this.ws.onopen = () => {
           this.clearConnectionTimer();
-          this.setState('connected');
+          this.setState("connected");
           this.reconnectAttempts = 0;
-          this.log('Connected');
+          this.log("Connected");
           resolve();
         };
 
@@ -179,20 +184,20 @@ export class WebSocketController {
           if (!this.intentionalClose && this.shouldReconnect()) {
             this.scheduleReconnect();
           } else {
-            this.setState('disconnected');
+            this.setState("disconnected");
           }
         };
 
         this.ws.onerror = (_event) => {
-          this.log('WebSocket error');
-          this.emit('error', new Error('WebSocket error'));
+          this.log("WebSocket error");
+          this.emit("error", new Error("WebSocket error"));
         };
 
         this.ws.onmessage = (event) => {
           this.handleMessage(event);
         };
       } catch (err) {
-        this.setState('error');
+        this.setState("error");
         reject(err);
       }
     });
@@ -209,7 +214,7 @@ export class WebSocketController {
     if (this.ws) {
       // Send hold command before closing
       try {
-        this.send({ type: 'hold' });
+        this.send({ type: "hold" });
       } catch {
         // Ignore send errors during close
       }
@@ -219,7 +224,7 @@ export class WebSocketController {
     }
 
     this.serverDelay.clear();
-    this.setState('disconnected');
+    this.setState("disconnected");
   }
 
   /**
@@ -232,7 +237,7 @@ export class WebSocketController {
     }
 
     // Track timing for certain commands
-    const timedCommands = ['seek', 'set_speed', 'request_codec_data'];
+    const timedCommands = ["seek", "set_speed", "request_codec_data"];
     if (timedCommands.includes(command.type)) {
       this.serverDelay.startTiming(command.type);
     }
@@ -247,14 +252,14 @@ export class WebSocketController {
    * Request playback start
    */
   play(): boolean {
-    return this.send({ type: 'play' });
+    return this.send({ type: "play" });
   }
 
   /**
    * Request playback pause
    */
   hold(): boolean {
-    return this.send({ type: 'hold' });
+    return this.send({ type: "hold" });
   }
 
   /**
@@ -264,7 +269,7 @@ export class WebSocketController {
    */
   seek(timeMs: number, fastForwardMs?: number): boolean {
     const cmd: ControlCommand = {
-      type: 'seek',
+      type: "seek",
       seek_time: Math.round(timeMs),
     };
     if (fastForwardMs !== undefined) {
@@ -276,8 +281,8 @@ export class WebSocketController {
   /**
    * Set playback speed
    */
-  setSpeed(rate: number | 'auto'): boolean {
-    return this.send({ type: 'set_speed', play_rate: rate });
+  setSpeed(rate: number | "auto"): boolean {
+    return this.send({ type: "set_speed", play_rate: rate });
   }
 
   /**
@@ -289,18 +294,18 @@ export class WebSocketController {
   requestCodecData(supportedCombinations?: string[][][]): boolean {
     if (supportedCombinations && supportedCombinations.length > 0) {
       return this.send({
-        type: 'request_codec_data',
+        type: "request_codec_data",
         supported_combinations: supportedCombinations,
       });
     }
-    return this.send({ type: 'request_codec_data' });
+    return this.send({ type: "request_codec_data" });
   }
 
   /**
    * Request additional data (fast-forward for buffer recovery)
    */
   fastForward(ms: number): boolean {
-    return this.send({ type: 'fast_forward', ff_add: Math.round(ms) });
+    return this.send({ type: "fast_forward", ff_add: Math.round(ms) });
   }
 
   /**
@@ -321,16 +326,13 @@ export class WebSocketController {
    * Check if connected
    */
   isConnected(): boolean {
-    return this.state === 'connected' && this.ws?.readyState === WebSocket.OPEN;
+    return this.state === "connected" && this.ws?.readyState === WebSocket.OPEN;
   }
 
   /**
    * Add event listener
    */
-  on<K extends keyof WebSocketControllerEvents>(
-    event: K,
-    listener: EventListener<K>
-  ): void {
+  on<K extends keyof WebSocketControllerEvents>(event: K, listener: EventListener<K>): void {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
@@ -340,10 +342,7 @@ export class WebSocketController {
   /**
    * Remove event listener
    */
-  off<K extends keyof WebSocketControllerEvents>(
-    event: K,
-    listener: EventListener<K>
-  ): void {
+  off<K extends keyof WebSocketControllerEvents>(event: K, listener: EventListener<K>): void {
     this.listeners.get(event)?.delete(listener);
   }
 
@@ -373,7 +372,7 @@ export class WebSocketController {
     if (event.data instanceof ArrayBuffer) {
       // Binary data - parse as raw chunk
       this.handleBinaryMessage(event.data);
-    } else if (typeof event.data === 'string') {
+    } else if (typeof event.data === "string") {
       // JSON control message
       this.handleControlMessage(event.data);
     }
@@ -391,7 +390,7 @@ export class WebSocketController {
       const chunk = parseRawChunk(data);
       if (this.options.debug) {
         // Only log KEY/INIT frames, rate-limit DELTA logs
-        if (chunk.type !== 'delta') {
+        if (chunk.type !== "delta") {
           this.log(formatChunkForLog(chunk));
         } else {
           const now = performance.now();
@@ -402,7 +401,7 @@ export class WebSocketController {
           }
         }
       }
-      this.emit('chunk', chunk);
+      this.emit("chunk", chunk);
     } catch (err) {
       this.log(`Failed to parse binary chunk: ${err}`);
     }
@@ -421,51 +420,53 @@ export class WebSocketController {
 
       // Match MistServer util.js line 1301: unwrap data field if present
       // Some messages (like on_answer_sdp) don't have the data key
-      const payload = 'data' in raw ? raw.data : raw;
+      const payload = "data" in raw ? raw.data : raw;
       const message: ControlMessage = { type: raw.type, ...payload };
 
       this.log(`Received: ${message.type}`);
 
       // Complete timing for responses
-      if (message.type === 'codec_data') {
-        this.serverDelay.completeTiming('request_codec_data');
-      } else if (message.type === 'on_time') {
-        this.serverDelay.completeTiming('seek');
-        this.serverDelay.completeTiming('set_speed');
+      if (message.type === "codec_data") {
+        this.serverDelay.completeTiming("request_codec_data");
+      } else if (message.type === "on_time") {
+        this.serverDelay.completeTiming("seek");
+        this.serverDelay.completeTiming("set_speed");
       }
 
       // Route to appropriate handler
       switch (message.type) {
-        case 'codec_data':
-          this.emit('codecdata', message as CodecDataMessage);
+        case "codec_data":
+          this.emit("codecdata", message as CodecDataMessage);
           break;
 
-        case 'info':
-          this.log(`Info message tracks: ${JSON.stringify(Object.keys((message as InfoMessage).meta?.tracks ?? {}))}`);
-          this.emit('info', message as InfoMessage);
+        case "info":
+          this.log(
+            `Info message tracks: ${JSON.stringify(Object.keys((message as InfoMessage).meta?.tracks ?? {}))}`
+          );
+          this.emit("info", message as InfoMessage);
           break;
 
-        case 'on_time':
+        case "on_time":
           if ((message as OnTimeMessage).tracks?.length) {
             this.log(`on_time tracks: ${JSON.stringify((message as OnTimeMessage).tracks)}`);
           }
-          this.emit('ontime', message as OnTimeMessage);
+          this.emit("ontime", message as OnTimeMessage);
           break;
 
-        case 'tracks':
-          this.emit('tracks', (message as any).tracks);
+        case "tracks":
+          this.emit("tracks", (message as any).tracks);
           break;
 
-        case 'on_stop':
-          this.emit('stop', undefined);
+        case "on_stop":
+          this.emit("stop", undefined);
           break;
 
-        case 'error':
-          this.emit('error', new Error((message as any).message));
+        case "error":
+          this.emit("error", new Error((message as any).message));
           break;
 
-        case 'pause':
-        case 'set_speed':
+        case "pause":
+        case "set_speed":
           // Acknowledgments - no action needed
           break;
 
@@ -483,7 +484,7 @@ export class WebSocketController {
   private setState(state: ConnectionState): void {
     if (this.state !== state) {
       this.state = state;
-      this.emit('statechange', state);
+      this.emit("statechange", state);
     }
   }
 
@@ -506,16 +507,13 @@ export class WebSocketController {
    * Schedule reconnection with exponential backoff
    */
   private scheduleReconnect(): void {
-    this.setState('reconnecting');
+    this.setState("reconnecting");
     this.reconnectAttempts++;
 
     // Exponential backoff with jitter
     const baseDelay = this.options.reconnectDelayMs;
     const maxDelay = this.options.maxReconnectDelayMs;
-    const delay = Math.min(
-      baseDelay * Math.pow(2, this.reconnectAttempts - 1),
-      maxDelay
-    );
+    const delay = Math.min(baseDelay * Math.pow(2, this.reconnectAttempts - 1), maxDelay);
     const jitter = delay * 0.2 * Math.random(); // +/- 20% jitter
 
     this.log(`Reconnecting in ${Math.round(delay + jitter)}ms (attempt ${this.reconnectAttempts})`);
@@ -526,8 +524,8 @@ export class WebSocketController {
         if (this.shouldReconnect()) {
           this.scheduleReconnect();
         } else {
-          this.setState('error');
-          this.emit('error', new Error('Max reconnection attempts exceeded'));
+          this.setState("error");
+          this.emit("error", new Error("Max reconnection attempts exceeded"));
         }
       });
     }, delay + jitter);

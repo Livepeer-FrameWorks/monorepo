@@ -3,8 +3,8 @@
  * React hook for device enumeration and management
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { DeviceManager, type DeviceInfo } from '@livepeer-frameworks/streamcrafter-core';
+import { useState, useEffect, useCallback, useRef } from "react";
+import { DeviceManager, type DeviceInfo } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface UseDevicesReturn {
   devices: DeviceInfo[];
@@ -32,23 +32,24 @@ export function useDevices(): UseDevicesReturn {
     deviceManagerRef.current = manager;
 
     // Set up event listeners
-    const unsubDevices = manager.on('devicesChanged', (event) => {
+    const unsubDevices = manager.on("devicesChanged", (event) => {
       setDevices(event.devices);
     });
 
-    const unsubPermission = manager.on('permissionChanged', (event) => {
+    const unsubPermission = manager.on("permissionChanged", (event) => {
       setHasPermission({
         video: event.granted,
         audio: event.granted,
       });
     });
 
-    const unsubError = manager.on('error', (event) => {
+    const unsubError = manager.on("error", (event) => {
       setError(event.message);
     });
 
     // Initial enumeration
-    manager.enumerateDevices()
+    manager
+      .enumerateDevices()
       .then((deviceList) => {
         setDevices(deviceList);
         setIsLoading(false);
@@ -80,22 +81,25 @@ export function useDevices(): UseDevicesReturn {
     }
   }, []);
 
-  const requestPermissions = useCallback(async (options: { video?: boolean; audio?: boolean } = { video: true, audio: true }) => {
-    if (!deviceManagerRef.current) return;
-    setError(null);
-    try {
-      const result = await deviceManagerRef.current.requestPermissions(options);
-      setHasPermission(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+  const requestPermissions = useCallback(
+    async (options: { video?: boolean; audio?: boolean } = { video: true, audio: true }) => {
+      if (!deviceManagerRef.current) return;
+      setError(null);
+      try {
+        const result = await deviceManagerRef.current.requestPermissions(options);
+        setHasPermission(result);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    []
+  );
 
   return {
     devices,
-    videoInputs: devices.filter((d) => d.kind === 'videoinput'),
-    audioInputs: devices.filter((d) => d.kind === 'audioinput'),
-    audioOutputs: devices.filter((d) => d.kind === 'audiooutput'),
+    videoInputs: devices.filter((d) => d.kind === "videoinput"),
+    audioInputs: devices.filter((d) => d.kind === "audioinput"),
+    audioOutputs: devices.filter((d) => d.kind === "audiooutput"),
     isLoading,
     error,
     hasPermission,

@@ -20,10 +20,7 @@
   aria-valuenow={value}
   aria-valuemin={0}
   aria-valuemax={max}
-  class={cn(
-    "relative h-2 w-full overflow-hidden rounded-full bg-muted",
-    className
-  )}
+  class={cn("relative h-2 w-full overflow-hidden rounded-full bg-muted", className)}
   {...restProps}
 >
   <div

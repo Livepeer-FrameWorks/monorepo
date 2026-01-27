@@ -170,9 +170,8 @@ export class LiveDurationProxy {
 
     const bufferEnd = this.getBufferEnd();
     const now = Date.now();
-    const elapsedSinceProgress = this.lastProgressTime > 0
-      ? (now - this.lastProgressTime) / 1000
-      : 0;
+    const elapsedSinceProgress =
+      this.lastProgressTime > 0 ? (now - this.lastProgressTime) / 1000 : 0;
 
     // MistPlayer formula: buffer_end + elapsed_since_last_progress
     const newDuration = bufferEnd + elapsedSinceProgress;
@@ -207,16 +206,16 @@ export class LiveDurationProxy {
       this.updateDuration();
     };
 
-    this.video.addEventListener('progress', onProgress);
-    this.video.addEventListener('timeupdate', onTimeUpdate);
-    this.video.addEventListener('durationchange', onDurationChange);
-    this.video.addEventListener('loadedmetadata', onLoadedMetadata);
+    this.video.addEventListener("progress", onProgress);
+    this.video.addEventListener("timeupdate", onTimeUpdate);
+    this.video.addEventListener("durationchange", onDurationChange);
+    this.video.addEventListener("loadedmetadata", onLoadedMetadata);
 
     this.listeners = [
-      () => this.video.removeEventListener('progress', onProgress),
-      () => this.video.removeEventListener('timeupdate', onTimeUpdate),
-      () => this.video.removeEventListener('durationchange', onDurationChange),
-      () => this.video.removeEventListener('loadedmetadata', onLoadedMetadata),
+      () => this.video.removeEventListener("progress", onProgress),
+      () => this.video.removeEventListener("timeupdate", onTimeUpdate),
+      () => this.video.removeEventListener("durationchange", onDurationChange),
+      () => this.video.removeEventListener("loadedmetadata", onLoadedMetadata),
     ];
   }
 
@@ -224,7 +223,7 @@ export class LiveDurationProxy {
    * Cleanup
    */
   destroy(): void {
-    this.listeners.forEach(cleanup => cleanup());
+    this.listeners.forEach((cleanup) => cleanup());
     this.listeners = [];
   }
 }
@@ -243,19 +242,19 @@ export function createLiveVideoProxy(
 
   const proxy = new Proxy(video, {
     get(target, prop, receiver) {
-      if (prop === 'duration') {
+      if (prop === "duration") {
         return controller.getDuration();
       }
 
       const value = Reflect.get(target, prop, receiver);
-      if (typeof value === 'function') {
+      if (typeof value === "function") {
         return value.bind(target);
       }
       return value;
     },
 
     set(target, prop, value, receiver) {
-      if (prop === 'currentTime' && controller.isLive()) {
+      if (prop === "currentTime" && controller.isLive()) {
         controller.seek(value as number);
         return true;
       }

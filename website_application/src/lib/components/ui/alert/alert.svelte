@@ -1,50 +1,51 @@
 <script lang="ts" module>
-	import { type VariantProps, tv } from "tailwind-variants";
+  import { type VariantProps, tv } from "tailwind-variants";
 
-	export const alertVariants = tv({
-		base: "relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
-		variants: {
-			variant: {
-				default: "bg-card text-card-foreground",
-				destructive:
-					"text-destructive bg-card *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current",
-				info: "bg-accent/10 border-accent/30 text-accent *:data-[slot=alert-description]:text-accent/90 [&>svg]:text-current",
-				success:
-					"bg-success/10 border-success/30 text-success *:data-[slot=alert-description]:text-success/90 [&>svg]:text-current",
-				warning:
-					"bg-warning/10 border-warning/30 text-warning *:data-[slot=alert-description]:text-warning/90 [&>svg]:text-current",
-				error: "bg-error/10 border-error/30 text-error *:data-[slot=alert-description]:text-error/90 [&>svg]:text-current",
-			},
-		},
-		defaultVariants: {
-			variant: "default",
-		},
-	});
+  export const alertVariants = tv({
+    base: "relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-4 [&>svg]:translate-y-0.5 [&>svg]:text-current",
+    variants: {
+      variant: {
+        default: "bg-card text-card-foreground",
+        destructive:
+          "text-destructive bg-card *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current",
+        info: "bg-accent/10 border-accent/30 text-accent *:data-[slot=alert-description]:text-accent/90 [&>svg]:text-current",
+        success:
+          "bg-success/10 border-success/30 text-success *:data-[slot=alert-description]:text-success/90 [&>svg]:text-current",
+        warning:
+          "bg-warning/10 border-warning/30 text-warning *:data-[slot=alert-description]:text-warning/90 [&>svg]:text-current",
+        error:
+          "bg-error/10 border-error/30 text-error *:data-[slot=alert-description]:text-error/90 [&>svg]:text-current",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  });
 
-	export type AlertVariant = VariantProps<typeof alertVariants>["variant"];
+  export type AlertVariant = VariantProps<typeof alertVariants>["variant"];
 </script>
 
 <script lang="ts">
-	import type { HTMLAttributes } from "svelte/elements";
-	import { cn, type WithElementRef } from "$lib/utils";
+  import type { HTMLAttributes } from "svelte/elements";
+  import { cn, type WithElementRef } from "$lib/utils";
 
-	let {
-		ref = $bindable(null),
-		class: className,
-		variant = "default",
-		children,
-		...restProps
-	}: WithElementRef<HTMLAttributes<HTMLDivElement>> & {
-		variant?: AlertVariant;
-	} = $props();
+  let {
+    ref = $bindable(null),
+    class: className,
+    variant = "default",
+    children,
+    ...restProps
+  }: WithElementRef<HTMLAttributes<HTMLDivElement>> & {
+    variant?: AlertVariant;
+  } = $props();
 </script>
 
 <div
-	bind:this={ref}
-	data-slot="alert"
-	class={cn(alertVariants({ variant }), className)}
-	{...restProps}
-	role="alert"
+  bind:this={ref}
+  data-slot="alert"
+  class={cn(alertVariants({ variant }), className)}
+  {...restProps}
+  role="alert"
 >
-	{@render children?.()}
+  {@render children?.()}
 </div>

@@ -9,7 +9,7 @@
  * - Transitions between scenes
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from "react";
 import type {
   Scene,
   Layer,
@@ -19,8 +19,8 @@ import type {
   RendererType,
   RendererStats,
   CompositorConfig,
-} from '@livepeer-frameworks/streamcrafter-core';
-import type { IngestControllerV2 } from '@livepeer-frameworks/streamcrafter-core';
+} from "@livepeer-frameworks/streamcrafter-core";
+import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface UseCompositorOptions {
   controller: IngestControllerV2 | null;
@@ -51,15 +51,23 @@ export interface UseCompositorReturn {
   transitionTo: (sceneId: string, transition?: TransitionConfig) => Promise<void>;
 
   // Layer management
-  addLayer: (sceneId: string, sourceId: string, transform?: Partial<LayerTransform>) => Layer | null;
+  addLayer: (
+    sceneId: string,
+    sourceId: string,
+    transform?: Partial<LayerTransform>
+  ) => Layer | null;
   removeLayer: (sceneId: string, layerId: string) => void;
-  updateLayerTransform: (sceneId: string, layerId: string, transform: Partial<LayerTransform>) => void;
+  updateLayerTransform: (
+    sceneId: string,
+    layerId: string,
+    transform: Partial<LayerTransform>
+  ) => void;
   setLayerVisibility: (sceneId: string, layerId: string, visible: boolean) => void;
   reorderLayers: (sceneId: string, layerIds: string[]) => void;
 
   // Layout presets
   applyLayout: (layout: LayoutConfig) => void;
-  cycleSourceOrder: (direction?: 'forward' | 'backward') => void;
+  cycleSourceOrder: (direction?: "forward" | "backward") => void;
   currentLayout: LayoutConfig | null;
 
   // Renderer control
@@ -117,18 +125,18 @@ export function useCompositor({
     const sceneManager = controller.getSceneManager();
     if (!sceneManager) return;
 
-    const unsubSceneCreated = sceneManager.on('sceneCreated', () => syncState());
-    const unsubSceneDeleted = sceneManager.on('sceneDeleted', () => syncState());
-    const unsubSceneActivated = sceneManager.on('sceneActivated', () => syncState());
-    const unsubLayerAdded = sceneManager.on('layerAdded', () => syncState());
-    const unsubLayerRemoved = sceneManager.on('layerRemoved', () => syncState());
-    const unsubLayerUpdated = sceneManager.on('layerUpdated', () => syncState());
-    const unsubTransitionStarted = sceneManager.on('transitionStarted', () => syncState());
-    const unsubTransitionCompleted = sceneManager.on('transitionCompleted', () => syncState());
-    const unsubStatsUpdate = sceneManager.on('statsUpdate', ({ stats: newStats }) => {
+    const unsubSceneCreated = sceneManager.on("sceneCreated", () => syncState());
+    const unsubSceneDeleted = sceneManager.on("sceneDeleted", () => syncState());
+    const unsubSceneActivated = sceneManager.on("sceneActivated", () => syncState());
+    const unsubLayerAdded = sceneManager.on("layerAdded", () => syncState());
+    const unsubLayerRemoved = sceneManager.on("layerRemoved", () => syncState());
+    const unsubLayerUpdated = sceneManager.on("layerUpdated", () => syncState());
+    const unsubTransitionStarted = sceneManager.on("transitionStarted", () => syncState());
+    const unsubTransitionCompleted = sceneManager.on("transitionCompleted", () => syncState());
+    const unsubStatsUpdate = sceneManager.on("statsUpdate", ({ stats: newStats }) => {
       setStats(newStats);
     });
-    const unsubRendererChanged = sceneManager.on('rendererChanged', ({ renderer }) => {
+    const unsubRendererChanged = sceneManager.on("rendererChanged", ({ renderer }) => {
       setRendererType(renderer);
     });
 
@@ -174,7 +182,7 @@ export function useCompositor({
 
   // Scene management
   const createScene = useCallback(
-    (name: string, backgroundColor = '#000000'): Scene | null => {
+    (name: string, backgroundColor = "#000000"): Scene | null => {
       const sceneManager = controller?.getSceneManager();
       if (!sceneManager) return null;
       const scene = sceneManager.createScene(name, backgroundColor);
@@ -292,13 +300,16 @@ export function useCompositor({
     [controller, syncState]
   );
 
-  const cycleSourceOrder = useCallback((direction: 'forward' | 'backward' = 'forward') => {
-    const sceneManager = controller?.getSceneManager();
-    if (!sceneManager) return;
+  const cycleSourceOrder = useCallback(
+    (direction: "forward" | "backward" = "forward") => {
+      const sceneManager = controller?.getSceneManager();
+      if (!sceneManager) return;
 
-    sceneManager.cycleSourceOrder(direction);
-    syncState();
-  }, [controller, syncState]);
+      sceneManager.cycleSourceOrder(direction);
+      syncState();
+    },
+    [controller, syncState]
+  );
 
   // Renderer control
   const setRendererCallback = useCallback(

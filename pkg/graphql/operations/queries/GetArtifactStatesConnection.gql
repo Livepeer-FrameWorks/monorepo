@@ -1,9 +1,20 @@
 # Fetch paginated artifact lifecycle states for DVR/clip processing
 # Returns real-time status, progress, and storage paths for ongoing artifact operations
-query GetArtifactStatesConnection($streamId: ID, $contentType: String, $stage: String, $first: Int = 100, $after: String) {
+query GetArtifactStatesConnection(
+  $streamId: ID
+  $contentType: String
+  $stage: String
+  $first: Int = 100
+  $after: String
+) {
   analytics {
     lifecycle {
-      artifactStatesConnection(streamId: $streamId, contentType: $contentType, stage: $stage, page: { first: $first, after: $after }) @paginate {
+      artifactStatesConnection(
+        streamId: $streamId
+        contentType: $contentType
+        stage: $stage
+        page: { first: $first, after: $after }
+      ) @paginate {
         edges {
           cursor
           node {

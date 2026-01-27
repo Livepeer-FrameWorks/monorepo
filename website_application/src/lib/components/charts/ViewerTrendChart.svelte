@@ -65,8 +65,7 @@
 
     // Sort data by timestamp
     const sortedData = [...data].sort(
-      (a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
     const config: ChartConfiguration = {

@@ -1,1 +1,1 @@
-export { default as MarketingPartnerSurface } from './MarketingPartnerSurface'
+export { default as MarketingPartnerSurface } from "./MarketingPartnerSurface";

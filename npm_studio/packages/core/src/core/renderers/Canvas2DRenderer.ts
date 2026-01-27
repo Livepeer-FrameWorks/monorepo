@@ -28,11 +28,11 @@ import type {
   FilterConfig,
   RendererType,
   RendererStats,
-} from '../../types';
-import { registerRenderer, type CompositorRenderer } from './index';
+} from "../../types";
+import { registerRenderer, type CompositorRenderer } from "./index";
 
 export class Canvas2DRenderer implements CompositorRenderer {
-  readonly type: RendererType = 'canvas2d';
+  readonly type: RendererType = "canvas2d";
   readonly isSupported = true; // Always available
 
   private canvas!: OffscreenCanvas;
@@ -49,14 +49,14 @@ export class Canvas2DRenderer implements CompositorRenderer {
     this.canvas = canvas;
     this.config = config;
 
-    const ctx = canvas.getContext('2d', {
+    const ctx = canvas.getContext("2d", {
       desynchronized: true, // Lower latency (no vsync wait)
       alpha: false, // Opaque canvas (faster)
       willReadFrequently: false, // Optimize for write-only
     });
 
     if (!ctx) {
-      throw new Error('Failed to get 2D context from OffscreenCanvas');
+      throw new Error("Failed to get 2D context from OffscreenCanvas");
     }
 
     this.ctx = ctx;
@@ -64,14 +64,14 @@ export class Canvas2DRenderer implements CompositorRenderer {
 
     // Set up image smoothing for quality
     this.ctx.imageSmoothingEnabled = true;
-    this.ctx.imageSmoothingQuality = 'high';
+    this.ctx.imageSmoothingQuality = "high";
   }
 
   renderScene(scene: Scene, frames: Map<string, VideoFrame | ImageBitmap>): void {
     const startTime = performance.now();
 
     // Clear with background color
-    this.ctx.fillStyle = scene.backgroundColor || '#000000';
+    this.ctx.fillStyle = scene.backgroundColor || "#000000";
     this.ctx.fillRect(0, 0, this.config.width, this.config.height);
 
     // Sort layers by z-index and render
@@ -94,24 +94,24 @@ export class Canvas2DRenderer implements CompositorRenderer {
   resize(config: CompositorConfig): void {
     this.config = config;
 
-    const ctx = this.canvas.getContext('2d', {
+    const ctx = this.canvas.getContext("2d", {
       desynchronized: true,
       alpha: false,
       willReadFrequently: false,
     });
 
     if (!ctx) {
-      throw new Error('Failed to get 2D context from OffscreenCanvas');
+      throw new Error("Failed to get 2D context from OffscreenCanvas");
     }
 
     this.ctx = ctx;
     this.ctx.imageSmoothingEnabled = true;
-    this.ctx.imageSmoothingQuality = 'high';
+    this.ctx.imageSmoothingQuality = "high";
   }
 
   private renderLayer(layer: Layer, frame: VideoFrame | ImageBitmap): void {
     const { x, y, width, height, opacity, rotation, borderRadius, crop } = layer.transform;
-    const scalingMode = layer.scalingMode || 'letterbox';
+    const scalingMode = layer.scalingMode || "letterbox";
 
     // Convert relative coordinates to pixels
     const px = x * this.config.width;
@@ -152,8 +152,14 @@ export class Canvas2DRenderer implements CompositorRenderer {
     // Calculate destination based on scaling mode
     const { dx, dy, dw, dh, sxFinal, syFinal, swFinal, shFinal } = this.calculateScaling(
       scalingMode,
-      sx, sy, sw, sh,
-      px, py, pw, ph
+      sx,
+      sy,
+      sw,
+      sh,
+      px,
+      py,
+      pw,
+      ph
     );
 
     // Draw the frame
@@ -167,25 +173,43 @@ export class Canvas2DRenderer implements CompositorRenderer {
    * Calculate source and destination rectangles based on scaling mode
    */
   private calculateScaling(
-    mode: 'stretch' | 'letterbox' | 'crop',
-    sx: number, sy: number, sw: number, sh: number,
-    dx: number, dy: number, dw: number, dh: number
+    mode: "stretch" | "letterbox" | "crop",
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number
   ): {
-    sxFinal: number; syFinal: number; swFinal: number; shFinal: number;
-    dx: number; dy: number; dw: number; dh: number;
+    sxFinal: number;
+    syFinal: number;
+    swFinal: number;
+    shFinal: number;
+    dx: number;
+    dy: number;
+    dw: number;
+    dh: number;
   } {
     const sourceAspect = sw / sh;
     const destAspect = dw / dh;
 
     switch (mode) {
-      case 'stretch':
+      case "stretch":
         // Stretch source to fill destination (may distort)
         return {
-          sxFinal: sx, syFinal: sy, swFinal: sw, shFinal: sh,
-          dx, dy, dw, dh
+          sxFinal: sx,
+          syFinal: sy,
+          swFinal: sw,
+          shFinal: sh,
+          dx,
+          dy,
+          dw,
+          dh,
         };
 
-      case 'letterbox': {
+      case "letterbox": {
         // Fit source within destination, preserving aspect ratio
         // Add black bars if needed (handled by layer background)
         let newDw: number, newDh: number;
@@ -204,14 +228,23 @@ export class Canvas2DRenderer implements CompositorRenderer {
         const newDy = dy + (dh - newDh) / 2;
 
         return {
-          sxFinal: sx, syFinal: sy, swFinal: sw, shFinal: sh,
-          dx: newDx, dy: newDy, dw: newDw, dh: newDh
+          sxFinal: sx,
+          syFinal: sy,
+          swFinal: sw,
+          shFinal: sh,
+          dx: newDx,
+          dy: newDy,
+          dw: newDw,
+          dh: newDh,
         };
       }
 
-      case 'crop': {
+      case "crop": {
         // Fill destination, preserving aspect ratio, crop overflow
-        let cropSx = sx, cropSy = sy, cropSw = sw, cropSh = sh;
+        let cropSx = sx,
+          cropSy = sy,
+          cropSw = sw,
+          cropSh = sh;
 
         if (sourceAspect > destAspect) {
           // Source is wider - crop sides
@@ -228,25 +261,37 @@ export class Canvas2DRenderer implements CompositorRenderer {
         }
 
         return {
-          sxFinal: cropSx, syFinal: cropSy, swFinal: cropSw, shFinal: cropSh,
-          dx, dy, dw, dh
+          sxFinal: cropSx,
+          syFinal: cropSy,
+          swFinal: cropSw,
+          shFinal: cropSh,
+          dx,
+          dy,
+          dw,
+          dh,
         };
       }
 
       default:
         return {
-          sxFinal: sx, syFinal: sy, swFinal: sw, shFinal: sh,
-          dx, dy, dw, dh
+          sxFinal: sx,
+          syFinal: sy,
+          swFinal: sw,
+          shFinal: sh,
+          dx,
+          dy,
+          dw,
+          dh,
         };
     }
   }
 
   private getFrameWidth(frame: VideoFrame | ImageBitmap): number {
-    return 'displayWidth' in frame ? frame.displayWidth : frame.width;
+    return "displayWidth" in frame ? frame.displayWidth : frame.width;
   }
 
   private getFrameHeight(frame: VideoFrame | ImageBitmap): number {
-    return 'displayHeight' in frame ? frame.displayHeight : frame.height;
+    return "displayHeight" in frame ? frame.displayHeight : frame.height;
   }
 
   /**
@@ -279,27 +324,27 @@ export class Canvas2DRenderer implements CompositorRenderer {
     const p = Math.max(0, Math.min(1, progress));
 
     switch (type) {
-      case 'fade':
+      case "fade":
         this.renderFadeTransition(from, to, p);
         break;
 
-      case 'slide-left':
-        this.renderSlideTransition(from, to, p, 'left');
+      case "slide-left":
+        this.renderSlideTransition(from, to, p, "left");
         break;
 
-      case 'slide-right':
-        this.renderSlideTransition(from, to, p, 'right');
+      case "slide-right":
+        this.renderSlideTransition(from, to, p, "right");
         break;
 
-      case 'slide-up':
-        this.renderSlideTransition(from, to, p, 'up');
+      case "slide-up":
+        this.renderSlideTransition(from, to, p, "up");
         break;
 
-      case 'slide-down':
-        this.renderSlideTransition(from, to, p, 'down');
+      case "slide-down":
+        this.renderSlideTransition(from, to, p, "down");
         break;
 
-      case 'cut':
+      case "cut":
       default:
         // Instant cut - just show the target
         this.ctx.drawImage(to, 0, 0, this.config.width, this.config.height);
@@ -324,13 +369,13 @@ export class Canvas2DRenderer implements CompositorRenderer {
     from: ImageBitmap,
     to: ImageBitmap,
     progress: number,
-    direction: 'left' | 'right' | 'up' | 'down'
+    direction: "left" | "right" | "up" | "down"
   ): void {
     const w = this.config.width;
     const h = this.config.height;
 
     switch (direction) {
-      case 'left': {
+      case "left": {
         // "from" slides out to the left, "to" slides in from the right
         const offset = progress * w;
         this.ctx.drawImage(from, -offset, 0, w, h);
@@ -338,7 +383,7 @@ export class Canvas2DRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'right': {
+      case "right": {
         // "from" slides out to the right, "to" slides in from the left
         const offset = progress * w;
         this.ctx.drawImage(from, offset, 0, w, h);
@@ -346,7 +391,7 @@ export class Canvas2DRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'up': {
+      case "up": {
         // "from" slides out to the top, "to" slides in from the bottom
         const offset = progress * h;
         this.ctx.drawImage(from, 0, -offset, w, h);
@@ -354,7 +399,7 @@ export class Canvas2DRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'down': {
+      case "down": {
         // "from" slides out to the bottom, "to" slides in from the top
         const offset = progress * h;
         this.ctx.drawImage(from, 0, offset, w, h);
@@ -369,7 +414,7 @@ export class Canvas2DRenderer implements CompositorRenderer {
     // Filters would require reading pixels back, processing, and redrawing
     // This is too slow for real-time video compositing
     console.warn(
-      '[Canvas2DRenderer] Filters not supported. Use WebGL or WebGPU renderer for filter effects.'
+      "[Canvas2DRenderer] Filters not supported. Use WebGL or WebGPU renderer for filter effects."
     );
   }
 
@@ -410,4 +455,4 @@ export class Canvas2DRenderer implements CompositorRenderer {
 }
 
 // Register this renderer with the factory
-registerRenderer('canvas2d', Canvas2DRenderer);
+registerRenderer("canvas2d", Canvas2DRenderer);

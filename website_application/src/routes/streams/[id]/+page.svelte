@@ -37,18 +37,8 @@
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
-  import {
-    Tabs,
-    TabsContent,
-    TabsList,
-    TabsTrigger,
-  } from "$lib/components/ui/tabs";
-  import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-  } from "$lib/components/ui/select";
+  import { Tabs, TabsContent, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
+  import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import {
     StreamEditModal,
     StreamDeleteModal,
@@ -66,10 +56,7 @@
   import { SectionDivider } from "$lib/components/layout";
   import type { StreamEvent, EventType } from "$lib/components/stream-details/EventLog.svelte";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
-  import {
-    Sheet,
-    SheetContent,
-  } from "$lib/components/ui/sheet";
+  import { Sheet, SheetContent } from "$lib/components/ui/sheet";
   import {
     DropdownMenu,
     DropdownMenuContent,
@@ -105,8 +92,14 @@
 
   // Types from Houdini
   type _StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
-  type _StreamKeyType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeysConnection"]>["edges"]>[0]>["node"];
-  type _RecordingType = NonNullable<NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]>[0]["node"];
+  type _StreamKeyType = NonNullable<
+    NonNullable<
+      NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeysConnection"]>["edges"]
+    >[0]
+  >["node"];
+  type _RecordingType = NonNullable<
+    NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]
+  >[0]["node"];
   type TrackInfo = NonNullable<TrackListUpdates$result["liveTrackListUpdates"]>;
 
   // page is a store; derive the param so it stays in sync with navigation
@@ -140,18 +133,20 @@
   // Derived state from Houdini stores
   // Map to create mutable objects (Houdini returns readonly types)
   let streamKeys = $derived(
-    ($streamKeysStore.data?.streamKeysConnection?.edges?.map(e => ({
+    $streamKeysStore.data?.streamKeysConnection?.edges?.map((e) => ({
       id: e.node.id,
       streamId: e.node.streamId,
       keyValue: e.node.keyValue,
-      keyName: e.node.keyName ?? '',
+      keyName: e.node.keyName ?? "",
       isActive: e.node.isActive,
       createdAt: e.node.createdAt,
-      lastUsedAt: e.node.lastUsedAt ?? undefined
-    })) ?? [])
+      lastUsedAt: e.node.lastUsedAt ?? undefined,
+    })) ?? []
   );
-  let recordings = $derived($dvrRequestsStore.data?.dvrRecordingsConnection?.edges?.map(e => e.node) ?? []);
-  let clips = $derived($clipsStore.data?.clipsConnection?.edges?.map(e => e.node) ?? []);
+  let recordings = $derived(
+    $dvrRequestsStore.data?.dvrRecordingsConnection?.edges?.map((e) => e.node) ?? []
+  );
+  let clips = $derived($clipsStore.data?.clipsConnection?.edges?.map((e) => e.node) ?? []);
 
   // Analytics and health from GetStreamOverview query
   let streamAnalyticsSummary = $derived(
@@ -172,8 +167,9 @@
     };
   });
   let healthMetrics = $derived(
-    ($streamOverviewStore.data?.analytics?.health?.streamHealthConnection?.edges ?? [])
-      .map(e => e.node)
+    ($streamOverviewStore.data?.analytics?.health?.streamHealthConnection?.edges ?? []).map(
+      (e) => e.node
+    )
   );
   let baseHealth = $derived(healthMetrics.length > 0 ? healthMetrics[0] : null);
   // Merge base health (from GraphQL query) with real-time metrics (from subscription)
@@ -197,24 +193,30 @@
 
   // Stream daily analytics history
   let streamDailyAnalytics = $derived.by(() => {
-    const edges = $streamDailyStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ?? [];
+    const edges =
+      $streamDailyStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ??
+      [];
     if (edges.length === 0) return [];
-    return edges.map(edge => ({
-      day: edge.node.day,
-      streamId: edge.node.streamId,
-      totalViews: edge.node.totalViews,
-      uniqueViewers: edge.node.uniqueViewers,
-      uniqueCountries: edge.node.uniqueCountries,
-      uniqueCities: edge.node.uniqueCities,
-      egressBytes: edge.node.egressBytes,
-      egressGb: edge.node.egressBytes / (1024 * 1024 * 1024),
-    })).sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
+    return edges
+      .map((edge) => ({
+        day: edge.node.day,
+        streamId: edge.node.streamId,
+        totalViews: edge.node.totalViews,
+        uniqueViewers: edge.node.uniqueViewers,
+        uniqueCountries: edge.node.uniqueCountries,
+        uniqueCities: edge.node.uniqueCities,
+        egressBytes: edge.node.egressBytes,
+        egressGb: edge.node.egressBytes / (1024 * 1024 * 1024),
+      }))
+      .sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
   });
 
   // Time range state (moved here so it's defined before useDailyTrend)
   let timeRange = $state("24h");
   let currentRange = $derived(resolveTimeRange(timeRange));
-  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) => ["24h", "7d", "30d"].includes(option.value));
+  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((option) =>
+    ["24h", "7d", "30d"].includes(option.value)
+  );
 
   const useDailyTrend = $derived(currentRange.days > 7);
 
@@ -226,20 +228,24 @@
         stream: d.streamId,
       }));
     }
-    const timeSeriesEdges = $streamOverviewStore.data?.analytics?.usage?.streaming?.viewerTimeSeriesConnection?.edges ?? [];
+    const timeSeriesEdges =
+      $streamOverviewStore.data?.analytics?.usage?.streaming?.viewerTimeSeriesConnection?.edges ??
+      [];
     if (timeSeriesEdges.length > 0) {
-      return timeSeriesEdges.map(e => ({
+      return timeSeriesEdges.map((e) => ({
         timestamp: e.node.timestamp,
         viewerCount: e.node.viewerCount,
         stream: e.node.streamId,
       }));
     }
     return (
-      $streamOverviewStore.data?.analytics?.usage?.streaming?.streamConnectionHourlyConnection?.edges?.map(e => ({
-        timestamp: e.node.hour,
-        viewerCount: e.node.uniqueViewers,
-        stream: e.node.streamId,
-      })) ?? []
+      $streamOverviewStore.data?.analytics?.usage?.streaming?.streamConnectionHourlyConnection?.edges?.map(
+        (e) => ({
+          timestamp: e.node.hour,
+          viewerCount: e.node.uniqueViewers,
+          stream: e.node.streamId,
+        })
+      ) ?? []
     );
   });
 
@@ -343,7 +349,7 @@
     // Create a fallback that satisfies the TrackInfo type from the subscription
     // OverviewTabPanel only uses a subset of these fields for display
     return {
-      streamId: stream?.id ?? '',
+      streamId: stream?.id ?? "",
       totalTracks: 1,
       videoTrackCount: 1,
       audioTrackCount: 0,
@@ -353,24 +359,29 @@
       primaryFps: streamMetrics.primaryFps ?? null,
       primaryVideoBitrate: streamMetrics.primaryBitrate ?? null,
       primaryVideoCodec: streamMetrics.primaryCodec ?? null,
-      tracks: [{
-        trackName: 'video0',
-        trackType: 'video',
-        codec: streamMetrics.primaryCodec ?? null,
-        width: streamMetrics.primaryWidth ?? null,
-        height: streamMetrics.primaryHeight ?? null,
-        fps: streamMetrics.primaryFps ?? null,
-        bitrateKbps: streamMetrics.primaryBitrate ? Math.round(streamMetrics.primaryBitrate / 1000) : null,
-        bitrateBps: streamMetrics.primaryBitrate ?? null,
-        buffer: null,
-        jitter: null,
-        resolution: streamMetrics.primaryWidth && streamMetrics.primaryHeight
-          ? `${streamMetrics.primaryWidth}x${streamMetrics.primaryHeight}`
-          : null,
-        hasBFrames: null,
-        channels: null,
-        sampleRate: null,
-      }]
+      tracks: [
+        {
+          trackName: "video0",
+          trackType: "video",
+          codec: streamMetrics.primaryCodec ?? null,
+          width: streamMetrics.primaryWidth ?? null,
+          height: streamMetrics.primaryHeight ?? null,
+          fps: streamMetrics.primaryFps ?? null,
+          bitrateKbps: streamMetrics.primaryBitrate
+            ? Math.round(streamMetrics.primaryBitrate / 1000)
+            : null,
+          bitrateBps: streamMetrics.primaryBitrate ?? null,
+          buffer: null,
+          jitter: null,
+          resolution:
+            streamMetrics.primaryWidth && streamMetrics.primaryHeight
+              ? `${streamMetrics.primaryWidth}x${streamMetrics.primaryHeight}`
+              : null,
+          hasBFrames: null,
+          channels: null,
+          sampleRate: null,
+        },
+      ],
     };
   });
 
@@ -601,14 +612,17 @@
 
     if (event.type === "BUFFER_UPDATE" && event.payload && typeof event.payload === "object") {
       const payload = event.payload as Record<string, unknown>;
-      const bufferState = (payload.bufferState as string | undefined) ?? (payload.buffer_state as string | undefined);
+      const bufferState =
+        (payload.bufferState as string | undefined) ?? (payload.buffer_state as string | undefined);
       if (bufferState === "DRY" || bufferState === "EMPTY") {
         addEvent("warning", "Buffer issue", `Buffer state: ${bufferState}`);
       }
     }
   }
 
-  function handleViewerMetrics(metrics: NonNullable<ViewerMetricsStream$result["liveViewerMetrics"]>) {
+  function handleViewerMetrics(
+    metrics: NonNullable<ViewerMetricsStream$result["liveViewerMetrics"]>
+  ) {
     // Note: realtimeViewers mutations are safe here because this function is called
     // from within untrack() in the $effect, and addEvent also uses untrack() internally
     if (metrics.action === "connect") {
@@ -643,7 +657,11 @@
     if (event.status === "RECORDING") {
       addEvent("dvr_start", `DVR recording started for '${displayStreamId}'`);
     } else if (event.status === "COMPLETED") {
-      addEvent("dvr_stop", `DVR recording completed for '${displayStreamId}'`, `Segments: ${event.segmentCount}`);
+      addEvent(
+        "dvr_stop",
+        `DVR recording completed for '${displayStreamId}'`,
+        `Segments: ${event.segmentCount}`
+      );
     } else if (event.status === "FAILED") {
       addEvent("error", `DVR recording failed for '${displayStreamId}'`, `Error: ${event.error}`);
     } else if (event.status === "DELETED") {
@@ -656,7 +674,9 @@
       error = null;
 
       const analyticsStreamId = stream?.id ?? streamId;
-      const result = await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
+      const result = await streamStore.fetch({
+        variables: { id: streamId, streamId: analyticsStreamId },
+      });
 
       if (!result.data?.stream) {
         error = "Stream not found";
@@ -675,22 +695,37 @@
         streamKeysStore.fetch({ variables: { streamId } }),
         dvrRequestsStore.fetch({ variables: { streamId: resolvedStreamId } }),
         clipsStore.fetch({ variables: { streamId, first: 100 } }),
-        streamOverviewStore.fetch({
-          variables: {
-            id: streamId,
-            streamId: resolvedStreamId,
-            timeRange: timeRangeInput,
-            first: overviewFirst,
-            viewerInterval,
-            viewerFirst,
-            qualityFirst,
-          },
-        }).catch(() => null),
-        streamDailyStore.fetch({ variables: { streamId: resolvedStreamId, timeRange: timeRangeInput, first: Math.min(range.days, 60) } }).catch(() => null),
-        streamEventsStore.fetch({ variables: { streamId: resolvedStreamId, timeRange: timeRangeInput, first: 200 } }).catch(() => null),
+        streamOverviewStore
+          .fetch({
+            variables: {
+              id: streamId,
+              streamId: resolvedStreamId,
+              timeRange: timeRangeInput,
+              first: overviewFirst,
+              viewerInterval,
+              viewerFirst,
+              qualityFirst,
+            },
+          })
+          .catch(() => null),
+        streamDailyStore
+          .fetch({
+            variables: {
+              streamId: resolvedStreamId,
+              timeRange: timeRangeInput,
+              first: Math.min(range.days, 60),
+            },
+          })
+          .catch(() => null),
+        streamEventsStore
+          .fetch({
+            variables: { streamId: resolvedStreamId, timeRange: timeRangeInput, first: 200 },
+          })
+          .catch(() => null),
       ]);
 
-      const historicalEdges = $streamEventsStore.data?.analytics?.lifecycle?.streamEventsConnection?.edges ?? [];
+      const historicalEdges =
+        $streamEventsStore.data?.analytics?.lifecycle?.streamEventsConnection?.edges ?? [];
       if (historicalEdges.length > 0) {
         const mapped = historicalEdges
           .map((edge) => edge.node)
@@ -722,17 +757,19 @@
       await Promise.all([
         streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } }),
         analyticsStreamId
-          ? streamOverviewStore.fetch({
-              variables: {
-                id: streamId,
-                streamId: analyticsStreamId,
-                timeRange: timeRangeInput,
-                first: overviewFirst,
-                viewerInterval,
-                viewerFirst,
-                qualityFirst,
-              },
-            }).catch(() => null)
+          ? streamOverviewStore
+              .fetch({
+                variables: {
+                  id: streamId,
+                  streamId: analyticsStreamId,
+                  timeRange: timeRangeInput,
+                  first: overviewFirst,
+                  viewerInterval,
+                  viewerFirst,
+                  qualityFirst,
+                },
+              })
+              .catch(() => null)
           : Promise.resolve(),
       ]);
     } catch (err) {
@@ -763,7 +800,11 @@
     }
   }
 
-  async function handleEditStream(formData: { name?: string; description?: string; record?: boolean }) {
+  async function handleEditStream(formData: {
+    name?: string;
+    description?: string;
+    record?: boolean;
+  }) {
     if (!stream) return;
 
     try {
@@ -896,19 +937,12 @@
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          class="rounded-full"
-          onclick={navigateBack}
-        >
+        <Button variant="ghost" size="icon" class="rounded-full" onclick={navigateBack}>
           <ArrowLeftIcon class="w-5 h-5" />
         </Button>
 
         <div>
-          <h1 class="text-xl font-bold text-foreground">
-            Stream Details
-          </h1>
+          <h1 class="text-xl font-bold text-foreground">Stream Details</h1>
           <div class="flex items-center gap-2 mt-0.5">
             <span class="text-sm font-medium text-foreground">
               {stream?.name || "Loading..."}
@@ -919,13 +953,19 @@
             </span>
             {#if stream}
               <!-- Status Badge -->
-              <span class="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium {isLive ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'}">
+              <span
+                class="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium {isLive
+                  ? 'bg-success/20 text-success'
+                  : 'bg-muted text-muted-foreground'}"
+              >
                 <CircleIcon class="w-1.5 h-1.5 {isLive ? 'fill-current animate-pulse' : ''}" />
                 {isLive ? "LIVE" : "OFFLINE"}
               </span>
 
               {#if stream.record}
-                <span class="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium bg-error/20 text-error">
+                <span
+                  class="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium bg-error/20 text-error"
+                >
                   <CircleIcon class="w-1.5 h-1.5 fill-current" />
                   REC
                 </span>
@@ -938,7 +978,14 @@
       {#if stream && !loading}
         <div class="flex items-center space-x-2">
           <div class="hidden sm:block">
-            <Select value={timeRange} onValueChange={(value) => { timeRange = value; loadStreamData(); }} type="single">
+            <Select
+              value={timeRange}
+              onValueChange={(value) => {
+                timeRange = value;
+                loadStreamData();
+              }}
+              type="single"
+            >
               <SelectTrigger class="min-w-[150px]">
                 <CalendarIcon class="w-4 h-4 mr-2 text-muted-foreground" />
                 {currentRange.label}
@@ -967,7 +1014,9 @@
           <Button
             variant="ghost"
             size="sm"
-            class="hidden lg:flex gap-2 {healthSidebarCollapsed ? '' : 'bg-[hsl(var(--tn-bg-visual))] text-primary'}"
+            class="hidden lg:flex gap-2 {healthSidebarCollapsed
+              ? ''
+              : 'bg-[hsl(var(--tn-bg-visual))] text-primary'}"
             onclick={toggleHealthSidebar}
           >
             <ActivityIcon class="w-4 h-4" />
@@ -1010,7 +1059,10 @@
                 Edit Stream
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem class="text-destructive focus:text-destructive" onclick={() => (showDeleteModal = true)}>
+              <DropdownMenuItem
+                class="text-destructive focus:text-destructive"
+                onclick={() => (showDeleteModal = true)}
+              >
                 <Trash2Icon class="w-4 h-4 mr-2" />
                 Delete Stream
               </DropdownMenuItem>
@@ -1042,7 +1094,9 @@
       <div class="flex-1 overflow-y-auto">
         <div class="flex flex-col">
           <!-- Stream Overview Cards -->
-          <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[hsl(var(--tn-fg-gutter)/0.3)] bg-background">
+          <div
+            class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[hsl(var(--tn-fg-gutter)/0.3)] bg-background"
+          >
             <StreamStatusCard {stream} {analytics} />
             <StreamKeyCard
               {stream}
@@ -1058,36 +1112,38 @@
           <!-- Tabbed Content -->
           <div class="slab border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
             <Tabs value="overview" class="w-full">
-              <TabsList class="flex w-full rounded-none p-0 h-auto bg-[hsl(var(--tn-bg-dark)/0.5)] border-b border-[hsl(var(--tn-fg-gutter)/0.3)] justify-start overflow-x-auto items-center">
-                  <TabsTrigger
-                    value="overview"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
-                  >
-                    <InfoIcon class="w-4 h-4" />
-                    Overview
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="ingest"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
-                  >
-                    <SettingsIcon class="w-4 h-4" />
-                    Ingest
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="recordings"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
-                  >
-                    <VideoIcon class="w-4 h-4" />
-                    Recordings ({recordings.length})
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="playback"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
-                  >
-                    <PlayIcon class="w-4 h-4" />
-                    Playback
-                  </TabsTrigger>
-                </TabsList>
+              <TabsList
+                class="flex w-full rounded-none p-0 h-auto bg-[hsl(var(--tn-bg-dark)/0.5)] border-b border-[hsl(var(--tn-fg-gutter)/0.3)] justify-start overflow-x-auto items-center"
+              >
+                <TabsTrigger
+                  value="overview"
+                  class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
+                >
+                  <InfoIcon class="w-4 h-4" />
+                  Overview
+                </TabsTrigger>
+                <TabsTrigger
+                  value="ingest"
+                  class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
+                >
+                  <SettingsIcon class="w-4 h-4" />
+                  Ingest
+                </TabsTrigger>
+                <TabsTrigger
+                  value="recordings"
+                  class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
+                >
+                  <VideoIcon class="w-4 h-4" />
+                  Recordings ({recordings.length})
+                </TabsTrigger>
+                <TabsTrigger
+                  value="playback"
+                  class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
+                >
+                  <PlayIcon class="w-4 h-4" />
+                  Playback
+                </TabsTrigger>
+              </TabsList>
 
               <TabsContent value="overview" class="p-0 min-h-[20rem]">
                 <OverviewTabPanel
@@ -1100,7 +1156,7 @@
                   {viewerMetrics}
                   dailyAnalytics={streamDailyAnalytics}
                   {qualityTierSummary}
-                  codecDistribution={codecDistribution}
+                  {codecDistribution}
                 />
               </TabsContent>
 
@@ -1126,9 +1182,7 @@
               </TabsContent>
 
               <TabsContent value="playback" class="p-0 min-h-[20rem]">
-                <PlaybackTabPanel
-                  playbackId={stream?.playbackId}
-                />
+                <PlaybackTabPanel playbackId={stream?.playbackId} />
               </TabsContent>
             </Tabs>
           </div>
@@ -1158,8 +1212,11 @@
 
       <!-- Health Sidebar (Mobile Sheet) -->
       <Sheet bind:open={sheetOpen}>
-        <SheetContent side="right" class="w-[85vw] sm:w-[400px] p-0 border-l border-[hsl(var(--tn-fg-gutter)/0.3)]">
-           <HealthSidebar
+        <SheetContent
+          side="right"
+          class="w-[85vw] sm:w-[400px] p-0 border-l border-[hsl(var(--tn-fg-gutter)/0.3)]"
+        >
+          <HealthSidebar
             streamId={stream?.id ?? streamId}
             streamName={stream.name}
             {isLive}

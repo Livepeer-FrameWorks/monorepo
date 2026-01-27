@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { QualityMonitor, type PlaybackQuality } from '@livepeer-frameworks/player-core';
-import type { UsePlaybackQualityOptions } from '../types';
+import { useEffect, useState, useRef, useCallback } from "react";
+import { QualityMonitor, type PlaybackQuality } from "@livepeer-frameworks/player-core";
+import type { UsePlaybackQualityOptions } from "../types";
 
 /**
  * Hook to monitor video playback quality

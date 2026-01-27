@@ -20,7 +20,7 @@ import type {
   FilterConfig,
   RendererType,
   RendererStats,
-} from '../../types';
+} from "../../types";
 
 // ============================================================================
 // Renderer Interface
@@ -116,17 +116,17 @@ let renderersRegistered = false;
  * Called automatically when renderer files are imported
  */
 export function registerRenderer(
-  type: 'canvas2d' | 'webgl' | 'webgpu',
+  type: "canvas2d" | "webgl" | "webgpu",
   RendererClass: new () => CompositorRenderer
 ): void {
   switch (type) {
-    case 'canvas2d':
+    case "canvas2d":
       Canvas2DRenderer = RendererClass;
       break;
-    case 'webgl':
+    case "webgl":
       WebGLRenderer = RendererClass;
       break;
-    case 'webgpu':
+    case "webgpu":
       WebGPURenderer = RendererClass;
       break;
   }
@@ -141,18 +141,16 @@ export function registerRenderer(
  *
  * Auto-fallback chain: WebGPU → WebGL → Canvas2D
  */
-export function createRenderer(preferred: RendererType = 'auto'): CompositorRenderer {
+export function createRenderer(preferred: RendererType = "auto"): CompositorRenderer {
   if (!renderersRegistered) {
     // If no renderers registered yet, try to import them dynamically
     throw new Error(
-      'No renderers registered. Import Canvas2DRenderer before calling createRenderer.'
+      "No renderers registered. Import Canvas2DRenderer before calling createRenderer."
     );
   }
 
   const fallbackChain: RendererType[] =
-    preferred === 'auto'
-      ? ['webgpu', 'webgl', 'canvas2d']
-      : [preferred, 'webgl', 'canvas2d'];
+    preferred === "auto" ? ["webgpu", "webgl", "canvas2d"] : [preferred, "webgl", "canvas2d"];
 
   for (const type of fallbackChain) {
     const renderer = instantiateRenderer(type);
@@ -162,7 +160,7 @@ export function createRenderer(preferred: RendererType = 'auto'): CompositorRend
   }
 
   // Canvas2D should always work, but if it somehow doesn't...
-  throw new Error('No supported renderer available');
+  throw new Error("No supported renderer available");
 }
 
 /**
@@ -170,11 +168,11 @@ export function createRenderer(preferred: RendererType = 'auto'): CompositorRend
  */
 function instantiateRenderer(type: RendererType): CompositorRenderer | null {
   switch (type) {
-    case 'webgpu':
+    case "webgpu":
       return WebGPURenderer ? new WebGPURenderer() : null;
-    case 'webgl':
+    case "webgl":
       return WebGLRenderer ? new WebGLRenderer() : null;
-    case 'canvas2d':
+    case "canvas2d":
       return Canvas2DRenderer ? new Canvas2DRenderer() : null;
     default:
       return null;
@@ -188,16 +186,16 @@ export function getSupportedRenderers(): RendererType[] {
   const supported: RendererType[] = [];
 
   // Canvas2D is always supported
-  supported.push('canvas2d');
+  supported.push("canvas2d");
 
   // Check WebGL2 support
-  if (typeof WebGL2RenderingContext !== 'undefined') {
-    supported.push('webgl');
+  if (typeof WebGL2RenderingContext !== "undefined") {
+    supported.push("webgl");
   }
 
   // Check WebGPU support (not available in workers before Chrome 115)
-  if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
-    supported.push('webgpu');
+  if (typeof navigator !== "undefined" && "gpu" in navigator) {
+    supported.push("webgpu");
   }
 
   return supported;
@@ -210,15 +208,15 @@ export function getRecommendedRenderer(): RendererType {
   const supported = getSupportedRenderers();
 
   // Prefer WebGL for now (WebGPU not ready for production)
-  if (supported.includes('webgl')) {
-    return 'webgl';
+  if (supported.includes("webgl")) {
+    return "webgl";
   }
 
-  return 'canvas2d';
+  return "canvas2d";
 }
 
 // ============================================================================
 // Re-exports
 // ============================================================================
 
-export type { CompositorConfig, RendererStats, RendererType } from '../../types';
+export type { CompositorConfig, RendererStats, RendererType } from "../../types";

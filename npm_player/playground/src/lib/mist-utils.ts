@@ -64,7 +64,7 @@ export function buildIngestUris(baseUrl: string, streamName: string): IngestUris
   return {
     rtmp: `rtmp://${hostname}:${MIST_PORTS.rtmp}/live/${streamName}`,
     srt: `srt://${hostname}:${MIST_PORTS.srt}?streamid=${streamName}`,
-    whip: `${sanitized}/webrtc/${streamName}`
+    whip: `${sanitized}/webrtc/${streamName}`,
   };
 }
 
@@ -154,12 +154,12 @@ export function buildContentEndpointsFromSources(
 
   if (selectedProtocol) {
     // User selected a specific protocol - find matching source
-    primarySource = sources.find(s => mapMistTypeToProtocol(s.type) === selectedProtocol);
+    primarySource = sources.find((s) => mapMistTypeToProtocol(s.type) === selectedProtocol);
   }
 
   if (!primarySource) {
     // Auto-select: filter out ws:// sources, sort by our protocol priority
-    const httpSources = sources.filter(s => !s.url.startsWith("ws://"));
+    const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
 
     if (httpSources.length > 0) {
       // Sort by protocol priority (HLS > DASH > MP4 > etc.)
@@ -183,11 +183,11 @@ export function buildContentEndpointsFromSources(
     protocol: mapMistTypeToProtocol(primarySource.type),
     url: primarySource.url,
     baseUrl: viewerBase,
-    outputs
+    outputs,
   };
 
   return {
     primary,
-    fallbacks: []
+    fallbacks: [],
   };
 }

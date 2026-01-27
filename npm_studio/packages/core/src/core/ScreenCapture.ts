@@ -4,8 +4,8 @@
  * Supports multiple simultaneous screen captures
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import type { ScreenCaptureOptions } from '../types';
+import { TypedEventEmitter } from "./EventEmitter";
+import type { ScreenCaptureOptions } from "../types";
 
 interface ScreenCaptureEvents {
   started: { stream: MediaStream; captureId: string };
@@ -33,7 +33,7 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
 
       if (options.video === false) {
         videoConstraints = false;
-      } else if (typeof options.video === 'object') {
+      } else if (typeof options.video === "object") {
         // Use custom video constraints if provided as object, merged with defaults
         const customVideo = options.video as MediaTrackConstraints;
         videoConstraints = {
@@ -65,13 +65,13 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
       };
 
       // Add preferCurrentTab if supported and requested
-      if (options.preferCurrentTab && 'preferCurrentTab' in constraints) {
+      if (options.preferCurrentTab && "preferCurrentTab" in constraints) {
         (constraints as Record<string, unknown>).preferCurrentTab = true;
       }
 
       // Add surfaceSwitching if requested (Chrome 107+)
       if (options.surfaceSwitching) {
-        (constraints as Record<string, unknown>).surfaceSwitching = 'include';
+        (constraints as Record<string, unknown>).surfaceSwitching = "include";
       }
 
       // Add selfBrowserSurface if requested (Chrome 107+)
@@ -86,7 +86,7 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
 
       // Add system audio preference if supported
       if (options.systemAudio && constraints.audio) {
-        if (typeof constraints.audio === 'object') {
+        if (typeof constraints.audio === "object") {
           (constraints.audio as Record<string, unknown>).systemAudio = options.systemAudio;
         }
       }
@@ -105,24 +105,24 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
 
       // Listen for track ended events (user stopped sharing)
       stream.getTracks().forEach((track) => {
-        track.addEventListener('ended', () => {
+        track.addEventListener("ended", () => {
           this.handleTrackEnded(captureId, stream);
         });
       });
 
-      this.emit('started', { stream, captureId });
+      this.emit("started", { stream, captureId });
 
       return stream;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
 
       // User cancelled is not an error
-      if (err.name === 'AbortError' || err.name === 'NotAllowedError') {
-        this.emit('ended', { captureId: '', stream: null, reason: 'cancelled' });
+      if (err.name === "AbortError" || err.name === "NotAllowedError") {
+        this.emit("ended", { captureId: "", stream: null, reason: "cancelled" });
         return null;
       }
 
-      this.emit('error', {
+      this.emit("error", {
         message: `Screen capture failed: ${err.message}`,
         error: err,
       });
@@ -136,10 +136,10 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
    */
   private handleTrackEnded(captureId: string, stream: MediaStream): void {
     // Check if all tracks have ended
-    const activeTracks = stream.getTracks().filter((t) => t.readyState === 'live');
+    const activeTracks = stream.getTracks().filter((t) => t.readyState === "live");
     if (activeTracks.length === 0) {
       this.captures.delete(captureId);
-      this.emit('ended', { captureId, stream, reason: 'user_stopped' });
+      this.emit("ended", { captureId, stream, reason: "user_stopped" });
     }
   }
 
@@ -151,7 +151,7 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
       if (info.stream === stream) {
         info.stream.getTracks().forEach((track) => track.stop());
         this.captures.delete(captureId);
-        this.emit('ended', { captureId, stream, reason: 'stopped' });
+        this.emit("ended", { captureId, stream, reason: "stopped" });
         return;
       }
     }
@@ -163,7 +163,7 @@ export class ScreenCapture extends TypedEventEmitter<ScreenCaptureEvents> {
   stop(): void {
     for (const [captureId, info] of this.captures) {
       info.stream.getTracks().forEach((track) => track.stop());
-      this.emit('ended', { captureId, stream: info.stream, reason: 'stopped' });
+      this.emit("ended", { captureId, stream: info.stream, reason: "stopped" });
     }
     this.captures.clear();
   }

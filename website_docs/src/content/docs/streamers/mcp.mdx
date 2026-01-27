@@ -5,12 +5,14 @@ sidebar:
   order: 5
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 FrameWorks exposes an MCP (Model Context Protocol) server for AI agent integration. Connect your AI tools to create streams, manage recordings, check billing, and query analytics.
 
 <Aside type="tip" title="What is MCP?">
-MCP is an open protocol for connecting AI models to external systems. It defines three primitives: **Resources** (data to read), **Tools** (actions to take), and **Prompts** (guided workflows). See [modelcontextprotocol.io](https://modelcontextprotocol.io).
+  MCP is an open protocol for connecting AI models to external systems. It defines three primitives:
+  **Resources** (data to read), **Tools** (actions to take), and **Prompts** (guided workflows). See
+  [modelcontextprotocol.io](https://modelcontextprotocol.io).
 </Aside>
 
 ## Endpoint
@@ -59,11 +61,13 @@ Any MCP-compatible client can connect using the endpoint URL and authentication 
 Requests accept any of the following:
 
 **Bearer Token** (API token or JWT):
+
 ```
 Authorization: Bearer YOUR_TOKEN
 ```
 
 **Wallet Signature** (for autonomous agents):
+
 ```
 X-Wallet-Address: 0x...
 X-Wallet-Signature: 0x...
@@ -71,9 +75,11 @@ X-Wallet-Message: <signed message>
 ```
 
 **x402 Auth‑Only** (wallet auth via payment header):
+
 ```
 X-PAYMENT: <base64-encoded payload>
 ```
+
 (`PAYMENT-SIGNATURE` is also accepted.)
 
 Get API tokens from **Developer → API** in the dashboard.
@@ -83,26 +89,26 @@ Some resources and tools are public (e.g., `account://status`, `billing://pricin
 
 Read-only data sources.
 
-| URI | Description |
-|-----|-------------|
-| `account://status` | Account status, blockers, and capabilities |
-| `billing://balance` | Prepaid balance, drain rate, estimated hours left |
-| `billing://pricing` | Current pricing rates |
-| `billing://transactions` | Recent balance transactions |
-| `streams://list` | List all streams |
-| `streams://{id}` | Stream details (relay ID or stream_id) |
-| `streams://{id}/health` | Stream health metrics |
-| `vod://list` | List all VOD assets |
-| `vod://{artifact_hash}` | VOD asset details (relay ID or artifact hash) |
-| `analytics://usage` | Current billing period usage |
-| `analytics://viewers` | Viewer metrics (last 24h) |
-| `analytics://geographic` | Geographic viewer distribution |
-| `nodes://list` | Infrastructure nodes |
-| `nodes://{id}` | Node details |
-| `support://conversations` | Support conversation list |
-| `support://conversations/{id}` | Support conversation details |
-| `knowledge://sources` | Curated documentation sources for video streaming |
-| `schema://catalog` | Curated GraphQL catalog (schema + templates) |
+| URI                            | Description                                       |
+| ------------------------------ | ------------------------------------------------- |
+| `account://status`             | Account status, blockers, and capabilities        |
+| `billing://balance`            | Prepaid balance, drain rate, estimated hours left |
+| `billing://pricing`            | Current pricing rates                             |
+| `billing://transactions`       | Recent balance transactions                       |
+| `streams://list`               | List all streams                                  |
+| `streams://{id}`               | Stream details (relay ID or stream_id)            |
+| `streams://{id}/health`        | Stream health metrics                             |
+| `vod://list`                   | List all VOD assets                               |
+| `vod://{artifact_hash}`        | VOD asset details (relay ID or artifact hash)     |
+| `analytics://usage`            | Current billing period usage                      |
+| `analytics://viewers`          | Viewer metrics (last 24h)                         |
+| `analytics://geographic`       | Geographic viewer distribution                    |
+| `nodes://list`                 | Infrastructure nodes                              |
+| `nodes://{id}`                 | Node details                                      |
+| `support://conversations`      | Support conversation list                         |
+| `support://conversations/{id}` | Support conversation details                      |
+| `knowledge://sources`          | Curated documentation sources for video streaming |
+| `schema://catalog`             | Curated GraphQL catalog (schema + templates)      |
 
 ### account://status
 
@@ -136,41 +142,42 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 Actions the agent can perform. Some require billing details and positive balance.
 
-| Tool | Description | Requires |
-|------|-------------|----------|
-| `update_billing_details` | Set billing address | Auth |
-| `get_payment_options` | Get x402 payment options | None |
-| `submit_payment` | Submit x402 payment (auth-only or top-up) | None |
-| `topup_balance` | Request crypto deposit address | Billing details |
-| `check_topup` | Check crypto payment status | Auth |
-| `create_stream` | Create a new stream | Billing + Balance |
-| `update_stream` | Update stream settings | Auth |
-| `delete_stream` | Delete a stream | Auth |
-| `refresh_stream_key` | Generate new stream key | Auth |
-| `create_clip` | Create clip from stream | Billing + Balance |
-| `delete_clip` | Delete a clip | Auth |
-| `start_dvr` | Start DVR recording | Billing + Balance |
-| `stop_dvr` | Stop DVR recording | Auth |
-| `create_vod_upload` | Start a VOD upload | Billing + Balance |
-| `complete_vod_upload` | Finalize a VOD upload | Auth |
-| `abort_vod_upload` | Cancel an upload | Auth |
-| `delete_vod_asset` | Delete a VOD asset | Auth |
-| `resolve_playback_endpoint` | Get viewer playback URLs | None |
-| `diagnose_rebuffering` | Analyze rebuffering events | Auth |
-| `diagnose_buffer_health` | Analyze buffer health and dry events | Auth |
-| `diagnose_packet_loss` | Analyze packet loss (protocol-aware) | Auth |
-| `diagnose_routing` | Analyze CDN routing decisions | Auth |
-| `get_stream_health_summary` | Aggregated stream health metrics | Auth |
-| `get_anomaly_report` | Detect anomalies vs baseline | Auth |
-| `search_support_history` | Search support conversations | Auth |
-| `introspect_schema` | Explore the GraphQL schema | Auth |
-| `generate_query` | Generate a GraphQL query from templates | Auth |
+| Tool                        | Description                               | Requires          |
+| --------------------------- | ----------------------------------------- | ----------------- |
+| `update_billing_details`    | Set billing address                       | Auth              |
+| `get_payment_options`       | Get x402 payment options                  | None              |
+| `submit_payment`            | Submit x402 payment (auth-only or top-up) | None              |
+| `topup_balance`             | Request crypto deposit address            | Billing details   |
+| `check_topup`               | Check crypto payment status               | Auth              |
+| `create_stream`             | Create a new stream                       | Billing + Balance |
+| `update_stream`             | Update stream settings                    | Auth              |
+| `delete_stream`             | Delete a stream                           | Auth              |
+| `refresh_stream_key`        | Generate new stream key                   | Auth              |
+| `create_clip`               | Create clip from stream                   | Billing + Balance |
+| `delete_clip`               | Delete a clip                             | Auth              |
+| `start_dvr`                 | Start DVR recording                       | Billing + Balance |
+| `stop_dvr`                  | Stop DVR recording                        | Auth              |
+| `create_vod_upload`         | Start a VOD upload                        | Billing + Balance |
+| `complete_vod_upload`       | Finalize a VOD upload                     | Auth              |
+| `abort_vod_upload`          | Cancel an upload                          | Auth              |
+| `delete_vod_asset`          | Delete a VOD asset                        | Auth              |
+| `resolve_playback_endpoint` | Get viewer playback URLs                  | None              |
+| `diagnose_rebuffering`      | Analyze rebuffering events                | Auth              |
+| `diagnose_buffer_health`    | Analyze buffer health and dry events      | Auth              |
+| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)      | Auth              |
+| `diagnose_routing`          | Analyze CDN routing decisions             | Auth              |
+| `get_stream_health_summary` | Aggregated stream health metrics          | Auth              |
+| `get_anomaly_report`        | Detect anomalies vs baseline              | Auth              |
+| `search_support_history`    | Search support conversations              | Auth              |
+| `introspect_schema`         | Explore the GraphQL schema                | Auth              |
+| `generate_query`            | Generate a GraphQL query from templates   | Auth              |
 
 QoE tool responses use a consistent status enum: `healthy | warning | critical | no_data`.
 
 ### Tool Parameters
 
 **update_billing_details**
+
 - `address_line1` (required): Street address
 - `city` (required): City
 - `postal_code` (required): Postal/ZIP code
@@ -178,35 +185,43 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 - `email`, `company`, `vat_number`, `address_line2`: Optional
 
 **topup_balance**
+
 - `amount_cents` (required): Amount in cents
 - `asset`: USDC (default), ETH, or LPT
 
 **create_stream**
+
 - `name` (required): Stream display name
 - `description`, `record`, `public`: Optional
 
 **create_clip**
+
 - `stream_id` (required): Stream to clip from
 - `title` (required): Clip title
 - `description`, `start_sec`, `duration_sec`: Optional
 
 **resolve_playback_endpoint**
+
 - `content_id` (required): playback_id, stream_id, or Relay ID
 - `viewer_ip`: Optional geo-routing hint
 
 **create_vod_upload**
+
 - `filename` (required): Original filename
 - `size_bytes` (required): File size in bytes
 - `content_type`, `title`, `description`: Optional
 
 **complete_vod_upload**
+
 - `upload_id` (required): Upload session ID
 - `parts` (required): Array of `{ part_number, etag }`
 
 **abort_vod_upload**
+
 - `upload_id` (required): Upload session ID
 
 **delete_vod_asset**
+
 - `artifact_hash` (required): VOD relay ID or artifact hash
 
 ### Preflight Errors
@@ -244,16 +259,16 @@ See [x402 Payments](#x402-payments) for how to pay inline.
 
 Guided workflows for common tasks.
 
-| Prompt | Description | Arguments |
-|--------|-------------|-----------|
-| `onboarding` | Walk through account setup | None |
-| `create_live_stream` | Guide to create and start streaming | `stream_name` (optional) |
-| `troubleshoot_stream` | Diagnose stream issues | `stream_id` (required) |
-| `optimize_costs` | Analyze usage, suggest savings | None |
-| `capabilities` | Explain platform features | None |
-| `video_consultant` | Expert streaming consultant persona | None |
-| `diagnose_quality_issue` | Guided QoE troubleshooting workflow | `stream_id` (required), `symptom` (optional) |
-| `api_integration_assistant` | Guided API integration workflow | `goal` (optional) |
+| Prompt                      | Description                         | Arguments                                    |
+| --------------------------- | ----------------------------------- | -------------------------------------------- |
+| `onboarding`                | Walk through account setup          | None                                         |
+| `create_live_stream`        | Guide to create and start streaming | `stream_name` (optional)                     |
+| `troubleshoot_stream`       | Diagnose stream issues              | `stream_id` (required)                       |
+| `optimize_costs`            | Analyze usage, suggest savings      | None                                         |
+| `capabilities`              | Explain platform features           | None                                         |
+| `video_consultant`          | Expert streaming consultant persona | None                                         |
+| `diagnose_quality_issue`    | Guided QoE troubleshooting workflow | `stream_id` (required), `symptom` (optional) |
+| `api_integration_assistant` | Guided API integration workflow     | `goal` (optional)                            |
 
 ## x402 Payments
 
@@ -332,13 +347,13 @@ Your AI can navigate these sitemaps to find codec guides, protocol references, a
 
 ### Diagnostic Tools
 
-| Tool | Use Case |
-|------|----------|
-| `diagnose_rebuffering` | Viewers experiencing buffering/stuttering |
-| `diagnose_buffer_health` | Quality fluctuations, dry buffer events |
-| `diagnose_routing` | CDN path issues, geographic performance |
-| `get_stream_health_summary` | Overall stream quality assessment |
-| `get_anomaly_report` | Detect sudden changes from baseline |
+| Tool                        | Use Case                                  |
+| --------------------------- | ----------------------------------------- |
+| `diagnose_rebuffering`      | Viewers experiencing buffering/stuttering |
+| `diagnose_buffer_health`    | Quality fluctuations, dry buffer events   |
+| `diagnose_routing`          | CDN path issues, geographic performance   |
+| `get_stream_health_summary` | Overall stream quality assessment         |
+| `get_anomaly_report`        | Detect sudden changes from baseline       |
 
 Each tool returns structured results with status, metrics, analysis, and recommendations:
 

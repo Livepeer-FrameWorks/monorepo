@@ -40,13 +40,13 @@ Foghorn ranks eligible nodes using a weighted scoring system. **Higher score = b
 score := cpuScore + ramScore + bwScore + geoScore + streamBonus
 ```
 
-| Component | Default Weight | Calculation |
-|-----------|----------------|-------------|
-| CPU | 500 | `WEIGHT - (cpu_pct * WEIGHT / 1000)` |
-| RAM | 500 | `WEIGHT - (ram_used * WEIGHT / ram_max)` |
-| Bandwidth | 1000 | `WEIGHT - (current_bw * WEIGHT / bw_limit)` |
-| Geo | 1000 | `WEIGHT - (WEIGHT * normalized_distance)` |
-| Stream bonus | +50 | If node already has the stream |
+| Component    | Default Weight | Calculation                                 |
+| ------------ | -------------- | ------------------------------------------- |
+| CPU          | 500            | `WEIGHT - (cpu_pct * WEIGHT / 1000)`        |
+| RAM          | 500            | `WEIGHT - (ram_used * WEIGHT / ram_max)`    |
+| Bandwidth    | 1000           | `WEIGHT - (current_bw * WEIGHT / bw_limit)` |
+| Geo          | 1000           | `WEIGHT - (WEIGHT * normalized_distance)`   |
+| Stream bonus | +50            | If node already has the stream              |
 
 ### Weight Configuration
 
@@ -62,6 +62,7 @@ GEO_WEIGHT=1000       # Geographic proximity weight
 ### Geographic Distance
 
 Distance is normalized to [0, 1] using haversine formula:
+
 - `distance = 0` → viewer and node are co-located → max geo score
 - `distance = 1` → opposite sides of the globe → zero geo score
 
@@ -89,6 +90,7 @@ func GetTopNodesWithScores(streamName, lat, lon, ...) ([]NodeWithScore, error) {
 ### Eligibility Filters
 
 A node must pass all filters:
+
 1. **Online**: Has recent heartbeat
 2. **Not in maintenance**: Maintenance flag not set
 3. **Capacity**: Below bandwidth limit
@@ -97,6 +99,7 @@ A node must pass all filters:
 ### Fallback Behavior
 
 If no node has the stream:
+
 - Source selection mode: Return best node for pulling from origin
 - Viewer mode: Return error (stream not available)
 
@@ -120,13 +123,14 @@ Implementation: `npm_player/packages/core/src/core/GatewayClient.ts`
 
 ```typescript
 interface ViewerEndpoint {
-  primary: NodeEndpoint;     // Best node
+  primary: NodeEndpoint; // Best node
   fallbacks: NodeEndpoint[]; // Backup nodes (up to 4)
-  outputs: ProtocolOutputs;  // URLs for each protocol
+  outputs: ProtocolOutputs; // URLs for each protocol
 }
 ```
 
 The player:
+
 1. Receives endpoint list from Gateway
 2. Selects best protocol using its own scoring (`npm_player/packages/core/src/core/scorer.ts`)
 3. Falls back to next node/protocol on failure

@@ -10,7 +10,12 @@ query GetProcessingUsage(
   analytics {
     usage {
       processing {
-        processingUsageConnection(streamId: $streamId, processType: $processType, timeRange: $timeRange, page: { first: $first, after: $after }) {
+        processingUsageConnection(
+          streamId: $streamId
+          processType: $processType
+          timeRange: $timeRange
+          page: { first: $first, after: $after }
+        ) {
           edges {
             cursor
             node {

@@ -10,17 +10,22 @@
  * - DataChannel for timed metadata
  */
 
-import { BasePlayer } from '../../core/PlayerInterface';
-import type { StreamSource, StreamInfo, PlayerOptions, PlayerCapability } from '../../core/PlayerInterface';
-import { MistSignaling, type MistTimeUpdate } from '../../core/MistSignaling';
-import { checkWebRTCCodecCompatibility } from '../../core/detector';
+import { BasePlayer } from "../../core/PlayerInterface";
+import type {
+  StreamSource,
+  StreamInfo,
+  PlayerOptions,
+  PlayerCapability,
+} from "../../core/PlayerInterface";
+import { MistSignaling, type MistTimeUpdate } from "../../core/MistSignaling";
+import { checkWebRTCCodecCompatibility } from "../../core/detector";
 
 export class MistWebRTCPlayerImpl extends BasePlayer {
   readonly capability: PlayerCapability = {
     name: "MistServer WebRTC",
     shortname: "mist-webrtc",
     priority: 2, // After direct (WHEP=1), before HLS.js (3)
-    mimes: ["webrtc", "mist/webrtc"]
+    mimes: ["webrtc", "mist/webrtc"],
   };
 
   private signaling: MistSignaling | null = null;
@@ -33,7 +38,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   private seekOffset = 0;
   private durationMs = 0;
   private isLiveStream = true;
-  private playRate: number | 'auto' = 'auto';
+  private playRate: number | "auto" = "auto";
 
   // Buffer window tracking (P2)
   private bufferWindow = 0;
@@ -46,7 +51,11 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   private currentOptions: PlayerOptions | null = null;
 
   // Stats tracking
-  private lastInboundStats: { video?: { bytesReceived: number }; audio?: { bytesReceived: number }; timestamp: number } | null = null;
+  private lastInboundStats: {
+    video?: { bytesReceived: number };
+    audio?: { bytesReceived: number };
+    timestamp: number;
+  } | null = null;
 
   /**
    * Chrome on Android has a bug where H264 is not available immediately
@@ -56,16 +65,16 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   private async checkH264Available(retries = 5): Promise<boolean> {
     for (let i = 0; i < retries; i++) {
       try {
-        const caps = RTCRtpReceiver.getCapabilities?.('video');
-        if (caps?.codecs.some(c => c.mimeType === 'video/H264')) {
+        const caps = RTCRtpReceiver.getCapabilities?.("video");
+        if (caps?.codecs.some((c) => c.mimeType === "video/H264")) {
           return true;
         }
       } catch {}
       if (i < retries - 1) {
-        await new Promise(r => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 100));
       }
     }
-    console.warn('[MistWebRTC] H264 not available after retries');
+    console.warn("[MistWebRTC] H264 not available after retries");
     return false;
   }
 
@@ -77,14 +86,14 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     if ((window as any).WebRTCBrowserEqualizerLoaded) return;
 
     return new Promise((resolve) => {
-      const script = document.createElement('script');
+      const script = document.createElement("script");
       script.src = `${host}/webrtc.js`;
       script.onload = () => {
-        console.debug('[MistWebRTC] Browser equalizer loaded');
+        console.debug("[MistWebRTC] Browser equalizer loaded");
         resolve();
       };
       script.onerror = () => {
-        console.warn('[MistWebRTC] Failed to load browser equalizer');
+        console.warn("[MistWebRTC] Failed to load browser equalizer");
         resolve(); // Non-fatal
       };
       document.head.appendChild(script);
@@ -105,35 +114,46 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     return this.capability.mimes.includes(mimetype);
   }
 
-  isBrowserSupported(mimetype: string, source: StreamSource, streamInfo: StreamInfo): boolean | string[] {
+  isBrowserSupported(
+    mimetype: string,
+    source: StreamSource,
+    streamInfo: StreamInfo
+  ): boolean | string[] {
     // Check basic WebRTC support
-    if (!('RTCPeerConnection' in window) || !('WebSocket' in window)) return false;
+    if (!("RTCPeerConnection" in window) || !("WebSocket" in window)) return false;
 
     // Check codec compatibility
     const codecCompat = checkWebRTCCodecCompatibility(streamInfo.meta.tracks);
     if (!codecCompat.compatible) {
-      console.debug('[MistWebRTC] Skipping - incompatible codecs:', codecCompat.incompatibleCodecs.join(', '));
+      console.debug(
+        "[MistWebRTC] Skipping - incompatible codecs:",
+        codecCompat.incompatibleCodecs.join(", ")
+      );
       return false;
     }
 
     // Return which track types we can play
     const playable: string[] = [];
     if (codecCompat.details.compatibleVideoCodecs.length > 0) {
-      playable.push('video');
+      playable.push("video");
     }
     if (codecCompat.details.compatibleAudioCodecs.length > 0) {
-      playable.push('audio');
+      playable.push("audio");
     }
 
     return playable.length > 0 ? playable : false;
   }
 
-  async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
+  async initialize(
+    container: HTMLElement,
+    source: StreamSource,
+    options: PlayerOptions
+  ): Promise<HTMLVideoElement> {
     this.destroyed = false;
     this.container = container;
     this.currentSource = source;
     this.currentOptions = options;
-    container.classList.add('fw-player-container');
+    container.classList.add("fw-player-container");
 
     // Load browser equalizer script (P0) - extract host from source URL
     try {
@@ -146,10 +166,10 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     await this.checkH264Available();
 
     // Create video element
-    const video = document.createElement('video');
-    video.classList.add('fw-player-video');
-    video.setAttribute('playsinline', '');
-    video.setAttribute('crossorigin', 'anonymous');
+    const video = document.createElement("video");
+    video.classList.add("fw-player-video");
+    video.setAttribute("playsinline", "");
+    video.setAttribute("crossorigin", "anonymous");
 
     if (options.autoplay) video.autoplay = true;
     if (options.muted) video.muted = true;
@@ -165,7 +185,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
       await this.setupWebRTC(video, source, options);
       return video;
     } catch (error: any) {
-      this.emit('error', error.message || String(error));
+      this.emit("error", error.message || String(error));
       throw error;
     }
   }
@@ -184,23 +204,31 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
     // Close data channel
     if (this.dataChannel) {
-      try { this.dataChannel.close(); } catch {}
+      try {
+        this.dataChannel.close();
+      } catch {}
       this.dataChannel = null;
     }
 
     // Close peer connection
     if (this.peerConnection) {
-      try { this.peerConnection.close(); } catch {}
+      try {
+        this.peerConnection.close();
+      } catch {}
       this.peerConnection = null;
     }
 
     // Clean up video element
     if (this.videoElement) {
-      try { (this.videoElement as any).srcObject = null; } catch {}
+      try {
+        (this.videoElement as any).srcObject = null;
+      } catch {}
       this.videoElement.pause();
 
       if (this.container) {
-        try { this.container.removeChild(this.videoElement); } catch {}
+        try {
+          this.container.removeChild(this.videoElement);
+        } catch {}
       }
     }
 
@@ -216,7 +244,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.videoElement.pause();
     this.seekOffset = time - this.videoElement.currentTime;
     this.signaling.seek(time).catch((e) => {
-      console.warn('[MistWebRTC] Seek failed:', e);
+      console.warn("[MistWebRTC] Seek failed:", e);
     });
   }
 
@@ -232,8 +260,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
     this.videoElement.pause();
     this.seekOffset = 0;
-    this.signaling.seek('live').catch((e) => {
-      console.warn('[MistWebRTC] Jump to live failed:', e);
+    this.signaling.seek("live").catch((e) => {
+      console.warn("[MistWebRTC] Jump to live failed:", e);
     });
   }
 
@@ -260,7 +288,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   getQualities(): Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> {
     // Always offer auto as first option
     const qualities: Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> = [
-      { id: 'auto', label: 'Auto', isAuto: true, active: this.playRate === 'auto' }
+      { id: "auto", label: "Auto", isAuto: true, active: this.playRate === "auto" },
     ];
 
     // If we have track info from signaling, add quality options
@@ -274,8 +302,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   selectQuality(id: string): void {
     if (!this.signaling?.isConnected) return;
 
-    if (id === 'auto') {
-      this.signaling.setSpeed('auto');
+    if (id === "auto") {
+      this.signaling.setSpeed("auto");
     } else {
       // Track selection: ~widthxheight or |bitrate
       this.signaling.setTracks({ video: id });
@@ -287,63 +315,67 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     if (!this.signaling?.isConnected) return;
 
     if (id === null) {
-      this.signaling.setTracks({ video: 'none' });
+      this.signaling.setTracks({ video: "none" });
     } else {
       this.signaling.setTracks({ video: id });
     }
   }
 
-  async getStats(): Promise<{
-    type: 'webrtc';
-    video?: {
-      bytesReceived: number;
-      packetsReceived: number;
-      packetsLost: number;
-      packetLossRate: number;
-      jitter: number;
-      framesDecoded: number;
-      framesDropped: number;
-      frameDropRate: number;
-      frameWidth: number;
-      frameHeight: number;
-      framesPerSecond: number;
-      bitrate: number;
-      jitterBufferDelay: number;
-    };
-    audio?: {
-      bytesReceived: number;
-      packetsReceived: number;
-      packetsLost: number;
-      packetLossRate: number;
-      jitter: number;
-      bitrate: number;
-    };
-    network?: {
-      rtt: number;
-      availableOutgoingBitrate: number;
-      availableIncomingBitrate: number;
-      bytesSent: number;
-      bytesReceived: number;
-    };
-    timestamp: number;
-  } | undefined> {
+  async getStats(): Promise<
+    | {
+        type: "webrtc";
+        video?: {
+          bytesReceived: number;
+          packetsReceived: number;
+          packetsLost: number;
+          packetLossRate: number;
+          jitter: number;
+          framesDecoded: number;
+          framesDropped: number;
+          frameDropRate: number;
+          frameWidth: number;
+          frameHeight: number;
+          framesPerSecond: number;
+          bitrate: number;
+          jitterBufferDelay: number;
+        };
+        audio?: {
+          bytesReceived: number;
+          packetsReceived: number;
+          packetsLost: number;
+          packetLossRate: number;
+          jitter: number;
+          bitrate: number;
+        };
+        network?: {
+          rtt: number;
+          availableOutgoingBitrate: number;
+          availableIncomingBitrate: number;
+          bytesSent: number;
+          bytesReceived: number;
+        };
+        timestamp: number;
+      }
+    | undefined
+  > {
     if (!this.peerConnection) return undefined;
 
     try {
       const stats = await this.peerConnection.getStats();
       const now = Date.now();
-      const result: any = { type: 'webrtc', timestamp: now };
+      const result: any = { type: "webrtc", timestamp: now };
 
       stats.forEach((report: any) => {
-        if (report.type === 'inbound-rtp') {
-          const packetLossRate = report.packetsReceived > 0
-            ? (report.packetsLost / (report.packetsReceived + report.packetsLost)) * 100
-            : 0;
+        if (report.type === "inbound-rtp") {
+          const packetLossRate =
+            report.packetsReceived > 0
+              ? (report.packetsLost / (report.packetsReceived + report.packetsLost)) * 100
+              : 0;
 
           // Calculate bitrate from previous sample
           let bitrate = 0;
-          if (this.lastInboundStats && this.lastInboundStats[report.kind as 'video' | 'audio']) {
-            const prev = this.lastInboundStats[report.kind as 'video' | 'audio'];
+          if (this.lastInboundStats && this.lastInboundStats[report.kind as "video" | "audio"]) {
+            const prev = this.lastInboundStats[report.kind as "video" | "audio"];
             const timeDelta = (now - this.lastInboundStats.timestamp) / 1000;
             if (timeDelta > 0 && prev) {
               const bytesDelta = report.bytesReceived - prev.bytesReceived;
@@ -351,10 +383,11 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
             }
           }
 
-          if (report.kind === 'video') {
-            const frameDropRate = report.framesDecoded > 0
-              ? (report.framesDropped / (report.framesDecoded + report.framesDropped)) * 100
-              : 0;
+          if (report.kind === "video") {
+            const frameDropRate =
+              report.framesDecoded > 0
+                ? (report.framesDropped / (report.framesDecoded + report.framesDropped)) * 100
+                : 0;
 
             result.video = {
               bytesReceived: report.bytesReceived || 0,
@@ -369,12 +402,13 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
               frameHeight: report.frameHeight || 0,
               framesPerSecond: report.framesPerSecond || 0,
               bitrate,
-              jitterBufferDelay: report.jitterBufferDelay && report.jitterBufferEmittedCount
-                ? (report.jitterBufferDelay / report.jitterBufferEmittedCount) * 1000
-                : 0,
+              jitterBufferDelay:
+                report.jitterBufferDelay && report.jitterBufferEmittedCount
+                  ? (report.jitterBufferDelay / report.jitterBufferEmittedCount) * 1000
+                  : 0,
             };
           }
-          if (report.kind === 'audio') {
+          if (report.kind === "audio") {
             result.audio = {
               bytesReceived: report.bytesReceived || 0,
               packetsReceived: report.packetsReceived || 0,
@@ -385,7 +419,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
             };
           }
         }
-        if (report.type === 'candidate-pair' && report.nominated) {
+        if (report.type === "candidate-pair" && report.nominated) {
           result.network = {
             rtt: report.currentRoundTripTime ? report.currentRoundTripTime * 1000 : 0,
             availableOutgoingBitrate: report.availableOutgoingBitrate || 0,
@@ -409,7 +443,9 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     }
   }
 
-  async getLatency(): Promise<{ estimatedMs: number; jitterBufferMs: number; rttMs: number } | undefined> {
+  async getLatency(): Promise<
+    { estimatedMs: number; jitterBufferMs: number; rttMs: number } | undefined
+  > {
     const s = await this.getStats();
     if (!s) return undefined;
 
@@ -460,15 +496,15 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
       const pauseOnFirstPlay = () => {
         video.pause();
         this.signaling?.pause();
-        video.removeEventListener('play', pauseOnFirstPlay);
+        video.removeEventListener("play", pauseOnFirstPlay);
       };
-      video.addEventListener('play', pauseOnFirstPlay);
+      video.addEventListener("play", pauseOnFirstPlay);
     }
 
     // Loop reconnect for VoD content (P1)
-    video.addEventListener('ended', async () => {
+    video.addEventListener("ended", async () => {
       if (video.loop && !this.isLiveStream && this.currentSource && this.currentOptions) {
-        console.debug('[MistWebRTC] VoD ended with loop enabled, reconnecting...');
+        console.debug("[MistWebRTC] VoD ended with loop enabled, reconnecting...");
         try {
           // Partial cleanup - keep container and video element
           if (this.signaling) {
@@ -479,19 +515,23 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
             this.signaling = null;
           }
           if (this.dataChannel) {
-            try { this.dataChannel.close(); } catch {}
+            try {
+              this.dataChannel.close();
+            } catch {}
             this.dataChannel = null;
           }
           if (this.peerConnection) {
-            try { this.peerConnection.close(); } catch {}
+            try {
+              this.peerConnection.close();
+            } catch {}
             this.peerConnection = null;
           }
 
           // Reconnect WebRTC
           await this.setupWebRTC(video, this.currentSource, this.currentOptions);
         } catch (e) {
-          console.error('[MistWebRTC] Failed to reconnect for loop:', e);
-          this.emit('error', 'Failed to reconnect for loop');
+          console.error("[MistWebRTC] Failed to reconnect for loop:", e);
+          this.emit("error", "Failed to reconnect for loop");
         }
       }
     });
@@ -499,7 +539,11 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
   // Private methods
 
-  private async setupWebRTC(video: HTMLVideoElement, source: StreamSource, _options: PlayerOptions): Promise<void> {
+  private async setupWebRTC(
+    video: HTMLVideoElement,
+    source: StreamSource,
+    _options: PlayerOptions
+  ): Promise<void> {
     const sourceAny = source as any;
     const iceServers: RTCIceServer[] = sourceAny?.iceServers || [];
 
@@ -515,10 +559,10 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.peerConnection = pc;
 
     // Create data channel for metadata
-    this.dataChannel = pc.createDataChannel('*', { protocol: 'JSON' });
+    this.dataChannel = pc.createDataChannel("*", { protocol: "JSON" });
     this.dataChannel.onmessage = (event) => {
       if (this.destroyed) return;
-      console.debug('[MistWebRTC] DataChannel message:', event.data);
+      console.debug("[MistWebRTC] DataChannel message:", event.data);
       // Handle timed metadata here if needed
     };
 
@@ -536,8 +580,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
       const state = pc.connectionState;
       console.debug(`[MistWebRTC] Connection state: ${state}`);
 
-      if (state === 'failed') {
-        this.emit('error', 'WebRTC connection failed (firewall?)');
+      if (state === "failed") {
+        this.emit("error", "WebRTC connection failed (firewall?)");
       }
     };
 
@@ -547,8 +591,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
       const state = pc.iceConnectionState;
       console.debug(`[MistWebRTC] ICE state: ${state}`);
 
-      if (state === 'failed') {
-        this.emit('error', 'ICE connection failed');
+      if (state === "failed") {
+        this.emit("error", "ICE connection failed");
       }
     };
 
@@ -561,15 +605,15 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Wait for signaling to connect
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('Signaling connection timeout'));
+        reject(new Error("Signaling connection timeout"));
       }, 10000);
 
-      this.signaling!.once('connected', () => {
+      this.signaling!.once("connected", () => {
         clearTimeout(timeout);
         resolve();
       });
 
-      this.signaling!.once('error', ({ message }) => {
+      this.signaling!.once("error", ({ message }) => {
         clearTimeout(timeout);
         reject(new Error(message));
       });
@@ -581,18 +625,18 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Wait for answer
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('SDP answer timeout'));
+        reject(new Error("SDP answer timeout"));
       }, 10000);
 
-      this.signaling!.once('answer_sdp', async ({ result, answer_sdp }) => {
+      this.signaling!.once("answer_sdp", async ({ result, answer_sdp }) => {
         clearTimeout(timeout);
         if (!result) {
-          reject(new Error('Failed to get SDP answer'));
+          reject(new Error("Failed to get SDP answer"));
           return;
         }
 
         try {
-          await pc.setRemoteDescription({ type: 'answer', sdp: answer_sdp });
+          await pc.setRemoteDescription({ type: "answer", sdp: answer_sdp });
           resolve();
         } catch (err) {
           reject(err);
@@ -605,49 +649,49 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     if (!this.signaling) return;
 
     // Dispatch webrtc_connected event (P2)
-    this.signaling.on('connected', () => {
+    this.signaling.on("connected", () => {
       if (this.destroyed) return;
-      video.dispatchEvent(new Event('webrtc_connected'));
+      video.dispatchEvent(new Event("webrtc_connected"));
     });
 
-    this.signaling.on('time_update', (update: MistTimeUpdate) => {
+    this.signaling.on("time_update", (update: MistTimeUpdate) => {
       if (this.destroyed) return;
       this.handleTimeUpdate(update, video);
     });
 
-    this.signaling.on('seeked', ({ live_point }) => {
+    this.signaling.on("seeked", ({ live_point }) => {
       if (this.destroyed) return;
       // Dispatch seeked event
-      video.dispatchEvent(new CustomEvent('seeked', { detail: { seekOffset: this.seekOffset } }));
+      video.dispatchEvent(new CustomEvent("seeked", { detail: { seekOffset: this.seekOffset } }));
       // Set playback rate to auto if seeked to live point
       if (live_point && this.signaling) {
-        this.signaling.setSpeed('auto');
+        this.signaling.setSpeed("auto");
       }
       video.play().catch(() => {});
     });
 
-    this.signaling.on('speed_changed', ({ play_rate_curr }) => {
+    this.signaling.on("speed_changed", ({ play_rate_curr }) => {
       if (this.destroyed) return;
       this.playRate = play_rate_curr;
-      video.dispatchEvent(new CustomEvent('ratechange', { detail: { play_rate_curr } }));
+      video.dispatchEvent(new CustomEvent("ratechange", { detail: { play_rate_curr } }));
     });
 
-    this.signaling.on('stopped', () => {
+    this.signaling.on("stopped", () => {
       if (this.destroyed) return;
       this.isLiveStream = false;
       video.pause();
-      this.emit('ended', undefined);
+      this.emit("ended", undefined);
     });
 
-    this.signaling.on('error', ({ message }) => {
+    this.signaling.on("error", ({ message }) => {
       if (this.destroyed) return;
-      this.emit('error', message);
+      this.emit("error", message);
     });
 
     // Dispatch webrtc_disconnected event (P2)
-    this.signaling.on('disconnected', () => {
+    this.signaling.on("disconnected", () => {
       if (this.destroyed) return;
-      video.dispatchEvent(new Event('webrtc_disconnected'));
+      video.dispatchEvent(new Event("webrtc_disconnected"));
       video.pause();
     });
   }
@@ -668,9 +712,11 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     if (update.tracks && !this.arraysEqual(update.tracks, this.currentTracks)) {
       for (const trackId of update.tracks) {
         if (!this.currentTracks.includes(trackId)) {
-          video.dispatchEvent(new CustomEvent('playerUpdate_trackChanged', {
-            detail: { trackId }
-          }));
+          video.dispatchEvent(
+            new CustomEvent("playerUpdate_trackChanged", {
+              detail: { trackId },
+            })
+          );
         }
       }
       this.currentTracks = [...update.tracks];
@@ -686,8 +732,8 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     if (!this.signaling) return;
 
     // Add transceivers for receiving
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
 
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,

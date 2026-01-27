@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 
 interface IconProps {
   size?: number;
@@ -6,7 +6,11 @@ interface IconProps {
   className?: string;
 }
 
-export const PlayIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const PlayIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -15,14 +19,15 @@ export const PlayIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor
     className={className}
     aria-hidden="true"
   >
-    <path
-      d="M8 5v14l11-7z"
-      fill={color}
-    />
+    <path d="M8 5v14l11-7z" fill={color} />
   </svg>
 );
 
-export const PauseIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const PauseIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -36,7 +41,11 @@ export const PauseIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColo
   </svg>
 );
 
-export const SkipBackIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const SkipBackIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -50,11 +59,17 @@ export const SkipBackIcon: React.FC<IconProps> = ({ size = 16, color = 'currentC
       d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"
       fill={color}
     />
-    <text x="12" y="15" fontSize="7" fontWeight="bold" fill={color} textAnchor="middle">10</text>
+    <text x="12" y="15" fontSize="7" fontWeight="bold" fill={color} textAnchor="middle">
+      10
+    </text>
   </svg>
 );
 
-export const SkipForwardIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const SkipForwardIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -68,11 +83,17 @@ export const SkipForwardIcon: React.FC<IconProps> = ({ size = 16, color = 'curre
       d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"
       fill={color}
     />
-    <text x="12" y="15" fontSize="7" fontWeight="bold" fill={color} textAnchor="middle">10</text>
+    <text x="12" y="15" fontSize="7" fontWeight="bold" fill={color} textAnchor="middle">
+      10
+    </text>
   </svg>
 );
 
-export const VolumeUpIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const VolumeUpIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -92,7 +113,11 @@ export const VolumeUpIcon: React.FC<IconProps> = ({ size = 16, color = 'currentC
   </svg>
 );
 
-export const VolumeOffIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const VolumeOffIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -107,7 +132,11 @@ export const VolumeOffIcon: React.FC<IconProps> = ({ size = 16, color = 'current
   </svg>
 );
 
-export const FullscreenIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const FullscreenIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -126,7 +155,11 @@ export const FullscreenIcon: React.FC<IconProps> = ({ size = 16, color = 'curren
   </svg>
 );
 
-export const FullscreenExitIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const FullscreenExitIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -145,7 +178,11 @@ export const FullscreenExitIcon: React.FC<IconProps> = ({ size = 16, color = 'cu
   </svg>
 );
 
-export const PictureInPictureIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const PictureInPictureIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -154,12 +191,26 @@ export const PictureInPictureIcon: React.FC<IconProps> = ({ size = 16, color = '
     className={className}
     aria-hidden="true"
   >
-    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" stroke={color} strokeWidth="2" fill="none" />
+    <rect
+      x="2"
+      y="3"
+      width="20"
+      height="14"
+      rx="2"
+      ry="2"
+      stroke={color}
+      strokeWidth="2"
+      fill="none"
+    />
     <rect x="8" y="10" width="10" height="6" rx="1" ry="1" fill={color} />
   </svg>
 );
 
-export const ClosedCaptionsIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const ClosedCaptionsIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -168,7 +219,17 @@ export const ClosedCaptionsIcon: React.FC<IconProps> = ({ size = 16, color = 'cu
     className={className}
     aria-hidden="true"
   >
-    <rect x="2" y="4" width="20" height="16" rx="2" ry="2" stroke={color} strokeWidth="2" fill="none" />
+    <rect
+      x="2"
+      y="4"
+      width="20"
+      height="16"
+      rx="2"
+      ry="2"
+      stroke={color}
+      strokeWidth="2"
+      fill="none"
+    />
     <path
       d="M8 10c0-.6.4-1 1-1h1c.6 0 1 .4 1 1v4c0 .6-.4 1-1 1H9c-.6 0-1-.4-1-1v-4zM14 10c0-.6.4-1 1-1h1c.6 0 1 .4 1 1v4c0 .6-.4 1-1 1h-1c-.6 0-1-.4-1-1v-4z"
       fill={color}
@@ -176,7 +237,11 @@ export const ClosedCaptionsIcon: React.FC<IconProps> = ({ size = 16, color = 'cu
   </svg>
 );
 
-export const LiveIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const LiveIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -195,7 +260,11 @@ export const LiveIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor
   </svg>
 );
 
-export const SettingsIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const SettingsIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -244,12 +313,19 @@ interface FullscreenToggleIconProps extends IconProps {
   isFullscreen?: boolean;
 }
 
-export const FullscreenToggleIcon: React.FC<FullscreenToggleIconProps> = ({ isFullscreen, ...props }) => {
+export const FullscreenToggleIcon: React.FC<FullscreenToggleIconProps> = ({
+  isFullscreen,
+  ...props
+}) => {
   return isFullscreen ? <FullscreenExitIcon {...props} /> : <FullscreenIcon {...props} />;
 };
 
 // Stats icon (bar chart style - recognizable for "stats for nerds")
-export const StatsIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const StatsIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}
@@ -265,7 +341,11 @@ export const StatsIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColo
 );
 
 // Seek to live/end icon (skip-to-end style: play triangle + bar)
-export const SeekToLiveIcon: React.FC<IconProps> = ({ size = 16, color = 'currentColor', className = '' }) => (
+export const SeekToLiveIcon: React.FC<IconProps> = ({
+  size = 16,
+  color = "currentColor",
+  className = "",
+}) => (
   <svg
     width={size}
     height={size}

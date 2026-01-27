@@ -9,7 +9,12 @@ query GetNodeMetrics(
 ) {
   analytics {
     infra {
-      nodeMetricsConnection(nodeId: $nodeId, timeRange: $timeRange, noCache: $noCache, page: { first: $first, after: $after }) @paginate {
+      nodeMetricsConnection(
+        nodeId: $nodeId
+        timeRange: $timeRange
+        noCache: $noCache
+        page: { first: $first, after: $after }
+      ) @paginate {
         edges {
           cursor
           node {

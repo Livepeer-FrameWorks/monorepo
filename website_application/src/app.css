@@ -75,21 +75,9 @@
     min-height: 100vh;
     overflow-x: hidden;
     background:
-      linear-gradient(
-        135deg,
-        hsl(var(--tn-bg)) 0%,
-        hsl(var(--tn-bg-highlight)) 100%
-      ),
-      radial-gradient(
-        circle at 20% 30%,
-        hsl(var(--tn-blue) / 0.08),
-        transparent 50%
-      ),
-      radial-gradient(
-        circle at 80% 70%,
-        hsl(var(--tn-cyan) / 0.05),
-        transparent 50%
-      );
+      linear-gradient(135deg, hsl(var(--tn-bg)) 0%, hsl(var(--tn-bg-highlight)) 100%),
+      radial-gradient(circle at 20% 30%, hsl(var(--tn-blue) / 0.08), transparent 50%),
+      radial-gradient(circle at 80% 70%, hsl(var(--tn-cyan) / 0.05), transparent 50%);
     margin: 0;
     padding: 0;
     color: hsl(var(--foreground));
@@ -130,11 +118,7 @@
 
 /* Context-specific card patterns */
 @utility metric-card {
-  background: linear-gradient(
-    160deg,
-    hsl(var(--tn-bg-highlight) / 0.6),
-    hsl(var(--tn-bg) / 0.5)
-  );
+  background: linear-gradient(160deg, hsl(var(--tn-bg-highlight) / 0.6), hsl(var(--tn-bg) / 0.5));
   border: 1px solid hsl(var(--border));
   border-radius: 0;
   padding: 1.5rem;
@@ -142,11 +126,7 @@
 }
 
 @utility stats-panel {
-  background: linear-gradient(
-    160deg,
-    hsl(var(--tn-bg-highlight) / 0.8),
-    hsl(var(--tn-bg) / 0.6)
-  );
+  background: linear-gradient(160deg, hsl(var(--tn-bg-highlight) / 0.8), hsl(var(--tn-bg) / 0.6));
   border: 1px solid hsl(var(--tn-blue) / 0.18);
   border-radius: 0;
   padding: 1.5rem;

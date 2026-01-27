@@ -8,7 +8,11 @@ query GetViewerHoursHourly(
   analytics {
     usage {
       streaming {
-        viewerHoursHourlyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first, after: $after }) {
+        viewerHoursHourlyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $first, after: $after }
+        ) {
           edges {
             cursor
             node {

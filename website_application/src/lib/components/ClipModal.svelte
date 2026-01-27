@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "$lib/components/ui/dialog";
+  import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+    DialogFooter,
+  } from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import Player from "./Player.svelte";
@@ -37,7 +44,9 @@
   let showUrls = $state(false);
 
   // Get delivery URLs for clip using playbackId
-  let clipUrls = $derived(clip?.playbackId ? getContentDeliveryUrls(clip.playbackId, "clip") : null);
+  let clipUrls = $derived(
+    clip?.playbackId ? getContentDeliveryUrls(clip.playbackId, "clip") : null
+  );
 
   // Primary protocols to show for clips
   const clipProtocols: Array<{
@@ -98,7 +107,9 @@
     }}
   >
     <DialogContent class="max-w-5xl overflow-hidden p-0">
-      <DialogHeader class="flex flex-row items-start justify-between gap-4 border-b border-border p-6">
+      <DialogHeader
+        class="flex flex-row items-start justify-between gap-4 border-b border-border p-6"
+      >
         <div class="min-w-0 space-y-2 text-left">
           <DialogTitle class="truncate text-xl font-semibold text-foreground">
             {clip.title || "Clip Preview"}
@@ -145,13 +156,17 @@
           </div>
           <div>
             <p class="text-muted-foreground">Status</p>
-            <p class={`font-medium inline-flex items-center rounded-full px-2 py-1 text-xs ${streamStatusColor[clip.status || "Available"] || "bg-primary/10 text-primary"}`}>
+            <p
+              class={`font-medium inline-flex items-center rounded-full px-2 py-1 text-xs ${streamStatusColor[clip.status || "Available"] || "bg-primary/10 text-primary"}`}
+            >
               {clip.status || "Available"}
             </p>
           </div>
           <div>
             <p class="text-muted-foreground">Created</p>
-            <p class="font-medium">{clip.createdAt ? new Date(clip.createdAt).toLocaleString() : "N/A"}</p>
+            <p class="font-medium">
+              {clip.createdAt ? new Date(clip.createdAt).toLocaleString() : "N/A"}
+            </p>
           </div>
         </div>
 
@@ -169,7 +184,7 @@
           <div class="border border-border">
             <button
               class="w-full p-3 flex items-center justify-between text-sm hover:bg-muted/10 transition-colors"
-              onclick={() => showUrls = !showUrls}
+              onclick={() => (showUrls = !showUrls)}
             >
               <div class="flex items-center gap-2">
                 <LinkIcon class="w-4 h-4 text-info" />
@@ -235,9 +250,7 @@
           {:else}
             <div></div>
           {/if}
-          <Button variant="secondary" onclick={close}>
-            Close
-          </Button>
+          <Button variant="secondary" onclick={close}>Close</Button>
         </div>
       </DialogFooter>
     </DialogContent>

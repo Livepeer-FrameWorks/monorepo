@@ -8,7 +8,9 @@
     padding: 0.75rem 1rem;
     font-size: 0.875rem;
     color: hsl(var(--foreground));
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    transition:
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
   }
 
   .input:focus-visible {

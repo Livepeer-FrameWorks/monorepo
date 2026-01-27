@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { page } from '$app/state';
-  import { goto } from '$app/navigation';
-  import { resolve } from '$app/paths';
-  import Player from '$lib/components/Player.svelte';
-  import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
-  import EmptyState from '$lib/components/EmptyState.svelte';
-  import { Button } from '$lib/components/ui/button';
-  import type { PlayerMetadata } from '@livepeer-frameworks/player-svelte';
+  import { onMount } from "svelte";
+  import { page } from "$app/state";
+  import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
+  import Player from "$lib/components/Player.svelte";
+  import LoadingSpinner from "$lib/components/LoadingSpinner.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
+  import { Button } from "$lib/components/ui/button";
+  import type { PlayerMetadata } from "@livepeer-frameworks/player-svelte";
 
   interface PlayerConfig {
     contentType?: "live" | "clip" | "dvr" | "vod";
@@ -30,12 +30,25 @@
   let streamMetadata = $state<PlayerMetadata | null>(null);
 
   // Derived display values from metadata
-  let displayTitle = $derived(streamMetadata?.title || (contentType === 'live' ? 'Live Stream' : contentType === 'clip' ? 'Clip' : contentType === 'vod' ? 'VOD Asset' : contentType === 'dvr' ? 'DVR Recording' : 'Playback'));
-  let _videoTrack = $derived(streamMetadata?.tracks?.find(t => t.type === 'video'));
+  let displayTitle = $derived(
+    streamMetadata?.title ||
+      (contentType === "live"
+        ? "Live Stream"
+        : contentType === "clip"
+          ? "Clip"
+          : contentType === "vod"
+            ? "VOD Asset"
+            : contentType === "dvr"
+              ? "DVR Recording"
+              : "Playback")
+  );
+  let _videoTrack = $derived(streamMetadata?.tracks?.find((t) => t.type === "video"));
   let resolutionLabel = $derived(_videoTrack ? `${_videoTrack.width}x${_videoTrack.height}` : null);
   let codecLabel = $derived(_videoTrack?.codec || null);
   let fpsLabel = $derived(_videoTrack?.fps ? `${_videoTrack.fps}fps` : null);
-  let bitrateLabel = $derived(_videoTrack?.bitrate ? `${(_videoTrack.bitrate / 1000).toFixed(0)} kbps` : null);
+  let bitrateLabel = $derived(
+    _videoTrack?.bitrate ? `${(_videoTrack.bitrate / 1000).toFixed(0)} kbps` : null
+  );
 
   function handleMetadata(metadata: PlayerMetadata) {
     streamMetadata = metadata;
@@ -83,14 +96,14 @@
       };
 
       // Add thumbnails for clips/dvr
-      if (contentType !== 'live') {
+      if (contentType !== "live") {
         playerConfig.thumbnailUrl = null; // Will be resolved by the player
       }
 
       loading = false;
     } catch (err) {
-      console.error('Error setting up player:', err);
-      error = 'Failed to initialize player';
+      console.error("Error setting up player:", err);
+      error = "Failed to initialize player";
       loading = false;
     }
   });
@@ -99,7 +112,7 @@
     if (window.history.length > 1) {
       window.history.back();
     } else {
-      goto(resolve('/'));
+      goto(resolve("/"));
     }
   }
 </script>
@@ -115,12 +128,7 @@
     </div>
   {:else if error}
     <div class="flex items-center justify-center flex-1 h-full min-h-[400px]">
-      <EmptyState 
-        title="Error" 
-        description={error}
-        actionText="Go Back"
-        onAction={goBack}
-      />
+      <EmptyState title="Error" description={error} actionText="Go Back" onAction={goBack} />
     </div>
   {:else if playerConfig}
     <div class="max-w-7xl mx-auto w-full space-y-6">
@@ -130,7 +138,12 @@
           <div class="flex items-center gap-3">
             <Button variant="ghost" size="sm" onclick={goBack} class="gap-2">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7 7-7m8 14l-7-7 7-7" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M10 19l-7-7 7-7m8 14l-7-7 7-7"
+                />
               </svg>
               Back
             </Button>
@@ -139,12 +152,14 @@
               {displayTitle}
             </h1>
           </div>
-          
-          {#if contentType === 'live' && streamMetadata?.viewers !== undefined}
-            <div class="flex items-center gap-2 px-3 py-1 bg-[hsl(var(--tn-bg-dark)/0.5)] rounded border border-[hsl(var(--tn-fg-gutter)/0.3)]">
+
+          {#if contentType === "live" && streamMetadata?.viewers !== undefined}
+            <div
+              class="flex items-center gap-2 px-3 py-1 bg-[hsl(var(--tn-bg-dark)/0.5)] rounded border border-[hsl(var(--tn-fg-gutter)/0.3)]"
+            >
               <span class="w-2 h-2 bg-[hsl(var(--tn-red))] rounded-full animate-pulse"></span>
               <span class="text-xs font-medium text-[hsl(var(--tn-red))] uppercase tracking-wider">
-                {streamMetadata.viewers} Viewer{streamMetadata.viewers !== 1 ? 's' : ''}
+                {streamMetadata.viewers} Viewer{streamMetadata.viewers !== 1 ? "s" : ""}
               </span>
             </div>
           {/if}
@@ -177,7 +192,9 @@
             </div>
             <div class="slab-body--padded">
               {#if !streamMetadata}
-                <div class="flex flex-col items-center justify-center py-8 text-center text-muted-foreground">
+                <div
+                  class="flex flex-col items-center justify-center py-8 text-center text-muted-foreground"
+                >
                   <LoadingSpinner class="w-6 h-6 mb-2 opacity-50" />
                   <span class="text-xs">Waiting for stream data...</span>
                 </div>
@@ -185,32 +202,48 @@
                 <div class="space-y-4">
                   <!-- Resolution & Codec -->
                   <div class="grid grid-cols-2 gap-4">
-                    <div class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]">
-                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Resolution</div>
+                    <div
+                      class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]"
+                    >
+                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                        Resolution
+                      </div>
                       <div class="font-mono text-sm text-foreground">
-                        {resolutionLabel || 'Unknown'}
+                        {resolutionLabel || "Unknown"}
                       </div>
                     </div>
-                    <div class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]">
-                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Codec</div>
+                    <div
+                      class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]"
+                    >
+                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                        Codec
+                      </div>
                       <div class="font-mono text-sm text-foreground uppercase">
-                        {codecLabel || 'Unknown'}
+                        {codecLabel || "Unknown"}
                       </div>
                     </div>
                   </div>
 
                   <!-- FPS & Bitrate -->
                   <div class="grid grid-cols-2 gap-4">
-                    <div class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]">
-                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Frame Rate</div>
+                    <div
+                      class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]"
+                    >
+                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                        Frame Rate
+                      </div>
                       <div class="font-mono text-sm text-foreground">
-                        {fpsLabel || 'Unknown'}
+                        {fpsLabel || "Unknown"}
                       </div>
                     </div>
-                    <div class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]">
-                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Bitrate</div>
+                    <div
+                      class="p-3 rounded bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.2)]"
+                    >
+                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                        Bitrate
+                      </div>
                       <div class="font-mono text-sm text-foreground">
-                        {bitrateLabel || 'Unknown'}
+                        {bitrateLabel || "Unknown"}
                       </div>
                     </div>
                   </div>
@@ -220,7 +253,9 @@
                     <div class="pt-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)]">
                       <div class="flex justify-between items-center text-xs">
                         <span class="text-muted-foreground">Protocol</span>
-                        <span class="font-mono text-foreground uppercase">{streamMetadata.protocol || 'N/A'}</span>
+                        <span class="font-mono text-foreground uppercase"
+                          >{streamMetadata.protocol || "N/A"}</span
+                        >
                       </div>
                       {#if streamMetadata.nodeId}
                         <div class="flex justify-between items-center text-xs mt-2">
@@ -231,7 +266,9 @@
                       {#if streamMetadata.geoDistance !== undefined}
                         <div class="flex justify-between items-center text-xs mt-2">
                           <span class="text-muted-foreground">Geo Distance</span>
-                          <span class="font-mono text-foreground">{streamMetadata.geoDistance.toFixed(0)} km</span>
+                          <span class="font-mono text-foreground"
+                            >{streamMetadata.geoDistance.toFixed(0)} km</span
+                          >
                         </div>
                       {/if}
                     </div>
@@ -240,8 +277,12 @@
                   <!-- Debug Info (Merged) -->
                   {#if playerConfig.options.devMode}
                     <div class="pt-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)]">
-                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Debug Info</div>
-                      <div class="text-xs font-mono text-muted-foreground break-all bg-[hsl(var(--tn-bg-dark)/0.5)] p-2 rounded">
+                      <div class="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">
+                        Debug Info
+                      </div>
+                      <div
+                        class="text-xs font-mono text-muted-foreground break-all bg-[hsl(var(--tn-bg-dark)/0.5)] p-2 rounded"
+                      >
                         <div>ID: {contentId}</div>
                         <div class="mt-1">Type: {contentType}</div>
                       </div>

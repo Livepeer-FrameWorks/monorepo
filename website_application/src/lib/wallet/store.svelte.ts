@@ -1,12 +1,7 @@
 /**
  * Wallet store for Svelte 5 - manages wallet connection state
  */
-import {
-  getAccount,
-  watchAccount,
-  disconnect,
-  signMessage,
-} from "wagmi/actions";
+import { getAccount, watchAccount, disconnect, signMessage } from "wagmi/actions";
 import { wagmiConfig, getChainType } from "./config";
 
 // Wallet connection state using Svelte 5 runes

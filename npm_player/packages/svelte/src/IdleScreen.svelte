@@ -13,10 +13,10 @@
   - Status overlay at bottom
 -->
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import type { StreamStatus } from '@livepeer-frameworks/player-core';
-  import DvdLogo from './DvdLogo.svelte';
-  import logomarkAsset from './assets/logomark.svg';
+  import { onMount, onDestroy } from "svelte";
+  import type { StreamStatus } from "@livepeer-frameworks/player-core";
+  import DvdLogo from "./DvdLogo.svelte";
+  import logomarkAsset from "./assets/logomark.svg";
 
   interface Props {
     status?: StreamStatus;
@@ -27,8 +27,8 @@
   }
 
   let {
-    status = 'OFFLINE',
-    message = 'Waiting for stream...',
+    status = "OFFLINE",
+    message = "Waiting for stream...",
     percentage = undefined,
     error = undefined,
     onRetry = undefined,
@@ -52,26 +52,26 @@
 
   // Tokyo Night inspired pastel colors for bubbles
   const bubbleColors = [
-    'rgba(122, 162, 247, 0.2)', // Terminal Blue
-    'rgba(187, 154, 247, 0.2)', // Terminal Magenta
-    'rgba(158, 206, 106, 0.2)', // Strings/CSS classes
-    'rgba(115, 218, 202, 0.2)', // Terminal Green
-    'rgba(125, 207, 255, 0.2)', // Terminal Cyan
-    'rgba(247, 118, 142, 0.2)', // Keywords/Terminal Red
-    'rgba(224, 175, 104, 0.2)', // Terminal Yellow
-    'rgba(42, 195, 222, 0.2)',  // Language functions
+    "rgba(122, 162, 247, 0.2)", // Terminal Blue
+    "rgba(187, 154, 247, 0.2)", // Terminal Magenta
+    "rgba(158, 206, 106, 0.2)", // Strings/CSS classes
+    "rgba(115, 218, 202, 0.2)", // Terminal Green
+    "rgba(125, 207, 255, 0.2)", // Terminal Cyan
+    "rgba(247, 118, 142, 0.2)", // Keywords/Terminal Red
+    "rgba(224, 175, 104, 0.2)", // Terminal Yellow
+    "rgba(42, 195, 222, 0.2)", // Language functions
   ];
 
   // Particle colors
   const particleColors = [
-    '#7aa2f7', // Terminal Blue
-    '#bb9af7', // Terminal Magenta
-    '#9ece6a', // Strings/CSS classes
-    '#73daca', // Terminal Green
-    '#7dcfff', // Terminal Cyan
-    '#f7768e', // Keywords/Terminal Red
-    '#e0af68', // Terminal Yellow
-    '#2ac3de', // Language functions
+    "#7aa2f7", // Terminal Blue
+    "#bb9af7", // Terminal Magenta
+    "#9ece6a", // Strings/CSS classes
+    "#73daca", // Terminal Green
+    "#7dcfff", // Terminal Cyan
+    "#f7768e", // Keywords/Terminal Red
+    "#e0af68", // Terminal Yellow
+    "#2ac3de", // Language functions
   ];
 
   // Generate random particles (matching React's 12 particles)
@@ -135,7 +135,11 @@
 
       const oscillator1 = audioContext.createOscillator();
       const oscillator2 = audioContext.createOscillator();
-      const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 0.1, audioContext.sampleRate);
+      const noiseBuffer = audioContext.createBuffer(
+        1,
+        audioContext.sampleRate * 0.1,
+        audioContext.sampleRate
+      );
       const noiseSource = audioContext.createBufferSource();
 
       // Generate white noise for the initial "crack"
@@ -166,8 +170,8 @@
       oscillator2.frequency.setValueAtTime(3600, audioContext.currentTime);
       oscillator2.frequency.exponentialRampToValueAtTime(1800, audioContext.currentTime + 0.04);
 
-      oscillator1.type = 'triangle';
-      oscillator2.type = 'sine';
+      oscillator1.type = "triangle";
+      oscillator2.type = "sine";
 
       // Sharp attack, quick decay
       gainNode1.gain.setValueAtTime(0, audioContext.currentTime);
@@ -202,15 +206,16 @@
 
   function playHitmarkerSound() {
     try {
-      const hitmarkerDataUrl = 'data:audio/mpeg;base64,SUQzBAAAAAAANFRDT04AAAAHAAADT3RoZXIAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAA' +
-        'AAD/+1QAAAAAAAAAAAAAAAAAAAAA' +
-        'AAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAYAAAnAADs7Ozs7Ozs7Ozs7Ozs7OztiYmJiYmJiYmJi' +
-        'YmJiYmJiYomJiYmJiYmJiYmJiYmJiYmxsbGxsbGxsbGxsbGxsbGxsdjY2NjY2NjY2NjY2NjY2NjY////' +
-        '/////////////////wAAAABMYXZjNTcuMTAAAAAAAAAAAAAAAAAkAkAAAAAAAAAJwOuMZun/+5RkAA8S' +
-        '/F23AGAaAi0AF0AAAAAInXsEAIRXyQ8D4OQgjEhE3cO7ujuHF0XCOu4G7xKbi3Funu7u7p9dw7unu7u7' +
-        'p7u7u6fXcW7om7u7uiU3dxdT67u7p7uHdxelN3cW6fXcW7oXXd3eJTd3d0+u4t3iXdw4up70W4uiPruL' +
-        'DzMw8Pz79Y99JfkyfPv5/h9uTJoy79Y99Y97q3vyZPJk0ZfrL6x73Vn+J35dKKS/STQyQ8CAiCPNuRAO' +
-        'OqquAx+fzJeBKDAsgAMBuWcBsHKhjJTcCwIALyAvABbI0ZIcCmP8jHJe8gZAdVRp2TpnU/kUXV4iQuBA';
+      const hitmarkerDataUrl =
+        "data:audio/mpeg;base64,SUQzBAAAAAAANFRDT04AAAAHAAADT3RoZXIAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAA" +
+        "AAD/+1QAAAAAAAAAAAAAAAAAAAAA" +
+        "AAAAAAAAAAAAAAAAAAAAAABJbmZvAAAADwAAAAYAAAnAADs7Ozs7Ozs7Ozs7Ozs7OztiYmJiYmJiYmJi" +
+        "YmJiYmJiYomJiYmJiYmJiYmJiYmJiYmxsbGxsbGxsbGxsbGxsbGxsdjY2NjY2NjY2NjY2NjY2NjY////" +
+        "/////////////////wAAAABMYXZjNTcuMTAAAAAAAAAAAAAAAAAkAkAAAAAAAAAJwOuMZun/+5RkAA8S" +
+        "/F23AGAaAi0AF0AAAAAInXsEAIRXyQ8D4OQgjEhE3cO7ujuHF0XCOu4G7xKbi3Funu7u7p9dw7unu7u7" +
+        "p7u7u6fXcW7om7u7uiU3dxdT67u7p7uHdxelN3cW6fXcW7oXXd3eJTd3d0+u4t3iXdw4up70W4uiPruL" +
+        "DzMw8Pz79Y99JfkyfPv5/h9uTJoy79Y99Y97q3vyZPJk0ZfrL6x73Vn+J35dKKS/STQyQ8CAiCPNuRAO" +
+        "OqquAx+fzJeBKDAsgAMBuWcBsHKhjJTcCwIALyAvABbI0ZIcCmP8jHJe8gZAdVRp2TpnU/kUXV4iQuBA";
 
       const audio = new Audio(hitmarkerDataUrl);
       audio.volume = 0.3;
@@ -239,7 +244,7 @@
     playHitmarkerSound();
 
     setTimeout(() => {
-      hitmarkers = hitmarkers.filter(h => h.id !== newHitmarker.id);
+      hitmarkers = hitmarkers.filter((h) => h.id !== newHitmarker.id);
     }, 600);
   }
 
@@ -287,25 +292,36 @@
   // Status helpers
   function getStatusLabel(s?: StreamStatus): string {
     switch (s) {
-      case 'ONLINE': return 'ONLINE';
-      case 'OFFLINE': return 'OFFLINE';
-      case 'INITIALIZING': return 'STARTING';
-      case 'BOOTING': return 'STARTING';
-      case 'WAITING_FOR_DATA': return 'WAITING';
-      case 'SHUTTING_DOWN': return 'ENDING';
-      case 'ERROR': return 'ERROR';
-      case 'INVALID': return 'ERROR';
-      default: return 'CONNECTING';
+      case "ONLINE":
+        return "ONLINE";
+      case "OFFLINE":
+        return "OFFLINE";
+      case "INITIALIZING":
+        return "STARTING";
+      case "BOOTING":
+        return "STARTING";
+      case "WAITING_FOR_DATA":
+        return "WAITING";
+      case "SHUTTING_DOWN":
+        return "ENDING";
+      case "ERROR":
+        return "ERROR";
+      case "INVALID":
+        return "ERROR";
+      default:
+        return "CONNECTING";
     }
   }
 
   let _statusLabel = $derived(getStatusLabel(status));
-  let showRetry = $derived((status === 'ERROR' || status === 'INVALID') && onRetry);
-  let showProgress = $derived(status === 'INITIALIZING' && percentage !== undefined);
+  let showRetry = $derived((status === "ERROR" || status === "INVALID") && onRetry);
+  let showProgress = $derived(status === "INITIALIZING" && percentage !== undefined);
   let displayMessage = $derived(error || message);
-  let isLoading = $derived(status === 'INITIALIZING' || status === 'BOOTING' || status === 'WAITING_FOR_DATA' || !status);
-  let isError = $derived(status === 'ERROR' || status === 'INVALID');
-  let isOffline = $derived(status === 'OFFLINE');
+  let isLoading = $derived(
+    status === "INITIALIZING" || status === "BOOTING" || status === "WAITING_FOR_DATA" || !status
+  );
+  let isError = $derived(status === "ERROR" || status === "INVALID");
+  let isOffline = $derived(status === "OFFLINE");
 
   // Update logo size on container resize
   $effect(() => {
@@ -335,20 +351,198 @@
 
   // Cleanup on destroy
   onDestroy(() => {
-    bubbles.forEach(bubble => {
+    bubbles.forEach((bubble) => {
       if (bubble.timeoutId) clearTimeout(bubble.timeoutId);
     });
   });
 </script>
 
+<div
+  bind:this={containerRef}
+  class="idle-container fw-player-root"
+  role="status"
+  aria-label="Stream status"
+  onmousemove={handleMouseMove}
+  onmouseleave={handleMouseLeave}
+>
+  <!-- Hitmarkers -->
+  {#each hitmarkers as hitmarker (hitmarker.id)}
+    <div class="hitmarker" style="left: {hitmarker.x}px; top: {hitmarker.y}px;">
+      <div class="hitmarker-line tl"></div>
+      <div class="hitmarker-line tr"></div>
+      <div class="hitmarker-line bl"></div>
+      <div class="hitmarker-line br"></div>
+    </div>
+  {/each}
+
+  <!-- Floating particles -->
+  {#each particles as particle, _i}
+    <div
+      class="particle"
+      style="
+        left: {particle.left}%;
+        width: {particle.size}px;
+        height: {particle.size}px;
+        background: {particle.color};
+        animation-duration: {particle.duration}s;
+        animation-delay: {particle.delay}s;
+      "
+    />
+  {/each}
+
+  <!-- Animated bubbles -->
+  {#each bubbles as bubble, _i}
+    <div
+      class="bubble"
+      style="
+        top: {bubble.position.top}%;
+        left: {bubble.position.left}%;
+        width: {bubble.size}px;
+        height: {bubble.size}px;
+        background: {bubble.color};
+        opacity: {bubble.opacity};
+      "
+    />
+  {/each}
+
+  <!-- Center logo with push-away effect -->
+  <div
+    class="center-logo"
+    style="transform: translate(-50%, -50%) translate({offset.x}px, {offset.y}px);"
+  >
+    <!-- Pulsing circle background -->
+    <div
+      class="logo-pulse"
+      class:hovered={isHovered}
+      style="width: {logoSize * 1.4}px; height: {logoSize * 1.4}px;"
+    />
+
+    <!-- Logo image -->
+    <img
+      src={logomarkAsset}
+      alt="Logo"
+      class="logo-image"
+      class:hovered={isHovered}
+      style="width: {logoSize}px; height: {logoSize}px;"
+      onclick={handleLogoClick}
+      draggable="false"
+    />
+  </div>
+
+  <!-- Bouncing DVD Logo -->
+  <DvdLogo parentRef={containerRef} scale={0.08} />
+
+  <!-- Status overlay at bottom -->
+  <div class="status-overlay">
+    <div class="status-indicator">
+      <!-- Status icon -->
+      {#if isLoading}
+        <svg
+          class="status-icon spinning"
+          fill="none"
+          viewBox="0 0 24 24"
+          style="color: hsl(var(--tn-yellow, 40 95% 64%));"
+        >
+          <circle
+            style="opacity: 0.25;"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            stroke-width="4"
+          />
+          <path
+            style="opacity: 0.75;"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+          />
+        </svg>
+      {:else if isOffline}
+        <svg
+          class="status-icon"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          style="color: hsl(var(--tn-red, 348 100% 72%));"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3m8.293 8.293l1.414 1.414"
+          />
+        </svg>
+      {:else if isError}
+        <svg
+          class="status-icon"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          style="color: hsl(var(--tn-red, 348 100% 72%));"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+          />
+        </svg>
+      {:else}
+        <svg
+          class="status-icon spinning"
+          fill="none"
+          viewBox="0 0 24 24"
+          style="color: hsl(var(--tn-cyan, 193 100% 75%));"
+        >
+          <circle
+            style="opacity: 0.25;"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            stroke-width="4"
+          />
+          <path
+            style="opacity: 0.75;"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+          />
+        </svg>
+      {/if}
+      <span>{displayMessage}</span>
+    </div>
+
+    <!-- Progress bar -->
+    {#if showProgress}
+      <div class="progress-bar">
+        <div class="progress-fill" style="width: {Math.min(100, percentage ?? 0)}%;" />
+      </div>
+    {/if}
+
+    <!-- Retry button -->
+    {#if showRetry}
+      <button type="button" class="retry-button" onclick={onRetry}> Retry </button>
+    {/if}
+  </div>
+
+  <!-- Subtle overlay texture -->
+  <div class="overlay-texture" />
+</div>
+
 <style>
   @keyframes fadeInOut {
-    0%, 100% { opacity: 0.6; }
-    50% { opacity: 0.9; }
+    0%,
+    100% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 0.9;
+    }
   }
 
   @keyframes logoPulse {
-    0%, 100% {
+    0%,
+    100% {
       opacity: 0.15;
       transform: scale(1);
     }
@@ -363,8 +557,12 @@
       transform: translateY(100vh) rotate(0deg);
       opacity: 0;
     }
-    10% { opacity: 0.6; }
-    90% { opacity: 0.6; }
+    10% {
+      opacity: 0.6;
+    }
+    90% {
+      opacity: 0.6;
+    }
     100% {
       transform: translateY(-100px) rotate(360deg);
       opacity: 0;
@@ -372,8 +570,13 @@
   }
 
   @keyframes gradientShift {
-    0%, 100% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
   }
 
   @keyframes hitmarkerFade45 {
@@ -407,15 +610,20 @@
   }
 
   @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .idle-container {
     position: absolute;
     inset: 0;
     z-index: 5;
-    background: linear-gradient(135deg,
+    background: linear-gradient(
+      135deg,
       hsl(var(--tn-bg-dark, 235 21% 11%)) 0%,
       hsl(var(--tn-bg, 233 23% 17%)) 25%,
       hsl(var(--tn-bg-dark, 235 21% 11%)) 50%,
@@ -570,7 +778,7 @@
     gap: 8px;
     color: #787c99;
     font-size: 13px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
   .status-icon {
@@ -606,134 +814,10 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
   .retry-button:hover {
     background: rgba(122, 162, 247, 0.1);
   }
 </style>
-
-<div
-  bind:this={containerRef}
-  class="idle-container fw-player-root"
-  role="status"
-  aria-label="Stream status"
-  onmousemove={handleMouseMove}
-  onmouseleave={handleMouseLeave}
->
-  <!-- Hitmarkers -->
-  {#each hitmarkers as hitmarker (hitmarker.id)}
-    <div class="hitmarker" style="left: {hitmarker.x}px; top: {hitmarker.y}px;">
-      <div class="hitmarker-line tl"></div>
-      <div class="hitmarker-line tr"></div>
-      <div class="hitmarker-line bl"></div>
-      <div class="hitmarker-line br"></div>
-    </div>
-  {/each}
-
-  <!-- Floating particles -->
-  {#each particles as particle, _i}
-    <div
-      class="particle"
-      style="
-        left: {particle.left}%;
-        width: {particle.size}px;
-        height: {particle.size}px;
-        background: {particle.color};
-        animation-duration: {particle.duration}s;
-        animation-delay: {particle.delay}s;
-      "
-    />
-  {/each}
-
-  <!-- Animated bubbles -->
-  {#each bubbles as bubble, _i}
-    <div
-      class="bubble"
-      style="
-        top: {bubble.position.top}%;
-        left: {bubble.position.left}%;
-        width: {bubble.size}px;
-        height: {bubble.size}px;
-        background: {bubble.color};
-        opacity: {bubble.opacity};
-      "
-    />
-  {/each}
-
-  <!-- Center logo with push-away effect -->
-  <div
-    class="center-logo"
-    style="transform: translate(-50%, -50%) translate({offset.x}px, {offset.y}px);"
-  >
-    <!-- Pulsing circle background -->
-    <div
-      class="logo-pulse"
-      class:hovered={isHovered}
-      style="width: {logoSize * 1.4}px; height: {logoSize * 1.4}px;"
-    />
-
-    <!-- Logo image -->
-    <img
-      src={logomarkAsset}
-      alt="Logo"
-      class="logo-image"
-      class:hovered={isHovered}
-      style="width: {logoSize}px; height: {logoSize}px;"
-      onclick={handleLogoClick}
-      draggable="false"
-    />
-  </div>
-
-  <!-- Bouncing DVD Logo -->
-  <DvdLogo parentRef={containerRef} scale={0.08} />
-
-  <!-- Status overlay at bottom -->
-  <div class="status-overlay">
-    <div class="status-indicator">
-      <!-- Status icon -->
-      {#if isLoading}
-        <svg class="status-icon spinning" fill="none" viewBox="0 0 24 24" style="color: hsl(var(--tn-yellow, 40 95% 64%));">
-          <circle style="opacity: 0.25;" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-          <path style="opacity: 0.75;" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-        </svg>
-      {:else if isOffline}
-        <svg class="status-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color: hsl(var(--tn-red, 348 100% 72%));">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3m8.293 8.293l1.414 1.414" />
-        </svg>
-      {:else if isError}
-        <svg class="status-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color: hsl(var(--tn-red, 348 100% 72%));">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-      {:else}
-        <svg class="status-icon spinning" fill="none" viewBox="0 0 24 24" style="color: hsl(var(--tn-cyan, 193 100% 75%));">
-          <circle style="opacity: 0.25;" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-          <path style="opacity: 0.75;" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-        </svg>
-      {/if}
-      <span>{displayMessage}</span>
-    </div>
-
-    <!-- Progress bar -->
-    {#if showProgress}
-      <div class="progress-bar">
-        <div class="progress-fill" style="width: {Math.min(100, percentage ?? 0)}%;" />
-      </div>
-    {/if}
-
-    <!-- Retry button -->
-    {#if showRetry}
-      <button
-        type="button"
-        class="retry-button"
-        onclick={onRetry}
-      >
-        Retry
-      </button>
-    {/if}
-  </div>
-
-  <!-- Subtle overlay texture -->
-  <div class="overlay-texture" />
-</div>

@@ -11,7 +11,7 @@
  * - Protocol-specific routing (new)
  */
 
-import type { PlaybackMode } from '../types';
+import type { PlaybackMode } from "../types";
 
 export interface TrackScore {
   video: number;
@@ -41,7 +41,7 @@ export interface PlayerScore {
 export const DEFAULT_TRACK_SCORES: TrackScore = {
   video: 2.0,
   audio: 1.0,
-  subtitle: 0.5
+  subtitle: 0.5,
 };
 
 /**
@@ -87,27 +87,21 @@ export function calculateMaxScore(
 export function calculatePriorityScore(priority: number, maxPriority: number): number {
   // Lower priority number = higher score
   // Normalize to 0-1 range, then invert
-  return 1 - (priority / Math.max(maxPriority, 1));
+  return 1 - priority / Math.max(maxPriority, 1);
 }
 
 /**
  * Source preference scoring based on MistServer ordering
  */
-export function calculateSourceScore(
-  sourceIndex: number,
-  totalSources: number
-): number {
+export function calculateSourceScore(sourceIndex: number, totalSources: number): number {
   // Earlier sources (lower index) get higher scores
-  return 1 - (sourceIndex / Math.max(totalSources - 1, 1));
+  return 1 - sourceIndex / Math.max(totalSources - 1, 1);
 }
 
 /**
  * Bandwidth/quality scoring
  */
-export function calculateQualityScore(
-  bandwidth?: number,
-  targetBandwidth?: number
-): number {
+export function calculateQualityScore(bandwidth?: number, targetBandwidth?: number): number {
   if (!bandwidth || !targetBandwidth) {
     return 1.0; // Neutral score if no bandwidth info
   }
@@ -126,32 +120,32 @@ export function calculateQualityScore(
  */
 export const PROTOCOL_BLACKLIST: Set<string> = new Set([
   // Flash - browsers removed support in 2020
-  'flash/7',
-  'flash/10',
-  'flash/11',
+  "flash/7",
+  "flash/10",
+  "flash/11",
   // Silverlight - dead technology
-  'silverlight',
+  "silverlight",
   // SDP is WebRTC signaling format, not a playback source type
-  'html5/application/sdp',
-  'sdp',
+  "html5/application/sdp",
+  "sdp",
   // MPEG-TS - no browser support, no wrapper implementation in reference
-  'html5/video/mpeg',
+  "html5/video/mpeg",
   // Smooth Streaming - intentionally disabled in reference (commented out in dashjs.js!)
-  'html5/application/vnd.ms-sstr+xml',
+  "html5/application/vnd.ms-sstr+xml",
   // Server-side only protocols - browsers can't connect to these directly
-  'srt',
-  'rtsp',
-  'rtmp',
+  "srt",
+  "rtsp",
+  "rtmp",
   // MistServer internal protocols - not for browser playback
-  'dtsc',
+  "dtsc",
   // NOTE: ws/video/raw is supported by WebCodecs player
   // Image formats - not video playback
-  'html5/image/jpeg',
+  "html5/image/jpeg",
   // Script/metadata formats - not playback sources
-  'html5/text/javascript',
+  "html5/text/javascript",
   // Subtitle-only formats - not standalone playback sources (used as tracks)
-  'html5/text/vtt',
-  'html5/text/plain',
+  "html5/text/vtt",
+  "html5/text/plain",
 ]);
 
 /**
@@ -175,24 +169,24 @@ export const PROTOCOL_PENALTIES: Record<string, number> = {
   // 'ws/video/h264': 0,
   // 'wss/video/h264': 0,
   // WebM - reference supports but unreliable in practice
-  'html5/video/webm': 0.80,  // Heavy penalty - very broken
-  'html5/audio/webm': 0.60,
-  'ws/video/webm': 0.80,
-  'wss/video/webm': 0.80,
+  "html5/video/webm": 0.8, // Heavy penalty - very broken
+  "html5/audio/webm": 0.6,
+  "ws/video/webm": 0.8,
+  "wss/video/webm": 0.8,
   // MEWS - heavy penalty, prefer HLS/WebRTC (reference mews.js has issues)
-  'ws/video/mp4': 0.50,
-  'wss/video/mp4': 0.50,
+  "ws/video/mp4": 0.5,
+  "wss/video/mp4": 0.5,
   // Native Mist WebRTC signaling - treat like MEWS (legacy/less stable than WHEP)
-  'webrtc': 0.50,
-  'mist/webrtc': 0.50,
+  webrtc: 0.5,
+  "mist/webrtc": 0.5,
   // DASH - heavy penalty, broken implementation
-  'dash/video/mp4': 0.90,  // Below legacy
-  'dash/video/webm': 0.95,
+  "dash/video/mp4": 0.9, // Below legacy
+  "dash/video/webm": 0.95,
   // CMAF-style protocols (fMP4 over HLS/DASH) - fragmentation issues
-  'html5/application/vnd.apple.mpegurl;version=7': 0.20,  // HLSv7 is CMAF-based
+  "html5/application/vnd.apple.mpegurl;version=7": 0.2, // HLSv7 is CMAF-based
   // LL-HLS specific - experimental, spotty support
-  'll-hls': 0.20,
-  'cmaf': 0.20,
+  "ll-hls": 0.2,
+  cmaf: 0.2,
 };
 
 /**
@@ -205,14 +199,14 @@ export function calculateProtocolPenalty(mimeType: string): number {
   }
   // Pattern-based penalties for protocols not explicitly listed
   const lowerMime = mimeType.toLowerCase();
-  if (lowerMime.includes('webm')) {
-    return 0.50; // Heavy penalty for any WebM variant
+  if (lowerMime.includes("webm")) {
+    return 0.5; // Heavy penalty for any WebM variant
   }
-  if (lowerMime.startsWith('dash/')) {
-    return 0.40; // DASH penalty
+  if (lowerMime.startsWith("dash/")) {
+    return 0.4; // DASH penalty
   }
-  if (lowerMime.includes('cmaf') || lowerMime.includes('ll-hls')) {
-    return 0.20;
+  if (lowerMime.includes("cmaf") || lowerMime.includes("ll-hls")) {
+    return 0.2;
   }
   return 0;
 }
@@ -222,14 +216,14 @@ export function calculateProtocolPenalty(mimeType: string): number {
  * Based on library maturity, error recovery, and overall stability
  */
 export const PLAYER_RELIABILITY: Record<string, number> = {
-  'webcodecs': 0.95,   // Stable, lowest latency option
-  'videojs': 0.95,     // Fast loading, built-in HLS via VHS
-  'hlsjs': 0.90,       // Battle-tested but slower to load
-  'native': 0.85,      // Native is lightweight but has edge cases
-  'mist-webrtc': 0.85, // Full signaling features
-  'mews': 0.75,        // Custom protocol, less tested
-  'mist-legacy': 0.70, // Ultimate fallback, delegates everything
-  'dashjs': 0.50,      // Broken, lowest reliability
+  webcodecs: 0.95, // Stable, lowest latency option
+  videojs: 0.95, // Fast loading, built-in HLS via VHS
+  hlsjs: 0.9, // Battle-tested but slower to load
+  native: 0.85, // Native is lightweight but has edge cases
+  "mist-webrtc": 0.85, // Full signaling features
+  mews: 0.75, // Custom protocol, less tested
+  "mist-legacy": 0.7, // Ultimate fallback, delegates everything
+  dashjs: 0.5, // Broken, lowest reliability
 };
 
 /**
@@ -253,71 +247,71 @@ export function calculateReliabilityScore(playerShortname: string): number {
  * - Auto: MP4/WS balanced choice, WHEP for low latency, HLS last resort
  */
 export const MODE_PROTOCOL_BONUSES: Record<PlaybackMode, Record<string, number>> = {
-  'low-latency': {
+  "low-latency": {
     // WebCodecs raw/h264: HIGHEST PRIORITY - ultra-low latency via WebCodecs API
-    'ws/video/raw': 0.55,
-    'wss/video/raw': 0.55,
-    'ws/video/h264': 0.52,
-    'wss/video/h264': 0.52,
+    "ws/video/raw": 0.55,
+    "wss/video/raw": 0.55,
+    "ws/video/h264": 0.52,
+    "wss/video/h264": 0.52,
     // WHEP/WebRTC: sub-second latency
-    'whep': 0.50,
-    'webrtc': 0.25,
-    'mist/webrtc': 0.25,
+    whep: 0.5,
+    webrtc: 0.25,
+    "mist/webrtc": 0.25,
     // MP4/WS (MEWS): 2-5s latency, good fallback
-    'ws/video/mp4': 0.30,
-    'wss/video/mp4': 0.30,
+    "ws/video/mp4": 0.3,
+    "wss/video/mp4": 0.3,
     // Progressive MP4: lower latency than HLS (5-10s vs 10-30s)
-    'html5/video/mp4': 0.15,
+    "html5/video/mp4": 0.15,
     // HLS: high latency, minimal bonus
-    'html5/application/vnd.apple.mpegurl': 0.05,
+    "html5/application/vnd.apple.mpegurl": 0.05,
   },
-  'quality': {
+  quality: {
     // MP4/WS: stable + lower latency than HLS, preferred when supported
-    'ws/video/mp4': 0.45,
-    'wss/video/mp4': 0.45,
+    "ws/video/mp4": 0.45,
+    "wss/video/mp4": 0.45,
     // WebCodecs raw: below MEWS but above HLS - good quality + low latency
-    'ws/video/raw': 0.40,
-    'wss/video/raw': 0.40,
-    'ws/video/h264': 0.38,
-    'wss/video/h264': 0.38,
+    "ws/video/raw": 0.4,
+    "wss/video/raw": 0.4,
+    "ws/video/h264": 0.38,
+    "wss/video/h264": 0.38,
     // HLS: ABR support, universal fallback
-    'html5/application/vnd.apple.mpegurl': 0.30,
-    'html5/video/mp4': 0.20,
+    "html5/application/vnd.apple.mpegurl": 0.3,
+    "html5/video/mp4": 0.2,
     // WebRTC: minimal for quality mode
-    'whep': 0.05,
-    'webrtc': 0.05,
-    'mist/webrtc': 0.05,
+    whep: 0.05,
+    webrtc: 0.05,
+    "mist/webrtc": 0.05,
   },
-  'vod': {
+  vod: {
     // VOD/Clip: Prefer seekable protocols, EXCLUDE WebRTC (no seek support)
-    'html5/video/mp4': 0.50,         // Progressive MP4 - best for clips
-    'html5/application/vnd.apple.mpegurl': 0.45,  // HLS - ABR support
-    'dash/video/mp4': 0.40,          // DASH - ABR support
-    'ws/video/mp4': 0.35,            // MEWS - seekable via MSE
-    'wss/video/mp4': 0.35,
+    "html5/video/mp4": 0.5, // Progressive MP4 - best for clips
+    "html5/application/vnd.apple.mpegurl": 0.45, // HLS - ABR support
+    "dash/video/mp4": 0.4, // DASH - ABR support
+    "ws/video/mp4": 0.35, // MEWS - seekable via MSE
+    "wss/video/mp4": 0.35,
     // WHEP/WebRTC: HARD PENALTY - no seek support, inappropriate for VOD
-    'whep': -1.0,
-    'webrtc': -1.0,
-    'mist/webrtc': -1.0,
+    whep: -1.0,
+    webrtc: -1.0,
+    "mist/webrtc": -1.0,
   },
-  'auto': {
+  auto: {
     // WebCodecs raw: highest priority for low-latency live streams
-    'ws/video/raw': 0.50,
-    'wss/video/raw': 0.50,
-    'ws/video/h264': 0.48,
-    'wss/video/h264': 0.48,
+    "ws/video/raw": 0.5,
+    "wss/video/raw": 0.5,
+    "ws/video/h264": 0.48,
+    "wss/video/h264": 0.48,
     // Direct MP4: simple, reliable, preferred over HLS when available
-    'html5/video/mp4': 0.42,
+    "html5/video/mp4": 0.42,
     // WHEP/WebRTC: good for low latency
-    'whep': 0.38,
-    'webrtc': 0.20,
-    'mist/webrtc': 0.20,
+    whep: 0.38,
+    webrtc: 0.2,
+    "mist/webrtc": 0.2,
     // MP4/WS (MEWS): lower latency than HLS
-    'ws/video/mp4': 0.30,
-    'wss/video/mp4': 0.30,
+    "ws/video/mp4": 0.3,
+    "wss/video/mp4": 0.3,
     // HLS: high latency, fallback option (but reliable)
-    'html5/application/vnd.apple.mpegurl': 0.20,
-  }
+    "html5/application/vnd.apple.mpegurl": 0.2,
+  },
 };
 
 /**
@@ -332,46 +326,46 @@ export function calculateModeBonus(mimeType: string, mode: PlaybackMode): number
  * Protocol routing rules - certain players are preferred for certain protocols
  */
 export const PROTOCOL_ROUTING: Record<string, { prefer: string[]; avoid?: string[] }> = {
-  'whep': { prefer: ['native'] },
-  'webrtc': { prefer: ['mist-webrtc', 'native'] },
-  'mist/webrtc': { prefer: ['mist-webrtc'] },
+  whep: { prefer: ["native"] },
+  webrtc: { prefer: ["mist-webrtc", "native"] },
+  "mist/webrtc": { prefer: ["mist-webrtc"] },
 
   // Raw WebSocket (12-byte header + AVCC NAL units) - WebCodecs only
-  'ws/video/raw': { prefer: ['webcodecs'] },
-  'wss/video/raw': { prefer: ['webcodecs'] },
+  "ws/video/raw": { prefer: ["webcodecs"] },
+  "wss/video/raw": { prefer: ["webcodecs"] },
 
   // Annex B WebSocket (H.264 NAL units) - WebCodecs
-  'ws/video/h264': { prefer: ['webcodecs'] },
-  'wss/video/h264': { prefer: ['webcodecs'] },
+  "ws/video/h264": { prefer: ["webcodecs"] },
+  "wss/video/h264": { prefer: ["webcodecs"] },
 
   // MP4-muxed WebSocket - MEWS (uses MSE for demuxing)
-  'ws/video/mp4': { prefer: ['mews'] },
-  'wss/video/mp4': { prefer: ['mews'] },
-  'ws/video/webm': { prefer: ['mews'] },
-  'wss/video/webm': { prefer: ['mews'] },
+  "ws/video/mp4": { prefer: ["mews"] },
+  "wss/video/mp4": { prefer: ["mews"] },
+  "ws/video/webm": { prefer: ["mews"] },
+  "wss/video/webm": { prefer: ["mews"] },
 
   // HLS
-  'html5/application/vnd.apple.mpegurl': {
-    prefer: ['videojs', 'hlsjs'],
-    avoid: ['native'],
+  "html5/application/vnd.apple.mpegurl": {
+    prefer: ["videojs", "hlsjs"],
+    avoid: ["native"],
   },
-  'html5/application/vnd.apple.mpegurl;version=7': {
-    prefer: ['videojs', 'hlsjs'],
-    avoid: ['native'],
+  "html5/application/vnd.apple.mpegurl;version=7": {
+    prefer: ["videojs", "hlsjs"],
+    avoid: ["native"],
   },
 
   // DASH
-  'dash/video/mp4': { prefer: ['dashjs', 'videojs'] },
+  "dash/video/mp4": { prefer: ["dashjs", "videojs"] },
 
   // Progressive download
-  'html5/video/mp4': { prefer: ['native'] },
-  'html5/video/webm': { prefer: ['native'] },
+  "html5/video/mp4": { prefer: ["native"] },
+  "html5/video/webm": { prefer: ["native"] },
 
   // Audio-only formats
-  'html5/audio/aac': { prefer: ['native'] },
-  'html5/audio/mp3': { prefer: ['native'] },
-  'html5/audio/flac': { prefer: ['native'] },
-  'html5/audio/wav': { prefer: ['native'] },
+  "html5/audio/aac": { prefer: ["native"] },
+  "html5/audio/mp3": { prefer: ["native"] },
+  "html5/audio/flac": { prefer: ["native"] },
+  "html5/audio/wav": { prefer: ["native"] },
 };
 
 /**
@@ -390,7 +384,7 @@ export function calculateRoutingBonus(mimeType: string, playerShortname: string)
   if (rules.prefer?.includes(playerShortname)) {
     const preferIndex = rules.prefer.indexOf(playerShortname);
     // First preferred player gets 0.15, second gets 0.10, etc.
-    return 0.15 - (preferIndex * 0.05);
+    return 0.15 - preferIndex * 0.05;
   }
 
   return 0;
@@ -433,17 +427,17 @@ export function scorePlayer(
     targetBandwidth,
     playerShortname,
     mimeType,
-    playbackMode = 'auto',
+    playbackMode = "auto",
     weights = {
-      tracks: 0.50,      // Reduced from 0.70 to make room for new factors
-      priority: 0.10,    // Reduced from 0.15
-      source: 0.05,      // Reduced from 0.10
-      quality: 0.05,     // Unchanged
-      reliability: 0.10, // NEW: Player stability
-      mode: 0.10,        // Playback mode bonus (reduced slightly)
-      routing: 0.08,     // Protocol routing preference
+      tracks: 0.5, // Reduced from 0.70 to make room for new factors
+      priority: 0.1, // Reduced from 0.15
+      source: 0.05, // Reduced from 0.10
+      quality: 0.05, // Unchanged
+      reliability: 0.1, // NEW: Player stability
+      mode: 0.1, // Playback mode bonus (reduced slightly)
+      routing: 0.08, // Protocol routing preference
       protocolPenalty: 1.0, // Protocol penalty weight (applied as subtraction)
-    }
+    },
   } = options;
 
   const finalTrackScores = { ...DEFAULT_TRACK_SCORES, ...trackScores };
@@ -457,7 +451,8 @@ export function scorePlayer(
   // New enhanced scores
   const reliabilityScore = playerShortname ? calculateReliabilityScore(playerShortname) : 0.5;
   const modeBonus = mimeType ? calculateModeBonus(mimeType, playbackMode) : 0;
-  const routingBonus = mimeType && playerShortname ? calculateRoutingBonus(mimeType, playerShortname) : 0;
+  const routingBonus =
+    mimeType && playerShortname ? calculateRoutingBonus(mimeType, playerShortname) : 0;
   const protocolPenalty = mimeType ? calculateProtocolPenalty(mimeType) : 0;
 
   // Weighted total score (penalty is subtracted)
@@ -483,7 +478,7 @@ export function scorePlayer(
       modeBonus,
       routingBonus,
       protocolPenalty,
-    }
+    },
   };
 }
 
@@ -510,7 +505,7 @@ export function scoreAndRankPlayers<T extends { priority: number }>(
 }> {
   const scoredPlayers = players.map(({ player, supportedTracks, sourceIndex }) => ({
     player,
-    score: scorePlayer(supportedTracks, player.priority, sourceIndex, options)
+    score: scorePlayer(supportedTracks, player.priority, sourceIndex, options),
   }));
 
   return scoredPlayers.sort((a, b) => compareScores(a.score, b.score));
@@ -532,7 +527,7 @@ export function meetsMinimumScore(
     minTotal = 0,
     requireVideo = false,
     requireAudio = false,
-    minTrackTypes = 0
+    minTrackTypes = 0,
   } = requirements;
 
   // Check total score
@@ -541,11 +536,11 @@ export function meetsMinimumScore(
   }
 
   // Check track type requirements
-  if (requireVideo && !score.trackTypes.includes('video')) {
+  if (requireVideo && !score.trackTypes.includes("video")) {
     return false;
   }
 
-  if (requireAudio && !score.trackTypes.includes('audio')) {
+  if (requireAudio && !score.trackTypes.includes("audio")) {
     return false;
   }
 

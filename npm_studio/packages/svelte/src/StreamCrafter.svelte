@@ -8,29 +8,29 @@
   import '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
 -->
 <script lang="ts">
-  import { onMount, onDestroy, untrack } from 'svelte';
+  import { onMount, onDestroy, untrack } from "svelte";
 
   import {
     createStreamCrafterContextV2,
     setStreamCrafterContextV2,
     type StreamCrafterV2State,
-  } from './stores/streamCrafterContextV2';
-  import { createAudioLevelsStore, type AudioLevelsState } from './stores/audioLevels.svelte';
-  import { createCompositorStore, type CompositorState } from './stores/compositor';
-  import { createIngestEndpointsStore, type IngestEndpointsState } from './stores/ingestEndpoints';
-  import CompositorControls from './components/CompositorControls.svelte';
-  import AdvancedPanel, { type AudioProcessingSettings } from './components/AdvancedPanel.svelte';
+  } from "./stores/streamCrafterContextV2";
+  import { createAudioLevelsStore, type AudioLevelsState } from "./stores/audioLevels.svelte";
+  import { createCompositorStore, type CompositorState } from "./stores/compositor";
+  import { createIngestEndpointsStore, type IngestEndpointsState } from "./stores/ingestEndpoints";
+  import CompositorControls from "./components/CompositorControls.svelte";
+  import AdvancedPanel, { type AudioProcessingSettings } from "./components/AdvancedPanel.svelte";
 
   // Icons
-  import CameraIcon from './icons/CameraIcon.svelte';
-  import MonitorIcon from './icons/MonitorIcon.svelte';
-  import MicIcon from './icons/MicIcon.svelte';
-  import XIcon from './icons/XIcon.svelte';
-  import SettingsIcon from './icons/SettingsIcon.svelte';
-  import VideoIcon from './icons/VideoIcon.svelte';
-  import EyeIcon from './icons/EyeIcon.svelte';
-  import ChevronsRightIcon from './icons/ChevronsRightIcon.svelte';
-  import ChevronsLeftIcon from './icons/ChevronsLeftIcon.svelte';
+  import CameraIcon from "./icons/CameraIcon.svelte";
+  import MonitorIcon from "./icons/MonitorIcon.svelte";
+  import MicIcon from "./icons/MicIcon.svelte";
+  import XIcon from "./icons/XIcon.svelte";
+  import SettingsIcon from "./icons/SettingsIcon.svelte";
+  import VideoIcon from "./icons/VideoIcon.svelte";
+  import EyeIcon from "./icons/EyeIcon.svelte";
+  import ChevronsRightIcon from "./icons/ChevronsRightIcon.svelte";
+  import ChevronsLeftIcon from "./icons/ChevronsLeftIcon.svelte";
 
   import type {
     QualityProfile,
@@ -40,8 +40,8 @@
     ReconnectionState,
     CompositorConfig,
     EncoderOverrides,
-  } from '@livepeer-frameworks/streamcrafter-core';
-  import { isWebCodecsEncodingPathSupported } from '@livepeer-frameworks/streamcrafter-core';
+  } from "@livepeer-frameworks/streamcrafter-core";
+  import { isWebCodecsEncodingPathSupported } from "@livepeer-frameworks/streamcrafter-core";
 
   // Props
   interface Props {
@@ -77,23 +77,23 @@
     whipUrl,
     gatewayUrl,
     streamKey,
-    initialProfile = 'broadcast',
+    initialProfile = "broadcast",
     autoStartCamera = false,
     showSettings: initialShowSettings = false,
     devMode = false,
     debug = false,
     enableCompositor = false,
     compositorConfig = {},
-    class: className = '',
+    class: className = "",
     onStateChange,
     onError,
   }: Props = $props();
 
   // Quality profiles
   const QUALITY_PROFILES: { id: QualityProfile; label: string; description: string }[] = [
-    { id: 'professional', label: 'Professional', description: '1080p @ 8 Mbps' },
-    { id: 'broadcast', label: 'Broadcast', description: '1080p @ 4.5 Mbps' },
-    { id: 'conference', label: 'Conference', description: '720p @ 2.5 Mbps' },
+    { id: "professional", label: "Professional", description: "1080p @ 8 Mbps" },
+    { id: "broadcast", label: "Broadcast", description: "1080p @ 4.5 Mbps" },
+    { id: "conference", label: "Conference", description: "720p @ 2.5 Mbps" },
   ];
 
   // State
@@ -106,7 +106,7 @@
   let contextMenu = $state<{ x: number; y: number } | null>(null);
   let isAdvancedPanelOpen = $state(false);
   let crafterState = $state<StreamCrafterV2State>({
-    state: 'idle',
+    state: "idle",
     stateContext: {},
     mediaStream: null,
     sources: [],
@@ -138,7 +138,7 @@
   });
   let ingestEndpointsState = $state<IngestEndpointsState>({
     endpoints: null,
-    status: 'idle',
+    status: "idle",
     error: null,
   });
   let masterVolume = $state(1);
@@ -175,7 +175,9 @@
   });
 
   // Track if we're waiting for gateway resolution
-  let isResolvingEndpoint = $derived(!whipUrl && gatewayUrl && streamKey && ingestEndpointsState.status === 'loading');
+  let isResolvingEndpoint = $derived(
+    !whipUrl && gatewayUrl && streamKey && ingestEndpointsState.status === "loading"
+  );
 
   // Subscriptions
   let unsubscribe: (() => void) | undefined;
@@ -245,7 +247,7 @@
 
   // Auto-start camera
   $effect(() => {
-    if (autoStartCamera && resolvedWhipUrl && crafterState.state === 'idle') {
+    if (autoStartCamera && resolvedWhipUrl && crafterState.state === "idle") {
       handleStartCamera();
     }
   });
@@ -267,15 +269,15 @@
     }
 
     function handleEscape(e: KeyboardEvent) {
-      if (e.key === 'Escape') showSettings = false;
+      if (e.key === "Escape") showSettings = false;
     }
 
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleEscape);
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
 
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
     };
   });
 
@@ -291,19 +293,19 @@
     }
 
     function handleEscape(e: KeyboardEvent) {
-      if (e.key === 'Escape') contextMenu = null;
+      if (e.key === "Escape") contextMenu = null;
     }
 
     // Small delay to prevent immediate close on right-click
     const timer = setTimeout(() => {
-      document.addEventListener('mousedown', handleClickOutside);
-      document.addEventListener('keydown', handleEscape);
+      document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener("keydown", handleEscape);
     }, 0);
 
     return () => {
       clearTimeout(timer);
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
     };
   });
 
@@ -313,10 +315,7 @@
     });
 
     // Setup audio levels store
-    audioLevelsStore = createAudioLevelsStore(
-      () => crafter.getController(),
-      { autoStart: true }
-    );
+    audioLevelsStore = createAudioLevelsStore(() => crafter.getController(), { autoStart: true });
     unsubscribeAudioLevels = audioLevelsStore.subscribe((state) => {
       audioLevels = state;
     });
@@ -350,7 +349,7 @@
     try {
       await crafter.startCamera();
     } catch (err) {
-      console.error('Failed to start camera:', err);
+      console.error("Failed to start camera:", err);
     }
   }
 
@@ -358,19 +357,19 @@
     try {
       await crafter.startScreenShare({ audio: true });
     } catch (err) {
-      console.error('Failed to start screen share:', err);
+      console.error("Failed to start screen share:", err);
     }
   }
 
   async function handleGoLive() {
     if (!resolvedWhipUrl) {
-      console.error('No WHIP endpoint configured');
+      console.error("No WHIP endpoint configured");
       return;
     }
     try {
       await crafter.startStreaming();
     } catch (err) {
-      console.error('Failed to start streaming:', err);
+      console.error("Failed to start streaming:", err);
     }
   }
 
@@ -413,8 +412,9 @@
 
   function handleToggleSourceVisibility(sourceId: string) {
     if (!compositorStore || !compositorState.activeSceneId) return;
-    const layers = compositorState.scenes.find(s => s.id === compositorState.activeSceneId)?.layers ?? [];
-    const layer = layers.find(l => l.sourceId === sourceId);
+    const layers =
+      compositorState.scenes.find((s) => s.id === compositorState.activeSceneId)?.layers ?? [];
+    const layer = layers.find((l) => l.sourceId === sourceId);
     if (layer) {
       compositorStore.setLayerVisibility(compositorState.activeSceneId, layer.id, !layer.visible);
     }
@@ -422,9 +422,9 @@
 
   function getSourceLayerVisibility(sourceId: string): boolean {
     if (!compositorState.isEnabled) return true;
-    const activeScene = compositorState.scenes.find(s => s.id === compositorState.activeSceneId);
+    const activeScene = compositorState.scenes.find((s) => s.id === compositorState.activeSceneId);
     if (!activeScene) return true;
-    const layer = activeScene.layers.find(l => l.sourceId === sourceId);
+    const layer = activeScene.layers.find((l) => l.sourceId === sourceId);
     return layer?.visible ?? true;
   }
 
@@ -447,53 +447,72 @@
   }
 
   function copyStreamInfo() {
-    const profile = QUALITY_PROFILES.find(p => p.id === crafterState.qualityProfile);
+    const profile = QUALITY_PROFILES.find((p) => p.id === crafterState.qualityProfile);
     const info = [
       `Status: ${crafterState.state}`,
-      `Quality: ${profile?.label ?? crafterState.qualityProfile} (${profile?.description ?? ''})`,
+      `Quality: ${profile?.label ?? crafterState.qualityProfile} (${profile?.description ?? ""})`,
       `Sources: ${crafterState.sources.length}`,
       resolvedWhipUrl ? `WHIP: ${resolvedWhipUrl}` : null,
-    ].filter(Boolean).join('\n');
+    ]
+      .filter(Boolean)
+      .join("\n");
     navigator.clipboard.writeText(info).catch(console.error);
     contextMenu = null;
   }
 
   // Computed
-  let canAddSource = $derived(crafterState.state !== 'destroyed' && crafterState.state !== 'error');
-  let canStream = $derived(crafterState.isCapturing && !crafterState.isStreaming && resolvedWhipUrl);
-  let hasCamera = $derived(crafterState.sources.some((s) => s.type === 'camera'));
-  let _hasScreen = $derived(crafterState.sources.some((s) => s.type === 'screen'));
+  let canAddSource = $derived(crafterState.state !== "destroyed" && crafterState.state !== "error");
+  let canStream = $derived(
+    crafterState.isCapturing && !crafterState.isStreaming && resolvedWhipUrl
+  );
+  let hasCamera = $derived(crafterState.sources.some((s) => s.type === "camera"));
+  let _hasScreen = $derived(crafterState.sources.some((s) => s.type === "screen"));
 
   function getStatusText(state: IngestState, reconnState?: ReconnectionState | null): string {
     if (reconnState?.isReconnecting) {
       return `Reconnecting (${reconnState.attemptNumber}/5)...`;
     }
     switch (state) {
-      case 'idle': return 'Idle';
-      case 'requesting_permissions': return 'Permissions...';
-      case 'capturing': return 'Ready';
-      case 'connecting': return 'Connecting...';
-      case 'streaming': return 'Live';
-      case 'reconnecting': return 'Reconnecting...';
-      case 'error': return 'Error';
-      case 'destroyed': return 'Destroyed';
-      default: return state;
+      case "idle":
+        return "Idle";
+      case "requesting_permissions":
+        return "Permissions...";
+      case "capturing":
+        return "Ready";
+      case "connecting":
+        return "Connecting...";
+      case "streaming":
+        return "Live";
+      case "reconnecting":
+        return "Reconnecting...";
+      case "error":
+        return "Error";
+      case "destroyed":
+        return "Destroyed";
+      default:
+        return state;
     }
   }
 
   function getStatusBadgeClass(state: IngestState, isReconnecting: boolean): string {
-    if (state === 'streaming') return 'fw-sc-badge fw-sc-badge--live';
-    if (isReconnecting) return 'fw-sc-badge fw-sc-badge--connecting';
-    if (state === 'error') return 'fw-sc-badge fw-sc-badge--error';
-    if (state === 'capturing') return 'fw-sc-badge fw-sc-badge--ready';
-    return 'fw-sc-badge fw-sc-badge--idle';
+    if (state === "streaming") return "fw-sc-badge fw-sc-badge--live";
+    if (isReconnecting) return "fw-sc-badge fw-sc-badge--connecting";
+    if (state === "error") return "fw-sc-badge fw-sc-badge--error";
+    if (state === "capturing") return "fw-sc-badge fw-sc-badge--ready";
+    return "fw-sc-badge fw-sc-badge--idle";
   }
 
   let statusText = $derived(getStatusText(crafterState.state, crafterState.reconnectionState));
-  let statusBadgeClass = $derived(getStatusBadgeClass(crafterState.state, crafterState.isReconnecting));
+  let statusBadgeClass = $derived(
+    getStatusBadgeClass(crafterState.state, crafterState.isReconnecting)
+  );
 </script>
 
-<div class="fw-sc-root {devMode ? 'fw-sc-root--devmode' : ''} {className}" oncontextmenu={handleContextMenu} role="application">
+<div
+  class="fw-sc-root {devMode ? 'fw-sc-root--devmode' : ''} {className}"
+  oncontextmenu={handleContextMenu}
+  role="application"
+>
   <!-- Main content wrapper -->
   <div class="fw-sc-main {devMode ? 'flex-1 min-w-0' : 'w-full'}">
     <!-- Header -->
@@ -504,237 +523,244 @@
       </div>
     </div>
 
-  <!-- Content area (preview + mixer) - responsive layout -->
-  <div class="fw-sc-content">
-    <!-- Preview wrapper for flex sizing -->
-    <div class="fw-sc-preview-wrapper">
-      <!-- Video Preview (flush - no padding) -->
-      <div class="fw-sc-preview">
-        <video
-          bind:this={videoEl}
-          playsinline
-          muted
-          autoplay
-          aria-label="Stream preview"
-        ></video>
+    <!-- Content area (preview + mixer) - responsive layout -->
+    <div class="fw-sc-content">
+      <!-- Preview wrapper for flex sizing -->
+      <div class="fw-sc-preview-wrapper">
+        <!-- Video Preview (flush - no padding) -->
+        <div class="fw-sc-preview">
+          <video bind:this={videoEl} playsinline muted autoplay aria-label="Stream preview"></video>
 
-        <!-- Empty State -->
-        {#if !crafterState.mediaStream}
-          <div class="fw-sc-preview-placeholder">
-            <CameraIcon size={48} />
-            <span>Add a camera or screen to preview</span>
-          </div>
-        {/if}
+          <!-- Empty State -->
+          {#if !crafterState.mediaStream}
+            <div class="fw-sc-preview-placeholder">
+              <CameraIcon size={48} />
+              <span>Add a camera or screen to preview</span>
+            </div>
+          {/if}
 
-        <!-- Status Overlay - Connecting/Reconnecting -->
-        {#if crafterState.state === 'connecting' || crafterState.state === 'reconnecting'}
-          <div class="fw-sc-status-overlay">
-            <div class="fw-sc-status-spinner"></div>
-            <span class="fw-sc-status-text">{statusText}</span>
-          </div>
-        {/if}
+          <!-- Status Overlay - Connecting/Reconnecting -->
+          {#if crafterState.state === "connecting" || crafterState.state === "reconnecting"}
+            <div class="fw-sc-status-overlay">
+              <div class="fw-sc-status-spinner"></div>
+              <span class="fw-sc-status-text">{statusText}</span>
+            </div>
+          {/if}
 
-        <!-- Live Badge -->
-        {#if crafterState.isStreaming}
-          <div class="fw-sc-live-badge">Live</div>
-        {/if}
+          <!-- Live Badge -->
+          {#if crafterState.isStreaming}
+            <div class="fw-sc-live-badge">Live</div>
+          {/if}
 
-        <!-- Compositor Controls Overlay (inside preview) -->
-        {#if enableCompositor && compositorStore && compositorState.isEnabled && compositorState.isInitialized}
-          {@const activeScene = compositorState.scenes.find(s => s.id === compositorState.activeSceneId) || null}
-          <CompositorControls
-            isEnabled={compositorState.isEnabled}
-            isInitialized={compositorState.isInitialized}
-            rendererType={compositorState.rendererType}
-            stats={compositorState.stats}
-            sources={crafterState.sources}
-            layers={activeScene?.layers ?? []}
-            currentLayout={compositorState.currentLayout}
-            onLayoutApply={(layout) => compositorStore?.applyLayout(layout)}
-            onCycleSourceOrder={(direction) => compositorStore?.cycleSourceOrder(direction)}
-          />
-        {/if}
-      </div>
-    </div>
-
-    <!-- Mixer Section - moves to right on wide screens -->
-    {#if crafterState.sources.length > 0}
-      <div class="fw-sc-section fw-sc-mixer {!showSources ? 'fw-sc-section--collapsed' : ''}">
-        <div
-          class="fw-sc-section-header"
-          onclick={() => showSources = !showSources}
-          role="button"
-          tabindex="0"
-          onkeydown={(e) => e.key === 'Enter' && (showSources = !showSources)}
-          title={showSources ? 'Collapse Mixer' : 'Expand Mixer'}
-        >
-          <span>Mixer ({crafterState.sources.length})</span>
-          {#if showSources}
-            <ChevronsRightIcon size={14} />
-          {:else}
-            <ChevronsLeftIcon size={14} />
+          <!-- Compositor Controls Overlay (inside preview) -->
+          {#if enableCompositor && compositorStore && compositorState.isEnabled && compositorState.isInitialized}
+            {@const activeScene =
+              compositorState.scenes.find((s) => s.id === compositorState.activeSceneId) || null}
+            <CompositorControls
+              isEnabled={compositorState.isEnabled}
+              isInitialized={compositorState.isInitialized}
+              rendererType={compositorState.rendererType}
+              stats={compositorState.stats}
+              sources={crafterState.sources}
+              layers={activeScene?.layers ?? []}
+              currentLayout={compositorState.currentLayout}
+              onLayoutApply={(layout) => compositorStore?.applyLayout(layout)}
+              onCycleSourceOrder={(direction) => compositorStore?.cycleSourceOrder(direction)}
+            />
           {/if}
         </div>
-        {#if showSources}
-          <div class="fw-sc-sources">
-            {#each crafterState.sources as source (source.id)}
-              {@const isVisible = getSourceLayerVisibility(source.id)}
-              <div class="fw-sc-source {!isVisible ? 'fw-sc-source--hidden' : ''}">
-                <div class="fw-sc-source-icon">
-                  {#if source.type === 'camera'}
-                    <CameraIcon size={16} />
-                  {:else if source.type === 'screen'}
-                    <MonitorIcon size={16} />
-                  {/if}
-                </div>
-                <div class="fw-sc-source-info">
-                  <div class="fw-sc-source-label">
-                    {source.label}
-                    {#if source.primaryVideo}
-                      <span class="fw-sc-primary-badge">PRIMARY</span>
+      </div>
+
+      <!-- Mixer Section - moves to right on wide screens -->
+      {#if crafterState.sources.length > 0}
+        <div class="fw-sc-section fw-sc-mixer {!showSources ? 'fw-sc-section--collapsed' : ''}">
+          <div
+            class="fw-sc-section-header"
+            onclick={() => (showSources = !showSources)}
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => e.key === "Enter" && (showSources = !showSources)}
+            title={showSources ? "Collapse Mixer" : "Expand Mixer"}
+          >
+            <span>Mixer ({crafterState.sources.length})</span>
+            {#if showSources}
+              <ChevronsRightIcon size={14} />
+            {:else}
+              <ChevronsLeftIcon size={14} />
+            {/if}
+          </div>
+          {#if showSources}
+            <div class="fw-sc-sources">
+              {#each crafterState.sources as source (source.id)}
+                {@const isVisible = getSourceLayerVisibility(source.id)}
+                <div class="fw-sc-source {!isVisible ? 'fw-sc-source--hidden' : ''}">
+                  <div class="fw-sc-source-icon">
+                    {#if source.type === "camera"}
+                      <CameraIcon size={16} />
+                    {:else if source.type === "screen"}
+                      <MonitorIcon size={16} />
                     {/if}
                   </div>
-                  <div class="fw-sc-source-type">{source.type}</div>
-                </div>
-                <div class="fw-sc-source-controls">
-                  <!-- Primary Video Button - works even during streaming -->
-                  {#if sourceHasVideo(source)}
+                  <div class="fw-sc-source-info">
+                    <div class="fw-sc-source-label">
+                      {source.label}
+                      {#if source.primaryVideo}
+                        <span class="fw-sc-primary-badge">PRIMARY</span>
+                      {/if}
+                    </div>
+                    <div class="fw-sc-source-type">{source.type}</div>
+                  </div>
+                  <div class="fw-sc-source-controls">
+                    <!-- Primary Video Button - works even during streaming -->
+                    {#if sourceHasVideo(source)}
+                      <button
+                        type="button"
+                        class="fw-sc-icon-btn {source.primaryVideo
+                          ? 'fw-sc-icon-btn--primary'
+                          : ''}"
+                        onclick={() => handleSetPrimaryVideo(source.id)}
+                        disabled={source.primaryVideo}
+                        title={source.primaryVideo
+                          ? "Primary video source"
+                          : "Set as primary video"}
+                      >
+                        <VideoIcon size={14} active={source.primaryVideo} />
+                      </button>
+                    {/if}
+                    <!-- Visibility toggle (when compositor enabled) -->
+                    {#if compositorState.isEnabled}
+                      <button
+                        type="button"
+                        class="fw-sc-icon-btn {!isVisible ? 'fw-sc-icon-btn--inactive' : ''}"
+                        onclick={() => handleToggleSourceVisibility(source.id)}
+                        title={isVisible ? "Hide from composition" : "Show in composition"}
+                      >
+                        <EyeIcon size={14} visible={isVisible} />
+                      </button>
+                    {/if}
+                    <!-- Volume Slider - supports up to 200% boost -->
+                    <span class="fw-sc-volume-label">{Math.round(source.volume * 100)}%</span>
+                    <input
+                      type="range"
+                      class="fw-sc-volume-slider {source.volume > 1
+                        ? 'fw-sc-volume-slider--boosted'
+                        : ''}"
+                      min="0"
+                      max="200"
+                      value={Math.round(source.volume * 100)}
+                      oninput={(e) =>
+                        crafter.setSourceVolume(
+                          source.id,
+                          parseInt((e.target as HTMLInputElement).value, 10) / 100
+                        )}
+                      title={`Volume: ${Math.round(source.volume * 100)}%${source.volume > 1 ? " (boosted)" : ""}`}
+                    />
                     <button
                       type="button"
-                      class="fw-sc-icon-btn {source.primaryVideo ? 'fw-sc-icon-btn--primary' : ''}"
-                      onclick={() => handleSetPrimaryVideo(source.id)}
-                      disabled={source.primaryVideo}
-                      title={source.primaryVideo ? 'Primary video source' : 'Set as primary video'}
+                      class="fw-sc-icon-btn {source.muted ? 'fw-sc-icon-btn--active' : ''}"
+                      onclick={() => toggleSourceMute(source.id, source.muted)}
+                      title={source.muted ? "Unmute" : "Mute"}
                     >
-                      <VideoIcon size={14} active={source.primaryVideo} />
+                      <MicIcon size={14} muted={source.muted} />
                     </button>
-                  {/if}
-                  <!-- Visibility toggle (when compositor enabled) -->
-                  {#if compositorState.isEnabled}
                     <button
                       type="button"
-                      class="fw-sc-icon-btn {!isVisible ? 'fw-sc-icon-btn--inactive' : ''}"
-                      onclick={() => handleToggleSourceVisibility(source.id)}
-                      title={isVisible ? 'Hide from composition' : 'Show in composition'}
+                      class="fw-sc-icon-btn fw-sc-icon-btn--destructive"
+                      onclick={() => handleRemoveSource(source.id)}
+                      disabled={crafterState.isStreaming}
+                      title={crafterState.isStreaming
+                        ? "Cannot remove source while streaming"
+                        : "Remove source"}
                     >
-                      <EyeIcon size={14} visible={isVisible} />
+                      <XIcon size={14} />
                     </button>
-                  {/if}
-                  <!-- Volume Slider - supports up to 200% boost -->
-                  <span class="fw-sc-volume-label">{Math.round(source.volume * 100)}%</span>
-                  <input
-                    type="range"
-                    class="fw-sc-volume-slider {source.volume > 1 ? 'fw-sc-volume-slider--boosted' : ''}"
-                    min="0"
-                    max="200"
-                    value={Math.round(source.volume * 100)}
-                    oninput={(e) => crafter.setSourceVolume(source.id, parseInt((e.target as HTMLInputElement).value, 10) / 100)}
-                    title={`Volume: ${Math.round(source.volume * 100)}%${source.volume > 1 ? ' (boosted)' : ''}`}
-                  />
-                  <button
-                    type="button"
-                    class="fw-sc-icon-btn {source.muted ? 'fw-sc-icon-btn--active' : ''}"
-                    onclick={() => toggleSourceMute(source.id, source.muted)}
-                    title={source.muted ? 'Unmute' : 'Mute'}
-                  >
-                    <MicIcon size={14} muted={source.muted} />
-                  </button>
-                  <button
-                    type="button"
-                    class="fw-sc-icon-btn fw-sc-icon-btn--destructive"
-                    onclick={() => handleRemoveSource(source.id)}
-                    disabled={crafterState.isStreaming}
-                    title={crafterState.isStreaming ? 'Cannot remove source while streaming' : 'Remove source'}
-                  >
-                    <XIcon size={14} />
-                  </button>
+                  </div>
                 </div>
-              </div>
-            {/each}
-          </div>
-        {/if}
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <!-- VU Meter (horizontal bar under content area) -->
+    {#if crafterState.isCapturing}
+      <div class="fw-sc-vu-meter">
+        <div
+          class="fw-sc-vu-meter-fill"
+          style="width: {Math.min(audioLevels.level * 100, 100)}%"
+        ></div>
+        <div
+          class="fw-sc-vu-meter-peak"
+          style="left: {Math.min(audioLevels.peakLevel * 100, 100)}%"
+        ></div>
       </div>
     {/if}
-  </div>
 
-  <!-- VU Meter (horizontal bar under content area) -->
-  {#if crafterState.isCapturing}
-    <div class="fw-sc-vu-meter">
-      <div
-        class="fw-sc-vu-meter-fill"
-        style="width: {Math.min(audioLevels.level * 100, 100)}%"
-      ></div>
-      <div
-        class="fw-sc-vu-meter-peak"
-        style="left: {Math.min(audioLevels.peakLevel * 100, 100)}%"
-      ></div>
-    </div>
-  {/if}
+    <!-- Error Display -->
+    {#if crafterState.error || ingestEndpointsState.error}
+      <div class="fw-sc-error">
+        <div class="fw-sc-error-title">Error</div>
+        <div class="fw-sc-error-message">{crafterState.error || ingestEndpointsState.error}</div>
+      </div>
+    {/if}
 
-  <!-- Error Display -->
-  {#if crafterState.error || ingestEndpointsState.error}
-    <div class="fw-sc-error">
-      <div class="fw-sc-error-title">Error</div>
-      <div class="fw-sc-error-message">{crafterState.error || ingestEndpointsState.error}</div>
-    </div>
-  {/if}
+    <!-- No Endpoint Warning -->
+    {#if !resolvedWhipUrl && !crafterState.error && !ingestEndpointsState.error && !isResolvingEndpoint}
+      <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)">
+        <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">Warning</div>
+        <div class="fw-sc-error-message">Configure WHIP endpoint to stream</div>
+      </div>
+    {/if}
 
-  <!-- No Endpoint Warning -->
-  {#if !resolvedWhipUrl && !crafterState.error && !ingestEndpointsState.error && !isResolvingEndpoint}
-    <div class="fw-sc-error" style="border-left-color: hsl(40 80% 65%)">
-      <div class="fw-sc-error-title" style="color: hsl(40 80% 65%)">Warning</div>
-      <div class="fw-sc-error-message">Configure WHIP endpoint to stream</div>
-    </div>
-  {/if}
+    <!-- Resolving Endpoint State -->
+    {#if isResolvingEndpoint}
+      <div class="fw-sc-error" style="border-left-color: hsl(210 80% 65%)">
+        <div class="fw-sc-error-title" style="color: hsl(210 80% 65%)">Resolving</div>
+        <div class="fw-sc-error-message">Resolving ingest endpoint...</div>
+      </div>
+    {/if}
 
-  <!-- Resolving Endpoint State -->
-  {#if isResolvingEndpoint}
-    <div class="fw-sc-error" style="border-left-color: hsl(210 80% 65%)">
-      <div class="fw-sc-error-title" style="color: hsl(210 80% 65%)">Resolving</div>
-      <div class="fw-sc-error-message">Resolving ingest endpoint...</div>
-    </div>
-  {/if}
-
-  <!-- Action Bar -->
-  <div class="fw-sc-actions">
-    <!-- Secondary actions: Camera, Screen, Settings -->
-    <button
-      type="button"
-      class="fw-sc-action-secondary"
-      onclick={handleStartCamera}
-      disabled={!canAddSource || hasCamera}
-      title={hasCamera ? 'Camera active' : 'Add Camera'}
-    >
-      <CameraIcon size={18} />
-    </button>
-    <button
-      type="button"
-      class="fw-sc-action-secondary"
-      onclick={handleStartScreenShare}
-      disabled={!canAddSource}
-      title="Share Screen"
-    >
-      <MonitorIcon size={18} />
-    </button>
-    <!-- Settings button in action bar -->
-    <div style="position: relative">
+    <!-- Action Bar -->
+    <div class="fw-sc-actions">
+      <!-- Secondary actions: Camera, Screen, Settings -->
       <button
-        bind:this={settingsButtonEl}
         type="button"
-        class="fw-sc-action-secondary {showSettings ? 'fw-sc-action-secondary--active' : ''}"
-        onclick={() => showSettings = !showSettings}
-        title="Settings"
-        style="display: flex; align-items: center; justify-content: center;"
+        class="fw-sc-action-secondary"
+        onclick={handleStartCamera}
+        disabled={!canAddSource || hasCamera}
+        title={hasCamera ? "Camera active" : "Add Camera"}
       >
-        <span class="settings-icon-wrapper">
-          <SettingsIcon size={16} />
-        </span>
+        <CameraIcon size={18} />
       </button>
-      <!-- Settings Popup - positioned above button -->
-      {#if showSettings}
-        <div
-          bind:this={settingsDropdownEl}
-          style="
+      <button
+        type="button"
+        class="fw-sc-action-secondary"
+        onclick={handleStartScreenShare}
+        disabled={!canAddSource}
+        title="Share Screen"
+      >
+        <MonitorIcon size={18} />
+      </button>
+      <!-- Settings button in action bar -->
+      <div style="position: relative">
+        <button
+          bind:this={settingsButtonEl}
+          type="button"
+          class="fw-sc-action-secondary {showSettings ? 'fw-sc-action-secondary--active' : ''}"
+          onclick={() => (showSettings = !showSettings)}
+          title="Settings"
+          style="display: flex; align-items: center; justify-content: center;"
+        >
+          <span class="settings-icon-wrapper">
+            <SettingsIcon size={16} />
+          </span>
+        </button>
+        <!-- Settings Popup - positioned above button -->
+        {#if showSettings}
+          <div
+            bind:this={settingsDropdownEl}
+            style="
             position: absolute;
             bottom: 100%;
             left: 0;
@@ -747,23 +773,25 @@
             overflow: hidden;
             z-index: 50;
           "
-        >
-          <!-- Quality Section -->
-          <div style="padding: 8px; border-bottom: 1px solid rgba(90, 96, 127, 0.3);">
-            <div style="font-size: 10px; color: #565f89; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; padding-left: 4px;">
-              Quality
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 2px;">
-              {#each QUALITY_PROFILES as profile}
-                <button
-                  type="button"
-                  onclick={() => {
-                    if (!crafterState.isStreaming) {
-                      selectQualityProfile(profile.id);
-                    }
-                  }}
-                  disabled={crafterState.isStreaming}
-                  style="
+          >
+            <!-- Quality Section -->
+            <div style="padding: 8px; border-bottom: 1px solid rgba(90, 96, 127, 0.3);">
+              <div
+                style="font-size: 10px; color: #565f89; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; padding-left: 4px;"
+              >
+                Quality
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 2px;">
+                {#each QUALITY_PROFILES as profile}
+                  <button
+                    type="button"
+                    onclick={() => {
+                      if (!crafterState.isStreaming) {
+                        selectQualityProfile(profile.id);
+                      }
+                    }}
+                    disabled={crafterState.isStreaming}
+                    style="
                     width: 100%;
                     padding: 6px 8px;
                     text-align: left;
@@ -773,67 +801,73 @@
                     border: none;
                     cursor: {crafterState.isStreaming ? 'not-allowed' : 'pointer'};
                     opacity: {crafterState.isStreaming ? 0.5 : 1};
-                    background: {crafterState.qualityProfile === profile.id ? 'rgba(122, 162, 247, 0.2)' : 'transparent'};
+                    background: {crafterState.qualityProfile === profile.id
+                      ? 'rgba(122, 162, 247, 0.2)'
+                      : 'transparent'};
                     color: {crafterState.qualityProfile === profile.id ? '#7aa2f7' : '#a9b1d6'};
                   "
-                >
-                  <div style="font-weight: 500;">{profile.label}</div>
-                  <div style="font-size: 10px; color: #565f89;">{profile.description}</div>
-                </button>
-              {/each}
+                  >
+                    <div style="font-weight: 500;">{profile.label}</div>
+                    <div style="font-size: 10px; color: #565f89;">{profile.description}</div>
+                  </button>
+                {/each}
+              </div>
             </div>
-          </div>
 
-          <!-- Dev Info Section -->
-          {#if devMode}
-            <div style="padding: 8px;">
-              <div style="font-size: 10px; color: #565f89; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; padding-left: 4px;">
-                Debug
+            <!-- Dev Info Section -->
+            {#if devMode}
+              <div style="padding: 8px;">
+                <div
+                  style="font-size: 10px; color: #565f89; text-transform: uppercase; font-weight: 600; margin-bottom: 4px; padding-left: 4px;"
+                >
+                  Debug
+                </div>
+                <div
+                  style="display: flex; flex-direction: column; gap: 4px; padding-left: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;"
+                >
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #565f89;">State</span>
+                    <span style="color: #c0caf5;">{crafterState.state}</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #565f89;">Audio</span>
+                    <span style="color: {audioLevels.isMonitoring ? '#9ece6a' : '#565f89'};">
+                      {audioLevels.isMonitoring ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #565f89;">WHIP</span>
+                    <span style="color: {resolvedWhipUrl ? '#9ece6a' : '#f7768e'};">
+                      {resolvedWhipUrl ? "OK" : "Not set"}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div style="display: flex; flex-direction: column; gap: 4px; padding-left: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;">
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="color: #565f89;">State</span>
-                  <span style="color: #c0caf5;">{crafterState.state}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="color: #565f89;">Audio</span>
-                  <span style="color: {audioLevels.isMonitoring ? '#9ece6a' : '#565f89'};">
-                    {audioLevels.isMonitoring ? 'Active' : 'Inactive'}
-                  </span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                  <span style="color: #565f89;">WHIP</span>
-                  <span style="color: {resolvedWhipUrl ? '#9ece6a' : '#f7768e'};">
-                    {resolvedWhipUrl ? 'OK' : 'Not set'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          {/if}
-        </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+
+      <!-- Primary action: Go Live / Stop -->
+      {#if !crafterState.isStreaming}
+        <button
+          type="button"
+          class="fw-sc-action-primary"
+          onclick={handleGoLive}
+          disabled={!canStream}
+        >
+          {crafterState.state === "connecting" ? "Connecting..." : "Go Live"}
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="fw-sc-action-primary fw-sc-action-stop"
+          onclick={handleStopStreaming}
+        >
+          Stop Streaming
+        </button>
       {/if}
     </div>
-
-    <!-- Primary action: Go Live / Stop -->
-    {#if !crafterState.isStreaming}
-      <button
-        type="button"
-        class="fw-sc-action-primary"
-        onclick={handleGoLive}
-        disabled={!canStream}
-      >
-        {crafterState.state === 'connecting' ? 'Connecting...' : 'Go Live'}
-      </button>
-    {:else}
-      <button
-        type="button"
-        class="fw-sc-action-primary fw-sc-action-stop"
-        onclick={handleStopStreaming}
-      >
-        Stop Streaming
-      </button>
-    {/if}
-  </div>
 
     <!-- Context Menu -->
     {#if contextMenu}
@@ -869,8 +903,8 @@
               background: transparent;
               cursor: pointer;
             "
-            onmouseenter={(e) => e.currentTarget.style.background = 'rgba(122, 162, 247, 0.1)'}
-            onmouseleave={(e) => e.currentTarget.style.background = 'transparent'}
+            onmouseenter={(e) => (e.currentTarget.style.background = "rgba(122, 162, 247, 0.1)")}
+            onmouseleave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             Copy WHIP URL
           </button>
@@ -890,8 +924,8 @@
             background: transparent;
             cursor: pointer;
           "
-          onmouseenter={(e) => e.currentTarget.style.background = 'rgba(122, 162, 247, 0.1)'}
-          onmouseleave={(e) => e.currentTarget.style.background = 'transparent'}
+          onmouseenter={(e) => (e.currentTarget.style.background = "rgba(122, 162, 247, 0.1)")}
+          onmouseleave={(e) => (e.currentTarget.style.background = "transparent")}
         >
           Copy Stream Info
         </button>
@@ -918,11 +952,11 @@
               gap: 8px;
               align-items: center;
             "
-            onmouseenter={(e) => e.currentTarget.style.background = 'rgba(122, 162, 247, 0.1)'}
-            onmouseleave={(e) => e.currentTarget.style.background = 'transparent'}
+            onmouseenter={(e) => (e.currentTarget.style.background = "rgba(122, 162, 247, 0.1)")}
+            onmouseleave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             <SettingsIcon size={14} />
-            <span>{isAdvancedPanelOpen ? 'Hide Advanced' : 'Advanced'}</span>
+            <span>{isAdvancedPanelOpen ? "Hide Advanced" : "Advanced"}</span>
           </button>
         {/if}
       </div>
@@ -931,10 +965,12 @@
 
   <!-- Advanced Panel for devMode -->
   {#if devMode}
-    {@const activeScene = compositorState.scenes.find(s => s.id === compositorState.activeSceneId)}
+    {@const activeScene = compositorState.scenes.find(
+      (s) => s.id === compositorState.activeSceneId
+    )}
     <AdvancedPanel
       isOpen={isAdvancedPanelOpen}
-      onClose={() => isAdvancedPanelOpen = false}
+      onClose={() => (isAdvancedPanelOpen = false)}
       ingestState={crafterState.state}
       qualityProfile={crafterState.qualityProfile}
       whipUrl={resolvedWhipUrl}

@@ -30,14 +30,11 @@ export interface TemplateGroups {
 // Use Vite's import.meta.glob to load all .gql files at build time
 // The ?raw query imports the file content as a string
 // Files are in ../pkg/graphql/operations/ (shared between frontend and Go gateway)
-const gqlModules = import.meta.glob(
-  "../../../../pkg/graphql/operations/**/*.gql",
-  {
-    query: "?raw",
-    import: "default",
-    eager: false, // Lazy load for better initial bundle size
-  },
-);
+const gqlModules = import.meta.glob("../../../../pkg/graphql/operations/**/*.gql", {
+  query: "?raw",
+  import: "default",
+  eager: false, // Lazy load for better initial bundle size
+});
 
 // Cache for loaded templates
 let cachedTemplates: TemplateGroups | null = null;
@@ -80,7 +77,7 @@ export async function loadAllTemplates(): Promise<TemplateGroups> {
         console.error(`Failed to load ${path}:`, error);
         return null;
       }
-    }),
+    })
   );
 
   // Parse and categorize each file
@@ -126,7 +123,7 @@ export async function loadAllTemplates(): Promise<TemplateGroups> {
   if (import.meta.env.DEV) {
     console.log(
       `[templateLoader] Loaded ${groups.fragments.length} fragments, ${fragmentDefinitions.size} parsed:`,
-      [...fragmentDefinitions.keys()],
+      [...fragmentDefinitions.keys()]
     );
   }
 
@@ -224,9 +221,7 @@ function cleanFilePath(path: string): string {
     return "operations/" + match[1];
   }
   // Legacy fallback
-  return path
-    .replace(/^\/src\/lib\//, "")
-    .replace(/^\.\.\/+pkg\/graphql\//, "");
+  return path.replace(/^\/src\/lib\//, "").replace(/^\.\.\/+pkg\/graphql\//, "");
 }
 
 /**
@@ -263,17 +258,14 @@ export async function searchTemplates(query: string): Promise<Template[]> {
 
   return allTemplates.filter(
     (t) =>
-      t.name.toLowerCase().includes(lowerQuery) ||
-      t.description.toLowerCase().includes(lowerQuery),
+      t.name.toLowerCase().includes(lowerQuery) || t.description.toLowerCase().includes(lowerQuery)
   );
 }
 
 /**
  * Get templates by operation type
  */
-export async function getTemplatesByType(
-  type: OperationType,
-): Promise<Template[]> {
+export async function getTemplatesByType(type: OperationType): Promise<Template[]> {
   const templates = await loadAllTemplates();
 
   switch (type) {

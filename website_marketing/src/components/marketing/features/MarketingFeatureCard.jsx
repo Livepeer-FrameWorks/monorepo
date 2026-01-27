@@ -1,25 +1,25 @@
-import { forwardRef } from 'react'
-import { cn } from '@/lib/utils'
-import { renderSlot } from '../utils'
-import MarketingIconBadge from '../misc/MarketingIconBadge'
+import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
+import { renderSlot } from "../utils";
+import MarketingIconBadge from "../misc/MarketingIconBadge";
 
 const MarketingFeatureCard = forwardRef(
   (
     {
       icon: Icon,
-      iconTone = 'accent',
+      iconTone = "accent",
       badge,
       title,
       subtitle,
       description,
       meta,
-      tone = 'accent',
+      tone = "accent",
       actions,
       children,
-      hover = 'lift',
+      hover = "lift",
       flush = false,
       stripe = false,
-      metaAlign = 'start',
+      metaAlign = "start",
       className,
       ...props
     },
@@ -28,10 +28,10 @@ const MarketingFeatureCard = forwardRef(
     <div
       ref={ref}
       className={cn(
-        'marketing-feature-card',
+        "marketing-feature-card",
         tone && `marketing-feature-card--tone-${tone}`,
-        flush && 'marketing-feature-card--flush',
-        stripe && 'marketing-feature-card--stripe',
+        flush && "marketing-feature-card--flush",
+        stripe && "marketing-feature-card--stripe",
         metaAlign && `marketing-feature-card--meta-${metaAlign}`,
         className
       )}
@@ -40,7 +40,11 @@ const MarketingFeatureCard = forwardRef(
     >
       <div className="marketing-feature-card__header">
         {Icon ? (
-          <MarketingIconBadge tone={iconTone} variant="neutral" className="marketing-feature-card__icon">
+          <MarketingIconBadge
+            tone={iconTone}
+            variant="neutral"
+            className="marketing-feature-card__icon"
+          >
             <Icon className="marketing-feature-card__icon-symbol" />
           </MarketingIconBadge>
         ) : null}
@@ -53,11 +57,13 @@ const MarketingFeatureCard = forwardRef(
       </div>
       {description ? <p className="marketing-feature-card__description">{description}</p> : null}
       {children}
-      {actions ? <div className="marketing-feature-card__actions">{renderSlot(actions)}</div> : null}
+      {actions ? (
+        <div className="marketing-feature-card__actions">{renderSlot(actions)}</div>
+      ) : null}
     </div>
   )
-)
+);
 
-MarketingFeatureCard.displayName = 'MarketingFeatureCard'
+MarketingFeatureCard.displayName = "MarketingFeatureCard";
 
-export default MarketingFeatureCard
+export default MarketingFeatureCard;

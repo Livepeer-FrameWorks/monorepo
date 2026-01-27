@@ -31,7 +31,7 @@
     height = 400,
     zoom = 2,
     center = [20, 0],
-    tileLayerUrl = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+    tileLayerUrl = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
   }: Props = $props();
 
   let mapContainer = $state<HTMLElement>();
@@ -84,11 +84,11 @@
     // Dark theme map tiles
     L.tileLayer(tileLayerUrl, {
       maxZoom: 19,
-      subdomains: 'abcd',
+      subdomains: "abcd",
     }).addTo(map);
 
     // Enable scroll zoom only with modifier key
-    mapContainer.addEventListener('wheel', handleWheel, { passive: false });
+    mapContainer.addEventListener("wheel", handleWheel, { passive: false });
 
     updateHeatLayer();
   }
@@ -124,7 +124,7 @@
     if (data.length === 0) return;
 
     // Convert data to format expected by leaflet.heat: [lat, lng, intensity]
-    const points = data.map(p => [p.lat, p.lng, p.intensity]);
+    const points = data.map((p) => [p.lat, p.lng, p.intensity]);
 
     // Create heat layer with our brand colors
     // Gradient: blue -> cyan -> green -> yellow -> red
@@ -136,11 +136,11 @@
       maxZoom: 10,
       gradient: {
         0.05: "rgba(59, 130, 246, 0.55)", // Primary base shows up sooner
-        0.25: "rgba(6, 182, 212, 0.75)",  // Cyan
-        0.45: "rgba(34, 197, 94, 0.85)",  // Green (Success)
-        0.65: "rgba(250, 204, 21, 0.9)",  // Amber (Warning)
-        0.9: "rgba(239, 68, 68, 0.95)"    // Red (High density)
-      }
+        0.25: "rgba(6, 182, 212, 0.75)", // Cyan
+        0.45: "rgba(34, 197, 94, 0.85)", // Green (Success)
+        0.65: "rgba(250, 204, 21, 0.9)", // Amber (Warning)
+        0.9: "rgba(239, 68, 68, 0.95)", // Red (High density)
+      },
     }).addTo(map);
   }
 
@@ -168,7 +168,11 @@
     <button class="map-control-btn" onclick={resetView} title="Reset view">
       <HomeIcon class="w-4 h-4" />
     </button>
-    <button class="map-control-btn" onclick={toggleFullscreen} title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
+    <button
+      class="map-control-btn"
+      onclick={toggleFullscreen}
+      title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+    >
       {#if isFullscreen}
         <MinimizeIcon class="w-4 h-4" />
       {:else}
@@ -179,7 +183,7 @@
 
   <!-- Scroll Hint Overlay -->
   {#if showScrollHint && !isFullscreen}
-    <button class="scroll-hint" type="button" onclick={() => showScrollHint = false}>
+    <button class="scroll-hint" type="button" onclick={() => (showScrollHint = false)}>
       <span>Hold <kbd>⌥</kbd> or <kbd>Ctrl</kbd> + scroll to zoom</span>
     </button>
   {/if}

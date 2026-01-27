@@ -35,12 +35,12 @@ This document describes the architecture for clips and DVR recordings in the Fra
 
 ## Service Responsibilities
 
-| Service | Role | Data | Query Pattern |
-|---------|------|------|---------------|
-| **Commodore** | Control Plane | Business registry (ownership, titles, stream, retention) | GraphQL queries for clip/DVR listings |
-| **Periscope** | Analytics | Lifecycle state (stage, size, file path, s3_url) | GraphQL lifecycle field resolvers (ArtifactLifecycleLoader) batch-fetch |
-| **Signalman** | Real-time | Live Kafka events | GraphQL subscriptions |
-| **Foghorn** | Media Plane | Artifact operations (storage, S3 sync, routing) | Internal gRPC for mutations |
+| Service       | Role          | Data                                                     | Query Pattern                                                           |
+| ------------- | ------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **Commodore** | Control Plane | Business registry (ownership, titles, stream, retention) | GraphQL queries for clip/DVR listings                                   |
+| **Periscope** | Analytics     | Lifecycle state (stage, size, file path, s3_url)         | GraphQL lifecycle field resolvers (ArtifactLifecycleLoader) batch-fetch |
+| **Signalman** | Real-time     | Live Kafka events                                        | GraphQL subscriptions                                                   |
+| **Foghorn**   | Media Plane   | Artifact operations (storage, S3 sync, routing)          | Internal gRPC for mutations                                             |
 
 ## GraphQL Data Flow
 
@@ -74,6 +74,7 @@ query GetClips($streamId: ID, $first: Int, $after: String) {
 ```
 
 Gateway handles this as:
+
 1. **Parent resolver** calls Commodore `GetClips` → returns business metadata
 2. **Lifecycle field resolvers** call `ArtifactLifecycleLoader`, which batch-calls Periscope `GetArtifactStates(request_ids: [artifact hashes])`
 3. Gateway merges results and returns unified response
@@ -120,6 +121,7 @@ Frontend → Gateway → Commodore.CreateClip → Foghorn.CreateClip
 ### Why Foghorn Still Exists?
 
 Foghorn handles **operations**, not queries:
+
 - Node orchestration (which node stores what)
 - S3 freeze/defrost coordination
 - Helmsman communication
@@ -129,12 +131,12 @@ Gateway queries go to Commodore + Periscope, not Foghorn.
 
 ## State Classification
 
-| State Type | Description | Owner | Storage | Query Source |
-|------------|-------------|-------|---------|--------------|
-| **Business Registry** | tenant_id, user_id, stream_id, title, description, retention | Commodore | PostgreSQL | GraphQL parent resolver |
-| **Lifecycle State** | stage, size_bytes, file_path, s3_url, manifest_path, error_message | Periscope | ClickHouse `artifact_state_current` | GraphQL field resolvers |
-| **Artifact Operations** | storage_location, node assignments, sync status | Foghorn | PostgreSQL | Internal gRPC only |
-| **Real-time Events** | Live progress updates, stage changes | Signalman | Kafka passthrough | GraphQL subscriptions |
+| State Type              | Description                                                        | Owner     | Storage                             | Query Source            |
+| ----------------------- | ------------------------------------------------------------------ | --------- | ----------------------------------- | ----------------------- |
+| **Business Registry**   | tenant_id, user_id, stream_id, title, description, retention       | Commodore | PostgreSQL                          | GraphQL parent resolver |
+| **Lifecycle State**     | stage, size_bytes, file_path, s3_url, manifest_path, error_message | Periscope | ClickHouse `artifact_state_current` | GraphQL field resolvers |
+| **Artifact Operations** | storage_location, node assignments, sync status                    | Foghorn   | PostgreSQL                          | Internal gRPC only      |
+| **Real-time Events**    | Live progress updates, stage changes                               | Signalman | Kafka passthrough                   | GraphQL subscriptions   |
 
 Note: `storageLocation`/`isFrozen` are derived in GraphQL from Periscope `s3_url` (not stored directly in ClickHouse).
 
@@ -374,15 +376,15 @@ DEFROST (cold -> warm):
 
 ## Service Responsibilities
 
-| Service | Responsibilities |
-|---------|------------------|
-| **Gateway** | GraphQL orchestrator. Field-level resolvers merge Commodore + Periscope data. |
-| **Commodore** | Business registry (clips, dvr_recordings tables). Hash generation. GraphQL parent resolvers. |
+| Service       | Responsibilities                                                                                                            |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Gateway**   | GraphQL orchestrator. Field-level resolvers merge Commodore + Periscope data.                                               |
+| **Commodore** | Business registry (clips, dvr_recordings tables). Hash generation. GraphQL parent resolvers.                                |
 | **Periscope** | Lifecycle state queries (artifact_state_current ClickHouse table). Batch lookup by request_ids via ArtifactLifecycleLoader. |
-| **Signalman** | Real-time WebSocket hub. Passes Kafka events to subscriptions. |
-| **Foghorn** | Artifact operations (artifacts, artifact_nodes tables). Node orchestration. S3 sync. NOT queried for listings. |
-| **Helmsman** | Local storage operations. Freeze/defrost execution. Artifact reporting. |
-| **Decklog** | Event ingestion. Events keyed by artifact_hash with tenant_id, user_id, internal_name. |
+| **Signalman** | Real-time WebSocket hub. Passes Kafka events to subscriptions.                                                              |
+| **Foghorn**   | Artifact operations (artifacts, artifact_nodes tables). Node orchestration. S3 sync. NOT queried for listings.              |
+| **Helmsman**  | Local storage operations. Freeze/defrost execution. Artifact reporting.                                                     |
+| **Decklog**   | Event ingestion. Events keyed by artifact_hash with tenant_id, user_id, internal_name.                                      |
 
 ## Service Events Audit (service_events)
 
@@ -412,6 +414,7 @@ The system uses an **eventual consistency** pattern between Commodore and Foghor
 4. **Cleanup** - Foghorn retention jobs only apply to artifacts that exist; Commodore registry cleanup is still manual/TODO
 
 This pattern is acceptable because:
+
 - Historical Commodore records are useful for billing and audit
 - Failed artifacts are marked `failed` and retained for troubleshooting
 - Retention jobs ensure storage cleanup for artifacts that exist
@@ -440,11 +443,11 @@ if fallbackTenantID.Valid {
 
 Three background jobs manage artifact lifecycle:
 
-| Job | Interval | Action |
-|-----|----------|--------|
-| `RetentionJob` | 1 hour | Soft-delete expired artifacts (status='deleted') |
-| `OrphanCleanupJob` | 5 min | Send delete requests to Helmsman for deleted artifacts |
-| `PurgeDeletedJob` | 24 hours | Hard-delete from DB + S3 (when no active node copies) |
+| Job                | Interval | Action                                                 |
+| ------------------ | -------- | ------------------------------------------------------ |
+| `RetentionJob`     | 1 hour   | Soft-delete expired artifacts (status='deleted')       |
+| `OrphanCleanupJob` | 5 min    | Send delete requests to Helmsman for deleted artifacts |
+| `PurgeDeletedJob`  | 24 hours | Hard-delete from DB + S3 (when no active node copies)  |
 
 ### RetentionJob
 
@@ -516,6 +519,7 @@ artifact_type = 'upload'
 ```
 
 **Flow (current):**
+
 1. `createVodUpload` → Gateway → Commodore registers in `commodore.vod_assets` and calls Foghorn to create an S3 multipart upload.
 2. Client uploads parts to S3 using presigned URLs.
 3. `completeVodUpload` → Gateway → Commodore → Foghorn finalizes upload and updates `foghorn.artifacts` (`artifact_type='upload'`).
@@ -524,6 +528,7 @@ artifact_type = 'upload'
 ## Critical Files
 
 ### Schema & Proto
+
 - `pkg/proto/commodore.proto` - Clip/DVR registry RPCs
 - `pkg/proto/shared.proto` - ClipInfo, DVRInfo, CreateClip/DVR requests (includes user_id)
 - `pkg/proto/periscope.proto` - GetArtifactStates with request_ids batch lookup
@@ -532,30 +537,37 @@ artifact_type = 'upload'
 - `pkg/database/sql/clickhouse/periscope.sql` - artifact_state_current, artifact_events, storage_events tables
 
 ### Gateway (api_gateway) - GraphQL Orchestration
+
 - `api_gateway/gqlgen.yml` - Field resolver configuration for lifecycle fields
 - `api_gateway/graph/schema.resolvers.go` - Parent resolvers (Commodore) + field resolvers (Periscope)
 - `api_gateway/internal/loaders/artifact_lifecycle.go` - Batch loader for Periscope lifecycle data
 - `api_gateway/internal/resolvers/streams.go` - GetClipsConnection, GetDVRRecordingsConnection
 
 ### Commodore (api_control) - Business Registry
+
 - `api_control/internal/grpc/server.go` - GetClips, ListDVRRequests (query own tables, NOT Foghorn)
 
 ### Periscope (api_analytics_query) - Lifecycle State
+
 - `api_analytics_query/internal/grpc/server.go` - GetArtifactStates with request_ids filter
 
 ### Foghorn (api_balancing) - Artifact Operations
+
 - `api_balancing/internal/grpc/server.go` - CreateClip, StartDVR (stores user_id)
 - `api_balancing/internal/handlers/handlers.go` - Clip/DVR lifecycle event handlers
 - `api_balancing/internal/control/server.go` - SendClipPull, SendDVRStart, Helmsman communication
 - `api_balancing/internal/jobs/` - Retention, orphan cleanup, purge jobs
 
 ### Signalman (api_realtime) - Real-time Events
+
 - `api_realtime/internal/grpc/server.go` - WebSocket subscriptions for liveClipLifecycle, liveDvrLifecycle
 
 ### Analytics Ingest (api_analytics_ingest)
+
 - `api_analytics_ingest/internal/handlers/handlers.go` - processClipLifecycle, processDVRLifecycle → ClickHouse
 
 ### Frontend (website_application)
+
 - `pkg/graphql/operations/queries/GetClipsConnection.gql` - Clip queries with lifecycle fields
 - `pkg/graphql/operations/queries/GetDVRRequests.gql` - DVR queries with lifecycle fields
 - `pkg/graphql/operations/subscriptions/ClipLifecycle.gql` - Real-time updates

@@ -58,7 +58,7 @@ export class TimerManager {
       try {
         callback();
       } catch (e) {
-        console.error('[TimerManager] Callback error:', e);
+        console.error("[TimerManager] Callback error:", e);
       }
     }, delay);
 
@@ -70,7 +70,9 @@ export class TimerManager {
     });
 
     if (this.debug) {
-      console.debug(`[TimerManager] Started timeout ${internalId}${label ? ` (${label})` : ''} for ${delay}ms`);
+      console.debug(
+        `[TimerManager] Started timeout ${internalId}${label ? ` (${label})` : ""} for ${delay}ms`
+      );
     }
 
     return internalId;
@@ -90,7 +92,7 @@ export class TimerManager {
       try {
         callback();
       } catch (e) {
-        console.error('[TimerManager] Interval callback error:', e);
+        console.error("[TimerManager] Interval callback error:", e);
       }
     }, interval);
 
@@ -102,7 +104,9 @@ export class TimerManager {
     });
 
     if (this.debug) {
-      console.debug(`[TimerManager] Started interval ${internalId}${label ? ` (${label})` : ''} every ${interval}ms`);
+      console.debug(
+        `[TimerManager] Started interval ${internalId}${label ? ` (${label})` : ""} every ${interval}ms`
+      );
     }
 
     return internalId;
@@ -127,7 +131,9 @@ export class TimerManager {
     this.timers.delete(internalId);
 
     if (this.debug) {
-      console.debug(`[TimerManager] Stopped ${entry.isInterval ? 'interval' : 'timeout'} ${internalId}${entry.label ? ` (${entry.label})` : ''}`);
+      console.debug(
+        `[TimerManager] Stopped ${entry.isInterval ? "interval" : "timeout"} ${internalId}${entry.label ? ` (${entry.label})` : ""}`
+      );
     }
 
     return true;
@@ -183,13 +189,23 @@ export class TimerManager {
   /**
    * Get debug info about all active timers
    */
-  getDebugInfo(): Array<{ id: number; type: 'timeout' | 'interval'; label?: string; remainingMs?: number }> {
-    const info: Array<{ id: number; type: 'timeout' | 'interval'; label?: string; remainingMs?: number }> = [];
+  getDebugInfo(): Array<{
+    id: number;
+    type: "timeout" | "interval";
+    label?: string;
+    remainingMs?: number;
+  }> {
+    const info: Array<{
+      id: number;
+      type: "timeout" | "interval";
+      label?: string;
+      remainingMs?: number;
+    }> = [];
 
     for (const [internalId, entry] of this.timers) {
       info.push({
         id: internalId,
-        type: entry.isInterval ? 'interval' : 'timeout',
+        type: entry.isInterval ? "interval" : "timeout",
         label: entry.label,
         remainingMs: entry.isInterval ? undefined : Math.max(0, entry.endTime - Date.now()),
       });

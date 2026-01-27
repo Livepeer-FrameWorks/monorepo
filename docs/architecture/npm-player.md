@@ -3,10 +3,11 @@
 FrameWorks Player is the platform’s **playback SDK**: a set of npm packages that render video and intelligently choose the best playback transport (HLS/DASH/WebRTC/etc.) for a given browser and stream.
 
 It is designed to work both:
+
 - **inside FrameWorks** (the dashboard uses it), and
 - **outside FrameWorks** (third-party apps can embed the player and use the Gateway for endpoint discovery).
 
-If you’re looking for browser-based ingest/publishing, this is *not* it — see StreamCrafter (`npm_studio`) instead (`docs/architecture/streamcrafter.md`).
+If you’re looking for browser-based ingest/publishing, this is _not_ it — see StreamCrafter (`npm_studio`) instead (`docs/architecture/streamcrafter.md`).
 
 ---
 
@@ -34,6 +35,7 @@ npm_player/
 ```
 
 ### `@livepeer-frameworks/player-core`
+
 Framework-agnostic engine + transports:
 
 - Orchestration state machine: `npm_player/packages/core/src/core/PlayerController.ts`
@@ -44,6 +46,7 @@ Framework-agnostic engine + transports:
 - Styles: `npm_player/packages/core/src/styles/player.css` → copied to `dist/player.css` on build (`tailwind.css` is an internal utility source, not shipped)
 
 ### `@livepeer-frameworks/player-react`
+
 React integration + UI:
 
 - Drop-in component: `npm_player/packages/react/src/components/Player.tsx`
@@ -51,6 +54,7 @@ React integration + UI:
 - Optional hooks: endpoints, stream state, quality, telemetry (`npm_player/packages/react/src/hooks/*`)
 
 ### `@livepeer-frameworks/player-svelte`
+
 Svelte 5 integration + UI:
 
 - Drop-in component: `npm_player/packages/svelte/src/Player.svelte`
@@ -67,12 +71,12 @@ Svelte 5 integration + UI:
 - Use:
 
 ```tsx
-import { Player } from '@livepeer-frameworks/player-react';
+import { Player } from "@livepeer-frameworks/player-react";
 
 <Player
-  contentType="live"      // 'live' | 'dvr' | 'clip' | 'vod'
-  contentId="pk_..."      // playbackId for live, or artifact playbackId for clip/dvr/vod
-  options={{ gatewayUrl: 'https://your-bridge/graphql' }}
+  contentType="live" // 'live' | 'dvr' | 'clip' | 'vod'
+  contentId="pk_..." // playbackId for live, or artifact playbackId for clip/dvr/vod
+  options={{ gatewayUrl: "https://your-bridge/graphql" }}
 />;
 ```
 
@@ -83,8 +87,8 @@ import { Player } from '@livepeer-frameworks/player-react';
 
 ```svelte
 <script lang="ts">
-  import { Player } from '@livepeer-frameworks/player-svelte';
-  import '@livepeer-frameworks/player-svelte/player.css';
+  import { Player } from "@livepeer-frameworks/player-svelte";
+  import "@livepeer-frameworks/player-svelte/player.css";
 </script>
 
 <Player
@@ -103,13 +107,13 @@ Use the vanilla wrapper entrypoint from core:
 - Mount:
 
 ```ts
-import { FrameWorksPlayer } from '@livepeer-frameworks/player-core/vanilla';
-import '@livepeer-frameworks/player-core/player.css'; // vanilla uses core directly
+import { FrameWorksPlayer } from "@livepeer-frameworks/player-core/vanilla";
+import "@livepeer-frameworks/player-core/player.css"; // vanilla uses core directly
 
-const player = new FrameWorksPlayer('#target', {
-  contentType: 'live',
-  contentId: 'pk_...',
-  gatewayUrl: 'https://your-bridge/graphql',
+const player = new FrameWorksPlayer("#target", {
+  contentType: "live",
+  contentId: "pk_...",
+  gatewayUrl: "https://your-bridge/graphql",
 });
 ```
 
@@ -123,11 +127,13 @@ In “Gateway mode” the player calls the public GraphQL query (contentId is th
 - Client: `npm_player/packages/core/src/core/GatewayClient.ts`
 
 The query returns:
+
 - `primary`: the best node + URL for the current viewer
 - `fallbacks`: additional candidate nodes
 - `outputs`: protocol-specific URLs (HLS/WHEP/DASH/etc.) for that node
 
 This allows:
+
 - geo-aware routing (viewer IP → closest/healthiest edge)
 - fast protocol switching/fallbacks without doing another routing request
 
@@ -164,7 +170,7 @@ Selection is done by `PlayerManager`:
 
 - registers a set of transport adapters (players) via `ensurePlayersRegistered()` (`npm_player/packages/core/src/core/PlayerRegistry.ts`)
 - computes scores for `(player × source)` combinations via `scorePlayer()` (`npm_player/packages/core/src/core/scorer.ts`)
-- caches results by *content shape* (source types + codecs), not by object identity, to avoid rerunning scoring every UI render
+- caches results by _content shape_ (source types + codecs), not by object identity, to avoid rerunning scoring every UI render
 
 ### 4) Lifecycle + fallback
 
@@ -185,20 +191,24 @@ The source-of-truth mapping for MistServer `source[].type` → “human name / p
 In practice, the player can handle:
 
 ### “Normal” playback
+
 - **HLS** (`html5/application/vnd.apple.mpegurl`) via `hls.js` or Video.js (VHS) (`HlsJsPlayerImpl` / `VideoJsPlayerImpl`)
 - **DASH** (`dash/video/mp4`) via `dash.js` (`DashJsPlayerImpl`)
 - **MP4/WebM progressive** (`html5/video/mp4`, `html5/video/webm`) via native `<video>` (`NativePlayerImpl`)
 
 ### Low latency / realtime
+
 - **WHEP (WebRTC-HTTP Egress Protocol)** (`whep`) via browser WebRTC (handled by the native/webrtc path)
 - **Mist WebRTC** (`webrtc`) via `MistWebRTCPlayerImpl`
 - **WebSocket MP4 (MEWS)** (`ws/video/mp4`, `wss/video/mp4`) via `MewsWsPlayerImpl`
 - **WebSocket raw/H264** (`ws/video/raw`, `ws/video/h264`) via `WebCodecsPlayerImpl` (includes a dedicated worker bundle)
 
 ### Track-like side channels (not primary playback)
+
 - WebVTT/SRT subtitle sources are managed as tracks (not standalone transports).
 
 ### Legacy fallback
+
 - **MistServer player.js** (`mist/legacy`) via `MistPlayerImpl` when other players fail.
 
 ### Important scoring notes

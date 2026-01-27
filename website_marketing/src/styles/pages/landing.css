@@ -39,7 +39,7 @@
     border-bottom: 1px solid hsl(var(--border) / 0.5);
   }
   .hero-band::before {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
     background:
@@ -66,8 +66,16 @@
     --hero-after-rotate: -6deg;
     --hero-after-scale: 1.08;
     --hero-after-opacity: 0.55;
-    --hero-surface-primary: color-mix(in srgb, hsl(var(--brand-surface-strong)) 95%, rgba(0, 0, 0, 0.08));
-    --hero-surface-secondary: color-mix(in srgb, hsl(var(--brand-surface)) 84%, rgba(255, 255, 255, 0.08));
+    --hero-surface-primary: color-mix(
+      in srgb,
+      hsl(var(--brand-surface-strong)) 95%,
+      rgba(0, 0, 0, 0.08)
+    );
+    --hero-surface-secondary: color-mix(
+      in srgb,
+      hsl(var(--brand-surface)) 84%,
+      rgba(255, 255, 255, 0.08)
+    );
     --hero-beam-stripe: rgba(var(--accent-rgb) / 0.18);
     --hero-beam-highlight: rgba(var(--accent-rgb) / 0.28);
     --hero-spotlight: rgba(var(--accent-rgb) / 0.22);
@@ -81,18 +89,20 @@
     border-bottom: 1px solid hsl(var(--border) / 0.45);
   }
 
-  .landing-hero[data-surface='beams'] .marketing-hero__surface::before {
+  .landing-hero[data-surface="beams"] .marketing-hero__surface::before {
     background:
-      repeating-linear-gradient(135deg,
+      repeating-linear-gradient(
+        135deg,
         transparent,
         transparent 28px,
         rgba(var(--accent-rgb) / 0.18) 28px,
-        rgba(var(--accent-rgb) / 0.18) 52px),
+        rgba(var(--accent-rgb) / 0.18) 52px
+      ),
       radial-gradient(circle at 18% 24%, rgba(var(--accent-rgb) / 0.28), transparent 70%);
     opacity: 0.6;
   }
 
-  .landing-hero[data-surface='beams'] .marketing-hero__surface::after {
+  .landing-hero[data-surface="beams"] .marketing-hero__surface::after {
     background:
       linear-gradient(120deg, rgba(55, 72, 120, 0.38), rgba(18, 22, 38, 0.12)),
       radial-gradient(circle at 70% 32%, rgba(var(--accent-rgb) / 0.18), transparent 72%);
@@ -108,14 +118,19 @@
   }
 
   .landing-hero .marketing-hero__description::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 0;
     bottom: 0;
     width: clamp(6rem, 28vw, 11.5rem);
     height: 3px;
     border-radius: 999px;
-    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--brand-green)));
+    background: linear-gradient(
+      90deg,
+      hsl(var(--primary)),
+      hsl(var(--accent)),
+      hsl(var(--brand-green))
+    );
     box-shadow: 0 0 18px hsl(var(--accent) / 0.35);
   }
 

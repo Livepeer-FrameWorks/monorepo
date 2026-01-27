@@ -15,6 +15,7 @@ frameworks edge status
 ```
 
 Shows:
+
 - Container status (MistServer, Helmsman, edge-proxy)
 - HTTPS health check against your configured domain
 
@@ -42,6 +43,7 @@ frameworks edge update
 ```
 
 This:
+
 1. Pulls new images from the registry
 2. Recreates containers with new images
 3. Preserves configuration and data
@@ -49,6 +51,7 @@ This:
 For a specific version, pin the image tags in `docker-compose.edge.yml` before running update.
 
 Check current version:
+
 ```bash
 frameworks version
 ```
@@ -56,6 +59,7 @@ frameworks version
 ## Certificates
 
 Check TLS status:
+
 ```bash
 frameworks edge cert
 ```
@@ -82,16 +86,19 @@ docker compose -f docker-compose.edge.yml restart helmsman
 ## Stopping the Node
 
 Stop the containers:
+
 ```bash
 docker compose -f docker-compose.edge.yml stop
 ```
 
 Bring down the stack:
+
 ```bash
 docker compose -f docker-compose.edge.yml down
 ```
 
 Start again:
+
 ```bash
 docker compose -f docker-compose.edge.yml up -d
 ```
@@ -99,17 +106,20 @@ docker compose -f docker-compose.edge.yml up -d
 ## Diagnostics
 
 Full health check:
+
 ```bash
 frameworks edge doctor
 ```
 
 Runs:
+
 - Host checks (ports, DNS, sysctls)
 - Container status
 - HTTPS reachability
 - Remediation hints
 
 Network diagnostics:
+
 ```bash
 # Check connectivity to control plane
 frameworks context check
@@ -127,11 +137,13 @@ docker stats mistserver helmsman edge-proxy
 ```
 
 MistServer metrics are available at:
+
 ```bash
 curl http://localhost:4242/api/stats
 ```
 
 Helmsman exposes Prometheus metrics:
+
 ```bash
 curl http://localhost:18007/metrics
 ```
@@ -148,21 +160,25 @@ docker compose -f docker-compose.edge.yml restart
 ```
 
 Changes that require restart:
+
 - Capability toggles
 - Foghorn endpoints / enrollment token
 - Storage configuration
 
 Changes that take effect immediately:
+
 - Most MistServer settings via its API
 
 ## Backup and Recovery
 
 **What to backup:**
+
 - `.edge.env` - Your configuration
 - MistServer recordings (if enabled)
 - Any custom Caddyfile modifications
 
 **Recovery:**
+
 1. Install Docker on new host
 2. Run `frameworks edge preflight`
 3. Run `frameworks edge init --dir .` to generate compose/Caddyfile
@@ -174,11 +190,13 @@ Changes that take effect immediately:
 ### Change node capacity
 
 Edit `.edge.env`:
+
 ```bash
 HELMSMAN_MAX_TRANSCODES=10
 ```
 
 Then restart Helmsman:
+
 ```bash
 docker compose -f docker-compose.edge.yml restart helmsman
 ```
@@ -216,11 +234,13 @@ find /var/lib/mistserver/recordings -mtime +30 -delete
 ## Automation
 
 For multiple nodes, consider:
+
 - Ansible playbooks using the CLI commands
 - Docker Swarm or Kubernetes (bring your own manifests)
 - Custom scripts wrapping `frameworks edge` commands
 
 Example health check script:
+
 ```bash
 #!/bin/bash
 cd /opt/frameworks-edge

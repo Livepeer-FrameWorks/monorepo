@@ -5,22 +5,27 @@ sidebar:
   order: 11
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="tip" title="Automated Setup Available">
 **Privateer (`api_mesh`)** automates WireGuard mesh configuration for FrameWorks infrastructure nodes. It handles key exchange, peer discovery, and configuration management via Quartermaster. Status: **In Testing**.
 
 This manual guide is for advanced users who need custom configurations or want to understand the underlying mesh architecture.
+
 </Aside>
 
 A robust mesh network is the backbone of any distributed system. FrameWorks uses WireGuard to create a secure, high-performance private network that connects all your backend services across different regions and clouds.
 
 <Aside type="note">
-The IP ranges and configs below are **examples**. If you use Privateer, prefer configuring the mesh via the `wireguard` section of your `cluster.yaml` and let Privateer manage peers.
+  The IP ranges and configs below are **examples**. If you use Privateer, prefer configuring the
+  mesh via the `wireguard` section of your `cluster.yaml` and let Privateer manage peers.
 </Aside>
 
 <Aside type="note" title="Privateer uses a different mesh range">
-Privateer (Quartermaster) currently allocates WireGuard IPs from **10.200.0.0/16**. The manual examples below use **10.18.0.0/16** from the deployment checklist. If you plan to move to Privateer later, either align your manual mesh to 10.200.0.0/16 now or be prepared to re-address the mesh.
+  Privateer (Quartermaster) currently allocates WireGuard IPs from **10.200.0.0/16**. The manual
+  examples below use **10.18.0.0/16** from the deployment checklist. If you plan to move to
+  Privateer later, either align your manual mesh to 10.200.0.0/16 now or be prepared to re-address
+  the mesh.
 </Aside>
 
 ## Overview
@@ -50,12 +55,14 @@ Edge streaming nodes are **not** part of this mesh—they communicate over the p
 ### Install WireGuard
 
 **Ubuntu/Debian:**
+
 ```bash
 sudo apt update
 sudo apt install wireguard wireguard-tools
 ```
 
 **RHEL/CentOS:**
+
 ```bash
 sudo dnf install wireguard-tools
 # or
@@ -63,6 +70,7 @@ sudo yum install wireguard-tools
 ```
 
 **Alpine Linux:**
+
 ```bash
 apk add wireguard-tools
 ```
@@ -114,6 +122,7 @@ PersistentKeepalive = 25
 ```
 
 **Notes:**
+
 - Use **/32 AllowedIPs per peer** to avoid routing the whole mesh through one node.
 - NAT masquerade is **not** required for a standard full mesh.
 - If a node is behind NAT, keep `PersistentKeepalive` enabled.
@@ -143,7 +152,7 @@ sudo wg show
 # Start interface manually
 sudo wg-quick up wg0
 
-# Stop interface  
+# Stop interface
 sudo wg-quick down wg0
 
 # Reload configuration
@@ -237,7 +246,7 @@ iperf3 -c 10.18.x.x -t 30
 # YugabyteDB connection test
 telnet 10.18.2.11 5433
 
-# ClickHouse connection test  
+# ClickHouse connection test
 telnet 10.18.3.11 9000
 
 # HTTP service test
@@ -271,18 +280,21 @@ ss -tuln | grep :51820
 ### Common Issues
 
 **Peers not connecting:**
+
 1. Check public keys match in configuration
 2. Verify endpoints are reachable: `ping <public-ip>`
 3. Check firewall allows port 51820/udp
 4. Verify NAT/port forwarding if behind router
 
 **High latency/packet loss:**
+
 1. Test direct connectivity without WireGuard
 2. Check for MTU issues: `ping -s 1472 -M do <target>`
 3. Adjust MTU in WireGuard config: `MTU = 1420`
 4. Monitor bandwidth utilization
 
 **Services can't reach each other:**
+
 1. Verify WireGuard interface is up: `ip addr show wg0`
 2. Check routing table: `ip route show table all`
 3. Test mesh connectivity: `ping 10.18.x.x`
@@ -330,6 +342,7 @@ net.ipv4.conf.wg0.rp_filter = 0
 ```
 
 Apply sysctl changes:
+
 ```bash
 sudo sysctl --system
 ```

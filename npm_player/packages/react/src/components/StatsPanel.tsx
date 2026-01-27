@@ -38,16 +38,15 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
   // Video element stats
   const video = videoElement;
   const currentRes = video ? `${video.videoWidth}x${video.videoHeight}` : "—";
-  const buffered = video && video.buffered.length > 0
-    ? (video.buffered.end(video.buffered.length - 1) - video.currentTime).toFixed(1)
-    : "—";
+  const buffered =
+    video && video.buffered.length > 0
+      ? (video.buffered.end(video.buffered.length - 1) - video.currentTime).toFixed(1)
+      : "—";
   const playbackRate = video?.playbackRate?.toFixed(2) ?? "1.00";
 
   // Quality monitor stats
   const qualityScore = quality?.score?.toFixed(0) ?? "—";
-  const bitrateKbps = quality?.bitrate
-    ? `${(quality.bitrate / 1000).toFixed(0)} kbps`
-    : "—";
+  const bitrateKbps = quality?.bitrate ? `${(quality.bitrate / 1000).toFixed(0)} kbps` : "—";
   const frameDropRate = quality?.frameDropRate?.toFixed(1) ?? "—";
   const stallCount = quality?.stallCount ?? 0;
   const latency = quality?.latency ? `${Math.round(quality.latency)} ms` : "—";
@@ -61,7 +60,7 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
   const deriveTracksFromMist = () => {
     const mistTracks = mistInfo?.meta?.tracks;
     if (!mistTracks) return undefined;
-    return Object.values(mistTracks).map(t => ({
+    return Object.values(mistTracks).map((t) => ({
       type: t.type,
       codec: t.codec,
       width: t.width,
@@ -77,15 +76,17 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
   const formatTracks = () => {
     const tracks = metadata?.tracks ?? deriveTracksFromMist();
     if (!tracks?.length) return "—";
-    return tracks.map(t => {
-      if (t.type === "video") {
-        const resolution = t.width && t.height ? `${t.width}x${t.height}` : "?";
-        const bitrate = t.bitrate ? `${Math.round(t.bitrate / 1000)}kbps` : "?";
-        return `${t.codec ?? "?"} ${resolution}@${bitrate}`;
-      }
-      const channels = t.channels ? `${t.channels}ch` : "?";
-      return `${t.codec ?? "?"} ${channels}`;
-    }).join(", ");
+    return tracks
+      .map((t) => {
+        if (t.type === "video") {
+          const resolution = t.width && t.height ? `${t.width}x${t.height}` : "?";
+          const bitrate = t.bitrate ? `${Math.round(t.bitrate / 1000)}kbps` : "?";
+          return `${t.codec ?? "?"} ${resolution}@${bitrate}`;
+        }
+        const channels = t.channels ? `${t.channels}ch` : "?";
+        return `${t.codec ?? "?"} ${channels}`;
+      })
+      .join(", ");
   };
 
   const mistType = mistInfo?.type ?? "—";
@@ -109,7 +110,10 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
     { label: "Status", value: streamStatus },
     { label: "Tracks", value: formatTracks() },
     { label: "Mist Type", value: mistType },
-    { label: "Mist Buffer Window", value: mistBufferWindow != null ? String(mistBufferWindow) : "—" },
+    {
+      label: "Mist Buffer Window",
+      value: mistBufferWindow != null ? String(mistBufferWindow) : "—",
+    },
     { label: "Mist Lastms", value: mistLastMs != null ? String(mistLastMs) : "—" },
     { label: "Mist Unixoffset", value: mistUnixOffset != null ? String(mistUnixOffset) : "—" },
   ];
@@ -137,20 +141,25 @@ const StatsPanel: React.FC<StatsPanelProps> = ({
         "max-w-[320px] max-h-[80%] overflow-auto",
         "shadow-lg"
       )}
-      style={{ backgroundColor: '#000000' }} // Inline fallback for opaque background
+      style={{ backgroundColor: "#000000" }} // Inline fallback for opaque background
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
-        <span className="text-white/70 text-[10px] uppercase tracking-wider">
-          Stats Overlay
-        </span>
+        <span className="text-white/70 text-[10px] uppercase tracking-wider">Stats Overlay</span>
         <button
           type="button"
           onClick={onClose}
           className="text-white/50 hover:text-white transition-colors p-1 -mr-1"
           aria-label="Close stats panel"
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
             <path d="M2 2l8 8M10 2l-8 8" />
           </svg>
         </button>

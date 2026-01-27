@@ -11,11 +11,7 @@
 </script>
 
 <ContextMenu.GroupHeading
-  class={cn(
-    "fw-context-menu-label",
-    inset && "fw-context-menu-item--inset",
-    className
-  )}
+  class={cn("fw-context-menu-label", inset && "fw-context-menu-item--inset", className)}
   {...rest}
 >
   {@render children?.()}

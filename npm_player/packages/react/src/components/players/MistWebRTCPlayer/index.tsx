@@ -5,8 +5,8 @@
  * The implementation is in @livepeer-frameworks/player-core.
  */
 
-import React, { useRef, useEffect } from 'react';
-import { MistWebRTCPlayerImpl } from '@livepeer-frameworks/player-core';
+import React, { useRef, useEffect } from "react";
+import { MistWebRTCPlayerImpl } from "@livepeer-frameworks/player-core";
 
 // Re-export the implementation from core for backwards compatibility
 export { MistWebRTCPlayerImpl };
@@ -39,13 +39,22 @@ export const MistWebRTCPlayer: React.FC<Props> = ({
     const player = new MistWebRTCPlayerImpl();
     playerRef.current = player;
 
-    player.initialize(
-      containerRef.current,
-      { url: src, type: 'webrtc' },
-      { autoplay: autoPlay, muted, controls, poster, onReady, onError: (e) => onError?.(typeof e === 'string' ? new Error(e) : e) }
-    ).catch((e) => {
-      onError?.(e instanceof Error ? e : new Error(String(e)));
-    });
+    player
+      .initialize(
+        containerRef.current,
+        { url: src, type: "webrtc" },
+        {
+          autoplay: autoPlay,
+          muted,
+          controls,
+          poster,
+          onReady,
+          onError: (e) => onError?.(typeof e === "string" ? new Error(e) : e),
+        }
+      )
+      .catch((e) => {
+        onError?.(e instanceof Error ? e : new Error(String(e)));
+      });
 
     return () => {
       player.destroy();
@@ -53,7 +62,7 @@ export const MistWebRTCPlayer: React.FC<Props> = ({
     };
   }, [src, autoPlay, muted, controls, poster, onReady, onError]);
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 };
 
 export default MistWebRTCPlayerImpl;

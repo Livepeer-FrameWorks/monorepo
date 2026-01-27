@@ -1,57 +1,57 @@
-import resolve from '@rollup/plugin-node-resolve';
-import commonjs from '@rollup/plugin-commonjs';
-import typescript from '@rollup/plugin-typescript';
+import resolve from "@rollup/plugin-node-resolve";
+import commonjs from "@rollup/plugin-commonjs";
+import typescript from "@rollup/plugin-typescript";
 
-const isDevelopment = process.env.NODE_ENV === 'development';
+const isDevelopment = process.env.NODE_ENV === "development";
 
 export default [
   // Main library bundle
   {
     input: {
-      index: 'src/index.ts',
-      vanilla: 'src/vanilla/index.ts',
+      index: "src/index.ts",
+      vanilla: "src/vanilla/index.ts",
     },
     output: [
       {
-        dir: 'dist',
-        format: 'cjs',
+        dir: "dist",
+        format: "cjs",
         sourcemap: !isDevelopment,
-        exports: 'named',
-        entryFileNames: 'cjs/[name].cjs',
-        chunkFileNames: 'cjs/[name]-[hash].cjs',
+        exports: "named",
+        entryFileNames: "cjs/[name].cjs",
+        chunkFileNames: "cjs/[name]-[hash].cjs",
       },
       {
-        dir: 'dist',
-        format: 'esm',
+        dir: "dist",
+        format: "esm",
         sourcemap: !isDevelopment,
-        entryFileNames: 'esm/[name].js',
-        chunkFileNames: 'esm/[name]-[hash].js',
-      }
+        entryFileNames: "esm/[name].js",
+        chunkFileNames: "esm/[name]-[hash].js",
+      },
     ],
     plugins: [
       commonjs({
         preferBuiltins: false,
         include: /node_modules/,
-        requireReturnsDefault: 'auto',
-        defaultIsModuleExports: 'auto'
+        requireReturnsDefault: "auto",
+        defaultIsModuleExports: "auto",
       }),
       resolve(),
       typescript({
-        tsconfig: './tsconfig.json',
+        tsconfig: "./tsconfig.json",
         declaration: true,
-        declarationDir: 'dist/types',
-        rootDir: 'src'
-      })
-    ].filter(Boolean)
+        declarationDir: "dist/types",
+        rootDir: "src",
+      }),
+    ].filter(Boolean),
   },
   // Encoder Worker bundle (separate entry for proper bundling)
   {
-    input: 'src/workers/encoder.worker.ts',
+    input: "src/workers/encoder.worker.ts",
     output: {
-      file: 'dist/workers/encoder.worker.js',
-      format: 'iife',
+      file: "dist/workers/encoder.worker.js",
+      format: "iife",
       sourcemap: !isDevelopment,
-      name: 'EncoderWorker'
+      name: "EncoderWorker",
     },
     plugins: [
       resolve(),
@@ -60,23 +60,23 @@ export default [
         include: /node_modules/,
       }),
       typescript({
-        tsconfig: './tsconfig.json',
+        tsconfig: "./tsconfig.json",
         declaration: false,
         declarationDir: undefined,
-        outDir: 'dist/workers'
-      })
-    ].filter(Boolean)
+        outDir: "dist/workers",
+      }),
+    ].filter(Boolean),
   },
   // Compositor Worker bundle (separate entry for proper bundling)
   // Uses inlineDynamicImports because the worker imports from other modules
   {
-    input: 'src/workers/compositor.worker.ts',
+    input: "src/workers/compositor.worker.ts",
     output: {
-      file: 'dist/workers/compositor.worker.js',
-      format: 'iife',
+      file: "dist/workers/compositor.worker.js",
+      format: "iife",
       sourcemap: !isDevelopment,
-      name: 'CompositorWorker',
-      inlineDynamicImports: true
+      name: "CompositorWorker",
+      inlineDynamicImports: true,
     },
     plugins: [
       resolve(),
@@ -85,21 +85,21 @@ export default [
         include: /node_modules/,
       }),
       typescript({
-        tsconfig: './tsconfig.json',
+        tsconfig: "./tsconfig.json",
         declaration: false,
         declarationDir: undefined,
-        outDir: 'dist/workers'
-      })
-    ].filter(Boolean)
+        outDir: "dist/workers",
+      }),
+    ].filter(Boolean),
   },
   // RTC Transform Worker bundle (for RTCRtpScriptTransform / WebCodecs encoding)
   {
-    input: 'src/workers/rtcTransform.worker.ts',
+    input: "src/workers/rtcTransform.worker.ts",
     output: {
-      file: 'dist/workers/rtcTransform.worker.js',
-      format: 'iife',
+      file: "dist/workers/rtcTransform.worker.js",
+      format: "iife",
       sourcemap: !isDevelopment,
-      name: 'RTCTransformWorker'
+      name: "RTCTransformWorker",
     },
     plugins: [
       resolve(),
@@ -108,11 +108,11 @@ export default [
         include: /node_modules/,
       }),
       typescript({
-        tsconfig: './tsconfig.json',
+        tsconfig: "./tsconfig.json",
         declaration: false,
         declarationDir: undefined,
-        outDir: 'dist/workers'
-      })
-    ].filter(Boolean)
-  }
+        outDir: "dist/workers",
+      }),
+    ].filter(Boolean),
+  },
 ];

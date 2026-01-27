@@ -98,7 +98,9 @@
     max-height: 28rem;
     overflow-x: auto;
     overflow-y: auto;
-    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-family:
+      "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+      "Liberation Mono", "Courier New", monospace;
     font-size: 0.9rem;
     line-height: 1.65;
     color: color-mix(in srgb, hsl(var(--foreground)) 92%, rgba(213, 229, 255, 0.18));

@@ -15,12 +15,7 @@
   } from "$lib/components/ui/dialog";
   import { getIconComponent } from "$lib/iconUtils";
 
-  let {
-    open = $bindable(false),
-    stream,
-    loading = false,
-    onSave,
-  } = $props();
+  let { open = $bindable(false), stream, loading = false, onSave } = $props();
 
   let formData = $state({
     name: "",
@@ -45,20 +40,25 @@
 </script>
 
 <Dialog {open} onOpenChange={(value) => (open = value)}>
-  <DialogContent class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden">
+  <DialogContent
+    class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden"
+  >
     <DialogHeader class="slab-header text-left space-y-1">
-      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">Edit Stream</DialogTitle>
+      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground"
+        >Edit Stream</DialogTitle
+      >
       <DialogDescription class="text-xs text-muted-foreground/70">
         Update the name, description, or recording preferences for this stream.
       </DialogDescription>
     </DialogHeader>
 
-    <form id="edit-stream-form" onsubmit={preventDefault(handleSubmit)} class="slab-body--padded space-y-4">
+    <form
+      id="edit-stream-form"
+      onsubmit={preventDefault(handleSubmit)}
+      class="slab-body--padded space-y-4"
+    >
       <div class="space-y-2">
-        <label
-          for="editName"
-          class="block text-sm font-medium text-foreground"
-        >
+        <label for="editName" class="block text-sm font-medium text-foreground">
           Stream Name
         </label>
         <Input
@@ -71,10 +71,7 @@
       </div>
 
       <div class="space-y-2">
-        <label
-          for="editDescription"
-          class="block text-sm font-medium text-foreground"
-        >
+        <label for="editDescription" class="block text-sm font-medium text-foreground">
           Description
         </label>
         <Textarea
@@ -87,16 +84,14 @@
 
       <div class="flex items-start space-x-2">
         <Checkbox id="editRecord" bind:checked={formData.record} />
-        <Label for="editRecord" class="text-sm text-foreground">
-          Enable Recording
-        </Label>
+        <Label for="editRecord" class="text-sm text-foreground">Enable Recording</Label>
       </div>
     </form>
 
     <DialogFooter class="slab-actions slab-actions--row gap-0">
-      <Button 
-        type="button" 
-        variant="ghost" 
+      <Button
+        type="button"
+        variant="ghost"
         class="rounded-none h-12 flex-1 border-r border-[hsl(var(--tn-fg-gutter)/0.3)] hover:bg-muted/10 text-muted-foreground hover:text-foreground"
         onclick={() => (open = false)}
       >

@@ -130,17 +130,17 @@ Your CloudFlare API token needs the following permissions:
 
 CloudFlare supports these geo regions for routing:
 
-| Constant | Region |
-|----------|--------|
-| `RegionWNAM` | Western North America |
-| `RegionENAM` | Eastern North America |
-| `RegionWEU` | Western Europe |
-| `RegionEEU` | Eastern Europe |
-| `RegionOC` | Oceania |
-| `RegionME` | Middle East |
-| `RegionEASIA` | East Asia |
-| `RegionSEAS` | Southeast Asia |
-| `RegionNEAS` | Northeast Asia |
+| Constant      | Region                |
+| ------------- | --------------------- |
+| `RegionWNAM`  | Western North America |
+| `RegionENAM`  | Eastern North America |
+| `RegionWEU`   | Western Europe        |
+| `RegionEEU`   | Eastern Europe        |
+| `RegionOC`    | Oceania               |
+| `RegionME`    | Middle East           |
+| `RegionEASIA` | East Asia             |
+| `RegionSEAS`  | Southeast Asia        |
+| `RegionNEAS`  | Northeast Asia        |
 
 ## Error Handling
 

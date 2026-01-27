@@ -11,11 +11,7 @@
 </script>
 
 <ContextMenu.Item
-  class={cn(
-    "fw-context-menu-item",
-    inset && "fw-context-menu-item--inset",
-    className
-  )}
+  class={cn("fw-context-menu-item", inset && "fw-context-menu-item--inset", className)}
   {...rest}
 >
   {@render children?.()}

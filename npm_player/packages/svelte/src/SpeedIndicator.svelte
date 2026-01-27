@@ -6,7 +6,7 @@
   let {
     isVisible = false,
     speed = 2,
-    class: className = '',
+    class: className = "",
   }: {
     isVisible: boolean;
     speed: number;

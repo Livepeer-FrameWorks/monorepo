@@ -9,17 +9,20 @@ Commodore is the control API. It owns users, streams, API tokens and exposes ten
 - **No external dependencies**: Pure Go + PostgreSQL, no cloud services required
 
 ## What it does
+
 - User authentication and authorization
 - Stream management and metadata
 - Tenant/stream API surface for the web app
 - Resolution endpoints used by Helmsman (internal name, playback ID)
 
 ## Architecture
+
 - Routing: uses Quartermaster for cluster/tenant context
 - Database: PostgreSQL/YugabyteDB for tenants, users, streams, API tokens
 - Auth: JWT for users, service tokens for S2S
 
 ## Run (dev)
+
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Commodore: `cd api_control && go run ./cmd/commodore`
 
@@ -31,9 +34,10 @@ Key secret:
 
 Health: `GET /health`.
 
-Cross‑refs: see root README "Ports" for stack overview. 
+Cross‑refs: see root README "Ports" for stack overview.
 
 ## Health & ports
+
 - Health: `GET /health` (HTTP) or `grpc.health.v1.Health/Check` (gRPC)
 - HTTP: 18001 (health/metrics only)
 - gRPC: 19001

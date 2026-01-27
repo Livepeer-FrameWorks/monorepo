@@ -37,7 +37,7 @@ export interface TimeDisplayParams {
  */
 export function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) {
-    return 'LIVE';
+    return "LIVE";
   }
 
   const total = Math.floor(seconds);
@@ -46,10 +46,10 @@ export function formatTime(seconds: number): string {
   const secs = total % 60;
 
   if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
   }
 
-  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 /**
@@ -62,9 +62,9 @@ export function formatTime(seconds: number): string {
  * formatClockTime(new Date('2024-01-15T14:30:45'))  // "14:30:45"
  */
 export function formatClockTime(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
   return `${hours}:${minutes}:${seconds}`;
 }
 
@@ -103,7 +103,7 @@ export function formatTimeDisplay(params: TimeDisplayParams): string {
     if (unixoffset && unixoffset > 0) {
       // unixoffset is Unix timestamp in ms at timestamp 0 of the stream
       // currentTime is playback position in seconds
-      const actualTimeMs = unixoffset + (currentTime * 1000);
+      const actualTimeMs = unixoffset + currentTime * 1000;
       const actualDate = new Date(actualTimeMs);
       return formatClockTime(actualDate);
     }
@@ -113,13 +113,13 @@ export function formatTimeDisplay(params: TimeDisplayParams): string {
     if (seekableWindow > 0) {
       const behindSeconds = liveEdge - currentTime;
       if (behindSeconds < 1) {
-        return 'LIVE';
+        return "LIVE";
       }
       return `-${formatTime(Math.abs(behindSeconds))}`;
     }
 
     // No DVR window: show LIVE instead of a misleading timestamp
-    return 'LIVE';
+    return "LIVE";
   }
 
   // VOD: show current / total
@@ -139,15 +139,11 @@ export function formatTimeDisplay(params: TimeDisplayParams): string {
  * @param liveEdge - Live edge position (for relative display)
  * @returns Formatted tooltip time
  */
-export function formatTooltipTime(
-  time: number,
-  isLive: boolean,
-  liveEdge?: number
-): string {
+export function formatTooltipTime(time: number, isLive: boolean, liveEdge?: number): string {
   if (isLive && liveEdge !== undefined && Number.isFinite(liveEdge)) {
     const behindSeconds = liveEdge - time;
     if (behindSeconds < 1) {
-      return 'LIVE';
+      return "LIVE";
     }
     return `-${formatTime(Math.abs(behindSeconds))}`;
   }
@@ -165,7 +161,7 @@ export function formatTooltipTime(
  */
 export function formatDuration(duration: number, isLive?: boolean): string {
   if (isLive || !Number.isFinite(duration)) {
-    return 'LIVE';
+    return "LIVE";
   }
 
   return formatTime(duration);
@@ -183,7 +179,7 @@ export function formatDuration(duration: number, isLive?: boolean): string {
  * parseTime("invalid")   // NaN
  */
 export function parseTime(timeStr: string): number {
-  const parts = timeStr.split(':').map(Number);
+  const parts = timeStr.split(":").map(Number);
 
   if (parts.some(isNaN)) {
     return NaN;

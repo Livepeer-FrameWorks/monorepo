@@ -5,8 +5,12 @@
  * Click to switch scenes, + button to create new scene.
  */
 
-import React, { useState, useCallback } from 'react';
-import type { Scene, TransitionConfig, TransitionType } from '@livepeer-frameworks/streamcrafter-core';
+import React, { useState, useCallback } from "react";
+import type {
+  Scene,
+  TransitionConfig,
+  TransitionType,
+} from "@livepeer-frameworks/streamcrafter-core";
 
 export interface SceneSwitcherProps {
   scenes: Scene[];
@@ -21,9 +25,9 @@ export interface SceneSwitcherProps {
 }
 
 const DEFAULT_TRANSITION: TransitionConfig = {
-  type: 'fade',
+  type: "fade",
   durationMs: 500,
-  easing: 'ease-in-out',
+  easing: "ease-in-out",
 };
 
 export function SceneSwitcher({
@@ -35,9 +39,11 @@ export function SceneSwitcher({
   onTransitionTo,
   transitionConfig = DEFAULT_TRANSITION,
   showTransitionControls = true,
-  className = '',
+  className = "",
 }: SceneSwitcherProps) {
-  const [selectedTransition, setSelectedTransition] = useState<TransitionType>(transitionConfig.type);
+  const [selectedTransition, setSelectedTransition] = useState<TransitionType>(
+    transitionConfig.type
+  );
   const [transitionDuration, setTransitionDuration] = useState(transitionConfig.durationMs);
   const [isTransitioning, setIsTransitioning] = useState(false);
 
@@ -60,7 +66,15 @@ export function SceneSwitcher({
         onSceneSelect(sceneId);
       }
     },
-    [activeSceneId, isTransitioning, onTransitionTo, onSceneSelect, selectedTransition, transitionDuration, transitionConfig.easing]
+    [
+      activeSceneId,
+      isTransitioning,
+      onTransitionTo,
+      onSceneSelect,
+      selectedTransition,
+      transitionDuration,
+      transitionConfig.easing,
+    ]
   );
 
   const handleDeleteClick = useCallback(
@@ -109,7 +123,7 @@ export function SceneSwitcher({
         {scenes.map((scene) => (
           <div
             key={scene.id}
-            className={`fw-sc-scene-item ${scene.id === activeSceneId ? 'fw-sc-scene-item--active' : ''} ${isTransitioning ? 'fw-sc-scene-item--transitioning' : ''}`}
+            className={`fw-sc-scene-item ${scene.id === activeSceneId ? "fw-sc-scene-item--active" : ""} ${isTransitioning ? "fw-sc-scene-item--transitioning" : ""}`}
             onClick={() => handleSceneClick(scene.id)}
             style={{ backgroundColor: scene.backgroundColor }}
           >

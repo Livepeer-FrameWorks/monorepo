@@ -50,11 +50,7 @@
   }
 
   .grid-seam[data-surface="panel"] {
-    background: color-mix(
-      in srgb,
-      hsl(var(--tn-bg-highlight)) 82%,
-      hsl(var(--tn-bg-dark) / 0.15)
-    );
+    background: color-mix(in srgb, hsl(var(--tn-bg-highlight)) 82%, hsl(var(--tn-bg-dark) / 0.15));
     border: 1px solid hsl(var(--tn-fg-gutter) / 0.5);
     box-shadow: 0 20px 46px hsl(var(--tn-bg-dark) / 0.36);
   }
@@ -81,12 +77,7 @@
     inset-inline: calc(var(--grid-cell-padding) * -0.6);
     bottom: -1px;
     height: 1px;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      hsl(var(--tn-blue) / 0.3),
-      transparent
-    );
+    background: linear-gradient(90deg, transparent, hsl(var(--tn-blue) / 0.3), transparent);
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.25s ease;
@@ -221,10 +212,7 @@
   .flow-layout {
     display: grid;
     gap: var(--flow-gap, 1.5rem);
-    grid-template-columns: repeat(
-      auto-fill,
-      minmax(var(--flow-min-width, 280px), 1fr)
-    );
+    grid-template-columns: repeat(auto-fill, minmax(var(--flow-min-width, 280px), 1fr));
   }
 
   .flow-layout--tight {
@@ -305,11 +293,7 @@
   .slab[data-surface="slate"] {
     background: linear-gradient(
       160deg,
-      color-mix(
-        in srgb,
-        hsl(var(--tn-bg-highlight)) 90%,
-        rgba(255, 255, 255, 0.03)
-      ),
+      color-mix(in srgb, hsl(var(--tn-bg-highlight)) 90%, rgba(255, 255, 255, 0.03)),
       color-mix(in srgb, hsl(var(--tn-bg-dark)) 85%, rgba(8, 10, 24, 0.15))
     );
     border-top: 1px solid hsl(var(--tn-blue) / 0.22);
@@ -324,32 +308,16 @@
     pointer-events: none;
     opacity: 0.45;
     background:
-      radial-gradient(
-        ellipse at 8% -12%,
-        hsl(var(--tn-blue) / 0.18),
-        transparent 60%
-      ),
-      radial-gradient(
-        ellipse at 86% 120%,
-        hsl(var(--tn-cyan) / 0.18),
-        transparent 68%
-      );
+      radial-gradient(ellipse at 8% -12%, hsl(var(--tn-blue) / 0.18), transparent 60%),
+      radial-gradient(ellipse at 86% 120%, hsl(var(--tn-cyan) / 0.18), transparent 68%);
     filter: blur(0.6px);
   }
 
   .band[data-surface="midnight"],
   .slab[data-surface="midnight"] {
     background:
-      radial-gradient(
-        160% 140% at 10% 10%,
-        hsl(var(--tn-blue) / 0.14),
-        transparent 65%
-      ),
-      linear-gradient(
-        175deg,
-        hsl(var(--tn-bg-highlight)),
-        hsl(var(--tn-bg-dark))
-      );
+      radial-gradient(160% 140% at 10% 10%, hsl(var(--tn-blue) / 0.14), transparent 65%),
+      linear-gradient(175deg, hsl(var(--tn-bg-highlight)), hsl(var(--tn-bg-dark)));
     border-top: 1px solid hsl(var(--tn-blue) / 0.16);
     box-shadow: 0 32px 66px rgba(5, 9, 24, 0.46);
   }
@@ -363,20 +331,12 @@
     opacity: 0.35;
     background:
       linear-gradient(105deg, hsl(var(--tn-cyan) / 0.12), transparent 62%),
-      radial-gradient(
-        120% 120% at 82% -20%,
-        hsl(var(--tn-purple) / 0.18),
-        transparent 74%
-      );
+      radial-gradient(120% 120% at 82% -20%, hsl(var(--tn-purple) / 0.18), transparent 74%);
   }
 
   .band[data-surface="mesh"],
   .slab[data-surface="mesh"] {
-    background: color-mix(
-      in srgb,
-      hsl(var(--tn-bg-highlight)) 80%,
-      hsl(var(--tn-bg-dark))
-    );
+    background: color-mix(in srgb, hsl(var(--tn-bg-highlight)) 80%, hsl(var(--tn-bg-dark)));
     border-top: 1px solid hsl(var(--tn-blue) / 0.18);
   }
 
@@ -396,11 +356,7 @@
 
   .band[data-surface="panel"],
   .slab[data-surface="panel"] {
-    background: linear-gradient(
-      160deg,
-      hsl(var(--tn-bg-highlight)),
-      hsl(var(--tn-bg-dark))
-    );
+    background: linear-gradient(160deg, hsl(var(--tn-bg-highlight)), hsl(var(--tn-bg-dark)));
     border-top: 1px solid hsl(var(--tn-cyan) / 0.18);
     box-shadow: 0 30px 70px rgba(8, 10, 24, 0.48);
   }
@@ -413,26 +369,14 @@
     pointer-events: none;
     opacity: 0.38;
     background:
-      radial-gradient(
-        ellipse at 8% -12%,
-        hsl(var(--tn-blue) / 0.18),
-        transparent 60%
-      ),
-      radial-gradient(
-        ellipse at 86% 120%,
-        hsl(var(--tn-cyan) / 0.18),
-        transparent 68%
-      );
+      radial-gradient(ellipse at 8% -12%, hsl(var(--tn-blue) / 0.18), transparent 60%),
+      radial-gradient(ellipse at 86% 120%, hsl(var(--tn-cyan) / 0.18), transparent 68%);
     filter: blur(0.6px);
   }
 
   .band[data-surface="beam"],
   .slab[data-surface="beam"] {
-    background: linear-gradient(
-      170deg,
-      hsl(var(--tn-bg-highlight)),
-      hsl(var(--tn-bg-dark))
-    );
+    background: linear-gradient(170deg, hsl(var(--tn-bg-highlight)), hsl(var(--tn-bg-dark)));
     border-top: 1px solid hsl(var(--tn-blue) / 0.2);
     box-shadow:
       inset 0 0 0 1px hsl(var(--tn-bg-visual) / 0.28),
@@ -454,16 +398,8 @@
         transparent 22px,
         transparent 46px
       ),
-      radial-gradient(
-        ellipse at 18% -10%,
-        hsl(var(--tn-blue) / 0.22),
-        transparent 62%
-      ),
-      radial-gradient(
-        ellipse at 86% 120%,
-        hsl(var(--tn-cyan) / 0.14),
-        transparent 70%
-      );
+      radial-gradient(ellipse at 18% -10%, hsl(var(--tn-blue) / 0.22), transparent 62%),
+      radial-gradient(ellipse at 86% 120%, hsl(var(--tn-cyan) / 0.14), transparent 70%);
   }
 
   /* ========================================
@@ -549,11 +485,7 @@
     bottom: 0;
     width: clamp(14rem, 28vw, 24rem);
     height: clamp(1.6rem, 3vw, 2.6rem);
-    background: linear-gradient(
-      135deg,
-      hsl(var(--tn-blue) / 0.22),
-      transparent 72%
-    );
+    background: linear-gradient(135deg, hsl(var(--tn-blue) / 0.22), transparent 72%);
     transform: skewX(-18deg);
     pointer-events: none;
   }
@@ -578,11 +510,7 @@
   .auth-form-slab {
     background: linear-gradient(
       150deg,
-      color-mix(
-        in srgb,
-        hsl(var(--tn-bg-highlight)) 92%,
-        rgba(255, 255, 255, 0.02)
-      ),
+      color-mix(in srgb, hsl(var(--tn-bg-highlight)) 92%, rgba(255, 255, 255, 0.02)),
       color-mix(in srgb, hsl(var(--tn-bg-dark)) 88%, rgba(0, 0, 0, 0.08))
     );
     border: 1px solid hsl(var(--tn-fg-gutter) / 0.4);
@@ -595,11 +523,7 @@
   .content-slab {
     background: linear-gradient(
       160deg,
-      color-mix(
-        in srgb,
-        hsl(var(--tn-bg-highlight)) 97%,
-        rgba(255, 255, 255, 0.01)
-      ),
+      color-mix(in srgb, hsl(var(--tn-bg-highlight)) 97%, rgba(255, 255, 255, 0.01)),
       color-mix(in srgb, hsl(var(--tn-bg-dark)) 94%, rgba(0, 0, 0, 0.06))
     );
     border: 1px solid hsl(var(--tn-fg-gutter) / 0.35);
@@ -684,11 +608,7 @@
     position: relative;
     padding: var(--space-lg, 1.5rem) var(--space-xl, 2rem);
     border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-    background: linear-gradient(
-      90deg,
-      hsl(var(--tn-blue) / 0.06) 0%,
-      transparent 50%
-    );
+    background: linear-gradient(90deg, hsl(var(--tn-blue) / 0.06) 0%, transparent 50%);
   }
 
   /* Subtle accent line on left edge */
@@ -699,11 +619,7 @@
     top: 0;
     bottom: 0;
     width: 3px;
-    background: linear-gradient(
-      to bottom,
-      hsl(var(--tn-blue) / 0.6),
-      hsl(var(--tn-cyan) / 0.3)
-    );
+    background: linear-gradient(to bottom, hsl(var(--tn-blue) / 0.6), hsl(var(--tn-cyan) / 0.3));
   }
 
   .slab-header h3,
@@ -873,19 +789,13 @@
 
   .grid-auto-fit {
     display: grid;
-    grid-template-columns: repeat(
-      auto-fit,
-      minmax(var(--grid-min-width, 250px), 1fr)
-    );
+    grid-template-columns: repeat(auto-fit, minmax(var(--grid-min-width, 250px), 1fr));
     gap: var(--grid-gap, 1.5rem);
   }
 
   .grid-auto-fill {
     display: grid;
-    grid-template-columns: repeat(
-      auto-fill,
-      minmax(var(--grid-min-width, 250px), 1fr)
-    );
+    grid-template-columns: repeat(auto-fill, minmax(var(--grid-min-width, 250px), 1fr));
     gap: var(--grid-gap, 1.5rem);
   }
 

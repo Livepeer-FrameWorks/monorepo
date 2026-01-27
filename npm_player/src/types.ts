@@ -1,10 +1,10 @@
-import React from 'react';
+import React from "react";
 
 export interface PlayerProps {
   /** Content identifier or stream name */
   contentId: string;
   /** Content type */
-  contentType: 'live' | 'dvr' | 'clip';
+  contentType: "live" | "dvr" | "clip";
   /** Pre-resolved endpoints/capabilities from Gateway/Foghorn */
   endpoints?: ContentEndpoints;
   /** Optional thumbnail/poster image */
@@ -17,23 +17,23 @@ export interface PlayerProps {
 
 /** High-level player state machine for UI */
 export type PlayerState =
-  | 'booting'
-  | 'gateway_loading'
-  | 'gateway_ready'
-  | 'gateway_error'
-  | 'no_endpoint'
-  | 'selecting_player'
-  | 'connecting'
-  | 'buffering'
-  | 'playing'
-  | 'paused'
-  | 'ended'
-  | 'error'
-  | 'destroyed';
+  | "booting"
+  | "gateway_loading"
+  | "gateway_ready"
+  | "gateway_error"
+  | "no_endpoint"
+  | "selecting_player"
+  | "connecting"
+  | "buffering"
+  | "playing"
+  | "paused"
+  | "ended"
+  | "error"
+  | "destroyed";
 
 export interface PlayerStateContext {
   reason?: string;
-  gatewayStatus?: 'idle' | 'loading' | 'ready' | 'error';
+  gatewayStatus?: "idle" | "loading" | "ready" | "error";
   selectedPlayer?: string; // shortname
   selectedProtocol?: string;
   nodeId?: string;
@@ -105,7 +105,7 @@ export interface DvdLogoProps {
   parentRef: React.RefObject<HTMLDivElement>;
   /** Scale factor for logo size (default: 0.15) */
   scale?: number;
-} 
+}
 
 // FrameWorks Player options
 export interface PlayerOptions {
@@ -215,7 +215,7 @@ export interface DashJsConfig {
       /** Auto switch bitrate for video */
       autoSwitchBitrate?: { video: boolean; audio: boolean };
       /** ABR strategy */
-      ABRStrategy?: 'abrDynamic' | 'abrBola' | 'abrL2A' | 'abrLoLP' | 'abrThroughput';
+      ABRStrategy?: "abrDynamic" | "abrBola" | "abrL2A" | "abrLoLP" | "abrThroughput";
       /** Use default ABR rules */
       useDefaultABRRules?: boolean;
     };
@@ -225,7 +225,7 @@ export interface DashJsConfig {
 }
 
 // To-be Gateway/Foghorn viewer resolution types
-export type StreamProtocol = 'WHEP' | 'HLS' | 'DASH' | 'MP4' | 'WEBM' | 'RTMP' | 'MIST_HTML';
+export type StreamProtocol = "WHEP" | "HLS" | "DASH" | "MP4" | "WEBM" | "RTMP" | "MIST_HTML";
 
 export interface OutputCapabilities {
   supportsSeek: boolean;
@@ -268,7 +268,7 @@ export interface ContentMetadata {
   durationSeconds?: number;
   thumbnailUrl?: string;
   createdAt?: string;
-  status?: 'AVAILABLE' | 'PROCESSING' | 'ERROR' | 'OFFLINE';
+  status?: "AVAILABLE" | "PROCESSING" | "ERROR" | "OFFLINE";
   viewers?: number;
   isLive?: boolean;
   recordingSizeBytes?: number;
@@ -287,14 +287,14 @@ export interface ContentEndpoints {
 
 /** Stream status from MistServer info.js endpoint */
 export type StreamStatus =
-  | 'ONLINE'
-  | 'OFFLINE'
-  | 'INITIALIZING'
-  | 'BOOTING'
-  | 'WAITING_FOR_DATA'
-  | 'SHUTTING_DOWN'
-  | 'INVALID'
-  | 'ERROR';
+  | "ONLINE"
+  | "OFFLINE"
+  | "INITIALIZING"
+  | "BOOTING"
+  | "WAITING_FOR_DATA"
+  | "SHUTTING_DOWN"
+  | "INVALID"
+  | "ERROR";
 
 /** MistServer info.js response structure - matches reference MistMetaPlayer */
 export interface MistStreamInfo {
@@ -305,7 +305,7 @@ export interface MistStreamInfo {
   /** Initialization percentage (0-100) */
   perc?: number;
   /** Stream type: "live" or "vod" */
-  type?: 'live' | 'vod';
+  type?: "live" | "vod";
   /** Whether stream has video tracks */
   hasVideo?: boolean;
   /** Whether stream has audio tracks */
@@ -342,7 +342,7 @@ export interface MistStreamSource {
 
 export interface MistTrackInfo {
   /** Track type */
-  type: 'video' | 'audio' | 'meta';
+  type: "video" | "audio" | "meta";
   /** Codec short name (H264, AAC, etc.) */
   codec: string;
   /** Video width in pixels */
@@ -454,7 +454,7 @@ export interface UsePlaybackQualityOptions {
 // =====================================================
 
 /** Types of meta track events */
-export type MetaTrackEventType = 'subtitle' | 'score' | 'event' | 'chapter' | 'unknown';
+export type MetaTrackEventType = "subtitle" | "score" | "event" | "chapter" | "unknown";
 
 /** Base meta track event */
 export interface MetaTrackEvent {
@@ -524,7 +524,7 @@ export interface TelemetryPayload {
   timestamp: number;
   sessionId: string;
   contentId: string;
-  contentType: 'live' | 'dvr' | 'clip';
+  contentType: "live" | "dvr" | "clip";
   metrics: {
     currentTime: number;
     duration: number;
@@ -566,14 +566,14 @@ export interface TelemetryOptions {
  * - 'quality': Prefer MP4/WS for stable playback, HLS/DASH as fallback
  * - 'auto': Balanced selection (MP4/WS → WHEP → HLS)
  */
-export type PlaybackMode = 'low-latency' | 'quality' | 'auto';
+export type PlaybackMode = "low-latency" | "quality" | "auto";
 
 // =====================================================
 // ABR Types
 // =====================================================
 
 /** ABR mode configuration */
-export type ABRMode = 'auto' | 'resize' | 'bitrate' | 'manual';
+export type ABRMode = "auto" | "resize" | "bitrate" | "manual";
 
 /** ABR controller options */
 export interface ABROptions {

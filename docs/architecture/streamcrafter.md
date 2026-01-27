@@ -21,6 +21,7 @@ StreamCrafter lets a browser user publish live video/audio to a **WHIP endpoint*
 ## What it supports (and what it doesn’t)
 
 ### Supported
+
 - **Publishing protocol:** WHIP (WebRTC-HTTP Ingest Protocol)
 - **Capture APIs:** `getUserMedia`, `getDisplayMedia`, `enumerateDevices`
 - **Output path:** WebRTC via `RTCPeerConnection`
@@ -32,6 +33,7 @@ StreamCrafter lets a browser user publish live video/audio to a **WHIP endpoint*
 - **Quality profiles:** runtime switching + encoder overrides
 
 ### Not supported / non-goals
+
 - RTMP ingest (StreamCrafter is WHIP-first; Gateway resolution may return RTMP/SRT URLs for display, but publishing is WHIP)
 - Server-side components (everything here is client-side)
 - Full “OBS replacement” feature set (no full scene editor UI; only the primitives + basic controls)
@@ -48,6 +50,7 @@ npm_studio/
 ```
 
 ### `@livepeer-frameworks/streamcrafter-core`
+
 Framework-agnostic engine + types:
 
 - Orchestration: `npm_studio/packages/core/src/core/IngestControllerV2.ts`
@@ -63,6 +66,7 @@ Framework-agnostic engine + types:
 Worker bundles are emitted into `npm_studio/packages/core/dist/workers/*.js` by Rollup (see `npm_studio/packages/core/rollup.config.js`).
 
 ### `@livepeer-frameworks/streamcrafter-react`
+
 React integration:
 
 - Main hook: `npm_studio/packages/react/src/hooks/useStreamCrafterV2.ts`
@@ -72,6 +76,7 @@ React integration:
   - Gateway resolution: `npm_studio/packages/react/src/hooks/useIngestEndpoints.ts`
 
 ### `@livepeer-frameworks/streamcrafter-svelte`
+
 Svelte 5 integration:
 
 - Main store: `npm_studio/packages/svelte/src/stores/streamCrafterContextV2.ts`
@@ -138,7 +143,7 @@ This is intentionally separated from publishing: compositor output is “just an
 
 ### 6) Optional: WebCodecs encoding path (“Path C”)
 
-When `useWebCodecs` is enabled *and* `RTCRtpScriptTransform` is supported:
+When `useWebCodecs` is enabled _and_ `RTCRtpScriptTransform` is supported:
 
 - `EncoderManager` spawns `encoder.worker.js`, reads frames/audio from the output stream, and encodes them with WebCodecs
 - Encoded chunks are forwarded to `rtcTransform.worker.js`
@@ -165,6 +170,7 @@ Workers are loaded using `new URL('../workers/<name>.js', import.meta.url)` firs
 If you see runtime errors like “Failed to initialize compositor worker” in a consuming app, you typically need to ensure the worker files are reachable at one of the fallback paths (or adjust bundling to preserve `import.meta.url` worker URLs).
 
 You can also override worker URLs in code:
+
 - `EncoderManager` accepts `workerUrl` (or a preconstructed `Worker`)
 - `WhipClient.attachEncoderTransform(encoderManager, workerUrl)` can override the RTP transform worker
 
@@ -189,6 +195,7 @@ The shared playground (see `npm_player/playground/src/lib/mist-utils.ts`) assume
 - `http://localhost:8080/webrtc/<streamName>` (default stream name is `live`)
 
 ### Playground
+
 The StreamCrafter playground is the shared Vite playground in `npm_player/playground` (symlinked into `npm_studio/playground`).
 
 From `npm_studio/`:

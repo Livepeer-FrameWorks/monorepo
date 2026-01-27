@@ -9,11 +9,11 @@ The `StreamCrafter` component is self-contained - pass a WHIP endpoint and get a
 
 ## Packages
 
-| Package | Description |
-|---------|-------------|
-| `@livepeer-frameworks/streamcrafter-core` | Core streaming logic, WHIP client, WebCodecs encoder |
-| `@livepeer-frameworks/streamcrafter-react` | React component and hooks |
-| `@livepeer-frameworks/streamcrafter-svelte` | Svelte 5 component and stores |
+| Package                                     | Description                                          |
+| ------------------------------------------- | ---------------------------------------------------- |
+| `@livepeer-frameworks/streamcrafter-core`   | Core streaming logic, WHIP client, WebCodecs encoder |
+| `@livepeer-frameworks/streamcrafter-react`  | React component and hooks                            |
+| `@livepeer-frameworks/streamcrafter-svelte` | Svelte 5 component and stores                        |
 
 ## Features
 
@@ -44,21 +44,22 @@ npm install @livepeer-frameworks/streamcrafter-svelte
 The simplest way to add streaming - just pass your WHIP endpoint:
 
 ```tsx
-import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-react';
-import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
+import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
+import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
 function BroadcastPage() {
   return (
     <StreamCrafter
       whipUrl="https://ingest.example.com/webrtc/your-stream-key"
       initialProfile="broadcast"
-      onStateChange={(state) => console.log('State:', state)}
+      onStateChange={(state) => console.log("State:", state)}
     />
   );
 }
 ```
 
 The component includes:
+
 - Video preview
 - Camera/Screen share buttons
 - Quality profile selector
@@ -80,6 +81,7 @@ If you want the SDK to resolve ingest endpoints for you, pass a **Gateway GraphQ
 ```
 
 Notes:
+
 - There is **no default gateway**; you must provide either `whipUrl` or (`gatewayUrl` + `streamKey`).
 - If both are provided, `whipUrl` takes priority.
 
@@ -87,8 +89,8 @@ Notes:
 
 ```svelte
 <script lang="ts">
-  import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-svelte';
-  import '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
+  import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-svelte";
+  import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
 </script>
 
 <StreamCrafter
@@ -104,7 +106,7 @@ For custom UI, use the hooks or stores directly:
 #### React Hook
 
 ```tsx
-import { useStreamCrafterV2 } from '@livepeer-frameworks/streamcrafter-react';
+import { useStreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-react";
 
 function CustomBroadcaster() {
   const {
@@ -120,15 +122,21 @@ function CustomBroadcaster() {
     stopStreaming,
     setQualityProfile,
   } = useStreamCrafterV2({
-    whipUrl: 'https://ingest.example.com/webrtc/stream-key',
-    profile: 'broadcast',
+    whipUrl: "https://ingest.example.com/webrtc/stream-key",
+    profile: "broadcast",
     reconnection: { enabled: true, maxAttempts: 5 },
     audioMixing: true,
   });
 
   return (
     <div>
-      <video ref={(el) => { if (el) el.srcObject = mediaStream; }} autoPlay muted />
+      <video
+        ref={(el) => {
+          if (el) el.srcObject = mediaStream;
+        }}
+        autoPlay
+        muted
+      />
       <button onClick={() => startCamera()}>Add Camera</button>
       <button onClick={() => startScreenShare()}>Share Screen</button>
       <button onClick={() => startStreaming()} disabled={!isCapturing}>
@@ -143,15 +151,15 @@ function CustomBroadcaster() {
 
 ```svelte
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { createStreamCrafterContextV2 } from '@livepeer-frameworks/streamcrafter-svelte';
+  import { onMount, onDestroy } from "svelte";
+  import { createStreamCrafterContextV2 } from "@livepeer-frameworks/streamcrafter-svelte";
 
   const crafter = createStreamCrafterContextV2();
 
   onMount(() => {
     crafter.initialize({
-      whipUrl: 'https://ingest.example.com/webrtc/stream-key',
-      profile: 'broadcast',
+      whipUrl: "https://ingest.example.com/webrtc/stream-key",
+      profile: "broadcast",
     });
   });
 
@@ -171,12 +179,12 @@ function CustomBroadcaster() {
 ### Vanilla JS
 
 ```ts
-import { StreamCrafterV2 } from '@livepeer-frameworks/streamcrafter-core';
-import '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
+import { StreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-core";
+import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";
 
 const crafter = new StreamCrafterV2({
-  whipUrl: 'https://ingest.example.com/webrtc/stream-key',
-  profile: 'broadcast',
+  whipUrl: "https://ingest.example.com/webrtc/stream-key",
+  profile: "broadcast",
   debug: true,
 });
 
@@ -192,18 +200,18 @@ crafter.destroy();
 
 ### StreamCrafter
 
-| Prop | Type | Default | Description |
-|------|------|---------|-------------|
-| `whipUrl` | string | - | WHIP endpoint URL |
-| `gatewayUrl` | string | - | Gateway URL (alternative to whipUrl) |
-| `streamKey` | string | - | Stream key for gateway mode |
-| `initialProfile` | `'professional'` \| `'broadcast'` \| `'conference'` | `'broadcast'` | Quality profile |
-| `autoStartCamera` | boolean | `false` | Start camera on mount |
-| `showSettings` | boolean | `false` | Show settings panel initially |
-| `devMode` | boolean | `false` | Show debug info |
-| `debug` | boolean | `false` | Enable console logging |
-| `onStateChange` | function | - | State change callback |
-| `onError` | function | - | Error callback |
+| Prop              | Type                                                | Default       | Description                          |
+| ----------------- | --------------------------------------------------- | ------------- | ------------------------------------ |
+| `whipUrl`         | string                                              | -             | WHIP endpoint URL                    |
+| `gatewayUrl`      | string                                              | -             | Gateway URL (alternative to whipUrl) |
+| `streamKey`       | string                                              | -             | Stream key for gateway mode          |
+| `initialProfile`  | `'professional'` \| `'broadcast'` \| `'conference'` | `'broadcast'` | Quality profile                      |
+| `autoStartCamera` | boolean                                             | `false`       | Start camera on mount                |
+| `showSettings`    | boolean                                             | `false`       | Show settings panel initially        |
+| `devMode`         | boolean                                             | `false`       | Show debug info                      |
+| `debug`           | boolean                                             | `false`       | Enable console logging               |
+| `onStateChange`   | function                                            | -             | State change callback                |
+| `onError`         | function                                            | -             | Error callback                       |
 
 ### States
 
@@ -220,11 +228,11 @@ The `onStateChange` callback receives one of these states:
 
 ## Quality Profiles
 
-| Profile | Resolution | Video Bitrate | Audio Bitrate |
-|---------|------------|---------------|---------------|
-| `professional` | 1920x1080 | 8 Mbps | 192 kbps |
-| `broadcast` | 1920x1080 | 4.5 Mbps | 128 kbps |
-| `conference` | 1280x720 | 2.5 Mbps | 96 kbps |
+| Profile        | Resolution | Video Bitrate | Audio Bitrate |
+| -------------- | ---------- | ------------- | ------------- |
+| `professional` | 1920x1080  | 8 Mbps        | 192 kbps      |
+| `broadcast`    | 1920x1080  | 4.5 Mbps      | 128 kbps      |
+| `conference`   | 1280x720   | 2.5 Mbps      | 96 kbps       |
 
 ## Multi-Source Streaming
 
@@ -261,6 +269,7 @@ pnpm run dev
 ```
 
 This starts the playground at `http://localhost:5173` where you can:
+
 - Configure WHIP endpoints
 - Test camera/screen capture
 - Stream to local MistServer
@@ -304,6 +313,7 @@ VideoFrame ───────postMessage────────► VideoEnco
 ```
 
 **Why this works in background tabs:**
+
 1. MediaStreamTrackProcessor is media-pipeline driven (not requestAnimationFrame)
 2. Web Workers aren't throttled like main thread timers
 3. WebRTC connection stays active
@@ -321,11 +331,13 @@ StreamCrafter implements [WebRTC-HTTP Ingest Protocol (WHIP)](https://datatracke
 ## Browser Support
 
 Requires:
+
 - WebRTC (RTCPeerConnection)
 - MediaDevices API (getUserMedia, getDisplayMedia)
 - WebCodecs API (optional, for background-safe encoding)
 
 Tested on:
+
 - Chrome 90+
 - Firefox 90+
 - Safari 14.1+

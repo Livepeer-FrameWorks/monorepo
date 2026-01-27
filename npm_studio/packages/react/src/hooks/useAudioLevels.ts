@@ -4,8 +4,8 @@
  * Provides real-time audio levels from the AudioMixer
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import type { IngestControllerV2 } from '@livepeer-frameworks/streamcrafter-core';
+import { useState, useEffect, useCallback, useRef } from "react";
+import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface AudioLevels {
   level: number; // Current level 0-1
@@ -60,7 +60,7 @@ export function useAudioLevels(options: UseAudioLevelsOptions): UseAudioLevelsRe
     if (!audioMixer) return;
 
     // Subscribe to level updates
-    const unsubscribe = audioMixer.on('levelUpdate', (event) => {
+    const unsubscribe = audioMixer.on("levelUpdate", (event) => {
       setLevels({ level: event.level, peakLevel: event.peakLevel });
     });
 

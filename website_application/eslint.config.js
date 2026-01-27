@@ -1,25 +1,22 @@
-import globals from "globals";
-import prettier from "eslint-config-prettier";
 import svelte from "eslint-plugin-svelte";
 import svelteParser from "svelte-eslint-parser";
-import tseslint from "typescript-eslint";
 import svelteConfig from "./svelte.config.js";
+import {
+  globalIgnores,
+  sharedTsRules,
+  tseslint,
+  globals,
+  prettier,
+} from "../eslint.base.config.js";
 
 export default tseslint.config(
+  globalIgnores,
   {
     ignores: [
-      "build",
-      ".svelte-kit",
-      "node_modules",
-      "dist",
       "$houdini/**",
       "src/lib/components/ui/**",
       "src/lib/graphql/generated/**",
-      "eslint.config.js",
-      "postcss.config.js",
-      "svelte.config.js",
-      "tailwind.config.js",
-      "houdini.config.js",
+      "**/*.config.js",
       "**/*.svelte.ts",
     ],
   },
@@ -40,13 +37,7 @@ export default tseslint.config(
     ...config,
     rules: {
       ...config.rules,
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-        },
-      ],
+      ...sharedTsRules,
     },
   })),
   ...svelte.configs.recommended,
@@ -71,5 +62,5 @@ export default tseslint.config(
     },
   },
   prettier,
-  ...svelte.configs.prettier,
+  ...svelte.configs.prettier
 );

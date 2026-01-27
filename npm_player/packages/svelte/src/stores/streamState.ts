@@ -4,8 +4,8 @@
  * Port of useStreamState.ts React hook to Svelte 5 stores.
  */
 
-import { writable, derived, type Readable } from 'svelte/store';
-import type { StreamStatus, MistStreamInfo, StreamState } from '@livepeer-frameworks/player-core';
+import { writable, derived, type Readable } from "svelte/store";
+import type { StreamStatus, MistStreamInfo, StreamState } from "@livepeer-frameworks/player-core";
 
 export interface StreamStateOptions {
   mistBaseUrl: string;
@@ -28,14 +28,14 @@ export interface StreamStateStore extends Readable<StreamState> {
 function parseErrorToStatus(error: string): StreamStatus {
   const lowerError = error.toLowerCase();
 
-  if (lowerError.includes('offline')) return 'OFFLINE';
-  if (lowerError.includes('initializing')) return 'INITIALIZING';
-  if (lowerError.includes('booting')) return 'BOOTING';
-  if (lowerError.includes('waiting for data')) return 'WAITING_FOR_DATA';
-  if (lowerError.includes('shutting down')) return 'SHUTTING_DOWN';
-  if (lowerError.includes('invalid')) return 'INVALID';
+  if (lowerError.includes("offline")) return "OFFLINE";
+  if (lowerError.includes("initializing")) return "INITIALIZING";
+  if (lowerError.includes("booting")) return "BOOTING";
+  if (lowerError.includes("waiting for data")) return "WAITING_FOR_DATA";
+  if (lowerError.includes("shutting down")) return "SHUTTING_DOWN";
+  if (lowerError.includes("invalid")) return "INVALID";
 
-  return 'ERROR';
+  return "ERROR";
 }
 
 /**
@@ -43,32 +43,32 @@ function parseErrorToStatus(error: string): StreamStatus {
  */
 function getStatusMessage(status: StreamStatus, percentage?: number): string {
   switch (status) {
-    case 'ONLINE':
-      return 'Stream is online';
-    case 'OFFLINE':
-      return 'Stream is offline';
-    case 'INITIALIZING':
+    case "ONLINE":
+      return "Stream is online";
+    case "OFFLINE":
+      return "Stream is offline";
+    case "INITIALIZING":
       return percentage !== undefined
         ? `Initializing... ${Math.round(percentage * 10) / 10}%`
-        : 'Stream is initializing';
-    case 'BOOTING':
-      return 'Stream is starting up';
-    case 'WAITING_FOR_DATA':
-      return 'Waiting for stream data';
-    case 'SHUTTING_DOWN':
-      return 'Stream is shutting down';
-    case 'INVALID':
-      return 'Stream status is invalid';
-    case 'ERROR':
+        : "Stream is initializing";
+    case "BOOTING":
+      return "Stream is starting up";
+    case "WAITING_FOR_DATA":
+      return "Waiting for stream data";
+    case "SHUTTING_DOWN":
+      return "Stream is shutting down";
+    case "INVALID":
+      return "Stream status is invalid";
+    case "ERROR":
     default:
-      return 'Stream error';
+      return "Stream error";
   }
 }
 
 const initialState: StreamState = {
-  status: 'OFFLINE',
+  status: "OFFLINE",
   isOnline: false,
-  message: 'Connecting...',
+  message: "Connecting...",
   lastUpdate: 0,
 };
 
@@ -120,7 +120,7 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
       const status = parseErrorToStatus(data.error);
       const message = data.on_error || getStatusMessage(status, data.perc);
 
-      store.update(prev => ({
+      store.update((prev) => ({
         status,
         isOnline: false,
         message,
@@ -131,7 +131,7 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
       }));
     } else {
       // Stream is online with valid metadata
-      store.update(prev => {
+      store.update((prev) => {
         const mergedStreamInfo: MistStreamInfo = {
           ...prev.streamInfo,
           ...data,
@@ -144,9 +144,9 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
         };
 
         return {
-          status: 'ONLINE',
+          status: "ONLINE",
           isOnline: true,
-          message: 'Stream is online',
+          message: "Stream is online",
           lastUpdate: Date.now(),
           streamInfo: mergedStreamInfo,
         };
@@ -161,11 +161,11 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
     if (!mounted || !enabled) return;
 
     try {
-      const baseUrl = `${mistBaseUrl.replace(/\/$/, '')}/json_${encodeURIComponent(streamName)}.js`;
+      const baseUrl = `${mistBaseUrl.replace(/\/$/, "")}/json_${encodeURIComponent(streamName)}.js`;
       const url = `${baseUrl}?metaeverywhere=1&inclzero=1`;
       const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        method: "GET",
+        headers: { Accept: "application/json" },
       });
 
       if (!response.ok) {
@@ -184,13 +184,13 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
     } catch (error) {
       if (!mounted) return;
 
-      store.update(prev => ({
+      store.update((prev) => ({
         ...prev,
-        status: 'ERROR',
+        status: "ERROR",
         isOnline: false,
-        message: error instanceof Error ? error.message : 'Connection failed',
+        message: error instanceof Error ? error.message : "Connection failed",
         lastUpdate: Date.now(),
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: error instanceof Error ? error.message : "Unknown error",
       }));
     }
 
@@ -218,9 +218,9 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
 
     try {
       const wsUrl = mistBaseUrl
-        .replace(/^http:/, 'ws:')
-        .replace(/^https:/, 'wss:')
-        .replace(/\/$/, '');
+        .replace(/^http:/, "ws:")
+        .replace(/^https:/, "wss:")
+        .replace(/\/$/, "");
 
       const url = `${wsUrl}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
       const socket = new WebSocket(url);
@@ -229,14 +229,14 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
       // Timeout: if no message within 5 seconds, fall back to HTTP
       wsTimeout = setTimeout(() => {
         if (socket.readyState <= WebSocket.OPEN) {
-          console.debug('[streamState] WebSocket timeout (5s), falling back to HTTP');
+          console.debug("[streamState] WebSocket timeout (5s), falling back to HTTP");
           socket.close();
           pollHttp();
         }
       }, WS_TIMEOUT_MS);
 
       socket.onopen = () => {
-        console.debug('[streamState] WebSocket connected');
+        console.debug("[streamState] WebSocket connected");
         socketReady.set(true);
       };
 
@@ -250,12 +250,12 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
           const data = JSON.parse(event.data) as MistStreamInfo;
           processStreamInfo(data);
         } catch (e) {
-          console.warn('[streamState] Failed to parse WebSocket message:', e);
+          console.warn("[streamState] Failed to parse WebSocket message:", e);
         }
       };
 
       socket.onerror = () => {
-        console.warn('[streamState] WebSocket error, falling back to HTTP');
+        console.warn("[streamState] WebSocket error, falling back to HTTP");
         if (wsTimeout) {
           clearTimeout(wsTimeout);
           wsTimeout = null;
@@ -269,11 +269,11 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
 
         if (!mounted || !enabled) return;
 
-        console.debug('[streamState] WebSocket closed, starting HTTP polling');
+        console.debug("[streamState] WebSocket closed, starting HTTP polling");
         pollHttp();
       };
     } catch (error) {
-      console.warn('[streamState] WebSocket connection failed:', error);
+      console.warn("[streamState] WebSocket connection failed:", error);
       pollHttp();
     }
   }
@@ -328,7 +328,7 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
   if (enabled && mistBaseUrl && streamName) {
     store.set({
       ...initialState,
-      message: 'Connecting...',
+      message: "Connecting...",
       lastUpdate: Date.now(),
     });
 
@@ -353,15 +353,15 @@ export function createStreamStateManager(options: StreamStateOptions): StreamSta
 
 // Convenience derived stores for common values
 export function createDerivedStreamStatus(store: StreamStateStore) {
-  return derived(store, $state => $state.status);
+  return derived(store, ($state) => $state.status);
 }
 
 export function createDerivedIsOnline(store: StreamStateStore) {
-  return derived(store, $state => $state.isOnline);
+  return derived(store, ($state) => $state.isOnline);
 }
 
 export function createDerivedStreamInfo(store: StreamStateStore) {
-  return derived(store, $state => $state.streamInfo);
+  return derived(store, ($state) => $state.streamInfo);
 }
 
 export default createStreamStateManager;

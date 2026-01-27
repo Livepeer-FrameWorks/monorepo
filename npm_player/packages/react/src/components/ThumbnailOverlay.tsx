@@ -9,7 +9,7 @@ const ThumbnailOverlay: React.FC<ThumbnailOverlayProps> = ({
   message,
   showUnmuteMessage = false,
   style,
-  className
+  className,
 }) => {
   const handleClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
@@ -29,8 +29,9 @@ const ThumbnailOverlay: React.FC<ThumbnailOverlayProps> = ({
       }}
       style={style}
       className={cn(
-        "fw-player-thumbnail relative flex h-full min-h-[280px] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-slate-950 text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-      , className)}
+        "fw-player-thumbnail relative flex h-full min-h-[280px] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl bg-slate-950 text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        className
+      )}
     >
       {thumbnailUrl && (
         <div
@@ -73,9 +74,7 @@ const ThumbnailOverlay: React.FC<ThumbnailOverlayProps> = ({
               </svg>
             </Button>
             <div className="w-full rounded-lg border border-white/10 bg-black/70 p-5 text-white shadow-inner backdrop-blur">
-              <p className="text-base font-semibold text-primary">
-                {message ?? "Click to play"}
-              </p>
+              <p className="text-base font-semibold text-primary">{message ?? "Click to play"}</p>
               <p className="mt-1 text-xs text-white/70">
                 {message ? "Start streaming instantly" : "Jump into the live feed"}
               </p>

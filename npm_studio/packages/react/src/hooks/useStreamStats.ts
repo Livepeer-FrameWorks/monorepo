@@ -3,8 +3,8 @@
  * React hook for streaming statistics
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import type { IngestStats } from '@livepeer-frameworks/streamcrafter-core';
+import { useState, useEffect, useRef, useCallback } from "react";
+import type { IngestStats } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface UseStreamStatsOptions {
   /** Polling interval in milliseconds (default: 1000) */

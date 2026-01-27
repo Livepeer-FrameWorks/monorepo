@@ -4,8 +4,8 @@
  * Supports per-source volume control, muting, and panning
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import type { AudioMixerConfig, AudioMixerEvents, AudioSourceOptions } from '../types';
+import { TypedEventEmitter } from "./EventEmitter";
+import type { AudioMixerConfig, AudioMixerEvents, AudioSourceOptions } from "../types";
 
 interface AudioSourceNode {
   id: string;
@@ -89,14 +89,14 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
       // Get the output stream
       this.outputStream = this.destination.stream;
 
-      console.log('[AudioMixer] Initialized with compressor/limiter chain', {
+      console.log("[AudioMixer] Initialized with compressor/limiter chain", {
         sampleRate: this.audioContext.sampleRate,
         channelCount: this.config.channelCount,
       });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      console.error('[AudioMixer] Failed to initialize:', err);
-      this.emit('error', { message: err.message, error: err });
+      console.error("[AudioMixer] Failed to initialize:", err);
+      this.emit("error", { message: err.message, error: err });
       throw err;
     }
   }
@@ -104,17 +104,13 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
   /**
    * Add an audio source to the mixer
    */
-  addSource(
-    id: string,
-    track: MediaStreamTrack,
-    options: AudioSourceOptions = {}
-  ): void {
+  addSource(id: string, track: MediaStreamTrack, options: AudioSourceOptions = {}): void {
     if (!this.audioContext || !this.masterGain) {
-      throw new Error('AudioMixer not initialized. Call initialize() first.');
+      throw new Error("AudioMixer not initialized. Call initialize() first.");
     }
 
-    if (track.kind !== 'audio') {
-      throw new Error('Track must be an audio track');
+    if (track.kind !== "audio") {
+      throw new Error("Track must be an audio track");
     }
 
     // Remove existing source with same ID if present
@@ -158,12 +154,12 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
 
       this.sources.set(id, audioSource);
 
-      console.log('[AudioMixer] Added source:', id);
-      this.emit('sourceAdded', { sourceId: id });
+      console.log("[AudioMixer] Added source:", id);
+      this.emit("sourceAdded", { sourceId: id });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      console.error('[AudioMixer] Failed to add source:', err);
-      this.emit('error', { message: `Failed to add source: ${err.message}`, error: err });
+      console.error("[AudioMixer] Failed to add source:", err);
+      this.emit("error", { message: `Failed to add source: ${err.message}`, error: err });
       throw err;
     }
   }
@@ -185,10 +181,10 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
 
       this.sources.delete(id);
 
-      console.log('[AudioMixer] Removed source:', id);
-      this.emit('sourceRemoved', { sourceId: id });
+      console.log("[AudioMixer] Removed source:", id);
+      this.emit("sourceRemoved", { sourceId: id });
     } catch (error) {
-      console.error('[AudioMixer] Error removing source:', error);
+      console.error("[AudioMixer] Error removing source:", error);
     }
   }
 
@@ -198,7 +194,7 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
   updateSource(id: string, options: AudioSourceOptions): void {
     const source = this.sources.get(id);
     if (!source) {
-      console.warn('[AudioMixer] Source not found:', id);
+      console.warn("[AudioMixer] Source not found:", id);
       return;
     }
 
@@ -227,11 +223,7 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
     // Update pan
     if (options.pan !== undefined) {
       source.options.pan = options.pan;
-      source.panNode.pan.setTargetAtTime(
-        options.pan,
-        this.audioContext?.currentTime ?? 0,
-        0.01
-      );
+      source.panNode.pan.setTargetAtTime(options.pan, this.audioContext?.currentTime ?? 0, 0.01);
     }
   }
 
@@ -343,7 +335,7 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
    * Resume audio context (required after user interaction)
    */
   async resume(): Promise<void> {
-    if (this.audioContext && this.audioContext.state === 'suspended') {
+    if (this.audioContext && this.audioContext.state === "suspended") {
       await this.audioContext.resume();
     }
   }
@@ -352,7 +344,7 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
    * Suspend audio context
    */
   async suspend(): Promise<void> {
-    if (this.audioContext && this.audioContext.state === 'running') {
+    if (this.audioContext && this.audioContext.state === "running") {
       await this.audioContext.suspend();
     }
   }
@@ -422,18 +414,18 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
     this.levelMonitoringActive = true;
 
     const update = () => {
-      if (!this.levelMonitoringActive || this.audioContext?.state !== 'running') {
+      if (!this.levelMonitoringActive || this.audioContext?.state !== "running") {
         return;
       }
 
       const { level, peakLevel } = this.getLevels();
-      this.emit('levelUpdate', { level, peakLevel });
+      this.emit("levelUpdate", { level, peakLevel });
 
       requestAnimationFrame(update);
     };
 
     requestAnimationFrame(update);
-    console.log('[AudioMixer] Level monitoring started');
+    console.log("[AudioMixer] Level monitoring started");
   }
 
   /**
@@ -442,7 +434,7 @@ export class AudioMixer extends TypedEventEmitter<AudioMixerEvents> {
   stopLevelMonitoring(): void {
     this.levelMonitoringActive = false;
     this.peakLevel = 0;
-    console.log('[AudioMixer] Level monitoring stopped');
+    console.log("[AudioMixer] Level monitoring stopped");
   }
 
   /**

@@ -5,8 +5,8 @@
  * The implementation is in @livepeer-frameworks/player-core.
  */
 
-import React, { useEffect, useRef } from 'react';
-import { MistPlayerImpl } from '@livepeer-frameworks/player-core';
+import React, { useEffect, useRef } from "react";
+import { MistPlayerImpl } from "@livepeer-frameworks/player-core";
 
 // Re-export the implementation from core for backwards compatibility
 export { MistPlayerImpl };
@@ -29,7 +29,7 @@ const MistPlayer: React.FC<Props> = ({
   autoPlay = true,
   controls = true,
   devMode = false,
-  onError
+  onError,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<MistPlayerImpl | null>(null);
@@ -40,13 +40,15 @@ const MistPlayer: React.FC<Props> = ({
     const player = new MistPlayerImpl();
     playerRef.current = player;
 
-    player.initialize(
-      containerRef.current,
-      { url: src, type: 'mist/legacy', streamName },
-      { autoplay: autoPlay, muted, controls, devMode }
-    ).catch((e) => {
-      onError?.(e instanceof Error ? e : new Error(String(e)));
-    });
+    player
+      .initialize(
+        containerRef.current,
+        { url: src, type: "mist/legacy", streamName },
+        { autoplay: autoPlay, muted, controls, devMode }
+      )
+      .catch((e) => {
+        onError?.(e instanceof Error ? e : new Error(String(e)));
+      });
 
     return () => {
       player.destroy();
@@ -54,7 +56,7 @@ const MistPlayer: React.FC<Props> = ({
     };
   }, [src, streamName, muted, autoPlay, controls, devMode, onError]);
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 };
 
 export default MistPlayer;

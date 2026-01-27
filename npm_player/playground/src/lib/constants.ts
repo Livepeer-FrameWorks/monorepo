@@ -3,7 +3,7 @@ export const STORAGE_KEYS = {
   baseUrl: "fw.player.playground.baseUrl",
   viewerPath: "fw.player.playground.viewerPath",
   streamName: "fw.player.playground.streamName",
-  thumbnailUrl: "fw.player.playground.thumbnailUrl"
+  thumbnailUrl: "fw.player.playground.thumbnailUrl",
 } as const;
 
 // Default configuration for local MistServer
@@ -12,14 +12,14 @@ export const DEFAULTS = {
   viewerPath: "",
   streamName: "live",
   thumbnailUrl: "",
-  autoplayMuted: true
+  autoplayMuted: true,
 } as const;
 
 // Standard MistServer ports
 export const MIST_PORTS = {
   http: 8080,
   rtmp: 1935,
-  srt: 9000
+  srt: 9000,
 } as const;
 
 // Polling intervals

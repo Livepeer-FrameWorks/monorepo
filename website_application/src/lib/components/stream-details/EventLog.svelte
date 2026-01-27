@@ -60,20 +60,33 @@
 
   function getEventIcon(type: EventType): string {
     switch (type) {
-      case "stream_start": return "Play";
-      case "stream_end": return "Square";
-      case "viewer_connect": return "UserPlus";
-      case "viewer_disconnect": return "UserMinus";
-      case "quality_change": return "Sliders";
-      case "error": return "XCircle";
-      case "warning": return "AlertTriangle";
-      case "dvr_start": return "Circle";
-      case "dvr_stop": return "CircleStop";
-      case "track_change": return "Layers";
-      case "node_health": return "Server";
-      case "service_status": return "Activity";
+      case "stream_start":
+        return "Play";
+      case "stream_end":
+        return "Square";
+      case "viewer_connect":
+        return "UserPlus";
+      case "viewer_disconnect":
+        return "UserMinus";
+      case "quality_change":
+        return "Sliders";
+      case "error":
+        return "XCircle";
+      case "warning":
+        return "AlertTriangle";
+      case "dvr_start":
+        return "Circle";
+      case "dvr_stop":
+        return "CircleStop";
+      case "track_change":
+        return "Layers";
+      case "node_health":
+        return "Server";
+      case "service_status":
+        return "Activity";
       case "info":
-      default: return "Info";
+      default:
+        return "Info";
     }
   }
 
@@ -143,16 +156,18 @@
 
 <div class={`slab h-full ${className}`} {...rest}>
   <!-- Header -->
-<button
-  type="button"
-  onclick={onToggle}
-  class="slab-header w-full flex items-center justify-between text-left transition-colors cursor-pointer hover:bg-white/5"
-  aria-expanded={!collapsed}
-  aria-controls="event-log-panel"
-  disabled={!onToggle}
->
+  <button
+    type="button"
+    onclick={onToggle}
+    class="slab-header w-full flex items-center justify-between text-left transition-colors cursor-pointer hover:bg-white/5"
+    aria-expanded={!collapsed}
+    aria-controls="event-log-panel"
+    disabled={!onToggle}
+  >
     <div class="flex items-center gap-2">
-      <span class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">{title}</span>
+      <span class="font-semibold text-xs uppercase tracking-wide text-muted-foreground"
+        >{title}</span
+      >
       {#if events.length > 0}
         <span class="text-xs text-muted-foreground">({events.length})</span>
       {/if}
@@ -187,7 +202,9 @@
                   <div class="flex items-center gap-2">
                     <span class="text-sm text-foreground truncate">{event.message}</span>
                     {#if showStreamName && event.streamName}
-                      <span class="text-xs px-1.5 py-0.5 bg-muted text-muted-foreground truncate max-w-24">
+                      <span
+                        class="text-xs px-1.5 py-0.5 bg-muted text-muted-foreground truncate max-w-24"
+                      >
                         {event.streamName}
                       </span>
                     {/if}
@@ -199,8 +216,12 @@
 
                 <!-- Timestamp -->
                 <div class="text-right shrink-0">
-                  <span class="text-xs font-mono text-muted-foreground">{formatTime(event.timestamp)}</span>
-                  <span class="text-xs text-muted-foreground/60 block">{formatDate(event.timestamp)}</span>
+                  <span class="text-xs font-mono text-muted-foreground"
+                    >{formatTime(event.timestamp)}</span
+                  >
+                  <span class="text-xs text-muted-foreground/60 block"
+                    >{formatDate(event.timestamp)}</span
+                  >
                 </div>
               </div>
             </div>

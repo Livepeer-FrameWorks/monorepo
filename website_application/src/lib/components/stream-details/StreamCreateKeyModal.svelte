@@ -14,11 +14,7 @@
   } from "$lib/components/ui/dialog";
   import { getIconComponent } from "$lib/iconUtils";
 
-  let {
-    open = $bindable(false),
-    loading = false,
-    onCreate,
-  } = $props();
+  let { open = $bindable(false), loading = false, onCreate } = $props();
 
   let formData = $state({
     keyName: "",
@@ -41,22 +37,25 @@
 </script>
 
 <Dialog {open} onOpenChange={(value) => (open = value)}>
-  <DialogContent class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden">
+  <DialogContent
+    class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden"
+  >
     <DialogHeader class="slab-header text-left space-y-1">
-      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">Create Stream Key</DialogTitle>
+      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground"
+        >Create Stream Key</DialogTitle
+      >
       <DialogDescription class="text-xs text-muted-foreground/70">
         Provide a name and choose whether this key should be active immediately.
       </DialogDescription>
     </DialogHeader>
 
-    <form id="create-key-form" onsubmit={preventDefault(handleSubmit)} class="slab-body--padded space-y-4">
+    <form
+      id="create-key-form"
+      onsubmit={preventDefault(handleSubmit)}
+      class="slab-body--padded space-y-4"
+    >
       <div class="space-y-2">
-        <label
-          for="keyName"
-          class="block text-sm font-medium text-foreground"
-        >
-          Key Name
-        </label>
+        <label for="keyName" class="block text-sm font-medium text-foreground"> Key Name </label>
         <Input
           id="keyName"
           type="text"
@@ -76,9 +75,9 @@
     </form>
 
     <DialogFooter class="slab-actions slab-actions--row gap-0">
-      <Button 
-        type="button" 
-        variant="ghost" 
+      <Button
+        type="button"
+        variant="ghost"
         class="rounded-none h-12 flex-1 border-r border-[hsl(var(--tn-fg-gutter)/0.3)] hover:bg-muted/10 text-muted-foreground hover:text-foreground"
         onclick={() => (open = false)}
       >

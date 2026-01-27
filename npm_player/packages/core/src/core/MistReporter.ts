@@ -11,7 +11,7 @@
  * Reports are sent over the same WebSocket used for stream state.
  */
 
-import { TimerManager } from './TimerManager';
+import { TimerManager } from "./TimerManager";
 
 export interface MistReporterStats {
   nWaiting: number;
@@ -23,7 +23,7 @@ export interface MistReporterStats {
   lastError: string | null;
   firstPlayback: number | null;
   playbackScore: number;
-  autoplay: 'success' | 'muted' | 'failed' | null;
+  autoplay: "success" | "muted" | "failed" | null;
   videoHeight: number | null;
   videoWidth: number | null;
   playerHeight: number | null;
@@ -74,7 +74,7 @@ export class MistReporter {
     lastError: string | null;
     firstPlayback: number | null;
     playbackScore: number;
-    autoplay: 'success' | 'muted' | 'failed' | null;
+    autoplay: "success" | "muted" | "failed" | null;
     tracks: string | null;
   };
 
@@ -187,10 +187,16 @@ export class MistReporter {
 
     return {
       nWaiting: this._stats._nWaiting,
-      timeWaiting: Math.round(this.timeWaitingAccum + (this.waitingSince > 0 ? now - this.waitingSince : 0)),
+      timeWaiting: Math.round(
+        this.timeWaitingAccum + (this.waitingSince > 0 ? now - this.waitingSince : 0)
+      ),
       nStalled: this._stats._nStalled,
-      timeStalled: Math.round(this.timeStalledAccum + (this.stalledSince > 0 ? now - this.stalledSince : 0)),
-      timeUnpaused: Math.round(this.timeUnpausedAccum + (this.unpausedSince > 0 ? now - this.unpausedSince : 0)),
+      timeStalled: Math.round(
+        this.timeStalledAccum + (this.stalledSince > 0 ? now - this.stalledSince : 0)
+      ),
+      timeUnpaused: Math.round(
+        this.timeUnpausedAccum + (this.unpausedSince > 0 ? now - this.unpausedSince : 0)
+      ),
       nError: this._stats._nError,
       lastError: this._stats.lastError,
       firstPlayback: this._stats.firstPlayback,
@@ -209,21 +215,21 @@ export class MistReporter {
    * Set a stat value
    */
   set<K extends StatsKey>(key: K, value: MistReporterStats[K]): void {
-    if (key === 'nWaiting') {
+    if (key === "nWaiting") {
       this._stats._nWaiting = value as number;
-    } else if (key === 'nStalled') {
+    } else if (key === "nStalled") {
       this._stats._nStalled = value as number;
-    } else if (key === 'nError') {
+    } else if (key === "nError") {
       this._stats._nError = value as number;
-    } else if (key === 'lastError') {
+    } else if (key === "lastError") {
       this._stats.lastError = value as string | null;
-    } else if (key === 'firstPlayback') {
+    } else if (key === "firstPlayback") {
       this._stats.firstPlayback = value as number | null;
-    } else if (key === 'playbackScore') {
+    } else if (key === "playbackScore") {
       this._stats.playbackScore = value as number;
-    } else if (key === 'autoplay') {
-      this._stats.autoplay = value as 'success' | 'muted' | 'failed' | null;
-    } else if (key === 'tracks') {
+    } else if (key === "autoplay") {
+      this._stats.autoplay = value as "success" | "muted" | "failed" | null;
+    } else if (key === "tracks") {
       this._stats.tracks = value as string | null;
     }
     // Other keys (computed) are read-only
@@ -232,12 +238,12 @@ export class MistReporter {
   /**
    * Increment a counter stat
    */
-  add(key: 'nWaiting' | 'nStalled' | 'nError', amount = 1): void {
-    if (key === 'nWaiting') {
+  add(key: "nWaiting" | "nStalled" | "nError", amount = 1): void {
+    if (key === "nWaiting") {
       this._stats._nWaiting += amount;
-    } else if (key === 'nStalled') {
+    } else if (key === "nStalled") {
       this._stats._nStalled += amount;
-    } else if (key === 'nError') {
+    } else if (key === "nError") {
       this._stats._nError += amount;
     }
   }
@@ -310,7 +316,7 @@ export class MistReporter {
 
     const onError = (e: Event) => {
       this._stats._nError++;
-      const error = (e as ErrorEvent).message || 'Unknown error';
+      const error = (e as ErrorEvent).message || "Unknown error";
       this._stats.lastError = error;
 
       // E2: Flush immediately on error
@@ -326,20 +332,20 @@ export class MistReporter {
       }
     };
 
-    videoElement.addEventListener('playing', onPlaying);
-    videoElement.addEventListener('waiting', onWaiting);
-    videoElement.addEventListener('stalled', onStalled);
-    videoElement.addEventListener('pause', onPause);
-    videoElement.addEventListener('error', onError);
-    videoElement.addEventListener('canplay', onCanPlay);
+    videoElement.addEventListener("playing", onPlaying);
+    videoElement.addEventListener("waiting", onWaiting);
+    videoElement.addEventListener("stalled", onStalled);
+    videoElement.addEventListener("pause", onPause);
+    videoElement.addEventListener("error", onError);
+    videoElement.addEventListener("canplay", onCanPlay);
 
     this.listeners = [
-      () => videoElement.removeEventListener('playing', onPlaying),
-      () => videoElement.removeEventListener('waiting', onWaiting),
-      () => videoElement.removeEventListener('stalled', onStalled),
-      () => videoElement.removeEventListener('pause', onPause),
-      () => videoElement.removeEventListener('error', onError),
-      () => videoElement.removeEventListener('canplay', onCanPlay),
+      () => videoElement.removeEventListener("playing", onPlaying),
+      () => videoElement.removeEventListener("waiting", onWaiting),
+      () => videoElement.removeEventListener("stalled", onStalled),
+      () => videoElement.removeEventListener("pause", onPause),
+      () => videoElement.removeEventListener("error", onError),
+      () => videoElement.removeEventListener("canplay", onCanPlay),
     ];
 
     // Start periodic reporting
@@ -363,7 +369,7 @@ export class MistReporter {
   /**
    * Update autoplay status
    */
-  setAutoplayStatus(status: 'success' | 'muted' | 'failed'): void {
+  setAutoplayStatus(status: "success" | "muted" | "failed"): void {
     this._stats.autoplay = status;
   }
 
@@ -371,7 +377,7 @@ export class MistReporter {
    * Update current tracks
    */
   setTracks(tracks: string[]): void {
-    this._stats.tracks = tracks.join(',');
+    this._stats.tracks = tracks.join(",");
   }
 
   /**
@@ -414,10 +420,14 @@ export class MistReporter {
       const timeSinceLastFlush = now - this.lastFlushTime;
       const delay = Math.max(0, this.batchFlushInterval - timeSinceLastFlush);
 
-      this.batchFlushTimerId = this.timers.start(() => {
-        this.batchFlushTimerId = null;
-        this.flushBatch();
-      }, delay, 'batchFlush');
+      this.batchFlushTimerId = this.timers.start(
+        () => {
+          this.batchFlushTimerId = null;
+          this.flushBatch();
+        },
+        delay,
+        "batchFlush"
+      );
     }
   }
 
@@ -452,9 +462,22 @@ export class MistReporter {
 
     // Compare each stat and include only changed values
     const keys: StatsKey[] = [
-      'nWaiting', 'timeWaiting', 'nStalled', 'timeStalled', 'timeUnpaused',
-      'nError', 'lastError', 'firstPlayback', 'playbackScore', 'autoplay',
-      'videoHeight', 'videoWidth', 'playerHeight', 'playerWidth', 'tracks', 'nLog'
+      "nWaiting",
+      "timeWaiting",
+      "nStalled",
+      "timeStalled",
+      "timeUnpaused",
+      "nError",
+      "lastError",
+      "firstPlayback",
+      "playbackScore",
+      "autoplay",
+      "videoHeight",
+      "videoWidth",
+      "playerHeight",
+      "playerWidth",
+      "tracks",
+      "nLog",
     ];
 
     for (const key of keys) {
@@ -497,9 +520,13 @@ export class MistReporter {
    * Schedule the next report
    */
   private scheduleNextReport(): void {
-    this.timers.start(() => {
-      this.reportStats();
-    }, this.reportInterval, 'report');
+    this.timers.start(
+      () => {
+        this.reportStats();
+      },
+      this.reportInterval,
+      "report"
+    );
   }
 
   /**
@@ -525,7 +552,7 @@ export class MistReporter {
     this.timers.destroy();
 
     // Remove event listeners
-    this.listeners.forEach(cleanup => cleanup());
+    this.listeners.forEach((cleanup) => cleanup());
     this.listeners = [];
 
     this.videoElement = null;

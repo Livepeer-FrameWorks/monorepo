@@ -72,7 +72,10 @@
   let realtimeData = $state<Array<{ status?: string }>>([]);
   let liveMetrics = $state<Record<string, StreamMetrics>>({});
   let totalRealtimeViewers = $state(0);
-  let wsConnectionStatus = $state<{ status: string; message: string }>({ status: "disconnected", message: "Disconnected" });
+  let wsConnectionStatus = $state<{ status: string; message: string }>({
+    status: "disconnected",
+    message: "Disconnected",
+  });
 
   // Service status tracking
   let controlPlaneStatus = $state<"connected" | "loading" | "error">("loading");
@@ -101,12 +104,14 @@
   }
 
   // Get masked data from Houdini stores
-  let maskedNodes = $derived($streamsConnectionStore.data?.streamsConnection?.edges?.map(e => e.node) ?? []);
+  let maskedNodes = $derived(
+    $streamsConnectionStore.data?.streamsConnection?.edges?.map((e) => e.node) ?? []
+  );
   let maskedBillingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
 
   // Unmask streams with fragment() and get() pattern
   let streams = $derived(
-    maskedNodes.map(node => {
+    maskedNodes.map((node) => {
       const core = get(fragment(node, streamCoreStore));
       const metrics = node.metrics ? get(fragment(node.metrics, streamMetricsStore)) : null;
       return { ...core, metrics };
@@ -125,31 +130,37 @@
     maskedBillingStatus
       ? {
           ...maskedBillingStatus,
-          currentTier
+          currentTier,
         }
       : null
   );
 
-  let usageData = $derived($platformOverviewStore.data?.analytics?.overview ? {
-    totalStreams: $platformOverviewStore.data.analytics.overview.totalStreams || 0,
-    activeStreams: $platformOverviewStore.data.analytics.overview.activeStreams || 0,
-    totalViewers: $platformOverviewStore.data.analytics.overview.totalViewers || 0,
-    averageViewers: $platformOverviewStore.data.analytics.overview.averageViewers || 0,
-    peakBandwidth: $platformOverviewStore.data.analytics.overview.peakBandwidth || 0,
-    streamHours: $platformOverviewStore.data.analytics.overview.streamHours || 0,
-    egressGb: $platformOverviewStore.data.analytics.overview.egressGb || 0,
-    peakViewers: $platformOverviewStore.data.analytics.overview.peakViewers || 0,
-    // Viewer consumption metrics
-    viewerHours: $platformOverviewStore.data.analytics.overview.viewerHours || 0,
-    deliveredMinutes: $platformOverviewStore.data.analytics.overview.deliveredMinutes || 0,
-    uniqueViewers: $platformOverviewStore.data.analytics.overview.uniqueViewers || 0,
-    ingestHours: $platformOverviewStore.data.analytics.overview.ingestHours || 0,
-    peakConcurrentViewers: $platformOverviewStore.data.analytics.overview.peakConcurrentViewers || 0,
-    // Aggregate totals
-    totalViews: $platformOverviewStore.data.analytics.overview.totalViews || 0,
-    totalUploadBytes: $platformOverviewStore.data.analytics.overview.totalUploadBytes || 0,
-    totalDownloadBytes: $platformOverviewStore.data.analytics.overview.totalDownloadBytes || 0,
-  } : null);
+  let usageData = $derived(
+    $platformOverviewStore.data?.analytics?.overview
+      ? {
+          totalStreams: $platformOverviewStore.data.analytics.overview.totalStreams || 0,
+          activeStreams: $platformOverviewStore.data.analytics.overview.activeStreams || 0,
+          totalViewers: $platformOverviewStore.data.analytics.overview.totalViewers || 0,
+          averageViewers: $platformOverviewStore.data.analytics.overview.averageViewers || 0,
+          peakBandwidth: $platformOverviewStore.data.analytics.overview.peakBandwidth || 0,
+          streamHours: $platformOverviewStore.data.analytics.overview.streamHours || 0,
+          egressGb: $platformOverviewStore.data.analytics.overview.egressGb || 0,
+          peakViewers: $platformOverviewStore.data.analytics.overview.peakViewers || 0,
+          // Viewer consumption metrics
+          viewerHours: $platformOverviewStore.data.analytics.overview.viewerHours || 0,
+          deliveredMinutes: $platformOverviewStore.data.analytics.overview.deliveredMinutes || 0,
+          uniqueViewers: $platformOverviewStore.data.analytics.overview.uniqueViewers || 0,
+          ingestHours: $platformOverviewStore.data.analytics.overview.ingestHours || 0,
+          peakConcurrentViewers:
+            $platformOverviewStore.data.analytics.overview.peakConcurrentViewers || 0,
+          // Aggregate totals
+          totalViews: $platformOverviewStore.data.analytics.overview.totalViews || 0,
+          totalUploadBytes: $platformOverviewStore.data.analytics.overview.totalUploadBytes || 0,
+          totalDownloadBytes:
+            $platformOverviewStore.data.analytics.overview.totalDownloadBytes || 0,
+        }
+      : null
+  );
 
   // Daily stats for 7-day trend sparklines
   let dailyStats = $derived($platformOverviewStore.data?.analytics?.overview?.dailyStats ?? []);
@@ -270,9 +281,11 @@
   });
 
   // Calculate total bandwidth from live metrics (bandwidthInBps/OutBps are in bits/sec)
-  let totalBandwidth = $derived(Object.values(liveMetrics).reduce((total: number, stream) => {
-    return total + (stream.bandwidthInBps || 0) + (stream.bandwidthOutBps || 0);
-  }, 0));
+  let totalBandwidth = $derived(
+    Object.values(liveMetrics).reduce((total: number, stream) => {
+      return total + (stream.bandwidthInBps || 0) + (stream.bandwidthOutBps || 0);
+    }, 0)
+  );
 
   function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text);
@@ -304,17 +317,17 @@
       </div>
     </div>
   {:else if isAuthenticated}
-    {@const PlayIcon = getIconComponent('Play')}
-    {@const UsersIcon = getIconComponent('Users')}
-    {@const WifiIcon = getIconComponent('Wifi')}
-    {@const ClockIcon = getIconComponent('Clock')}
-    {@const VideoIcon = getIconComponent('Video')}
-    {@const ChartLineIcon = getIconComponent('ChartLine')}
-    {@const CreditCardIcon = getIconComponent('CreditCard')}
-    {@const GlobeIcon = getIconComponent('Globe')}
-    {@const GaugeIcon = getIconComponent('Gauge')}
-    {@const ServerIcon = getIconComponent('Server')}
-    {@const LayoutDashboardIcon = getIconComponent('LayoutDashboard')}
+    {@const PlayIcon = getIconComponent("Play")}
+    {@const UsersIcon = getIconComponent("Users")}
+    {@const WifiIcon = getIconComponent("Wifi")}
+    {@const ClockIcon = getIconComponent("Clock")}
+    {@const VideoIcon = getIconComponent("Video")}
+    {@const ChartLineIcon = getIconComponent("ChartLine")}
+    {@const CreditCardIcon = getIconComponent("CreditCard")}
+    {@const GlobeIcon = getIconComponent("Globe")}
+    {@const GaugeIcon = getIconComponent("Gauge")}
+    {@const ServerIcon = getIconComponent("Server")}
+    {@const LayoutDashboardIcon = getIconComponent("LayoutDashboard")}
     <!-- Fixed Page Header -->
     <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
       <div class="flex items-center gap-3">
@@ -330,344 +343,351 @@
 
     <!-- Scrollable Content -->
     <div class="flex-1 overflow-y-auto">
-    <div class="page-transition">
-
-      <!-- Real-time Dashboard Stats (4→2×2→1 responsive) -->
-      <div class="px-4 sm:px-6 lg:px-8 py-2">
-        <div class="flex items-center gap-2">
-          <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">Real-Time</span>
-          <span class="text-[10px] px-1.5 py-0.5 rounded bg-success/20 text-success flex items-center gap-1">
-            <span class="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></span>
-            Live
-          </span>
-        </div>
-      </div>
-      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
-        <div>
-          <DashboardMetricCard
-            icon={PlayIcon}
-            iconColor="text-destructive"
-            value={enhancedStreamStats.live}
-            valueColor="text-success"
-            label="Streams Live"
-            statusIndicator={{
-              connected: wsConnectionStatus.status === "connected",
-              label: "Live",
-            }}
-          />
-        </div>
-
-        <div>
-          <DashboardMetricCard
-            icon={UsersIcon}
-            iconColor="text-info"
-            value={formatNumber(enhancedStreamStats.totalViewers)}
-            valueColor="text-info"
-            label="Total Viewers"
-          />
-        </div>
-
-        <div>
-          <DashboardMetricCard
-            icon={WifiIcon}
-            iconColor="text-accent-purple"
-            value={`${formatBytes(totalBandwidth)}/s`}
-            valueColor="text-accent-purple"
-            label="Live Bandwidth"
-          />
-        </div>
-
-        <div>
-          <DashboardMetricCard
-            icon={ClockIcon}
-            iconColor="text-warning"
-            value={`${usageData?.streamHours ? formatNumber(usageData.streamHours) : "0"}h`}
-            valueColor="text-warning"
-            label="Stream Hours (24h)"
-          />
-        </div>
-      </GridSeam>
-
-      <!-- 7-Day Trends (Historical) -->
-      {#if dailyStats.length > 0}
-        <div class="px-4 sm:px-6 lg:px-8 py-4 border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
-          <div class="flex items-center gap-2 mb-3">
-            <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider">7-Day Trends</span>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Historical</span>
+      <div class="page-transition">
+        <!-- Real-time Dashboard Stats (4→2×2→1 responsive) -->
+        <div class="px-4 sm:px-6 lg:px-8 py-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider"
+              >Real-Time</span
+            >
+            <span
+              class="text-[10px] px-1.5 py-0.5 rounded bg-success/20 text-success flex items-center gap-1"
+            >
+              <span class="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></span>
+              Live
+            </span>
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <!-- Viewer Hours Trend -->
-            <div class="bg-muted/30 rounded-lg p-3">
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs text-muted-foreground">Viewer Hours</span>
-                <span class="text-sm font-semibold text-info">
-                  {formatNumber(dailyStats.reduce((sum, d) => sum + (d.viewerHours || 0), 0))}h
-                </span>
-              </div>
-              <ViewerTrendChart
-                data={dailyStats.map(d => ({ timestamp: d.date, viewers: d.viewerHours || 0 }))}
-                mini={true}
-                height={40}
-                seriesLabel="Viewer Hours"
-                valueFormatter={(v) => `${formatNumber(v)}h`}
-              />
+        </div>
+        <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
+          <div>
+            <DashboardMetricCard
+              icon={PlayIcon}
+              iconColor="text-destructive"
+              value={enhancedStreamStats.live}
+              valueColor="text-success"
+              label="Streams Live"
+              statusIndicator={{
+                connected: wsConnectionStatus.status === "connected",
+                label: "Live",
+              }}
+            />
+          </div>
+
+          <div>
+            <DashboardMetricCard
+              icon={UsersIcon}
+              iconColor="text-info"
+              value={formatNumber(enhancedStreamStats.totalViewers)}
+              valueColor="text-info"
+              label="Total Viewers"
+            />
+          </div>
+
+          <div>
+            <DashboardMetricCard
+              icon={WifiIcon}
+              iconColor="text-accent-purple"
+              value={`${formatBytes(totalBandwidth)}/s`}
+              valueColor="text-accent-purple"
+              label="Live Bandwidth"
+            />
+          </div>
+
+          <div>
+            <DashboardMetricCard
+              icon={ClockIcon}
+              iconColor="text-warning"
+              value={`${usageData?.streamHours ? formatNumber(usageData.streamHours) : "0"}h`}
+              valueColor="text-warning"
+              label="Stream Hours (24h)"
+            />
+          </div>
+        </GridSeam>
+
+        <!-- 7-Day Trends (Historical) -->
+        {#if dailyStats.length > 0}
+          <div class="px-4 sm:px-6 lg:px-8 py-4 border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                >7-Day Trends</span
+              >
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground"
+                >Historical</span
+              >
             </div>
-            <!-- Egress Trend -->
-            <div class="bg-muted/30 rounded-lg p-3">
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs text-muted-foreground">Egress</span>
-                <span class="text-sm font-semibold text-primary">
-                  {formatNumber(dailyStats.reduce((sum, d) => sum + (d.egressGb || 0), 0))} GB
-                </span>
-              </div>
-              <ViewerTrendChart
-                data={dailyStats.map(d => ({ timestamp: d.date, viewers: d.egressGb || 0 }))}
-                mini={true}
-                height={40}
-                seriesLabel="Egress"
-                valueFormatter={(v) => `${formatNumber(v)} GB`}
-              />
-            </div>
-            <!-- Sessions Trend -->
-            <div class="bg-muted/30 rounded-lg p-3">
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs text-muted-foreground">Sessions</span>
-                <span class="text-sm font-semibold text-accent-purple">
-                  {formatNumber(dailyStats.reduce((sum, d) => sum + (d.totalSessions || 0), 0))}
-                </span>
-              </div>
-              <ViewerTrendChart
-                data={dailyStats.map(d => ({ timestamp: d.date, viewers: d.totalSessions || 0 }))}
-                mini={true}
-                height={40}
-                seriesLabel="Sessions"
-                valueFormatter={(v) => formatNumber(v)}
-              />
-            </div>
-          </div>
-        </div>
-      {/if}
-
-      <SectionDivider class="my-8" />
-
-      <!-- Main Content Grid (seamed layout, no outer padding) -->
-      <div class="dashboard-grid">
-        <!-- Streams Overview Slab -->
-        <div class="slab">
-          <div class="slab-header">
-            <h3>Streams Overview</h3>
-          </div>
-          <div class="slab-body--padded space-y-4">
-            {#if enhancedStreamStats.total === 0}
-              <EmptyState
-                iconName="Video"
-                title="No streams yet"
-                description="Create your first stream to start broadcasting and see real-time stats."
-                actionText="Create Stream"
-                onAction={() => goto(resolve("/streams"))}
-              />
-            {:else}
-              <StreamStatsGrid
-                totalStreams={enhancedStreamStats.total}
-                liveStreams={enhancedStreamStats.live}
-                totalViewers={formatNumber(enhancedStreamStats.totalViewers)}
-              />
-
-              <ConnectionStatusBanner
-                visible={wsConnectionStatus.status !== "connected"}
-                message={wsConnectionStatus.message}
-              />
-
-              <PrimaryStreamCard
-                stream={primaryStream}
-                onCopyStreamKey={copyToClipboard}
-                createStreamUrl={resolve("/streams")}
-              />
-            {/if}
-          </div>
-          <div class="slab-actions slab-actions--row">
-            <Button href={resolve("/streams")} variant="ghost" class="gap-2">
-              <VideoIcon class="w-4 h-4" />
-              Manage Streams
-            </Button>
-            <Button href={resolve("/analytics")} variant="ghost" class="gap-2">
-              <ChartLineIcon class="w-4 h-4" />
-              Stream Analytics
-            </Button>
-          </div>
-        </div>
-
-        <!-- Usage & Billing Slab -->
-        <div class="slab">
-          <div class="slab-header">
-            <h3>Usage & Billing</h3>
-          </div>
-          <div class="slab-body--padded">
-            {#if billingStatus}
-              <div class="space-y-4">
-                <div class="flex items-center justify-between">
-                  <span class="text-foreground font-medium">
-                    {billingStatus.currentTier?.displayName || "Free"} Plan
-                  </span>
-                  <span class="bg-success/20 text-success px-2 py-1 text-xs capitalize">
-                    {billingStatus.billingStatus || "active"}
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <!-- Viewer Hours Trend -->
+              <div class="bg-muted/30 rounded-lg p-3">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs text-muted-foreground">Viewer Hours</span>
+                  <span class="text-sm font-semibold text-info">
+                    {formatNumber(dailyStats.reduce((sum, d) => sum + (d.viewerHours || 0), 0))}h
                   </span>
                 </div>
-
-                <div class="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p class="text-muted-foreground">Monthly Cost</p>
-                    <p class="font-semibold text-foreground text-lg">
-                      {billingStatus.currentTier?.basePrice
-                        ? `$${billingStatus.currentTier.basePrice}`
-                        : "Free"}
-                    </p>
-                  </div>
-                  <div>
-                    <p class="text-muted-foreground">Usage (24h)</p>
-                    <p class="font-semibold text-foreground text-lg">
-                      {usageData?.streamHours
-                        ? `${formatNumber(usageData.streamHours)}h`
-                        : "0h"}
-                    </p>
-                  </div>
-                </div>
-
-                {#if usageData && (usageData.egressGb > 0 || usageData.peakViewers > 0 || usageData.viewerHours > 0)}
-                  <div class="grid grid-cols-2 gap-4 text-sm pt-4 border-t border-border/30">
-                    <div>
-                      <p class="text-muted-foreground">Egress (24h)</p>
-                      <p class="font-semibold text-primary">
-                        {usageData.egressGb ? formatNumber(usageData.egressGb) : "0"} GB
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-muted-foreground">Viewer Hours</p>
-                      <p class="font-semibold text-info">
-                        {usageData.viewerHours ? formatNumber(usageData.viewerHours) : "0"}h
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-muted-foreground">Unique Viewers</p>
-                      <p class="font-semibold text-accent-purple">
-                        {usageData.uniqueViewers || 0}
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-muted-foreground">Peak Concurrent</p>
-                      <p class="font-semibold text-success">
-                        {usageData.peakConcurrentViewers || 0}
-                      </p>
-                    </div>
-                    <div class="col-span-2">
-                      <p class="text-muted-foreground">Delivered Minutes</p>
-                      <p class="font-semibold text-warning">
-                        {usageData.deliveredMinutes ? formatNumber(usageData.deliveredMinutes) : "0"}
-                      </p>
-                    </div>
-                  </div>
-                {/if}
-
-                {#if usageData && (usageData.totalViews > 0 || usageData.totalUploadBytes > 0 || usageData.totalDownloadBytes > 0)}
-                  <div class="grid grid-cols-3 gap-4 text-sm pt-4 border-t border-border/30">
-                    <div>
-                      <p class="text-muted-foreground">Total Views</p>
-                      <p class="font-semibold text-foreground">
-                        {formatNumber(usageData.totalViews)}
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-muted-foreground">Upload</p>
-                      <p class="font-semibold text-foreground">
-                        {formatBytes(usageData.totalUploadBytes)}
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-muted-foreground">Download</p>
-                      <p class="font-semibold text-foreground">
-                        {formatBytes(usageData.totalDownloadBytes)}
-                      </p>
-                    </div>
-                  </div>
-                {/if}
+                <ViewerTrendChart
+                  data={dailyStats.map((d) => ({ timestamp: d.date, viewers: d.viewerHours || 0 }))}
+                  mini={true}
+                  height={40}
+                  seriesLabel="Viewer Hours"
+                  valueFormatter={(v) => `${formatNumber(v)}h`}
+                />
               </div>
-            {/if}
+              <!-- Egress Trend -->
+              <div class="bg-muted/30 rounded-lg p-3">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs text-muted-foreground">Egress</span>
+                  <span class="text-sm font-semibold text-primary">
+                    {formatNumber(dailyStats.reduce((sum, d) => sum + (d.egressGb || 0), 0))} GB
+                  </span>
+                </div>
+                <ViewerTrendChart
+                  data={dailyStats.map((d) => ({ timestamp: d.date, viewers: d.egressGb || 0 }))}
+                  mini={true}
+                  height={40}
+                  seriesLabel="Egress"
+                  valueFormatter={(v) => `${formatNumber(v)} GB`}
+                />
+              </div>
+              <!-- Sessions Trend -->
+              <div class="bg-muted/30 rounded-lg p-3">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-xs text-muted-foreground">Sessions</span>
+                  <span class="text-sm font-semibold text-accent-purple">
+                    {formatNumber(dailyStats.reduce((sum, d) => sum + (d.totalSessions || 0), 0))}
+                  </span>
+                </div>
+                <ViewerTrendChart
+                  data={dailyStats.map((d) => ({
+                    timestamp: d.date,
+                    viewers: d.totalSessions || 0,
+                  }))}
+                  mini={true}
+                  height={40}
+                  seriesLabel="Sessions"
+                  valueFormatter={(v) => formatNumber(v)}
+                />
+              </div>
+            </div>
           </div>
-          <div class="slab-actions slab-actions--row">
-            <Button href={resolve("/account/billing")} variant="ghost" class="gap-2">
-              <CreditCardIcon class="w-4 h-4" />
-              Billing
-            </Button>
-            <Button href={resolve("/analytics/usage")} variant="ghost" class="gap-2">
-              <GaugeIcon class="w-4 h-4" />
-              Usage Analytics
-            </Button>
+        {/if}
+
+        <SectionDivider class="my-8" />
+
+        <!-- Main Content Grid (seamed layout, no outer padding) -->
+        <div class="dashboard-grid">
+          <!-- Streams Overview Slab -->
+          <div class="slab">
+            <div class="slab-header">
+              <h3>Streams Overview</h3>
+            </div>
+            <div class="slab-body--padded space-y-4">
+              {#if enhancedStreamStats.total === 0}
+                <EmptyState
+                  iconName="Video"
+                  title="No streams yet"
+                  description="Create your first stream to start broadcasting and see real-time stats."
+                  actionText="Create Stream"
+                  onAction={() => goto(resolve("/streams"))}
+                />
+              {:else}
+                <StreamStatsGrid
+                  totalStreams={enhancedStreamStats.total}
+                  liveStreams={enhancedStreamStats.live}
+                  totalViewers={formatNumber(enhancedStreamStats.totalViewers)}
+                />
+
+                <ConnectionStatusBanner
+                  visible={wsConnectionStatus.status !== "connected"}
+                  message={wsConnectionStatus.message}
+                />
+
+                <PrimaryStreamCard
+                  stream={primaryStream}
+                  onCopyStreamKey={copyToClipboard}
+                  createStreamUrl={resolve("/streams")}
+                />
+              {/if}
+            </div>
+            <div class="slab-actions slab-actions--row">
+              <Button href={resolve("/streams")} variant="ghost" class="gap-2">
+                <VideoIcon class="w-4 h-4" />
+                Manage Streams
+              </Button>
+              <Button href={resolve("/analytics")} variant="ghost" class="gap-2">
+                <ChartLineIcon class="w-4 h-4" />
+                Stream Analytics
+              </Button>
+            </div>
           </div>
+
+          <!-- Usage & Billing Slab -->
+          <div class="slab">
+            <div class="slab-header">
+              <h3>Usage & Billing</h3>
+            </div>
+            <div class="slab-body--padded">
+              {#if billingStatus}
+                <div class="space-y-4">
+                  <div class="flex items-center justify-between">
+                    <span class="text-foreground font-medium">
+                      {billingStatus.currentTier?.displayName || "Free"} Plan
+                    </span>
+                    <span class="bg-success/20 text-success px-2 py-1 text-xs capitalize">
+                      {billingStatus.billingStatus || "active"}
+                    </span>
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p class="text-muted-foreground">Monthly Cost</p>
+                      <p class="font-semibold text-foreground text-lg">
+                        {billingStatus.currentTier?.basePrice
+                          ? `$${billingStatus.currentTier.basePrice}`
+                          : "Free"}
+                      </p>
+                    </div>
+                    <div>
+                      <p class="text-muted-foreground">Usage (24h)</p>
+                      <p class="font-semibold text-foreground text-lg">
+                        {usageData?.streamHours ? `${formatNumber(usageData.streamHours)}h` : "0h"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {#if usageData && (usageData.egressGb > 0 || usageData.peakViewers > 0 || usageData.viewerHours > 0)}
+                    <div class="grid grid-cols-2 gap-4 text-sm pt-4 border-t border-border/30">
+                      <div>
+                        <p class="text-muted-foreground">Egress (24h)</p>
+                        <p class="font-semibold text-primary">
+                          {usageData.egressGb ? formatNumber(usageData.egressGb) : "0"} GB
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Viewer Hours</p>
+                        <p class="font-semibold text-info">
+                          {usageData.viewerHours ? formatNumber(usageData.viewerHours) : "0"}h
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Unique Viewers</p>
+                        <p class="font-semibold text-accent-purple">
+                          {usageData.uniqueViewers || 0}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Peak Concurrent</p>
+                        <p class="font-semibold text-success">
+                          {usageData.peakConcurrentViewers || 0}
+                        </p>
+                      </div>
+                      <div class="col-span-2">
+                        <p class="text-muted-foreground">Delivered Minutes</p>
+                        <p class="font-semibold text-warning">
+                          {usageData.deliveredMinutes
+                            ? formatNumber(usageData.deliveredMinutes)
+                            : "0"}
+                        </p>
+                      </div>
+                    </div>
+                  {/if}
+
+                  {#if usageData && (usageData.totalViews > 0 || usageData.totalUploadBytes > 0 || usageData.totalDownloadBytes > 0)}
+                    <div class="grid grid-cols-3 gap-4 text-sm pt-4 border-t border-border/30">
+                      <div>
+                        <p class="text-muted-foreground">Total Views</p>
+                        <p class="font-semibold text-foreground">
+                          {formatNumber(usageData.totalViews)}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Upload</p>
+                        <p class="font-semibold text-foreground">
+                          {formatBytes(usageData.totalUploadBytes)}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Download</p>
+                        <p class="font-semibold text-foreground">
+                          {formatBytes(usageData.totalDownloadBytes)}
+                        </p>
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+            <div class="slab-actions slab-actions--row">
+              <Button href={resolve("/account/billing")} variant="ghost" class="gap-2">
+                <CreditCardIcon class="w-4 h-4" />
+                Billing
+              </Button>
+              <Button href={resolve("/analytics/usage")} variant="ghost" class="gap-2">
+                <GaugeIcon class="w-4 h-4" />
+                Usage Analytics
+              </Button>
+            </div>
+          </div>
+
+          <!-- Prepaid Balance Widget -->
+          <PrepaidBalanceWidget />
+
+          <!-- System Health Slab -->
+          <div class="slab">
+            <div class="slab-header">
+              <h3>System Health</h3>
+            </div>
+            <div class="slab-body--padded space-y-4">
+              <ServiceStatusList
+                wsStatus={wsConnectionStatus}
+                controlPlane={controlPlaneStatus}
+                dataPlane={dataPlaneStatus}
+              />
+
+              <LiveStreamHealthCards {liveMetrics} {formatBytes} />
+            </div>
+            <div class="slab-actions slab-actions--row">
+              <Button href={resolve("/analytics")} variant="ghost" class="gap-2">
+                <ChartLineIcon class="w-4 h-4" />
+                Analytics
+              </Button>
+              <Button href={resolve("/analytics/audience")} variant="ghost" class="gap-2">
+                <GlobeIcon class="w-4 h-4" />
+                Audience
+              </Button>
+              <Button href={resolve("/infrastructure")} variant="ghost" class="gap-2">
+                <ServerIcon class="w-4 h-4" />
+                Infrastructure
+              </Button>
+            </div>
+          </div>
+
+          <!-- Tips & Hints Slab -->
+          <div class="slab">
+            <div class="slab-header">
+              <h3>Tips</h3>
+            </div>
+            <div class="slab-body--padded">
+              <DynamicHints
+                hasStreams={enhancedStreamStats.total > 0}
+                hasLiveStreams={enhancedStreamStats.live > 0}
+                streamKey={primaryStream?.streamKey}
+              />
+            </div>
+          </div>
+
+          <!-- Recent Activity Event Log -->
+          <EventLog
+            class="col-span-full"
+            events={platformEvents}
+            title="Recent Activity"
+            maxVisible={5}
+            collapsed={eventLogCollapsed}
+            onToggle={() => (eventLogCollapsed = !eventLogCollapsed)}
+            showStreamName={true}
+            emptyMessage="No recent activity. Events will appear here as streams go live and viewers connect."
+          />
         </div>
-
-        <!-- Prepaid Balance Widget -->
-        <PrepaidBalanceWidget />
-
-        <!-- System Health Slab -->
-        <div class="slab">
-          <div class="slab-header">
-            <h3>System Health</h3>
-          </div>
-          <div class="slab-body--padded space-y-4">
-            <ServiceStatusList
-              wsStatus={wsConnectionStatus}
-              controlPlane={controlPlaneStatus}
-              dataPlane={dataPlaneStatus}
-            />
-
-            <LiveStreamHealthCards
-              {liveMetrics}
-              {formatBytes}
-            />
-          </div>
-          <div class="slab-actions slab-actions--row">
-            <Button href={resolve("/analytics")} variant="ghost" class="gap-2">
-              <ChartLineIcon class="w-4 h-4" />
-              Analytics
-            </Button>
-            <Button href={resolve("/analytics/audience")} variant="ghost" class="gap-2">
-              <GlobeIcon class="w-4 h-4" />
-              Audience
-            </Button>
-            <Button href={resolve("/infrastructure")} variant="ghost" class="gap-2">
-              <ServerIcon class="w-4 h-4" />
-              Infrastructure
-            </Button>
-          </div>
-        </div>
-
-        <!-- Tips & Hints Slab -->
-        <div class="slab">
-          <div class="slab-header">
-            <h3>Tips</h3>
-          </div>
-          <div class="slab-body--padded">
-            <DynamicHints
-              hasStreams={enhancedStreamStats.total > 0}
-              hasLiveStreams={enhancedStreamStats.live > 0}
-              streamKey={primaryStream?.streamKey}
-            />
-          </div>
-        </div>
-
-        <!-- Recent Activity Event Log -->
-        <EventLog
-          class="col-span-full"
-          events={platformEvents}
-          title="Recent Activity"
-          maxVisible={5}
-          collapsed={eventLogCollapsed}
-          onToggle={() => (eventLogCollapsed = !eventLogCollapsed)}
-          showStreamName={true}
-          emptyMessage="No recent activity. Events will appear here as streams go live and viewers connect."
-        />
       </div>
-    </div>
     </div>
   {/if}
 </div>

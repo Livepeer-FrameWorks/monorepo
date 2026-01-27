@@ -60,8 +60,8 @@
         </div>
         <div class="slab-body--padded">
           <p class="text-muted-foreground mb-4">
-            If an account exists for <span class="text-foreground font-medium">{email}</span>,
-            you will receive a password reset link shortly.
+            If an account exists for <span class="text-foreground font-medium">{email}</span>, you
+            will receive a password reset link shortly.
           </p>
           <div class="space-y-2 text-sm text-muted-foreground">
             <p>• Check your spam/junk folder if you don't see the email</p>
@@ -69,9 +69,7 @@
           </div>
         </div>
         <div class="slab-actions">
-          <Button href={resolve("/login")} class="w-full justify-center">
-            Return to Sign In
-          </Button>
+          <Button href={resolve("/login")} class="w-full justify-center">Return to Sign In</Button>
         </div>
       </div>
     {:else}

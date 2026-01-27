@@ -1,11 +1,11 @@
-import type { ABRMode, ABROptions, PlaybackQuality, QualityLevel } from '../types';
-import { TimerManager } from './TimerManager';
+import type { ABRMode, ABROptions, PlaybackQuality, QualityLevel } from "../types";
+import { TimerManager } from "./TimerManager";
 
 /**
  * Default ABR options
  */
 const DEFAULT_OPTIONS: Required<ABROptions> = {
-  mode: 'auto',
+  mode: "auto",
   maxResolution: { width: 1920, height: 1080 },
   maxBitrate: 8000000, // 8 Mbps
   minBufferForUpgrade: 10,
@@ -18,7 +18,7 @@ export interface ABRControllerConfig {
   /** Callback to get available qualities */
   getQualities: () => QualityLevel[];
   /** Callback to select a quality */
-  selectQuality: (id: string | 'auto') => void;
+  selectQuality: (id: string | "auto") => void;
   /** Callback to get current quality */
   getCurrentQuality?: () => QualityLevel | null;
   /** Callback to get bandwidth estimate (bits per second) - typically from player stats */
@@ -27,7 +27,7 @@ export interface ABRControllerConfig {
   debug?: boolean;
 }
 
-export type ABRDecision = 'upgrade' | 'downgrade' | 'maintain' | 'none';
+export type ABRDecision = "upgrade" | "downgrade" | "maintain" | "none";
 
 /**
  * ABRController - Adaptive Bitrate Controller
@@ -54,8 +54,8 @@ export class ABRController {
   private options: Required<ABROptions>;
   private config: ABRControllerConfig;
   private videoElement: HTMLVideoElement | null = null;
-  private currentQualityId: string | 'auto' = 'auto';
-  private lastDecision: ABRDecision = 'none';
+  private currentQualityId: string | "auto" = "auto";
+  private lastDecision: ABRDecision = "none";
   private lastDecisionTime = 0;
   private resizeObserver: ResizeObserver | null = null;
   private qualityChangeCallbacks: Array<(level: QualityLevel) => void> = [];
@@ -96,18 +96,18 @@ export class ABRController {
     this.stop();
     this.videoElement = videoElement;
 
-    if (this.options.mode === 'manual') {
-      this.log('Manual mode - no automatic ABR');
+    if (this.options.mode === "manual") {
+      this.log("Manual mode - no automatic ABR");
       return;
     }
 
     // Setup resize observer for ABR_resize mode
-    if (this.options.mode === 'resize' || this.options.mode === 'auto') {
+    if (this.options.mode === "resize" || this.options.mode === "auto") {
       this.setupResizeObserver();
     }
 
     // Start active bandwidth monitoring for bitrate mode
-    if (this.options.mode === 'bitrate' || this.options.mode === 'auto') {
+    if (this.options.mode === "bitrate" || this.options.mode === "auto") {
       this.startActiveMonitoring();
     }
   }
@@ -133,7 +133,7 @@ export class ABRController {
     this.timers.startInterval(
       () => this.checkBandwidthAndSwitch(),
       ABRController.MONITORING_INTERVAL_MS,
-      'monitoring'
+      "monitoring"
     );
 
     // Initial check
@@ -182,8 +182,10 @@ export class ABRController {
       if (smoothedBandwidth < currentBitrate * ABRController.DOWNGRADE_THRESHOLD) {
         const lowerQuality = this.findLowerQuality(qualities, currentQuality);
         if (lowerQuality) {
-          this.log(`ABR: bandwidth ${Math.round(smoothedBandwidth / 1000)}kbps < ${Math.round(currentBitrate * ABRController.DOWNGRADE_THRESHOLD / 1000)}kbps threshold -> downgrading to ${lowerQuality.label}`);
-          this.lastDecision = 'downgrade';
+          this.log(
+            `ABR: bandwidth ${Math.round(smoothedBandwidth / 1000)}kbps < ${Math.round((currentBitrate * ABRController.DOWNGRADE_THRESHOLD) / 1000)}kbps threshold -> downgrading to ${lowerQuality.label}`
+          );
+          this.lastDecision = "downgrade";
           this.lastDecisionTime = now;
           this.lastDowngradeTime = now;
           this.selectQuality(lowerQuality.id);
@@ -201,11 +203,14 @@ export class ABRController {
         // D2: Hysteresis - require 1.5x headroom to upgrade
         // Once at a quality level, stay until bandwidth drops below 1.2x (not 1.0x)
         const shouldUpgrade = smoothedBandwidth >= targetBitrate * ABRController.UPGRADE_HEADROOM;
-        const _canHoldHigher = smoothedBandwidth >= targetBitrate * ABRController.UPGRADE_HOLD_THRESHOLD;
+        const _canHoldHigher =
+          smoothedBandwidth >= targetBitrate * ABRController.UPGRADE_HOLD_THRESHOLD;
 
         if (shouldUpgrade) {
-          this.log(`ABR: bandwidth ${Math.round(smoothedBandwidth / 1000)}kbps >= ${Math.round(targetBitrate * ABRController.UPGRADE_HEADROOM / 1000)}kbps headroom -> upgrading to ${higherQuality.label}`);
-          this.lastDecision = 'upgrade';
+          this.log(
+            `ABR: bandwidth ${Math.round(smoothedBandwidth / 1000)}kbps >= ${Math.round((targetBitrate * ABRController.UPGRADE_HEADROOM) / 1000)}kbps headroom -> upgrading to ${higherQuality.label}`
+          );
+          this.lastDecision = "upgrade";
           this.lastDecisionTime = now;
           this.lastUpgradeTime = now;
           this.selectQuality(higherQuality.id);
@@ -282,7 +287,7 @@ export class ABRController {
    * Handle viewport resize (ABR_resize mode)
    */
   private handleResize(width: number, height: number): void {
-    if (this.options.mode !== 'resize' && this.options.mode !== 'auto') {
+    if (this.options.mode !== "resize" && this.options.mode !== "auto") {
       return;
     }
 
@@ -291,7 +296,10 @@ export class ABRController {
 
     // Find best quality for viewport size
     const targetWidth = Math.min(width * window.devicePixelRatio, this.options.maxResolution.width);
-    const targetHeight = Math.min(height * window.devicePixelRatio, this.options.maxResolution.height);
+    const targetHeight = Math.min(
+      height * window.devicePixelRatio,
+      this.options.maxResolution.height
+    );
 
     const bestQuality = this.findBestQualityForResolution(qualities, targetWidth, targetHeight);
 
@@ -307,7 +315,7 @@ export class ABRController {
    * Called by QualityMonitor when playback quality drops
    */
   handleQualityDegraded(quality: PlaybackQuality): void {
-    if (this.options.mode !== 'bitrate' && this.options.mode !== 'auto') {
+    if (this.options.mode !== "bitrate" && this.options.mode !== "auto") {
       return;
     }
 
@@ -327,7 +335,7 @@ export class ABRController {
 
         if (lowerQuality) {
           this.log(`Bitrate ABR: score ${quality.score} -> downgrading to ${lowerQuality.label}`);
-          this.lastDecision = 'downgrade';
+          this.lastDecision = "downgrade";
           this.lastDecisionTime = now;
           this.lastDowngradeTime = now;
           this.selectQuality(lowerQuality.id);
@@ -342,7 +350,7 @@ export class ABRController {
    * Called when conditions are good enough to try higher quality
    */
   handleQualityImproved(quality: PlaybackQuality): void {
-    if (this.options.mode !== 'bitrate' && this.options.mode !== 'auto') {
+    if (this.options.mode !== "bitrate" && this.options.mode !== "auto") {
       return;
     }
 
@@ -363,7 +371,7 @@ export class ABRController {
 
         if (higherQuality && this.isWithinConstraints(higherQuality)) {
           this.log(`Bitrate ABR: score ${quality.score} -> upgrading to ${higherQuality.label}`);
-          this.lastDecision = 'upgrade';
+          this.lastDecision = "upgrade";
           this.lastDecisionTime = now;
           this.lastUpgradeTime = now;
           this.selectQuality(higherQuality.id);
@@ -381,7 +389,7 @@ export class ABRController {
     targetHeight: number
   ): QualityLevel | null {
     // Filter out qualities that exceed constraints
-    const validQualities = qualities.filter(q => this.isWithinConstraints(q));
+    const validQualities = qualities.filter((q) => this.isWithinConstraints(q));
 
     if (validQualities.length === 0) return null;
 
@@ -409,10 +417,7 @@ export class ABRController {
   /**
    * Find a lower quality level
    */
-  private findLowerQuality(
-    qualities: QualityLevel[],
-    current: QualityLevel
-  ): QualityLevel | null {
+  private findLowerQuality(qualities: QualityLevel[], current: QualityLevel): QualityLevel | null {
     const currentBitrate = current.bitrate ?? 0;
 
     // Sort by bitrate descending
@@ -431,10 +436,7 @@ export class ABRController {
   /**
    * Find a higher quality level
    */
-  private findHigherQuality(
-    qualities: QualityLevel[],
-    current: QualityLevel
-  ): QualityLevel | null {
+  private findHigherQuality(qualities: QualityLevel[], current: QualityLevel): QualityLevel | null {
     const currentBitrate = current.bitrate ?? 0;
 
     // Sort by bitrate ascending
@@ -466,15 +468,15 @@ export class ABRController {
   /**
    * Select a quality level
    */
-  private selectQuality(id: string | 'auto'): void {
+  private selectQuality(id: string | "auto"): void {
     this.currentQualityId = id;
     this.config.selectQuality(id);
 
     // Notify callbacks
     const qualities = this.config.getQualities();
-    const selected = qualities.find(q => q.id === id);
+    const selected = qualities.find((q) => q.id === id);
     if (selected) {
-      this.qualityChangeCallbacks.forEach(cb => cb(selected));
+      this.qualityChangeCallbacks.forEach((cb) => cb(selected));
     }
   }
 
@@ -494,7 +496,7 @@ export class ABRController {
   /**
    * Manually set quality (switches to manual mode temporarily)
    */
-  setQuality(id: string | 'auto'): void {
+  setQuality(id: string | "auto"): void {
     this.selectQuality(id);
   }
 

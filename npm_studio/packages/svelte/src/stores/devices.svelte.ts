@@ -3,7 +3,7 @@
  * Svelte 5 store for device enumeration and management
  */
 
-import { DeviceManager, type DeviceInfo } from '@livepeer-frameworks/streamcrafter-core';
+import { DeviceManager, type DeviceInfo } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface DevicesState {
   devices: DeviceInfo[];
@@ -38,9 +38,9 @@ export function createDevicesStore(): DevicesStore {
 
   function notify() {
     const snapshot = { ...state };
-    snapshot.videoInputs = state.devices.filter((d) => d.kind === 'videoinput');
-    snapshot.audioInputs = state.devices.filter((d) => d.kind === 'audioinput');
-    snapshot.audioOutputs = state.devices.filter((d) => d.kind === 'audiooutput');
+    snapshot.videoInputs = state.devices.filter((d) => d.kind === "videoinput");
+    snapshot.audioInputs = state.devices.filter((d) => d.kind === "audioinput");
+    snapshot.audioOutputs = state.devices.filter((d) => d.kind === "audiooutput");
     subscribers.forEach((fn) => fn(snapshot));
   }
 
@@ -49,23 +49,24 @@ export function createDevicesStore(): DevicesStore {
 
     deviceManager = new DeviceManager();
 
-    deviceManager.on('devicesChanged', (event) => {
+    deviceManager.on("devicesChanged", (event) => {
       state.devices = event.devices;
       notify();
     });
 
-    deviceManager.on('permissionChanged', (event) => {
+    deviceManager.on("permissionChanged", (event) => {
       state.hasPermission = { video: event.granted, audio: event.granted };
       notify();
     });
 
-    deviceManager.on('error', (event) => {
+    deviceManager.on("error", (event) => {
       state.error = event.message;
       notify();
     });
 
     // Initial enumeration
-    deviceManager.enumerateDevices()
+    deviceManager
+      .enumerateDevices()
       .then((devices) => {
         state.devices = devices;
         state.isLoading = false;
@@ -84,9 +85,9 @@ export function createDevicesStore(): DevicesStore {
       subscribers.add(fn);
       fn({
         ...state,
-        videoInputs: state.devices.filter((d) => d.kind === 'videoinput'),
-        audioInputs: state.devices.filter((d) => d.kind === 'audioinput'),
-        audioOutputs: state.devices.filter((d) => d.kind === 'audiooutput'),
+        videoInputs: state.devices.filter((d) => d.kind === "videoinput"),
+        audioInputs: state.devices.filter((d) => d.kind === "audioinput"),
+        audioOutputs: state.devices.filter((d) => d.kind === "audiooutput"),
       });
       return () => {
         subscribers.delete(fn);

@@ -1,35 +1,35 @@
-  <script lang="ts">
-	  import {
-      cn,
-      globalPlayerManager,
-      type MistStreamInfo,
-      type PlaybackMode,
-      // Seeking utilities from core
-      SPEED_PRESETS,
-      isMediaStreamSource,
-      supportsPlaybackRate as coreSupportsPlaybackRate,
-      calculateSeekableRange,
-      canSeekStream,
-      calculateLiveThresholds,
-      calculateIsNearLive,
-      isLiveContent,
-      // Time formatting from core
-      formatTimeDisplay,
-    } from '@livepeer-frameworks/player-core';
-	  import SeekBar from './SeekBar.svelte';
-	  import Slider from './ui/Slider.svelte';
-	  import VolumeIcons from './components/VolumeIcons.svelte';
-	  import {
-      StatsIcon,
-      SettingsIcon,
-      PlayIcon,
-      PauseIcon,
-      SkipBackIcon,
-      SkipForwardIcon,
-      FullscreenIcon,
-      FullscreenExitIcon,
-      SeekToLiveIcon,
-    } from './icons';
+<script lang="ts">
+  import {
+    cn,
+    globalPlayerManager,
+    type MistStreamInfo,
+    type PlaybackMode,
+    // Seeking utilities from core
+    SPEED_PRESETS,
+    isMediaStreamSource,
+    supportsPlaybackRate as coreSupportsPlaybackRate,
+    calculateSeekableRange,
+    canSeekStream,
+    calculateLiveThresholds,
+    calculateIsNearLive,
+    isLiveContent,
+    // Time formatting from core
+    formatTimeDisplay,
+  } from "@livepeer-frameworks/player-core";
+  import SeekBar from "./SeekBar.svelte";
+  import Slider from "./ui/Slider.svelte";
+  import VolumeIcons from "./components/VolumeIcons.svelte";
+  import {
+    StatsIcon,
+    SettingsIcon,
+    PlayIcon,
+    PauseIcon,
+    SkipBackIcon,
+    SkipForwardIcon,
+    FullscreenIcon,
+    FullscreenExitIcon,
+    SeekToLiveIcon,
+  } from "./icons";
 
   // Props - aligned with React PlayerControls
   interface Props {
@@ -58,7 +58,7 @@
     onseek = undefined,
     mistStreamInfo = undefined,
     disabled = false,
-    playbackMode = 'auto',
+    playbackMode = "auto",
     onModeChange = undefined,
     sourceType = undefined,
     showStatsButton = false,
@@ -75,8 +75,10 @@
   function findVideoElement(): HTMLVideoElement | null {
     const player = globalPlayerManager.getCurrentPlayer();
     if (player?.getVideoElement?.()) return player.getVideoElement();
-    return document.querySelector('[data-player-container="true"] video') as HTMLVideoElement | null
-      ?? document.querySelector('.fw-player-container video') as HTMLVideoElement | null;
+    return (
+      (document.querySelector('[data-player-container="true"] video') as HTMLVideoElement | null) ??
+      (document.querySelector(".fw-player-container video") as HTMLVideoElement | null)
+    );
   }
 
   $effect(() => {
@@ -118,8 +120,8 @@
   let isNearLiveState = $state(true);
   let buffered: TimeRanges | undefined = $state(undefined);
   let _hasSeekToLive = false; // Track if we've auto-seeked to live
-  let qualityValue = $state('auto');
-  let captionValue = $state('none');
+  let qualityValue = $state("auto");
+  let captionValue = $state("none");
 
   // Text tracks from player
   let textTracks = $derived.by(() => {
@@ -142,7 +144,7 @@
     const mistTracks = mistStreamInfo?.meta?.tracks;
     if (mistTracks) {
       return Object.entries(mistTracks)
-        .filter(([, t]) => t.type === 'video')
+        .filter(([, t]) => t.type === "video")
         .map(([id, t]) => ({
           id,
           label: t.height ? `${t.height}p` : t.codec,
@@ -164,12 +166,14 @@
   let isLive = $derived(isLiveContent(isContentLive, mistStreamInfo, duration));
   let isWebRTC = $derived(isMediaStreamSource(video));
   let supportsPlaybackRate = $derived(coreSupportsPlaybackRate(video));
-  function deriveBufferWindowMs(tracks?: Record<string, { firstms?: number; lastms?: number }>): number | undefined {
+  function deriveBufferWindowMs(
+    tracks?: Record<string, { firstms?: number; lastms?: number }>
+  ): number | undefined {
     if (!tracks) return undefined;
     const list = Object.values(tracks);
     if (list.length === 0) return undefined;
-    const firstmsValues = list.map(t => t.firstms).filter((v): v is number => v !== undefined);
-    const lastmsValues = list.map(t => t.lastms).filter((v): v is number => v !== undefined);
+    const firstmsValues = list.map((t) => t.firstms).filter((v): v is number => v !== undefined);
+    const lastmsValues = list.map((t) => t.lastms).filter((v): v is number => v !== undefined);
     if (firstmsValues.length === 0 || lastmsValues.length === 0) return undefined;
     const firstms = Math.max(...firstmsValues);
     const lastms = Math.min(...lastmsValues);
@@ -179,37 +183,58 @@
   }
 
   let bufferWindowMs = $derived(
-    mistStreamInfo?.meta?.buffer_window
-      ?? deriveBufferWindowMs(mistStreamInfo?.meta?.tracks as Record<string, { firstms?: number; lastms?: number }> | undefined)
+    mistStreamInfo?.meta?.buffer_window ??
+      deriveBufferWindowMs(
+        mistStreamInfo?.meta?.tracks as
+          | Record<string, { firstms?: number; lastms?: number }>
+          | undefined
+      )
   );
 
   function getPlayerSeekableRange(): { seekableStart: number; liveEdge: number } | null {
     const player = globalPlayerManager.getCurrentPlayer();
-    if (player && typeof (player as any).getSeekableRange === 'function') {
+    if (player && typeof (player as any).getSeekableRange === "function") {
       const range = (player as any).getSeekableRange();
-      if (range && Number.isFinite(range.start) && Number.isFinite(range.end) && range.end >= range.start) {
+      if (
+        range &&
+        Number.isFinite(range.start) &&
+        Number.isFinite(range.end) &&
+        range.end >= range.start
+      ) {
         return { seekableStart: range.start, liveEdge: range.end };
       }
     }
     return null;
   }
 
-  const allowMediaStreamDvr = isMediaStreamSource(video)
-    && (bufferWindowMs !== undefined && bufferWindowMs > 0)
-    && (sourceType !== 'whep' && sourceType !== 'webrtc');
+  const allowMediaStreamDvr =
+    isMediaStreamSource(video) &&
+    bufferWindowMs !== undefined &&
+    bufferWindowMs > 0 &&
+    sourceType !== "whep" &&
+    sourceType !== "webrtc";
 
   // Seekable range using core calculation (allow player override)
-  let seekableRange = $derived.by(() => getPlayerSeekableRange() ?? calculateSeekableRange({
-    isLive,
-    video,
-    mistStreamInfo,
-    currentTime,
-    duration,
-    allowMediaStreamDvr,
-  }));
+  let seekableRange = $derived.by(
+    () =>
+      getPlayerSeekableRange() ??
+      calculateSeekableRange({
+        isLive,
+        video,
+        mistStreamInfo,
+        currentTime,
+        duration,
+        allowMediaStreamDvr,
+      })
+  );
   let seekableStart = $derived(seekableRange.seekableStart);
   let liveEdge = $derived(seekableRange.liveEdge);
-  let hasDvrWindow = $derived(isLive && Number.isFinite(liveEdge) && Number.isFinite(seekableStart) && liveEdge > seekableStart);
+  let hasDvrWindow = $derived(
+    isLive &&
+      Number.isFinite(liveEdge) &&
+      Number.isFinite(seekableStart) &&
+      liveEdge > seekableStart
+  );
   let commitOnRelease = $derived(isLive);
 
   // Live thresholds with buffer window scaling
@@ -219,7 +244,7 @@
   let baseCanSeek = $derived.by(() => {
     // Check if current player has canSeek method
     const player = globalPlayerManager.getCurrentPlayer();
-    if (player && typeof (player as any).canSeek === 'function') {
+    if (player && typeof (player as any).canSeek === "function") {
       return (player as any).canSeek();
     }
     // Fallback to core utility logic
@@ -249,7 +274,9 @@
     function updateFullscreenState() {
       isFullscreen = !!document.fullscreenElement;
     }
-    function updatePlaybackRate() { playbackRate = video!.playbackRate; }
+    function updatePlaybackRate() {
+      playbackRate = video!.playbackRate;
+    }
     function updateBuffered() {
       const player = globalPlayerManager.getCurrentPlayer();
       buffered = player?.getBufferedRanges?.() ?? video!.buffered;
@@ -261,24 +288,24 @@
     updatePlaybackRate();
     updateBuffered();
 
-    video.addEventListener('play', updatePlayingState);
-    video.addEventListener('pause', updatePlayingState);
-    video.addEventListener('playing', updatePlayingState);
-    video.addEventListener('volumechange', updateMutedState);
-    video.addEventListener('ratechange', updatePlaybackRate);
-    video.addEventListener('progress', updateBuffered);
-    video.addEventListener('loadeddata', updateBuffered);
-    document.addEventListener('fullscreenchange', updateFullscreenState);
+    video.addEventListener("play", updatePlayingState);
+    video.addEventListener("pause", updatePlayingState);
+    video.addEventListener("playing", updatePlayingState);
+    video.addEventListener("volumechange", updateMutedState);
+    video.addEventListener("ratechange", updatePlaybackRate);
+    video.addEventListener("progress", updateBuffered);
+    video.addEventListener("loadeddata", updateBuffered);
+    document.addEventListener("fullscreenchange", updateFullscreenState);
 
     return () => {
-      video!.removeEventListener('play', updatePlayingState);
-      video!.removeEventListener('pause', updatePlayingState);
-      video!.removeEventListener('playing', updatePlayingState);
-      video!.removeEventListener('volumechange', updateMutedState);
-      video!.removeEventListener('ratechange', updatePlaybackRate);
-      video!.removeEventListener('progress', updateBuffered);
-      video!.removeEventListener('loadeddata', updateBuffered);
-      document.removeEventListener('fullscreenchange', updateFullscreenState);
+      video!.removeEventListener("play", updatePlayingState);
+      video!.removeEventListener("pause", updatePlayingState);
+      video!.removeEventListener("playing", updatePlayingState);
+      video!.removeEventListener("volumechange", updateMutedState);
+      video!.removeEventListener("ratechange", updatePlaybackRate);
+      video!.removeEventListener("progress", updateBuffered);
+      video!.removeEventListener("loadeddata", updateBuffered);
+      document.removeEventListener("fullscreenchange", updateFullscreenState);
     };
   });
 
@@ -299,14 +326,16 @@
   });
 
   // Time display - using core formatTimeDisplay
-  let timeDisplay = $derived(formatTimeDisplay({
-    isLive,
-    currentTime,
-    duration,
-    liveEdge,
-    seekableStart,
-    unixoffset: mistStreamInfo?.unixoffset,
-  }));
+  let timeDisplay = $derived(
+    formatTimeDisplay({
+      isLive,
+      currentTime,
+      duration,
+      liveEdge,
+      seekableStart,
+      unixoffset: mistStreamInfo?.unixoffset,
+    })
+  );
 
   // Seek value for slider
   let _seekValue = $derived.by(() => {
@@ -387,7 +416,9 @@
 
   function handleFullscreen() {
     if (disabled) return;
-    const container = document.querySelector('[data-player-container="true"]') as HTMLElement | null;
+    const container = document.querySelector(
+      '[data-player-container="true"]'
+    ) as HTMLElement | null;
     if (!container) return;
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
@@ -424,7 +455,7 @@
   function handleCaptionChange(value: string) {
     if (disabled) return;
     captionValue = value;
-    if (value === 'none') {
+    if (value === "none") {
       globalPlayerManager.getCurrentPlayer()?.selectTextTrack?.(null);
     } else {
       globalPlayerManager.getCurrentPlayer()?.selectTextTrack?.(value);
@@ -438,29 +469,31 @@
 
     const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.fw-settings-menu')) {
+      if (!target.closest(".fw-settings-menu")) {
         showSettingsMenu = false;
       }
     };
 
     // Debounce to prevent immediate close from the same click that opened the menu
     const timeout = setTimeout(() => {
-      window.addEventListener('click', handleClick);
+      window.addEventListener("click", handleClick);
     }, 0);
 
     return () => {
       clearTimeout(timeout);
-      window.removeEventListener('click', handleClick);
+      window.removeEventListener("click", handleClick);
     };
   });
 </script>
 
-	  <div class={cn(
-	    'fw-player-surface fw-controls-wrapper',
-	    isVisible ? 'fw-controls-wrapper--visible' : 'fw-controls-wrapper--hidden'
-	  )}>
-	  <!-- Control bar -->
-	  <div class="fw-control-bar pointer-events-auto" onclick={(e) => e.stopPropagation()}>
+<div
+  class={cn(
+    "fw-player-surface fw-controls-wrapper",
+    isVisible ? "fw-controls-wrapper--visible" : "fw-controls-wrapper--hidden"
+  )}
+>
+  <!-- Control bar -->
+  <div class="fw-control-bar pointer-events-auto" onclick={(e) => e.stopPropagation()}>
     <!-- Seek bar -->
     {#if canSeek}
       <div class="fw-seek-wrapper">
@@ -469,7 +502,7 @@
           {duration}
           {buffered}
           {disabled}
-          isLive={isLive}
+          {isLive}
           {seekableStart}
           {liveEdge}
           {commitOnRelease}
@@ -485,11 +518,17 @@
     {/if}
 
     <!-- Control buttons -->
-      <div class="fw-controls-row">
+    <div class="fw-controls-row">
       <!-- Left: Play, Skip, Volume, Time, Live -->
       <div class="fw-controls-left">
         <div class="fw-control-group">
-          <button type="button" class="fw-btn-flush" aria-label={isPlaying ? 'Pause' : 'Play'} onclick={handlePlayPause} disabled={disabled}>
+          <button
+            type="button"
+            class="fw-btn-flush"
+            aria-label={isPlaying ? "Pause" : "Play"}
+            onclick={handlePlayPause}
+            {disabled}
+          >
             {#if isPlaying}
               <PauseIcon size={18} />
             {:else}
@@ -497,10 +536,22 @@
             {/if}
           </button>
           {#if canSeek}
-            <button type="button" class="fw-btn-flush hidden sm:flex" aria-label="Skip back 10s" onclick={handleSkipBack} disabled={disabled}>
+            <button
+              type="button"
+              class="fw-btn-flush hidden sm:flex"
+              aria-label="Skip back 10s"
+              onclick={handleSkipBack}
+              {disabled}
+            >
               <SkipBackIcon size={16} />
             </button>
-            <button type="button" class="fw-btn-flush hidden sm:flex" aria-label="Skip forward 10s" onclick={handleSkipForward} disabled={disabled}>
+            <button
+              type="button"
+              class="fw-btn-flush hidden sm:flex"
+              aria-label="Skip forward 10s"
+              onclick={handleSkipForward}
+              {disabled}
+            >
               <SkipForwardIcon size={16} />
             </button>
           {/if}
@@ -509,12 +560,15 @@
         <!-- Volume -->
         <div
           class={cn(
-            'fw-volume-group',
-            isVolumeExpanded && 'fw-volume-group--expanded',
-            !hasAudio && 'fw-volume-group--disabled'
+            "fw-volume-group",
+            isVolumeExpanded && "fw-volume-group--expanded",
+            !hasAudio && "fw-volume-group--disabled"
           )}
           onmouseenter={() => hasAudio && (isVolumeHovered = true)}
-          onmouseleave={() => { isVolumeHovered = false; isVolumeFocused = false; }}
+          onmouseleave={() => {
+            isVolumeHovered = false;
+            isVolumeFocused = false;
+          }}
           onfocuscapture={() => hasAudio && (isVolumeFocused = true)}
           onblurcapture={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) isVolumeFocused = false;
@@ -529,17 +583,21 @@
           <button
             type="button"
             class="fw-volume-btn"
-            aria-label={!hasAudio ? 'No audio' : (isMuted ? 'Unmute' : 'Mute')}
-            title={!hasAudio ? 'No audio' : (isMuted ? 'Unmute' : 'Mute')}
+            aria-label={!hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
+            title={!hasAudio ? "No audio" : isMuted ? "Unmute" : "Mute"}
             onclick={handleMute}
             disabled={!hasAudio}
           >
-            <VolumeIcons isMuted={isMuted} volume={volumeValue / 100} size={16} />
+            <VolumeIcons {isMuted} volume={volumeValue / 100} size={16} />
           </button>
-          <div class={cn(
-            'fw-volume-slider-wrapper',
-            isVolumeExpanded ? 'fw-volume-slider-wrapper--expanded' : 'fw-volume-slider-wrapper--collapsed'
-          )}>
+          <div
+            class={cn(
+              "fw-volume-slider-wrapper",
+              isVolumeExpanded
+                ? "fw-volume-slider-wrapper--expanded"
+                : "fw-volume-slider-wrapper--collapsed"
+            )}
+          >
             <Slider
               min={0}
               max={100}
@@ -567,10 +625,14 @@
               onclick={handleGoLive}
               disabled={!hasDvrWindow || isNearLiveState}
               class={cn(
-                'fw-live-badge',
-                (!hasDvrWindow || isNearLiveState) ? 'fw-live-badge--active' : 'fw-live-badge--behind'
+                "fw-live-badge",
+                !hasDvrWindow || isNearLiveState ? "fw-live-badge--active" : "fw-live-badge--behind"
               )}
-              title={!hasDvrWindow ? 'Live only' : (isNearLiveState ? 'At live edge' : 'Jump to live')}
+              title={!hasDvrWindow
+                ? "Live only"
+                : isNearLiveState
+                  ? "At live edge"
+                  : "Jump to live"}
             >
               LIVE
               {#if !isNearLiveState && hasDvrWindow}
@@ -587,11 +649,11 @@
           <div class="fw-control-group">
             <button
               type="button"
-              class={cn('fw-btn-flush', isStatsOpen && 'fw-btn-flush--active')}
+              class={cn("fw-btn-flush", isStatsOpen && "fw-btn-flush--active")}
               aria-label="Toggle stats"
               title="Stats"
               onclick={onStatsToggle}
-              disabled={disabled}
+              {disabled}
             >
               <StatsIcon size={16} />
             </button>
@@ -600,11 +662,11 @@
         <div class="fw-control-group relative">
           <button
             type="button"
-            class={cn('fw-btn-flush group', showSettingsMenu && 'fw-btn-flush--active')}
+            class={cn("fw-btn-flush group", showSettingsMenu && "fw-btn-flush--active")}
             aria-label="Settings"
             title="Settings"
-            onclick={() => showSettingsMenu = !showSettingsMenu}
-            disabled={disabled}
+            onclick={() => (showSettingsMenu = !showSettingsMenu)}
+            {disabled}
           >
             <SettingsIcon size={16} class="transition-transform group-hover:rotate-90" />
           </button>
@@ -616,16 +678,19 @@
                 <div class="fw-settings-section">
                   <div class="fw-settings-label">Mode</div>
                   <div class="fw-settings-options">
-                    {#each ['auto', 'low-latency', 'quality'] as mode}
+                    {#each ["auto", "low-latency", "quality"] as mode}
                       <button
                         type="button"
                         class={cn(
-                          'fw-settings-btn',
-                          playbackMode === mode && 'fw-settings-btn--active'
+                          "fw-settings-btn",
+                          playbackMode === mode && "fw-settings-btn--active"
                         )}
-                        onclick={() => { onModeChange(mode as PlaybackMode); showSettingsMenu = false; }}
+                        onclick={() => {
+                          onModeChange(mode as PlaybackMode);
+                          showSettingsMenu = false;
+                        }}
                       >
-                        {mode === 'low-latency' ? 'Fast' : mode === 'quality' ? 'Stable' : 'Auto'}
+                        {mode === "low-latency" ? "Fast" : mode === "quality" ? "Stable" : "Auto"}
                       </button>
                     {/each}
                   </div>
@@ -641,11 +706,11 @@
                       <button
                         type="button"
                         class={cn(
-                          'fw-settings-btn',
-                          playbackRate === rate && 'fw-settings-btn--active'
+                          "fw-settings-btn",
+                          playbackRate === rate && "fw-settings-btn--active"
                         )}
                         onclick={() => handleSpeedSelect(rate)}
-                        disabled={disabled}
+                        {disabled}
                       >
                         {rate}x
                       </button>
@@ -661,18 +726,18 @@
                   <div class="fw-settings-list">
                     <button
                       class={cn(
-                        'fw-settings-list-item',
-                        qualityValue === 'auto' && 'fw-settings-list-item--active'
+                        "fw-settings-list-item",
+                        qualityValue === "auto" && "fw-settings-list-item--active"
                       )}
-                      onclick={() => handleQualityChange('auto')}
+                      onclick={() => handleQualityChange("auto")}
                     >
                       Auto
                     </button>
                     {#each qualities as q}
                       <button
                         class={cn(
-                          'fw-settings-list-item',
-                          qualityValue === q.id && 'fw-settings-list-item--active'
+                          "fw-settings-list-item",
+                          qualityValue === q.id && "fw-settings-list-item--active"
                         )}
                         onclick={() => handleQualityChange(q.id)}
                       >
@@ -690,18 +755,18 @@
                   <div class="fw-settings-list">
                     <button
                       class={cn(
-                        'fw-settings-list-item',
-                        captionValue === 'none' && 'fw-settings-list-item--active'
+                        "fw-settings-list-item",
+                        captionValue === "none" && "fw-settings-list-item--active"
                       )}
-                      onclick={() => handleCaptionChange('none')}
+                      onclick={() => handleCaptionChange("none")}
                     >
                       Off
                     </button>
                     {#each textTracks as t}
                       <button
                         class={cn(
-                          'fw-settings-list-item',
-                          captionValue === t.id && 'fw-settings-list-item--active'
+                          "fw-settings-list-item",
+                          captionValue === t.id && "fw-settings-list-item--active"
                         )}
                         onclick={() => handleCaptionChange(t.id)}
                       >
@@ -715,15 +780,22 @@
           {/if}
         </div>
 
-	        <div class="fw-control-group">
-	          <button type="button" class="fw-btn-flush" aria-label="Toggle fullscreen" title="Fullscreen" onclick={handleFullscreen} disabled={disabled}>
-	            {#if isFullscreen}
-	              <FullscreenExitIcon size={16} />
-	            {:else}
-	              <FullscreenIcon size={16} />
-	            {/if}
-	          </button>
-	        </div>
+        <div class="fw-control-group">
+          <button
+            type="button"
+            class="fw-btn-flush"
+            aria-label="Toggle fullscreen"
+            title="Fullscreen"
+            onclick={handleFullscreen}
+            {disabled}
+          >
+            {#if isFullscreen}
+              <FullscreenExitIcon size={16} />
+            {:else}
+              <FullscreenIcon size={16} />
+            {/if}
+          </button>
+        </div>
       </div>
     </div>
   </div>

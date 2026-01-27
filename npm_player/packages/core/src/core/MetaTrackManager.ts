@@ -1,5 +1,5 @@
-import type { MetaTrackEvent, MetaTrackEventType } from '../types';
-import { TimerManager } from './TimerManager';
+import type { MetaTrackEvent, MetaTrackEventType } from "../types";
+import { TimerManager } from "./TimerManager";
 
 export interface MetaTrackSubscription {
   trackId: string;
@@ -23,7 +23,7 @@ export interface MetaTrackManagerConfig {
   fastForwardInterval?: number;
 }
 
-type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
 
 /**
  * MetaTrackManager - Handles real-time metadata subscriptions via MistServer WebSocket
@@ -60,7 +60,7 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecti
 export class MetaTrackManager {
   private config: MetaTrackManagerConfig;
   private ws: WebSocket | null = null;
-  private state: ConnectionState = 'disconnected';
+  private state: ConnectionState = "disconnected";
   private subscriptions: Map<string, Set<(event: MetaTrackEvent) => void>> = new Map();
   private pendingSubscriptions: Set<string> = new Set();
   private reconnectAttempt = 0;
@@ -108,25 +108,29 @@ export class MetaTrackManager {
    * Debounced to prevent orphaned connections during rapid mount/unmount cycles.
    */
   connect(): void {
-    if (this.state === 'connecting' || this.state === 'connected') {
+    if (this.state === "connecting" || this.state === "connected") {
       return;
     }
 
-    this.state = 'connecting';
-    this.log('Connecting...');
+    this.state = "connecting";
+    this.log("Connecting...");
 
     // Increment connection ID to invalidate any pending callbacks
     const currentConnectionId = ++this.connectionId;
 
     // Debounce connection
-    this.timers.start(() => {
-      // Check if this connection attempt is still valid
-      if (this.state !== 'connecting' || this.connectionId !== currentConnectionId) {
-        return;
-      }
+    this.timers.start(
+      () => {
+        // Check if this connection attempt is still valid
+        if (this.state !== "connecting" || this.connectionId !== currentConnectionId) {
+          return;
+        }
 
-      this.createWebSocket(currentConnectionId);
-    }, MetaTrackManager.CONNECTION_DEBOUNCE_MS, 'connect');
+        this.createWebSocket(currentConnectionId);
+      },
+      MetaTrackManager.CONNECTION_DEBOUNCE_MS,
+      "connect"
+    );
   }
 
   /**
@@ -144,8 +148,8 @@ export class MetaTrackManager {
           return;
         }
 
-        this.log('Connected');
-        this.state = 'connected';
+        this.log("Connected");
+        this.state = "connected";
         this.reconnectAttempt = 0;
 
         // Merge pending subscriptions into existing
@@ -171,15 +175,15 @@ export class MetaTrackManager {
       };
 
       this.ws.onerror = (event) => {
-        this.log('WebSocket error');
-        console.warn('[MetaTrackManager] WebSocket error:', event);
+        this.log("WebSocket error");
+        console.warn("[MetaTrackManager] WebSocket error:", event);
       };
 
       this.ws.onclose = () => {
-        this.log('Disconnected');
+        this.log("Disconnected");
         this.ws = null;
 
-        if (this.state !== 'disconnected') {
+        if (this.state !== "disconnected") {
           this.scheduleReconnect();
         }
       };
@@ -193,7 +197,7 @@ export class MetaTrackManager {
    * Disconnect from MistServer
    */
   disconnect(): void {
-    this.state = 'disconnected';
+    this.state = "disconnected";
 
     // Clear all timers
     this.timers.destroy();
@@ -218,7 +222,7 @@ export class MetaTrackManager {
     this.subscriptions.get(trackId)!.add(callback);
 
     // Send updated track list if connected and this is a new track
-    if (this.state === 'connected' && this.ws && isNewTrack) {
+    if (this.state === "connected" && this.ws && isNewTrack) {
       this.sendTracksUpdate();
     } else if (isNewTrack) {
       this.pendingSubscriptions.add(trackId);
@@ -240,7 +244,7 @@ export class MetaTrackManager {
       if (callbacks.size === 0) {
         this.subscriptions.delete(trackId);
         // Send updated track list (MistServer doesn't have explicit unsubscribe)
-        if (this.state === 'connected' && this.ws) {
+        if (this.state === "connected" && this.ws) {
           this.sendTracksUpdate();
         }
       }
@@ -265,7 +269,7 @@ export class MetaTrackManager {
    * Check if connected
    */
   isConnected(): boolean {
-    return this.state === 'connected';
+    return this.state === "connected";
   }
 
   // ========================================
@@ -406,7 +410,7 @@ export class MetaTrackManager {
     }
 
     this.lastFastForwardTime = now;
-    this.log('Fast-forwarding through buffered events');
+    this.log("Fast-forwarding through buffered events");
 
     // Process all events up to current time + bufferAhead
     const targetTime = (this.currentPlaybackTime + this.bufferAhead) * 1000;
@@ -469,9 +473,9 @@ export class MetaTrackManager {
    */
   private buildWsUrl(): string {
     const baseUrl = this.config.mistBaseUrl
-      .replace(/^http:/, 'ws:')
-      .replace(/^https:/, 'wss:')
-      .replace(/\/$/, '');
+      .replace(/^http:/, "ws:")
+      .replace(/^https:/, "wss:")
+      .replace(/\/$/, "");
 
     // MistServer meta track WebSocket uses /json_<streamname>.js endpoint
     // The rate=1 param tells MistServer to stream metadata in real-time
@@ -486,11 +490,11 @@ export class MetaTrackManager {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const trackIds = Array.from(this.subscriptions.keys());
       // Support "all" as special track ID to subscribe to all meta tracks
-      const metaValue = trackIds.includes('all') ? 'all' : trackIds.join(',');
+      const metaValue = trackIds.includes("all") ? "all" : trackIds.join(",");
 
       const message = JSON.stringify({
-        type: 'tracks',
-        meta: metaValue
+        type: "tracks",
+        meta: metaValue,
       });
       this.ws.send(message);
       this.log(`Set tracks: ${metaValue}`);
@@ -507,9 +511,9 @@ export class MetaTrackManager {
       const ffToMs = Math.round((timeInSeconds + this.bufferAhead) * 1000);
 
       const message = JSON.stringify({
-        type: 'seek',
+        type: "seek",
         seek_time: seekTimeMs,
-        ff_to: ffToMs
+        ff_to: ffToMs,
       });
       this.ws.send(message);
       this.log(`Seek to ${timeInSeconds}s, buffer ahead to ${timeInSeconds + this.bufferAhead}s`);
@@ -521,8 +525,8 @@ export class MetaTrackManager {
    */
   private sendHold(): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'hold' }));
-      this.log('Sent hold');
+      this.ws.send(JSON.stringify({ type: "hold" }));
+      this.log("Sent hold");
     }
   }
 
@@ -531,8 +535,8 @@ export class MetaTrackManager {
    */
   private sendPlay(): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'play' }));
-      this.log('Sent play');
+      this.ws.send(JSON.stringify({ type: "play" }));
+      this.log("Sent play");
     }
   }
 
@@ -542,8 +546,8 @@ export class MetaTrackManager {
   private sendFastForward(targetTimeSeconds: number): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const message = JSON.stringify({
-        type: 'fast_forward',
-        ff_to: Math.round(targetTimeSeconds * 1000)
+        type: "fast_forward",
+        ff_to: Math.round(targetTimeSeconds * 1000),
       });
       this.ws.send(message);
       this.log(`Fast-forward to ${targetTimeSeconds}s`);
@@ -562,15 +566,15 @@ export class MetaTrackManager {
       const parsed = JSON.parse(data);
 
       // Handle metadata event: {time, track, data}
-      if ('time' in parsed && 'track' in parsed && 'data' in parsed) {
+      if ("time" in parsed && "track" in parsed && "data" in parsed) {
         const event = this.parseMetaTrackEvent(parsed);
 
         // Check if we're subscribed to this track (or "all")
         const trackId = String(parsed.track);
-        if (this.subscriptions.has(trackId) || this.subscriptions.has('all')) {
+        if (this.subscriptions.has(trackId) || this.subscriptions.has("all")) {
           // Subtitles and chapters should be buffered for timed playback
           // Other events (scores, generic events) dispatch immediately
-          if (event.type === 'subtitle' || event.type === 'chapter') {
+          if (event.type === "subtitle" || event.type === "chapter") {
             this.addToTimedBuffer(event);
             // Also process immediately in case we're already past this time
             this.processTimedEvents();
@@ -583,9 +587,9 @@ export class MetaTrackManager {
       }
 
       // Handle server status messages: {type:..., ...}
-      if ('type' in parsed) {
+      if ("type" in parsed) {
         switch (parsed.type) {
-          case 'on_time':
+          case "on_time":
             // Server time update - can be used for buffer management
             if (parsed.data?.current) {
               const serverTimeMs = parsed.data.current;
@@ -600,9 +604,9 @@ export class MetaTrackManager {
             }
             break;
 
-          case 'seek':
+          case "seek":
             // Seek completed - clear buffers
-            this.log('Server confirmed seek, clearing buffers');
+            this.log("Server confirmed seek, clearing buffers");
             this.timedEventBuffer.clear();
             break;
 
@@ -644,33 +648,33 @@ export class MetaTrackManager {
    * Detect event type from data shape
    */
   private detectEventType(data: unknown): MetaTrackEventType {
-    if (typeof data !== 'object' || data === null) {
-      return 'unknown';
+    if (typeof data !== "object" || data === null) {
+      return "unknown";
     }
 
     const obj = data as Record<string, unknown>;
 
     // Subtitle: has text, startTime/endTime
-    if ('text' in obj && ('startTime' in obj || 'start' in obj)) {
-      return 'subtitle';
+    if ("text" in obj && ("startTime" in obj || "start" in obj)) {
+      return "subtitle";
     }
 
     // Score: has key and value
-    if ('key' in obj && 'value' in obj) {
-      return 'score';
+    if ("key" in obj && "value" in obj) {
+      return "score";
     }
 
     // Chapter: has title and startTime
-    if ('title' in obj && 'startTime' in obj) {
-      return 'chapter';
+    if ("title" in obj && "startTime" in obj) {
+      return "chapter";
     }
 
     // Event: has name
-    if ('name' in obj) {
-      return 'event';
+    if ("name" in obj) {
+      return "event";
     }
 
-    return 'unknown';
+    return "unknown";
   }
 
   /**
@@ -683,7 +687,7 @@ export class MetaTrackManager {
         try {
           callback(event);
         } catch (error) {
-          console.error('[MetaTrackManager] Callback error:', error);
+          console.error("[MetaTrackManager] Callback error:", error);
         }
       }
     }
@@ -693,15 +697,15 @@ export class MetaTrackManager {
    * Schedule reconnection attempt
    */
   private scheduleReconnect(): void {
-    if (this.state === 'disconnected') return;
+    if (this.state === "disconnected") return;
 
     if (this.reconnectAttempt >= MetaTrackManager.MAX_RECONNECT_ATTEMPTS) {
-      this.log('Max reconnect attempts reached');
-      this.state = 'disconnected';
+      this.log("Max reconnect attempts reached");
+      this.state = "disconnected";
       return;
     }
 
-    this.state = 'reconnecting';
+    this.state = "reconnecting";
     this.reconnectAttempt++;
 
     const delay = Math.min(
@@ -711,9 +715,13 @@ export class MetaTrackManager {
 
     this.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt})`);
 
-    this.timers.start(() => {
-      this.connect();
-    }, delay, 'reconnect');
+    this.timers.start(
+      () => {
+        this.connect();
+      },
+      delay,
+      "reconnect"
+    );
   }
 
   /**

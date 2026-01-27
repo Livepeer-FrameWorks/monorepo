@@ -7,7 +7,7 @@
  * - Auto-reconnection
  */
 
-import { IngestControllerV2 } from '../core/IngestControllerV2';
+import { IngestControllerV2 } from "../core/IngestControllerV2";
 import type {
   IngestControllerConfigV2,
   IngestState,
@@ -21,7 +21,7 @@ import type {
   SourceAddedEvent,
   SourceRemovedEvent,
   SourceUpdatedEvent,
-} from '../types';
+} from "../types";
 
 export interface StreamCrafterV2Config extends IngestControllerConfigV2 {}
 
@@ -42,49 +42,49 @@ export class StreamCrafterV2 {
   onStateChange(
     handler: (event: { state: IngestState; context?: IngestStateContextV2 }) => void
   ): () => void {
-    return this.controller.on('stateChange', handler);
+    return this.controller.on("stateChange", handler);
   }
 
   /**
    * Subscribe to stats updates
    */
   onStatsUpdate(handler: (stats: IngestStats) => void): () => void {
-    return this.controller.on('statsUpdate', handler);
+    return this.controller.on("statsUpdate", handler);
   }
 
   /**
    * Subscribe to device changes
    */
   onDeviceChange(handler: (event: { devices: DeviceInfo[] }) => void): () => void {
-    return this.controller.on('deviceChange', handler);
+    return this.controller.on("deviceChange", handler);
   }
 
   /**
    * Subscribe to errors
    */
   onError(handler: (event: { error: string; recoverable: boolean }) => void): () => void {
-    return this.controller.on('error', handler);
+    return this.controller.on("error", handler);
   }
 
   /**
    * Subscribe to source added events
    */
   onSourceAdded(handler: (event: SourceAddedEvent) => void): () => void {
-    return this.controller.on('sourceAdded', handler);
+    return this.controller.on("sourceAdded", handler);
   }
 
   /**
    * Subscribe to source removed events
    */
   onSourceRemoved(handler: (event: SourceRemovedEvent) => void): () => void {
-    return this.controller.on('sourceRemoved', handler);
+    return this.controller.on("sourceRemoved", handler);
   }
 
   /**
    * Subscribe to source updated events
    */
   onSourceUpdated(handler: (event: SourceUpdatedEvent) => void): () => void {
-    return this.controller.on('sourceUpdated', handler);
+    return this.controller.on("sourceUpdated", handler);
   }
 
   /**
@@ -93,7 +93,7 @@ export class StreamCrafterV2 {
   onQualityChanged(
     handler: (event: { profile: QualityProfile; previousProfile: QualityProfile }) => void
   ): () => void {
-    return this.controller.on('qualityChanged', handler);
+    return this.controller.on("qualityChanged", handler);
   }
 
   /**
@@ -102,21 +102,21 @@ export class StreamCrafterV2 {
   onReconnectionAttempt(
     handler: (event: { attempt: number; maxAttempts: number }) => void
   ): () => void {
-    return this.controller.on('reconnectionAttempt', handler);
+    return this.controller.on("reconnectionAttempt", handler);
   }
 
   /**
    * Subscribe to reconnection success events
    */
   onReconnectionSuccess(handler: () => void): () => void {
-    return this.controller.on('reconnectionSuccess', () => handler());
+    return this.controller.on("reconnectionSuccess", () => handler());
   }
 
   /**
    * Subscribe to reconnection failed events
    */
   onReconnectionFailed(handler: (event: { error: string }) => void): () => void {
-    return this.controller.on('reconnectionFailed', handler);
+    return this.controller.on("reconnectionFailed", handler);
   }
 
   // ========================================

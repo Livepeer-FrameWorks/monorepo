@@ -16,6 +16,7 @@ If your encoder fails to connect, the issue is usually a mismatch in configurati
 The encoder can't reach our servers.
 
 **Check these first:**
+
 1. **RTMP URL:** Verify it is exactly `%RTMP_URL%`.
 2. **Stream Key:** Ensure you've copied the active key from the **Stream Key** card on your dashboard.
 3. **Port 1935:** Some corporate or school networks block RTMP. Try a different network (like a mobile hotspot) or use SRT.
@@ -35,6 +36,7 @@ Your stream key is wrong or revoked.
 This typically indicates network instability or packet loss between your location and our ingest server.
 
 **Troubleshooting steps:**
+
 - **Check Ping:** Run `ping` against your ingest hostname. Consistent times under 100ms are ideal.
 - **Check for Packet Loss:** Run `ping -c 100 <ingest-hostname>` and look for any percentage of loss. Even 1% loss can disrupt a stream.
 - **Try Alternative Protocols:** If your ISP throttles RTMP (port 1935), try switching to SRT or WHIP, which handle unstable networks better.
@@ -53,10 +55,12 @@ The playback ID doesn't match a live stream or a ready asset.
 ### Video plays but no audio
 
 **For viewers:**
+
 - Browser muted the tab. Check the tab icon and unmute
 - The video is muted by default. Click the volume icon in the player
 
 **For streamers:**
+
 - Check OBS audio mixer: is the bar moving when you speak?
 - Verify audio codec is AAC (not MP3 or raw PCM)
 - Make sure the correct audio source is selected in OBS
@@ -64,10 +68,12 @@ The playback ID doesn't match a live stream or a ready asset.
 ### Constant buffering
 
 **On the viewer's end:**
+
 - Slow connection. The player will drop to a lower quality, but there's a limit
 - If you’re self-hosted, the viewer may be far from your nearest edge
 
 **On your end:**
+
 - Your upload can't keep up with your bitrate
 - Rule of thumb: `upload speed > 2× stream bitrate`
 - If you have 10 Mbps upload, don't stream above 5 Mbps
@@ -77,6 +83,7 @@ The playback ID doesn't match a live stream or a ready asset.
 Classic encoder overload.
 
 **Quick fixes in OBS:**
+
 1. Switch to hardware encoding (NVENC for Nvidia, AMF for AMD, QSV for Intel)
 2. Lower output resolution: 1080p → 720p
 3. Use a faster encoder preset
@@ -87,6 +94,7 @@ Classic encoder overload.
 That's normal for HLS. Actual latency depends on segment size and player config.
 
 For lower latency:
+
 - Use WebRTC/WHEP playback URLs for sub-second latency
 - Or enable Low Latency HLS if you need broader compatibility
 
@@ -97,6 +105,7 @@ For lower latency:
 Your CPU can't keep up.
 
 **Solutions:**
+
 1. **Use GPU encoding** - Settings → Output → Encoder → select NVENC/AMD/QSV
 2. **Lower resolution** - 1080p60 is demanding; try 720p30
 3. **Faster preset** - "veryfast" instead of "slow"
@@ -105,10 +114,12 @@ Your CPU can't keep up.
 ### Choppy/stuttery output
 
 **If the OBS preview is smooth but the stream is choppy:**
+
 - Network issue. Check for packet loss
 - Bitrate too high for your connection
 
 **If the preview is also choppy:**
+
 - CPU/GPU overloaded
 - Check if OBS shows a red "Encoding overloaded" warning
 
@@ -134,6 +145,7 @@ These visual glitches are typically caused by outdated GPU drivers or a corrupte
 The dashboard polls every few seconds. Give it 10 seconds and refresh.
 
 If still offline:
+
 - Verify your encoder says "Connected" or "Live"
 - Check the stream key matches
 - Look at the OBS stats panel for errors
@@ -143,6 +155,7 @@ If still offline:
 Analytics can be delayed by a few minutes. If you just started streaming, give it time.
 
 For older streams:
+
 - Make sure the stream was actually live (not just connected)
 - Some metrics require viewer sessions (testing with your own playback is fine)
 
@@ -153,12 +166,14 @@ For older streams:
 Token missing, invalid, or revoked.
 
 **For API tokens (programmatic access):**
+
 1. Create a new token from **Developer → API** in the dashboard
 2. Token values are shown only once. If you lost your key, you can revoke it and create a new one in the webapp
 3. Check if the token was revoked (it won't be in your active tokens list)
 4. By default, API tokens never expire unless you set an expiration when creating
 
 **For session tokens (dashboard access):**
+
 1. Your browser session may have expired. The webapp should catch this on a page refresh.
 2. Clear cookies for the app domain and re-authenticate
 

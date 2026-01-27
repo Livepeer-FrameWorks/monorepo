@@ -21,7 +21,7 @@ import {
   type ReconnectionState,
   type EncoderOverrides,
   detectCapabilities,
-} from '@livepeer-frameworks/streamcrafter-core';
+} from "@livepeer-frameworks/streamcrafter-core";
 
 // Encoder stats from EncoderManager
 export interface EncoderStats {
@@ -103,15 +103,15 @@ export interface StreamCrafterContextV2Store {
   destroy: () => void;
 }
 
-import { writable } from 'svelte/store';
+import { writable } from "svelte/store";
 
 export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
   // Detect capabilities for default useWebCodecs value
   const capabilities = detectCapabilities();
-  const defaultUseWebCodecs = capabilities.recommended === 'webcodecs';
+  const defaultUseWebCodecs = capabilities.recommended === "webcodecs";
 
   const initialState: StreamCrafterV2State = {
-    state: 'idle',
+    state: "idle",
     stateContext: {},
     mediaStream: null,
     sources: [],
@@ -120,7 +120,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
     isReconnecting: false,
     error: null,
     stats: null,
-    qualityProfile: 'broadcast',
+    qualityProfile: "broadcast",
     reconnectionState: null,
     // Encoder
     useWebCodecs: defaultUseWebCodecs,
@@ -133,14 +133,14 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
   let encoderStatsCleanup: (() => void) | null = null;
 
   let _state: StreamCrafterV2State;
-  subscribe(s => _state = s);
+  subscribe((s) => (_state = s));
 
   function updateDerivedState(currentState: StreamCrafterV2State): StreamCrafterV2State {
     return {
       ...currentState,
-      isStreaming: currentState.state === 'streaming',
-      isCapturing: currentState.state === 'capturing' || currentState.state === 'streaming',
-      isReconnecting: currentState.state === 'reconnecting',
+      isStreaming: currentState.state === "streaming",
+      isCapturing: currentState.state === "capturing" || currentState.state === "streaming",
+      isReconnecting: currentState.state === "reconnecting",
     };
   }
 
@@ -155,7 +155,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
     }
     const encoder = controller?.getEncoderManager();
     if (encoder) {
-      encoderStatsCleanup = encoder.on('stats', (newStats) => {
+      encoderStatsCleanup = encoder.on("stats", (newStats) => {
         applyUpdate({ encoderStats: newStats as EncoderStats });
       });
     }
@@ -180,9 +180,9 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
 
     // Use useWebCodecs from current state (allows toggling before initialize)
     controller = new IngestControllerV2({ ...config, useWebCodecs: _state.useWebCodecs });
-    applyUpdate({ qualityProfile: config.profile || 'broadcast' });
+    applyUpdate({ qualityProfile: config.profile || "broadcast" });
 
-    controller.on('stateChange', (event) => {
+    controller.on("stateChange", (event) => {
       const contextAsAny = event.context as any; // Workaround for type mismatch with core
       applyUpdate({
         state: event.state,
@@ -193,9 +193,9 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
       });
 
       // Check encoder status when streaming starts
-      if (event.state === 'streaming') {
+      if (event.state === "streaming") {
         setTimeout(checkEncoderStatus, 100);
-      } else if (event.state === 'idle' || event.state === 'capturing') {
+      } else if (event.state === "idle" || event.state === "capturing") {
         applyUpdate({ isWebCodecsActive: false, encoderStats: null });
         if (encoderStatsCleanup) {
           encoderStatsCleanup();
@@ -204,40 +204,40 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
       }
     });
 
-    controller.on('statsUpdate', (stats) => {
+    controller.on("statsUpdate", (stats) => {
       applyUpdate({ stats });
     });
 
-    controller.on('error', (event) => {
+    controller.on("error", (event) => {
       applyUpdate({ error: event.error });
     });
 
-    controller.on('sourceAdded', () => {
+    controller.on("sourceAdded", () => {
       applyUpdate({
         sources: controller?.getSources() ?? [],
         mediaStream: controller?.getMediaStream() ?? null,
       });
     });
 
-    controller.on('sourceRemoved', () => {
+    controller.on("sourceRemoved", () => {
       applyUpdate({
         sources: controller?.getSources() ?? [],
         mediaStream: controller?.getMediaStream() ?? null,
       });
     });
 
-    controller.on('sourceUpdated', () => {
+    controller.on("sourceUpdated", () => {
       applyUpdate({
         sources: controller?.getSources() ?? [],
         mediaStream: controller?.getMediaStream() ?? null,
       });
     });
 
-    controller.on('qualityChanged', (event) => {
+    controller.on("qualityChanged", (event) => {
       applyUpdate({ qualityProfile: event.profile });
     });
 
-    controller.on('reconnectionAttempt', () => {
+    controller.on("reconnectionAttempt", () => {
       applyUpdate({ reconnectionState: controller?.getReconnectionManager().getState() ?? null });
     });
   }
@@ -251,7 +251,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
 
     async startCamera(options?: CaptureOptions) {
       if (!controller) {
-        throw new Error('Controller not initialized. Call initialize() first.');
+        throw new Error("Controller not initialized. Call initialize() first.");
       }
       applyUpdate({ error: null });
       return controller.startCamera(options);
@@ -259,7 +259,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
 
     async startScreenShare(options?: ScreenCaptureOptions) {
       if (!controller) {
-        throw new Error('Controller not initialized. Call initialize() first.');
+        throw new Error("Controller not initialized. Call initialize() first.");
       }
       applyUpdate({ error: null });
       return controller.startScreenShare(options);
@@ -267,7 +267,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
 
     addCustomSource(stream: MediaStream, label: string) {
       if (!controller) {
-        throw new Error('Controller not initialized. Call initialize() first.');
+        throw new Error("Controller not initialized. Call initialize() first.");
       }
       return controller.addCustomSource(stream, label);
     },
@@ -319,7 +319,7 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
 
     async startStreaming() {
       if (!controller) {
-        throw new Error('Controller not initialized. Call initialize() first.');
+        throw new Error("Controller not initialized. Call initialize() first.");
       }
       applyUpdate({ error: null });
       return controller.startStreaming();
@@ -378,9 +378,9 @@ export function createStreamCrafterContextV2(): StreamCrafterContextV2Store {
 }
 
 // Context API for sharing across components
-import { getContext, setContext } from 'svelte';
+import { getContext, setContext } from "svelte";
 
-const STREAM_CRAFTER_V2_CONTEXT_KEY = Symbol('streamcrafter-v2-context');
+const STREAM_CRAFTER_V2_CONTEXT_KEY = Symbol("streamcrafter-v2-context");
 
 export function setStreamCrafterContextV2(store: StreamCrafterContextV2Store): void {
   setContext(STREAM_CRAFTER_V2_CONTEXT_KEY, store);

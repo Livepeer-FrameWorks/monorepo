@@ -28,7 +28,11 @@ query GetStreamHealth(
   }
   analytics {
     health {
-      streamHealthConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $metricsFirst }) {
+      streamHealthConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $metricsFirst }
+      ) {
         edges {
           node {
             timestamp
@@ -53,7 +57,11 @@ query GetStreamHealth(
           endCursor
         }
       }
-      rebufferingEventsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: 100 }) {
+      rebufferingEventsConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: 100 }
+      ) {
         edges {
           node {
             timestamp
@@ -66,7 +74,11 @@ query GetStreamHealth(
           }
         }
       }
-      clientQoeConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $metricsFirst }) {
+      clientQoeConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $metricsFirst }
+      ) {
         edges {
           node {
             timestamp
@@ -85,7 +97,11 @@ query GetStreamHealth(
         }
       }
       # 5-minute health aggregates
-      streamHealth5mConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $metricsFirst }) {
+      streamHealth5mConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $metricsFirst }
+      ) {
         edges {
           cursor
           node {
@@ -138,7 +154,11 @@ query GetStreamHealth(
           endCursor
         }
       }
-      bufferEventsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $bufferFirst }) {
+      bufferEventsConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $bufferFirst }
+      ) {
         edges {
           cursor
           node {

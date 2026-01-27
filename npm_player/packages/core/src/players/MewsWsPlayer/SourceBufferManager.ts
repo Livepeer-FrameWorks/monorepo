@@ -12,7 +12,7 @@
  * - Track switch msgqueue handling
  */
 
-import type { SourceBufferManagerOptions } from './types';
+import type { SourceBufferManagerOptions } from "./types";
 
 export class SourceBufferManager {
   private mediaSource: MediaSource;
@@ -62,12 +62,12 @@ export class SourceBufferManager {
       return true;
     }
     if (!codecs || !codecs.length) {
-      this.onError('No codecs provided');
+      this.onError("No codecs provided");
       return false;
     }
 
-    const container = 'mp4'; // Could be 'webm' for WebM container
-    const mime = `video/${container};codecs="${codecs.join(',')}"`;
+    const container = "mp4"; // Could be 'webm' for WebM container
+    const mime = `video/${container};codecs="${codecs.join(",")}"`;
 
     if (!MediaSource.isTypeSupported(mime)) {
       this.onError(`Unsupported MSE codec: ${mime}`);
@@ -78,7 +78,7 @@ export class SourceBufferManager {
       // Create SourceBuffer (mews.js:211)
       this.sourceBuffer = this.mediaSource.addSourceBuffer(mime);
       // Use segments mode - fragments will be put at correct time (mews.js:212)
-      this.sourceBuffer.mode = 'segments';
+      this.sourceBuffer.mode = "segments";
       // Save current codecs (mews.js:215)
       this._codecs = codecs.slice();
 
@@ -92,7 +92,7 @@ export class SourceBufferManager {
 
       return true;
     } catch (e: any) {
-      this.onError(e?.message || 'Failed to create SourceBuffer');
+      this.onError(e?.message || "Failed to create SourceBuffer");
       return false;
     }
   }
@@ -144,7 +144,7 @@ export class SourceBufferManager {
 
     if (this._busy) {
       // Still busy, put back in queue (mews.js:296-300)
-      if (this.debugging) console.warn('MEWS: wanted to append but busy, requeuing');
+      if (this.debugging) console.warn("MEWS: wanted to append but busy, requeuing");
       this.queue.unshift(data);
       return;
     }
@@ -165,13 +165,13 @@ export class SourceBufferManager {
     } catch (e: any) {
       // Error handling (mews.js:306-338)
       switch (e?.name) {
-        case 'QuotaExceededError': {
+        case "QuotaExceededError": {
           // Buffer is full - clean up and retry (mews.js:308-324)
           const buffered = this.videoElement.buffered;
           if (buffered.length && this.videoElement.currentTime - buffered.start(0) > 1) {
             // Clear as much from buffer as we can
             if (this.debugging) {
-              console.log('MEWS: QuotaExceededError, cleaning buffer');
+              console.log("MEWS: QuotaExceededError, cleaning buffer");
             }
             this._clean(1); // Keep 1 second
             this._busy = false;
@@ -181,7 +181,7 @@ export class SourceBufferManager {
             // Can't clean more, skip ahead (mews.js:316-319)
             const bufferEnd = buffered.end(buffered.length - 1);
             if (this.debugging) {
-              console.log('MEWS: QuotaExceededError, skipping ahead');
+              console.log("MEWS: QuotaExceededError, skipping ahead");
             }
             this.videoElement.currentTime = bufferEnd;
             this._busy = false;
@@ -190,7 +190,7 @@ export class SourceBufferManager {
           }
           break;
         }
-        case 'InvalidStateError': {
+        case "InvalidStateError": {
           // Playback is borked (mews.js:326-334)
           if (this.videoElement.error) {
             // Video element error will handle this
@@ -200,7 +200,7 @@ export class SourceBufferManager {
           break;
         }
       }
-      this.onError(e?.message || 'Append buffer failed');
+      this.onError(e?.message || "Append buffer failed");
       this._busy = false;
     }
   }
@@ -245,12 +245,12 @@ export class SourceBufferManager {
   changeCodecs(codecs: string[], switchPointMs?: number): void {
     // Skip reinit if codecs are identical (mews.js:676)
     if (this.codecsEqual(this._codecs, codecs)) {
-      if (this.debugging) console.log('MEWS: keeping source buffer, codecs same');
+      if (this.debugging) console.log("MEWS: keeping source buffer, codecs same");
       return;
     }
 
-    const container = 'mp4';
-    const mime = `video/${container};codecs="${codecs.join(',')}"`;
+    const container = "mp4";
+    const mime = `video/${container};codecs="${codecs.join(",")}"`;
     if (!MediaSource.isTypeSupported(mime)) {
       this.onError(`Unsupported codec for switch: ${mime}`);
       return;
@@ -265,7 +265,7 @@ export class SourceBufferManager {
 
     const pendingCodecs = codecs.slice();
 
-    if (typeof switchPointMs === 'number' && switchPointMs > 0) {
+    if (typeof switchPointMs === "number" && switchPointMs > 0) {
       // Wait for playback to reach switching point (mews.js:751-785)
       this.awaitSwitchingPoint(mime, switchPointMs, pendingCodecs);
     } else {
@@ -368,7 +368,7 @@ export class SourceBufferManager {
     this.queue = [];
 
     // Remove old sourceBuffer
-    if (this.sourceBuffer && this.mediaSource.readyState === 'open') {
+    if (this.sourceBuffer && this.mediaSource.readyState === "open") {
       try {
         this.mediaSource.removeSourceBuffer(this.sourceBuffer);
       } catch {
@@ -381,7 +381,7 @@ export class SourceBufferManager {
     try {
       // Create new sourceBuffer (mews.js:713-715)
       this.sourceBuffer = this.mediaSource.addSourceBuffer(mime);
-      this.sourceBuffer.mode = 'segments';
+      this.sourceBuffer.mode = "segments";
       this._codecs = newCodecs;
 
       this.installEventHandlers();
@@ -399,7 +399,7 @@ export class SourceBufferManager {
         this.append(frag);
       }
     } catch (e: any) {
-      this.onError(e?.message || 'Failed to reinit SourceBuffer');
+      this.onError(e?.message || "Failed to reinit SourceBuffer");
     }
   }
 
@@ -417,21 +417,21 @@ export class SourceBufferManager {
     // Wait for video.currentTime to reach switch point
     const onTimeUpdate = () => {
       if (this.videoElement.currentTime >= tSec) {
-        this.videoElement.removeEventListener('timeupdate', onTimeUpdate);
-        this.videoElement.removeEventListener('waiting', onWaiting);
+        this.videoElement.removeEventListener("timeupdate", onTimeUpdate);
+        this.videoElement.removeEventListener("waiting", onWaiting);
         clearAndReinit();
       }
     };
 
     // Or if video is waiting (buffer empty before switch point)
     const onWaiting = () => {
-      this.videoElement.removeEventListener('timeupdate', onTimeUpdate);
-      this.videoElement.removeEventListener('waiting', onWaiting);
+      this.videoElement.removeEventListener("timeupdate", onTimeUpdate);
+      this.videoElement.removeEventListener("waiting", onWaiting);
       clearAndReinit();
     };
 
-    this.videoElement.addEventListener('timeupdate', onTimeUpdate);
-    this.videoElement.addEventListener('waiting', onWaiting);
+    this.videoElement.addEventListener("timeupdate", onTimeUpdate);
+    this.videoElement.addEventListener("waiting", onWaiting);
   }
 
   /**
@@ -468,14 +468,14 @@ export class SourceBufferManager {
 
     if (this.debugging) {
       console.log(
-        'MEWS: drained msgqueue',
-        this.msgqueue ? `${this.msgqueue.length} more queue(s) remain` : ''
+        "MEWS: drained msgqueue",
+        this.msgqueue ? `${this.msgqueue.length} more queue(s) remain` : ""
       );
     }
 
     // Manually trigger updateend if queue was empty (mews.js:363-366)
     if (do_do && this.sourceBuffer) {
-      this.sourceBuffer.dispatchEvent(new Event('updateend'));
+      this.sourceBuffer.dispatchEvent(new Event("updateend"));
     }
   }
 
@@ -486,9 +486,9 @@ export class SourceBufferManager {
   private installEventHandlers(): void {
     if (!this.sourceBuffer) return;
 
-    this.sourceBuffer.addEventListener('updateend', () => {
+    this.sourceBuffer.addEventListener("updateend", () => {
       if (!this.sourceBuffer) {
-        if (this.debugging) console.log('MEWS: updateend but sourceBuffer is null');
+        if (this.debugging) console.log("MEWS: updateend but sourceBuffer is null");
         return;
       }
 
@@ -506,33 +506,38 @@ export class SourceBufferManager {
 
       for (let i = 0; i < do_funcs.length; i++) {
         if (!this.sourceBuffer) {
-          if (this.debugging) console.warn('MEWS: doing updateend but sb was reset');
+          if (this.debugging) console.warn("MEWS: doing updateend but sb was reset");
           break;
         }
         if (this.sourceBuffer.updating) {
           // Still updating, requeue remaining functions (mews.js:255-259)
           this.do_on_updateend = this.do_on_updateend.concat(do_funcs.slice(i));
-          if (this.debugging) console.warn('MEWS: doing updateend but was interrupted');
+          if (this.debugging) console.warn("MEWS: doing updateend but was interrupted");
           break;
         }
         try {
           // Pass remaining functions as argument (mews.js:261)
           do_funcs[i](i < do_funcs.length - 1 ? do_funcs.slice(i + 1) : []);
         } catch (e) {
-          console.error('MEWS: error in do_on_updateend:', e);
+          console.error("MEWS: error in do_on_updateend:", e);
         }
       }
 
       this._busy = false;
 
       // Process queued data (mews.js:269-272)
-      if (this.sourceBuffer && this.queue.length > 0 && !this.sourceBuffer.updating && !this.videoElement.error) {
+      if (
+        this.sourceBuffer &&
+        this.queue.length > 0 &&
+        !this.sourceBuffer.updating &&
+        !this.videoElement.error
+      ) {
         this._append(this.queue.shift()!);
       }
     });
 
-    this.sourceBuffer.addEventListener('error', () => {
-      this.onError('SourceBuffer error');
+    this.sourceBuffer.addEventListener("error", () => {
+      this.onError("SourceBuffer error");
     });
   }
 

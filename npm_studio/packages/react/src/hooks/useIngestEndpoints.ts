@@ -3,12 +3,12 @@
  * Mirrors useViewerEndpoints from npm_player for consistency
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   IngestClient,
   type IngestEndpoints,
   type IngestClientStatus,
-} from '@livepeer-frameworks/streamcrafter-core';
+} from "@livepeer-frameworks/streamcrafter-core";
 
 export interface UseIngestEndpointsOptions {
   /** Gateway GraphQL URL */
@@ -57,11 +57,11 @@ export function useIngestEndpoints(
   } = options;
 
   const [endpoints, setEndpoints] = useState<IngestEndpoints | null>(null);
-  const [status, setStatus] = useState<IngestClientStatus>('idle');
+  const [status, setStatus] = useState<IngestClientStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
   const clientRef = useRef<IngestClient | null>(null);
-  const lastOptionsRef = useRef<string>('');
+  const lastOptionsRef = useRef<string>("");
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -75,7 +75,7 @@ export function useIngestEndpoints(
   const reset = useCallback(() => {
     cleanup();
     setEndpoints(null);
-    setStatus('idle');
+    setStatus("idle");
     setError(null);
   }, [cleanup]);
 
@@ -100,14 +100,14 @@ export function useIngestEndpoints(
     clientRef.current = client;
 
     // Set up event listeners
-    client.on('statusChange', ({ status: newStatus, error: newError }) => {
+    client.on("statusChange", ({ status: newStatus, error: newError }) => {
       setStatus(newStatus);
       if (newError) {
         setError(newError);
       }
     });
 
-    client.on('endpointsResolved', ({ endpoints: resolved }) => {
+    client.on("endpointsResolved", ({ endpoints: resolved }) => {
       setEndpoints(resolved);
       setError(null);
     });
@@ -116,7 +116,7 @@ export function useIngestEndpoints(
       const resolved = await client.resolve();
       return resolved;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
+      const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
       return null;
     }

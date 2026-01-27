@@ -54,9 +54,7 @@
       </div>
       <div class="flex items-center space-x-2">
         <div
-          class="w-2 h-2 rounded-full {isLive
-            ? 'bg-success animate-pulse'
-            : 'bg-destructive'}"
+          class="w-2 h-2 rounded-full {isLive ? 'bg-success animate-pulse' : 'bg-destructive'}"
         ></div>
         <span class="text-xs text-muted-foreground capitalize">
           {status?.toLowerCase() || "offline"}
@@ -81,9 +79,7 @@
 
     <!-- Stream Key -->
     <div>
-      <label
-        for="primary-stream-key"
-        class="block text-sm font-medium text-muted-foreground mb-2"
+      <label for="primary-stream-key" class="block text-sm font-medium text-muted-foreground mb-2"
         >Stream Key</label
       >
       <div class="flex items-center space-x-3">
@@ -103,15 +99,16 @@
         </Button>
       </div>
       <p class="text-xs text-muted-foreground mt-2">
-        Keep your stream key private. Anyone with this key can broadcast to your
-        channel.
+        Keep your stream key private. Anyone with this key can broadcast to your channel.
       </p>
     </div>
   </div>
 {:else}
   {@const VideoIcon = getIconComponent("Video")}
   {@const PlusIcon = getIconComponent("Plus")}
-  <div class="bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.3)] p-6 space-y-4">
+  <div
+    class="bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.3)] p-6 space-y-4"
+  >
     <div class="text-center space-y-2">
       <div class="text-4xl">
         <VideoIcon class="w-10 h-10 text-muted-foreground mx-auto" />

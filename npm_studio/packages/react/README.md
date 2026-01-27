@@ -15,8 +15,8 @@ npm install @livepeer-frameworks/streamcrafter-react
 ## Usage (Component)
 
 ```tsx
-import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-react';
-import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
+import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
+import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
 export function BroadcastPage() {
   return (
@@ -39,18 +39,19 @@ export function BroadcastPage() {
 ```
 
 Notes:
+
 - There is **no default gateway**; pass either `whipUrl` or (`gatewayUrl` + `streamKey`).
 - If both are provided, `whipUrl` takes priority.
 
 ## Usage (Hook)
 
 ```tsx
-import { useStreamCrafterV2 } from '@livepeer-frameworks/streamcrafter-react';
+import { useStreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-react";
 
 export function CustomBroadcaster() {
   const { mediaStream, startCamera, startStreaming, stopStreaming } = useStreamCrafterV2({
-    whipUrl: 'https://ingest.example.com/webrtc/your-stream-key',
-    profile: 'broadcast',
+    whipUrl: "https://ingest.example.com/webrtc/your-stream-key",
+    profile: "broadcast",
   });
 
   return (

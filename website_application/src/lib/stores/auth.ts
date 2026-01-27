@@ -50,22 +50,19 @@ function createAuthStore() {
     async login(
       email: string,
       password: string,
-      botProtectionData: BotProtectionData = {},
+      botProtectionData: BotProtectionData = {}
     ): Promise<LoginResponse> {
       update((state) => ({ ...state, loading: true, error: null }));
 
       try {
         // Backend now sets httpOnly cookies automatically
         // Response only contains user data (no token in body)
-        const response = await authAPI.post<{ user: User; expires_at: string }>(
-          "/login",
-          {
-            email,
-            password,
-            turnstile_token: botProtectionData.turnstileToken,
-            ...botProtectionData,
-          },
-        );
+        const response = await authAPI.post<{ user: User; expires_at: string }>("/login", {
+          email,
+          password,
+          turnstile_token: botProtectionData.turnstileToken,
+          ...botProtectionData,
+        });
 
         const { user } = response.data;
 
@@ -108,7 +105,7 @@ function createAuthStore() {
       password: string,
       botProtectionData: BotProtectionData = {},
       firstName: string = "",
-      lastName: string = "",
+      lastName: string = ""
     ): Promise<LoginResponse> {
       update((state) => ({ ...state, loading: true, error: null }));
 
@@ -188,9 +185,7 @@ function createAuthStore() {
       } catch {
         // Not authenticated or token expired - try refresh
         try {
-          const refreshResponse = await authAPI.post<{ user: User }>(
-            "/refresh",
-          );
+          const refreshResponse = await authAPI.post<{ user: User }>("/refresh");
           const { user } = refreshResponse.data;
 
           localStorage.setItem("user", JSON.stringify(user));
@@ -239,10 +234,7 @@ function createAuthStore() {
       });
     },
 
-    async resendVerification(
-      email: string,
-      turnstileToken?: string,
-    ): Promise<LoginResponse> {
+    async resendVerification(email: string, turnstileToken?: string): Promise<LoginResponse> {
       try {
         const response = await authAPI.post<{
           success: boolean;
@@ -297,10 +289,7 @@ function createAuthStore() {
       }
     },
 
-    async resetPassword(
-      token: string,
-      password: string,
-    ): Promise<LoginResponse> {
+    async resetPassword(token: string, password: string): Promise<LoginResponse> {
       try {
         const response = await authAPI.post<{
           success: boolean;
@@ -328,19 +317,16 @@ function createAuthStore() {
       }
     },
 
-    async walletLogin(
-      address: string,
-      message: string,
-      signature: string,
-    ): Promise<LoginResponse> {
+    async walletLogin(address: string, message: string, signature: string): Promise<LoginResponse> {
       update((state) => ({ ...state, loading: true, error: null }));
 
       try {
         // POST to /auth/wallet-login - backend sets httpOnly cookies
-        const response = await authAPI.post<{ user: User; expires_at: string }>(
-          "/wallet-login",
-          { address, message, signature },
-        );
+        const response = await authAPI.post<{ user: User; expires_at: string }>("/wallet-login", {
+          address,
+          message,
+          signature,
+        });
 
         const { user } = response.data;
 

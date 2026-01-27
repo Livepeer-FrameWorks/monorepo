@@ -7,16 +7,16 @@
  * - Automatic reconnection with exponential backoff
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import { DeviceManager } from './DeviceManager';
-import { ScreenCapture } from './ScreenCapture';
-import { WhipClient } from './WhipClient';
-import { AudioMixer } from './AudioMixer';
-import { ReconnectionManager } from './ReconnectionManager';
-import { SceneManager } from './SceneManager';
-import { EncoderManager, createEncoderConfig } from './EncoderManager';
-import { detectCapabilities, isRTCRtpScriptTransformSupported } from './FeatureDetection';
-import { getVideoConstraints } from './MediaConstraints';
+import { TypedEventEmitter } from "./EventEmitter";
+import { DeviceManager } from "./DeviceManager";
+import { ScreenCapture } from "./ScreenCapture";
+import { WhipClient } from "./WhipClient";
+import { AudioMixer } from "./AudioMixer";
+import { ReconnectionManager } from "./ReconnectionManager";
+import { SceneManager } from "./SceneManager";
+import { EncoderManager, createEncoderConfig } from "./EncoderManager";
+import { detectCapabilities, isRTCRtpScriptTransformSupported } from "./FeatureDetection";
+import { getVideoConstraints } from "./MediaConstraints";
 import type {
   IngestControllerConfigV2,
   IngestControllerEventsV2,
@@ -31,8 +31,8 @@ import type {
   SourceType,
   CompositorConfig,
   EncoderOverrides,
-} from '../types';
-import { DEFAULT_COMPOSITOR_CONFIG } from '../types';
+} from "../types";
+import { DEFAULT_COMPOSITOR_CONFIG } from "../types";
 
 let sourceIdCounter = 0;
 function generateSourceId(type: SourceType): string {
@@ -47,7 +47,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private reconnectionManager: ReconnectionManager;
   private whipClient: WhipClient | null = null;
 
-  private state: IngestState = 'idle';
+  private state: IngestState = "idle";
   private stateContext: IngestStateContextV2 = {};
   private sources: Map<string, MediaSource> = new Map();
   private outputStream: MediaStream | null = null;
@@ -68,7 +68,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   constructor(config: IngestControllerConfigV2) {
     super();
     this.config = config;
-    this.currentProfile = config.profile || 'broadcast';
+    this.currentProfile = config.profile || "broadcast";
     this.deviceManager = new DeviceManager();
     this.screenCapture = new ScreenCapture();
     this.audioMixer = new AudioMixer();
@@ -76,12 +76,12 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Determine if we should use WebCodecs
     const capabilities = detectCapabilities();
-    this.useWebCodecs = config.useWebCodecs ?? capabilities.recommended === 'webcodecs';
+    this.useWebCodecs = config.useWebCodecs ?? capabilities.recommended === "webcodecs";
 
     // Set up event forwarding
     this.setupEventForwarding();
 
-    this.log('IngestControllerV2 initialized', {
+    this.log("IngestControllerV2 initialized", {
       useWebCodecs: this.useWebCodecs,
       profile: this.currentProfile,
       audioMixing: config.audioMixing ?? false,
@@ -93,7 +93,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   private log(message: string, data?: unknown): void {
     if (this.config.debug) {
-      console.log(`[IngestControllerV2] ${message}`, data ?? '');
+      console.log(`[IngestControllerV2] ${message}`, data ?? "");
     }
   }
 
@@ -101,20 +101,20 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Set up event forwarding from child components
    */
   private setupEventForwarding(): void {
-    this.deviceManager.on('devicesChanged', (event) => {
-      this.emit('deviceChange', event);
+    this.deviceManager.on("devicesChanged", (event) => {
+      this.emit("deviceChange", event);
     });
 
-    this.deviceManager.on('error', (event) => {
-      this.emit('error', { error: event.message, recoverable: true });
+    this.deviceManager.on("error", (event) => {
+      this.emit("error", { error: event.message, recoverable: true });
     });
 
-    this.screenCapture.on('ended', (event) => {
-      this.log('Screen capture ended', event);
+    this.screenCapture.on("ended", (event) => {
+      this.log("Screen capture ended", event);
       // Find and remove the specific screen source by matching the stream
       if (event.stream) {
         for (const [id, source] of this.sources) {
-          if (source.type === 'screen' && source.stream === event.stream) {
+          if (source.type === "screen" && source.stream === event.stream) {
             this.removeSource(id);
             break;
           }
@@ -122,30 +122,30 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       }
     });
 
-    this.screenCapture.on('error', (event) => {
-      this.emit('error', { error: event.message, recoverable: true });
+    this.screenCapture.on("error", (event) => {
+      this.emit("error", { error: event.message, recoverable: true });
     });
 
     // Reconnection events
-    this.reconnectionManager.on('attemptStart', (event) => {
-      this.emit('reconnectionAttempt', {
+    this.reconnectionManager.on("attemptStart", (event) => {
+      this.emit("reconnectionAttempt", {
         attempt: event.attempt,
         maxAttempts: this.reconnectionManager.getMaxAttempts(),
       });
     });
 
-    this.reconnectionManager.on('attemptSuccess', () => {
-      this.emit('reconnectionSuccess', undefined);
-      this.setState('streaming');
+    this.reconnectionManager.on("attemptSuccess", () => {
+      this.emit("reconnectionSuccess", undefined);
+      this.setState("streaming");
     });
 
-    this.reconnectionManager.on('attemptFailed', (event) => {
-      this.log('Reconnection attempt failed', event);
+    this.reconnectionManager.on("attemptFailed", (event) => {
+      this.log("Reconnection attempt failed", event);
     });
 
-    this.reconnectionManager.on('exhausted', () => {
-      this.emit('reconnectionFailed', { error: 'All reconnection attempts exhausted' });
-      this.setState('error', { error: 'Connection lost - reconnection failed' });
+    this.reconnectionManager.on("exhausted", () => {
+      this.emit("reconnectionFailed", { error: "All reconnection attempts exhausted" });
+      this.setState("error", { error: "Connection lost - reconnection failed" });
     });
   }
 
@@ -160,7 +160,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.stateContext.sources = Array.from(this.sources.values());
     this.stateContext.activeProfile = this.currentProfile;
     this.stateContext.reconnection = this.reconnectionManager.getState();
-    this.emit('stateChange', { state: this.state, context: this.stateContext });
+    this.emit("stateChange", { state: this.state, context: this.stateContext });
   }
 
   /**
@@ -175,11 +175,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   /**
    * Add a media source
    */
-  private addMediaSource(
-    type: SourceType,
-    stream: MediaStream,
-    label: string
-  ): MediaSource {
+  private addMediaSource(type: SourceType, stream: MediaStream, label: string): MediaSource {
     const id = generateSourceId(type);
 
     // Check if this is the first video source (will be primary by default)
@@ -201,7 +197,11 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     };
 
     this.sources.set(id, source);
-    this.log(`Added source: ${id} (${type})`, { label, tracks: stream.getTracks().length, primaryVideo: isPrimaryVideo });
+    this.log(`Added source: ${id} (${type})`, {
+      label,
+      tracks: stream.getTracks().length,
+      primaryVideo: isPrimaryVideo,
+    });
 
     // Add audio track to mixer if enabled
     if (this.config.audioMixing) {
@@ -213,24 +213,28 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Bind to compositor if enabled
     if (this.sceneManager && this.sceneManager.isInitialized()) {
-      this.log('Binding source to compositor', { sourceId: id });
+      this.log("Binding source to compositor", { sourceId: id });
       this.sceneManager.bindSource(id, stream);
       // Add layer to active scene
       const activeScene = this.sceneManager.getActiveScene();
-      this.log('Adding layer to scene', { sourceId: id, activeSceneId: activeScene?.id, sceneLayers: activeScene?.layers.length });
+      this.log("Adding layer to scene", {
+        sourceId: id,
+        activeSceneId: activeScene?.id,
+        sceneLayers: activeScene?.layers.length,
+      });
       if (activeScene) {
         this.sceneManager.addLayer(activeScene.id, id);
-        this.log('Layer added', { sourceId: id, layerCount: activeScene.layers.length });
+        this.log("Layer added", { sourceId: id, layerCount: activeScene.layers.length });
       }
     } else {
-      this.log('Compositor not ready when adding source', {
+      this.log("Compositor not ready when adding source", {
         sourceId: id,
         hasSceneManager: !!this.sceneManager,
         isInitialized: this.sceneManager?.isInitialized() ?? false,
       });
     }
 
-    this.emit('sourceAdded', { source });
+    this.emit("sourceAdded", { source });
     this.updateOutputStreamFromSources();
 
     return source;
@@ -259,7 +263,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       // Remove layer from active scene
       const activeScene = this.sceneManager.getActiveScene();
       if (activeScene) {
-        const layer = activeScene.layers.find(l => l.sourceId === id);
+        const layer = activeScene.layers.find((l) => l.sourceId === id);
         if (layer) {
           this.sceneManager.removeLayer(activeScene.id, layer.id);
         }
@@ -281,7 +285,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       }
     }
 
-    this.emit('sourceRemoved', { sourceId: id });
+    this.emit("sourceRemoved", { sourceId: id });
     this.updateOutputStreamFromSources();
   }
 
@@ -311,7 +315,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.sources.set(sourceId, source);
 
     this.log(`Set primary video source: ${sourceId}`);
-    this.emit('sourceUpdated', { source, changes: { primaryVideo: true } });
+    this.emit("sourceUpdated", { source, changes: { primaryVideo: true } });
     this.updateOutputStreamFromSources();
   }
 
@@ -352,8 +356,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       const videoSourcesWithVideo = sourcesArray.filter(
         (s) => s.stream.getVideoTracks().length > 0
       );
-      const primaryVideoSource = videoSourcesWithVideo.find((s) => s.primaryVideo) ||
-                                 videoSourcesWithVideo[0];
+      const primaryVideoSource =
+        videoSourcesWithVideo.find((s) => s.primaryVideo) || videoSourcesWithVideo[0];
 
       if (primaryVideoSource) {
         const videoTrack = primaryVideoSource.stream.getVideoTracks()[0];
@@ -364,7 +368,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     }
 
     // Get audio (mixed or primary)
-    if (this.config.audioMixing && this.audioMixer.getState() === 'running') {
+    if (this.config.audioMixing && this.audioMixer.getState() === "running") {
       const mixedAudioTrack = this.audioMixer.getOutputTrack();
       if (mixedAudioTrack) {
         tracks.push(mixedAudioTrack);
@@ -383,18 +387,18 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.outputStream = tracks.length > 0 ? new MediaStream(tracks) : null;
 
     // Update WHIP client if streaming
-    if (this.whipClient && this.state === 'streaming') {
+    if (this.whipClient && this.state === "streaming") {
       this.updateWhipTracks();
     }
 
     // Update EncoderManager input stream if WebCodecs is active
     if (this.encoderManager && this.outputStream) {
       this.encoderManager.updateInputStream(this.outputStream).catch((err) => {
-        this.log('Failed to update encoder input stream', err);
+        this.log("Failed to update encoder input stream", err);
       });
     }
 
-    this.log('Output stream updated', {
+    this.log("Output stream updated", {
       videoTracks: this.outputStream?.getVideoTracks().length ?? 0,
       audioTracks: this.outputStream?.getAudioTracks().length ?? 0,
       usingCompositor: !!this.sceneManager,
@@ -415,19 +419,19 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       // Update video track (replaceTrack(null) properly stops sending)
       const newVideoTrack = this.outputStream.getVideoTracks()[0];
-      const videoSender = senders.find((s) => s.track?.kind === 'video');
+      const videoSender = senders.find((s) => s.track?.kind === "video");
       if (videoSender) {
         await videoSender.replaceTrack(newVideoTrack ?? null);
       }
 
       // Update audio track (replaceTrack(null) properly stops sending)
       const newAudioTrack = this.outputStream.getAudioTracks()[0];
-      const audioSender = senders.find((s) => s.track?.kind === 'audio');
+      const audioSender = senders.find((s) => s.track?.kind === "audio");
       if (audioSender) {
         await audioSender.replaceTrack(newAudioTrack ?? null);
       }
     } catch (error) {
-      this.log('Error updating WHIP tracks', error);
+      this.log("Error updating WHIP tracks", error);
     }
   }
 
@@ -435,8 +439,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Start camera capture
    */
   async startCamera(options: CaptureOptions = {}): Promise<MediaSource> {
-    this.log('Starting camera capture', options);
-    this.setState('requesting_permissions');
+    this.log("Starting camera capture", options);
+    this.setState("requesting_permissions");
 
     try {
       await this.ensureAudioMixer();
@@ -460,22 +464,25 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           },
           audio: true,
         };
-        this.log('Using encoder overrides for capture constraints:', captureOptions.customConstraints);
+        this.log(
+          "Using encoder overrides for capture constraints:",
+          captureOptions.customConstraints
+        );
       }
 
       const stream = await this.deviceManager.getUserMedia(captureOptions);
 
       const label = await this.getCameraLabel(stream);
-      const source = this.addMediaSource('camera', stream, label);
+      const source = this.addMediaSource("camera", stream, label);
 
-      this.setState('capturing', {
+      this.setState("capturing", {
         hasVideo: stream.getVideoTracks().length > 0,
         hasAudio: stream.getAudioTracks().length > 0,
       });
 
       return source;
     } catch (error) {
-      this.setState('error', {
+      this.setState("error", {
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -488,17 +495,17 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private async getCameraLabel(stream: MediaStream): Promise<string> {
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
-      return videoTrack.label || 'Camera';
+      return videoTrack.label || "Camera";
     }
-    return 'Camera';
+    return "Camera";
   }
 
   /**
    * Start screen share capture
    */
   async startScreenShare(options: ScreenCaptureOptions = {}): Promise<MediaSource | null> {
-    this.log('Starting screen share', options);
-    this.setState('requesting_permissions');
+    this.log("Starting screen share", options);
+    this.setState("requesting_permissions");
 
     try {
       await this.ensureAudioMixer();
@@ -515,7 +522,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           ...(videoOverrides.height && { height: { ideal: videoOverrides.height } }),
           ...(videoOverrides.framerate && { frameRate: { ideal: videoOverrides.framerate } }),
         };
-        this.log('Using encoder overrides for screen capture constraints:', captureOptions.video);
+        this.log("Using encoder overrides for screen capture constraints:", captureOptions.video);
       }
 
       const stream = await this.screenCapture.start(captureOptions);
@@ -525,9 +532,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         const videoTrack = stream.getVideoTracks()[0];
         const label = videoTrack?.label || `Screen ${this.screenCapture.getCaptureCount()}`;
 
-        const source = this.addMediaSource('screen', stream, label);
+        const source = this.addMediaSource("screen", stream, label);
 
-        this.setState('capturing', {
+        this.setState("capturing", {
           hasVideo: true,
           isScreenShare: true,
         });
@@ -536,14 +543,14 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       } else {
         // User cancelled
         if (this.sources.size > 0) {
-          this.setState('capturing');
+          this.setState("capturing");
         } else {
-          this.setState('idle');
+          this.setState("idle");
         }
         return null;
       }
     } catch (error) {
-      this.setState('error', {
+      this.setState("error", {
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -554,7 +561,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Add a custom media source
    */
   addCustomSource(stream: MediaStream, label: string): MediaSource {
-    return this.addMediaSource('custom', stream, label);
+    return this.addMediaSource("custom", stream, label);
   }
 
   /**
@@ -572,7 +579,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       this.audioMixer.setVolume(sourceId, source.volume);
     }
 
-    this.emit('sourceUpdated', { source, changes: { volume: source.volume } });
+    this.emit("sourceUpdated", { source, changes: { volume: source.volume } });
   }
 
   /**
@@ -598,7 +605,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       });
     }
 
-    this.emit('sourceUpdated', { source, changes: { muted } });
+    this.emit("sourceUpdated", { source, changes: { muted } });
     this.updateOutputStreamFromSources();
   }
 
@@ -612,7 +619,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     source.active = active;
     this.sources.set(sourceId, source);
 
-    this.emit('sourceUpdated', { source, changes: { active } });
+    this.emit("sourceUpdated", { source, changes: { active } });
     this.updateOutputStreamFromSources();
   }
 
@@ -636,7 +643,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Stop all capture
    */
   async stopCapture(): Promise<void> {
-    this.log('Stopping all capture');
+    this.log("Stopping all capture");
 
     // Remove all sources
     for (const id of Array.from(this.sources.keys())) {
@@ -647,8 +654,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.screenCapture.stop();
     this.outputStream = null;
 
-    if (this.state !== 'streaming') {
-      this.setState('idle', {
+    if (this.state !== "streaming") {
+      this.setState("idle", {
         hasVideo: false,
         hasAudio: false,
         isScreenShare: false,
@@ -669,20 +676,20 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Update existing camera sources with new constraints
     for (const [_id, source] of this.sources) {
-      if (source.type === 'camera') {
+      if (source.type === "camera") {
         const videoTrack = source.stream.getVideoTracks()[0];
         if (videoTrack) {
           try {
             const constraints = getVideoConstraints(profile);
             await videoTrack.applyConstraints(constraints);
           } catch (error) {
-            this.log('Failed to apply new constraints', error);
+            this.log("Failed to apply new constraints", error);
           }
         }
       }
     }
 
-    this.emit('qualityChanged', { profile, previousProfile });
+    this.emit("qualityChanged", { profile, previousProfile });
     this.setState(this.state, { activeProfile: profile });
   }
 
@@ -693,37 +700,37 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private setupWhipClientHandlers(): void {
     if (!this.whipClient) return;
 
-    this.whipClient.on('stateChange', (event) => {
-      this.log('WHIP state changed', event);
+    this.whipClient.on("stateChange", (event) => {
+      this.log("WHIP state changed", event);
       this.stateContext = {
         ...this.stateContext,
         connectionState: event.state,
       };
 
-      if (event.state === 'connected') {
-        this.setState('streaming');
+      if (event.state === "connected") {
+        this.setState("streaming");
         this.startStatsPolling();
         this.reconnectionManager.reset();
 
         // Attach WebCodecs encoder transform if supported and codecs are aligned
         // This must happen AFTER connection is established (senders exist)
         if (this.useWebCodecs && this.encoderManager && this.whipClient) {
-          this.log('Attempting to attach WebCodecs encoder transform');
+          this.log("Attempting to attach WebCodecs encoder transform");
           // Check if codec alignment allows encoded frame insertion
           const canUseEncoded = this.whipClient.canUseEncodedInsertion();
-          this.log('canUseEncodedInsertion result:', canUseEncoded);
+          this.log("canUseEncodedInsertion result:", canUseEncoded);
           if (canUseEncoded) {
             try {
               this.whipClient.attachEncoderTransform(this.encoderManager);
               this.encoderManager.start();
-              this.log('WebCodecs encoder transform attached', {
+              this.log("WebCodecs encoder transform attached", {
                 videoCodec: this.whipClient.getNegotiatedVideoCodec(),
                 audioCodec: this.whipClient.getNegotiatedAudioCodec(),
               });
               // Emit event so UI can update
-              this.emit('webCodecsActive', { active: true });
+              this.emit("webCodecsActive", { active: true });
             } catch (err) {
-              this.log('Failed to attach encoder transform, continuing with browser encoding', err);
+              this.log("Failed to attach encoder transform, continuing with browser encoding", err);
               // Clean up encoder on failure
               if (this.encoderManager) {
                 this.encoderManager.destroy();
@@ -731,7 +738,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
               }
             }
           } else {
-            this.log('Codec alignment check failed, using browser encoding', {
+            this.log("Codec alignment check failed, using browser encoding", {
               videoCodec: this.whipClient.getNegotiatedVideoCodec(),
               audioCodec: this.whipClient.getNegotiatedAudioCodec(),
             });
@@ -742,18 +749,18 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
             }
           }
         }
-      } else if (event.state === 'failed' || event.state === 'disconnected') {
-        if (this.state === 'streaming' && this.config.reconnection?.enabled !== false) {
+      } else if (event.state === "failed" || event.state === "disconnected") {
+        if (this.state === "streaming" && this.config.reconnection?.enabled !== false) {
           this.handleConnectionLost();
-        } else if (event.state === 'failed') {
-          this.setState('error', { error: 'Connection failed' });
+        } else if (event.state === "failed") {
+          this.setState("error", { error: "Connection failed" });
           this.stopStatsPolling();
         }
       }
     });
 
-    this.whipClient.on('error', (event) => {
-      this.emit('error', { error: event.message, recoverable: false });
+    this.whipClient.on("error", (event) => {
+      this.emit("error", { error: event.message, recoverable: false });
     });
   }
 
@@ -762,11 +769,11 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   async startStreaming(): Promise<void> {
     if (!this.outputStream) {
-      throw new Error('No media source available. Add a camera or screen share first.');
+      throw new Error("No media source available. Add a camera or screen share first.");
     }
 
-    this.log('Starting streaming');
-    this.setState('connecting');
+    this.log("Starting streaming");
+    this.setState("connecting");
 
     try {
       // Create WHIP client
@@ -786,42 +793,47 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       // Initialize WebCodecs encoder if enabled and RTCRtpScriptTransform is supported
       if (this.useWebCodecs && isRTCRtpScriptTransformSupported()) {
-        this.log('Initializing WebCodecs encoder (Path C: RTCRtpScriptTransform)');
+        this.log("Initializing WebCodecs encoder (Path C: RTCRtpScriptTransform)");
         try {
           this.encoderManager = new EncoderManager({ debug: this.config.debug });
 
           // Set up encoder event forwarding
-          this.encoderManager.on('error', (event) => {
-            this.emit('error', { error: event.message, recoverable: !event.fatal });
+          this.encoderManager.on("error", (event) => {
+            this.emit("error", { error: event.message, recoverable: !event.fatal });
 
             // On fatal encoder error during streaming, reconnect without WebCodecs
-            if (event.fatal && this.state === 'streaming') {
-              this.log('Fatal encoder error, reconnecting without WebCodecs');
+            if (event.fatal && this.state === "streaming") {
+              this.log("Fatal encoder error, reconnecting without WebCodecs");
               this.handleEncoderFailure();
             }
           });
 
-          this.encoderManager.on('stats', (stats) => {
-            this.log('Encoder stats', stats);
+          this.encoderManager.on("stats", (stats) => {
+            this.log("Encoder stats", stats);
           });
 
           // Initialize encoder with output stream
           // Map quality profile to encoder profile (handle 'auto' by defaulting to 'broadcast')
-          const encoderProfile = this.currentProfile === 'auto' ? 'broadcast' : this.currentProfile;
+          const encoderProfile = this.currentProfile === "auto" ? "broadcast" : this.currentProfile;
           const encoderConfig = createEncoderConfig(encoderProfile, this.encoderOverrides);
-          this.log('Encoder config with overrides:', encoderConfig);
+          this.log("Encoder config with overrides:", encoderConfig);
           await this.encoderManager.initialize(this.outputStream, encoderConfig);
-          this.log('WebCodecs encoder initialized');
+          this.log("WebCodecs encoder initialized");
         } catch (err) {
           // If encoder initialization fails, continue without it
-          this.log('WebCodecs encoder initialization failed, falling back to browser encoding', err);
+          this.log(
+            "WebCodecs encoder initialization failed, falling back to browser encoding",
+            err
+          );
           if (this.encoderManager) {
             this.encoderManager.destroy();
             this.encoderManager = null;
           }
         }
       } else if (this.useWebCodecs) {
-        this.log('WebCodecs requested but RTCRtpScriptTransform not supported, using browser encoding');
+        this.log(
+          "WebCodecs requested but RTCRtpScriptTransform not supported, using browser encoding"
+        );
       }
 
       // Connect via standard MediaStream path
@@ -833,7 +845,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         this.encoderManager.destroy();
         this.encoderManager = null;
       }
-      this.setState('error', {
+      this.setState("error", {
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -844,8 +856,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Handle encoder failure - reconnect without WebCodecs
    */
   private async handleEncoderFailure(): Promise<void> {
-    this.log('Handling encoder failure - reconnecting without WebCodecs');
-    this.setState('reconnecting');
+    this.log("Handling encoder failure - reconnecting without WebCodecs");
+    this.setState("reconnecting");
     this.stopStatsPolling();
 
     // Clean up encoder
@@ -865,7 +877,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Reconnect without WebCodecs
     if (!this.outputStream) {
-      this.setState('error', { error: 'No output stream available for reconnection' });
+      this.setState("error", { error: "No output stream available for reconnection" });
       return;
     }
 
@@ -881,7 +893,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       await this.whipClient.connect(this.outputStream);
     } catch (error) {
-      this.setState('error', {
+      this.setState("error", {
         error: `Reconnection failed: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
@@ -891,8 +903,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Handle connection lost - trigger reconnection
    */
   private handleConnectionLost(): void {
-    this.log('Connection lost, starting reconnection');
-    this.setState('reconnecting');
+    this.log("Connection lost, starting reconnection");
+    this.setState("reconnecting");
     this.stopStatsPolling();
 
     this.reconnectionManager.start(async () => {
@@ -904,7 +916,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       // Create new client and reconnect
       if (!this.outputStream) {
-        throw new Error('No output stream available');
+        throw new Error("No output stream available");
       }
 
       this.whipClient = new WhipClient({
@@ -919,23 +931,23 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       // Wait for connection to complete
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
-          reject(new Error('Connection timeout'));
+          reject(new Error("Connection timeout"));
         }, 30000);
 
         // One-time listener just to signal reconnection success/failure
         const onStateChange = (event: { state: string }) => {
-          if (event.state === 'connected') {
+          if (event.state === "connected") {
             clearTimeout(timeout);
-            this.whipClient?.off('stateChange', onStateChange);
+            this.whipClient?.off("stateChange", onStateChange);
             resolve();
-          } else if (event.state === 'failed') {
+          } else if (event.state === "failed") {
             clearTimeout(timeout);
-            this.whipClient?.off('stateChange', onStateChange);
-            reject(new Error('Connection failed'));
+            this.whipClient?.off("stateChange", onStateChange);
+            reject(new Error("Connection failed"));
           }
         };
 
-        this.whipClient!.on('stateChange', onStateChange);
+        this.whipClient!.on("stateChange", onStateChange);
         this.whipClient!.connect(this.outputStream!).catch(reject);
       });
     });
@@ -945,7 +957,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Stop streaming
    */
   async stopStreaming(): Promise<void> {
-    this.log('Stopping streaming');
+    this.log("Stopping streaming");
     this.stopStatsPolling();
     this.reconnectionManager.stop();
 
@@ -963,14 +975,14 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     }
 
     if (this.sources.size > 0) {
-      this.setState('capturing');
+      this.setState("capturing");
     } else {
-      this.setState('idle');
+      this.setState("idle");
     }
 
     this.stateContext = {
       ...this.stateContext,
-      connectionState: 'disconnected',
+      connectionState: "disconnected",
     };
   }
 
@@ -983,7 +995,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (newTrack && this.whipClient) {
       const pc = this.whipClient.getPeerConnection();
       if (pc) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
         if (sender) {
           await sender.replaceTrack(newTrack);
         }
@@ -1000,7 +1012,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (newTrack && this.whipClient) {
       const pc = this.whipClient.getPeerConnection();
       if (pc) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
+        const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
         if (sender) {
           await sender.replaceTrack(newTrack);
         }
@@ -1023,7 +1035,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
         const stats = await this.getStats();
         if (stats) {
           this.lastStats = stats;
-          this.emit('statsUpdate', stats);
+          this.emit("statsUpdate", stats);
         }
       } finally {
         this.statsInFlight = false;
@@ -1067,8 +1079,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       },
       connection: {
         rtt: 0,
-        state: this.whipClient.getPeerConnection()?.connectionState ?? 'new',
-        iceState: this.whipClient.getPeerConnection()?.iceConnectionState ?? 'new',
+        state: this.whipClient.getPeerConnection()?.connectionState ?? "new",
+        iceState: this.whipClient.getPeerConnection()?.iceConnectionState ?? "new",
       },
       timestamp: Date.now(),
     };
@@ -1077,9 +1089,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     const prevStats = this.lastStats;
 
     report.forEach((stat) => {
-      if (stat.type === 'outbound-rtp') {
+      if (stat.type === "outbound-rtp") {
         const rtpStat = stat as RTCOutboundRtpStreamStats;
-        if (rtpStat.kind === 'video') {
+        if (rtpStat.kind === "video") {
           stats.video.bytesSent = rtpStat.bytesSent ?? 0;
           stats.video.packetsSent = rtpStat.packetsSent ?? 0;
           stats.video.framesEncoded = rtpStat.framesEncoded ?? 0;
@@ -1091,7 +1103,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
             const bytesDiff = stats.video.bytesSent - prevStats.video.bytesSent;
             stats.video.bitrate = Math.round((bytesDiff * 8) / timeDiff);
           }
-        } else if (rtpStat.kind === 'audio') {
+        } else if (rtpStat.kind === "audio") {
           stats.audio.bytesSent = rtpStat.bytesSent ?? 0;
           stats.audio.packetsSent = rtpStat.packetsSent ?? 0;
 
@@ -1102,8 +1114,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           }
         }
       } else if (
-        stat.type === 'candidate-pair' &&
-        (stat as RTCIceCandidatePairStats).state === 'succeeded'
+        stat.type === "candidate-pair" &&
+        (stat as RTCIceCandidatePairStats).state === "succeeded"
       ) {
         stats.connection.rtt = (stat as RTCIceCandidatePairStats).currentRoundTripTime ?? 0;
       }
@@ -1121,42 +1133,42 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Call this before adding sources if you want compositor-based output
    */
   async enableCompositor(config?: Partial<CompositorConfig>): Promise<void> {
-    this.log('enableCompositor called', { alreadyEnabled: !!this.sceneManager });
+    this.log("enableCompositor called", { alreadyEnabled: !!this.sceneManager });
 
     if (this.sceneManager) {
-      this.log('Compositor already enabled');
+      this.log("Compositor already enabled");
       return;
     }
 
     const compositorConfig = { ...DEFAULT_COMPOSITOR_CONFIG, ...this.config.compositor, ...config };
-    this.log('Creating SceneManager with config', compositorConfig);
+    this.log("Creating SceneManager with config", compositorConfig);
     this.sceneManager = new SceneManager(compositorConfig);
     this.compositorBaseConfig = compositorConfig;
 
     // Initialize the compositor
     try {
-      this.log('Initializing SceneManager...');
+      this.log("Initializing SceneManager...");
       await this.sceneManager.initialize();
-      this.log('SceneManager initialized successfully');
+      this.log("SceneManager initialized successfully");
     } catch (e) {
       // If initialization fails, clean up and re-throw
       this.sceneManager = null;
       const message = e instanceof Error ? e.message : String(e);
-      this.log('Compositor initialization failed:', message);
+      this.log("Compositor initialization failed:", message);
       throw new Error(`Compositor initialization failed: ${message}`);
     }
 
     // Verify sceneManager is still set after async initialize
     if (!this.sceneManager) {
-      this.log('ERROR: SceneManager was unexpectedly null after initialization');
-      throw new Error('SceneManager was unexpectedly null after initialization');
+      this.log("ERROR: SceneManager was unexpectedly null after initialization");
+      throw new Error("SceneManager was unexpectedly null after initialization");
     }
 
-    this.log('SceneManager is valid, getting active scene...');
+    this.log("SceneManager is valid, getting active scene...");
 
     // Bind existing sources to the compositor and add as layers
     const activeScene = this.sceneManager.getActiveScene();
-    this.log('Compositor active scene:', activeScene?.id ?? 'none');
+    this.log("Compositor active scene:", activeScene?.id ?? "none");
 
     for (const [id, source] of this.sources) {
       if (!this.sceneManager) break; // Guard against concurrent disable
@@ -1170,12 +1182,12 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Forward compositor events
     if (this.sceneManager) {
-      this.sceneManager.on('error', (event) => {
-        this.emit('error', { error: event.message, recoverable: true });
+      this.sceneManager.on("error", (event) => {
+        this.emit("error", { error: event.message, recoverable: true });
       });
     }
 
-    this.log('Compositor enabled', compositorConfig);
+    this.log("Compositor enabled", compositorConfig);
 
     // Update output to use compositor
     this.updateOutputStreamFromSources();
@@ -1188,7 +1200,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     if (this.sceneManager) {
       this.sceneManager.destroy();
       this.sceneManager = null;
-      this.log('Compositor disabled');
+      this.log("Compositor disabled");
       this.updateOutputStreamFromSources();
     }
   }
@@ -1256,15 +1268,15 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   }
 
   isStreaming(): boolean {
-    return this.state === 'streaming';
+    return this.state === "streaming";
   }
 
   isCapturing(): boolean {
-    return this.state === 'capturing' || this.state === 'streaming';
+    return this.state === "capturing" || this.state === "streaming";
   }
 
   isReconnecting(): boolean {
-    return this.state === 'reconnecting';
+    return this.state === "reconnecting";
   }
 
   /**
@@ -1272,12 +1284,12 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Only takes effect before streaming starts (cannot change mid-stream)
    */
   setUseWebCodecs(enabled: boolean): void {
-    if (this.state === 'streaming') {
-      this.log('Cannot change useWebCodecs while streaming');
+    if (this.state === "streaming") {
+      this.log("Cannot change useWebCodecs while streaming");
       return;
     }
     this.useWebCodecs = enabled;
-    this.log('useWebCodecs set to', enabled);
+    this.log("useWebCodecs set to", enabled);
   }
 
   /**
@@ -1285,12 +1297,12 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Only takes effect before streaming starts (cannot change mid-stream)
    */
   setEncoderOverrides(overrides: EncoderOverrides): void {
-    if (this.state === 'streaming') {
-      this.log('Cannot change encoder overrides while streaming');
+    if (this.state === "streaming") {
+      this.log("Cannot change encoder overrides while streaming");
       return;
     }
     this.encoderOverrides = overrides;
-    this.log('Encoder overrides set:', overrides);
+    this.log("Encoder overrides set:", overrides);
 
     if (this.sceneManager) {
       const baseConfig = this.compositorBaseConfig ?? this.sceneManager.getConfig();
@@ -1340,7 +1352,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Destroy the controller
    */
   destroy(): void {
-    this.log('Destroying IngestControllerV2');
+    this.log("Destroying IngestControllerV2");
     this.stopStatsPolling();
     this.reconnectionManager.destroy();
 
@@ -1371,6 +1383,6 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.audioMixer.destroy();
     this.removeAllListeners();
 
-    this.setState('destroyed');
+    this.setState("destroyed");
   }
 }

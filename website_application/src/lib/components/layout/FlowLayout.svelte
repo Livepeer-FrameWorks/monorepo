@@ -12,12 +12,7 @@
     class?: string;
   }
 
-  let {
-    children,
-    minWidth = "md",
-    gap = "default",
-    class: className = "",
-  }: Props = $props();
+  let { children, minWidth = "md", gap = "default", class: className = "" }: Props = $props();
 
   const flowClass = $derived.by(() => {
     const classes = ["flow-layout"];

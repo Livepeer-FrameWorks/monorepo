@@ -117,9 +117,7 @@
           </div>
         </div>
         <div class="slab-body--padded">
-          <p class="text-muted-foreground mb-4">
-            Enter your new password below.
-          </p>
+          <p class="text-muted-foreground mb-4">Enter your new password below.</p>
 
           <form onsubmit={handleSubmit} class="space-y-4">
             <div>
@@ -133,13 +131,14 @@
                 placeholder="Enter new password"
                 disabled={loading}
               />
-              <p class="mt-1 text-xs text-muted-foreground">
-                Must be at least 8 characters
-              </p>
+              <p class="mt-1 text-xs text-muted-foreground">Must be at least 8 characters</p>
             </div>
 
             <div>
-              <label for="confirmPassword" class="block text-sm font-medium mb-2 text-muted-foreground">
+              <label
+                for="confirmPassword"
+                class="block text-sm font-medium mb-2 text-muted-foreground"
+              >
                 Confirm Password
               </label>
               <Input
@@ -157,7 +156,11 @@
               </div>
             {/if}
 
-            <Button type="submit" class="w-full" disabled={loading || !password || !confirmPassword}>
+            <Button
+              type="submit"
+              class="w-full"
+              disabled={loading || !password || !confirmPassword}
+            >
               {#if loading}
                 <div class="loading-spinner mr-2"></div>
               {/if}

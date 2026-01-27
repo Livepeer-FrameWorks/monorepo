@@ -14,7 +14,7 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
   "dash/video/mp4": "DASH",
   "html5/video/mp4": "MP4",
   "html5/video/webm": "WebM",
-  "whep": "WHEP",
+  whep: "WHEP",
   "mist/html": "Mist",
   "mist/legacy": "Auto",
   "ws/video/mp4": "MEWS",
@@ -66,7 +66,7 @@ export interface DevModePanelProps {
  */
 const DevModePanel: React.FC<DevModePanelProps> = ({
   onSettingsChange,
-  playbackMode = 'auto',
+  playbackMode = "auto",
   onModeChange,
   onReload,
   streamInfo,
@@ -83,13 +83,16 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
   // Support both controlled and uncontrolled modes
   const [internalIsOpen, setInternalIsOpen] = useState(false);
   const isOpen = controlledIsOpen !== undefined ? controlledIsOpen : internalIsOpen;
-  const setIsOpen = useCallback((value: boolean) => {
-    if (onOpenChange) {
-      onOpenChange(value);
-    } else {
-      setInternalIsOpen(value);
-    }
-  }, [onOpenChange]);
+  const setIsOpen = useCallback(
+    (value: boolean) => {
+      if (onOpenChange) {
+        onOpenChange(value);
+      } else {
+        setInternalIsOpen(value);
+      }
+    },
+    [onOpenChange]
+  );
   const [activeTab, setActiveTab] = useState<"config" | "stats">("config");
   const [, setCurrentComboIndex] = useState(0);
   const [hoveredComboIndex, setHoveredComboIndex] = useState<number | null>(null);
@@ -180,7 +183,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
 
   // For backward compatibility (Next Option only cycles compatible)
   const combinations = useMemo(() => {
-    return allCombinations.filter(c => c.compatible);
+    return allCombinations.filter((c) => c.compatible);
   }, [allCombinations]);
 
   // Find current active combo index based on current player/source (in allCombinations)
@@ -220,18 +223,21 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
     });
   }, [combinations, activeCompatibleIndex, onSettingsChange]);
 
-  const handleSelectCombo = useCallback((index: number) => {
-    const combo = allCombinations[index];
-    if (!combo) return;
+  const handleSelectCombo = useCallback(
+    (index: number) => {
+      const combo = allCombinations[index];
+      if (!combo) return;
 
-    // Allow selecting even incompatible combos in dev mode (for testing)
-    setCurrentComboIndex(index);
-    onSettingsChange({
-      forcePlayer: combo.player,
-      forceType: combo.sourceType,
-      forceSource: combo.sourceIndex,
-    });
-  }, [allCombinations, onSettingsChange]);
+      // Allow selecting even incompatible combos in dev mode (for testing)
+      setCurrentComboIndex(index);
+      onSettingsChange({
+        forcePlayer: combo.player,
+        forceType: combo.sourceType,
+        forceSource: combo.sourceIndex,
+      });
+    },
+    [allCombinations, onSettingsChange]
+  );
 
   // Video stats - poll periodically when stats tab is open
   const [stats, setStats] = useState<{
@@ -324,20 +330,17 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
           <div className="fw-dev-section">
             <div className="fw-dev-label">Active</div>
             <div className="fw-dev-value">
-              {currentPlayer?.name || "None"}{" "}
-              <span className="fw-dev-value-arrow">→</span>{" "}
+              {currentPlayer?.name || "None"} <span className="fw-dev-value-arrow">→</span>{" "}
               {SOURCE_TYPE_LABELS[currentSource?.type || ""] || currentSource?.type || "—"}
             </div>
-            {nodeId && (
-              <div className="fw-dev-value-muted">Node: {nodeId}</div>
-            )}
+            {nodeId && <div className="fw-dev-value-muted">Node: {nodeId}</div>}
           </div>
 
           {/* Playback Mode Selector */}
           <div className="fw-dev-section">
             <div className="fw-dev-label">Playback Mode</div>
             <div className="fw-dev-mode-group">
-              {(['auto', 'low-latency', 'quality'] as const).map((mode) => (
+              {(["auto", "low-latency", "quality"] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -347,31 +350,25 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                     playbackMode === mode && "fw-dev-mode-btn--active"
                   )}
                 >
-                  {mode === 'low-latency' ? 'Low Lat' : mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  {mode === "low-latency"
+                    ? "Low Lat"
+                    : mode.charAt(0).toUpperCase() + mode.slice(1)}
                 </button>
               ))}
             </div>
             <div className="fw-dev-mode-desc">
-              {playbackMode === 'auto' && 'Balanced: MP4/WS → WHEP → HLS'}
-              {playbackMode === 'low-latency' && 'WHEP/WebRTC first (<1s delay)'}
-              {playbackMode === 'quality' && 'MP4/WS first, HLS fallback'}
+              {playbackMode === "auto" && "Balanced: MP4/WS → WHEP → HLS"}
+              {playbackMode === "low-latency" && "WHEP/WebRTC first (<1s delay)"}
+              {playbackMode === "quality" && "MP4/WS first, HLS fallback"}
             </div>
           </div>
 
           {/* Action buttons */}
           <div className="fw-dev-actions">
-            <button
-              type="button"
-              onClick={handleReload}
-              className="fw-dev-action-btn"
-            >
+            <button type="button" onClick={handleReload} className="fw-dev-action-btn">
               Reload
             </button>
-            <button
-              type="button"
-              onClick={handleNextCombo}
-              className="fw-dev-action-btn"
-            >
+            <button type="button" onClick={handleNextCombo} className="fw-dev-action-btn">
               Next Option
             </button>
           </div>
@@ -379,9 +376,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
           {/* Combo list */}
           <div className="fw-dev-section" style={{ padding: 0, borderBottom: 0 }}>
             <div className="fw-dev-list-header">
-              <span className="fw-dev-list-title">
-                Player Options ({combinations.length})
-              </span>
+              <span className="fw-dev-list-title">Player Options ({combinations.length})</span>
               {allCombinations.length > combinations.length && (
                 <button
                   type="button"
@@ -399,14 +394,13 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                   >
                     <path d="M6 9l6 6 6-6" />
                   </svg>
-                  {showDisabledPlayers ? "Hide" : "Show"} disabled ({allCombinations.length - combinations.length})
+                  {showDisabledPlayers ? "Hide" : "Show"} disabled (
+                  {allCombinations.length - combinations.length})
                 </button>
               )}
             </div>
             {allCombinations.length === 0 ? (
-              <div className="fw-dev-list-empty">
-                No stream info available
-              </div>
+              <div className="fw-dev-list-empty">No stream info available</div>
             ) : (
               <div>
                 {allCombinations.map((combo, index) => {
@@ -415,11 +409,13 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                   if (!combo.compatible && !isCodecIncompat && !showDisabledPlayers) return null;
 
                   const isActive = activeComboIndex === index;
-                  const typeLabel = SOURCE_TYPE_LABELS[combo.sourceType] || combo.sourceType.split("/").pop();
+                  const typeLabel =
+                    SOURCE_TYPE_LABELS[combo.sourceType] || combo.sourceType.split("/").pop();
 
                   // Determine score class
                   const getScoreClass = () => {
-                    if (!combo.compatible && !isCodecIncompat) return "fw-dev-combo-score--disabled";
+                    if (!combo.compatible && !isCodecIncompat)
+                      return "fw-dev-combo-score--disabled";
                     if (isCodecIncompat) return "fw-dev-combo-score--low";
                     if (combo.score >= 2) return "fw-dev-combo-score--high";
                     if (combo.score >= 1.5) return "fw-dev-combo-score--mid";
@@ -451,7 +447,8 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                           const row = e.currentTarget;
                           const containerRect = container.getBoundingClientRect();
                           const rowRect = row.getBoundingClientRect();
-                          const relativePosition = (rowRect.top - containerRect.top) / containerRect.height;
+                          const relativePosition =
+                            (rowRect.top - containerRect.top) / containerRect.height;
                           setTooltipAbove(relativePosition > 0.6);
                         }
                       }}
@@ -474,9 +471,10 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                         </span>
                         {/* Player + Protocol */}
                         <span className="fw-dev-combo-name">
-                          {combo.playerName}{" "}
-                          <span className="fw-dev-combo-arrow">→</span>{" "}
-                          <span className={cn("fw-dev-combo-type", getTypeClass())}>{typeLabel}</span>
+                          {combo.playerName} <span className="fw-dev-combo-arrow">→</span>{" "}
+                          <span className={cn("fw-dev-combo-type", getTypeClass())}>
+                            {typeLabel}
+                          </span>
                         </span>
                         {/* Score */}
                         <span className={cn("fw-dev-combo-score", getScoreClass())}>
@@ -486,50 +484,105 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
 
                       {/* Score breakdown tooltip */}
                       {hoveredComboIndex === index && (
-                        <div className={cn(
-                          "fw-dev-tooltip",
-                          tooltipAbove ? "fw-dev-tooltip--above" : "fw-dev-tooltip--below"
-                        )}>
+                        <div
+                          className={cn(
+                            "fw-dev-tooltip",
+                            tooltipAbove ? "fw-dev-tooltip--above" : "fw-dev-tooltip--below"
+                          )}
+                        >
                           {/* Full player/source info */}
                           <div className="fw-dev-tooltip-header">
                             <div className="fw-dev-tooltip-title">{combo.playerName}</div>
                             <div className="fw-dev-tooltip-subtitle">{combo.sourceType}</div>
-                            {combo.scoreBreakdown?.trackTypes && combo.scoreBreakdown.trackTypes.length > 0 && (
-                              <div className="fw-dev-tooltip-tracks">
-                                Tracks: <span className="fw-dev-tooltip-value">{combo.scoreBreakdown.trackTypes.join(', ')}</span>
-                              </div>
-                            )}
+                            {combo.scoreBreakdown?.trackTypes &&
+                              combo.scoreBreakdown.trackTypes.length > 0 && (
+                                <div className="fw-dev-tooltip-tracks">
+                                  Tracks:{" "}
+                                  <span className="fw-dev-tooltip-value">
+                                    {combo.scoreBreakdown.trackTypes.join(", ")}
+                                  </span>
+                                </div>
+                              )}
                           </div>
                           {combo.compatible && combo.scoreBreakdown ? (
                             <>
-                              <div className="fw-dev-tooltip-score">Score: {combo.score.toFixed(2)}</div>
-                              <div className="fw-dev-tooltip-row">
-                                Tracks [{combo.scoreBreakdown.trackTypes.join(', ')}]: <span className="fw-dev-tooltip-value">{combo.scoreBreakdown.trackScore.toFixed(2)}</span> <span className="fw-dev-tooltip-weight">x{combo.scoreBreakdown.weights.tracks}</span>
+                              <div className="fw-dev-tooltip-score">
+                                Score: {combo.score.toFixed(2)}
                               </div>
                               <div className="fw-dev-tooltip-row">
-                                Priority: <span className="fw-dev-tooltip-value">{combo.scoreBreakdown.priorityScore.toFixed(2)}</span> <span className="fw-dev-tooltip-weight">x{combo.scoreBreakdown.weights.priority}</span>
+                                Tracks [{combo.scoreBreakdown.trackTypes.join(", ")}]:{" "}
+                                <span className="fw-dev-tooltip-value">
+                                  {combo.scoreBreakdown.trackScore.toFixed(2)}
+                                </span>{" "}
+                                <span className="fw-dev-tooltip-weight">
+                                  x{combo.scoreBreakdown.weights.tracks}
+                                </span>
                               </div>
                               <div className="fw-dev-tooltip-row">
-                                Source: <span className="fw-dev-tooltip-value">{combo.scoreBreakdown.sourceScore.toFixed(2)}</span> <span className="fw-dev-tooltip-weight">x{combo.scoreBreakdown.weights.source}</span>
+                                Priority:{" "}
+                                <span className="fw-dev-tooltip-value">
+                                  {combo.scoreBreakdown.priorityScore.toFixed(2)}
+                                </span>{" "}
+                                <span className="fw-dev-tooltip-weight">
+                                  x{combo.scoreBreakdown.weights.priority}
+                                </span>
+                              </div>
+                              <div className="fw-dev-tooltip-row">
+                                Source:{" "}
+                                <span className="fw-dev-tooltip-value">
+                                  {combo.scoreBreakdown.sourceScore.toFixed(2)}
+                                </span>{" "}
+                                <span className="fw-dev-tooltip-weight">
+                                  x{combo.scoreBreakdown.weights.source}
+                                </span>
                               </div>
                               {combo.scoreBreakdown.reliabilityScore !== undefined && (
                                 <div className="fw-dev-tooltip-row">
-                                  Reliability: <span className="fw-dev-tooltip-value">{combo.scoreBreakdown.reliabilityScore.toFixed(2)}</span> <span className="fw-dev-tooltip-weight">x{combo.scoreBreakdown.weights.reliability ?? 0}</span>
+                                  Reliability:{" "}
+                                  <span className="fw-dev-tooltip-value">
+                                    {combo.scoreBreakdown.reliabilityScore.toFixed(2)}
+                                  </span>{" "}
+                                  <span className="fw-dev-tooltip-weight">
+                                    x{combo.scoreBreakdown.weights.reliability ?? 0}
+                                  </span>
                                 </div>
                               )}
-                              {combo.scoreBreakdown.modeBonus !== undefined && combo.scoreBreakdown.modeBonus !== 0 && (
-                                <div className="fw-dev-tooltip-row">
-                                  Mode ({playbackMode}): <span className="fw-dev-tooltip-bonus">+{combo.scoreBreakdown.modeBonus.toFixed(2)}</span> <span className="fw-dev-tooltip-weight">x{combo.scoreBreakdown.weights.mode ?? 0}</span>
-                                </div>
-                              )}
-                              {combo.scoreBreakdown.routingBonus !== undefined && combo.scoreBreakdown.routingBonus !== 0 && (
-                                <div className="fw-dev-tooltip-row">
-                                  Routing: <span className={combo.scoreBreakdown.routingBonus > 0 ? "fw-dev-tooltip-bonus" : "fw-dev-tooltip-penalty"}>{combo.scoreBreakdown.routingBonus > 0 ? '+' : ''}{combo.scoreBreakdown.routingBonus.toFixed(2)}</span> <span className="fw-dev-tooltip-weight">x{combo.scoreBreakdown.weights.routing ?? 0}</span>
-                                </div>
-                              )}
+                              {combo.scoreBreakdown.modeBonus !== undefined &&
+                                combo.scoreBreakdown.modeBonus !== 0 && (
+                                  <div className="fw-dev-tooltip-row">
+                                    Mode ({playbackMode}):{" "}
+                                    <span className="fw-dev-tooltip-bonus">
+                                      +{combo.scoreBreakdown.modeBonus.toFixed(2)}
+                                    </span>{" "}
+                                    <span className="fw-dev-tooltip-weight">
+                                      x{combo.scoreBreakdown.weights.mode ?? 0}
+                                    </span>
+                                  </div>
+                                )}
+                              {combo.scoreBreakdown.routingBonus !== undefined &&
+                                combo.scoreBreakdown.routingBonus !== 0 && (
+                                  <div className="fw-dev-tooltip-row">
+                                    Routing:{" "}
+                                    <span
+                                      className={
+                                        combo.scoreBreakdown.routingBonus > 0
+                                          ? "fw-dev-tooltip-bonus"
+                                          : "fw-dev-tooltip-penalty"
+                                      }
+                                    >
+                                      {combo.scoreBreakdown.routingBonus > 0 ? "+" : ""}
+                                      {combo.scoreBreakdown.routingBonus.toFixed(2)}
+                                    </span>{" "}
+                                    <span className="fw-dev-tooltip-weight">
+                                      x{combo.scoreBreakdown.weights.routing ?? 0}
+                                    </span>
+                                  </div>
+                                )}
                             </>
                           ) : (
-                            <div className="fw-dev-tooltip-error">{combo.incompatibleReason || 'Incompatible'}</div>
+                            <div className="fw-dev-tooltip-error">
+                              {combo.incompatibleReason || "Incompatible"}
+                            </div>
                           )}
                         </div>
                       )}
@@ -549,30 +602,46 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
           <div className="fw-dev-section">
             <div className="fw-dev-label">Playback Rate</div>
             <div className="fw-dev-rate">
-              <div className={cn(
-                "fw-dev-rate-value",
-                playbackScore >= 0.95 && playbackScore <= 1.05 ? "fw-dev-stat-value--good" :
-                playbackScore > 1.05 ? "fw-dev-stat-value--accent" :
-                playbackScore >= 0.75 ? "fw-dev-stat-value--warn" :
-                "fw-dev-stat-value--bad"
-              )}>
+              <div
+                className={cn(
+                  "fw-dev-rate-value",
+                  playbackScore >= 0.95 && playbackScore <= 1.05
+                    ? "fw-dev-stat-value--good"
+                    : playbackScore > 1.05
+                      ? "fw-dev-stat-value--accent"
+                      : playbackScore >= 0.75
+                        ? "fw-dev-stat-value--warn"
+                        : "fw-dev-stat-value--bad"
+                )}
+              >
                 {playbackScore.toFixed(2)}×
               </div>
               <div className="fw-dev-rate-status">
-                {playbackScore >= 0.95 && playbackScore <= 1.05 ? "realtime" :
-                 playbackScore > 1.05 ? "catching up" :
-                 playbackScore >= 0.75 ? "slightly slow" :
-                 "stalling"}
+                {playbackScore >= 0.95 && playbackScore <= 1.05
+                  ? "realtime"
+                  : playbackScore > 1.05
+                    ? "catching up"
+                    : playbackScore >= 0.75
+                      ? "slightly slow"
+                      : "stalling"}
               </div>
             </div>
             <div className="fw-dev-rate-stats">
-              <span className={qualityScore >= 75 ? "fw-dev-stat-value--good" : "fw-dev-stat-value--bad"}>
+              <span
+                className={
+                  qualityScore >= 75 ? "fw-dev-stat-value--good" : "fw-dev-stat-value--bad"
+                }
+              >
                 Quality: {qualityScore}/100
               </span>
-              <span className={stallCount === 0 ? "fw-dev-stat-value--good" : "fw-dev-stat-value--warn"}>
+              <span
+                className={stallCount === 0 ? "fw-dev-stat-value--good" : "fw-dev-stat-value--warn"}
+              >
                 Stalls: {stallCount}
               </span>
-              <span className={frameDropRate < 1 ? "fw-dev-stat-value--good" : "fw-dev-stat-value--bad"}>
+              <span
+                className={frameDropRate < 1 ? "fw-dev-stat-value--good" : "fw-dev-stat-value--bad"}
+              >
                 Drops: {frameDropRate.toFixed(1)}%
               </span>
             </div>
@@ -616,16 +685,14 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
               {nodeId && (
                 <div className="fw-dev-stat">
                   <span className="fw-dev-stat-label">Node ID</span>
-                  <span className="fw-dev-stat-value truncate" style={{ maxWidth: '150px' }}>
+                  <span className="fw-dev-stat-value truncate" style={{ maxWidth: "150px" }}>
                     {nodeId}
                   </span>
                 </div>
               )}
             </div>
           ) : (
-            <div className="fw-dev-list-empty">
-              No video element available
-            </div>
+            <div className="fw-dev-list-empty">No video element available</div>
           )}
 
           {/* Player-specific Stats (HLS.js / WebRTC) */}
@@ -633,20 +700,23 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
             <div>
               <div className="fw-dev-list-header fw-dev-section-header">
                 <span className="fw-dev-list-title">
-                  {playerStats.type === 'hls' ? 'HLS.js Stats' :
-                   playerStats.type === 'webrtc' ? 'WebRTC Stats' : 'Player Stats'}
+                  {playerStats.type === "hls"
+                    ? "HLS.js Stats"
+                    : playerStats.type === "webrtc"
+                      ? "WebRTC Stats"
+                      : "Player Stats"}
                 </span>
               </div>
 
               {/* HLS-specific stats */}
-              {playerStats.type === 'hls' && (
+              {playerStats.type === "hls" && (
                 <>
                   <div className="fw-dev-stat">
                     <span className="fw-dev-stat-label">Bitrate</span>
                     <span className="fw-dev-stat-value--accent">
                       {playerStats.currentBitrate > 0
                         ? `${Math.round(playerStats.currentBitrate / 1000)} kbps`
-                        : 'N/A'}
+                        : "N/A"}
                     </span>
                   </div>
                   <div className="fw-dev-stat">
@@ -654,19 +724,26 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                     <span className="fw-dev-stat-value">
                       {playerStats.bandwidthEstimate > 0
                         ? `${Math.round(playerStats.bandwidthEstimate / 1000)} kbps`
-                        : 'N/A'}
+                        : "N/A"}
                     </span>
                   </div>
                   <div className="fw-dev-stat">
                     <span className="fw-dev-stat-label">Level</span>
                     <span className="fw-dev-stat-value">
-                      {playerStats.currentLevel >= 0 ? playerStats.currentLevel : 'Auto'} / {playerStats.levels?.length || 0}
+                      {playerStats.currentLevel >= 0 ? playerStats.currentLevel : "Auto"} /{" "}
+                      {playerStats.levels?.length || 0}
                     </span>
                   </div>
                   {playerStats.latency !== undefined && (
                     <div className="fw-dev-stat">
                       <span className="fw-dev-stat-label">Latency</span>
-                      <span className={playerStats.latency > 5000 ? "fw-dev-stat-value--warn" : "fw-dev-stat-value"}>
+                      <span
+                        className={
+                          playerStats.latency > 5000
+                            ? "fw-dev-stat-value--warn"
+                            : "fw-dev-stat-value"
+                        }
+                      >
                         {Math.round(playerStats.latency)} ms
                       </span>
                     </div>
@@ -675,7 +752,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
               )}
 
               {/* WebRTC-specific stats */}
-              {playerStats.type === 'webrtc' && (
+              {playerStats.type === "webrtc" && (
                 <>
                   {playerStats.video && (
                     <>
@@ -684,7 +761,7 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                         <span className="fw-dev-stat-value--accent">
                           {playerStats.video.bitrate > 0
                             ? `${Math.round(playerStats.video.bitrate / 1000)} kbps`
-                            : 'N/A'}
+                            : "N/A"}
                         </span>
                       </div>
                       <div className="fw-dev-stat">
@@ -696,21 +773,39 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                       <div className="fw-dev-stat">
                         <span className="fw-dev-stat-label">Frames</span>
                         <span className="fw-dev-stat-value">
-                          {playerStats.video.framesDecoded} decoded,{' '}
-                          <span className={playerStats.video.frameDropRate > 1 ? "fw-dev-stat-value--bad" : "fw-dev-stat-value--good"}>
+                          {playerStats.video.framesDecoded} decoded,{" "}
+                          <span
+                            className={
+                              playerStats.video.frameDropRate > 1
+                                ? "fw-dev-stat-value--bad"
+                                : "fw-dev-stat-value--good"
+                            }
+                          >
                             {playerStats.video.framesDropped} dropped
                           </span>
                         </span>
                       </div>
                       <div className="fw-dev-stat">
                         <span className="fw-dev-stat-label">Packet Loss</span>
-                        <span className={playerStats.video.packetLossRate > 1 ? "fw-dev-stat-value--bad" : "fw-dev-stat-value--good"}>
+                        <span
+                          className={
+                            playerStats.video.packetLossRate > 1
+                              ? "fw-dev-stat-value--bad"
+                              : "fw-dev-stat-value--good"
+                          }
+                        >
                           {playerStats.video.packetLossRate.toFixed(2)}%
                         </span>
                       </div>
                       <div className="fw-dev-stat">
                         <span className="fw-dev-stat-label">Jitter</span>
-                        <span className={playerStats.video.jitter > 30 ? "fw-dev-stat-value--warn" : "fw-dev-stat-value"}>
+                        <span
+                          className={
+                            playerStats.video.jitter > 30
+                              ? "fw-dev-stat-value--warn"
+                              : "fw-dev-stat-value"
+                          }
+                        >
                           {playerStats.video.jitter.toFixed(1)} ms
                         </span>
                       </div>
@@ -725,7 +820,13 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
                   {playerStats.network && (
                     <div className="fw-dev-stat">
                       <span className="fw-dev-stat-label">RTT</span>
-                      <span className={playerStats.network.rtt > 200 ? "fw-dev-stat-value--warn" : "fw-dev-stat-value"}>
+                      <span
+                        className={
+                          playerStats.network.rtt > 200
+                            ? "fw-dev-stat-value--warn"
+                            : "fw-dev-stat-value"
+                        }
+                      >
                         {Math.round(playerStats.network.rtt)} ms
                       </span>
                     </div>
@@ -746,36 +847,32 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
               {Object.entries(mistStreamInfo.meta.tracks).map(([id, track]) => (
                 <div key={id} className="fw-dev-track">
                   <div className="fw-dev-track-header">
-                    <span className={cn(
-                      "fw-dev-track-badge",
-                      track.type === 'video' ? "fw-dev-track-badge--video" :
-                      track.type === 'audio' ? "fw-dev-track-badge--audio" :
-                      "fw-dev-track-badge--other"
-                    )}>
+                    <span
+                      className={cn(
+                        "fw-dev-track-badge",
+                        track.type === "video"
+                          ? "fw-dev-track-badge--video"
+                          : track.type === "audio"
+                            ? "fw-dev-track-badge--audio"
+                            : "fw-dev-track-badge--other"
+                      )}
+                    >
                       {track.type}
                     </span>
                     <span className="fw-dev-track-codec">{track.codec}</span>
                     <span className="fw-dev-track-id">#{id}</span>
                   </div>
                   <div className="fw-dev-track-meta">
-                    {track.type === 'video' && track.width && track.height && (
-                      <span>{track.width}×{track.height}</span>
+                    {track.type === "video" && track.width && track.height && (
+                      <span>
+                        {track.width}×{track.height}
+                      </span>
                     )}
-                    {track.bps && (
-                      <span>{Math.round(track.bps / 1000)} kbps</span>
-                    )}
-                    {track.fpks && (
-                      <span>{Math.round(track.fpks / 1000)} fps</span>
-                    )}
-                    {track.type === 'audio' && track.channels && (
-                      <span>{track.channels}ch</span>
-                    )}
-                    {track.type === 'audio' && track.rate && (
-                      <span>{track.rate} Hz</span>
-                    )}
-                    {track.lang && (
-                      <span>{track.lang}</span>
-                    )}
+                    {track.bps && <span>{Math.round(track.bps / 1000)} kbps</span>}
+                    {track.fpks && <span>{Math.round(track.fpks / 1000)} fps</span>}
+                    {track.type === "audio" && track.channels && <span>{track.channels}ch</span>}
+                    {track.type === "audio" && track.rate && <span>{track.rate} Hz</span>}
+                    {track.lang && <span>{track.lang}</span>}
                   </div>
                 </div>
               ))}
@@ -783,14 +880,18 @@ const DevModePanel: React.FC<DevModePanelProps> = ({
           )}
 
           {/* Debug: Show if mistStreamInfo is missing tracks */}
-          {mistStreamInfo && (!mistStreamInfo.meta?.tracks || Object.keys(mistStreamInfo.meta.tracks).length === 0) && (
-            <div className="fw-dev-no-tracks">
-              <span className="fw-dev-no-tracks-text">
-                No track data available
-                {mistStreamInfo.type && <span className="fw-dev-no-tracks-type">({mistStreamInfo.type})</span>}
-              </span>
-            </div>
-          )}
+          {mistStreamInfo &&
+            (!mistStreamInfo.meta?.tracks ||
+              Object.keys(mistStreamInfo.meta.tracks).length === 0) && (
+              <div className="fw-dev-no-tracks">
+                <span className="fw-dev-no-tracks-text">
+                  No track data available
+                  {mistStreamInfo.type && (
+                    <span className="fw-dev-no-tracks-type">({mistStreamInfo.type})</span>
+                  )}
+                </span>
+              </div>
+            )}
         </div>
       )}
     </div>

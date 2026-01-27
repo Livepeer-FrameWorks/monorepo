@@ -1,17 +1,27 @@
-import { forwardRef } from 'react'
-import { cn } from '@/lib/utils'
+import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
 
 const MarketingOutline = forwardRef(
   (
-    { as: Component = 'div', label, labelPosition = 'corner', accent = 'accent', glow = false, contentClassName, className, children, ...props },
+    {
+      as: Component = "div",
+      label,
+      labelPosition = "corner",
+      accent = "accent",
+      glow = false,
+      contentClassName,
+      className,
+      children,
+      ...props
+    },
     ref
   ) => (
     <Component
       ref={ref}
-      className={cn('marketing-outline', className)}
+      className={cn("marketing-outline", className)}
       data-accent={accent}
       data-label-position={labelPosition}
-      data-glow={glow ? 'true' : 'false'}
+      data-glow={glow ? "true" : "false"}
       {...props}
     >
       {label ? (
@@ -19,11 +29,11 @@ const MarketingOutline = forwardRef(
           {label}
         </span>
       ) : null}
-      <div className={cn('marketing-outline__content', contentClassName)}>{children}</div>
+      <div className={cn("marketing-outline__content", contentClassName)}>{children}</div>
     </Component>
   )
-)
+);
 
-MarketingOutline.displayName = 'MarketingOutline'
+MarketingOutline.displayName = "MarketingOutline";
 
-export default MarketingOutline
+export default MarketingOutline;

@@ -8,7 +8,7 @@
 // Latency Profile Types
 // ============================================================================
 
-export type LatencyProfileName = 'ultra-low' | 'low' | 'balanced' | 'quality';
+export type LatencyProfileName = "ultra-low" | "low" | "balanced" | "quality";
 
 export interface LatencyProfile {
   name: string;
@@ -34,7 +34,7 @@ export interface LatencyProfile {
 // Raw Chunk Types (12-byte binary header protocol)
 // ============================================================================
 
-export type ChunkType = 'key' | 'delta' | 'init';
+export type ChunkType = "key" | "delta" | "init";
 
 export interface RawChunk {
   /** Track index from server */
@@ -53,7 +53,7 @@ export interface RawChunk {
 // Track Types
 // ============================================================================
 
-export type TrackType = 'video' | 'audio' | 'meta';
+export type TrackType = "video" | "audio" | "meta";
 
 export interface TrackInfo {
   idx: number;
@@ -76,17 +76,17 @@ export interface TrackInfo {
 // ============================================================================
 
 export type ControlMessageType =
-  | 'codec_data'
-  | 'info'
-  | 'on_time'
-  | 'tracks'
-  | 'set_speed'
-  | 'pause'
-  | 'on_stop'
-  | 'error';
+  | "codec_data"
+  | "info"
+  | "on_time"
+  | "tracks"
+  | "set_speed"
+  | "pause"
+  | "on_stop"
+  | "error";
 
 export interface CodecDataMessage {
-  type: 'codec_data';
+  type: "codec_data";
   /** Current stream position in milliseconds */
   current?: number;
   /** List of WebCodecs-compatible codec strings (e.g., "avc1.42001f", "mp4a.40.2") */
@@ -100,7 +100,7 @@ export interface CodecDataMessage {
  * Sent by MistServer with full stream information
  */
 export interface InfoMessage {
-  type: 'info';
+  type: "info";
   /** Stream metadata including tracks */
   meta?: {
     tracks?: Record<string, TrackInfo>;
@@ -110,7 +110,7 @@ export interface InfoMessage {
 }
 
 export interface OnTimeMessage {
-  type: 'on_time';
+  type: "on_time";
   /** Current playback time (seconds) */
   current: number;
   /** Total duration (seconds, Infinity for live) */
@@ -122,34 +122,34 @@ export interface OnTimeMessage {
   /** Server-reported jitter (ms) */
   jitter?: number;
   /** Current play rate */
-  play_rate?: number | 'auto';
+  play_rate?: number | "auto";
   /** Current play rate (alias) */
-  play_rate_curr?: number | 'auto' | 'fast-forward';
+  play_rate_curr?: number | "auto" | "fast-forward";
   /** Active track indices */
   tracks?: number[];
 }
 
 export interface TracksMessage {
-  type: 'tracks';
+  type: "tracks";
   tracks: TrackInfo[];
   codecs?: string[];
 }
 
 export interface SetSpeedMessage {
-  type: 'set_speed';
-  play_rate: number | 'auto';
+  type: "set_speed";
+  play_rate: number | "auto";
 }
 
 export interface PauseMessage {
-  type: 'pause';
+  type: "pause";
 }
 
 export interface OnStopMessage {
-  type: 'on_stop';
+  type: "on_stop";
 }
 
 export interface ErrorMessage {
-  type: 'error';
+  type: "error";
   message: string;
 }
 
@@ -165,32 +165,32 @@ export type ControlMessage =
 
 // Outbound control commands
 export interface PlayCommand {
-  type: 'play';
+  type: "play";
 }
 
 export interface HoldCommand {
-  type: 'hold';
+  type: "hold";
 }
 
 export interface SeekCommand {
-  type: 'seek';
+  type: "seek";
   seek_time: number; // milliseconds
   ff_add?: number; // fast-forward buffer request (ms)
 }
 
 export interface SetSpeedCommand {
-  type: 'set_speed';
-  play_rate: number | 'auto';
+  type: "set_speed";
+  play_rate: number | "auto";
 }
 
 export interface RequestCodecDataCommand {
-  type: 'request_codec_data';
+  type: "request_codec_data";
   /** Supported codec combinations - array of [video codecs[], audio codecs[]] */
   supported_combinations?: string[][][];
 }
 
 export interface FastForwardCommand {
-  type: 'fast_forward';
+  type: "fast_forward";
   ff_add: number; // milliseconds of additional data to request
 }
 
@@ -208,29 +208,29 @@ export type ControlCommand =
 
 // Main thread -> Worker messages
 export interface CreatePipelineMessage {
-  type: 'create';
+  type: "create";
   idx: number;
   track: TrackInfo;
   opts: {
     optimizeForLatency: boolean;
     /** Payload format: 'avcc' (length-prefixed) or 'annexb' (start-code delimited) */
-    payloadFormat?: 'avcc' | 'annexb';
+    payloadFormat?: "avcc" | "annexb";
   };
   uid?: number;
 }
 
 export interface ConfigurePipelineMessage {
-  type: 'configure';
+  type: "configure";
   idx: number;
   header: Uint8Array;
   uid?: number;
 }
 
 export interface ReceiveChunkMessage {
-  type: 'receive';
+  type: "receive";
   idx: number;
   chunk: {
-    type: 'key' | 'delta';
+    type: "key" | "delta";
     timestamp: number; // microseconds
     data: Uint8Array;
   };
@@ -238,28 +238,28 @@ export interface ReceiveChunkMessage {
 }
 
 export interface SetWritableMessage {
-  type: 'setwritable';
+  type: "setwritable";
   idx: number;
   writable: WritableStream;
   uid?: number;
 }
 
 export interface CreateGeneratorMessage {
-  type: 'creategenerator';
+  type: "creategenerator";
   idx: number;
   uid?: number;
 }
 
 export interface ClosePipelineMessage {
-  type: 'close';
+  type: "close";
   idx: number;
   waitEmpty?: boolean;
   uid?: number;
 }
 
 export interface FrameTimingMessage {
-  type: 'frametiming';
-  action: 'setSpeed' | 'reset' | 'setPaused';
+  type: "frametiming";
+  action: "setSpeed" | "reset" | "setPaused";
   speed?: number;
   tweak?: number;
   paused?: boolean;
@@ -267,28 +267,28 @@ export interface FrameTimingMessage {
 }
 
 export interface SeekWorkerMessage {
-  type: 'seek';
+  type: "seek";
   seekTime: number; // milliseconds
   uid?: number;
 }
 
 export interface DebuggingMessage {
-  type: 'debugging';
-  value: boolean | 'verbose';
+  type: "debugging";
+  value: boolean | "verbose";
   uid?: number;
 }
 
 export interface FrameStepMessage {
-  type: 'framestep';
+  type: "framestep";
   direction: -1 | 1;
   uid?: number;
 }
 
 export interface WriteFrameResponseMessage {
-  type: 'writeframe';
+  type: "writeframe";
   idx: number;
   uid?: number;
-  status: 'ok' | 'error';
+  status: "ok" | "error";
   error?: string;
 }
 
@@ -307,39 +307,39 @@ export type MainToWorkerMessage =
 
 // Worker -> Main thread messages
 export interface AddTrackMessage {
-  type: 'addtrack';
+  type: "addtrack";
   idx: number;
   track?: MediaStreamTrack; // Safari only
   uid?: number;
 }
 
 export interface RemoveTrackMessage {
-  type: 'removetrack';
+  type: "removetrack";
   idx: number;
   uid?: number;
 }
 
 export interface SetPlaybackRateMessage {
-  type: 'setplaybackrate';
+  type: "setplaybackrate";
   speed: number;
   uid?: number;
 }
 
 export interface ClosedMessage {
-  type: 'closed';
+  type: "closed";
   idx: number;
   uid?: number;
 }
 
 export interface LogMessage {
-  type: 'log';
+  type: "log";
   msg: string;
-  level?: 'info' | 'warn' | 'error';
+  level?: "info" | "warn" | "error";
   uid?: number;
 }
 
 export interface SendEventMessage {
-  type: 'sendevent';
+  type: "sendevent";
   kind: string;
   message?: string;
   time?: number;
@@ -348,21 +348,21 @@ export interface SendEventMessage {
 }
 
 export interface StatsMessage {
-  type: 'stats';
+  type: "stats";
   stats: WorkerStats;
   uid?: number;
 }
 
 export interface AckMessage {
-  type: 'ack';
+  type: "ack";
   idx?: number;
   uid?: number;
-  status?: 'ok' | 'error';
+  status?: "ok" | "error";
   error?: string;
 }
 
 export interface WriteFrameMessage {
-  type: 'writeframe';
+  type: "writeframe";
   idx: number;
   frame: AudioData;
   uid?: number;

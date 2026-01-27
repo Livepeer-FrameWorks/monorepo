@@ -37,8 +37,7 @@ export function extractOperationType(query: string): OperationType {
   if (withoutComments.startsWith("mutation")) return "mutation";
   if (withoutComments.startsWith("subscription")) return "subscription";
   if (withoutComments.startsWith("fragment")) return "fragment";
-  if (withoutComments.startsWith("query") || withoutComments.startsWith("{"))
-    return "query";
+  if (withoutComments.startsWith("query") || withoutComments.startsWith("{")) return "query";
 
   // Check for shorthand query (no keyword)
   if (/^\s*\{/.test(withoutComments)) return "query";
@@ -54,9 +53,7 @@ export function extractOperationName(query: string): string {
   const withoutComments = stripComments(query);
 
   // Match: query|mutation|subscription|fragment OperationName
-  const match = withoutComments.match(
-    /^(query|mutation|subscription|fragment)\s+(\w+)/,
-  );
+  const match = withoutComments.match(/^(query|mutation|subscription|fragment)\s+(\w+)/);
   if (match) {
     return match[2];
   }
@@ -79,9 +76,7 @@ function stripComments(content: string): string {
 /**
  * Extract variable definitions from a GraphQL query string
  */
-export function extractVariableDefinitions(
-  query: string,
-): VariableDefinition[] {
+export function extractVariableDefinitions(query: string): VariableDefinition[] {
   const variables: VariableDefinition[] = [];
 
   // Match the variable definition block: ($var1: Type!, $var2: Type)
@@ -149,9 +144,7 @@ function parseVariableDefinition(def: string): VariableDefinition | null {
     type,
     required: type.endsWith("!"),
     isList: type.startsWith("["),
-    defaultValue: defaultStr
-      ? parseDefaultValue(defaultStr.trim(), type)
-      : undefined,
+    defaultValue: defaultStr ? parseDefaultValue(defaultStr.trim(), type) : undefined,
   };
 }
 
@@ -205,9 +198,7 @@ export function extractDescription(content: string): string | undefined {
 /**
  * Generate default variable values based on type
  */
-export function generateDefaultVariables(
-  variables: VariableDefinition[],
-): Record<string, unknown> {
+export function generateDefaultVariables(variables: VariableDefinition[]): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};
 
   for (const v of variables) {
@@ -437,10 +428,7 @@ function getDefaultForInputType(typeName: string): unknown {
 /**
  * Parse a complete .gql file content into a ParsedOperation
  */
-export function parseGqlFile(
-  content: string,
-  filePath?: string,
-): ParsedOperation {
+export function parseGqlFile(content: string, filePath?: string): ParsedOperation {
   const description = extractDescription(content);
   const type = extractOperationType(content);
   const name = extractOperationName(content);
@@ -482,10 +470,7 @@ export function stripClientDirectives(query: string): string {
   for (const directive of clientDirectives) {
     // Remove directive with optional arguments: @directive or @directive(...)
     // This regex handles @directive, @directive(...), and preserves surrounding whitespace
-    const pattern = new RegExp(
-      `\\s*${directive.replace("@", "@")}(?:\\([^)]*\\))?`,
-      "g",
-    );
+    const pattern = new RegExp(`\\s*${directive.replace("@", "@")}(?:\\([^)]*\\))?`, "g");
     result = result.replace(pattern, "");
   }
 
@@ -513,10 +498,7 @@ export function extractFragmentSpreads(query: string): string[] {
 /**
  * Get helpful description for common variable patterns
  */
-export function getVariableHint(
-  name: string,
-  type: string,
-): string | undefined {
+export function getVariableHint(name: string, type: string): string | undefined {
   // Pagination variables
   if (name === "first" && type.includes("Int")) {
     return "Number of items per page";

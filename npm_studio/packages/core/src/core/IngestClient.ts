@@ -3,12 +3,8 @@
  * Mirrors GatewayClient from npm_player for consistency
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import type {
-  IngestClientConfig,
-  IngestClientEvents,
-  IngestEndpoints,
-} from '../types';
+import { TypedEventEmitter } from "./EventEmitter";
+import type { IngestClientConfig, IngestClientEvents, IngestEndpoints } from "../types";
 
 const RESOLVE_INGEST_QUERY = `
   query ResolveIngest($streamKey: String!) {
@@ -71,13 +67,13 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
     const { gatewayUrl, streamKey, authToken, maxRetries, initialDelayMs } = this.config;
 
     this.abortController = new AbortController();
-    this.emit('statusChange', { status: 'loading' });
+    this.emit("statusChange", { status: "loading" });
 
     try {
       const response = await fetch(gatewayUrl, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
         body: JSON.stringify({
@@ -94,12 +90,12 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
       const payload = await response.json();
 
       if (payload.errors?.length > 0) {
-        throw new Error(payload.errors[0].message || 'GraphQL error');
+        throw new Error(payload.errors[0].message || "GraphQL error");
       }
 
       const data = payload.data?.resolveIngestEndpoint;
       if (!data) {
-        throw new Error('No data returned from resolveIngestEndpoint');
+        throw new Error("No data returned from resolveIngestEndpoint");
       }
 
       this.endpoints = {
@@ -109,25 +105,25 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
       };
 
       this.retryCount = 0;
-      this.emit('endpointsResolved', { endpoints: this.endpoints });
-      this.emit('statusChange', { status: 'ready' });
+      this.emit("endpointsResolved", { endpoints: this.endpoints });
+      this.emit("statusChange", { status: "ready" });
 
       return this.endpoints;
     } catch (error) {
-      if ((error as Error).name === 'AbortError') {
-        this.emit('statusChange', { status: 'idle' });
+      if ((error as Error).name === "AbortError") {
+        this.emit("statusChange", { status: "idle" });
         throw error;
       }
 
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
       // Retry logic
       if (this.retryCount < (maxRetries || 3)) {
         this.retryCount++;
         const delay = (initialDelayMs || 1000) * Math.pow(2, this.retryCount - 1);
 
-        this.emit('statusChange', {
-          status: 'loading',
+        this.emit("statusChange", {
+          status: "loading",
           error: `Retrying (${this.retryCount}/${maxRetries})...`,
         });
 
@@ -138,7 +134,7 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
         return this.resolve();
       }
 
-      this.emit('statusChange', { status: 'error', error: errorMessage });
+      this.emit("statusChange", { status: "error", error: errorMessage });
       throw new Error(`Failed to resolve ingest endpoint: ${errorMessage}`);
     }
   }

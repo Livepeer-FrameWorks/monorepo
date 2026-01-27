@@ -5,7 +5,7 @@ sidebar:
   order: 100
 ---
 
-import { Aside, Badge } from '@astrojs/starlight/components';
+import { Aside, Badge } from "@astrojs/starlight/components";
 
 This document outlines the development trajectory for Frameworks. We believe in building in the open, giving you full visibility into what is live, what is currently being built, and what we plan to tackle next.
 
@@ -14,23 +14,23 @@ Please note that while we strive for accuracy, priorities can evolve based on us
 For full context, history, and status updates, see GitHub Projects (public): https://github.com/orgs/Livepeer-FrameWorks/projects
 
 <Aside type="note" title="Status Key">
-- **Done**: Live in production.
-- **In Progress**: Work is underway; may have rough edges.
-- **In the Pipeline**: In design or early prototype.
-- **Planned**: On the backlog.
+  - **Done**: Live in production. - **In Progress**: Work is underway; may have rough edges. - **In
+  the Pipeline**: In design or early prototype. - **Planned**: On the backlog.
 </Aside>
 
 ## Done
 
-*Rotating highlight of recently shipped, production‑ready capabilities. For full history, use GitHub Projects.*
+_Rotating highlight of recently shipped, production‑ready capabilities. For full history, use GitHub Projects._
 
 ### Video Engine
+
 - **Ingest**: RTMP, SRT, and WHIP support.
 - **Delivery**: Low-latency HLS, WebRTC, and DASH.
 - **Stream Control**: Stream CRUD, multiple keys per stream, and playback IDs.
 - **Media**: DVR recording (with retention policies), server-side clipping, and VOD uploads.
 
 ### Core Platform
+
 - **Tenancy**: Native multi-tenant isolation.
 - **Auth**: JWT and API Token management.
 - **Billing**: Usage tracking, cost breakdowns, and invoice generation.
@@ -38,12 +38,14 @@ For full context, history, and status updates, see GitHub Projects (public): htt
 - **Reliability**: Service health endpoints are internal only; a public status page is not yet implemented (tracked in GitHub Projects).
 
 ### Data & Analytics
+
 - **Real-time**: Viewer counts and stream health metrics (buffer, packet loss).
 - **Insights**: Geographic breakdowns (Country/City).
 - **Pipeline**: Kafka → ClickHouse analytics pipeline.
 - **System**: Node performance metrics.
 
 ### Developer Experience
+
 - **API**: GraphQL API with subscriptions and dashboard Explorer.
 - **Components**: Web Player (NPM) and StreamCrafter (Broadcasting) SDKs.
 - **MCP Server**: AI agent integration via Model Context Protocol.
@@ -62,22 +64,25 @@ For full context, history, and status updates, see GitHub Projects (public): htt
 
 ## In Progress
 
-*Active development. Core functionality is established; work is focused on full integration, UI exposure, and production hardening.*
+_Active development. Core functionality is established; work is focused on full integration, UI exposure, and production hardening._
 
 ### Platform & Infrastructure
+
 - **Cloud Federation**: Hardening edge node connectivity and production-grade subdomain routing.
 - **Cluster Provisioning**: Finalizing end-to-end validation for CLI-based deployment workflows, including on-demand control-plane services (Foghorn).
 
 ### Product & Services
+
 - **Livepeer Gateway**: Transcoding is active. Work is focused on native integration and exposed controls.
 
 ---
 
 ## In the Pipeline
 
-*Design and prototype phase. Early access may be available.*
+_Design and prototype phase. Early access may be available._
 
 ### Product
+
 - **Interactive (Parlor)**: XMTP-based chat rooms. <Badge text="Q1 2026" variant="note" /> [RFC: Parlor], [RFC: XMPT Chattins]
 - **Stream Provenance**: Arweave-backed chain of custody for stream integrity and dispute resolution. <Badge text="Q1 2026" variant="note" />
 - **Orchestration**: Unified processing for Live + VOD. [RFC: Processing Orchestration], [RFC: Stream Replication], [RFC: VOD Optimization]
@@ -89,15 +94,18 @@ For full context, history, and status updates, see GitHub Projects (public): htt
 - **Live Daydream V2V**: Real-time video-to-video processing.
 
 ### Platform & Infrastructure
+
 - **Mesh Networking** (RFC phase): WireGuard mesh with per-tenant isolation, OSPF routing, and gRPC TLS. [RFC: Mesh Isolation], [RFC: WireGuard OSPF], [RFC: Service Identity], [RFC: gRPC TLS Mesh]
 - **Scaling & HA** (RFC phase): Horizontal scaling strategies and node maintenance (drain) workflows. [RFC: Horizontal Scaling], [RFC: Node Drain]
 - **Tenant Subdomains (Platform‑Managed)** (RFC phase): Subdomain provisioning and SSL automation for self‑hosted edge clusters (no BYO domains yet).
 - **Object Storage**: S3-compatible storage for edge clusters. [RFC: S3 Storage]
 
 ### Analytics
+
 - **QoE**: Comprehensive Quality of Experience metrics. [RFC: QoE Analytics]
 
 ### Developer Experience
+
 - **MCP Video Consultant (Phase 2)**: Background monitoring and semantic knowledge search. [RFC: MCP Consultant]
   - RAG knowledge base with pgvector for semantic doc search
   - Background monitor service ("Lookout") polling for QoE anomalies
@@ -108,20 +116,23 @@ For full context, history, and status updates, see GitHub Projects (public): htt
 
 ## Planned
 
-*Backlog items for future development cycles.*
+_Backlog items for future development cycles._
 
 ### Product
+
 - **Advanced Controls**: Per-stream transcoding targets.
 - **Teams**: Multi-user accounts, role-based permissions (RBAC), and audit logs.
 - **Help Center**: Integrated documentation and support hub.
 - **Mobile Apps**: Native iOS and Android applications.
 
 ### Platform & Infrastructure
+
 - **DNS**: Self-hosted anycast DNS. [RFC: Anycast DNS]
 - **Security**: Vault secrets management. [RFC: Vault Secrets Management]
 - **Refactoring**: Large-file strategy to reduce repo churn. [RFC: Large File Refactor]
 
 ### Developer Experience
+
 - **Webhooks**: Outbound event notifications.
 - **SDKs**: Official JS/TS clients.
 - **Status Page**: Public incident tracking (Lookout). [RFC: Lookout Incidents]

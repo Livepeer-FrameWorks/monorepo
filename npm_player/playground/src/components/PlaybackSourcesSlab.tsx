@@ -17,7 +17,8 @@ export function PlaybackSourcesSlab() {
         )}
         {!playbackLoading && !playbackError && playbackSources.length === 0 && (
           <div className="slab-form-group text-sm text-muted-foreground">
-            No sources. Press Poll to inspect playback sources, or just Connect to use the configured Base URL.
+            No sources. Press Poll to inspect playback sources, or just Connect to use the
+            configured Base URL.
           </div>
         )}
         {playbackSources.map((source, i) => (

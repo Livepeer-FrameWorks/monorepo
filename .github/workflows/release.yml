@@ -3,11 +3,11 @@ name: Release Platform
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
-  contents: write      # create release, upload assets
-  packages: write      # push images to GHCR
+  contents: write # create release, upload assets
+  packages: write # push images to GHCR
 
 env:
   REGISTRY: ghcr.io/livepeer-frameworks
@@ -20,19 +20,27 @@ jobs:
       fail-fast: false
       matrix:
         service:
-          - { name: bridge,            context: api_gateway,            dockerfile: api_gateway/Dockerfile }
-          - { name: quartermaster,     context: api_tenants,            dockerfile: api_tenants/Dockerfile }
-          - { name: commodore,         context: api_control,            dockerfile: api_control/Dockerfile }
-          - { name: purser,            context: api_billing,            dockerfile: api_billing/Dockerfile }
-          - { name: foghorn,           context: api_balancing,          dockerfile: api_balancing/Dockerfile }
-          - { name: decklog,           context: api_firehose,           dockerfile: api_firehose/Dockerfile }
-          - { name: periscope-ingest,  context: api_analytics_ingest,   dockerfile: api_analytics_ingest/Dockerfile }
-          - { name: periscope-query,   context: api_analytics_query,    dockerfile: api_analytics_query/Dockerfile }
-          - { name: signalman,         context: api_realtime,           dockerfile: api_realtime/Dockerfile }
-          - { name: helmsman,          context: api_sidecar,            dockerfile: api_sidecar/Dockerfile }
-          - { name: forms,             context: api_forms,              dockerfile: api_forms/Dockerfile }
-          - { name: deckhand,          context: api_ticketing,          dockerfile: api_ticketing/Dockerfile }
-          - { name: navigator,         context: api_dns,                dockerfile: api_dns/Dockerfile }
+          - { name: bridge, context: api_gateway, dockerfile: api_gateway/Dockerfile }
+          - { name: quartermaster, context: api_tenants, dockerfile: api_tenants/Dockerfile }
+          - { name: commodore, context: api_control, dockerfile: api_control/Dockerfile }
+          - { name: purser, context: api_billing, dockerfile: api_billing/Dockerfile }
+          - { name: foghorn, context: api_balancing, dockerfile: api_balancing/Dockerfile }
+          - { name: decklog, context: api_firehose, dockerfile: api_firehose/Dockerfile }
+          - {
+              name: periscope-ingest,
+              context: api_analytics_ingest,
+              dockerfile: api_analytics_ingest/Dockerfile,
+            }
+          - {
+              name: periscope-query,
+              context: api_analytics_query,
+              dockerfile: api_analytics_query/Dockerfile,
+            }
+          - { name: signalman, context: api_realtime, dockerfile: api_realtime/Dockerfile }
+          - { name: helmsman, context: api_sidecar, dockerfile: api_sidecar/Dockerfile }
+          - { name: forms, context: api_forms, dockerfile: api_forms/Dockerfile }
+          - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
+          - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -131,9 +139,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: 'pnpm-lock.yaml'
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: "pnpm-lock.yaml"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -268,7 +276,7 @@ jobs:
           echo "value=${ver}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
           cache-dependency-path: cli/go.sum
       - name: Build CLI ${{ matrix.goos }}/${{ matrix.goarch }}
         env:
@@ -296,20 +304,20 @@ jobs:
       fail-fast: false
       matrix:
         service:
-          - { name: bridge,            context: api_gateway,            cmd_path: ./cmd/bridge }
-          - { name: quartermaster,     context: api_tenants,            cmd_path: ./cmd/quartermaster }
-          - { name: commodore,         context: api_control,            cmd_path: ./cmd/commodore }
-          - { name: purser,            context: api_billing,            cmd_path: ./cmd/purser }
-          - { name: foghorn,           context: api_balancing,          cmd_path: ./cmd/foghorn }
-          - { name: decklog,           context: api_firehose,           cmd_path: cmd/decklog/main.go }
-          - { name: periscope-ingest,  context: api_analytics_ingest,   cmd_path: ./cmd/periscope }
-          - { name: periscope-query,   context: api_analytics_query,    cmd_path: ./cmd/periscope }
-          - { name: signalman,         context: api_realtime,           cmd_path: ./cmd/signalman }
-          - { name: helmsman,          context: api_sidecar,            cmd_path: ./cmd/helmsman }
-          - { name: forms,             context: api_forms,              cmd_path: ./cmd/forms }
-          - { name: navigator,         context: api_dns,                cmd_path: ./cmd/navigator }
-          - { name: deckhand,          context: api_ticketing,          cmd_path: ./cmd/deckhand }
-          - { name: privateer,         context: api_mesh,               cmd_path: ./cmd/privateer }
+          - { name: bridge, context: api_gateway, cmd_path: ./cmd/bridge }
+          - { name: quartermaster, context: api_tenants, cmd_path: ./cmd/quartermaster }
+          - { name: commodore, context: api_control, cmd_path: ./cmd/commodore }
+          - { name: purser, context: api_billing, cmd_path: ./cmd/purser }
+          - { name: foghorn, context: api_balancing, cmd_path: ./cmd/foghorn }
+          - { name: decklog, context: api_firehose, cmd_path: cmd/decklog/main.go }
+          - { name: periscope-ingest, context: api_analytics_ingest, cmd_path: ./cmd/periscope }
+          - { name: periscope-query, context: api_analytics_query, cmd_path: ./cmd/periscope }
+          - { name: signalman, context: api_realtime, cmd_path: ./cmd/signalman }
+          - { name: helmsman, context: api_sidecar, cmd_path: ./cmd/helmsman }
+          - { name: forms, context: api_forms, cmd_path: ./cmd/forms }
+          - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator }
+          - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand }
+          - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer }
         arch:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
@@ -320,7 +328,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
           cache-dependency-path: ${{ matrix.service.context }}/go.sum
 
       - name: Read service version

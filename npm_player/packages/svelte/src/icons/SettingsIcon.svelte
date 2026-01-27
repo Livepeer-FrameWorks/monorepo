@@ -8,11 +8,7 @@
     class?: string;
   }
 
-  let {
-    size = 16,
-    color = 'currentColor',
-    class: className = '',
-  }: Props = $props();
+  let { size = 16, color = "currentColor", class: className = "" }: Props = $props();
 </script>
 
 <svg

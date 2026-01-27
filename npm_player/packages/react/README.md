@@ -15,15 +15,15 @@ npm i @livepeer-frameworks/player-react
 ## Usage
 
 ```tsx
-import { Player } from '@livepeer-frameworks/player-react';
+import { Player } from "@livepeer-frameworks/player-react";
 
 export default function App() {
   return (
-    <div style={{ width: '100%', height: 500 }}>
+    <div style={{ width: "100%", height: 500 }}>
       <Player
         contentType="live"
         contentId="pk_..." // playbackId
-        options={{ gatewayUrl: 'https://your-bridge/graphql' }}
+        options={{ gatewayUrl: "https://your-bridge/graphql" }}
       />
     </div>
   );
@@ -31,22 +31,19 @@ export default function App() {
 ```
 
 Notes:
+
 - There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
 
 ### Direct MistServer Node (mistUrl)
 
 ```tsx
-<Player
-  contentType="live"
-  contentId="pk_..."
-  options={{ mistUrl: 'https://edge.example.com' }}
-/>
+<Player contentType="live" contentId="pk_..." options={{ mistUrl: "https://edge.example.com" }} />
 ```
 
 ### Styles
 
 ```ts
-import '@livepeer-frameworks/player-react/player.css';
+import "@livepeer-frameworks/player-react/player.css";
 ```
 
 ## Controls & Shortcuts
@@ -75,6 +72,7 @@ The player ships with keyboard/mouse shortcuts when the player is focused (click
 | Click/Tap and hold | 2x speed | Disabled on live-only |
 
 **Constraints**
+
 - Live-only streams disable seeking/skip/2x hold and frame-step.
 - Live with DVR buffer enables the same shortcuts as VOD.
 - Frame stepping only moves within already buffered ranges (no network seek). WebCodecs supports true frame stepping when paused.

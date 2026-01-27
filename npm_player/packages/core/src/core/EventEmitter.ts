@@ -77,7 +77,7 @@ export class TypedEventEmitter<Events extends Record<string, any>> {
    * @param data - The event payload
    */
   protected emit<K extends keyof Events>(event: K, data: Events[K]): void {
-    this.listeners.get(event)?.forEach(listener => {
+    this.listeners.get(event)?.forEach((listener) => {
       try {
         listener(data);
       } catch (e) {

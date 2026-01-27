@@ -11,14 +11,7 @@
     type ChartConfiguration,
   } from "chart.js";
 
-  Chart.register(
-    BarController,
-    BarElement,
-    CategoryScale,
-    LinearScale,
-    Tooltip,
-    Legend
-  );
+  Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
   interface Props {
     // Array of buffer health percentages (0-100) from individual sessions/metrics
@@ -43,11 +36,19 @@
     // Bucket data into bins: 0-10, 10-20, ... 90-100
     const bins = new Array(10).fill(0);
     const labels = [
-      "0-10%", "10-20%", "20-30%", "30-40%", "40-50%",
-      "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"
+      "0-10%",
+      "10-20%",
+      "20-30%",
+      "30-40%",
+      "40-50%",
+      "50-60%",
+      "60-70%",
+      "70-80%",
+      "80-90%",
+      "90-100%",
     ];
 
-    data.forEach(value => {
+    data.forEach((value) => {
       // Clamp value between 0 and 100
       const clamped = Math.max(0, Math.min(100, value));
       // Determine bin index (0 to 9)
@@ -60,7 +61,7 @@
       // 0-3 (bad/red), 4-6 (warning/yellow), 7-9 (good/green)
       if (i < 4) return "rgba(239, 68, 68, 0.7)"; // red
       if (i < 7) return "rgba(245, 158, 11, 0.7)"; // amber
-      return "rgba(34, 197, 94, 0.7)";  // green
+      return "rgba(34, 197, 94, 0.7)"; // green
     });
 
     const borderColors = bins.map((_, i) => {
@@ -110,8 +111,8 @@
                 const total = data.length || 1;
                 const percentage = ((count / total) * 100).toFixed(1);
                 return `${count} sessions (${percentage}%)`;
-              }
-            }
+              },
+            },
           },
         },
         scales: {
@@ -143,7 +144,9 @@
   });
 
   onMount(() => createChart());
-  onDestroy(() => { if (chart) chart.destroy(); });
+  onDestroy(() => {
+    if (chart) chart.destroy();
+  });
 </script>
 
 <div class="chart-container" style="height: {height}px;">

@@ -28,7 +28,8 @@
       icon: "Video",
       iconColor: "text-primary",
       title: "Create Your First Stream",
-      getDescription: () => "Set up a stream to start broadcasting. You'll get RTMP, SRT, and WHIP ingest URLs.",
+      getDescription: () =>
+        "Set up a stream to start broadcasting. You'll get RTMP, SRT, and WHIP ingest URLs.",
       link: "/streams",
       linkText: "Create Stream",
       condition: () => !hasStreams,
@@ -39,9 +40,10 @@
       icon: "Settings2",
       iconColor: "text-info",
       title: "OBS Setup",
-      getDescription: () => streamKey
-        ? `Use stream key: ${streamKey.slice(0, 8)}... with RTMP ingest.`
-        : "Configure OBS or your preferred encoder with your stream key.",
+      getDescription: () =>
+        streamKey
+          ? `Use stream key: ${streamKey.slice(0, 8)}... with RTMP ingest.`
+          : "Configure OBS or your preferred encoder with your stream key.",
       link: "/streams",
       linkText: "View Keys",
       condition: () => hasStreams && !hasLiveStreams,
@@ -63,7 +65,8 @@
       icon: "Play",
       iconColor: "text-destructive",
       title: "Embed Your Stream",
-      getDescription: () => "Use the Player SDK to embed streams in your React, Svelte, or vanilla JS app.",
+      getDescription: () =>
+        "Use the Player SDK to embed streams in your React, Svelte, or vanilla JS app.",
       link: "/developer/sdks",
       linkText: "View SDKs",
       condition: () => hasStreams,
@@ -95,9 +98,7 @@
 
   // Get applicable hints sorted by priority
   let applicableHints = $derived(
-    hints
-      .filter((h) => h.condition())
-      .sort((a, b) => b.priority - a.priority)
+    hints.filter((h) => h.condition()).sort((a, b) => b.priority - a.priority)
   );
 
   // Current hint index (cycles through)
@@ -107,9 +108,7 @@
   let dismissedHints = $state<string[]>([]);
 
   // Filter out dismissed hints
-  let visibleHints = $derived(
-    applicableHints.filter((h) => !dismissedHints.includes(h.id))
-  );
+  let visibleHints = $derived(applicableHints.filter((h) => !dismissedHints.includes(h.id)));
 
   let currentHint = $derived(visibleHints[currentIndex % visibleHints.length] || null);
 
@@ -158,8 +157,8 @@
 
 {#if currentHint}
   {@const Icon = getIconComponent(currentHint.icon)}
-  {@const XIcon = getIconComponent('X')}
-  {@const ChevronRightIcon = getIconComponent('ChevronRight')}
+  {@const XIcon = getIconComponent("X")}
+  {@const ChevronRightIcon = getIconComponent("ChevronRight")}
 
   <div class="bg-muted/30 border border-border/50 rounded-md p-3">
     <div class="flex items-start gap-3">

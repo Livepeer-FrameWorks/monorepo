@@ -1,6 +1,11 @@
 <script lang="ts">
   import { Player } from "@livepeer-frameworks/player-svelte";
-  import type { PlayerState, PlayerStateContext, PlayerOptions as CorePlayerOptions, PlayerMetadata } from "@livepeer-frameworks/player-svelte";
+  import type {
+    PlayerState,
+    PlayerStateContext,
+    PlayerOptions as CorePlayerOptions,
+    PlayerMetadata,
+  } from "@livepeer-frameworks/player-svelte";
   import { getGraphqlHttpUrl } from "$lib/config";
 
   interface Props {
@@ -61,7 +66,7 @@
   <Player
     {contentId}
     {contentType}
-    thumbnailUrl={thumbnailUrl}
+    {thumbnailUrl}
     options={playerOptions}
     {onStateChange}
     {onMetadata}

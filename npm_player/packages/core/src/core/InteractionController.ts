@@ -45,11 +45,11 @@ export interface InteractionState {
 }
 
 // Timing constants
-const HOLD_THRESHOLD_MS = 200;       // Time before keydown becomes "hold" vs "tap"
+const HOLD_THRESHOLD_MS = 200; // Time before keydown becomes "hold" vs "tap"
 const LONG_PRESS_THRESHOLD_MS = 300; // Time for touch/click to become "hold"
-const DOUBLE_TAP_WINDOW_MS = 300;    // Window for detecting double-tap
-const SKIP_AMOUNT_SECONDS = 10;      // Skip forward/backward amount
-const VOLUME_STEP = 0.1;             // Volume change per arrow press (10%)
+const DOUBLE_TAP_WINDOW_MS = 300; // Window for detecting double-tap
+const SKIP_AMOUNT_SECONDS = 10; // Skip forward/backward amount
+const VOLUME_STEP = 0.1; // Volume change per arrow press (10%)
 const DEFAULT_IDLE_TIMEOUT_MS = 5000; // Default idle timeout (5 seconds)
 
 export class InteractionController {
@@ -117,30 +117,30 @@ export class InteractionController {
     const { container } = this.config;
 
     // Make container focusable for keyboard events
-    if (!container.hasAttribute('tabindex')) {
-      container.setAttribute('tabindex', '0');
+    if (!container.hasAttribute("tabindex")) {
+      container.setAttribute("tabindex", "0");
     }
 
     // Keyboard events
-    container.addEventListener('keydown', this.boundKeyDown);
-    container.addEventListener('keyup', this.boundKeyUp);
-    document.addEventListener('keydown', this.boundDocumentKeyDown);
-    document.addEventListener('keyup', this.boundDocumentKeyUp);
+    container.addEventListener("keydown", this.boundKeyDown);
+    container.addEventListener("keyup", this.boundKeyUp);
+    document.addEventListener("keydown", this.boundDocumentKeyDown);
+    document.addEventListener("keyup", this.boundDocumentKeyUp);
 
     // Pointer events (unified mouse + touch)
-    container.addEventListener('pointerdown', this.boundPointerDown);
-    container.addEventListener('pointerup', this.boundPointerUp);
-    container.addEventListener('pointercancel', this.boundPointerCancel);
-    container.addEventListener('pointerleave', this.boundPointerCancel);
+    container.addEventListener("pointerdown", this.boundPointerDown);
+    container.addEventListener("pointerup", this.boundPointerUp);
+    container.addEventListener("pointercancel", this.boundPointerCancel);
+    container.addEventListener("pointerleave", this.boundPointerCancel);
 
     // Mouse move for idle detection
-    container.addEventListener('mousemove', this.boundMouseMove);
+    container.addEventListener("mousemove", this.boundMouseMove);
 
     // Double click for fullscreen (desktop)
-    container.addEventListener('dblclick', this.boundDoubleClick);
+    container.addEventListener("dblclick", this.boundDoubleClick);
 
     // Prevent context menu on long press
-    container.addEventListener('contextmenu', this.boundContextMenu);
+    container.addEventListener("contextmenu", this.boundContextMenu);
 
     // Start idle tracking
     this.resetIdleTimer();
@@ -156,17 +156,17 @@ export class InteractionController {
 
     const { container } = this.config;
 
-    container.removeEventListener('keydown', this.boundKeyDown);
-    container.removeEventListener('keyup', this.boundKeyUp);
-    document.removeEventListener('keydown', this.boundDocumentKeyDown);
-    document.removeEventListener('keyup', this.boundDocumentKeyUp);
-    container.removeEventListener('pointerdown', this.boundPointerDown);
-    container.removeEventListener('pointerup', this.boundPointerUp);
-    container.removeEventListener('pointercancel', this.boundPointerCancel);
-    container.removeEventListener('pointerleave', this.boundPointerCancel);
-    container.removeEventListener('mousemove', this.boundMouseMove);
-    container.removeEventListener('dblclick', this.boundDoubleClick);
-    container.removeEventListener('contextmenu', this.boundContextMenu);
+    container.removeEventListener("keydown", this.boundKeyDown);
+    container.removeEventListener("keyup", this.boundKeyUp);
+    document.removeEventListener("keydown", this.boundDocumentKeyDown);
+    document.removeEventListener("keyup", this.boundDocumentKeyUp);
+    container.removeEventListener("pointerdown", this.boundPointerDown);
+    container.removeEventListener("pointerup", this.boundPointerUp);
+    container.removeEventListener("pointercancel", this.boundPointerCancel);
+    container.removeEventListener("pointerleave", this.boundPointerCancel);
+    container.removeEventListener("mousemove", this.boundMouseMove);
+    container.removeEventListener("dblclick", this.boundDoubleClick);
+    container.removeEventListener("contextmenu", this.boundContextMenu);
 
     // Clear any pending timeouts
     if (this.holdCheckTimeout) {
@@ -244,66 +244,66 @@ export class InteractionController {
     const isPaused = this.config.isPaused?.() ?? this.config.videoElement?.paused ?? false;
 
     switch (e.key) {
-      case ' ':
-      case 'Spacebar':
+      case " ":
+      case "Spacebar":
         e.preventDefault();
         this.handleSpaceDown();
         break;
 
-      case 'ArrowLeft':
-      case 'j':
-      case 'J':
+      case "ArrowLeft":
+      case "j":
+      case "J":
         e.preventDefault();
         if (!isLive) {
           this.config.onSeek(-SKIP_AMOUNT_SECONDS);
         }
         break;
 
-      case 'ArrowRight':
-      case 'l':
-      case 'L':
+      case "ArrowRight":
+      case "l":
+      case "L":
         e.preventDefault();
         if (!isLive) {
           this.config.onSeek(SKIP_AMOUNT_SECONDS);
         }
         break;
 
-      case 'ArrowUp':
+      case "ArrowUp":
         e.preventDefault();
         this.config.onVolumeChange(VOLUME_STEP);
         break;
 
-      case 'ArrowDown':
+      case "ArrowDown":
         e.preventDefault();
         this.config.onVolumeChange(-VOLUME_STEP);
         break;
 
-      case 'm':
-      case 'M':
+      case "m":
+      case "M":
         e.preventDefault();
         this.config.onMuteToggle();
         break;
 
-      case 'f':
-      case 'F':
+      case "f":
+      case "F":
         e.preventDefault();
         this.config.onFullscreenToggle();
         break;
 
-      case 'c':
-      case 'C':
+      case "c":
+      case "C":
         e.preventDefault();
         this.config.onCaptionsToggle?.();
         break;
 
-      case 'k':
-      case 'K':
+      case "k":
+      case "K":
         // YouTube-style: K = play/pause (no hold behavior)
         e.preventDefault();
         this.config.onPlayPause();
         break;
 
-      case '<':
+      case "<":
         // Decrease speed (shift+, = <)
         e.preventDefault();
         if (!isLive) {
@@ -311,7 +311,7 @@ export class InteractionController {
         }
         break;
 
-      case '>':
+      case ">":
         // Increase speed (shift+. = >)
         e.preventDefault();
         if (!isLive) {
@@ -319,7 +319,7 @@ export class InteractionController {
         }
         break;
 
-      case ',':
+      case ",":
         // Previous frame when paused
         if (this.config.onFrameStep || (!isLive && isPaused)) {
           e.preventDefault();
@@ -327,7 +327,7 @@ export class InteractionController {
         }
         break;
 
-      case '.':
+      case ".":
         // Next frame when paused
         if (this.config.onFrameStep || (!isLive && isPaused)) {
           e.preventDefault();
@@ -336,16 +336,16 @@ export class InteractionController {
         break;
 
       // Number keys for seeking to percentage
-      case '0':
-      case '1':
-      case '2':
-      case '3':
-      case '4':
-      case '5':
-      case '6':
-      case '7':
-      case '8':
-      case '9':
+      case "0":
+      case "1":
+      case "2":
+      case "3":
+      case "4":
+      case "5":
+      case "6":
+      case "7":
+      case "8":
+      case "9":
         e.preventDefault();
         if (!isLive && this.config.onSeekPercent) {
           const percent = parseInt(e.key, 10) / 10;
@@ -360,7 +360,7 @@ export class InteractionController {
     if (e.defaultPrevented) return;
     if (!this.shouldHandleKeyboard(e)) return;
 
-    if (e.key === ' ' || e.key === 'Spacebar') {
+    if (e.key === " " || e.key === "Spacebar") {
       e.preventDefault();
       this.handleSpaceUp();
     }
@@ -373,8 +373,8 @@ export class InteractionController {
     const active = document.activeElement as HTMLElement | null;
     if (active && this.config.container.contains(active)) return true;
     try {
-      if (this.config.container.matches(':focus-within')) return true;
-      if (this.config.container.matches(':hover')) return true;
+      if (this.config.container.matches(":focus-within")) return true;
+      if (this.config.container.matches(":hover")) return true;
     } catch {}
     const now = Date.now();
     if (now - this.lastInteractionTime < DEFAULT_IDLE_TIMEOUT_MS) return true;
@@ -432,7 +432,7 @@ export class InteractionController {
     const video = this.config.videoElement;
     if (!video) return;
 
-    const target = video.currentTime + (direction * step);
+    const target = video.currentTime + direction * step;
     if (!Number.isFinite(target)) return;
 
     // Only step within already-buffered ranges to avoid network seeks
@@ -442,7 +442,9 @@ export class InteractionController {
         const start = buffered.start(i);
         const end = buffered.end(i);
         if (target >= start && target <= end) {
-          try { video.currentTime = target; } catch {}
+          try {
+            video.currentTime = target;
+          } catch {}
           return;
         }
       }
@@ -467,7 +469,7 @@ export class InteractionController {
     const now = Date.now();
     const rect = this.config.container.getBoundingClientRect();
     const relativeX = (e.clientX - rect.left) / rect.width;
-    const isMouse = e.pointerType === 'mouse';
+    const isMouse = e.pointerType === "mouse";
 
     // Check for double-tap
     if (now - this.lastTapTime < DOUBLE_TAP_WINDOW_MS) {
@@ -673,7 +675,12 @@ export class InteractionController {
   private isInputElement(target: EventTarget | null): boolean {
     if (!target || !(target instanceof HTMLElement)) return false;
     const tagName = target.tagName.toLowerCase();
-    return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
+    return (
+      tagName === "input" ||
+      tagName === "textarea" ||
+      tagName === "select" ||
+      target.isContentEditable
+    );
   }
 
   private isControlElement(target: EventTarget | null): boolean {
@@ -681,25 +688,25 @@ export class InteractionController {
 
     // Check if clicking on player controls (buttons, sliders, etc.)
     const controlSelectors = [
-      'button',
+      "button",
       '[role="button"]',
       '[role="slider"]',
-      'input',
-      'select',
-      '.fw-player-controls',
-      '[data-player-controls]',
-      '.fw-controls-wrapper',
-      '.fw-control-bar',
-      '.fw-settings-menu',
-      '.fw-context-menu',
-      '.fw-stats-panel',
-      '.fw-dev-panel',
-      '.fw-error-overlay',
-      '.fw-error-popup',
-      '.fw-player-error',
+      "input",
+      "select",
+      ".fw-player-controls",
+      "[data-player-controls]",
+      ".fw-controls-wrapper",
+      ".fw-control-bar",
+      ".fw-settings-menu",
+      ".fw-context-menu",
+      ".fw-stats-panel",
+      ".fw-dev-panel",
+      ".fw-error-overlay",
+      ".fw-error-popup",
+      ".fw-player-error",
     ];
 
-    return controlSelectors.some(selector => {
+    return controlSelectors.some((selector) => {
       return target.matches(selector) || target.closest(selector) !== null;
     });
   }

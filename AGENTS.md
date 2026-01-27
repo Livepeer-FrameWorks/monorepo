@@ -6,26 +6,40 @@
 
 **These are completely separate systems. Identify which is relevant before acting.**
 
-| Situation | System | Target |
-|-----------|--------|--------|
-| DB empty, missing data in dev | Seed Data | `pkg/database/sql/seeds/` |
+| Situation                        | System    | Target                                    |
+| -------------------------------- | --------- | ----------------------------------------- |
+| DB empty, missing data in dev    | Seed Data | `pkg/database/sql/seeds/`                 |
 | Build failed, API sandbox broken | Demo Mode | `api_gateway/internal/demo/generators.go` |
 
 ## Where to Find Context
 
-| Area | Location |
-|------|----------|
-| Architecture, services, ports | `README.md` |
-| Analytics pipeline, event types | `docs/architecture/analytics-pipeline.md` |
-| Service events backbone | `docs/architecture/service-events.md` |
-| Viewer routing algorithm | `docs/architecture/viewer-routing.md` |
-| Agent/wallet/x402/MCP | `docs/architecture/agent-access.md` |
-| UI design system | `docs/standards/design-system.md` |
-| Metrics naming/units | `docs/standards/metrics.md` |
-| Deployment & ops | `website_docs/src/content/docs/operators/` |
-| Dev runtime | `docker-compose.yml` |
-| Release pipeline | `.github/workflows/release.yml` |
-| Workflows, Svelte 5 patterns | `CONTRIBUTING.md` |
+| Area                            | Location                                   |
+| ------------------------------- | ------------------------------------------ |
+| Architecture, services, ports   | `README.md`                                |
+| Analytics pipeline, event types | `docs/architecture/analytics-pipeline.md`  |
+| Service events backbone         | `docs/architecture/service-events.md`      |
+| Viewer routing algorithm        | `docs/architecture/viewer-routing.md`      |
+| Agent/wallet/x402/MCP           | `docs/architecture/agent-access.md`        |
+| UI design system                | `docs/standards/design-system.md`          |
+| Metrics naming/units            | `docs/standards/metrics.md`                |
+| Deployment & ops                | `website_docs/src/content/docs/operators/` |
+| Dev runtime                     | `docker-compose.yml`                       |
+| Release pipeline                | `.github/workflows/release.yml`            |
+| Workflows, Svelte 5 patterns    | `CONTRIBUTING.md`                          |
+
+## Code Style
+
+**Before committing:**
+
+- Go: Run `make lint` to see all violations, `make lint-fix` for auto-fixes
+- Frontend: Run `pnpm lint` and `pnpm format`
+
+**Key rules:**
+
+- Go uses tabs (enforced by `gofmt`)
+- JS/TS/Svelte uses 2 spaces
+- Unused variables: prefix with `_` (e.g., `_unused`)
+- CI enforces linting on new code via baseline
 
 ## Code Generation
 
@@ -35,11 +49,11 @@
 
 ## Never Edit Generated Code
 
-| Generated (don't edit) | Source (edit this) |
-|------------------------|-------------------|
-| `pkg/proto/*.pb.go` | `pkg/proto/*.proto` |
-| `api_gateway/graph/generated/*` | `pkg/graphql/schema.graphql` |
-| `api_gateway/graph/model/*` | `pkg/graphql/schema.graphql` |
+| Generated (don't edit)           | Source (edit this)                |
+| -------------------------------- | --------------------------------- |
+| `pkg/proto/*.pb.go`              | `pkg/proto/*.proto`               |
+| `api_gateway/graph/generated/*`  | `pkg/graphql/schema.graphql`      |
+| `api_gateway/graph/model/*`      | `pkg/graphql/schema.graphql`      |
 | `website_application/$houdini/*` | `pkg/graphql/operations/**/*.gql` |
 
 ## Service Boundaries
@@ -62,12 +76,14 @@ If changes need undoing, tell the user what to run.
 **Truth over appeasement** - Be honest about limitations; don't pretend stub services are implemented
 
 **No AI narration in comments**:
+
 - No `// Step 1:`, `// Phase 2:`, `// ========== SECTION ==========`
 - No `// Helper function for X` (function name should be clear)
 - No `// X was removed`, `// No longer needed`, `// Added in v2.0`
 - No obvious restatements: `// Check if user is authenticated` above `if user.isAuthenticated`
 
 Good comments explain WHY:
+
 - `// MistServer uses MD5(MD5(password) + challenge) for auth`
 - `// Registration triggers DNS sync as a side-effect`
 

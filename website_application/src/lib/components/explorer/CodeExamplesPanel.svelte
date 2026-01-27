@@ -6,12 +6,7 @@
     onCopy: (code: string) => void;
   }
 
-  let {
-    codeExamples,
-    selectedLanguage = $bindable(),
-    languages,
-    onCopy,
-  }: Props = $props();
+  let { codeExamples, selectedLanguage = $bindable(), languages, onCopy }: Props = $props();
 </script>
 
 <!-- Code Examples Section -->

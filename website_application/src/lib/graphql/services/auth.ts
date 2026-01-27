@@ -62,11 +62,7 @@ export const authService = {
     }
   },
 
-  async register(
-    email: string,
-    password: string,
-    name: string,
-  ): Promise<AuthResponse> {
+  async register(email: string, password: string, name: string): Promise<AuthResponse> {
     try {
       const response = await authAPI.post<AuthResponse>("/register", {
         email,

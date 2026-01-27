@@ -1,29 +1,29 @@
-import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
+import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
-export const SECTION_SPACING = 'py-16 sm:py-24'
+export const SECTION_SPACING = "py-16 sm:py-24";
 
 export function Section({ className, ...props }) {
-  return <section className={cn(SECTION_SPACING, className)} {...props} />
+  return <section className={cn(SECTION_SPACING, className)} {...props} />;
 }
 
 export function SectionContainer({ className, ...props }) {
-  return <div className={cn('mx-auto w-full max-w-7xl px-6 sm:px-8', className)} {...props} />
+  return <div className={cn("mx-auto w-full max-w-7xl px-6 sm:px-8", className)} {...props} />;
 }
 
 export function SectionHeader({
   eyebrow,
   title,
   description,
-  align = 'center',
+  align = "center",
   className,
   children,
   ...props
 }) {
-  const alignment = align === 'left' ? 'items-start text-left' : 'items-center text-center'
+  const alignment = align === "left" ? "items-start text-left" : "items-center text-center";
 
   return (
-    <div className={cn('flex flex-col gap-4', alignment, className)} {...props}>
+    <div className={cn("flex flex-col gap-4", alignment, className)} {...props}>
       {eyebrow && (
         <Badge variant="outline" className="rounded-full border-border/40 bg-background/80">
           {eyebrow}
@@ -41,5 +41,5 @@ export function SectionHeader({
       )}
       {children}
     </div>
-  )
+  );
 }

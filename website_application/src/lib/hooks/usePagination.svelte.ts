@@ -10,10 +10,7 @@ export interface PaginatedResult<T> {
 
 export interface UsePaginationOptions<T> {
   /** Function that fetches a page of data */
-  fetchPage: (options: {
-    first?: number;
-    after?: string;
-  }) => Promise<PaginatedResult<T>>;
+  fetchPage: (options: { first?: number; after?: string }) => Promise<PaginatedResult<T>>;
   /** Number of items to fetch per page (default: 50) */
   pageSize?: number;
   /** Whether to fetch the first page automatically (default: true) */
@@ -170,10 +167,7 @@ export function createPagination<T>(options: UsePaginationOptions<T>) {
   /**
    * Update an item in place
    */
-  function update(
-    predicate: (item: T) => boolean,
-    updater: (item: T) => T,
-  ): void {
+  function update(predicate: (item: T) => boolean, updater: (item: T) => T): void {
     items = items.map((item) => (predicate(item) ? updater(item) : item));
   }
 

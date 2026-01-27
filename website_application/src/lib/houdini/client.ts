@@ -70,7 +70,7 @@ export default new HoudiniClient({
                     console.warn(
                       "[WebSocket] Connection closed:",
                       closeEvent.code,
-                      closeEvent.reason,
+                      closeEvent.reason
                     );
                   }
                 }

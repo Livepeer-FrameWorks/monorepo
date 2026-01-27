@@ -7,8 +7,7 @@
     class?: string;
   }
 
-  let { size = "md", color = "text-primary", class: className }: Props =
-    $props();
+  let { size = "md", color = "text-primary", class: className }: Props = $props();
 
   const sizeClasses = {
     sm: "w-4 h-4",

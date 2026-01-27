@@ -5,14 +5,14 @@
  * Uses event-driven updates instead of polling - no render spam.
  */
 
-import { writable, derived, type Readable } from 'svelte/store';
+import { writable, derived, type Readable } from "svelte/store";
 import {
   type PlayerManager,
   type PlayerSelection,
   type PlayerCombination,
   type StreamInfo,
   type PlaybackMode,
-} from '@livepeer-frameworks/player-core';
+} from "@livepeer-frameworks/player-core";
 
 export interface PlayerSelectionOptions {
   /** Enable debug logging */
@@ -78,7 +78,7 @@ export function createPlayerSelectionStore(
   const store = writable<PlayerSelectionState>({ ...initialState });
 
   let currentStreamInfo: StreamInfo | null = null;
-  let currentPlaybackMode: PlaybackMode = 'auto';
+  let currentPlaybackMode: PlaybackMode = "auto";
   let unsubSelection: (() => void) | null = null;
   let unsubCombos: (() => void) | null = null;
 
@@ -87,9 +87,9 @@ export function createPlayerSelectionStore(
     // Clean up existing subscriptions
     unsubscribe();
 
-    unsubSelection = manager.on('selection-changed', (sel) => {
+    unsubSelection = manager.on("selection-changed", (sel) => {
       if (debug) {
-        console.log('[playerSelection store] Selection changed:', sel?.player, sel?.source?.type);
+        console.log("[playerSelection store] Selection changed:", sel?.player, sel?.source?.type);
       }
       store.update((state) => ({
         ...state,
@@ -97,9 +97,9 @@ export function createPlayerSelectionStore(
       }));
     });
 
-    unsubCombos = manager.on('combinations-updated', (combos) => {
+    unsubCombos = manager.on("combinations-updated", (combos) => {
       if (debug) {
-        console.log('[playerSelection store] Combinations updated:', combos.length);
+        console.log("[playerSelection store] Combinations updated:", combos.length);
       }
       store.update((state) => ({
         ...state,
@@ -125,7 +125,7 @@ export function createPlayerSelectionStore(
    */
   function setStreamInfo(streamInfo: StreamInfo | null, playbackMode?: PlaybackMode) {
     currentStreamInfo = streamInfo;
-    currentPlaybackMode = playbackMode ?? 'auto';
+    currentPlaybackMode = playbackMode ?? "auto";
 
     if (!streamInfo) {
       store.set({ ...initialState });
@@ -167,14 +167,18 @@ export function createPlayerSelectionStore(
 /**
  * Derive just the current selection from the store.
  */
-export function createDerivedSelection(store: PlayerSelectionStore): Readable<PlayerSelection | null> {
+export function createDerivedSelection(
+  store: PlayerSelectionStore
+): Readable<PlayerSelection | null> {
   return derived(store, ($state) => $state.selection);
 }
 
 /**
  * Derive just the combinations array from the store.
  */
-export function createDerivedCombinations(store: PlayerSelectionStore): Readable<PlayerCombination[]> {
+export function createDerivedCombinations(
+  store: PlayerSelectionStore
+): Readable<PlayerCombination[]> {
   return derived(store, ($state) => $state.combinations);
 }
 
@@ -195,21 +199,27 @@ export function createDerivedSelectedPlayer(store: PlayerSelectionStore): Readab
 /**
  * Derive the selected source type.
  */
-export function createDerivedSelectedSourceType(store: PlayerSelectionStore): Readable<string | null> {
+export function createDerivedSelectedSourceType(
+  store: PlayerSelectionStore
+): Readable<string | null> {
   return derived(store, ($state) => $state.selection?.source?.type ?? null);
 }
 
 /**
  * Derive only compatible combinations (filtered from all).
  */
-export function createDerivedCompatibleCombinations(store: PlayerSelectionStore): Readable<PlayerCombination[]> {
+export function createDerivedCompatibleCombinations(
+  store: PlayerSelectionStore
+): Readable<PlayerCombination[]> {
   return derived(store, ($state) => $state.combinations.filter((c) => c.compatible));
 }
 
 /**
  * Derive only incompatible combinations.
  */
-export function createDerivedIncompatibleCombinations(store: PlayerSelectionStore): Readable<PlayerCombination[]> {
+export function createDerivedIncompatibleCombinations(
+  store: PlayerSelectionStore
+): Readable<PlayerCombination[]> {
   return derived(store, ($state) => $state.combinations.filter((c) => !c.compatible));
 }
 

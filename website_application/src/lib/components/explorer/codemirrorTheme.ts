@@ -43,10 +43,9 @@ export const tokyoNightTheme = EditorView.theme(
       borderLeftColor: colors.blue,
       borderLeftWidth: "2px",
     },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
-      {
-        backgroundColor: colors.bgSelection,
-      },
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+      backgroundColor: colors.bgSelection,
+    },
     ".cm-activeLine": {
       backgroundColor: colors.bgHighlight,
     },
@@ -101,7 +100,7 @@ export const tokyoNightTheme = EditorView.theme(
       fontFamily: '"JetBrains Mono", "Fira Code", monospace',
     },
   },
-  { dark: true },
+  { dark: true }
 );
 
 // Syntax highlighting
@@ -177,7 +176,4 @@ export const tokyoNightHighlightStyle = HighlightStyle.define([
 ]);
 
 // Combined theme extension
-export const tokyoNight = [
-  tokyoNightTheme,
-  syntaxHighlighting(tokyoNightHighlightStyle),
-];
+export const tokyoNight = [tokyoNightTheme, syntaxHighlighting(tokyoNightHighlightStyle)];

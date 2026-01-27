@@ -1,5 +1,5 @@
-import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { Button } from '../ui/button';
+import React, { Component, ErrorInfo, ReactNode } from "react";
+import { Button } from "../ui/button";
 
 interface Props {
   children: ReactNode;
@@ -28,7 +28,7 @@ class PlayerErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    console.error('[PlayerErrorBoundary] Caught error:', error, errorInfo);
+    console.error("[PlayerErrorBoundary] Caught error:", error, errorInfo);
     this.props.onError?.(error, errorInfo);
   }
 
@@ -45,18 +45,11 @@ class PlayerErrorBoundary extends Component<Props, State> {
 
       return (
         <div className="fw-player-error flex min-h-[280px] flex-col items-center justify-center gap-4 rounded-xl bg-slate-950 p-6 text-center text-white">
-          <div className="text-lg font-semibold text-red-400">
-            Playback Error
-          </div>
+          <div className="text-lg font-semibold text-red-400">Playback Error</div>
           <p className="max-w-sm text-sm text-slate-400">
-            {this.state.error?.message || 'An unexpected error occurred while loading the player.'}
+            {this.state.error?.message || "An unexpected error occurred while loading the player."}
           </p>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={this.handleRetry}
-            className="mt-2"
-          >
+          <Button type="button" variant="secondary" onClick={this.handleRetry} className="mt-2">
             Try Again
           </Button>
         </div>

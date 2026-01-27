@@ -232,8 +232,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         description: "Stream lifecycle events as they happen.",
         operationType: "subscription",
         templatePath: "operations/subscriptions/StreamEvents.gql",
-        expectedPayload:
-          "Live stream status transitions, buffer updates, and lifecycle events.",
+        expectedPayload: "Live stream status transitions, buffer updates, and lifecycle events.",
         variables: {
           streamId: "stream_global_id",
         },
@@ -245,8 +244,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         description: "Per-stream viewer connect/disconnect pulses.",
         operationType: "subscription",
         templatePath: "operations/subscriptions/ViewerMetricsStream.gql",
-        expectedPayload:
-          "Connect/disconnect events with protocol and node metadata.",
+        expectedPayload: "Connect/disconnect events with protocol and node metadata.",
         variables: {
           streamId: "stream_global_id",
         },

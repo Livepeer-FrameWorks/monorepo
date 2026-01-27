@@ -3,8 +3,8 @@
  * Handles automatic reconnection with exponential backoff
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import type { ReconnectionConfig, ReconnectionState, ReconnectionEvents } from '../types';
+import { TypedEventEmitter } from "./EventEmitter";
+import type { ReconnectionConfig, ReconnectionState, ReconnectionEvents } from "../types";
 
 export const DEFAULT_RECONNECTION_CONFIG: ReconnectionConfig = {
   enabled: true,
@@ -47,12 +47,12 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    */
   start(reconnectCallback: () => Promise<void>): void {
     if (!this.config.enabled) {
-      console.log('[ReconnectionManager] Reconnection disabled');
+      console.log("[ReconnectionManager] Reconnection disabled");
       return;
     }
 
     if (this.state.isReconnecting) {
-      console.log('[ReconnectionManager] Already reconnecting');
+      console.log("[ReconnectionManager] Already reconnecting");
       return;
     }
 
@@ -87,7 +87,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
       `[ReconnectionManager] Scheduling attempt ${this.state.attemptNumber}/${this.config.maxAttempts} in ${delay}ms`
     );
 
-    this.emit('attemptStart', {
+    this.emit("attemptStart", {
       attempt: this.state.attemptNumber,
       delay,
     });
@@ -132,7 +132,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
     this.state.nextAttemptIn = null;
 
     if (!this.reconnectCallback) {
-      console.error('[ReconnectionManager] No reconnect callback set');
+      console.error("[ReconnectionManager] No reconnect callback set");
       return;
     }
 
@@ -153,7 +153,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    * Handle successful reconnection
    */
   private handleSuccess(): void {
-    console.log('[ReconnectionManager] Reconnection successful');
+    console.log("[ReconnectionManager] Reconnection successful");
 
     this.state = {
       isReconnecting: false,
@@ -163,7 +163,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
     };
 
     this.cleanup();
-    this.emit('attemptSuccess', undefined);
+    this.emit("attemptSuccess", undefined);
   }
 
   /**
@@ -174,7 +174,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
 
     this.state.lastError = error;
 
-    this.emit('attemptFailed', {
+    this.emit("attemptFailed", {
       attempt: this.state.attemptNumber,
       error,
     });
@@ -187,9 +187,9 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    * Handle exhausted attempts
    */
   private handleExhausted(): void {
-    console.log('[ReconnectionManager] All reconnection attempts exhausted');
+    console.log("[ReconnectionManager] All reconnection attempts exhausted");
 
-    this.emit('exhausted', {
+    this.emit("exhausted", {
       totalAttempts: this.config.maxAttempts,
     });
 
@@ -200,7 +200,7 @@ export class ReconnectionManager extends TypedEventEmitter<ReconnectionEvents> {
    * Stop reconnection process
    */
   stop(): void {
-    console.log('[ReconnectionManager] Stopping reconnection');
+    console.log("[ReconnectionManager] Stopping reconnection");
 
     this.cleanup();
 

@@ -41,20 +41,25 @@
     if (!value) onCancel();
   }}
 >
-  <DialogContent class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden">
+  <DialogContent
+    class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden"
+  >
     <DialogHeader class="slab-header text-left space-y-1">
-      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">Create New Stream</DialogTitle>
+      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground"
+        >Create New Stream</DialogTitle
+      >
       <DialogDescription class="text-xs text-muted-foreground/70">
         Configure the basics for your next broadcast.
       </DialogDescription>
     </DialogHeader>
 
-    <form id="create-stream-form" class="slab-body--padded space-y-4" onsubmit={preventDefault(onSubmit)}>
+    <form
+      id="create-stream-form"
+      class="slab-body--padded space-y-4"
+      onsubmit={preventDefault(onSubmit)}
+    >
       <div>
-        <label
-          for="stream-title"
-          class="block text-sm font-medium text-muted-foreground mb-2"
-        >
+        <label for="stream-title" class="block text-sm font-medium text-muted-foreground mb-2">
           Stream Title *
         </label>
         <Input
@@ -85,16 +90,9 @@
       </div>
 
       <div class="flex items-start space-x-3">
-        <Checkbox
-          id="create-stream-record"
-          bind:checked={record}
-          disabled={creating}
-        />
+        <Checkbox id="create-stream-record" bind:checked={record} disabled={creating} />
         <div>
-          <Label
-            for="create-stream-record"
-            class="text-sm font-medium text-foreground"
-          >
+          <Label for="create-stream-record" class="text-sm font-medium text-foreground">
             Enable Recording
           </Label>
           <p class="text-xs text-muted-foreground">
@@ -114,8 +112,8 @@
       >
         Cancel
       </Button>
-      <Button 
-        type="submit" 
+      <Button
+        type="submit"
         variant="ghost"
         class="rounded-none h-12 flex-1 hover:bg-muted/10 text-primary hover:text-primary/80"
         disabled={creating || !title.trim()}

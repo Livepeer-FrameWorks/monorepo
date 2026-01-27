@@ -1,15 +1,15 @@
-import { forwardRef } from 'react'
-import { cn } from '@/lib/utils'
+import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
 
 const MarketingStack = forwardRef(
-  ({ align = 'start', gap = 'md', direction = 'column', className, children, ...props }, ref) => (
+  ({ align = "start", gap = "md", direction = "column", className, children, ...props }, ref) => (
     <div
       ref={ref}
       className={cn(
-        'marketing-stack',
+        "marketing-stack",
         align && `marketing-stack--align-${align}`,
         gap && `marketing-stack--gap-${gap}`,
-        direction === 'row' && 'marketing-stack--row',
+        direction === "row" && "marketing-stack--row",
         className
       )}
       {...props}
@@ -17,8 +17,8 @@ const MarketingStack = forwardRef(
       {children}
     </div>
   )
-)
+);
 
-MarketingStack.displayName = 'MarketingStack'
+MarketingStack.displayName = "MarketingStack";
 
-export default MarketingStack
+export default MarketingStack;

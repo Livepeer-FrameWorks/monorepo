@@ -62,15 +62,11 @@
             label: "Storage",
             data: [data.dvrBytes, data.clipBytes, data.vodBytes],
             backgroundColor: [
-              "rgba(59, 130, 246, 0.8)",   // primary blue (DVR)
-              "rgba(168, 85, 247, 0.8)",   // accent purple (Clips)
-              "rgba(34, 197, 94, 0.8)",    // success green (VOD)
+              "rgba(59, 130, 246, 0.8)", // primary blue (DVR)
+              "rgba(168, 85, 247, 0.8)", // accent purple (Clips)
+              "rgba(34, 197, 94, 0.8)", // success green (VOD)
             ],
-            borderColor: [
-              "rgb(59, 130, 246)",
-              "rgb(168, 85, 247)",
-              "rgb(34, 197, 94)",
-            ],
+            borderColor: ["rgb(59, 130, 246)", "rgb(168, 85, 247)", "rgb(34, 197, 94)"],
             borderWidth: 1,
             borderRadius: 4,
           },

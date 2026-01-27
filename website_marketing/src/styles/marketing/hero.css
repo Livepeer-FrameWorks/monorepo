@@ -14,8 +14,16 @@
     --hero-after-rotate: -6deg;
     --hero-after-scale: 1;
     --hero-after-opacity: 0.5;
-    --hero-surface-primary: color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(0, 0, 0, 0.08));
-    --hero-surface-secondary: color-mix(in srgb, hsl(var(--brand-surface)) 82%, rgba(255, 255, 255, 0.04));
+    --hero-surface-primary: color-mix(
+      in srgb,
+      hsl(var(--brand-surface-strong)) 92%,
+      rgba(0, 0, 0, 0.08)
+    );
+    --hero-surface-secondary: color-mix(
+      in srgb,
+      hsl(var(--brand-surface)) 82%,
+      rgba(255, 255, 255, 0.04)
+    );
     --hero-beam-stripe: rgba(var(--accent-rgb) / 0.12);
     --hero-beam-highlight: rgba(var(--accent-rgb) / 0.22);
     --hero-spotlight: rgba(var(--accent-rgb) / 0.24);
@@ -36,34 +44,38 @@
 
   .marketing-hero__surface::before,
   .marketing-hero__surface::after {
-    content: '';
+    content: "";
     position: absolute;
     pointer-events: none;
     mix-blend-mode: screen;
     display: none;
   }
 
-  .marketing-hero[data-surface='none']::after {
+  .marketing-hero[data-surface="none"]::after {
     content: none;
   }
 
-  .marketing-hero[data-surface='none'] .marketing-hero__surface::before,
-  .marketing-hero[data-surface='none'] .marketing-hero__surface::after {
+  .marketing-hero[data-surface="none"] .marketing-hero__surface::before,
+  .marketing-hero[data-surface="none"] .marketing-hero__surface::after {
     display: none;
   }
 
-  .marketing-hero[data-surface='gradient']::after {
-    content: '';
+  .marketing-hero[data-surface="gradient"]::after {
+    content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(var(--hero-gradient-angle), var(--hero-surface-primary), var(--hero-surface-secondary));
+    background: linear-gradient(
+      var(--hero-gradient-angle),
+      var(--hero-surface-primary),
+      var(--hero-surface-secondary)
+    );
     border-bottom: 1px solid rgba(var(--accent-rgb) / 0.24);
     pointer-events: none;
     z-index: 0;
     opacity: 1;
   }
 
-  .marketing-hero[data-surface='gradient'] .marketing-hero__surface::before {
+  .marketing-hero[data-surface="gradient"] .marketing-hero__surface::before {
     display: block;
     width: clamp(420px, 42vw, 560px);
     height: clamp(420px, 42vw, 560px);
@@ -78,7 +90,7 @@
     box-shadow: 0 32px 58px rgba(8, 10, 24, 0.42);
   }
 
-  .marketing-hero[data-surface='gradient'] .marketing-hero__surface::after {
+  .marketing-hero[data-surface="gradient"] .marketing-hero__surface::after {
     display: block;
     width: clamp(360px, 36vw, 520px);
     height: clamp(360px, 36vw, 520px);
@@ -93,30 +105,35 @@
     box-shadow: 0 18px 46px rgba(8, 10, 24, 0.32);
   }
 
-  .marketing-hero[data-surface='beams']::after {
-    content: '';
+  .marketing-hero[data-surface="beams"]::after {
+    content: "";
     position: absolute;
     inset: 0;
-    background:
-      linear-gradient(165deg, color-mix(in srgb, var(--hero-surface-primary) 96%, rgba(0, 0, 0, 0.08)), color-mix(in srgb, var(--hero-surface-secondary) 92%, rgba(0, 0, 0, 0.18)));
+    background: linear-gradient(
+      165deg,
+      color-mix(in srgb, var(--hero-surface-primary) 96%, rgba(0, 0, 0, 0.08)),
+      color-mix(in srgb, var(--hero-surface-secondary) 92%, rgba(0, 0, 0, 0.18))
+    );
     border-bottom: 1px solid rgba(var(--accent-rgb) / 0.22);
     pointer-events: none;
     z-index: 0;
     opacity: 1;
   }
 
-  .marketing-hero[data-surface='beams'] .marketing-hero__surface::before {
+  .marketing-hero[data-surface="beams"] .marketing-hero__surface::before {
     display: block;
     width: clamp(520px, 56vw, 760px);
     height: clamp(480px, 52vw, 680px);
     top: var(--hero-before-top, -220px);
     left: var(--hero-before-left, -320px);
     background:
-      repeating-linear-gradient(135deg,
+      repeating-linear-gradient(
+        135deg,
         transparent,
         transparent 32px,
         var(--hero-beam-stripe) 32px,
-        var(--hero-beam-stripe) 60px),
+        var(--hero-beam-stripe) 60px
+      ),
       radial-gradient(circle at 12% 18%, var(--hero-beam-highlight), transparent 70%);
     border-radius: 36px;
     transform: rotate(var(--hero-before-rotate, -12deg)) scale(var(--hero-before-scale, 1.04));
@@ -124,7 +141,7 @@
     filter: blur(0.4px);
   }
 
-  .marketing-hero[data-surface='beams'] .marketing-hero__surface::after {
+  .marketing-hero[data-surface="beams"] .marketing-hero__surface::after {
     display: block;
     width: clamp(420px, 48vw, 640px);
     height: clamp(340px, 38vw, 520px);
@@ -138,22 +155,26 @@
     opacity: var(--hero-after-opacity, 0.55);
   }
 
-  .marketing-hero[data-surface='spotlight']::after {
-    content: '';
+  .marketing-hero[data-surface="spotlight"]::after {
+    content: "";
     position: absolute;
     inset: 0;
     background:
       radial-gradient(circle at 30% 42%, var(--hero-spotlight), transparent 60%),
       radial-gradient(circle at 80% 18%, rgba(var(--accent-rgb) / 0.16), transparent 70%),
-      linear-gradient(var(--hero-gradient-angle), var(--hero-surface-primary), var(--hero-surface-secondary));
+      linear-gradient(
+        var(--hero-gradient-angle),
+        var(--hero-surface-primary),
+        var(--hero-surface-secondary)
+      );
     border-bottom: 1px solid rgba(var(--accent-rgb) / 0.22);
     pointer-events: none;
     z-index: 0;
     opacity: 1;
   }
 
-  .marketing-hero[data-surface='spotlight'] .marketing-hero__surface::before,
-  .marketing-hero[data-surface='spotlight'] .marketing-hero__surface::after {
+  .marketing-hero[data-surface="spotlight"] .marketing-hero__surface::before,
+  .marketing-hero[data-surface="spotlight"] .marketing-hero__surface::after {
     display: none;
   }
 
@@ -174,14 +195,20 @@
     opacity: var(--accent-opacity, 0.45);
     filter: blur(var(--accent-blur, 0));
     border-radius: var(--accent-radius, clamp(28px, 6vw, 48px));
-    background: var(--accent-fill, linear-gradient(135deg, rgba(var(--accent-rgb) / 0.28), rgba(18, 22, 38, 0.14)));
+    background: var(
+      --accent-fill,
+      linear-gradient(135deg, rgba(var(--accent-rgb) / 0.28), rgba(18, 22, 38, 0.14))
+    );
     mix-blend-mode: screen;
     z-index: var(--accent-layer, 1);
   }
 
   .marketing-hero__accent--spot {
     border-radius: 999px;
-    background: var(--accent-fill, radial-gradient(circle, rgba(var(--accent-rgb) / 0.28) 0%, transparent 70%));
+    background: var(
+      --accent-fill,
+      radial-gradient(circle, rgba(var(--accent-rgb) / 0.28) 0%, transparent 70%)
+    );
   }
 
   .marketing-hero__container {
@@ -221,7 +248,7 @@
     justify-content: center;
   }
 
-  .marketing-hero__media>* {
+  .marketing-hero__media > * {
     width: 100%;
     max-width: 520px;
   }
@@ -407,5 +434,4 @@
       order: 1;
     }
   }
-
 }

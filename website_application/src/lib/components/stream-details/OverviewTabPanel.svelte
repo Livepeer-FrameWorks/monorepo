@@ -132,18 +132,18 @@
   const storageStats = $derived.by(() => {
     const loadedRecordings = recordings || [];
     const loadedClips = clips || [];
-    
+
     const recordingBytes = loadedRecordings.reduce((sum, r) => sum + (r.sizeBytes || 0), 0);
     const clipBytes = loadedClips.reduce((sum, c) => sum + (c.sizeBytes || 0), 0);
-    const frozenRecordings = loadedRecordings.filter(r => r.isFrozen).length;
-    const frozenClips = loadedClips.filter(c => c.isFrozen).length;
+    const frozenRecordings = loadedRecordings.filter((r) => r.isFrozen).length;
+    const frozenClips = loadedClips.filter((c) => c.isFrozen).length;
 
     return {
       totalBytes: recordingBytes + clipBytes,
       recordingBytes,
       clipBytes,
       frozenAssets: frozenRecordings + frozenClips,
-      totalAssets: loadedRecordings.length + loadedClips.length
+      totalAssets: loadedRecordings.length + loadedClips.length,
     };
   });
 
@@ -157,7 +157,7 @@
 
   // Map viewer metrics for the chart
   const chartData = $derived(
-    viewerMetrics.map(m => ({ timestamp: m.timestamp, viewers: m.viewerCount }))
+    viewerMetrics.map((m) => ({ timestamp: m.timestamp, viewers: m.viewerCount }))
   );
 
   const VideoIcon = $derived(getIconComponent("Video"));
@@ -200,9 +200,11 @@
     <div class="slab col-span-full">
       <div class="slab-header flex items-center gap-2">
         <ActivityIcon class="w-5 h-5 text-success animate-pulse" />
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Live Encoding</h3>
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+          Live Encoding
+        </h3>
         <span class="text-xs text-muted-foreground ml-auto">
-          {tracks.totalTracks ?? 0} track{(tracks.totalTracks ?? 0) !== 1 ? 's' : ''} active
+          {tracks.totalTracks ?? 0} track{(tracks.totalTracks ?? 0) !== 1 ? "s" : ""} active
         </span>
       </div>
 
@@ -214,7 +216,9 @@
               <VideoIcon class="w-4 h-4 text-accent-purple" />
               <span class="font-medium text-foreground">{track.trackName}</span>
               {#if track.codec}
-                <span class="px-2 py-0.5 text-xs font-mono bg-accent-purple/10 text-accent-purple rounded">
+                <span
+                  class="px-2 py-0.5 text-xs font-mono bg-accent-purple/10 text-accent-purple rounded"
+                >
                   {track.codec}
                 </span>
               {/if}
@@ -265,14 +269,20 @@
                 <div>
                   <span class="text-muted-foreground">Channels</span>
                   <p class="font-mono text-foreground">
-                    {track.channels === 1 ? 'Mono' : track.channels === 2 ? 'Stereo' : `${track.channels}ch`}
+                    {track.channels === 1
+                      ? "Mono"
+                      : track.channels === 2
+                        ? "Stereo"
+                        : `${track.channels}ch`}
                   </p>
                 </div>
               {/if}
               {#if track.sampleRate}
                 <div>
                   <span class="text-muted-foreground">Sample Rate</span>
-                  <p class="font-mono text-foreground">{(track.sampleRate / 1000).toFixed(1)} kHz</p>
+                  <p class="font-mono text-foreground">
+                    {(track.sampleRate / 1000).toFixed(1)} kHz
+                  </p>
                 </div>
               {/if}
               {#if track.bitrateKbps}
@@ -302,7 +312,9 @@
   <!-- Stream Information -->
   <div class="slab">
     <div class="slab-header">
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Stream Information</h3>
+      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+        Stream Information
+      </h3>
     </div>
     <div class="slab-body--padded space-y-3">
       <div>
@@ -335,27 +347,23 @@
   <!-- Quick Stats -->
   <div class="slab">
     <div class="slab-header">
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Quick Stats</h3>
+      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+        Quick Stats
+      </h3>
     </div>
     <div class="slab-body--padded space-y-3">
       <div class="flex justify-between items-center">
         <span class="text-muted-foreground">Total Stream Keys:</span>
-        <span class="font-mono text-info font-medium"
-          >{streamKeys.length}</span
-        >
+        <span class="font-mono text-info font-medium">{streamKeys.length}</span>
       </div>
       <div class="flex justify-between items-center">
         <span class="text-muted-foreground">Total Recordings:</span>
-        <span class="font-mono text-info font-medium"
-          >{recordings.length}</span
-        >
+        <span class="font-mono text-info font-medium">{recordings.length}</span>
       </div>
       {#if analytics}
         <div class="flex justify-between items-center">
           <span class="text-muted-foreground">24h Peak Viewers:</span>
-          <span class="font-mono text-info font-medium"
-            >{analytics.peakViewers || 0}</span
-          >
+          <span class="font-mono text-info font-medium">{analytics.peakViewers || 0}</span>
         </div>
         <div class="flex justify-between items-center">
           <span class="text-muted-foreground">Total Watch Time:</span>
@@ -371,7 +379,9 @@
   <div class="slab">
     <div class="slab-header flex items-center gap-2">
       <HardDriveIcon class="w-5 h-5 text-accent-purple" />
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Storage Summary</h3>
+      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+        Storage Summary
+      </h3>
     </div>
     <div class="slab-body--padded space-y-4">
       <div class="flex justify-between items-center">
@@ -380,7 +390,7 @@
           {formatBytes(storageStats.totalBytes)}
         </span>
       </div>
-      
+
       <div class="grid grid-cols-2 gap-4 pt-2 border-t border-border/30">
         <div>
           <div class="flex items-center gap-1.5 mb-1">
@@ -399,7 +409,9 @@
       </div>
 
       {#if storageStats.frozenAssets > 0}
-        <div class="flex items-center justify-between pt-2 border-t border-border/30 bg-blue-500/5 -mx-4 px-4 py-2 mt-2">
+        <div
+          class="flex items-center justify-between pt-2 border-t border-border/30 bg-blue-500/5 -mx-4 px-4 py-2 mt-2"
+        >
           <div class="flex items-center gap-2 text-blue-400">
             <SnowflakeIcon class="w-4 h-4" />
             <span class="text-sm font-medium">Archived to Cold Storage</span>
@@ -415,7 +427,9 @@
     <div class="slab col-span-full">
       <div class="slab-header flex items-center gap-2">
         <NetworkIcon class="w-5 h-5 text-info" />
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Network Stats</h3>
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+          Network Stats
+        </h3>
       </div>
       <div class="slab-body--padded">
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -425,22 +439,34 @@
           </div>
           <div>
             <span class="text-sm text-muted-foreground">Packets Lost</span>
-            <p class="font-mono text-lg {analytics.packetsLost > 0 ? 'text-warning' : 'text-foreground'}">
+            <p
+              class="font-mono text-lg {analytics.packetsLost > 0
+                ? 'text-warning'
+                : 'text-foreground'}"
+            >
               {formatNumber(analytics.packetsLost)}
             </p>
           </div>
           <div>
             <span class="text-sm text-muted-foreground">Retransmitted</span>
-            <p class="font-mono text-lg text-foreground">{formatNumber(analytics.packetsRetrans)}</p>
+            <p class="font-mono text-lg text-foreground">
+              {formatNumber(analytics.packetsRetrans)}
+            </p>
           </div>
           <div>
             <span class="text-sm text-muted-foreground">Packet Loss Rate</span>
-            <p class="font-mono text-lg {getPacketLossColor(analytics.packetLossRate)} flex items-center gap-1">
+            <p
+              class="font-mono text-lg {getPacketLossColor(
+                analytics.packetLossRate
+              )} flex items-center gap-1"
+            >
               {analytics.packetLossRate !== null && analytics.packetLossRate !== undefined
                 ? `${(analytics.packetLossRate * 100).toFixed(3)}%`
                 : "N/A"}
               {#if analytics.packetLossRate === null || analytics.packetLossRate === undefined}
-                <span title="Packet statistics are available for UDP-based protocols (SRT, WebRTC) which prioritize low latency. HTTP-based protocols (HLS, DASH) use TCP which guarantees delivery but adds latency through retransmission.">
+                <span
+                  title="Packet statistics are available for UDP-based protocols (SRT, WebRTC) which prioritize low latency. HTTP-based protocols (HLS, DASH) use TCP which guarantees delivery but adds latency through retransmission."
+                >
                   <InfoIcon class="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </span>
               {/if}
@@ -456,7 +482,9 @@
     <div class="slab col-span-full">
       <div class="slab-header flex items-center gap-2">
         <VideoIcon class="w-5 h-5 text-success" />
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Quality Mix</h3>
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+          Quality Mix
+        </h3>
         {#if qualityTierSummary.totalMinutes}
           <span class="text-xs text-muted-foreground ml-auto">
             {formatMinutes(qualityTierSummary.totalMinutes)} analyzed
@@ -477,7 +505,9 @@
           <div>
             <span class="text-sm text-muted-foreground">Avg Bitrate</span>
             <p class="font-mono text-lg text-foreground">
-              {qualityTierSummary.avgBitrate ? `${Math.round(qualityTierSummary.avgBitrate / 1000)} kbps` : "N/A"}
+              {qualityTierSummary.avgBitrate
+                ? `${Math.round(qualityTierSummary.avgBitrate / 1000)} kbps`
+                : "N/A"}
             </p>
           </div>
           <div>
@@ -507,15 +537,13 @@
   <div class="slab col-span-full">
     <div class="slab-header flex items-center gap-2">
       <TrendingUpIcon class="w-5 h-5 text-primary" />
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Viewer Trend (24h)</h3>
+      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+        Viewer Trend (24h)
+      </h3>
     </div>
     <div class="slab-body--padded">
       {#if chartData.length > 0}
-        <ViewerTrendChart
-          data={chartData}
-          height={200}
-          title=""
-        />
+        <ViewerTrendChart data={chartData} height={200} title="" />
       {:else}
         <div class="h-[200px] flex items-center justify-center">
           <EmptyState
@@ -533,12 +561,16 @@
     <div class="slab col-span-full">
       <div class="slab-header flex items-center gap-2">
         <CalendarIcon class="w-5 h-5 text-info" />
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Daily Analytics (Last 30 Days)</h3>
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+          Daily Analytics (Last 30 Days)
+        </h3>
         <span class="text-xs text-muted-foreground ml-auto">{dailyAnalytics.length} days</span>
       </div>
 
       <!-- Summary Cards -->
-      <div class="slab-body--padded grid grid-cols-2 md:grid-cols-4 gap-4 pb-4 border-b border-border/30">
+      <div
+        class="slab-body--padded grid grid-cols-2 md:grid-cols-4 gap-4 pb-4 border-b border-border/30"
+      >
         <div>
           <span class="text-sm text-muted-foreground">Total Views</span>
           <p class="font-mono text-lg text-info font-medium">
@@ -548,7 +580,7 @@
         <div>
           <span class="text-sm text-muted-foreground">Unique Viewers</span>
           <p class="font-mono text-lg text-success font-medium">
-            {formatNumber(Math.max(...dailyAnalytics.map(d => d.uniqueViewers)))}
+            {formatNumber(Math.max(...dailyAnalytics.map((d) => d.uniqueViewers)))}
             <span class="text-xs text-muted-foreground">peak</span>
           </p>
         </div>
@@ -556,7 +588,7 @@
           <span class="text-sm text-muted-foreground">Countries Reached</span>
           <p class="font-mono text-lg text-accent-purple font-medium flex items-center gap-1">
             <GlobeIcon class="w-4 h-4" />
-            {Math.max(...dailyAnalytics.map(d => d.uniqueCountries))}
+            {Math.max(...dailyAnalytics.map((d) => d.uniqueCountries))}
           </p>
         </div>
         <div>
@@ -571,7 +603,9 @@
       <div class="slab-body--padded overflow-x-auto">
         <table class="w-full text-sm">
           <thead>
-            <tr class="text-muted-foreground text-xs uppercase tracking-wide border-b border-border/30">
+            <tr
+              class="text-muted-foreground text-xs uppercase tracking-wide border-b border-border/30"
+            >
               <th class="text-left py-2 px-2">Date</th>
               <th class="text-right py-2 px-2">Views</th>
               <th class="text-right py-2 px-2">Unique Viewers</th>
@@ -584,7 +618,11 @@
             {#each dailyAnalytics.slice().reverse() as day, i (`${day.day}-${i}`)}
               <tr class="border-b border-border/20 hover:bg-muted/20">
                 <td class="py-2 px-2 font-mono text-foreground">
-                  {new Date(day.day).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                  {new Date(day.day).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
                 </td>
                 <td class="py-2 px-2 text-right font-mono text-info">
                   {formatNumber(day.totalViews)}

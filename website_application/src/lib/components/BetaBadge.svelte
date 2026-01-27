@@ -17,6 +17,6 @@
   }: Props = $props();
 </script>
 
-<Badge class={`uppercase tracking-wide ${className}`} variant={variant} tone={tone}>
+<Badge class={`uppercase tracking-wide ${className}`} {variant} {tone}>
   {label}
 </Badge>

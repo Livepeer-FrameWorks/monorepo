@@ -15,7 +15,7 @@
  * 5. Limit lowering rate to prevent oscillation
  */
 
-import type { JitterState } from './types';
+import type { JitterState } from "./types";
 
 /** Default sliding window size for chunk tracking */
 const DEFAULT_CHUNK_WINDOW = 8;
@@ -156,8 +156,7 @@ export class JitterTracker {
     // Calculate new weighted average
     if (this.peaks.length > 0) {
       const maxPeak = Math.max(...this.peaks);
-      const avgPeak =
-        this.peaks.reduce((sum, p) => sum + p, 0) / this.peaks.length;
+      const avgPeak = this.peaks.reduce((sum, p) => sum + p, 0) / this.peaks.length;
 
       // Weighted: emphasize max peak for safety
       let weighted = (avgPeak + maxPeak * 2) / 3 + MIN_JITTER;
@@ -193,8 +192,8 @@ export class JitterTracker {
   /**
    * Set playback speed for jitter calculation
    */
-  setSpeed(speed: number | 'auto'): void {
-    const newSpeed = speed === 'auto' ? 1 : speed;
+  setSpeed(speed: number | "auto"): void {
+    const newSpeed = speed === "auto" ? 1 : speed;
     if (newSpeed !== this.speed) {
       this.speed = newSpeed;
       this.reset();
@@ -267,8 +266,8 @@ export class MultiTrackJitterTracker {
   /**
    * Set playback speed for all trackers
    */
-  setSpeed(speed: number | 'auto'): void {
-    this.globalSpeed = speed === 'auto' ? 1 : speed;
+  setSpeed(speed: number | "auto"): void {
+    this.globalSpeed = speed === "auto" ? 1 : speed;
     for (const tracker of this.trackers.values()) {
       tracker.setSpeed(speed);
     }

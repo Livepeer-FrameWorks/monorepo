@@ -59,12 +59,12 @@ export class SubtitleManager {
     const onLoadedData = () => this.correctSubtitleSync();
     const onSeeked = () => this.correctSubtitleSync();
 
-    video.addEventListener('loadeddata', onLoadedData);
-    video.addEventListener('seeked', onSeeked);
+    video.addEventListener("loadeddata", onLoadedData);
+    video.addEventListener("seeked", onSeeked);
 
     this.listeners = [
-      () => video.removeEventListener('loadeddata', onLoadedData),
-      () => video.removeEventListener('seeked', onSeeked),
+      () => video.removeEventListener("loadeddata", onLoadedData),
+      () => video.removeEventListener("seeked", onSeeked),
     ];
   }
 
@@ -72,7 +72,7 @@ export class SubtitleManager {
    * Detach from video element
    */
   detach(): void {
-    this.listeners.forEach(fn => fn());
+    this.listeners.forEach((fn) => fn());
     this.listeners = [];
     this.removeAllTracks();
     this.video = null;
@@ -92,7 +92,7 @@ export class SubtitleManager {
    */
   getTrackElements(): HTMLTrackElement[] {
     if (!this.video) return [];
-    return Array.from(this.video.querySelectorAll('track'));
+    return Array.from(this.video.querySelectorAll("track"));
   }
 
   /**
@@ -101,7 +101,7 @@ export class SubtitleManager {
    */
   setSubtitle(track: SubtitleTrackInfo | null): void {
     if (!this.video) {
-      this.log('Cannot set subtitle: no video element attached');
+      this.log("Cannot set subtitle: no video element attached");
       return;
     }
 
@@ -110,20 +110,20 @@ export class SubtitleManager {
 
     if (!track) {
       this.currentTrackId = null;
-      this.log('Subtitles disabled');
+      this.log("Subtitles disabled");
       return;
     }
 
     // Create new track element
-    const trackElement = document.createElement('track');
-    trackElement.kind = 'subtitles';
+    const trackElement = document.createElement("track");
+    trackElement.kind = "subtitles";
     trackElement.label = track.label;
     trackElement.srclang = track.lang;
     trackElement.src = this.buildTrackUrl(track.src);
     trackElement.default = true;
 
     // Set up load handler for sync correction
-    trackElement.addEventListener('load', () => {
+    trackElement.addEventListener("load", () => {
       this.correctSubtitleSync();
     });
 
@@ -133,7 +133,7 @@ export class SubtitleManager {
     // Enable the track
     const textTrack = this.video.textTracks[this.video.textTracks.length - 1];
     if (textTrack) {
-      textTrack.mode = 'showing';
+      textTrack.mode = "showing";
     }
 
     this.log(`Subtitle track set: ${track.label} (${track.lang})`);
@@ -146,14 +146,14 @@ export class SubtitleManager {
     let url = src;
 
     // If relative URL and base URL provided, construct full URL
-    if (!url.startsWith('http') && this.config.mistBaseUrl) {
-      const base = this.config.mistBaseUrl.replace(/\/$/, '');
-      url = url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
+    if (!url.startsWith("http") && this.config.mistBaseUrl) {
+      const base = this.config.mistBaseUrl.replace(/\/$/, "");
+      url = url.startsWith("/") ? `${base}${url}` : `${base}/${url}`;
     }
 
     // Append URL params if configured
     if (this.config.urlAppend) {
-      const separator = url.includes('?') ? '&' : '?';
+      const separator = url.includes("?") ? "&" : "?";
       url = `${url}${separator}${this.config.urlAppend}`;
     }
 
@@ -181,8 +181,8 @@ export class SubtitleManager {
   removeAllTracks(): void {
     if (!this.video) return;
 
-    const tracks = this.video.querySelectorAll('track');
-    tracks.forEach(track => track.remove());
+    const tracks = this.video.querySelectorAll("track");
+    tracks.forEach((track) => track.remove());
   }
 
   /**
@@ -258,7 +258,9 @@ export class SubtitleManager {
    * Parse subtitle tracks from MistServer stream info
    */
   static parseTracksFromStreamInfo(
-    streamInfo: { meta?: { tracks?: Record<string, { type: string; codec: string; lang?: string }> } },
+    streamInfo: {
+      meta?: { tracks?: Record<string, { type: string; codec: string; lang?: string }> };
+    },
     baseUrl: string,
     streamName: string
   ): SubtitleTrackInfo[] {
@@ -267,9 +269,9 @@ export class SubtitleManager {
     if (!streamInfo.meta?.tracks) return tracks;
 
     for (const [trackId, trackData] of Object.entries(streamInfo.meta.tracks)) {
-      if (trackData.type === 'meta' && trackData.codec === 'subtitle') {
-        const lang = trackData.lang || 'und';
-        const label = lang === 'und' ? `Subtitles ${trackId}` : lang.toUpperCase();
+      if (trackData.type === "meta" && trackData.codec === "subtitle") {
+        const lang = trackData.lang || "und";
+        const label = lang === "und" ? `Subtitles ${trackId}` : lang.toUpperCase();
         tracks.push(SubtitleManager.createTrackInfo(trackId, label, lang, baseUrl, streamName));
       }
     }

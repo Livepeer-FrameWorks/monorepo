@@ -9,12 +9,43 @@
 
 ## Code Style
 
-- Go: Run `make verify` (includes `gofmt`, `golangci-lint`, tests)
-- TypeScript/Svelte: Run `pnpm lint`
+### Linting
+
+**Go:**
+
+```bash
+make lint       # Show all violations (for cleanup)
+make lint-fix   # Auto-fix what's possible
+make lint-count # Track cleanup progress
+```
+
+**Frontend:**
+
+```bash
+pnpm lint       # ESLint
+pnpm format     # Prettier (auto-fix)
+pnpm format:check  # Check without fixing
+```
+
+### Pre-commit Hooks
+
+Hooks auto-install on `pnpm install` via Lefthook. They run:
+
+- `gofmt` and `golangci-lint` on staged Go files
+- Prettier and ESLint on staged frontend files
+
+To skip temporarily: `git commit --no-verify`
+
+### Indentation
+
+- Go: tabs (enforced by `gofmt`)
+- JS/TS/Svelte/JSON/YAML: 2 spaces
+- See `.editorconfig` for full settings
 
 ### Svelte 5 Patterns
 
 Use runes, not old syntax:
+
 - `$state()` not `let`
 - `$derived()` not `$:`
 - `$props()` not `export let`
@@ -25,7 +56,9 @@ Use runes, not old syntax:
 // Bad: myState.length outside untrack creates dependency
 $effect(() => {
   if (newData && myState.length === 0) {
-    untrack(() => { myState = newData; });
+    untrack(() => {
+      myState = newData;
+    });
   }
 });
 

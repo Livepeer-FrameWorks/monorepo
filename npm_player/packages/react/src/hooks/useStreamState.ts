@@ -1,10 +1,5 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import type {
-  UseStreamStateOptions,
-  StreamState,
-  StreamStatus,
-  MistStreamInfo,
-} from '../types';
+import { useEffect, useState, useRef, useCallback } from "react";
+import type { UseStreamStateOptions, StreamState, StreamStatus, MistStreamInfo } from "../types";
 
 /**
  * Parse MistServer error string into StreamStatus enum
@@ -12,14 +7,14 @@ import type {
 function parseErrorToStatus(error: string): StreamStatus {
   const lowerError = error.toLowerCase();
 
-  if (lowerError.includes('offline')) return 'OFFLINE';
-  if (lowerError.includes('initializing')) return 'INITIALIZING';
-  if (lowerError.includes('booting')) return 'BOOTING';
-  if (lowerError.includes('waiting for data')) return 'WAITING_FOR_DATA';
-  if (lowerError.includes('shutting down')) return 'SHUTTING_DOWN';
-  if (lowerError.includes('invalid')) return 'INVALID';
+  if (lowerError.includes("offline")) return "OFFLINE";
+  if (lowerError.includes("initializing")) return "INITIALIZING";
+  if (lowerError.includes("booting")) return "BOOTING";
+  if (lowerError.includes("waiting for data")) return "WAITING_FOR_DATA";
+  if (lowerError.includes("shutting down")) return "SHUTTING_DOWN";
+  if (lowerError.includes("invalid")) return "INVALID";
 
-  return 'ERROR';
+  return "ERROR";
 }
 
 /**
@@ -27,25 +22,25 @@ function parseErrorToStatus(error: string): StreamStatus {
  */
 function getStatusMessage(status: StreamStatus, percentage?: number): string {
   switch (status) {
-    case 'ONLINE':
-      return 'Stream is online';
-    case 'OFFLINE':
-      return 'Stream is offline';
-    case 'INITIALIZING':
+    case "ONLINE":
+      return "Stream is online";
+    case "OFFLINE":
+      return "Stream is offline";
+    case "INITIALIZING":
       return percentage !== undefined
         ? `Initializing... ${Math.round(percentage * 10) / 10}%`
-        : 'Stream is initializing';
-    case 'BOOTING':
-      return 'Stream is starting up';
-    case 'WAITING_FOR_DATA':
-      return 'Waiting for stream data';
-    case 'SHUTTING_DOWN':
-      return 'Stream is shutting down';
-    case 'INVALID':
-      return 'Stream status is invalid';
-    case 'ERROR':
+        : "Stream is initializing";
+    case "BOOTING":
+      return "Stream is starting up";
+    case "WAITING_FOR_DATA":
+      return "Waiting for stream data";
+    case "SHUTTING_DOWN":
+      return "Stream is shutting down";
+    case "INVALID":
+      return "Stream status is invalid";
+    case "ERROR":
     default:
-      return 'Stream error';
+      return "Stream error";
   }
 }
 
@@ -53,9 +48,9 @@ function getStatusMessage(status: StreamStatus, percentage?: number): string {
  * Initial stream state
  */
 const initialState: StreamState = {
-  status: 'OFFLINE',
+  status: "OFFLINE",
   isOnline: false,
-  message: 'Connecting...',
+  message: "Connecting...",
   lastUpdate: 0,
 };
 
@@ -115,7 +110,7 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
       const status = parseErrorToStatus(data.error);
       const message = data.on_error || getStatusMessage(status, data.perc);
 
-      setState(prev => ({
+      setState((prev) => ({
         status,
         isOnline: false,
         message,
@@ -128,10 +123,10 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
       // Stream is online with valid metadata
       // Merge new data with existing streamInfo to preserve source/tracks from initial fetch
       // WebSocket updates may not include source array - only status updates
-      setState(prev => {
+      setState((prev) => {
         const mergedStreamInfo: MistStreamInfo = {
-          ...prev.streamInfo,  // Keep existing source/meta if present
-          ...data,             // Override with new data
+          ...prev.streamInfo, // Keep existing source/meta if present
+          ...data, // Override with new data
           // Explicitly preserve source if not in new data
           source: data.source || prev.streamInfo?.source,
           // Merge meta to preserve tracks
@@ -144,9 +139,9 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
         };
 
         return {
-          status: 'ONLINE',
+          status: "ONLINE",
           isOnline: true,
-          message: 'Stream is online',
+          message: "Stream is online",
           lastUpdate: Date.now(),
           streamInfo: mergedStreamInfo,
         };
@@ -163,11 +158,11 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
 
     try {
       // Build URL with MistPlayer-style params
-      const baseUrl = `${mistBaseUrl.replace(/\/$/, '')}/json_${encodeURIComponent(streamName)}.js`;
+      const baseUrl = `${mistBaseUrl.replace(/\/$/, "")}/json_${encodeURIComponent(streamName)}.js`;
       const url = `${baseUrl}?metaeverywhere=1&inclzero=1`;
       const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' },
+        method: "GET",
+        headers: { Accept: "application/json" },
       });
 
       if (!response.ok) {
@@ -187,13 +182,13 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
     } catch (error) {
       if (!mountedRef.current) return;
 
-      setState(prev => ({
+      setState((prev) => ({
         ...prev,
-        status: 'ERROR',
+        status: "ERROR",
         isOnline: false,
-        message: error instanceof Error ? error.message : 'Connection failed',
+        message: error instanceof Error ? error.message : "Connection failed",
         lastUpdate: Date.now(),
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: error instanceof Error ? error.message : "Unknown error",
       }));
     }
 
@@ -222,9 +217,9 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
     try {
       // Convert http(s) to ws(s)
       const wsUrl = mistBaseUrl
-        .replace(/^http:/, 'ws:')
-        .replace(/^https:/, 'wss:')
-        .replace(/\/$/, '');
+        .replace(/^http:/, "ws:")
+        .replace(/^https:/, "wss:")
+        .replace(/\/$/, "");
 
       // Build URL with MistPlayer-style params
       const url = `${wsUrl}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
@@ -235,7 +230,7 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
       wsTimeoutRef.current = setTimeout(() => {
         if (ws.readyState <= WebSocket.OPEN) {
           if (debug) {
-            console.debug('[useStreamState] WebSocket timeout (5s), falling back to HTTP polling');
+            console.debug("[useStreamState] WebSocket timeout (5s), falling back to HTTP polling");
           }
           ws.close();
           pollHttp();
@@ -244,7 +239,7 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
 
       ws.onopen = () => {
         if (debug) {
-          console.debug('[useStreamState] WebSocket connected');
+          console.debug("[useStreamState] WebSocket connected");
         }
         setSocketReady(true);
       };
@@ -260,12 +255,12 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
           const data = JSON.parse(event.data) as MistStreamInfo;
           processStreamInfo(data);
         } catch (e) {
-          console.warn('[useStreamState] Failed to parse WebSocket message:', e);
+          console.warn("[useStreamState] Failed to parse WebSocket message:", e);
         }
       };
 
       ws.onerror = (_event) => {
-        console.warn('[useStreamState] WebSocket error, falling back to HTTP polling');
+        console.warn("[useStreamState] WebSocket error, falling back to HTTP polling");
         if (wsTimeoutRef.current) {
           clearTimeout(wsTimeoutRef.current);
           wsTimeoutRef.current = null;
@@ -281,12 +276,12 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
 
         // Fallback to HTTP polling or reconnect
         if (debug) {
-          console.debug('[useStreamState] WebSocket closed, starting HTTP polling');
+          console.debug("[useStreamState] WebSocket closed, starting HTTP polling");
         }
         pollHttp();
       };
     } catch (error) {
-      console.warn('[useStreamState] WebSocket connection failed:', error);
+      console.warn("[useStreamState] WebSocket connection failed:", error);
       // Fallback to HTTP polling
       pollHttp();
     }
@@ -320,7 +315,7 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
     // Reset state when stream changes
     setState({
       ...initialState,
-      message: 'Connecting...',
+      message: "Connecting...",
       lastUpdate: Date.now(),
     });
 
@@ -342,7 +337,7 @@ export function useStreamState(options: UseStreamStateOptions): UseStreamStateRe
       // Set mounted=false FIRST before any other cleanup
       mountedRef.current = false;
       if (debug) {
-        console.debug('[useStreamState] cleanup starting, mountedRef set to false');
+        console.debug("[useStreamState] cleanup starting, mountedRef set to false");
       }
 
       // Cleanup WebSocket timeout

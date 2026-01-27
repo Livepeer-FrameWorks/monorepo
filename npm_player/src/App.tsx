@@ -7,7 +7,9 @@ export function App(): React.ReactElement {
       <header className="fw-mb-10 max-w-2xl text-center">
         <h1 className="fw-text-3xl font-semibold">FrameWorks Player Demo</h1>
         <p className="fw-mt-3 text-sm text-slate-400">
-          This package ships with a dedicated Vite playground. Run <code className="fw-rounded bg-slate-800 px-2 py-1 text-xs">pnpm run playground:dev</code> to try the interactive tester.
+          This package ships with a dedicated Vite playground. Run{" "}
+          <code className="fw-rounded bg-slate-800 px-2 py-1 text-xs">pnpm run playground:dev</code>{" "}
+          to try the interactive tester.
         </p>
       </header>
       <div className="fw-w-full max-w-4xl overflow-hidden rounded-xl border border-white/10 bg-black">

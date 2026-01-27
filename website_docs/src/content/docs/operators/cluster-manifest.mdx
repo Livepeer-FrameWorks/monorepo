@@ -5,12 +5,13 @@ sidebar:
   order: 4
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 The cluster manifest is the blueprint for your FrameWorks deployment. It's a YAML file that tells the CLI how to provision infrastructure, services, and interfaces.
 
 <Aside type="tip">
-FrameWorks uses a GitOps-friendly approach. We recommend committing your `cluster.yaml` to a private repository to track changes over time.
+  FrameWorks uses a GitOps-friendly approach. We recommend committing your `cluster.yaml` to a
+  private repository to track changes over time.
 </Aside>
 
 ## File Structure
@@ -34,6 +35,7 @@ observability: {}
 Manifest schema version (required).
 
 **Example:**
+
 ```yaml
 version: v1
 ```
@@ -45,10 +47,12 @@ version: v1
 Cluster manifest type (required).
 
 **Values:**
+
 - `cluster` - Full multi-service deployment.
 - `edge` - Single edge node deployment (use `edges.yaml` for multi-node edge fleets; see below).
 
 **Example:**
+
 ```yaml
 type: cluster
 ```
@@ -62,6 +66,7 @@ Environment/profile name. This is used to form the default cluster ID during pro
 **Common values:** `development`, `staging`, `production`.
 
 **Example:**
+
 ```yaml
 profile: production
 ```
@@ -73,19 +78,21 @@ profile: production
 Map of host definitions for SSH access.
 
 **Format:**
+
 ```yaml
 hosts:
   <hostname>:
     address: <ip-or-hostname>
-    external_ip: <public-ip>           # optional
+    external_ip: <public-ip> # optional
     user: <ssh-user>
-    ssh_key: <path-to-private-key>    # optional
-    roles: [infrastructure, services]  # optional
-    labels:                            # optional
+    ssh_key: <path-to-private-key> # optional
+    roles: [infrastructure, services] # optional
+    labels: # optional
       environment: prod
 ```
 
 **Fields:**
+
 - `address` (required) - IP address or hostname
 - `external_ip` (optional) - Public IP used for DNS registration
 - `user` (required) - SSH username
@@ -100,6 +107,7 @@ hosts:
 WireGuard mesh configuration for backend infrastructure nodes. Managed by Privateer (`api_mesh`).
 
 **Format:**
+
 ```yaml
 wireguard:
   enabled: true
@@ -113,11 +121,12 @@ wireguard:
 ```
 
 **Fields:**
+
 - `enabled` (required)
 - `interface` (optional, default `wg0`)
 - `manage_hosts_file` (optional) - Write WireGuard hostnames into `/etc/hosts`
 - `peers` (optional) - Static peers (manual mesh only)
-> Edge nodes do not join the mesh.
+  > Edge nodes do not join the mesh.
 
 ---
 
@@ -132,6 +141,7 @@ Database and messaging infrastructure.
 PostgreSQL or YugabyteDB configuration.
 
 **Format:**
+
 ```yaml
 infrastructure:
   postgres:
@@ -146,6 +156,7 @@ infrastructure:
 ```
 
 **Fields:**
+
 - `enabled` (required)
 - `mode` (required) - `native`
 - `version` (required)
@@ -161,6 +172,7 @@ infrastructure:
 ClickHouse analytics database.
 
 **Format:**
+
 ```yaml
 infrastructure:
   clickhouse:
@@ -173,6 +185,7 @@ infrastructure:
 ```
 
 **Fields:**
+
 - `enabled` (required)
 - `mode` (required) - `native`
 - `version` (required)
@@ -187,6 +200,7 @@ infrastructure:
 Apache Kafka message broker.
 
 **Format:**
+
 ```yaml
 infrastructure:
   kafka:
@@ -205,6 +219,7 @@ infrastructure:
 ```
 
 **Fields:**
+
 - `enabled` (required)
 - `mode` (required) - `native`
 - `version` (required)
@@ -219,6 +234,7 @@ infrastructure:
 Zookeeper ensemble (Kafka coordination).
 
 **Format:**
+
 ```yaml
 infrastructure:
   zookeeper:
@@ -232,6 +248,7 @@ infrastructure:
 ```
 
 **Fields:**
+
 - `enabled` (required)
 - `mode` (required) - `native`
 - `version` (required)
@@ -246,6 +263,7 @@ All three sections share the same shape. Use them to define application services
 ### Service Definition
 
 **Format:**
+
 ```yaml
 services:
   commodore:
@@ -263,6 +281,7 @@ services:
 ```
 
 **Fields:**
+
 - `enabled` (required)
 - `mode` (required) - `docker` or `native`
 - `version` (required)
@@ -285,6 +304,7 @@ services:
 For multi-node edge fleets, use a dedicated **edge manifest** (`edges.yaml`).
 
 **Format:**
+
 ```yaml
 version: v1
 root_domain: example.com
@@ -303,6 +323,7 @@ nodes:
 ```
 
 **Fields:**
+
 - `root_domain` or `pool_domain` (at least one required)
 - `email` (ACME)
 - `cluster_id` (required when `register_qm: true`)
@@ -310,6 +331,7 @@ nodes:
 - `nodes` (required)
 
 **Node fields:**
+
 - `name` (required)
 - `ssh` (required) - `user@host`
 - `ssh_key` (optional)
@@ -324,6 +346,7 @@ nodes:
 ## Validation Notes
 
 The CLI validates:
+
 - Required fields (`version`, `type`, hosts)
 - Host references used by infrastructure/services/interfaces
 

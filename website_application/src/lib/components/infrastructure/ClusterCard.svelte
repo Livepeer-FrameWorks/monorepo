@@ -33,7 +33,7 @@
       </Badge>
     </div>
     <div class="space-y-1 text-sm text-muted-foreground">
-      <p>Created: {cluster.createdAt ? new Date(cluster.createdAt).toLocaleDateString() : 'N/A'}</p>
+      <p>Created: {cluster.createdAt ? new Date(cluster.createdAt).toLocaleDateString() : "N/A"}</p>
     </div>
   </CardContent>
 </Card>

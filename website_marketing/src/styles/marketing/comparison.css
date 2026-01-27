@@ -100,7 +100,7 @@
     background: rgba(16, 20, 32, 0.55);
   }
 
-  .comparison-table__mobile-item+.comparison-table__mobile-item {
+  .comparison-table__mobile-item + .comparison-table__mobile-item {
     border-top: 1px solid rgba(var(--accent-rgb) / 0.12);
   }
 

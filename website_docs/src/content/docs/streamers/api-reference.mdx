@@ -5,12 +5,13 @@ sidebar:
   order: 4
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 FrameWorks offers a powerful GraphQL API that puts you in full control. Whether you need to programmatically create streams, manage keys, or pull detailed analytics, our API provides a unified interface for all platform operations.
 
 <Aside type="note" title="Same schema everywhere">
-Managed and self-hosted deployments run the same Bridge (API Gateway) and GraphQL schema. Some fields may return null or errors if the backing service isn’t deployed.
+  Managed and self-hosted deployments run the same Bridge (API Gateway) and GraphQL schema. Some
+  fields may return null or errors if the backing service isn’t deployed.
 </Aside>
 
 ## GraphQL Endpoint
@@ -47,6 +48,7 @@ Public allowlist (no auth required): `resolveViewerEndpoint`, `resolveIngestEndp
 The dashboard has a built-in GraphQL explorer. Go to **Developer → API** to run queries against your account.
 
 Or use any GraphQL client:
+
 - [Altair](https://altairgraphql.dev/)
 - [GraphQL Playground](https://github.com/graphql/graphql-playground)
 - [Insomnia](https://insomnia.rest/)
@@ -236,11 +238,11 @@ GraphQL errors come in the `errors` array. Mutation errors for unions are return
 ```
 
 Common codes:
+
 - `UNAUTHORIZED` - Missing or invalid token
 - `FORBIDDEN` - Token lacks required permissions
 - `NOT_FOUND` - Resource doesn't exist
 - `VALIDATION_ERROR` - Invalid input
-
 
 ## SDKs
 
@@ -249,11 +251,11 @@ No official GraphQL SDK yet. Use any GraphQL client in your language of choice. 
 JavaScript example with `graphql-request`:
 
 ```javascript
-import { GraphQLClient, gql } from 'graphql-request';
+import { GraphQLClient, gql } from "graphql-request";
 
-const client = new GraphQLClient('%GATEWAY_URL%/graphql', {
+const client = new GraphQLClient("%GATEWAY_URL%/graphql", {
   headers: {
-    Authorization: 'Bearer YOUR_TOKEN',
+    Authorization: "Bearer YOUR_TOKEN",
   },
 });
 

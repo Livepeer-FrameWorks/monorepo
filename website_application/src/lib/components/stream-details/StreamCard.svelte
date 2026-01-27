@@ -47,8 +47,7 @@
     onDelete: () => void;
   }
 
-  let { stream, selected, deleting, healthData, onSelect, onDelete }: Props =
-    $props();
+  let { stream, selected, deleting, healthData, onSelect, onDelete }: Props = $props();
 
   // Derive status from metrics edge
   const status = $derived(stream.metrics?.status);
@@ -64,7 +63,7 @@
         qualityTier: stream.metrics.qualityTier,
         hasIssues: stream.metrics.hasIssues,
         issuesDescription: stream.metrics.issuesDescription,
-        bufferHealth: null // Only available from detailed health query
+        bufferHealth: null, // Only available from detailed health query
       };
     }
     return null;
@@ -90,12 +89,14 @@
         {stream.name || `Stream ${displayStreamId.slice(0, 8)}`}
       </h3>
       {#if selected}
-        <span class="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-sm font-medium shrink-0 uppercase tracking-wider">
+        <span
+          class="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-sm font-medium shrink-0 uppercase tracking-wider"
+        >
           Selected
         </span>
       {/if}
     </div>
-    
+
     <div class="flex items-center gap-3">
       <div
         class="w-2 h-2 rounded-full shrink-0 {isLive
@@ -103,7 +104,7 @@
           : 'bg-muted-foreground/30'}"
         title={isLive ? "Live" : "Offline"}
       ></div>
-      
+
       <button
         class="text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 -mr-2"
         onclick={(event) => {
@@ -147,16 +148,21 @@
             compact
           />
           <span class="text-xs font-medium capitalize">
-            {(effectiveHealthData.bufferState ?? 'unknown').toLowerCase()}
+            {(effectiveHealthData.bufferState ?? "unknown").toLowerCase()}
           </span>
           {#if effectiveHealthData.qualityTier}
-            <span class="ml-auto text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent border border-accent/20 rounded-sm">
+            <span
+              class="ml-auto text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent border border-accent/20 rounded-sm"
+            >
               {effectiveHealthData.qualityTier}
             </span>
           {/if}
         </div>
         {#if effectiveHealthData?.hasIssues && effectiveHealthData?.issuesDescription}
-          <p class="text-xs text-destructive mt-1.5 truncate" title={effectiveHealthData.issuesDescription}>
+          <p
+            class="text-xs text-destructive mt-1.5 truncate"
+            title={effectiveHealthData.issuesDescription}
+          >
             ⚠ {effectiveHealthData.issuesDescription}
           </p>
         {/if}

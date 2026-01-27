@@ -1,1 +1,1 @@
-export { default as TimelineBand } from './TimelineBand'
+export { default as TimelineBand } from "./TimelineBand";

@@ -65,7 +65,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18000/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18000/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -131,14 +132,14 @@ services:
     #   - DEBUG=4
     container_name: frameworks-mistserver
     platform: linux/amd64
-    shm_size: '2gb'  # Allocate 2GB of shared memory for MistServer
+    shm_size: "2gb" # Allocate 2GB of shared memory for MistServer
     ports:
-      - "4242:4242"       # Controller
-      - "8080:8080"       # HTTP
-      - "1935:1935"       # RTMP
-      - "5554:5554"       # RTSP
-      - "4200:4200"       # DTSC (Mist internal format; used for stream replication)
-      - "8889:8889/udp"   # TS-SRT
+      - "4242:4242" # Controller
+      - "8080:8080" # HTTP
+      - "1935:1935" # RTMP
+      - "5554:5554" # RTSP
+      - "4200:4200" # DTSC (Mist internal format; used for stream replication)
+      - "8889:8889/udp" # TS-SRT
       - "18203:18203/udp" # WebRTC
     volumes:
       - ./infrastructure/mistserver.conf:/etc/mistserver.conf
@@ -227,7 +228,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18008/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18008/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -276,13 +278,13 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
       # Reduce Kafka startup log spam (partition/leader state chatter).
@@ -322,7 +324,7 @@ services:
         condition: service_healthy
     environment:
       KAFKA_LOG4J_ROOT_LOGLEVEL: WARN
-    entrypoint: [ '/bin/sh', '-c' ]
+    entrypoint: ["/bin/sh", "-c"]
     command: |
       "
       echo 'Creating Kafka topics...'
@@ -367,8 +369,8 @@ services:
       context: .
       dockerfile: api_tenants/Dockerfile
     ports:
-      - "18002:18002"   # HTTP (health)
-      - "19002:19002"   # gRPC (internal)
+      - "18002:18002" # HTTP (health)
+      - "19002:19002" # gRPC (internal)
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${QUARTERMASTER_PORT}
@@ -392,7 +394,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18002/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18002/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -490,7 +493,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18009/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18009/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -518,8 +522,8 @@ services:
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
       CLUSTER_ID: ${CLUSTER_ID}
     ports:
-      - "18001:18001"   # HTTP (auth, webhooks, health)
-      - "19001:19001"   # gRPC (internal)
+      - "18001:18001" # HTTP (auth, webhooks, health)
+      - "19001:19001" # gRPC (internal)
     depends_on:
       postgres:
         condition: service_healthy
@@ -536,7 +540,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18001/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18001/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -591,12 +596,13 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18007/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18007/health"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 10s
-  
+
   # Periscope-Ingest: High-throughput event processing from Kafka
   periscope-ingest:
     <<: *default-env
@@ -645,7 +651,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18005/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18005/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -699,7 +706,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18004/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18004/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -713,8 +721,8 @@ services:
       context: .
       dockerfile: api_billing/Dockerfile
     ports:
-      - "18003:18003"   # HTTP (webhooks, health)
-      - "19003:19003"   # gRPC (internal)
+      - "18003:18003" # HTTP (webhooks, health)
+      - "19003:19003" # gRPC (internal)
     environment:
       DATABASE_URL: ${DATABASE_URL}
       KAFKA_BROKERS: ${KAFKA_BROKERS}
@@ -778,7 +786,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18003/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18003/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -821,7 +830,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18032/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18032/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -916,7 +926,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18031/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18031/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -959,7 +970,15 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${WEBSITE_DOCS_PORT:-18033}/"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:${WEBSITE_DOCS_PORT:-18033}/",
+        ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -1015,8 +1034,8 @@ services:
     container_name: frameworks-clickhouse
     hostname: clickhouse
     ports:
-      - "8123:8123"   # HTTP interface
-      - "9000:9000"   # Native interface
+      - "8123:8123" # HTTP interface
+      - "9000:9000" # Native interface
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./infrastructure/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
@@ -1030,7 +1049,7 @@ services:
       CLICKHOUSE_DB: periscope
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       # Environment variables for users.xml
-      CLICKHOUSE_PASSWORD: frameworks_dev  # For frameworks user
+      CLICKHOUSE_PASSWORD: frameworks_dev # For frameworks user
       CLICKHOUSE_READONLY_PASSWORD: readonly_dev
     ulimits:
       nofile:
@@ -1060,7 +1079,7 @@ services:
     hostname: listmonk
     ports:
       - "9001:9000"
-    entrypoint: [ "sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk" ]
+    entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk"]
     environment:
       LISTMONK_app__address: "0.0.0.0:9000"
       LISTMONK_app__admin_username: ${LISTMONK_ADMIN_USER:-admin}
@@ -1263,7 +1282,8 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18015/health"]
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18015/health"]
       interval: 10s
       timeout: 5s
       retries: 3

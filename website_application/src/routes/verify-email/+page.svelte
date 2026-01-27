@@ -31,24 +31,18 @@
       // Verify the token
       loading = true;
       try {
-        const response = await fetch(
-          `${AUTH_URL}/verify/${encodeURIComponent(token)}`,
-          {
-            method: "GET",
-          }
-        );
+        const response = await fetch(`${AUTH_URL}/verify/${encodeURIComponent(token)}`, {
+          method: "GET",
+        });
 
         const data = await response.json();
 
         if (response.ok) {
           verificationStatus = "success";
-          message =
-            data.message || "Your email has been verified successfully!";
+          message = data.message || "Your email has been verified successfully!";
         } else {
           verificationStatus = "error";
-          message =
-            data.error ||
-            "Verification failed. The token may be invalid or expired.";
+          message = data.error || "Verification failed. The token may be invalid or expired.";
         }
       } catch {
         verificationStatus = "error";
@@ -154,7 +148,13 @@
             <p class="text-sm text-muted-foreground mb-4">
               Need a new verification link? Enter your email below.
             </p>
-            <form onsubmit={(e) => { e.preventDefault(); handleResend(); }} class="space-y-3">
+            <form
+              onsubmit={(e) => {
+                e.preventDefault();
+                handleResend();
+              }}
+              class="space-y-3"
+            >
               <Input
                 type="email"
                 placeholder="Enter your email"
@@ -177,7 +177,11 @@
               </Button>
             </form>
             {#if resendMessage}
-              <p class={resendSuccess ? "text-success text-sm mt-2" : "text-destructive text-sm mt-2"}>
+              <p
+                class={resendSuccess
+                  ? "text-success text-sm mt-2"
+                  : "text-destructive text-sm mt-2"}
+              >
                 {resendMessage}
               </p>
             {/if}
@@ -200,8 +204,8 @@
         </div>
         <div class="slab-body--padded">
           <p class="text-muted-foreground mb-4">
-            We've sent a verification email to your address. Please click the
-            link in the email to verify your account.
+            We've sent a verification email to your address. Please click the link in the email to
+            verify your account.
           </p>
 
           <div class="space-y-2 text-sm text-muted-foreground mb-4">
@@ -215,7 +219,13 @@
             <p class="text-sm text-muted-foreground mb-4">
               Didn't receive the email? Request a new one.
             </p>
-            <form onsubmit={(e) => { e.preventDefault(); handleResend(); }} class="space-y-3">
+            <form
+              onsubmit={(e) => {
+                e.preventDefault();
+                handleResend();
+              }}
+              class="space-y-3"
+            >
               <Input
                 type="email"
                 placeholder="Enter your email"
@@ -238,7 +248,11 @@
               </Button>
             </form>
             {#if resendMessage}
-              <p class={resendSuccess ? "text-success text-sm mt-2" : "text-destructive text-sm mt-2"}>
+              <p
+                class={resendSuccess
+                  ? "text-success text-sm mt-2"
+                  : "text-destructive text-sm mt-2"}
+              >
                 {resendMessage}
               </p>
             {/if}

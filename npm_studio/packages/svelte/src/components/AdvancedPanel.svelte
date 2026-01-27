@@ -17,9 +17,13 @@
     RendererType,
     RendererStats,
     EncoderOverrides,
-  } from '@livepeer-frameworks/streamcrafter-core';
-  import { createEncoderConfig, getAudioConstraints, getEncoderSettings } from '@livepeer-frameworks/streamcrafter-core';
-  import VolumeSlider from './VolumeSlider.svelte';
+  } from "@livepeer-frameworks/streamcrafter-core";
+  import {
+    createEncoderConfig,
+    getAudioConstraints,
+    getEncoderSettings,
+  } from "@livepeer-frameworks/streamcrafter-core";
+  import VolumeSlider from "./VolumeSlider.svelte";
 
   export interface AudioProcessingSettings {
     echoCancellation: boolean;
@@ -108,45 +112,45 @@
   }
 
   const RESOLUTION_OPTIONS: SettingOption<string>[] = [
-    { value: '3840x2160', label: '3840×2160 (4K)' },
-    { value: '2560x1440', label: '2560×1440 (1440p)' },
-    { value: '1920x1080', label: '1920×1080 (1080p)' },
-    { value: '1280x720', label: '1280×720 (720p)' },
-    { value: '854x480', label: '854×480 (480p)' },
-    { value: '640x360', label: '640×360 (360p)' },
+    { value: "3840x2160", label: "3840×2160 (4K)" },
+    { value: "2560x1440", label: "2560×1440 (1440p)" },
+    { value: "1920x1080", label: "1920×1080 (1080p)" },
+    { value: "1280x720", label: "1280×720 (720p)" },
+    { value: "854x480", label: "854×480 (480p)" },
+    { value: "640x360", label: "640×360 (360p)" },
   ];
 
   const VIDEO_BITRATE_OPTIONS: SettingOption<number>[] = [
-    { value: 50_000_000, label: '50 Mbps' },
-    { value: 35_000_000, label: '35 Mbps' },
-    { value: 25_000_000, label: '25 Mbps' },
-    { value: 15_000_000, label: '15 Mbps' },
-    { value: 10_000_000, label: '10 Mbps' },
-    { value: 8_000_000, label: '8 Mbps' },
-    { value: 6_000_000, label: '6 Mbps' },
-    { value: 4_000_000, label: '4 Mbps' },
-    { value: 2_500_000, label: '2.5 Mbps' },
-    { value: 2_000_000, label: '2 Mbps' },
-    { value: 1_500_000, label: '1.5 Mbps' },
-    { value: 1_000_000, label: '1 Mbps' },
-    { value: 500_000, label: '500 kbps' },
+    { value: 50_000_000, label: "50 Mbps" },
+    { value: 35_000_000, label: "35 Mbps" },
+    { value: 25_000_000, label: "25 Mbps" },
+    { value: 15_000_000, label: "15 Mbps" },
+    { value: 10_000_000, label: "10 Mbps" },
+    { value: 8_000_000, label: "8 Mbps" },
+    { value: 6_000_000, label: "6 Mbps" },
+    { value: 4_000_000, label: "4 Mbps" },
+    { value: 2_500_000, label: "2.5 Mbps" },
+    { value: 2_000_000, label: "2 Mbps" },
+    { value: 1_500_000, label: "1.5 Mbps" },
+    { value: 1_000_000, label: "1 Mbps" },
+    { value: 500_000, label: "500 kbps" },
   ];
 
   const FRAMERATE_OPTIONS: SettingOption<number>[] = [
-    { value: 120, label: '120 fps' },
-    { value: 60, label: '60 fps' },
-    { value: 30, label: '30 fps' },
-    { value: 24, label: '24 fps' },
-    { value: 15, label: '15 fps' },
+    { value: 120, label: "120 fps" },
+    { value: 60, label: "60 fps" },
+    { value: 30, label: "30 fps" },
+    { value: 24, label: "24 fps" },
+    { value: 15, label: "15 fps" },
   ];
 
   const AUDIO_BITRATE_OPTIONS: SettingOption<number>[] = [
-    { value: 320_000, label: '320 kbps' },
-    { value: 256_000, label: '256 kbps' },
-    { value: 192_000, label: '192 kbps' },
-    { value: 128_000, label: '128 kbps' },
-    { value: 96_000, label: '96 kbps' },
-    { value: 64_000, label: '64 kbps' },
+    { value: 320_000, label: "320 kbps" },
+    { value: 256_000, label: "256 kbps" },
+    { value: 192_000, label: "192 kbps" },
+    { value: 128_000, label: "128 kbps" },
+    { value: 96_000, label: "96 kbps" },
+    { value: 64_000, label: "64 kbps" },
   ];
 
   let {
@@ -181,10 +185,7 @@
 
   let profileEncoderSettings = $derived(getEncoderSettings(qualityProfile));
   let effectiveEncoderConfig = $derived(
-    createEncoderConfig(
-      qualityProfile === 'auto' ? 'broadcast' : qualityProfile,
-      encoderOverrides
-    )
+    createEncoderConfig(qualityProfile === "auto" ? "broadcast" : qualityProfile, encoderOverrides)
   );
   // Computed values for encoder settings display
   let currentResolution = $derived(
@@ -192,7 +193,7 @@
   );
   let hasEncoderOverrides = $derived(!!(encoderOverrides?.video || encoderOverrides?.audio));
 
-  let activeTab = $state<'audio' | 'stats' | 'info' | 'compositor'>('audio');
+  let activeTab = $state<"audio" | "stats" | "info" | "compositor">("audio");
   let profileDefaults = $derived(getAudioConstraints(qualityProfile));
   let videoTrackSettings = $derived.by(() => {
     const track = mediaStream?.getVideoTracks?.()[0];
@@ -214,9 +215,21 @@
 
   // Audio processing toggles
   const audioToggles = [
-    { key: 'echoCancellation' as const, label: 'Echo Cancellation', description: 'Reduce echo from speakers' },
-    { key: 'noiseSuppression' as const, label: 'Noise Suppression', description: 'Filter background noise' },
-    { key: 'autoGainControl' as const, label: 'Auto Gain Control', description: 'Normalize audio levels' },
+    {
+      key: "echoCancellation" as const,
+      label: "Echo Cancellation",
+      description: "Reduce echo from speakers",
+    },
+    {
+      key: "noiseSuppression" as const,
+      label: "Noise Suppression",
+      description: "Filter background noise",
+    },
+    {
+      key: "autoGainControl" as const,
+      label: "Auto Gain Control",
+      description: "Normalize audio levels",
+    },
   ];
 </script>
 
@@ -227,21 +240,21 @@
       <button
         type="button"
         class="fw-dev-mode-tab {activeTab === 'audio' ? 'fw-dev-mode-tab--active' : ''}"
-        onclick={() => activeTab = 'audio'}
+        onclick={() => (activeTab = "audio")}
       >
         Audio
       </button>
       <button
         type="button"
         class="fw-dev-mode-tab {activeTab === 'stats' ? 'fw-dev-mode-tab--active' : ''}"
-        onclick={() => activeTab = 'stats'}
+        onclick={() => (activeTab = "stats")}
       >
         Stats
       </button>
       <button
         type="button"
         class="fw-dev-mode-tab {activeTab === 'info' ? 'fw-dev-mode-tab--active' : ''}"
-        onclick={() => activeTab = 'info'}
+        onclick={() => (activeTab = "info")}
       >
         Info
       </button>
@@ -249,37 +262,51 @@
         <button
           type="button"
           class="fw-dev-mode-tab {activeTab === 'compositor' ? 'fw-dev-mode-tab--active' : ''}"
-          onclick={() => activeTab = 'compositor'}
+          onclick={() => (activeTab = "compositor")}
         >
           Comp
         </button>
       {/if}
       <div style="flex: 1;"></div>
-      <button type="button" class="fw-dev-mode-close" onclick={onClose} aria-label="Close advanced panel">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5">
+      <button
+        type="button"
+        class="fw-dev-mode-close"
+        onclick={onClose}
+        aria-label="Close advanced panel"
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
           <path d="M2 2l8 8M10 2l-8 8" />
         </svg>
       </button>
     </div>
 
     <!-- Audio Tab -->
-    {#if activeTab === 'audio'}
+    {#if activeTab === "audio"}
       <div class="fw-dev-mode-content">
         <!-- Master Volume -->
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-section-header">Master Volume</div>
           <div class="fw-dev-mode-volume-control">
-            <VolumeSlider
-              value={masterVolume}
-              onChange={onMasterVolumeChange}
-              max={2}
-            />
-            <span class="fw-dev-mode-volume-value {masterVolume > 1 ? 'fw-dev-mode-volume--boosted' : ''}">
+            <VolumeSlider value={masterVolume} onChange={onMasterVolumeChange} max={2} />
+            <span
+              class="fw-dev-mode-volume-value {masterVolume > 1
+                ? 'fw-dev-mode-volume--boosted'
+                : ''}"
+            >
               {Math.round(masterVolume * 100)}%
             </span>
           </div>
           {#if masterVolume > 1}
-            <div class="fw-dev-mode-boost-label">+{((masterVolume - 1) * 100).toFixed(0)}% boost</div>
+            <div class="fw-dev-mode-boost-label">
+              +{((masterVolume - 1) * 100).toFixed(0)}% boost
+            </div>
           {/if}
         </div>
 
@@ -289,7 +316,11 @@
           <div class="fw-dev-mode-meter">
             <div
               class="fw-dev-mode-meter-fill"
-              style="width: {audioLevel * 100}%; background: {audioLevel > 0.9 ? '#f7768e' : audioLevel > 0.7 ? '#e0af68' : '#9ece6a'};"
+              style="width: {audioLevel * 100}%; background: {audioLevel > 0.9
+                ? '#f7768e'
+                : audioLevel > 0.7
+                  ? '#e0af68'
+                  : '#9ece6a'};"
             ></div>
           </div>
           <div class="fw-dev-mode-meter-labels">
@@ -302,8 +333,10 @@
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-row">
             <span class="fw-dev-mode-section-header">Audio Mixing</span>
-            <span class="fw-dev-mode-badge {audioMixingEnabled ? 'fw-dev-mode-badge--success' : ''}">
-              {audioMixingEnabled ? 'ON' : 'OFF'}
+            <span
+              class="fw-dev-mode-badge {audioMixingEnabled ? 'fw-dev-mode-badge--success' : ''}"
+            >
+              {audioMixingEnabled ? "ON" : "OFF"}
             </span>
           </div>
           {#if audioMixingEnabled}
@@ -331,8 +364,11 @@
               </div>
               <button
                 type="button"
-                class="fw-dev-mode-switch {audioProcessing[toggle.key] ? 'fw-dev-mode-switch--on' : ''}"
-                onclick={() => onAudioProcessingChange({ [toggle.key]: !audioProcessing[toggle.key] })}
+                class="fw-dev-mode-switch {audioProcessing[toggle.key]
+                  ? 'fw-dev-mode-switch--on'
+                  : ''}"
+                onclick={() =>
+                  onAudioProcessingChange({ [toggle.key]: !audioProcessing[toggle.key] })}
                 role="switch"
                 aria-checked={audioProcessing[toggle.key]}
                 aria-label={toggle.label}
@@ -354,7 +390,7 @@
     {/if}
 
     <!-- Stats Tab -->
-    {#if activeTab === 'stats'}
+    {#if activeTab === "stats"}
       <div class="fw-dev-mode-content">
         <!-- Connection State -->
         <div class="fw-dev-mode-section">
@@ -390,12 +426,16 @@
             {#if stats.video.packetsLost > 0 || stats.audio.packetsLost > 0}
               <div class="fw-dev-mode-info-row">
                 <span>Packets Lost</span>
-                <span class="fw-dev-mode-value--error">{stats.video.packetsLost + stats.audio.packetsLost}</span>
+                <span class="fw-dev-mode-value--error"
+                  >{stats.video.packetsLost + stats.audio.packetsLost}</span
+                >
               </div>
             {/if}
             <div class="fw-dev-mode-info-row">
               <span>RTT</span>
-              <span class="{stats.connection.rtt > 200 ? 'fw-dev-mode-value--warning' : ''}">{stats.connection.rtt.toFixed(0)} ms</span>
+              <span class={stats.connection.rtt > 200 ? "fw-dev-mode-value--warning" : ""}
+                >{stats.connection.rtt.toFixed(0)} ms</span
+              >
             </div>
             <div class="fw-dev-mode-info-row">
               <span>ICE State</span>
@@ -404,7 +444,7 @@
           </div>
         {:else}
           <div class="fw-dev-mode-empty">
-            {ingestState === 'streaming' ? 'Waiting for stats...' : 'Start streaming to see stats'}
+            {ingestState === "streaming" ? "Waiting for stats..." : "Start streaming to see stats"}
           </div>
         {/if}
 
@@ -419,23 +459,27 @@
     {/if}
 
     <!-- Info Tab -->
-    {#if activeTab === 'info'}
+    {#if activeTab === "info"}
       <div class="fw-dev-mode-content">
         <!-- Quality Profile -->
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-section-header">Quality Profile</div>
           <div class="fw-dev-mode-profile-name">{qualityProfile}</div>
           <div class="fw-dev-mode-hint">
-            {profileEncoderSettings.video.width}x{profileEncoderSettings.video.height} @ {formatBitrate(profileEncoderSettings.video.bitrate)}
+            {profileEncoderSettings.video.width}x{profileEncoderSettings.video.height} @ {formatBitrate(
+              profileEncoderSettings.video.bitrate
+            )}
           </div>
         </div>
 
         <!-- WHIP URL -->
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-section-header">WHIP Endpoint</div>
-          <div class="fw-dev-mode-url">{whipUrl || 'Not configured'}</div>
+          <div class="fw-dev-mode-url">{whipUrl || "Not configured"}</div>
           {#if whipUrl}
-            <button type="button" class="fw-dev-mode-copy-btn" onclick={copyWhipUrl}>Copy URL</button>
+            <button type="button" class="fw-dev-mode-copy-btn" onclick={copyWhipUrl}
+              >Copy URL</button
+            >
           {/if}
         </div>
 
@@ -460,12 +504,17 @@
           <div class="fw-dev-mode-info-row">
             <span>Resolution</span>
             <select
-              class="fw-dev-mode-select {(encoderOverrides?.video?.width || encoderOverrides?.video?.height) ? 'fw-dev-mode-select--overridden' : ''}"
+              class="fw-dev-mode-select {encoderOverrides?.video?.width ||
+              encoderOverrides?.video?.height
+                ? 'fw-dev-mode-select--overridden'
+                : ''}"
               value={currentResolution}
-              disabled={ingestState === 'streaming'}
+              disabled={ingestState === "streaming"}
               onchange={(e) => {
-                const [w, h] = (e.target as HTMLSelectElement).value.split('x').map(Number);
-                const isProfileDefault = w === profileEncoderSettings.video.width && h === profileEncoderSettings.video.height;
+                const [w, h] = (e.target as HTMLSelectElement).value.split("x").map(Number);
+                const isProfileDefault =
+                  w === profileEncoderSettings.video.width &&
+                  h === profileEncoderSettings.video.height;
                 onEncoderOverridesChange?.({
                   ...encoderOverrides,
                   video: {
@@ -484,15 +533,21 @@
           {#if videoTrackSettings?.width && videoTrackSettings?.height}
             <div class="fw-dev-mode-info-row">
               <span>Actual Resolution</span>
-              <span class="fw-dev-mode-mono">{Math.round(videoTrackSettings.width)}x{Math.round(videoTrackSettings.height)}</span>
+              <span class="fw-dev-mode-mono"
+                >{Math.round(videoTrackSettings.width)}x{Math.round(
+                  videoTrackSettings.height
+                )}</span
+              >
             </div>
           {/if}
           <div class="fw-dev-mode-info-row">
             <span>Framerate</span>
             <select
-              class="fw-dev-mode-select {encoderOverrides?.video?.framerate ? 'fw-dev-mode-select--overridden' : ''}"
+              class="fw-dev-mode-select {encoderOverrides?.video?.framerate
+                ? 'fw-dev-mode-select--overridden'
+                : ''}"
               value={encoderOverrides?.video?.framerate ?? profileEncoderSettings.video.framerate}
-              disabled={ingestState === 'streaming'}
+              disabled={ingestState === "streaming"}
               onchange={(e) => {
                 const value = Number((e.target as HTMLSelectElement).value);
                 const isProfileDefault = value === profileEncoderSettings.video.framerate;
@@ -519,9 +574,11 @@
           <div class="fw-dev-mode-info-row">
             <span>Video Bitrate</span>
             <select
-              class="fw-dev-mode-select {encoderOverrides?.video?.bitrate ? 'fw-dev-mode-select--overridden' : ''}"
+              class="fw-dev-mode-select {encoderOverrides?.video?.bitrate
+                ? 'fw-dev-mode-select--overridden'
+                : ''}"
               value={encoderOverrides?.video?.bitrate ?? profileEncoderSettings.video.bitrate}
-              disabled={ingestState === 'streaming'}
+              disabled={ingestState === "streaming"}
               onchange={(e) => {
                 const value = Number((e.target as HTMLSelectElement).value);
                 const isProfileDefault = value === profileEncoderSettings.video.bitrate;
@@ -546,9 +603,11 @@
           <div class="fw-dev-mode-info-row">
             <span>Audio Bitrate</span>
             <select
-              class="fw-dev-mode-select {encoderOverrides?.audio?.bitrate ? 'fw-dev-mode-select--overridden' : ''}"
+              class="fw-dev-mode-select {encoderOverrides?.audio?.bitrate
+                ? 'fw-dev-mode-select--overridden'
+                : ''}"
               value={encoderOverrides?.audio?.bitrate ?? profileEncoderSettings.audio.bitrate}
-              disabled={ingestState === 'streaming'}
+              disabled={ingestState === "streaming"}
               onchange={(e) => {
                 const value = Number((e.target as HTMLSelectElement).value);
                 const isProfileDefault = value === profileEncoderSettings.audio.bitrate;
@@ -566,7 +625,7 @@
               {/each}
             </select>
           </div>
-          {#if ingestState === 'streaming'}
+          {#if ingestState === "streaming"}
             <div class="fw-dev-mode-locked-notice">Settings locked while streaming</div>
           {/if}
         </div>
@@ -578,7 +637,9 @@
           </div>
           {#if sources.length > 0}
             {#each sources as source, idx (source.id)}
-              <div class="fw-dev-mode-source-row {idx > 0 ? 'fw-dev-mode-source-row--bordered' : ''}">
+              <div
+                class="fw-dev-mode-source-row {idx > 0 ? 'fw-dev-mode-source-row--bordered' : ''}"
+              >
                 <div class="fw-dev-mode-source-header">
                   <span class="fw-dev-mode-source-type fw-dev-mode-source-type--{source.type}">
                     {source.type.toUpperCase()}
@@ -604,17 +665,17 @@
     {/if}
 
     <!-- Compositor Tab -->
-    {#if activeTab === 'compositor' && compositorEnabled}
+    {#if activeTab === "compositor" && compositorEnabled}
       <div class="fw-dev-mode-content">
         <!-- Renderer Info -->
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-section-header">Renderer</div>
           <div class="fw-dev-mode-renderer fw-dev-mode-renderer--{compositorRendererType}">
-            {#if compositorRendererType === 'webgpu'}
+            {#if compositorRendererType === "webgpu"}
               WebGPU
-            {:else if compositorRendererType === 'webgl'}
+            {:else if compositorRendererType === "webgl"}
               WebGL
-            {:else if compositorRendererType === 'canvas2d'}
+            {:else if compositorRendererType === "canvas2d"}
               Canvas2D
             {:else}
               Not initialized
@@ -635,7 +696,11 @@
             </div>
             <div class="fw-dev-mode-info-row">
               <span>Frame Time</span>
-              <span class="fw-dev-mode-mono {compositorStats.frameTimeMs > 16 ? 'fw-dev-mode-value--warning' : ''}">
+              <span
+                class="fw-dev-mode-mono {compositorStats.frameTimeMs > 16
+                  ? 'fw-dev-mode-value--warning'
+                  : ''}"
+              >
                 {compositorStats.frameTimeMs.toFixed(2)} ms
               </span>
             </div>
@@ -671,23 +736,27 @@
           <div class="fw-dev-mode-info-row">
             <span>Type</span>
             <span
-              class="fw-dev-mode-encoder-badge {isWebCodecsActive ? 'fw-dev-mode-encoder-badge--webcodecs' : 'fw-dev-mode-encoder-badge--browser'}"
+              class="fw-dev-mode-encoder-badge {isWebCodecsActive
+                ? 'fw-dev-mode-encoder-badge--webcodecs'
+                : 'fw-dev-mode-encoder-badge--browser'}"
             >
-              {isWebCodecsActive ? 'WebCodecs' : 'Browser'}
+              {isWebCodecsActive ? "WebCodecs" : "Browser"}
             </span>
           </div>
           <div class="fw-dev-mode-toggle-row">
             <div class="fw-dev-mode-toggle-info">
               <div class="fw-dev-mode-toggle-label">Use WebCodecs</div>
               <div class="fw-dev-mode-toggle-desc">
-                {ingestState === 'streaming' ? 'Change takes effect on next stream' : 'Enable advanced WebCodecs encoder'}
+                {ingestState === "streaming"
+                  ? "Change takes effect on next stream"
+                  : "Enable advanced WebCodecs encoder"}
               </div>
             </div>
             <button
               type="button"
               class="fw-dev-mode-switch {useWebCodecs ? 'fw-dev-mode-switch--on' : ''}"
               onclick={() => onUseWebCodecsChange?.(!useWebCodecs)}
-              disabled={ingestState === 'streaming'}
+              disabled={ingestState === "streaming"}
               role="switch"
               aria-checked={useWebCodecs}
               aria-label="Use WebCodecs"
@@ -709,13 +778,19 @@
             </div>
             <div class="fw-dev-mode-info-row">
               <span>Video Pending</span>
-              <span class="fw-dev-mode-mono {encoderStats.video.framesPending > 5 ? 'fw-dev-mode-value--warning' : ''}">
+              <span
+                class="fw-dev-mode-mono {encoderStats.video.framesPending > 5
+                  ? 'fw-dev-mode-value--warning'
+                  : ''}"
+              >
                 {encoderStats.video.framesPending}
               </span>
             </div>
             <div class="fw-dev-mode-info-row">
               <span>Video Bytes</span>
-              <span class="fw-dev-mode-mono">{(encoderStats.video.bytesEncoded / 1024 / 1024).toFixed(2)} MB</span>
+              <span class="fw-dev-mode-mono"
+                >{(encoderStats.video.bytesEncoded / 1024 / 1024).toFixed(2)} MB</span
+              >
             </div>
             <div class="fw-dev-mode-info-row">
               <span>Audio Samples</span>
@@ -723,7 +798,9 @@
             </div>
             <div class="fw-dev-mode-info-row">
               <span>Audio Bytes</span>
-              <span class="fw-dev-mode-mono">{(encoderStats.audio.bytesEncoded / 1024).toFixed(1)} KB</span>
+              <span class="fw-dev-mode-mono"
+                >{(encoderStats.audio.bytesEncoded / 1024).toFixed(1)} KB</span
+              >
             </div>
           </div>
         {/if}
@@ -732,7 +809,8 @@
         <div class="fw-dev-mode-section">
           <div class="fw-dev-mode-compositor-info">
             {#if isWebCodecsActive}
-              Using WebCodecs encoder via RTCRtpScriptTransform for lower latency and better control.
+              Using WebCodecs encoder via RTCRtpScriptTransform for lower latency and better
+              control.
             {:else}
               Using browser's built-in MediaStream encoder. Toggle WebCodecs for advanced encoding.
             {/if}
@@ -749,7 +827,13 @@
     border-left: 1px solid rgba(65, 72, 104, 0.5);
     color: #a9b1d6;
     font-size: 12px;
-    font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+    font-family:
+      ui-monospace,
+      SFMono-Regular,
+      SF Mono,
+      Menlo,
+      Consolas,
+      monospace;
     width: 280px;
     display: flex;
     flex-direction: column;
@@ -987,7 +1071,7 @@
     width: 16px;
     border-radius: 50%;
     background: white;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     transition: transform 0.2s;
     transform: translateX(0);
   }

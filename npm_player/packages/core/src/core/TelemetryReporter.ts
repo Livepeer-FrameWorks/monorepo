@@ -1,4 +1,4 @@
-import type { TelemetryPayload, PlaybackQuality, ContentType } from '../types';
+import type { TelemetryPayload, PlaybackQuality, ContentType } from "../types";
 
 /**
  * Generate a unique session ID
@@ -51,7 +51,7 @@ export class TelemetryReporter {
   constructor(config: TelemetryReporterConfig) {
     this.config = {
       endpoint: config.endpoint,
-      authToken: config.authToken ?? '',
+      authToken: config.authToken ?? "",
       interval: config.interval ?? 5000,
       batchSize: config.batchSize ?? 1,
       contentId: config.contentId,
@@ -65,10 +65,7 @@ export class TelemetryReporter {
   /**
    * Start telemetry reporting
    */
-  start(
-    videoElement: HTMLVideoElement,
-    qualityGetter?: () => PlaybackQuality | null
-  ): void {
+  start(videoElement: HTMLVideoElement, qualityGetter?: () => PlaybackQuality | null): void {
     this.stop();
 
     this.videoElement = videoElement;
@@ -95,29 +92,29 @@ export class TelemetryReporter {
       if (error) {
         this.errors.push({
           code: String(error.code),
-          message: error.message || 'Unknown error',
+          message: error.message || "Unknown error",
           timestamp: Date.now(),
         });
       }
     };
 
-    videoElement.addEventListener('waiting', onWaiting);
-    videoElement.addEventListener('playing', onPlaying);
-    videoElement.addEventListener('error', onError);
+    videoElement.addEventListener("waiting", onWaiting);
+    videoElement.addEventListener("playing", onPlaying);
+    videoElement.addEventListener("error", onError);
 
     this.listeners = [
-      () => videoElement.removeEventListener('waiting', onWaiting),
-      () => videoElement.removeEventListener('playing', onPlaying),
-      () => videoElement.removeEventListener('error', onError),
+      () => videoElement.removeEventListener("waiting", onWaiting),
+      () => videoElement.removeEventListener("playing", onPlaying),
+      () => videoElement.removeEventListener("error", onError),
     ];
 
     // Setup unload handler for reliable final report
     const onUnload = () => this.flushSync();
-    window.addEventListener('beforeunload', onUnload);
-    window.addEventListener('pagehide', onUnload);
+    window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("pagehide", onUnload);
     this.listeners.push(
-      () => window.removeEventListener('beforeunload', onUnload),
-      () => window.removeEventListener('pagehide', onUnload)
+      () => window.removeEventListener("beforeunload", onUnload),
+      () => window.removeEventListener("pagehide", onUnload)
     );
 
     // Start reporting interval
@@ -139,7 +136,7 @@ export class TelemetryReporter {
       this.intervalId = null;
     }
 
-    this.listeners.forEach(cleanup => cleanup());
+    this.listeners.forEach((cleanup) => cleanup());
     this.listeners = [];
 
     this.videoElement = null;
@@ -171,7 +168,7 @@ export class TelemetryReporter {
     let framesDecoded = 0;
     let framesDropped = 0;
 
-    if ('getVideoPlaybackQuality' in video) {
+    if ("getVideoPlaybackQuality" in video) {
       const stats = video.getVideoPlaybackQuality();
       framesDecoded = stats.totalVideoFrames;
       framesDropped = stats.droppedVideoFrames;
@@ -181,7 +178,10 @@ export class TelemetryReporter {
     let bufferedSeconds = 0;
     if (video.buffered.length > 0) {
       for (let i = 0; i < video.buffered.length; i++) {
-        if (video.buffered.start(i) <= video.currentTime && video.buffered.end(i) > video.currentTime) {
+        if (
+          video.buffered.start(i) <= video.currentTime &&
+          video.buffered.end(i) > video.currentTime
+        ) {
           bufferedSeconds = video.buffered.end(i) - video.currentTime;
           break;
         }
@@ -205,10 +205,13 @@ export class TelemetryReporter {
         framesDropped,
         playerType: this.config.playerType,
         protocol: this.config.protocol,
-        resolution: video.videoWidth > 0 ? {
-          width: video.videoWidth,
-          height: video.videoHeight,
-        } : undefined,
+        resolution:
+          video.videoWidth > 0
+            ? {
+                width: video.videoWidth,
+                height: video.videoHeight,
+              }
+            : undefined,
       },
       errors: this.errors.length > 0 ? [...this.errors] : undefined,
     };
@@ -240,21 +243,21 @@ export class TelemetryReporter {
 
     try {
       const headers: HeadersInit = {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       };
 
       if (this.config.authToken) {
-        headers['Authorization'] = `Bearer ${this.config.authToken}`;
+        headers["Authorization"] = `Bearer ${this.config.authToken}`;
       }
 
       const response = await fetch(this.config.endpoint, {
-        method: 'POST',
+        method: "POST",
         headers,
         body: JSON.stringify(payloads.length === 1 ? payloads[0] : payloads),
       });
 
       if (!response.ok) {
-        console.warn('[TelemetryReporter] Report failed:', response.status);
+        console.warn("[TelemetryReporter] Report failed:", response.status);
         // Re-queue failed payloads (up to a limit)
         if (this.pendingPayloads.length < 10) {
           this.pendingPayloads.unshift(...payloads);
@@ -264,7 +267,7 @@ export class TelemetryReporter {
         this.errors = [];
       }
     } catch (error) {
-      console.warn('[TelemetryReporter] Report error:', error);
+      console.warn("[TelemetryReporter] Report error:", error);
       // Re-queue failed payloads
       if (this.pendingPayloads.length < 10) {
         this.pendingPayloads.unshift(...payloads);
@@ -284,9 +287,9 @@ export class TelemetryReporter {
 
     try {
       const data = JSON.stringify(payloads.length === 1 ? payloads[0] : payloads);
-      navigator.sendBeacon(this.config.endpoint, new Blob([data], { type: 'application/json' }));
+      navigator.sendBeacon(this.config.endpoint, new Blob([data], { type: "application/json" }));
     } catch (error) {
-      console.warn('[TelemetryReporter] Beacon failed:', error);
+      console.warn("[TelemetryReporter] Beacon failed:", error);
     }
   }
 

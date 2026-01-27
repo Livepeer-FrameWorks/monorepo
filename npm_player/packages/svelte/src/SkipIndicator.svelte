@@ -1,16 +1,16 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount } from "svelte";
 
   /**
    * Skip indicator overlay that appears when double-tapping to skip.
    * Shows the skip direction and amount (e.g., "-10s" or "+10s") with a ripple effect.
    */
-  export type SkipDirection = 'back' | 'forward' | null;
+  export type SkipDirection = "back" | "forward" | null;
 
   let {
     direction = null as SkipDirection,
     seconds = 10,
-    class: className = '',
+    class: className = "",
     onhide = undefined as (() => void) | undefined,
   }: {
     direction: SkipDirection;
@@ -46,7 +46,7 @@
     };
   });
 
-  let isBack = $derived(direction === 'back');
+  let isBack = $derived(direction === "back");
 </script>
 
 {#if direction}

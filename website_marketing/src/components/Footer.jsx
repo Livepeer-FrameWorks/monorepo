@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom'
-import config from '../config'
+import { Link } from "react-router-dom";
+import config from "../config";
 
 const Footer = () => {
   return (
@@ -10,48 +10,102 @@ const Footer = () => {
           <div>
             <h3 className="mb-3 text-sm font-semibold text-foreground">Company</h3>
             <div className="flex flex-col gap-2">
-              <Link to="/about" className="text-sm text-muted-foreground transition-colors hover:text-foreground">About</Link>
-              <Link to="/contact" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Contact</Link>
+              <Link
+                to="/about"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                About
+              </Link>
+              <Link
+                to="/contact"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Contact
+              </Link>
             </div>
           </div>
-          
+
           {/* Resources */}
           <div>
             <h3 className="mb-3 text-sm font-semibold text-foreground">Resources</h3>
             <div className="flex flex-col gap-2">
-              <a href={config.docsUrl} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Documentation</a>
-              <Link to="/status" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Status</Link>
-              <a href={`${config.docsUrl.replace(/\/+$/, '')}/roadmap`} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Roadmap</a>
+              <a
+                href={config.docsUrl}
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Documentation
+              </a>
+              <Link
+                to="/status"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Status
+              </Link>
+              <a
+                href={`${config.docsUrl.replace(/\/+$/, "")}/roadmap`}
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Roadmap
+              </a>
               {/* <Link to="/changelog" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Changelog</Link> */}
             </div>
           </div>
-          
+
           {/* Product */}
           <div>
             <h3 className="mb-3 text-sm font-semibold text-foreground">Product</h3>
             <div className="flex flex-col gap-2">
-              <Link to="/pricing" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Pricing</Link>
-              <a href="https://github.com/livepeer-frameworks/monorepo" target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground transition-colors hover:text-foreground">GitHub</a>
+              <Link
+                to="/pricing"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Pricing
+              </Link>
+              <a
+                href="https://github.com/livepeer-frameworks/monorepo"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                GitHub
+              </a>
             </div>
           </div>
-          
+
           {/* Legal */}
           <div>
             <h3 className="mb-3 text-sm font-semibold text-foreground">Legal</h3>
             <div className="flex flex-col gap-2">
-              <Link to="/privacy" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Privacy</Link>
-              <Link to="/terms" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Terms</Link>
-              <Link to="/aup" className="text-sm text-muted-foreground transition-colors hover:text-foreground">AUP</Link>
+              <Link
+                to="/privacy"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Privacy
+              </Link>
+              <Link
+                to="/terms"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Terms
+              </Link>
+              <Link
+                to="/aup"
+                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+              >
+                AUP
+              </Link>
             </div>
           </div>
         </div>
-        
+
         <div className="flex flex-col items-center justify-between gap-4 border-t border-border/60 pt-8 md:flex-row">
-          <div className="text-sm text-muted-foreground">© {new Date().getFullYear()} FrameWorks</div>
+          <div className="text-sm text-muted-foreground">
+            © {new Date().getFullYear()} FrameWorks
+          </div>
         </div>
       </div>
     </footer>
-  )
-}
+  );
+};
 
-export default Footer
+export default Footer;

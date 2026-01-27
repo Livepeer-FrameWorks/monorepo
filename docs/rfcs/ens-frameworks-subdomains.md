@@ -1,9 +1,11 @@
 # RFC: FrameWorks ENS Offchain Subdomains & Donations
 
 ## Status
+
 Draft
 
 ## TL;DR
+
 - FrameWorks issues gasless ENS subdomains (`alice.frameworks.eth`) via CCIP-Read.
 - Subdomains map to HD-derived wallet addresses for donations.
 - Donations credit stream balances (ties to stream-balances RFC).
@@ -11,32 +13,38 @@ Draft
 ## Current State (as of 2026-01-26)
 
 **Existing infrastructure:**
+
 - HD wallet derivation: `api_billing/internal/handlers/hdwallet.go`
 - Crypto deposit detection: `api_billing/internal/handlers/checkout.go`
 - Stream balances RFC: `docs/rfcs/stream-balances.md` (Draft)
 
 **Missing:**
+
 - ENS subdomain resolver
 - Subdomain → HD address mapping
 - ENS text record population
 
 Evidence:
+
 - [Source] HD wallet implementation: `api_billing/internal/handlers/hdwallet.go`
 - [Source] Stream balances RFC: `docs/rfcs/stream-balances.md`
 - [Reference] ENS Offchain Resolution (ENSIP-16): https://docs.ens.domains/ensip/16
 
 ## Problem / Motivation
+
 - Users want web3 identity without buying ENS names (gas costs).
 - Creators want to receive donations via human-readable addresses.
 - Donations should fund stream infrastructure costs.
 
 ## Goals
+
 - Issue gasless subdomains to FrameWorks users.
 - Map subdomains to HD-derived deposit addresses.
 - Credit donations to stream/creator balances.
 - Populate streaming text records on subdomains.
 
 ## Non-Goals
+
 - Managing user-owned ENS names (they control their own records).
 - Building a general-purpose ENS resolver (only FrameWorks subdomains).
 
@@ -51,11 +59,13 @@ gaming.alice.frameworks.eth    → channel-specific subdomain
 ```
 
 **Creator subdomains** (`alice.frameworks.eth`):
+
 - Linked to user's wallet address
 - Default stream endpoints
 - Receives donations for the user
 
 **Stream subdomains** (`stream1.alice.frameworks.eth`):
+
 - Specific to a single stream
 - Stream-specific playback URLs
 - Donations credit that stream's balance
@@ -65,6 +75,7 @@ gaming.alice.frameworks.eth    → channel-specific subdomain
 FrameWorks owns `frameworks.eth` and configures an offchain resolver using CCIP-Read (EIP-3668).
 
 **Resolution flow:**
+
 ```
 1. Wallet queries alice.frameworks.eth
 2. ENS sees offchain resolver, returns CCIP-Read URL
@@ -90,6 +101,7 @@ POST /ens/ccip-read
 Each subdomain gets a unique deposit address derived from the platform HD wallet.
 
 **Derivation:**
+
 ```
 xpub (platform HD wallet)
   ↓
@@ -101,6 +113,7 @@ Store mapping: subdomain → address → stream/creator
 ```
 
 **Database schema addition:**
+
 ```sql
 CREATE TABLE purser.ens_subdomains (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -126,6 +139,7 @@ CREATE TABLE purser.ens_subdomains (
 ```
 
 This reuses existing infrastructure:
+
 - `api_billing/internal/handlers/hdwallet.go` - address derivation
 - `api_billing/internal/handlers/checkout.go` - deposit detection
 - Stream balances (per stream-balances RFC)
@@ -159,12 +173,12 @@ The stream-balances RFC defines per-stream balances. ENS donations integrate as 
 
 ## Impact / Dependencies
 
-| Component | Change Required |
-|-----------|-----------------|
-| api_billing (Purser) | ENS subdomain table, resolver API |
-| api_gateway (Bridge) | GraphQL mutations for subdomain management |
-| pkg/database | Schema migration for ens_subdomains |
-| ENS | Configure frameworks.eth with CCIP-Read resolver |
+| Component            | Change Required                                  |
+| -------------------- | ------------------------------------------------ |
+| api_billing (Purser) | ENS subdomain table, resolver API                |
+| api_gateway (Bridge) | GraphQL mutations for subdomain management       |
+| pkg/database         | Schema migration for ens_subdomains              |
+| ENS                  | Configure frameworks.eth with CCIP-Read resolver |
 
 ## Alternatives Considered
 
@@ -174,11 +188,11 @@ The stream-balances RFC defines per-stream balances. ENS donations integrate as 
 
 ## Risks & Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Resolver downtime | Wallets retry; fallback to cached records |
+| Risk                        | Mitigation                                                     |
+| --------------------------- | -------------------------------------------------------------- |
+| Resolver downtime           | Wallets retry; fallback to cached records                      |
 | Address substitution attack | HD derivation is deterministic; all addresses logged for audit |
-| Subdomain squatting | Registration requires FrameWorks account; rate limits |
+| Subdomain squatting         | Registration requires FrameWorks account; rate limits          |
 
 ## Migration / Rollout
 
@@ -189,11 +203,13 @@ The stream-balances RFC defines per-stream balances. ENS donations integrate as 
 5. Enable donation detection for ENS addresses.
 
 ## Open Questions
+
 - Should subdomain registration be automatic (on stream creation) or opt-in?
 - What's the subdomain naming policy? (alphanumeric, length limits, reserved names)
 - How to handle subdomain conflicts across tenants?
 
 ## References, Sources & Evidence
+
 - [Source] HD wallet: `api_billing/internal/handlers/hdwallet.go`
 - [Source] Crypto deposits: `api_billing/internal/handlers/checkout.go`
 - [Source] Stream balances RFC: `docs/rfcs/stream-balances.md`

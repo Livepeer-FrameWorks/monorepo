@@ -3,7 +3,7 @@
  * for declarative usage in Svelte 5 components.
  */
 
-import { writable, derived, type Readable } from 'svelte/store';
+import { writable, derived, type Readable } from "svelte/store";
 import {
   PlayerController,
   type PlayerControllerConfig,
@@ -12,13 +12,13 @@ import {
   type PlaybackQuality,
   type ContentEndpoints,
   type ContentMetadata,
-} from '@livepeer-frameworks/player-core';
+} from "@livepeer-frameworks/player-core";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface PlayerControllerStoreConfig extends Omit<PlayerControllerConfig, 'playerManager'> {
+export interface PlayerControllerStoreConfig extends Omit<PlayerControllerConfig, "playerManager"> {
   /** Enable/disable the store */
   enabled?: boolean;
 }
@@ -136,7 +136,7 @@ export interface PlayerControllerStore extends Readable<PlayerControllerState> {
     forcePlayer?: string;
     forceType?: string;
     forceSource?: number;
-    playbackMode?: 'auto' | 'low-latency' | 'quality' | 'vod';
+    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
   }) => Promise<void>;
 }
 
@@ -145,7 +145,7 @@ export interface PlayerControllerStore extends Readable<PlayerControllerState> {
 // ============================================================================
 
 const initialState: PlayerControllerState = {
-  state: 'booting',
+  state: "booting",
   streamState: null,
   endpoints: null,
   metadata: null,
@@ -228,7 +228,7 @@ export function createPlayerControllerStore(
   function syncState() {
     if (!controller) return;
 
-    store.update(prev => ({
+    store.update((prev) => ({
       ...prev,
       isPlaying: controller!.isPlaying(),
       isPaused: controller!.isPaused(),
@@ -252,7 +252,7 @@ export function createPlayerControllerStore(
 
     // Clean up existing controller
     if (controller) {
-      unsubscribers.forEach(fn => fn());
+      unsubscribers.forEach((fn) => fn());
       unsubscribers = [];
       controller.destroy();
     }
@@ -261,116 +261,148 @@ export function createPlayerControllerStore(
     controller = new PlayerController(controllerConfig);
 
     // Subscribe to events
-    unsubscribers.push(controller.on('stateChange', ({ state }) => {
-      store.update(prev => ({ ...prev, state }));
-    }));
+    unsubscribers.push(
+      controller.on("stateChange", ({ state }) => {
+        store.update((prev) => ({ ...prev, state }));
+      })
+    );
 
-    unsubscribers.push(controller.on('streamStateChange', ({ state: streamState }) => {
-      store.update(prev => ({
-        ...prev,
-        streamState,
-        metadata: controller!.getMetadata(),
-        isEffectivelyLive: controller!.isEffectivelyLive(),
-        shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
-      }));
-    }));
+    unsubscribers.push(
+      controller.on("streamStateChange", ({ state: streamState }) => {
+        store.update((prev) => ({
+          ...prev,
+          streamState,
+          metadata: controller!.getMetadata(),
+          isEffectivelyLive: controller!.isEffectivelyLive(),
+          shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+        }));
+      })
+    );
 
-    unsubscribers.push(controller.on('timeUpdate', ({ currentTime, duration }) => {
-      store.update(prev => ({ ...prev, currentTime, duration }));
-    }));
+    unsubscribers.push(
+      controller.on("timeUpdate", ({ currentTime, duration }) => {
+        store.update((prev) => ({ ...prev, currentTime, duration }));
+      })
+    );
 
-    unsubscribers.push(controller.on('error', ({ error }) => {
-      store.update(prev => ({
-        ...prev,
-        error,
-        isPassiveError: controller!.isPassiveError(),
-      }));
-    }));
+    unsubscribers.push(
+      controller.on("error", ({ error }) => {
+        store.update((prev) => ({
+          ...prev,
+          error,
+          isPassiveError: controller!.isPassiveError(),
+        }));
+      })
+    );
 
-    unsubscribers.push(controller.on('errorCleared', () => {
-      store.update(prev => ({ ...prev, error: null, isPassiveError: false }));
-    }));
+    unsubscribers.push(
+      controller.on("errorCleared", () => {
+        store.update((prev) => ({ ...prev, error: null, isPassiveError: false }));
+      })
+    );
 
-    unsubscribers.push(controller.on('ready', ({ videoElement }) => {
-      store.update(prev => ({
-        ...prev,
-        videoElement,
-        endpoints: controller!.getEndpoints(),
-        metadata: controller!.getMetadata(),
-        isEffectivelyLive: controller!.isEffectivelyLive(),
-        shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
-        currentPlayerInfo: controller!.getCurrentPlayerInfo(),
-        currentSourceInfo: controller!.getCurrentSourceInfo(),
-      }));
+    unsubscribers.push(
+      controller.on("ready", ({ videoElement }) => {
+        store.update((prev) => ({
+          ...prev,
+          videoElement,
+          endpoints: controller!.getEndpoints(),
+          metadata: controller!.getMetadata(),
+          isEffectivelyLive: controller!.isEffectivelyLive(),
+          shouldShowIdleScreen: controller!.shouldShowIdleScreen(),
+          currentPlayerInfo: controller!.getCurrentPlayerInfo(),
+          currentSourceInfo: controller!.getCurrentSourceInfo(),
+        }));
 
-      // Add video event listeners for state sync
-      const video = videoElement;
-      const handleVideoEvent = () => {
-        if (controller?.shouldSuppressVideoEvents?.()) return;
-        syncState();
-      };
-      video.addEventListener('play', handleVideoEvent);
-      video.addEventListener('pause', handleVideoEvent);
-      video.addEventListener('waiting', handleVideoEvent);
-      video.addEventListener('playing', handleVideoEvent);
-      unsubscribers.push(() => {
-        video.removeEventListener('play', handleVideoEvent);
-        video.removeEventListener('pause', handleVideoEvent);
-        video.removeEventListener('waiting', handleVideoEvent);
-        video.removeEventListener('playing', handleVideoEvent);
-      });
-    }));
+        // Add video event listeners for state sync
+        const video = videoElement;
+        const handleVideoEvent = () => {
+          if (controller?.shouldSuppressVideoEvents?.()) return;
+          syncState();
+        };
+        video.addEventListener("play", handleVideoEvent);
+        video.addEventListener("pause", handleVideoEvent);
+        video.addEventListener("waiting", handleVideoEvent);
+        video.addEventListener("playing", handleVideoEvent);
+        unsubscribers.push(() => {
+          video.removeEventListener("play", handleVideoEvent);
+          video.removeEventListener("pause", handleVideoEvent);
+          video.removeEventListener("waiting", handleVideoEvent);
+          video.removeEventListener("playing", handleVideoEvent);
+        });
+      })
+    );
 
-    unsubscribers.push(controller.on('playerSelected', ({ player: _player, source }) => {
-      store.update(prev => ({
-        ...prev,
-        currentPlayerInfo: controller!.getCurrentPlayerInfo(),
-        currentSourceInfo: { url: source.url, type: source.type },
-      }));
-    }));
+    unsubscribers.push(
+      controller.on("playerSelected", ({ player: _player, source }) => {
+        store.update((prev) => ({
+          ...prev,
+          currentPlayerInfo: controller!.getCurrentPlayerInfo(),
+          currentSourceInfo: { url: source.url, type: source.type },
+        }));
+      })
+    );
 
-    unsubscribers.push(controller.on('volumeChange', ({ volume, muted }) => {
-      store.update(prev => ({ ...prev, volume, isMuted: muted }));
-    }));
+    unsubscribers.push(
+      controller.on("volumeChange", ({ volume, muted }) => {
+        store.update((prev) => ({ ...prev, volume, isMuted: muted }));
+      })
+    );
 
-    unsubscribers.push(controller.on('loopChange', ({ isLoopEnabled }) => {
-      store.update(prev => ({ ...prev, isLoopEnabled }));
-    }));
+    unsubscribers.push(
+      controller.on("loopChange", ({ isLoopEnabled }) => {
+        store.update((prev) => ({ ...prev, isLoopEnabled }));
+      })
+    );
 
-    unsubscribers.push(controller.on('fullscreenChange', ({ isFullscreen }) => {
-      store.update(prev => ({ ...prev, isFullscreen }));
-    }));
+    unsubscribers.push(
+      controller.on("fullscreenChange", ({ isFullscreen }) => {
+        store.update((prev) => ({ ...prev, isFullscreen }));
+      })
+    );
 
-    unsubscribers.push(controller.on('pipChange', ({ isPiP }) => {
-      store.update(prev => ({ ...prev, isPiPActive: isPiP }));
-    }));
+    unsubscribers.push(
+      controller.on("pipChange", ({ isPiP }) => {
+        store.update((prev) => ({ ...prev, isPiPActive: isPiP }));
+      })
+    );
 
-    unsubscribers.push(controller.on('holdSpeedStart', ({ speed }) => {
-      store.update(prev => ({ ...prev, isHoldingSpeed: true, holdSpeed: speed }));
-    }));
+    unsubscribers.push(
+      controller.on("holdSpeedStart", ({ speed }) => {
+        store.update((prev) => ({ ...prev, isHoldingSpeed: true, holdSpeed: speed }));
+      })
+    );
 
-    unsubscribers.push(controller.on('holdSpeedEnd', () => {
-      store.update(prev => ({ ...prev, isHoldingSpeed: false }));
-    }));
+    unsubscribers.push(
+      controller.on("holdSpeedEnd", () => {
+        store.update((prev) => ({ ...prev, isHoldingSpeed: false }));
+      })
+    );
 
-    unsubscribers.push(controller.on('hoverStart', () => {
-      store.update(prev => ({ ...prev, isHovering: true, shouldShowControls: true }));
-    }));
+    unsubscribers.push(
+      controller.on("hoverStart", () => {
+        store.update((prev) => ({ ...prev, isHovering: true, shouldShowControls: true }));
+      })
+    );
 
-    unsubscribers.push(controller.on('hoverEnd', () => {
-      store.update(prev => ({
-        ...prev,
-        isHovering: false,
-        shouldShowControls: controller!.shouldShowControls(),
-      }));
-    }));
+    unsubscribers.push(
+      controller.on("hoverEnd", () => {
+        store.update((prev) => ({
+          ...prev,
+          isHovering: false,
+          shouldShowControls: controller!.shouldShowControls(),
+        }));
+      })
+    );
 
-    unsubscribers.push(controller.on('captionsChange', ({ enabled }) => {
-      store.update(prev => ({ ...prev, subtitlesEnabled: enabled }));
-    }));
+    unsubscribers.push(
+      controller.on("captionsChange", ({ enabled }) => {
+        store.update((prev) => ({ ...prev, subtitlesEnabled: enabled }));
+      })
+    );
 
     // Set initial loop state
-    store.update(prev => ({
+    store.update((prev) => ({
       ...prev,
       isLoopEnabled: controller!.isLoopEnabled(),
     }));
@@ -393,7 +425,7 @@ export function createPlayerControllerStore(
    * Destroy the store and controller
    */
   function destroy(): void {
-    unsubscribers.forEach(fn => fn());
+    unsubscribers.forEach((fn) => fn());
     unsubscribers = [];
 
     if (controller) {
@@ -451,7 +483,7 @@ export function createPlayerControllerStore(
 
   function clearError(): void {
     controller?.clearError();
-    store.update(prev => ({ ...prev, error: null, isPassiveError: false }));
+    store.update((prev) => ({ ...prev, error: null, isPassiveError: false }));
   }
 
   async function retry(): Promise<void> {
@@ -490,7 +522,7 @@ export function createPlayerControllerStore(
     forcePlayer?: string;
     forceType?: string;
     forceSource?: number;
-    playbackMode?: 'auto' | 'low-latency' | 'quality' | 'vod';
+    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
   }): Promise<void> {
     await controller?.setDevModeOptions(options);
   }
@@ -534,35 +566,35 @@ export function createPlayerControllerStore(
 // ============================================================================
 
 export function createDerivedState(store: PlayerControllerStore) {
-  return derived(store, $state => $state.state);
+  return derived(store, ($state) => $state.state);
 }
 
 export function createDerivedIsPlaying(store: PlayerControllerStore) {
-  return derived(store, $state => $state.isPlaying);
+  return derived(store, ($state) => $state.isPlaying);
 }
 
 export function createDerivedCurrentTime(store: PlayerControllerStore) {
-  return derived(store, $state => $state.currentTime);
+  return derived(store, ($state) => $state.currentTime);
 }
 
 export function createDerivedDuration(store: PlayerControllerStore) {
-  return derived(store, $state => $state.duration);
+  return derived(store, ($state) => $state.duration);
 }
 
 export function createDerivedError(store: PlayerControllerStore) {
-  return derived(store, $state => $state.error);
+  return derived(store, ($state) => $state.error);
 }
 
 export function createDerivedVideoElement(store: PlayerControllerStore) {
-  return derived(store, $state => $state.videoElement);
+  return derived(store, ($state) => $state.videoElement);
 }
 
 export function createDerivedShouldShowControls(store: PlayerControllerStore) {
-  return derived(store, $state => $state.shouldShowControls);
+  return derived(store, ($state) => $state.shouldShowControls);
 }
 
 export function createDerivedShouldShowIdleScreen(store: PlayerControllerStore) {
-  return derived(store, $state => $state.shouldShowIdleScreen);
+  return derived(store, ($state) => $state.shouldShowIdleScreen);
 }
 
 export default createPlayerControllerStore;

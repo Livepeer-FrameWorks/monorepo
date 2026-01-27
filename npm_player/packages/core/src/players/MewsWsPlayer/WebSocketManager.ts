@@ -7,7 +7,7 @@
  * Ported from reference: mews.js:387-883
  */
 
-import type { WebSocketManagerOptions, MewsMessage, MewsMessageListener } from './types';
+import type { WebSocketManagerOptions, MewsMessage, MewsMessageListener } from "./types";
 
 export class WebSocketManager {
   private ws: WebSocket | null = null;
@@ -44,7 +44,7 @@ export class WebSocketManager {
 
     // Protocol mismatch check (non-fatal warning)
     try {
-      const pageProto = window.location.protocol.replace(/^http/, 'ws');
+      const pageProto = window.location.protocol.replace(/^http/, "ws");
       const srcProto = new URL(this.url, window.location.href).protocol;
       if (pageProto !== srcProto) {
         this.onError(`Protocol mismatch ${pageProto} vs ${srcProto}`);
@@ -52,7 +52,7 @@ export class WebSocketManager {
     } catch {}
 
     const ws = new WebSocket(this.url);
-    ws.binaryType = 'arraybuffer';
+    ws.binaryType = "arraybuffer";
     this.ws = ws;
 
     ws.onopen = () => {
@@ -67,7 +67,7 @@ export class WebSocketManager {
     };
 
     ws.onerror = () => {
-      this.onError('WebSocket error');
+      this.onError("WebSocket error");
     };
 
     ws.onclose = () => {
@@ -83,7 +83,7 @@ export class WebSocketManager {
         }, backoff);
       } else {
         this.onClose();
-        this.onError('WebSocket closed');
+        this.onError("WebSocket closed");
       }
     };
   }
@@ -101,7 +101,7 @@ export class WebSocketManager {
     if (this.isDestroyed) return false;
 
     if (retry > MAX_RETRIES) {
-      this.onError('Too many send retries');
+      this.onError("Too many send retries");
       return false;
     }
 
@@ -156,7 +156,7 @@ export class WebSocketManager {
   }
 
   destroy(): void {
-    console.debug('[WebSocketManager] destroy() called');
+    console.debug("[WebSocketManager] destroy() called");
     this.isDestroyed = true;
     this.clearReconnectTimer();
 
@@ -175,7 +175,7 @@ export class WebSocketManager {
       } catch {}
       this.ws = null;
     }
-    console.debug('[WebSocketManager] destroy() completed');
+    console.debug("[WebSocketManager] destroy() completed");
   }
 
   isConnected(): boolean {
@@ -232,7 +232,7 @@ export class WebSocketManager {
           callbacks[i](msg);
         } catch (e) {
           // Don't let one listener crash others
-          console.error('MEWS listener error:', e);
+          console.error("MEWS listener error:", e);
         }
       }
     }

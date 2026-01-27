@@ -1,22 +1,19 @@
-import globals from "globals";
-import tseslint from "typescript-eslint";
 import reactPlugin from "eslint-plugin-react";
 import reactHooksPlugin from "eslint-plugin-react-hooks";
 import sveltePlugin from "eslint-plugin-svelte";
 import svelteParser from "svelte-eslint-parser";
+import {
+  globalIgnores,
+  sharedTsRules,
+  unusedVarsRule,
+  tseslint,
+  globals,
+} from "../eslint.base.config.js";
 
 export default tseslint.config(
-  // Global ignores
+  globalIgnores,
   {
-    ignores: [
-      "**/dist/**",
-      "**/node_modules/**",
-      "**/.svelte-kit/**",
-      "**/playground/**",
-      "src/**",
-      "**/*.config.js",
-      "**/*.config.ts",
-    ],
+    ignores: ["**/playground/**", "src/**", "**/*.config.js", "**/*.config.ts"],
   },
 
   // TypeScript base config for core package
@@ -36,14 +33,7 @@ export default tseslint.config(
     },
     rules: {
       ...tseslint.configs.recommended[0]?.rules,
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-        },
-      ],
-      "@typescript-eslint/no-explicit-any": "warn",
+      ...sharedTsRules,
     },
   },
 
@@ -74,14 +64,7 @@ export default tseslint.config(
     },
     rules: {
       ...tseslint.configs.recommended[0]?.rules,
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-        },
-      ],
-      "@typescript-eslint/no-explicit-any": "warn",
+      ...sharedTsRules,
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
     },
@@ -104,14 +87,7 @@ export default tseslint.config(
     },
     rules: {
       ...tseslint.configs.recommended[0]?.rules,
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-        },
-      ],
-      "@typescript-eslint/no-explicit-any": "warn",
+      ...sharedTsRules,
     },
   },
 
@@ -136,13 +112,7 @@ export default tseslint.config(
     },
     rules: {
       ...sveltePlugin.configs.recommended.rules,
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-        },
-      ],
+      ...unusedVarsRule,
     },
-  },
+  }
 );

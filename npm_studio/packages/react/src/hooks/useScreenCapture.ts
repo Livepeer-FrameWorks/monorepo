@@ -3,8 +3,8 @@
  * React hook for screen capture
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { ScreenCapture, type ScreenCaptureOptions } from '@livepeer-frameworks/streamcrafter-core';
+import { useState, useEffect, useCallback, useRef } from "react";
+import { ScreenCapture, type ScreenCaptureOptions } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface UseScreenCaptureReturn {
   stream: MediaStream | null;
@@ -28,19 +28,19 @@ export function useScreenCapture(): UseScreenCaptureReturn {
     const capture = new ScreenCapture();
     screenCaptureRef.current = capture;
 
-    const unsubStarted = capture.on('started', (event) => {
+    const unsubStarted = capture.on("started", (event) => {
       setStream(event.stream);
       setIsActive(true);
       setHasAudio(event.stream.getAudioTracks().length > 0);
     });
 
-    const unsubEnded = capture.on('ended', () => {
+    const unsubEnded = capture.on("ended", () => {
       setStream(null);
       setIsActive(false);
       setHasAudio(false);
     });
 
-    const unsubError = capture.on('error', (event) => {
+    const unsubError = capture.on("error", (event) => {
       setError(event.message);
     });
 

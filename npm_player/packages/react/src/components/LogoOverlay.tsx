@@ -10,14 +10,11 @@ interface LogoOverlayProps {
   clickUrl?: string;
 }
 
-const POSITION_MAP: Record<
-  NonNullable<LogoOverlayProps["position"]>,
-  string
-> = {
+const POSITION_MAP: Record<NonNullable<LogoOverlayProps["position"]>, string> = {
   "top-left": "left-3 top-3 sm:left-4 sm:top-4",
   "top-right": "right-3 top-3 sm:right-4 sm:top-4",
   "bottom-left": "left-3 bottom-3 sm:left-4 sm:bottom-4",
-  "bottom-right": "right-3 bottom-3 sm:right-4 sm:bottom-4"
+  "bottom-right": "right-3 bottom-3 sm:right-4 sm:bottom-4",
 };
 
 const LogoOverlay: React.FC<LogoOverlayProps> = ({
@@ -26,7 +23,7 @@ const LogoOverlay: React.FC<LogoOverlayProps> = ({
   position = "bottom-right",
   width = 96,
   height = "auto",
-  clickUrl
+  clickUrl,
 }) => {
   if (!show) return null;
 

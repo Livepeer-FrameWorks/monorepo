@@ -1,14 +1,14 @@
-import { forwardRef } from 'react'
-import { cn } from '@/lib/utils'
+import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
 
 const MarketingGridSeam = forwardRef(
   (
     {
-      as: Component = 'div',
+      as: Component = "div",
       columns = 2,
-      stackAt = 'md',
-      gap = 'md',
-      surface = 'transparent',
+      stackAt = "md",
+      gap = "md",
+      surface = "transparent",
       className,
       style,
       children,
@@ -19,7 +19,7 @@ const MarketingGridSeam = forwardRef(
     <Component
       ref={ref}
       className={cn(
-        'marketing-grid-seam',
+        "marketing-grid-seam",
         columns && `marketing-grid-seam--cols-${columns}`,
         stackAt && `marketing-grid-seam--stack-${stackAt}`,
         gap && `marketing-grid-seam--gap-${gap}`,
@@ -27,7 +27,7 @@ const MarketingGridSeam = forwardRef(
       )}
       data-surface={surface}
       style={{
-        '--grid-cols': columns,
+        "--grid-cols": columns,
         ...style,
       }}
       {...props}
@@ -35,8 +35,8 @@ const MarketingGridSeam = forwardRef(
       {children}
     </Component>
   )
-)
+);
 
-MarketingGridSeam.displayName = 'MarketingGridSeam'
+MarketingGridSeam.displayName = "MarketingGridSeam";
 
-export default MarketingGridSeam
+export default MarketingGridSeam;

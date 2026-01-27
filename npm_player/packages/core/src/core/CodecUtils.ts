@@ -40,61 +40,61 @@ export function translateCodec(track: TrackInfo): string {
   }
 
   // Audio codecs
-  if (track.type === 'audio') {
+  if (track.type === "audio") {
     switch (codec) {
-      case 'AAC':
-      case 'MP4A':
-        return 'mp4a.40.2'; // AAC-LC
-      case 'MP3':
-        return 'mp4a.40.34'; // MP3 in MP4 container
-      case 'AC3':
-      case 'AC-3':
-        return 'ac-3';
-      case 'EAC3':
-      case 'EC3':
-      case 'E-AC3':
-      case 'EC-3':
-        return 'ec-3';
-      case 'OPUS':
-        return 'opus';
-      case 'VORBIS':
-        return 'vorbis';
-      case 'FLAC':
-        return 'flac';
-      case 'PCM':
-      case 'PCMS16LE':
-        return 'pcm';
+      case "AAC":
+      case "MP4A":
+        return "mp4a.40.2"; // AAC-LC
+      case "MP3":
+        return "mp4a.40.34"; // MP3 in MP4 container
+      case "AC3":
+      case "AC-3":
+        return "ac-3";
+      case "EAC3":
+      case "EC3":
+      case "E-AC3":
+      case "EC-3":
+        return "ec-3";
+      case "OPUS":
+        return "opus";
+      case "VORBIS":
+        return "vorbis";
+      case "FLAC":
+        return "flac";
+      case "PCM":
+      case "PCMS16LE":
+        return "pcm";
       default:
         return codec.toLowerCase();
     }
   }
 
   // Video codecs
-  if (track.type === 'video') {
+  if (track.type === "video") {
     switch (codec) {
-      case 'H264':
-      case 'AVC':
-      case 'AVC1': {
+      case "H264":
+      case "AVC":
+      case "AVC1": {
         // Try to extract profile/level from init data
         const profileLevel = extractH264Profile(track.init);
-        return profileLevel || 'avc1.42E01E'; // Default: Baseline Profile, Level 3.0
+        return profileLevel || "avc1.42E01E"; // Default: Baseline Profile, Level 3.0
       }
-      case 'H265':
-      case 'HEVC':
-      case 'HEV1':
-      case 'HVC1': {
+      case "H265":
+      case "HEVC":
+      case "HEV1":
+      case "HVC1": {
         // Try to extract profile/level from init data
         const profileLevel = extractHEVCProfile(track.init);
-        return profileLevel || 'hev1.1.6.L93.B0'; // Default: Main Profile, Level 3.1
+        return profileLevel || "hev1.1.6.L93.B0"; // Default: Main Profile, Level 3.1
       }
-      case 'VP8':
-        return 'vp8';
-      case 'VP9':
-        return 'vp09.00.10.08'; // Profile 0, Level 1.0, 8-bit
-      case 'AV1':
-        return 'av01.0.01M.08'; // Main Profile, Level 2.1, 8-bit
-      case 'THEORA':
-        return 'theora';
+      case "VP8":
+        return "vp8";
+      case "VP9":
+        return "vp09.00.10.08"; // Profile 0, Level 1.0, 8-bit
+      case "AV1":
+        return "av01.0.01M.08"; // Main Profile, Level 2.1, 8-bit
+      case "THEORA":
+        return "theora";
       default:
         return codec.toLowerCase();
     }
@@ -199,7 +199,7 @@ function extractHEVCProfile(init?: string): string | null {
  * Convert byte to 2-digit hex string
  */
 function toHex(byte: number): string {
-  return byte.toString(16).padStart(2, '0').toUpperCase();
+  return byte.toString(16).padStart(2, "0").toUpperCase();
 }
 
 /**
@@ -221,8 +221,8 @@ function base64ToBytes(base64: string): Uint8Array {
  * @param containerType - Container type (default: 'video/mp4')
  * @returns true if supported
  */
-export function isCodecSupported(codecString: string, containerType = 'video/mp4'): boolean {
-  if (typeof MediaSource === 'undefined' || !MediaSource.isTypeSupported) {
+export function isCodecSupported(codecString: string, containerType = "video/mp4"): boolean {
+  if (typeof MediaSource === "undefined" || !MediaSource.isTypeSupported) {
     return false;
   }
 
@@ -237,8 +237,11 @@ export function isCodecSupported(codecString: string, containerType = 'video/mp4
  * @param type - Track type to filter ('video' or 'audio')
  * @returns Best supported track or null
  */
-export function getBestSupportedTrack(tracks: TrackInfo[], type: 'video' | 'audio'): TrackInfo | null {
-  const filteredTracks = tracks.filter(t => t.type === type);
+export function getBestSupportedTrack(
+  tracks: TrackInfo[],
+  type: "video" | "audio"
+): TrackInfo | null {
+  const filteredTracks = tracks.filter((t) => t.type === type);
 
   for (const track of filteredTracks) {
     const codecString = translateCodec(track);

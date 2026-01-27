@@ -1,11 +1,11 @@
-import { forwardRef } from 'react'
-import { cn } from '@/lib/utils'
+import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
 
 const MarketingBand = forwardRef(
   (
     {
-      as: Component = 'section',
-      surface = 'none',
+      as: Component = "section",
+      surface = "none",
       bleed = false,
       contentClassName,
       className,
@@ -17,16 +17,16 @@ const MarketingBand = forwardRef(
     return (
       <Component
         ref={ref}
-        className={cn('marketing-band', bleed && 'marketing-band--bleed', className)}
+        className={cn("marketing-band", bleed && "marketing-band--bleed", className)}
         data-surface={surface}
         {...props}
       >
-        <div className={cn('marketing-band__inner', contentClassName)}>{children}</div>
+        <div className={cn("marketing-band__inner", contentClassName)}>{children}</div>
       </Component>
-    )
+    );
   }
-)
+);
 
-MarketingBand.displayName = 'MarketingBand'
+MarketingBand.displayName = "MarketingBand";
 
-export default MarketingBand
+export default MarketingBand;

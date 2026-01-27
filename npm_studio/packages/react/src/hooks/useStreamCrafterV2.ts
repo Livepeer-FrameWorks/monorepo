@@ -7,7 +7,7 @@
  * - Auto-reconnection
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   IngestControllerV2,
   type IngestControllerConfigV2,
@@ -23,7 +23,7 @@ import {
   type EncoderOverrides,
   detectCapabilities,
   isWebCodecsEncodingPathSupported,
-} from '@livepeer-frameworks/streamcrafter-core';
+} from "@livepeer-frameworks/streamcrafter-core";
 
 // Encoder stats from EncoderManager
 export interface EncoderStats {
@@ -107,21 +107,21 @@ export interface UseStreamCrafterV2Return {
 }
 
 export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStreamCrafterV2Return {
-  const [state, setState] = useState<IngestState>('idle');
+  const [state, setState] = useState<IngestState>("idle");
   const [stateContext, setStateContext] = useState<IngestStateContextV2>({});
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [sources, setSources] = useState<MediaSource[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<IngestStats | null>(null);
   const [qualityProfile, setQualityProfileState] = useState<QualityProfile>(
-    options.profile || 'broadcast'
+    options.profile || "broadcast"
   );
   const [reconnectionState, setReconnectionState] = useState<ReconnectionState | null>(null);
 
   // Encoder state
   const capabilities = detectCapabilities();
   const [useWebCodecs, setUseWebCodecsState] = useState<boolean>(
-    options.useWebCodecs ?? capabilities.recommended === 'webcodecs'
+    options.useWebCodecs ?? capabilities.recommended === "webcodecs"
   );
   const [isWebCodecsActive, setIsWebCodecsActive] = useState<boolean>(false);
   const [encoderStats, setEncoderStats] = useState<EncoderStats | null>(null);
@@ -133,11 +133,14 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
   // Initialize controller
   useEffect(() => {
     // Use ref value to avoid recreating controller when useWebCodecs changes
-    const controller = new IngestControllerV2({ ...options, useWebCodecs: initialUseWebCodecsRef.current });
+    const controller = new IngestControllerV2({
+      ...options,
+      useWebCodecs: initialUseWebCodecsRef.current,
+    });
     controllerRef.current = controller;
 
     // Set up event listeners
-    const unsubState = controller.on('stateChange', (event) => {
+    const unsubState = controller.on("stateChange", (event) => {
       setState(event.state);
       setStateContext(event.context ?? {});
       setMediaStream(controller.getMediaStream());
@@ -148,35 +151,35 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
       }
     });
 
-    const unsubStats = controller.on('statsUpdate', (newStats) => {
+    const unsubStats = controller.on("statsUpdate", (newStats) => {
       setStats(newStats);
     });
 
-    const unsubError = controller.on('error', (event) => {
+    const unsubError = controller.on("error", (event) => {
       setError(event.error);
     });
 
-    const unsubSourceAdded = controller.on('sourceAdded', () => {
+    const unsubSourceAdded = controller.on("sourceAdded", () => {
       setSources(controller.getSources());
       setMediaStream(controller.getMediaStream());
     });
 
-    const unsubSourceRemoved = controller.on('sourceRemoved', () => {
+    const unsubSourceRemoved = controller.on("sourceRemoved", () => {
       setSources(controller.getSources());
       setMediaStream(controller.getMediaStream());
     });
 
-    const unsubSourceUpdated = controller.on('sourceUpdated', () => {
+    const unsubSourceUpdated = controller.on("sourceUpdated", () => {
       setSources(controller.getSources());
       // Update mediaStream when sources change (e.g., primary video switch)
       setMediaStream(controller.getMediaStream());
     });
 
-    const unsubQualityChanged = controller.on('qualityChanged', (event) => {
+    const unsubQualityChanged = controller.on("qualityChanged", (event) => {
       setQualityProfileState(event.profile);
     });
 
-    const unsubReconnectionAttempt = controller.on('reconnectionAttempt', () => {
+    const unsubReconnectionAttempt = controller.on("reconnectionAttempt", () => {
       setReconnectionState(controller.getReconnectionManager().getState());
     });
 
@@ -185,7 +188,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     const setupEncoderStatsListener = () => {
       const encoder = controller.getEncoderManager();
       if (encoder) {
-        encoderStatsCleanup = encoder.on('stats', (newStats) => {
+        encoderStatsCleanup = encoder.on("stats", (newStats) => {
           setEncoderStats(newStats as EncoderStats);
         });
       }
@@ -201,7 +204,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     };
 
     // Listen for WebCodecs activation event
-    const unsubWebCodecs = controller.on('webCodecsActive', (event: { active: boolean }) => {
+    const unsubWebCodecs = controller.on("webCodecsActive", (event: { active: boolean }) => {
       setIsWebCodecsActive(event.active);
       if (event.active) {
         setupEncoderStatsListener();
@@ -209,11 +212,11 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     });
 
     // Hook into state changes to monitor encoder status
-    const unsubStateForEncoder = controller.on('stateChange', (event) => {
-      if (event.state === 'streaming') {
+    const unsubStateForEncoder = controller.on("stateChange", (event) => {
+      if (event.state === "streaming") {
         // Check after a delay as fallback (in case event was missed)
         setTimeout(checkEncoderStatus, 200);
-      } else if (event.state === 'idle' || event.state === 'capturing') {
+      } else if (event.state === "idle" || event.state === "capturing") {
         setIsWebCodecsActive(false);
         setEncoderStats(null);
         if (encoderStatsCleanup) {
@@ -251,7 +254,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
 
   const startCamera = useCallback(async (captureOptions?: CaptureOptions) => {
     if (!controllerRef.current) {
-      throw new Error('Controller not initialized');
+      throw new Error("Controller not initialized");
     }
     setError(null);
     return controllerRef.current.startCamera(captureOptions);
@@ -259,7 +262,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
 
   const startScreenShare = useCallback(async (captureOptions?: ScreenCaptureOptions) => {
     if (!controllerRef.current) {
-      throw new Error('Controller not initialized');
+      throw new Error("Controller not initialized");
     }
     setError(null);
     return controllerRef.current.startScreenShare(captureOptions);
@@ -267,7 +270,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
 
   const addCustomSource = useCallback((stream: MediaStream, label: string) => {
     if (!controllerRef.current) {
-      throw new Error('Controller not initialized');
+      throw new Error("Controller not initialized");
     }
     return controllerRef.current.addCustomSource(stream, label);
   }, []);
@@ -319,7 +322,7 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
 
   const startStreaming = useCallback(async () => {
     if (!controllerRef.current) {
-      throw new Error('Controller not initialized');
+      throw new Error("Controller not initialized");
     }
     setError(null);
     return controllerRef.current.startStreaming();
@@ -377,9 +380,9 @@ export function useStreamCrafterV2(options: UseStreamCrafterV2Options): UseStrea
     // State
     state,
     stateContext,
-    isStreaming: state === 'streaming',
-    isCapturing: state === 'capturing' || state === 'streaming',
-    isReconnecting: state === 'reconnecting',
+    isStreaming: state === "streaming",
+    isCapturing: state === "capturing" || state === "streaming",
+    isReconnecting: state === "reconnecting",
     error,
 
     // Media

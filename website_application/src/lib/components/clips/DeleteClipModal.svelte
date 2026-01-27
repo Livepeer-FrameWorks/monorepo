@@ -32,9 +32,13 @@
     if (!value) onCancel();
   }}
 >
-  <DialogContent class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden">
+  <DialogContent
+    class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden"
+  >
     <DialogHeader class="slab-header text-left space-y-1">
-      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">Delete Clip</DialogTitle>
+      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground"
+        >Delete Clip</DialogTitle
+      >
       <DialogDescription class="text-xs text-muted-foreground/70">
         This action cannot be undone. The clip file will be permanently removed.
       </DialogDescription>
@@ -44,7 +48,7 @@
       <p class="text-sm text-muted-foreground">
         Are you sure you want to delete
         <span class="font-semibold text-foreground"
-          >"{clip?.title || clip?.clipHash || 'Untitled Clip'}"</span
+          >"{clip?.title || clip?.clipHash || "Untitled Clip"}"</span
         >?
       </p>
     </div>

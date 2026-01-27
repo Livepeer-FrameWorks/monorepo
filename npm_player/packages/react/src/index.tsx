@@ -5,48 +5,56 @@
  */
 
 // Main player component
-export { default as Player } from './components/Player';
-export { default as PlayerControls } from './components/PlayerControls';
+export { default as Player } from "./components/Player";
+export { default as PlayerControls } from "./components/PlayerControls";
 
 // Overlay components
-export { default as LoadingScreen } from './components/LoadingScreen';
-export { default as IdleScreen } from './components/IdleScreen';
-export { default as ThumbnailOverlay } from './components/ThumbnailOverlay';
-export { default as TitleOverlay } from './components/TitleOverlay';
-export { default as StreamStateOverlay } from './components/StreamStateOverlay';
-export { default as StatsPanel } from './components/StatsPanel';
-export { default as DevModePanel } from './components/DevModePanel';
-export { default as PlayerErrorBoundary } from './components/PlayerErrorBoundary';
+export { default as LoadingScreen } from "./components/LoadingScreen";
+export { default as IdleScreen } from "./components/IdleScreen";
+export { default as ThumbnailOverlay } from "./components/ThumbnailOverlay";
+export { default as TitleOverlay } from "./components/TitleOverlay";
+export { default as StreamStateOverlay } from "./components/StreamStateOverlay";
+export { default as StatsPanel } from "./components/StatsPanel";
+export { default as DevModePanel } from "./components/DevModePanel";
+export { default as PlayerErrorBoundary } from "./components/PlayerErrorBoundary";
 
 // Icon components
-export * from './components/Icons';
+export * from "./components/Icons";
 
 // UI primitives
-export { Button } from './ui/button';
-export { Badge } from './ui/badge';
-export { Slider } from './ui/slider';
+export { Button } from "./ui/button";
+export { Badge } from "./ui/badge";
+export { Slider } from "./ui/slider";
 
 // Context
-export { PlayerProvider, usePlayerContext, usePlayerContextOptional, PlayerContext } from './context/PlayerContext';
-export type { PlayerContextValue } from './context/PlayerContext';
+export {
+  PlayerProvider,
+  usePlayerContext,
+  usePlayerContextOptional,
+  PlayerContext,
+} from "./context/PlayerContext";
+export type { PlayerContextValue } from "./context/PlayerContext";
 
 // Hooks
-export { useStreamState } from './hooks/useStreamState';
-export { usePlaybackQuality } from './hooks/usePlaybackQuality';
-export { useViewerEndpoints } from './hooks/useViewerEndpoints';
-export { useMetaTrack } from './hooks/useMetaTrack';
-export { useTelemetry } from './hooks/useTelemetry';
-export { usePlayerSelection } from './hooks/usePlayerSelection';
-export type { UsePlayerSelectionOptions, UsePlayerSelectionReturn } from './hooks/usePlayerSelection';
-export { usePlayerController } from './hooks/usePlayerController';
+export { useStreamState } from "./hooks/useStreamState";
+export { usePlaybackQuality } from "./hooks/usePlaybackQuality";
+export { useViewerEndpoints } from "./hooks/useViewerEndpoints";
+export { useMetaTrack } from "./hooks/useMetaTrack";
+export { useTelemetry } from "./hooks/useTelemetry";
+export { usePlayerSelection } from "./hooks/usePlayerSelection";
+export type {
+  UsePlayerSelectionOptions,
+  UsePlayerSelectionReturn,
+} from "./hooks/usePlayerSelection";
+export { usePlayerController } from "./hooks/usePlayerController";
 export type {
   UsePlayerControllerConfig,
   UsePlayerControllerReturn,
   PlayerControllerState,
-} from './hooks/usePlayerController';
+} from "./hooks/usePlayerController";
 
 // Types
-export * from './types';
+export * from "./types";
 
 // Re-export commonly used core items
 export {
@@ -57,7 +65,7 @@ export {
   StreamStateClient,
   QualityMonitor,
   cn,
-} from '@livepeer-frameworks/player-core';
+} from "@livepeer-frameworks/player-core";
 
 export type {
   PlayerState,
@@ -72,4 +80,4 @@ export type {
   PlayerSelection,
   PlayerCombination,
   PlayerManagerEvents,
-} from '@livepeer-frameworks/player-core';
+} from "@livepeer-frameworks/player-core";

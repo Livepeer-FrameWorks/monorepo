@@ -23,12 +23,7 @@
   import { EventLog } from "$lib/components/stream-details";
   import type { StreamEvent } from "$lib/components/stream-details/EventLog.svelte";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
-  import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-  } from "$lib/components/ui/select";
+  import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
 
   // Houdini stores
   const streamStore = new GetStreamStore();
@@ -55,16 +50,22 @@
 
   // Time range selection
   let timeRange = $state("7d");
-  const timeRangeOptions = TIME_RANGE_OPTIONS.filter(o => ["24h", "7d", "30d", "90d"].includes(o.value));
+  const timeRangeOptions = TIME_RANGE_OPTIONS.filter((o) =>
+    ["24h", "7d", "30d", "90d"].includes(o.value)
+  );
 
   // Loading state
   let loading = $state(true);
 
   // Stream data
   let maskedStream = $derived($streamStore.data?.stream ?? null);
-  let streamCoreStoreResult = $derived(maskedStream ? fragment(maskedStream, streamCoreStore) : null);
+  let streamCoreStoreResult = $derived(
+    maskedStream ? fragment(maskedStream, streamCoreStore) : null
+  );
   let streamCore = $derived(streamCoreStoreResult ? $streamCoreStoreResult : null);
-  let streamMetricsStoreResult = $derived(maskedStream?.metrics ? fragment(maskedStream.metrics, streamMetricsStore) : null);
+  let streamMetricsStoreResult = $derived(
+    maskedStream?.metrics ? fragment(maskedStream.metrics, streamMetricsStore) : null
+  );
   let streamMetrics = $derived(streamMetricsStoreResult ? $streamMetricsStoreResult : null);
   let stream = $derived(streamCore ? { ...streamCore, metrics: streamMetrics } : null);
 
@@ -75,9 +76,11 @@
 
   // Daily analytics for trend charts
   let streamDailyAnalytics = $derived.by(() => {
-    const edges = $streamDailyStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ?? [];
+    const edges =
+      $streamDailyStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ??
+      [];
     return edges
-      .map(e => e.node)
+      .map((e) => e.node)
       .sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
   });
 
@@ -104,7 +107,7 @@
       { codec: "HEVC", minutes: quality.codecH265Minutes ?? 0, color: "bg-orange-500" },
       { codec: "VP9", minutes: quality.codecVp9Minutes ?? 0, color: "bg-purple-500" },
       { codec: "AV1", minutes: quality.codecAv1Minutes ?? 0, color: "bg-green-500" },
-    ].filter(c => c.minutes > 0);
+    ].filter((c) => c.minutes > 0);
   });
 
   // Map GraphQL event types to EventLog component types
@@ -125,8 +128,9 @@
 
   // Stream events for event log
   let streamEvents = $derived.by(() => {
-    const edges = $streamEventsStore.data?.analytics?.lifecycle?.streamEventsConnection?.edges ?? [];
-    return edges.map(e => ({
+    const edges =
+      $streamEventsStore.data?.analytics?.lifecycle?.streamEventsConnection?.edges ?? [];
+    return edges.map((e) => ({
       id: e.node.eventId,
       timestamp: e.node.timestamp,
       type: mapEventType(e.node.type),
@@ -139,7 +143,7 @@
   // Viewer trend data for chart
   let viewerTrendData = $derived.by(() => {
     if (!streamDailyAnalytics.length) return [];
-    return streamDailyAnalytics.map(d => ({
+    return streamDailyAnalytics.map((d) => ({
       timestamp: d.day,
       viewers: d.uniqueViewers ?? 0,
     }));
@@ -193,9 +197,12 @@
         label: "Packet Loss",
         value: `${((summary?.rangePacketLossRate ?? 0) * 100).toFixed(2)}%`,
         icon: ZapIcon,
-        tone: summary?.rangePacketLossRate && summary.rangePacketLossRate < 0.01 ? "text-success" : "text-warning",
+        tone:
+          summary?.rangePacketLossRate && summary.rangePacketLossRate < 0.01
+            ? "text-success"
+            : "text-warning",
       },
-    ].filter(c => c.value !== null && c.value !== undefined);
+    ].filter((c) => c.value !== null && c.value !== undefined);
   });
 
   async function loadData() {
@@ -267,9 +274,9 @@
           </div>
         </div>
         <div class="flex items-center gap-3">
-          <Select value={timeRange} onValueChange={(v) => timeRange = v} type="single">
+          <Select value={timeRange} onValueChange={(v) => (timeRange = v)} type="single">
             <SelectTrigger class="min-w-[120px]">
-              {timeRangeOptions.find(o => o.value === timeRange)?.label ?? "7 Days"}
+              {timeRangeOptions.find((o) => o.value === timeRange)?.label ?? "7 Days"}
             </SelectTrigger>
             <SelectContent>
               {#each timeRangeOptions as option (option.value)}
@@ -277,7 +284,11 @@
               {/each}
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" onclick={() => goto(resolve(`/streams/${streamId}/health`))}>
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => goto(resolve(`/streams/${streamId}/health`))}
+          >
             <HeartIcon class="w-4 h-4 mr-2" />
             Health
           </Button>
@@ -305,7 +316,8 @@
           <div class="p-4 border-r border-b border-border/30 last:border-r-0">
             <div class="flex items-center gap-2 mb-2">
               <svelte:component this={card.icon} class="w-4 h-4 text-muted-foreground" />
-              <span class="text-xs text-muted-foreground uppercase tracking-wide">{card.label}</span>
+              <span class="text-xs text-muted-foreground uppercase tracking-wide">{card.label}</span
+              >
               {#if card.live}
                 <span class="text-[10px] px-1 py-0.5 rounded bg-success/20 text-success">LIVE</span>
               {/if}
@@ -363,7 +375,9 @@
           <div class="slab-body--flush overflow-x-auto max-h-80">
             <table class="w-full text-sm">
               <thead class="sticky top-0 bg-background">
-                <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
+                <tr
+                  class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
+                >
                   <th class="text-left py-3 px-4">Date</th>
                   <th class="text-right py-3 px-4">Viewers</th>
                   <th class="text-right py-3 px-4">Views</th>
@@ -374,11 +388,21 @@
               <tbody>
                 {#each streamDailyAnalytics.slice().reverse() as day (day.day)}
                   <tr class="border-b border-border/30 hover:bg-muted/10">
-                    <td class="py-3 px-4 font-mono text-xs">{new Date(day.day).toLocaleDateString()}</td>
-                    <td class="py-3 px-4 text-right font-mono">{formatNumber(day.uniqueViewers ?? 0)}</td>
-                    <td class="py-3 px-4 text-right font-mono">{formatNumber(day.totalViews ?? 0)}</td>
-                    <td class="py-3 px-4 text-right font-mono text-info">{((day.egressBytes ?? 0) / 1e9).toFixed(2)} GB</td>
-                    <td class="py-3 px-4 text-right font-mono text-primary">{day.uniqueCountries ?? 0}</td>
+                    <td class="py-3 px-4 font-mono text-xs"
+                      >{new Date(day.day).toLocaleDateString()}</td
+                    >
+                    <td class="py-3 px-4 text-right font-mono"
+                      >{formatNumber(day.uniqueViewers ?? 0)}</td
+                    >
+                    <td class="py-3 px-4 text-right font-mono"
+                      >{formatNumber(day.totalViews ?? 0)}</td
+                    >
+                    <td class="py-3 px-4 text-right font-mono text-info"
+                      >{((day.egressBytes ?? 0) / 1e9).toFixed(2)} GB</td
+                    >
+                    <td class="py-3 px-4 text-right font-mono text-primary"
+                      >{day.uniqueCountries ?? 0}</td
+                    >
                   </tr>
                 {/each}
               </tbody>

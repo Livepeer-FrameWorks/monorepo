@@ -7,7 +7,9 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "lint": "eslint src/",
+    "format": "prettier --write 'src/**/*.{ts,mts,astro,md,mdx}'"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.37.0",
@@ -19,6 +21,9 @@
     "unist-util-visit": "^5.0.0"
   },
   "devDependencies": {
-    "vite": "^7.1.9"
+    "vite": "^7.1.9",
+    "eslint": "^9.36.0",
+    "typescript-eslint": "^8.44.1",
+    "prettier": "^3.1.0"
   }
 }

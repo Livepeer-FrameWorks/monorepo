@@ -4,36 +4,36 @@
  * These types define the message protocol between main thread and worker.
  */
 
-import type { TrackInfo, FrameTimingStats, PipelineStats } from '../types';
+import type { TrackInfo, FrameTimingStats, PipelineStats } from "../types";
 
 // ============================================================================
 // Main Thread -> Worker Messages
 // ============================================================================
 
 export interface CreateMessage {
-  type: 'create';
+  type: "create";
   idx: number;
   track: TrackInfo;
   opts: {
     optimizeForLatency: boolean;
     /** Payload format: 'avcc' (length-prefixed) or 'annexb' (start-code delimited) */
-    payloadFormat?: 'avcc' | 'annexb';
+    payloadFormat?: "avcc" | "annexb";
   };
   uid: number;
 }
 
 export interface ConfigureMessage {
-  type: 'configure';
+  type: "configure";
   idx: number;
   header: Uint8Array;
   uid: number;
 }
 
 export interface ReceiveMessage {
-  type: 'receive';
+  type: "receive";
   idx: number;
   chunk: {
-    type: 'key' | 'delta';
+    type: "key" | "delta";
     timestamp: number; // microseconds
     data: Uint8Array;
   };
@@ -41,28 +41,28 @@ export interface ReceiveMessage {
 }
 
 export interface SetWritableMessage {
-  type: 'setwritable';
+  type: "setwritable";
   idx: number;
   writable: WritableStream<VideoFrame | AudioData>;
   uid: number;
 }
 
 export interface CreateGeneratorMessage {
-  type: 'creategenerator';
+  type: "creategenerator";
   idx: number;
   uid: number;
 }
 
 export interface CloseMessage {
-  type: 'close';
+  type: "close";
   idx: number;
   waitEmpty?: boolean;
   uid: number;
 }
 
 export interface FrameTimingMessage {
-  type: 'frametiming';
-  action: 'setSpeed' | 'reset' | 'setPaused';
+  type: "frametiming";
+  action: "setSpeed" | "reset" | "setPaused";
   speed?: number;
   tweak?: number;
   paused?: boolean;
@@ -70,20 +70,20 @@ export interface FrameTimingMessage {
 }
 
 export interface SeekMessage {
-  type: 'seek';
+  type: "seek";
   seekTime: number; // milliseconds
   uid: number;
 }
 
 export interface FrameStepMessage {
-  type: 'framestep';
+  type: "framestep";
   direction: -1 | 1;
   uid: number;
 }
 
 export interface DebuggingMessage {
-  type: 'debugging';
-  value: boolean | 'verbose';
+  type: "debugging";
+  value: boolean | "verbose";
   uid: number;
 }
 
@@ -104,41 +104,41 @@ export type MainToWorkerMessage =
 // ============================================================================
 
 export interface AddTrackMessage {
-  type: 'addtrack';
+  type: "addtrack";
   idx: number;
   track?: MediaStreamTrack; // Only for Safari's MediaStreamTrackGenerator in Worker
   uid: number;
-  status: 'ok';
+  status: "ok";
 }
 
 export interface RemoveTrackMessage {
-  type: 'removetrack';
+  type: "removetrack";
   idx: number;
   uid: number;
 }
 
 export interface SetPlaybackRateMessage {
-  type: 'setplaybackrate';
+  type: "setplaybackrate";
   speed: number;
   uid: number;
 }
 
 export interface ClosedMessage {
-  type: 'closed';
+  type: "closed";
   idx: number;
   uid: number;
-  status: 'ok';
+  status: "ok";
 }
 
 export interface LogMessage {
-  type: 'log';
+  type: "log";
   msg: string;
-  level?: 'info' | 'warn' | 'error';
+  level?: "info" | "warn" | "error";
   uid: number;
 }
 
 export interface SendEventMessage {
-  type: 'sendevent';
+  type: "sendevent";
   kind: string;
   message?: string;
   time?: number;
@@ -147,7 +147,7 @@ export interface SendEventMessage {
 }
 
 export interface StatsUpdateMessage {
-  type: 'stats';
+  type: "stats";
   stats: {
     frameTiming: FrameTimingStats;
     pipelines: Record<number, PipelineStats>;
@@ -156,16 +156,16 @@ export interface StatsUpdateMessage {
 }
 
 export interface AckMessage {
-  type: 'ack';
+  type: "ack";
   idx?: number;
   uid: number;
-  status: 'ok' | 'error';
+  status: "ok" | "error";
   error?: string;
 }
 
 /** Safari audio: worker sends frames to main thread for writing */
 export interface WriteFrameMessage {
-  type: 'writeframe';
+  type: "writeframe";
   idx: number;
   frame: AudioData;
   uid: number;
@@ -219,7 +219,7 @@ export interface PipelineState {
   writable: WritableStream<VideoFrame | AudioData> | null;
   writer: WritableStreamDefaultWriter<VideoFrame | AudioData> | null;
   inputQueue: Array<{
-    type: 'key' | 'delta';
+    type: "key" | "delta";
     timestamp: number;
     data: Uint8Array;
   }>;
@@ -243,7 +243,7 @@ export interface PipelineState {
   };
   optimizeForLatency: boolean;
   /** Payload format: 'avcc' (length-prefixed) or 'annexb' (start-code delimited) */
-  payloadFormat: 'avcc' | 'annexb';
+  payloadFormat: "avcc" | "annexb";
 }
 
 // ============================================================================
@@ -268,7 +268,7 @@ export interface VideoDecoderInit {
   codedWidth?: number;
   codedHeight?: number;
   description?: Uint8Array;
-  hardwareAcceleration?: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+  hardwareAcceleration?: "no-preference" | "prefer-hardware" | "prefer-software";
   optimizeForLatency?: boolean;
 }
 

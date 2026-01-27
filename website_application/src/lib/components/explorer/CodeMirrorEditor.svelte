@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { browser } from '$app/environment';
-  import type { GraphQLSchema } from 'graphql';
-  import type { Diagnostic as LintDiagnostic } from '@codemirror/lint';
+  import { onMount } from "svelte";
+  import { browser } from "$app/environment";
+  import type { GraphQLSchema } from "graphql";
+  import type { Diagnostic as LintDiagnostic } from "@codemirror/lint";
 
   // Schema can be a proper GraphQLSchema for autocomplete,
   // or an introspection result (we'll build the schema from it),
@@ -11,7 +11,7 @@
 
   interface Props {
     value?: string;
-    language?: 'graphql' | 'json';
+    language?: "graphql" | "json";
     schema?: SchemaInput;
     readonly?: boolean;
     placeholder?: string;
@@ -23,36 +23,41 @@
   }
 
   let {
-    value = $bindable(''),
-    language = 'graphql',
+    value = $bindable(""),
+    language = "graphql",
     schema = null,
     readonly = false,
-    placeholder = '',
-    minHeight = '200px',
-    class: className = '',
+    placeholder = "",
+    minHeight = "200px",
+    class: className = "",
     onchange,
     onkeydown,
     onCursorInfo,
   }: Props = $props();
 
   let container: HTMLDivElement;
-  let view: import('@codemirror/view').EditorView | null = null;
+  let view: import("@codemirror/view").EditorView | null = null;
   let isInitialized = $state(false);
 
   // Track if we're updating from external value change
   let isExternalUpdate = false;
 
   // Store function reference for updateSchema
-  let updateSchemaFn: ((view: import('@codemirror/view').EditorView, schema: GraphQLSchema) => void) | null = null;
-  let buildClientSchemaFn: typeof import('graphql').buildClientSchema | null = null;
-  let getContextAtPositionFn: typeof import('graphql-language-service').getContextAtPosition | null = null;
-  let offsetToPositionFn: typeof import('graphql-language-service').offsetToPosition | null = null;
-  let _getHoverInformationFn: typeof import('graphql-language-service').getHoverInformation | null = null;
-  let _getDiagnosticsFn: typeof import('graphql-language-service').getDiagnostics | null = null;
+  let updateSchemaFn:
+    | ((view: import("@codemirror/view").EditorView, schema: GraphQLSchema) => void)
+    | null = null;
+  let buildClientSchemaFn: typeof import("graphql").buildClientSchema | null = null;
+  let getContextAtPositionFn:
+    | typeof import("graphql-language-service").getContextAtPosition
+    | null = null;
+  let offsetToPositionFn: typeof import("graphql-language-service").offsetToPosition | null = null;
+  let _getHoverInformationFn: typeof import("graphql-language-service").getHoverInformation | null =
+    null;
+  let _getDiagnosticsFn: typeof import("graphql-language-service").getDiagnostics | null = null;
 
   // Convert line/character position to string offset
   function positionToOffset(text: string, pos: { line: number; character: number }): number {
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     let offset = 0;
     for (let i = 0; i < pos.line && i < lines.length; i++) {
       offset += lines[i].length + 1; // +1 for newline
@@ -63,7 +68,7 @@
   let lastCursorSignature: string | null = null;
 
   type CursorInfo = {
-    kind: 'field' | 'argument' | 'enum' | 'type' | 'directive' | 'variable';
+    kind: "field" | "argument" | "enum" | "type" | "directive" | "variable";
     signature: string;
     description?: string;
     args?: Array<{
@@ -92,17 +97,17 @@
   function buildSchema(schemaInput: SchemaInput): GraphQLSchema | undefined {
     if (!schemaInput || !buildClientSchemaFn) return undefined;
 
-    if (typeof schemaInput === 'object' && 'types' in schemaInput) {
+    if (typeof schemaInput === "object" && "types" in schemaInput) {
       try {
         // Schema is an introspection result (__schema object)
         return buildClientSchemaFn({
-          __schema: schemaInput as unknown as Parameters<typeof buildClientSchemaFn>[0]['__schema']
+          __schema: schemaInput as unknown as Parameters<typeof buildClientSchemaFn>[0]["__schema"],
         });
       } catch (e) {
-        console.warn('Failed to build GraphQL schema from introspection:', e);
+        console.warn("Failed to build GraphQL schema from introspection:", e);
         return undefined;
       }
-    } else if (typeof schemaInput === 'object' && 'getQueryType' in schemaInput) {
+    } else if (typeof schemaInput === "object" && "getQueryType" in schemaInput) {
       // Already a GraphQLSchema instance
       return schemaInput as GraphQLSchema;
     }
@@ -112,19 +117,32 @@
 
   async function initializeEditor() {
     // Dynamic imports for CodeMirror
-    const { EditorView, keymap, placeholder: placeholderExtension } = await import('@codemirror/view');
-    const { EditorState } = await import('@codemirror/state');
-    const { defaultKeymap, history, historyKeymap } = await import('@codemirror/commands');
-    const { bracketMatching, foldGutter, foldKeymap } = await import('@codemirror/language');
-    const { closeBrackets, closeBracketsKeymap, autocompletion, acceptCompletion } = await import('@codemirror/autocomplete');
-    const { lineNumbers, highlightActiveLineGutter, highlightActiveLine } = await import('@codemirror/view');
-    const { json } = await import('@codemirror/lang-json');
-    const { graphql, updateSchema } = await import('cm6-graphql');
-    const { tokyoNight } = await import('./codemirrorTheme');
-    const { buildClientSchema, GraphQLInputObjectType, GraphQLEnumType, GraphQLList, GraphQLNonNull } = await import('graphql');
-    const { getContextAtPosition, offsetToPosition, getHoverInformation, getDiagnostics } = await import('graphql-language-service');
-    const { hoverTooltip } = await import('@codemirror/view');
-    const { linter, lintGutter } = await import('@codemirror/lint');
+    const {
+      EditorView,
+      keymap,
+      placeholder: placeholderExtension,
+    } = await import("@codemirror/view");
+    const { EditorState } = await import("@codemirror/state");
+    const { defaultKeymap, history, historyKeymap } = await import("@codemirror/commands");
+    const { bracketMatching, foldGutter, foldKeymap } = await import("@codemirror/language");
+    const { closeBrackets, closeBracketsKeymap, autocompletion, acceptCompletion } =
+      await import("@codemirror/autocomplete");
+    const { lineNumbers, highlightActiveLineGutter, highlightActiveLine } =
+      await import("@codemirror/view");
+    const { json } = await import("@codemirror/lang-json");
+    const { graphql, updateSchema } = await import("cm6-graphql");
+    const { tokyoNight } = await import("./codemirrorTheme");
+    const {
+      buildClientSchema,
+      GraphQLInputObjectType,
+      GraphQLEnumType,
+      GraphQLList,
+      GraphQLNonNull,
+    } = await import("graphql");
+    const { getContextAtPosition, offsetToPosition, getHoverInformation, getDiagnostics } =
+      await import("graphql-language-service");
+    const { hoverTooltip } = await import("@codemirror/view");
+    const { linter, lintGutter } = await import("@codemirror/lint");
 
     // Store function references for later use
     updateSchemaFn = updateSchema;
@@ -138,9 +156,7 @@
     graphqlSchema = buildSchema(schema) || null;
 
     // Build extensions array based on language
-    const languageExtension = language === 'graphql'
-      ? graphql(graphqlSchema ?? undefined)
-      : json();
+    const languageExtension = language === "graphql" ? graphql(graphqlSchema ?? undefined) : json();
 
     const extensions = [
       // Theme
@@ -160,7 +176,7 @@
 
       // Keymaps
       keymap.of([
-        { key: 'Tab', run: acceptCompletion },
+        { key: "Tab", run: acceptCompletion },
         ...defaultKeymap,
         ...historyKeymap,
         ...closeBracketsKeymap,
@@ -175,110 +191,120 @@
 
       // GraphQL-specific: Hover tooltips with schema docs
       // Note: Always add extension, callback handles null schema gracefully
-      language === 'graphql' && hoverTooltip((view: import('@codemirror/view').EditorView, pos: number) => {
-        if (!graphqlSchema || !offsetToPositionFn) return null;
+      language === "graphql" &&
+        hoverTooltip((view: import("@codemirror/view").EditorView, pos: number) => {
+          if (!graphqlSchema || !offsetToPositionFn) return null;
 
-        const docText = view.state.doc.toString();
-        const cursorPos = offsetToPositionFn(docText, pos);
+          const docText = view.state.doc.toString();
+          const cursorPos = offsetToPositionFn(docText, pos);
 
-        // Get hover information from graphql-language-service
-        const hoverInfo = getHoverInformation(graphqlSchema, docText, cursorPos);
-        if (!hoverInfo) return null;
+          // Get hover information from graphql-language-service
+          const hoverInfo = getHoverInformation(graphqlSchema, docText, cursorPos);
+          if (!hoverInfo) return null;
 
-        // hoverInfo can be string or array of MarkedString
-        const content = Array.isArray(hoverInfo)
-          ? hoverInfo.map(h => typeof h === 'string' ? h : h.value).join('\n\n')
-          : typeof hoverInfo === 'string' ? hoverInfo : '';
+          // hoverInfo can be string or array of MarkedString
+          const content = Array.isArray(hoverInfo)
+            ? hoverInfo.map((h) => (typeof h === "string" ? h : h.value)).join("\n\n")
+            : typeof hoverInfo === "string"
+              ? hoverInfo
+              : "";
 
-        if (!content.trim()) return null;
+          if (!content.trim()) return null;
 
-        // Find word boundaries for better tooltip positioning
-        const line = view.state.doc.lineAt(pos);
-        let start = pos;
-        let end = pos;
-        const text = line.text;
+          // Find word boundaries for better tooltip positioning
+          const line = view.state.doc.lineAt(pos);
+          let start = pos;
+          let end = pos;
+          const text = line.text;
 
-        // Expand to word boundaries
-        while (start > line.from && /[\w_]/.test(text[start - line.from - 1])) start--;
-        while (end < line.to && /[\w_]/.test(text[end - line.from])) end++;
+          // Expand to word boundaries
+          while (start > line.from && /[\w_]/.test(text[start - line.from - 1])) start--;
+          while (end < line.to && /[\w_]/.test(text[end - line.from])) end++;
 
-        return {
-          pos: start,
-          end,
-          above: true,
-          create() {
-            const dom = document.createElement('div');
-            dom.className = 'cm-graphql-hover';
+          return {
+            pos: start,
+            end,
+            above: true,
+            create() {
+              const dom = document.createElement("div");
+              dom.className = "cm-graphql-hover";
 
-            // Parse markdown-like content (```graphql blocks)
-            const parts = content.split(/```(\w*)\n?/);
-            let inCode = false;
+              // Parse markdown-like content (```graphql blocks)
+              const parts = content.split(/```(\w*)\n?/);
+              let inCode = false;
 
-            parts.forEach((part, i) => {
-              if (i % 2 === 1) {
-                // This is a language identifier, next part is code
-                inCode = true;
-                return;
-              }
+              parts.forEach((part, i) => {
+                if (i % 2 === 1) {
+                  // This is a language identifier, next part is code
+                  inCode = true;
+                  return;
+                }
 
-              if (inCode) {
-                const code = document.createElement('pre');
-                code.className = 'cm-hover-code';
-                code.textContent = part.trim();
-                dom.appendChild(code);
-                inCode = false;
-              } else if (part.trim()) {
-                const text = document.createElement('div');
-                text.className = 'cm-hover-text';
-                text.textContent = part.trim();
-                dom.appendChild(text);
-              }
-            });
+                if (inCode) {
+                  const code = document.createElement("pre");
+                  code.className = "cm-hover-code";
+                  code.textContent = part.trim();
+                  dom.appendChild(code);
+                  inCode = false;
+                } else if (part.trim()) {
+                  const text = document.createElement("div");
+                  text.className = "cm-hover-text";
+                  text.textContent = part.trim();
+                  dom.appendChild(text);
+                }
+              });
 
-            return { dom };
-          }
-        };
-      }),
+              return { dom };
+            },
+          };
+        }),
 
       // GraphQL-specific: Live linting/diagnostics
       // Note: Always add extension, callback handles null schema gracefully
-      language === 'graphql' && linter((view: import('@codemirror/view').EditorView) => {
-        if (!graphqlSchema) return [];
+      language === "graphql" &&
+        linter(
+          (view: import("@codemirror/view").EditorView) => {
+            if (!graphqlSchema) return [];
 
-        const docText = view.state.doc.toString();
-        if (!docText.trim()) return [];
+            const docText = view.state.doc.toString();
+            if (!docText.trim()) return [];
 
-        try {
-          const rawDiagnostics = getDiagnostics(docText, graphqlSchema);
+            try {
+              const rawDiagnostics = getDiagnostics(docText, graphqlSchema);
 
-          return rawDiagnostics.map((d): LintDiagnostic | null => {
-            const startLine = d.range?.start?.line ?? 0;
-            const startChar = d.range?.start?.character ?? 0;
-            const endLine = d.range?.end?.line ?? startLine;
-            const endChar = d.range?.end?.character ?? startChar + 1;
+              return rawDiagnostics
+                .map((d): LintDiagnostic | null => {
+                  const startLine = d.range?.start?.line ?? 0;
+                  const startChar = d.range?.start?.character ?? 0;
+                  const endLine = d.range?.end?.line ?? startLine;
+                  const endChar = d.range?.end?.character ?? startChar + 1;
 
-            // Convert position to offset
-            const from = positionToOffset(docText, { line: startLine, character: startChar });
-            const to = positionToOffset(docText, { line: endLine, character: endChar });
+                  // Convert position to offset
+                  const from = positionToOffset(docText, { line: startLine, character: startChar });
+                  const to = positionToOffset(docText, { line: endLine, character: endChar });
 
-            // Ensure valid range
-            if (from < 0 || to < 0 || from > docText.length || to > docText.length) return null;
+                  // Ensure valid range
+                  if (from < 0 || to < 0 || from > docText.length || to > docText.length)
+                    return null;
 
-            return {
-              from,
-              to: Math.max(to, from + 1), // Ensure non-zero width
-              severity: d.severity === 1 ? 'error' : 'warning',
-              message: d.message,
-            };
-          }).filter((d): d is LintDiagnostic => d !== null);
-        } catch {
-          // Silently fail on parse errors during typing
-          return [];
-        }
-      }, { delay: 300 }),
+                  return {
+                    from,
+                    to: Math.max(to, from + 1), // Ensure non-zero width
+                    severity: d.severity === 1 ? "error" : "warning",
+                    message: d.message,
+                  };
+                })
+                .filter((d): d is LintDiagnostic => d !== null);
+            } catch {
+              // Silently fail on parse errors during typing
+              return [];
+            }
+          },
+          { delay: 300 }
+        ),
 
       // GraphQL-specific: Lint gutter (shows icons in margin)
-      language === 'graphql' && graphqlSchema && lintGutter(),
+      language === "graphql" && graphqlSchema && lintGutter(),
 
       // Read-only mode
       readonly && EditorState.readOnly.of(true),
@@ -293,7 +319,7 @@
 
         if (
           onCursorInfo &&
-          language === 'graphql' &&
+          language === "graphql" &&
           graphqlSchema &&
           getContextAtPositionFn &&
           offsetToPositionFn &&
@@ -330,14 +356,14 @@
             const { kind, step } = token.state;
 
             if (
-              (kind === 'Field' && step === 0 && typeInfo.fieldDef) ||
-              (kind === 'AliasedField' && step === 2 && typeInfo.fieldDef) ||
-              (kind === 'ObjectField' && step === 0 && typeInfo.fieldDef)
+              (kind === "Field" && step === 0 && typeInfo.fieldDef) ||
+              (kind === "AliasedField" && step === 2 && typeInfo.fieldDef) ||
+              (kind === "ObjectField" && step === 0 && typeInfo.fieldDef)
             ) {
               const field = typeInfo.fieldDef;
-              const parent = typeInfo.parentType ? String(typeInfo.parentType) : 'Query';
+              const parent = typeInfo.parentType ? String(typeInfo.parentType) : "Query";
               nextInfo = {
-                kind: 'field',
+                kind: "field",
                 signature: `${parent}.${field.name}: ${String(field.type)}`,
                 description: field.description || undefined,
                 args: field.args?.map((arg) => ({
@@ -347,56 +373,60 @@
                   inputFields: getInputFields(arg.type),
                 })),
               };
-            } else if (kind === 'Argument' && step === 0 && typeInfo.argDef) {
+            } else if (kind === "Argument" && step === 0 && typeInfo.argDef) {
               const arg = typeInfo.argDef;
               nextInfo = {
-                kind: 'argument',
+                kind: "argument",
                 signature: `${arg.name}: ${String(arg.type)}`,
                 description: arg.description || undefined,
                 inputFields: getInputFields(arg.type),
               };
             } else if (
-              kind === 'EnumValue' &&
+              kind === "EnumValue" &&
               typeInfo.enumValue &&
-              'description' in typeInfo.enumValue
+              "description" in typeInfo.enumValue
             ) {
-              const enumType = typeInfo.inputType ? String(typeInfo.inputType) : 'Enum';
+              const enumType = typeInfo.inputType ? String(typeInfo.inputType) : "Enum";
               nextInfo = {
-                kind: 'enum',
+                kind: "enum",
                 signature: `${enumType}.${typeInfo.enumValue.name}`,
                 description: typeInfo.enumValue.description || undefined,
               };
-            } else if (kind === 'Variable' && typeInfo.type) {
+            } else if (kind === "Variable" && typeInfo.type) {
               nextInfo = {
-                kind: 'variable',
+                kind: "variable",
                 signature: String(typeInfo.type),
-                description: (typeInfo.type as unknown as { description?: string }).description || undefined,
+                description:
+                  (typeInfo.type as unknown as { description?: string }).description || undefined,
               };
-            } else if (kind === 'Directive' && step === 1 && typeInfo.directiveDef) {
+            } else if (kind === "Directive" && step === 1 && typeInfo.directiveDef) {
               nextInfo = {
-                kind: 'directive',
+                kind: "directive",
                 signature: `@${typeInfo.directiveDef.name}`,
                 description: typeInfo.directiveDef.description || undefined,
               };
-            } else if (kind === 'NamedType' && typeInfo.type) {
+            } else if (kind === "NamedType" && typeInfo.type) {
               const base = unwrapInputType(typeInfo.type);
               nextInfo = {
-                kind: 'type',
+                kind: "type",
                 signature: String(typeInfo.type),
-                description: (typeInfo.type as unknown as { description?: string }).description || undefined,
-                inputFields: base instanceof GraphQLInputObjectType
-                  ? Object.values(base.getFields()).map((field) => ({
-                      name: field.name,
-                      type: String(field.type),
-                      description: field.description || undefined,
-                    }))
-                  : undefined,
-                enumValues: base instanceof GraphQLEnumType
-                  ? base.getValues().map((value) => ({
-                      name: value.name,
-                      description: value.description || undefined,
-                    }))
-                  : undefined,
+                description:
+                  (typeInfo.type as unknown as { description?: string }).description || undefined,
+                inputFields:
+                  base instanceof GraphQLInputObjectType
+                    ? Object.values(base.getFields()).map((field) => ({
+                        name: field.name,
+                        type: String(field.type),
+                        description: field.description || undefined,
+                      }))
+                    : undefined,
+                enumValues:
+                  base instanceof GraphQLEnumType
+                    ? base.getValues().map((value) => ({
+                        name: value.name,
+                        description: value.description || undefined,
+                      }))
+                    : undefined,
               };
             }
           }
@@ -420,10 +450,10 @@
 
       // Min height
       EditorView.theme({
-        '&': {
+        "&": {
           minHeight,
         },
-        '.cm-scroller': {
+        ".cm-scroller": {
           minHeight,
         },
       }),
@@ -433,7 +463,7 @@
     view = new EditorView({
       state: EditorState.create({
         doc: value,
-        extensions: extensions as import('@codemirror/state').Extension[],
+        extensions: extensions as import("@codemirror/state").Extension[],
       }),
       parent: container,
     });
@@ -465,7 +495,7 @@
   $effect(() => {
     const currentSchema = schema;
 
-    if (view && isInitialized && updateSchemaFn && language === 'graphql') {
+    if (view && isInitialized && updateSchemaFn && language === "graphql") {
       const nextSchema = buildSchema(currentSchema);
       if (nextSchema) {
         // Keep the shared schema reference updated for hover + cursor docs.
@@ -476,11 +506,7 @@
   });
 </script>
 
-<div
-  bind:this={container}
-  class="codemirror-container {className}"
-  class:readonly
-></div>
+<div bind:this={container} class="codemirror-container {className}" class:readonly></div>
 
 <style>
   .codemirror-container {
@@ -534,7 +560,8 @@
     padding: 6px 8px;
     margin: 4px 0;
     border-radius: 3px;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-family:
+      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 11px;
     color: hsl(var(--primary));
     white-space: pre-wrap;
@@ -567,7 +594,7 @@
 
   /* Lint Gutter */
   .codemirror-container :global(.cm-lint-marker-error) {
-    content: '';
+    content: "";
     width: 8px;
     height: 8px;
     background: #f87171;
@@ -575,7 +602,7 @@
   }
 
   .codemirror-container :global(.cm-lint-marker-warning) {
-    content: '';
+    content: "";
     width: 8px;
     height: 8px;
     background: #fbbf24;

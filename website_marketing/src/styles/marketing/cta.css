@@ -1,5 +1,4 @@
 @layer components {
-
   .marketing-cta {
     position: relative;
     display: flex;
@@ -44,12 +43,17 @@
   }
 
   .marketing-cta__title::after {
-    content: '';
+    content: "";
     display: block;
     width: clamp(6.5rem, 28vw, 12rem);
     height: 3px;
     border-radius: 999px;
-    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--brand-green)));
+    background: linear-gradient(
+      90deg,
+      hsl(var(--primary)),
+      hsl(var(--accent)),
+      hsl(var(--brand-green))
+    );
     box-shadow: 0 0 18px hsl(var(--accent) / 0.35);
     margin-top: clamp(0.6rem, 1vw, 0.9rem);
   }
@@ -132,14 +136,19 @@
     padding: clamp(3.8rem, 4.4vw, 5.4rem) clamp(1.5rem, 5.8vw, 5.6rem);
     border-top: 1px solid rgba(97, 140, 216, 0.32);
     border-bottom: 1px solid rgba(64, 94, 168, 0.28);
-    background:
-      linear-gradient(115deg, hsl(var(--brand-surface-strong)), hsl(var(--brand-surface) / 0.92));
-    box-shadow: inset 0 1px 0 rgba(109, 167, 255, 0.16), 0 32px 80px rgba(8, 10, 24, 0.46);
+    background: linear-gradient(
+      115deg,
+      hsl(var(--brand-surface-strong)),
+      hsl(var(--brand-surface) / 0.92)
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(109, 167, 255, 0.16),
+      0 32px 80px rgba(8, 10, 24, 0.46);
   }
 
   .marketing-cta-band::before,
   .marketing-cta-band::after {
-    content: '';
+    content: "";
     position: absolute;
     pointer-events: none;
     opacity: 0.65;
@@ -189,13 +198,19 @@
   }
 
   .marketing-cta--band .marketing-cta__actions::before {
-    content: '';
+    content: "";
     position: absolute;
     left: -15%;
     right: -15%;
     top: 0;
     height: 1px;
-    background: linear-gradient(90deg, transparent 0%, rgba(125, 207, 255, 0.4) 35%, rgba(125, 207, 255, 0.4) 65%, transparent 100%);
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(125, 207, 255, 0.4) 35%,
+      rgba(125, 207, 255, 0.4) 65%,
+      transparent 100%
+    );
     opacity: 0.65;
   }
 
@@ -209,6 +224,4 @@
       right: -8%;
     }
   }
-
-
 }

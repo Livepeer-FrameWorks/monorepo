@@ -13,7 +13,7 @@
  * Combined presentation time = timestamp + offset
  */
 
-import type { RawChunk, ChunkType } from './types';
+import type { RawChunk, ChunkType } from "./types";
 
 const HEADER_LENGTH = 12;
 
@@ -23,11 +23,11 @@ const HEADER_LENGTH = 12;
 function parseChunkType(typeByte: number): ChunkType {
   switch (typeByte) {
     case 1:
-      return 'key';
+      return "key";
     case 2:
-      return 'init';
+      return "init";
     default:
-      return 'delta';
+      return "delta";
   }
 }
 
@@ -92,14 +92,14 @@ export function getPresentationTimestamp(chunk: RawChunk): number {
  * Check if this chunk is a keyframe
  */
 export function isKeyframe(chunk: RawChunk): boolean {
-  return chunk.type === 'key';
+  return chunk.type === "key";
 }
 
 /**
  * Check if this chunk contains codec initialization data
  */
 export function isInitData(chunk: RawChunk): boolean {
-  return chunk.type === 'init';
+  return chunk.type === "init";
 }
 
 /**
@@ -132,12 +132,12 @@ export class RawChunkParser {
       const chunk = parseRawChunk(data);
 
       if (this.debug) {
-        console.log('▶️', formatChunkForLog(chunk));
+        console.log("▶️", formatChunkForLog(chunk));
       }
 
       return chunk;
     } catch (err) {
-      console.error('▶️ Failed to parse chunk:', err);
+      console.error("▶️ Failed to parse chunk:", err);
       return null;
     }
   }
@@ -145,7 +145,7 @@ export class RawChunkParser {
   /**
    * Set debug mode
    */
-  setDebug(enabled: boolean | 'verbose'): void {
-    this.debug = enabled === 'verbose' || enabled === true;
+  setDebug(enabled: boolean | "verbose"): void {
+    this.debug = enabled === "verbose" || enabled === true;
   }
 }

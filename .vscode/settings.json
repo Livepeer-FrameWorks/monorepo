@@ -127,9 +127,5 @@
   "tailwindCSS.includeLanguages": {
     "svelte": "html"
   },
-  "tailwindCSS.classAttributes": [
-    "class",
-    "className",
-    "ngClass"
-  ]
-} 
+  "tailwindCSS.classAttributes": ["class", "className", "ngClass"]
+}

@@ -11,10 +11,10 @@
  * - `selectBestPlayer()` returns cached winner without recomputation
  */
 
-import { getBrowserInfo, getBrowserCompatibility } from './detector';
-import { IPlayer, StreamSource, StreamInfo, PlayerOptions } from './PlayerInterface';
-import { scorePlayer, isProtocolBlacklisted } from './scorer';
-import type { PlaybackMode } from '../types';
+import { getBrowserInfo, getBrowserCompatibility } from "./detector";
+import { IPlayer, StreamSource, StreamInfo, PlayerOptions } from "./PlayerInterface";
+import { scorePlayer, isProtocolBlacklisted } from "./scorer";
+import type { PlaybackMode } from "../types";
 
 // ============================================================================
 // Types
@@ -50,9 +50,9 @@ export interface PlayerManagerEvents {
   playerFailed: { player: string; error: string };
   fallbackAttempted: { fromPlayer: string; toPlayer: string };
   /** Fires when selection changes (different player+source than before) */
-  'selection-changed': PlayerSelection | null;
+  "selection-changed": PlayerSelection | null;
   /** Fires when combinations are recomputed (cache miss) */
-  'combinations-updated': PlayerCombination[];
+  "combinations-updated": PlayerCombination[];
 }
 
 /** Full combination info including scoring breakdown */
@@ -191,18 +191,15 @@ export class PlayerManager {
    * Returns ALL combinations (compatible and incompatible) with scores.
    * Results are cached - won't recompute if source types/tracks haven't changed.
    */
-  getAllCombinations(
-    streamInfo: StreamInfo,
-    playbackMode?: PlaybackMode
-  ): PlayerCombination[] {
+  getAllCombinations(streamInfo: StreamInfo, playbackMode?: PlaybackMode): PlayerCombination[] {
     // Determine effective playback mode
     const explicitMode = playbackMode || this.options.playbackMode;
     const effectiveMode: PlaybackMode =
-      explicitMode && explicitMode !== 'auto'
+      explicitMode && explicitMode !== "auto"
         ? explicitMode
-        : streamInfo.type === 'vod'
-          ? 'vod'
-          : 'auto';
+        : streamInfo.type === "vod"
+          ? "vod"
+          : "auto";
 
     // Check cache
     const key = this.computeCacheKey(streamInfo, effectiveMode);
@@ -235,10 +232,10 @@ export class PlayerManager {
         }
       }
 
-      this.emit('selection-changed', newSelection);
+      this.emit("selection-changed", newSelection);
     }
 
-    this.emit('combinations-updated', combinations);
+    this.emit("combinations-updated", combinations);
     return combinations;
   }
 
@@ -254,26 +251,23 @@ export class PlayerManager {
     const mergedOptions = { ...this.options, ...options };
 
     // Special handling for Legacy player - bypass normal selection
-    if (
-      mergedOptions.forcePlayer === 'mist-legacy' ||
-      mergedOptions.forceType === 'mist/legacy'
-    ) {
-      const legacyPlayer = this.players.get('mist-legacy');
+    if (mergedOptions.forcePlayer === "mist-legacy" || mergedOptions.forceType === "mist/legacy") {
+      const legacyPlayer = this.players.get("mist-legacy");
       if (legacyPlayer && streamInfo.source.length > 0) {
         const firstSource = streamInfo.source[0];
         const legacySource: StreamSource = {
           url: firstSource.url,
-          type: 'mist/legacy',
+          type: "mist/legacy",
           streamName: firstSource.streamName,
           mistPlayerUrl: firstSource.mistPlayerUrl,
         };
         const result: PlayerSelection = {
           score: 0.1,
-          player: 'mist-legacy',
+          player: "mist-legacy",
           source: legacySource,
           source_index: 0,
         };
-        this.emit('playerSelected', {
+        this.emit("playerSelected", {
           player: result.player,
           source: result.source,
           score: result.score,
@@ -283,10 +277,7 @@ export class PlayerManager {
     }
 
     // Get combinations (will use cache if available)
-    const combinations = this.getAllCombinations(
-      streamInfo,
-      mergedOptions.playbackMode
-    );
+    const combinations = this.getAllCombinations(streamInfo, mergedOptions.playbackMode);
 
     // Apply force filters
     let filtered = combinations.filter((c) => c.compatible);
@@ -295,18 +286,14 @@ export class PlayerManager {
       filtered = filtered.filter((c) => c.player === mergedOptions.forcePlayer);
     }
     if (mergedOptions.forceType) {
-      filtered = filtered.filter(
-        (c) => c.sourceType === mergedOptions.forceType
-      );
+      filtered = filtered.filter((c) => c.sourceType === mergedOptions.forceType);
     }
     if (mergedOptions.forceSource !== undefined) {
-      filtered = filtered.filter(
-        (c) => c.sourceIndex === mergedOptions.forceSource
-      );
+      filtered = filtered.filter((c) => c.sourceIndex === mergedOptions.forceSource);
     }
 
     if (filtered.length === 0) {
-      this.log('No suitable player found');
+      this.log("No suitable player found");
       return false;
     }
 
@@ -318,7 +305,7 @@ export class PlayerManager {
       source_index: best.sourceIndex,
     };
 
-    this.emit('playerSelected', {
+    this.emit("playerSelected", {
       player: result.player,
       source: result.source,
       score: result.score,
@@ -336,25 +323,20 @@ export class PlayerManager {
   ): PlayerCombination[] {
     const combinations: PlayerCombination[] = [];
     const players = Array.from(this.players.values());
-    const maxPriority = Math.max(
-      ...players.map((p) => p.capability.priority),
-      1
-    );
+    const maxPriority = Math.max(...players.map((p) => p.capability.priority), 1);
 
     // Filter blacklisted sources for scoring index calculation
-    const selectionSources = streamInfo.source.filter(
-      (s) => !isProtocolBlacklisted(s.type)
-    );
+    const selectionSources = streamInfo.source.filter((s) => !isProtocolBlacklisted(s.type));
     const selectionIndexBySource = new Map<StreamSource, number>();
     selectionSources.forEach((s, idx) => selectionIndexBySource.set(s, idx));
     const totalSources = selectionSources.length;
 
-    const requiredTracks: Array<'video' | 'audio'> = [];
-    if (streamInfo.meta.tracks.some((t) => t.type === 'video')) {
-      requiredTracks.push('video');
+    const requiredTracks: Array<"video" | "audio"> = [];
+    if (streamInfo.meta.tracks.some((t) => t.type === "video")) {
+      requiredTracks.push("video");
     }
-    if (streamInfo.meta.tracks.some((t) => t.type === 'audio')) {
-      requiredTracks.push('audio');
+    if (streamInfo.meta.tracks.some((t) => t.type === "audio")) {
+      requiredTracks.push("audio");
     }
 
     // Track seen player+sourceType pairs to avoid duplicates
@@ -402,19 +384,13 @@ export class PlayerManager {
         }
 
         // Check browser/codec compatibility
-        const tracktypes = player.isBrowserSupported(
-          source.type,
-          source,
-          streamInfo
-        );
+        const tracktypes = player.isBrowserSupported(source.type, source, streamInfo);
         if (!tracktypes) {
           // Codec incompatible - still score for UI display
-          const priorityScore =
-            1 - player.capability.priority / Math.max(maxPriority, 1);
-          const sourceScore =
-            1 - sourceListIndex / Math.max(totalSources - 1, 1);
+          const priorityScore = 1 - player.capability.priority / Math.max(maxPriority, 1);
+          const sourceScore = 1 - sourceListIndex / Math.max(totalSources - 1, 1);
           const playerScore = scorePlayer(
-            ['video', 'audio'],
+            ["video", "audio"],
             player.capability.priority,
             sourceListIndex,
             {
@@ -435,7 +411,7 @@ export class PlayerManager {
             score: playerScore.total,
             compatible: false,
             codecIncompatible: true,
-            incompatibleReason: 'Codec not supported by browser',
+            incompatibleReason: "Codec not supported by browser",
             scoreBreakdown: {
               trackScore: 0,
               trackTypes: [],
@@ -450,10 +426,8 @@ export class PlayerManager {
         if (Array.isArray(tracktypes) && requiredTracks.length > 0) {
           const missing = requiredTracks.filter((t) => !tracktypes.includes(t));
           if (missing.length > 0) {
-            const priorityScore =
-              1 - player.capability.priority / Math.max(maxPriority, 1);
-            const sourceScore =
-              1 - sourceListIndex / Math.max(totalSources - 1, 1);
+            const priorityScore = 1 - player.capability.priority / Math.max(maxPriority, 1);
+            const sourceScore = 1 - sourceListIndex / Math.max(totalSources - 1, 1);
             const playerScore = scorePlayer(
               tracktypes,
               player.capability.priority,
@@ -475,7 +449,7 @@ export class PlayerManager {
               sourceType: source.type,
               score: playerScore.total,
               compatible: false,
-              incompatibleReason: `Missing required tracks: ${missing.join(', ')}`,
+              incompatibleReason: `Missing required tracks: ${missing.join(", ")}`,
               scoreBreakdown: {
                 trackScore: 0,
                 trackTypes: tracktypes,
@@ -491,28 +465,20 @@ export class PlayerManager {
         // Compatible - calculate full score
         const trackScore = Array.isArray(tracktypes)
           ? tracktypes.reduce(
-              (sum, t) =>
-                sum + ({ video: 2.0, audio: 1.0, subtitle: 0.5 }[t] || 0),
+              (sum, t) => sum + ({ video: 2.0, audio: 1.0, subtitle: 0.5 }[t] || 0),
               0
             )
           : 1.9;
-        const priorityScore =
-          1 - player.capability.priority / Math.max(maxPriority, 1);
-        const sourceScore =
-          1 - sourceListIndex / Math.max(totalSources - 1, 1);
+        const priorityScore = 1 - player.capability.priority / Math.max(maxPriority, 1);
+        const sourceScore = 1 - sourceListIndex / Math.max(totalSources - 1, 1);
 
-        const playerScore = scorePlayer(
-          tracktypes,
-          player.capability.priority,
-          sourceListIndex,
-          {
-            maxPriority,
-            totalSources,
-            playerShortname: player.capability.shortname,
-            mimeType: source.type,
-            playbackMode: effectiveMode,
-          }
-        );
+        const playerScore = scorePlayer(tracktypes, player.capability.priority, sourceListIndex, {
+          maxPriority,
+          totalSources,
+          playerShortname: player.capability.shortname,
+          mimeType: source.type,
+          playbackMode: effectiveMode,
+        });
 
         combinations.push({
           player: player.capability.shortname,
@@ -524,9 +490,7 @@ export class PlayerManager {
           compatible: true,
           scoreBreakdown: {
             trackScore,
-            trackTypes: Array.isArray(tracktypes)
-              ? tracktypes
-              : ['video', 'audio'],
+            trackTypes: Array.isArray(tracktypes) ? tracktypes : ["video", "audio"],
             priorityScore,
             sourceScore,
             reliabilityScore: playerScore.breakdown?.reliabilityScore ?? 0,
@@ -546,12 +510,12 @@ export class PlayerManager {
     }
 
     // Add Legacy player option
-    const legacyPlayer = this.players.get('mist-legacy');
+    const legacyPlayer = this.players.get("mist-legacy");
     if (legacyPlayer && streamInfo.source.length > 0) {
       const firstSource = streamInfo.source[0];
       const legacySource: StreamSource = {
         url: firstSource.url,
-        type: 'mist/legacy',
+        type: "mist/legacy",
         streamName: firstSource.streamName,
         mistPlayerUrl: firstSource.mistPlayerUrl,
       };
@@ -561,12 +525,12 @@ export class PlayerManager {
         playerName: legacyPlayer.capability.name,
         source: legacySource,
         sourceIndex: 0,
-        sourceType: 'mist/legacy',
+        sourceType: "mist/legacy",
         score: 0.1,
         compatible: true,
         scoreBreakdown: {
           trackScore: 2.0,
-          trackTypes: ['video', 'audio'],
+          trackTypes: ["video", "audio"],
           priorityScore: 0,
           sourceScore: 0,
           weights: { tracks: 0.5, priority: 0.1, source: 0.05 },
@@ -585,9 +549,7 @@ export class PlayerManager {
   /**
    * Pick best compatible combination
    */
-  private pickBestFromCombinations(
-    combinations: PlayerCombination[]
-  ): PlayerSelection | null {
+  private pickBestFromCombinations(combinations: PlayerCombination[]): PlayerSelection | null {
     const compatible = combinations.filter((c) => c.compatible);
     if (compatible.length === 0) return null;
 
@@ -631,9 +593,9 @@ export class PlayerManager {
     playerOptions: PlayerOptions = {},
     managerOptions?: PlayerManagerOptions
   ): Promise<HTMLVideoElement> {
-    console.log('[PlayerManager] initializePlayer() called');
+    console.log("[PlayerManager] initializePlayer() called");
     return this.enqueueOp(async () => {
-      console.log('[PlayerManager] Inside enqueueOp - starting');
+      console.log("[PlayerManager] Inside enqueueOp - starting");
       this.fallbackAttempts = 0;
       this.excludedPlayers.clear();
 
@@ -651,12 +613,7 @@ export class PlayerManager {
         // They are one-shot selections that shouldn't persist through fallback
       };
 
-      return this.tryInitializePlayer(
-        container,
-        streamInfo,
-        playerOptions,
-        managerOptions
-      );
+      return this.tryInitializePlayer(container, streamInfo, playerOptions, managerOptions);
     });
   }
 
@@ -667,15 +624,15 @@ export class PlayerManager {
     managerOptions?: PlayerManagerOptions,
     excludePlayers: Set<string> = new Set()
   ): Promise<HTMLVideoElement> {
-    console.log('[PlayerManager] tryInitializePlayer() starting');
+    console.log("[PlayerManager] tryInitializePlayer() starting");
 
     // Clean up previous player
     if (this.currentPlayer) {
-      console.log('[PlayerManager] Cleaning up previous player...');
+      console.log("[PlayerManager] Cleaning up previous player...");
       await Promise.resolve(this.currentPlayer.destroy());
       this.currentPlayer = null;
     }
-    container.innerHTML = '';
+    container.innerHTML = "";
 
     // Filter excluded players
     const availableSources = streamInfo.source.filter((_, index) => {
@@ -688,8 +645,8 @@ export class PlayerManager {
     });
 
     if (availableSources.length === 0) {
-      console.log('[PlayerManager] No available sources after filtering');
-      throw new Error('No available players after fallback attempts');
+      console.log("[PlayerManager] No available sources after filtering");
+      throw new Error("No available players after fallback attempts");
     }
 
     console.log(`[PlayerManager] Available sources: ${availableSources.length}`);
@@ -697,8 +654,8 @@ export class PlayerManager {
     const selection = this.selectBestPlayer(modifiedStreamInfo, managerOptions);
 
     if (!selection) {
-      console.log('[PlayerManager] No suitable player selected');
-      throw new Error('No suitable player found for stream');
+      console.log("[PlayerManager] No suitable player selected");
+      throw new Error("No suitable player found for stream");
     }
 
     console.log(`[PlayerManager] Selected: ${selection.player} for ${selection.source.type}`);
@@ -718,13 +675,12 @@ export class PlayerManager {
       );
       console.log(`[PlayerManager] ${selection.player}.initialize() completed successfully`);
       this.currentPlayer = player;
-      this.emit('playerInitialized', { player, videoElement });
+      this.emit("playerInitialized", { player, videoElement });
       return videoElement;
     } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.log(`Player ${selection.player} failed: ${errorMessage}`);
-      this.emit('playerFailed', { player: selection.player, error: errorMessage });
+      this.emit("playerFailed", { player: selection.player, error: errorMessage });
 
       // Attempt fallback
       if (
@@ -734,9 +690,9 @@ export class PlayerManager {
         this.fallbackAttempts++;
         excludePlayers.add(selection.player);
         this.log(`Attempting fallback (attempt ${this.fallbackAttempts})`);
-        this.emit('fallbackAttempted', {
+        this.emit("fallbackAttempted", {
           fromPlayer: selection.player,
-          toPlayer: 'auto',
+          toPlayer: "auto",
         });
 
         return this.tryInitializePlayer(
@@ -759,7 +715,7 @@ export class PlayerManager {
   async tryPlaybackFallback(): Promise<boolean> {
     return this.enqueueOp(async () => {
       if (!this.lastContainer || !this.lastStreamInfo) {
-        this.log('Cannot attempt fallback: no previous init params');
+        this.log("Cannot attempt fallback: no previous init params");
         return false;
       }
 
@@ -776,7 +732,7 @@ export class PlayerManager {
       }
 
       this.fallbackAttempts++;
-      this.lastContainer.innerHTML = '';
+      this.lastContainer.innerHTML = "";
 
       try {
         await this.tryInitializePlayer(
@@ -788,24 +744,21 @@ export class PlayerManager {
         );
 
         const current = this.getCurrentPlayer();
-        this.emit('fallbackAttempted', {
-          fromPlayer: Array.from(this.excludedPlayers).pop() || 'unknown',
-          toPlayer: current?.capability.shortname || 'unknown',
+        this.emit("fallbackAttempted", {
+          fromPlayer: Array.from(this.excludedPlayers).pop() || "unknown",
+          toPlayer: current?.capability.shortname || "unknown",
         });
 
         return true;
       } catch {
-        this.log('Playback fallback failed');
+        this.log("Playback fallback failed");
         return false;
       }
     });
   }
 
   getRemainingFallbackAttempts(): number {
-    return Math.max(
-      0,
-      (this.options.maxFallbackAttempts || 3) - this.fallbackAttempts
-    );
+    return Math.max(0, (this.options.maxFallbackAttempts || 3) - this.fallbackAttempts);
   }
 
   canAttemptFallback(): boolean {
@@ -892,10 +845,7 @@ export class PlayerManager {
     this.listeners.get(event)?.delete(listener);
   }
 
-  private emit<K extends keyof PlayerManagerEvents>(
-    event: K,
-    data: PlayerManagerEvents[K]
-  ): void {
+  private emit<K extends keyof PlayerManagerEvents>(event: K, data: PlayerManagerEvents[K]): void {
     this.listeners.get(event)?.forEach((listener) => {
       try {
         listener(data);
@@ -933,11 +883,7 @@ export class PlayerManager {
     const capablePlayers: string[] = [];
     for (const player of this.players.values()) {
       if (player.isMimeSupported(source.type)) {
-        const browserSupport = player.isBrowserSupported(
-          source.type,
-          source,
-          streamInfo
-        );
+        const browserSupport = player.isBrowserSupported(source.type, source, streamInfo);
         if (browserSupport) {
           capablePlayers.push(player.capability.shortname);
         }

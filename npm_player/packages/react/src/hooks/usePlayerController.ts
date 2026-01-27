@@ -5,7 +5,7 @@
  * Manages the complete player lifecycle and provides reactive state.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   PlayerController,
   type PlayerControllerConfig,
@@ -15,13 +15,13 @@ import {
   type PlaybackQuality,
   type ContentEndpoints,
   type ContentMetadata,
-} from '@livepeer-frameworks/player-core';
+} from "@livepeer-frameworks/player-core";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface UsePlayerControllerConfig extends Omit<PlayerControllerConfig, 'playerManager'> {
+export interface UsePlayerControllerConfig extends Omit<PlayerControllerConfig, "playerManager"> {
   /** Enable/disable the hook */
   enabled?: boolean;
   /** Callback when state changes */
@@ -92,7 +92,15 @@ export interface PlayerControllerState {
   /** Subtitles enabled */
   subtitlesEnabled: boolean;
   /** Available quality levels */
-  qualities: Array<{ id: string; label: string; bitrate?: number; width?: number; height?: number; isAuto?: boolean; active?: boolean }>;
+  qualities: Array<{
+    id: string;
+    label: string;
+    bitrate?: number;
+    width?: number;
+    height?: number;
+    isAuto?: boolean;
+    active?: boolean;
+  }>;
   /** Available text/caption tracks */
   textTracks: Array<{ id: string; label: string; language?: string; active: boolean }>;
   /** Stream info for player selection (sources + tracks) */
@@ -153,7 +161,7 @@ export interface UsePlayerControllerReturn {
     forcePlayer?: string;
     forceType?: string;
     forceSource?: number;
-    playbackMode?: 'auto' | 'low-latency' | 'quality' | 'vod';
+    playbackMode?: "auto" | "low-latency" | "quality" | "vod";
   }) => Promise<void>;
 }
 
@@ -162,7 +170,7 @@ export interface UsePlayerControllerReturn {
 // ============================================================================
 
 const initialState: PlayerControllerState = {
-  state: 'booting',
+  state: "booting",
   streamState: null,
   endpoints: null,
   metadata: null,
@@ -199,10 +207,15 @@ const initialState: PlayerControllerState = {
 // Hook
 // ============================================================================
 
-export function usePlayerController(
-  config: UsePlayerControllerConfig
-): UsePlayerControllerReturn {
-  const { enabled = true, onStateChange, onStreamStateChange, onError, onReady, ...controllerConfig } = config;
+export function usePlayerController(config: UsePlayerControllerConfig): UsePlayerControllerReturn {
+  const {
+    enabled = true,
+    onStateChange,
+    onStreamStateChange,
+    onError,
+    onReady,
+    ...controllerConfig
+  } = config;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<PlayerController | null>(null);
@@ -243,7 +256,7 @@ export function usePlayerController(
     const syncState = () => {
       if (!controllerRef.current) return;
       const c = controllerRef.current;
-      setState(prev => ({
+      setState((prev) => ({
         ...prev,
         isPlaying: c.isPlaying(),
         isPaused: c.isPaused(),
@@ -261,135 +274,167 @@ export function usePlayerController(
       }));
     };
 
-    unsubs.push(controller.on('stateChange', ({ state: newState }) => {
-      setState(prev => ({ ...prev, state: newState }));
-      onStateChange?.(newState);
-    }));
+    unsubs.push(
+      controller.on("stateChange", ({ state: newState }) => {
+        setState((prev) => ({ ...prev, state: newState }));
+        onStateChange?.(newState);
+      })
+    );
 
-    unsubs.push(controller.on('streamStateChange', ({ state: streamState }) => {
-      setState(prev => ({
-        ...prev,
-        streamState,
-        metadata: controller.getMetadata(),
-        isEffectivelyLive: controller.isEffectivelyLive(),
-        shouldShowIdleScreen: controller.shouldShowIdleScreen(),
-      }));
-      onStreamStateChange?.(streamState);
-    }));
+    unsubs.push(
+      controller.on("streamStateChange", ({ state: streamState }) => {
+        setState((prev) => ({
+          ...prev,
+          streamState,
+          metadata: controller.getMetadata(),
+          isEffectivelyLive: controller.isEffectivelyLive(),
+          shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+        }));
+        onStreamStateChange?.(streamState);
+      })
+    );
 
-    unsubs.push(controller.on('timeUpdate', ({ currentTime, duration }) => {
-      setState(prev => ({ ...prev, currentTime, duration }));
-    }));
+    unsubs.push(
+      controller.on("timeUpdate", ({ currentTime, duration }) => {
+        setState((prev) => ({ ...prev, currentTime, duration }));
+      })
+    );
 
-    unsubs.push(controller.on('error', ({ error }) => {
-      setState(prev => ({
-        ...prev,
-        error,
-        isPassiveError: controller.isPassiveError(),
-      }));
-      onError?.(error);
-    }));
+    unsubs.push(
+      controller.on("error", ({ error }) => {
+        setState((prev) => ({
+          ...prev,
+          error,
+          isPassiveError: controller.isPassiveError(),
+        }));
+        onError?.(error);
+      })
+    );
 
-    unsubs.push(controller.on('errorCleared', () => {
-      setState(prev => ({ ...prev, error: null, isPassiveError: false }));
-    }));
+    unsubs.push(
+      controller.on("errorCleared", () => {
+        setState((prev) => ({ ...prev, error: null, isPassiveError: false }));
+      })
+    );
 
-    unsubs.push(controller.on('ready', ({ videoElement }) => {
-      setState(prev => ({
-        ...prev,
-        videoElement,
-        endpoints: controller.getEndpoints(),
-        metadata: controller.getMetadata(),
-        streamInfo: controller.getStreamInfo(),
-        isEffectivelyLive: controller.isEffectivelyLive(),
-        shouldShowIdleScreen: controller.shouldShowIdleScreen(),
-        currentPlayerInfo: controller.getCurrentPlayerInfo(),
-        currentSourceInfo: controller.getCurrentSourceInfo(),
-        qualities: controller.getQualities(),
-      }));
-      onReady?.(videoElement);
+    unsubs.push(
+      controller.on("ready", ({ videoElement }) => {
+        setState((prev) => ({
+          ...prev,
+          videoElement,
+          endpoints: controller.getEndpoints(),
+          metadata: controller.getMetadata(),
+          streamInfo: controller.getStreamInfo(),
+          isEffectivelyLive: controller.isEffectivelyLive(),
+          shouldShowIdleScreen: controller.shouldShowIdleScreen(),
+          currentPlayerInfo: controller.getCurrentPlayerInfo(),
+          currentSourceInfo: controller.getCurrentSourceInfo(),
+          qualities: controller.getQualities(),
+        }));
+        onReady?.(videoElement);
 
-      // Set up video event listeners AFTER video is ready
-      // syncState is defined below - this closure captures it
-      const handleVideoEvent = () => {
-        if (controllerRef.current?.shouldSuppressVideoEvents?.()) return;
-        syncState();
-      };
-      videoElement.addEventListener('play', handleVideoEvent);
-      videoElement.addEventListener('pause', handleVideoEvent);
-      videoElement.addEventListener('waiting', handleVideoEvent);
-      videoElement.addEventListener('playing', handleVideoEvent);
-      unsubs.push(() => {
-        videoElement.removeEventListener('play', handleVideoEvent);
-        videoElement.removeEventListener('pause', handleVideoEvent);
-        videoElement.removeEventListener('waiting', handleVideoEvent);
-        videoElement.removeEventListener('playing', handleVideoEvent);
-      });
-    }));
+        // Set up video event listeners AFTER video is ready
+        // syncState is defined below - this closure captures it
+        const handleVideoEvent = () => {
+          if (controllerRef.current?.shouldSuppressVideoEvents?.()) return;
+          syncState();
+        };
+        videoElement.addEventListener("play", handleVideoEvent);
+        videoElement.addEventListener("pause", handleVideoEvent);
+        videoElement.addEventListener("waiting", handleVideoEvent);
+        videoElement.addEventListener("playing", handleVideoEvent);
+        unsubs.push(() => {
+          videoElement.removeEventListener("play", handleVideoEvent);
+          videoElement.removeEventListener("pause", handleVideoEvent);
+          videoElement.removeEventListener("waiting", handleVideoEvent);
+          videoElement.removeEventListener("playing", handleVideoEvent);
+        });
+      })
+    );
 
-    unsubs.push(controller.on('playerSelected', ({ player: _player, source }) => {
-      setState(prev => ({
-        ...prev,
-        currentPlayerInfo: controller.getCurrentPlayerInfo(),
-        currentSourceInfo: { url: source.url, type: source.type },
-        qualities: controller.getQualities(),
-      }));
-    }));
+    unsubs.push(
+      controller.on("playerSelected", ({ player: _player, source }) => {
+        setState((prev) => ({
+          ...prev,
+          currentPlayerInfo: controller.getCurrentPlayerInfo(),
+          currentSourceInfo: { url: source.url, type: source.type },
+          qualities: controller.getQualities(),
+        }));
+      })
+    );
 
-    unsubs.push(controller.on('volumeChange', ({ volume, muted }) => {
-      setState(prev => ({ ...prev, volume, isMuted: muted }));
-    }));
+    unsubs.push(
+      controller.on("volumeChange", ({ volume, muted }) => {
+        setState((prev) => ({ ...prev, volume, isMuted: muted }));
+      })
+    );
 
-    unsubs.push(controller.on('loopChange', ({ isLoopEnabled }) => {
-      setState(prev => ({ ...prev, isLoopEnabled }));
-    }));
+    unsubs.push(
+      controller.on("loopChange", ({ isLoopEnabled }) => {
+        setState((prev) => ({ ...prev, isLoopEnabled }));
+      })
+    );
 
-    unsubs.push(controller.on('fullscreenChange', ({ isFullscreen }) => {
-      setState(prev => ({ ...prev, isFullscreen }));
-    }));
+    unsubs.push(
+      controller.on("fullscreenChange", ({ isFullscreen }) => {
+        setState((prev) => ({ ...prev, isFullscreen }));
+      })
+    );
 
-    unsubs.push(controller.on('pipChange', ({ isPiP }) => {
-      setState(prev => ({ ...prev, isPiPActive: isPiP }));
-    }));
+    unsubs.push(
+      controller.on("pipChange", ({ isPiP }) => {
+        setState((prev) => ({ ...prev, isPiPActive: isPiP }));
+      })
+    );
 
-    unsubs.push(controller.on('holdSpeedStart', ({ speed }) => {
-      setState(prev => ({ ...prev, isHoldingSpeed: true, holdSpeed: speed }));
-    }));
+    unsubs.push(
+      controller.on("holdSpeedStart", ({ speed }) => {
+        setState((prev) => ({ ...prev, isHoldingSpeed: true, holdSpeed: speed }));
+      })
+    );
 
-    unsubs.push(controller.on('holdSpeedEnd', () => {
-      setState(prev => ({ ...prev, isHoldingSpeed: false }));
-    }));
+    unsubs.push(
+      controller.on("holdSpeedEnd", () => {
+        setState((prev) => ({ ...prev, isHoldingSpeed: false }));
+      })
+    );
 
-    unsubs.push(controller.on('hoverStart', () => {
-      setState(prev => ({ ...prev, isHovering: true, shouldShowControls: true }));
-    }));
+    unsubs.push(
+      controller.on("hoverStart", () => {
+        setState((prev) => ({ ...prev, isHovering: true, shouldShowControls: true }));
+      })
+    );
 
-    unsubs.push(controller.on('hoverEnd', () => {
-      setState(prev => ({
-        ...prev,
-        isHovering: false,
-        shouldShowControls: controller.shouldShowControls(),
-      }));
-    }));
+    unsubs.push(
+      controller.on("hoverEnd", () => {
+        setState((prev) => ({
+          ...prev,
+          isHovering: false,
+          shouldShowControls: controller.shouldShowControls(),
+        }));
+      })
+    );
 
-    unsubs.push(controller.on('captionsChange', ({ enabled }) => {
-      setState(prev => ({ ...prev, subtitlesEnabled: enabled }));
-    }));
+    unsubs.push(
+      controller.on("captionsChange", ({ enabled }) => {
+        setState((prev) => ({ ...prev, subtitlesEnabled: enabled }));
+      })
+    );
 
     // Attach controller to container
     // Note: Video event listeners are set up in the 'ready' handler above
-    controller.attach(container).catch(err => {
-      console.warn('[usePlayerController] Attach failed:', err);
+    controller.attach(container).catch((err) => {
+      console.warn("[usePlayerController] Attach failed:", err);
     });
 
     // Set initial state
-    setState(prev => ({
+    setState((prev) => ({
       ...prev,
       isLoopEnabled: controller.isLoopEnabled(),
     }));
 
     return () => {
-      unsubs.forEach(fn => fn());
+      unsubs.forEach((fn) => fn());
       controller.destroy();
       controllerRef.current = null;
       setState(initialState);
@@ -443,7 +488,7 @@ export function usePlayerController(
 
   const clearError = useCallback(() => {
     controllerRef.current?.clearError();
-    setState(prev => ({ ...prev, error: null, isPassiveError: false }));
+    setState((prev) => ({ ...prev, error: null, isPassiveError: false }));
   }, []);
 
   const jumpToLive = useCallback(() => {
@@ -482,14 +527,17 @@ export function usePlayerController(
     controllerRef.current?.handleTouchStart();
   }, []);
 
-  const setDevModeOptions = useCallback(async (options: {
-    forcePlayer?: string;
-    forceType?: string;
-    forceSource?: number;
-    playbackMode?: 'auto' | 'low-latency' | 'quality' | 'vod';
-  }) => {
-    await controllerRef.current?.setDevModeOptions(options);
-  }, []);
+  const setDevModeOptions = useCallback(
+    async (options: {
+      forcePlayer?: string;
+      forceType?: string;
+      forceSource?: number;
+      playbackMode?: "auto" | "low-latency" | "quality" | "vod";
+    }) => {
+      await controllerRef.current?.setDevModeOptions(options);
+    },
+    []
+  );
 
   return {
     containerRef,

@@ -1,8 +1,4 @@
-import axios, {
-  type InternalAxiosRequestConfig,
-  type AxiosResponse,
-  type AxiosError,
-} from "axios";
+import axios, { type InternalAxiosRequestConfig, type AxiosResponse, type AxiosError } from "axios";
 
 interface User {
   tenant_id?: string;
@@ -55,7 +51,7 @@ authAPI.interceptors.request.use(
   },
   (error: AxiosError) => {
     return Promise.reject(error);
-  },
+  }
 );
 
 // Response interceptor to handle errors
@@ -64,5 +60,5 @@ authAPI.interceptors.response.use(
   (error: AxiosError) => {
     // Just pass through errors - let the UI components handle them
     return Promise.reject(error);
-  },
+  }
 );

@@ -15,12 +15,7 @@
  * - ease-in-out: Start slow, accelerate, end slow
  */
 
-import type {
-  TransitionConfig,
-  TransitionState,
-  TransitionType,
-  EasingType,
-} from '../types';
+import type { TransitionConfig, TransitionState, TransitionType, EasingType } from "../types";
 
 // ============================================================================
 // Easing Functions
@@ -34,11 +29,11 @@ type EasingFunction = (t: number) => number;
 const EASING_FUNCTIONS: Record<EasingType, EasingFunction> = {
   linear: (t) => t,
 
-  'ease-in': (t) => t * t,
+  "ease-in": (t) => t * t,
 
-  'ease-out': (t) => t * (2 - t),
+  "ease-out": (t) => t * (2 - t),
 
-  'ease-in-out': (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t),
+  "ease-in-out": (t) => (t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t),
 };
 
 // ============================================================================
@@ -73,7 +68,7 @@ export class TransitionEngine {
     this.easing = EASING_FUNCTIONS[config.easing] || EASING_FUNCTIONS.linear;
 
     // For 'cut' transitions, immediately complete
-    if (config.type === 'cut') {
+    if (config.type === "cut") {
       this.state.progress = 1;
       this.state.active = false;
     }
@@ -135,7 +130,7 @@ export class TransitionEngine {
    * Get the current transition type
    */
   getType(): TransitionType {
-    return this.state?.type ?? 'cut';
+    return this.state?.type ?? "cut";
   }
 
   /**
@@ -210,9 +205,9 @@ export class TransitionEngine {
  */
 export function createDefaultTransitionConfig(): TransitionConfig {
   return {
-    type: 'fade',
+    type: "fade",
     durationMs: 500,
-    easing: 'ease-in-out',
+    easing: "ease-in-out",
   };
 }
 
@@ -221,9 +216,9 @@ export function createDefaultTransitionConfig(): TransitionConfig {
  */
 export function createCutTransition(): TransitionConfig {
   return {
-    type: 'cut',
+    type: "cut",
     durationMs: 0,
-    easing: 'linear',
+    easing: "linear",
   };
 }
 
@@ -232,10 +227,10 @@ export function createCutTransition(): TransitionConfig {
  */
 export function createFadeTransition(
   durationMs: number = 500,
-  easing: EasingType = 'ease-in-out'
+  easing: EasingType = "ease-in-out"
 ): TransitionConfig {
   return {
-    type: 'fade',
+    type: "fade",
     durationMs,
     easing,
   };
@@ -245,9 +240,9 @@ export function createFadeTransition(
  * Create a slide transition configuration
  */
 export function createSlideTransition(
-  direction: 'left' | 'right' | 'up' | 'down' = 'left',
+  direction: "left" | "right" | "up" | "down" = "left",
   durationMs: number = 500,
-  easing: EasingType = 'ease-in-out'
+  easing: EasingType = "ease-in-out"
 ): TransitionConfig {
   return {
     type: `slide-${direction}` as TransitionType,
@@ -264,14 +259,14 @@ export function createSlideTransition(
  * Get all available transition types
  */
 export function getAvailableTransitionTypes(): TransitionType[] {
-  return ['cut', 'fade', 'slide-left', 'slide-right', 'slide-up', 'slide-down'];
+  return ["cut", "fade", "slide-left", "slide-right", "slide-up", "slide-down"];
 }
 
 /**
  * Get all available easing types
  */
 export function getAvailableEasingTypes(): EasingType[] {
-  return ['linear', 'ease-in', 'ease-out', 'ease-in-out'];
+  return ["linear", "ease-in", "ease-out", "ease-in-out"];
 }
 
 /**
@@ -279,8 +274,8 @@ export function getAvailableEasingTypes(): EasingType[] {
  */
 export function validateTransitionConfig(config: Partial<TransitionConfig>): TransitionConfig {
   return {
-    type: config.type || 'fade',
+    type: config.type || "fade",
     durationMs: Math.max(0, config.durationMs ?? 500),
-    easing: config.easing || 'ease-in-out',
+    easing: config.easing || "ease-in-out",
   };
 }

@@ -48,7 +48,11 @@ query GetStreamWithAnalytics(
             codecH265Minutes
           }
         }
-        viewerHoursHourlyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $hourlyFirst }) {
+        viewerHoursHourlyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $hourlyFirst }
+        ) {
           edges {
             node {
               hour
@@ -60,7 +64,11 @@ query GetStreamWithAnalytics(
             }
           }
         }
-        streamAnalyticsDailyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: 30 }) {
+        streamAnalyticsDailyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: 30 }
+        ) {
           edges {
             node {
               day
@@ -73,7 +81,11 @@ query GetStreamWithAnalytics(
             }
           }
         }
-        qualityTierDailyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $qualityFirst }) {
+        qualityTierDailyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $qualityFirst }
+        ) {
           edges {
             node {
               day
@@ -94,7 +106,11 @@ query GetStreamWithAnalytics(
       }
     }
     health {
-      streamHealth5mConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $healthFirst }) {
+      streamHealth5mConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $healthFirst }
+      ) {
         edges {
           node {
             timestamp

@@ -19,7 +19,7 @@
     contentType,
     showPrimary = true,
     showAdditional = true,
-    docsUrl = "/docs/playback"
+    docsUrl = "/docs/playback",
   }: Props = $props();
 
   // Get all URLs for this content
@@ -100,7 +100,10 @@
           <div class="flex items-center gap-2">
             <div class="flex flex-col w-24 shrink-0">
               <span class="text-xs font-medium text-foreground">{protocol.label}</span>
-              <span class="text-[10px] text-muted-foreground/70 truncate" title={protocol.description}>
+              <span
+                class="text-[10px] text-muted-foreground/70 truncate"
+                title={protocol.description}
+              >
                 {protocol.description}
               </span>
             </div>
@@ -132,7 +135,9 @@
     {#if additionalProtocols.length > 0 && showAdditional}
       <div class="pt-1">
         {#if showAdvanced}
-          <div class="space-y-2 mb-2 pt-2 border-t border-border/40 animate-in slide-in-from-top-2 duration-200">
+          <div
+            class="space-y-2 mb-2 pt-2 border-t border-border/40 animate-in slide-in-from-top-2 duration-200"
+          >
             {#each additionalProtocols as protocol (protocol.key)}
               {@const url = getUrl(protocol.key)}
               {#if url}
@@ -169,7 +174,7 @@
           variant="ghost"
           size="sm"
           class="w-full h-6 text-xs text-muted-foreground hover:text-foreground gap-1"
-          onclick={() => showAdvanced = !showAdvanced}
+          onclick={() => (showAdvanced = !showAdvanced)}
         >
           {#if showAdvanced}
             Hide Advanced Protocols <ChevronUpIcon class="w-3 h-3" />

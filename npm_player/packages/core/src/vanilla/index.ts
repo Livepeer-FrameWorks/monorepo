@@ -14,9 +14,9 @@
  * ```
  */
 
-export { FrameWorksPlayer, default } from './FrameWorksPlayer';
-export type { FrameWorksPlayerOptions } from './FrameWorksPlayer';
+export { FrameWorksPlayer, default } from "./FrameWorksPlayer";
+export type { FrameWorksPlayerOptions } from "./FrameWorksPlayer";
 
 // Re-export useful types from core
-export type { PlayerControllerEvents } from '../core/PlayerController';
-export type { PlayerState, PlayerStateContext, StreamState, ContentEndpoints } from '../types';
+export type { PlayerControllerEvents } from "../core/PlayerController";
+export type { PlayerState, PlayerStateContext, StreamState, ContentEndpoints } from "../types";

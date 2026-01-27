@@ -169,11 +169,7 @@
 }
 
 .bg-brand-surface-soft {
-  background-color: color-mix(
-    in srgb,
-    hsl(var(--brand-surface)) 88%,
-    rgba(18, 20, 34, 0.12)
-  );
+  background-color: color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(18, 20, 34, 0.12));
 }
 
 .bg-brand-surface-strong {

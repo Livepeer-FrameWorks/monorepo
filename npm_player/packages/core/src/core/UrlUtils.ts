@@ -35,7 +35,7 @@ export function appendUrlParams(
 
   // Convert object to query string
   let queryString: string;
-  if (typeof params === 'object') {
+  if (typeof params === "object") {
     const entries = Object.entries(params)
       .filter(([, value]) => value !== undefined && value !== null)
       .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
@@ -43,11 +43,11 @@ export function appendUrlParams(
     if (entries.length === 0) {
       return url;
     }
-    queryString = entries.join('&');
+    queryString = entries.join("&");
   } else {
     queryString = params;
     // Strip leading ? or & if present
-    if (queryString.startsWith('?') || queryString.startsWith('&')) {
+    if (queryString.startsWith("?") || queryString.startsWith("&")) {
       queryString = queryString.slice(1);
     }
   }
@@ -57,7 +57,7 @@ export function appendUrlParams(
   }
 
   // Determine separator (? or &)
-  const separator = url.includes('?') ? '&' : '?';
+  const separator = url.includes("?") ? "&" : "?";
   return `${url}${separator}${queryString}`;
 }
 
@@ -77,17 +77,17 @@ export function parseUrlParams(url: string): Record<string, string> {
     });
   } catch {
     // If URL parsing fails, try manual parsing
-    const queryIndex = url.indexOf('?');
+    const queryIndex = url.indexOf("?");
     if (queryIndex === -1) {
       return params;
     }
 
     const queryString = url.slice(queryIndex + 1);
-    const pairs = queryString.split('&');
+    const pairs = queryString.split("&");
     for (const pair of pairs) {
-      const [key, value] = pair.split('=');
+      const [key, value] = pair.split("=");
       if (key) {
-        params[decodeURIComponent(key)] = value ? decodeURIComponent(value) : '';
+        params[decodeURIComponent(key)] = value ? decodeURIComponent(value) : "";
       }
     }
   }
@@ -102,7 +102,7 @@ export function parseUrlParams(url: string): Record<string, string> {
  * @returns URL without query parameters
  */
 export function stripUrlParams(url: string): string {
-  const queryIndex = url.indexOf('?');
+  const queryIndex = url.indexOf("?");
   return queryIndex === -1 ? url : url.slice(0, queryIndex);
 }
 
@@ -113,7 +113,10 @@ export function stripUrlParams(url: string): string {
  * @param params - Query parameters
  * @returns Complete URL
  */
-export function buildUrl(baseUrl: string, params: Record<string, string | number | boolean | undefined | null>): string {
+export function buildUrl(
+  baseUrl: string,
+  params: Record<string, string | number | boolean | undefined | null>
+): string {
   return appendUrlParams(stripUrlParams(baseUrl), params);
 }
 
@@ -121,7 +124,7 @@ export function buildUrl(baseUrl: string, params: Record<string, string | number
  * Check if URL uses secure protocol (https/wss)
  */
 export function isSecureUrl(url: string): boolean {
-  return url.startsWith('https://') || url.startsWith('wss://');
+  return url.startsWith("https://") || url.startsWith("wss://");
 }
 
 /**
@@ -130,7 +133,7 @@ export function isSecureUrl(url: string): boolean {
  * https:// -> wss://
  */
 export function httpToWs(url: string): string {
-  return url.replace(/^http/, 'ws');
+  return url.replace(/^http/, "ws");
 }
 
 /**
@@ -139,7 +142,7 @@ export function httpToWs(url: string): string {
  * wss:// -> https://
  */
 export function wsToHttp(url: string): string {
-  return url.replace(/^ws/, 'http');
+  return url.replace(/^ws/, "http");
 }
 
 /**
@@ -147,21 +150,21 @@ export function wsToHttp(url: string): string {
  * Useful for avoiding mixed content issues
  */
 export function matchPageProtocol(url: string): string {
-  if (typeof window === 'undefined') {
+  if (typeof window === "undefined") {
     return url;
   }
 
-  const pageIsSecure = window.location.protocol === 'https:';
+  const pageIsSecure = window.location.protocol === "https:";
   const urlIsSecure = isSecureUrl(url);
 
   if (pageIsSecure && !urlIsSecure) {
     // Upgrade to secure
-    return url.replace(/^http:/, 'https:').replace(/^ws:/, 'wss:');
+    return url.replace(/^http:/, "https:").replace(/^ws:/, "wss:");
   }
 
   if (!pageIsSecure && urlIsSecure) {
     // Downgrade to insecure (not recommended, but avoids issues)
-    return url.replace(/^https:/, 'http:').replace(/^wss:/, 'ws:');
+    return url.replace(/^https:/, "http:").replace(/^wss:/, "ws:");
   }
 
   return url;

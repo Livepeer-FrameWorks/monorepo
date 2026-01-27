@@ -66,32 +66,32 @@
     flex-shrink: 0;
   }
 
-  .marketing-icon-list[data-tone='green'] .marketing-icon-list__icon {
+  .marketing-icon-list[data-tone="green"] .marketing-icon-list__icon {
     background: linear-gradient(145deg, rgba(158, 206, 106, 0.46), rgba(12, 18, 36, 0.28));
     color: hsl(var(--brand-green));
   }
 
-  .marketing-icon-list[data-tone='yellow'] .marketing-icon-list__icon {
+  .marketing-icon-list[data-tone="yellow"] .marketing-icon-list__icon {
     background: linear-gradient(145deg, rgba(224, 175, 104, 0.46), rgba(12, 18, 36, 0.28));
     color: hsl(var(--brand-yellow));
   }
 
-  .marketing-icon-list[data-tone='purple'] .marketing-icon-list__icon {
+  .marketing-icon-list[data-tone="purple"] .marketing-icon-list__icon {
     background: linear-gradient(145deg, rgba(187, 154, 247, 0.46), rgba(12, 18, 36, 0.28));
     color: hsl(var(--brand-purple));
   }
 
-  .marketing-icon-list__item[data-tone='green'] .marketing-icon-list__icon {
+  .marketing-icon-list__item[data-tone="green"] .marketing-icon-list__icon {
     background: linear-gradient(145deg, rgba(158, 206, 106, 0.46), rgba(12, 18, 36, 0.28));
     color: hsl(var(--brand-green));
   }
 
-  .marketing-icon-list__item[data-tone='yellow'] .marketing-icon-list__icon {
+  .marketing-icon-list__item[data-tone="yellow"] .marketing-icon-list__icon {
     background: linear-gradient(145deg, rgba(224, 175, 104, 0.46), rgba(12, 18, 36, 0.28));
     color: hsl(var(--brand-yellow));
   }
 
-  .marketing-icon-list__item[data-tone='purple'] .marketing-icon-list__icon {
+  .marketing-icon-list__item[data-tone="purple"] .marketing-icon-list__icon {
     background: linear-gradient(145deg, rgba(187, 154, 247, 0.46), rgba(12, 18, 36, 0.28));
     color: hsl(var(--brand-purple));
   }
@@ -117,28 +117,58 @@
     margin-top: 0.35rem;
   }
 
-  .marketing-icon-list--plain[data-tone='green'] .marketing-icon-list__icon {
-    background: linear-gradient(135deg, hsl(var(--brand-green)), color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%));
+  .marketing-icon-list--plain[data-tone="green"] .marketing-icon-list__icon {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-green)),
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+    );
   }
 
-  .marketing-icon-list--plain[data-tone='yellow'] .marketing-icon-list__icon {
-    background: linear-gradient(135deg, hsl(var(--brand-yellow)), color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%));
+  .marketing-icon-list--plain[data-tone="yellow"] .marketing-icon-list__icon {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-yellow)),
+      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%)
+    );
   }
 
-  .marketing-icon-list--plain[data-tone='purple'] .marketing-icon-list__icon {
-    background: linear-gradient(135deg, hsl(var(--brand-purple)), color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%));
+  .marketing-icon-list--plain[data-tone="purple"] .marketing-icon-list__icon {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-purple)),
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+    );
   }
 
-  .marketing-icon-list--plain .marketing-icon-list__item[data-tone='green'] .marketing-icon-list__icon {
-    background: linear-gradient(135deg, hsl(var(--brand-green)), color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%));
+  .marketing-icon-list--plain
+    .marketing-icon-list__item[data-tone="green"]
+    .marketing-icon-list__icon {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-green)),
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+    );
   }
 
-  .marketing-icon-list--plain .marketing-icon-list__item[data-tone='yellow'] .marketing-icon-list__icon {
-    background: linear-gradient(135deg, hsl(var(--brand-yellow)), color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%));
+  .marketing-icon-list--plain
+    .marketing-icon-list__item[data-tone="yellow"]
+    .marketing-icon-list__icon {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-yellow)),
+      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%)
+    );
   }
 
-  .marketing-icon-list--plain .marketing-icon-list__item[data-tone='purple'] .marketing-icon-list__icon {
-    background: linear-gradient(135deg, hsl(var(--brand-purple)), color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%));
+  .marketing-icon-list--plain
+    .marketing-icon-list__item[data-tone="purple"]
+    .marketing-icon-list__icon {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-purple)),
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+    );
   }
 
   .marketing-icon-list--plain .marketing-icon-list__content h4 {
@@ -168,22 +198,34 @@
     background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--brand-cyan)));
   }
 
-  .marketing-icon-list__dot[data-tone='accent'] {
+  .marketing-icon-list__dot[data-tone="accent"] {
     background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--brand-cyan)));
   }
 
-  .marketing-icon-list__dot[data-tone='green'] {
-    background: linear-gradient(135deg, hsl(var(--brand-green)), color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%));
+  .marketing-icon-list__dot[data-tone="green"] {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-green)),
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+    );
     box-shadow: 0 0 12px rgba(158, 206, 106, 0.35);
   }
 
-  .marketing-icon-list__dot[data-tone='yellow'] {
-    background: linear-gradient(135deg, hsl(var(--brand-yellow)), color-mix(in srgb, hsl(var(--brand-yellow)) 72%, white 28%));
+  .marketing-icon-list__dot[data-tone="yellow"] {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-yellow)),
+      color-mix(in srgb, hsl(var(--brand-yellow)) 72%, white 28%)
+    );
     box-shadow: 0 0 12px rgba(224, 175, 104, 0.35);
   }
 
-  .marketing-icon-list__dot[data-tone='purple'] {
-    background: linear-gradient(135deg, hsl(var(--brand-purple)), color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%));
+  .marketing-icon-list__dot[data-tone="purple"] {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-purple)),
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+    );
     box-shadow: 0 0 12px rgba(187, 154, 247, 0.35);
   }
 

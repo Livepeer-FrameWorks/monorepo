@@ -6,30 +6,30 @@
 
 :root {
   /* Core backgrounds */
-  --tn-bg: 235 19% 13%;           /* #1a1b26 - Main background */
-  --tn-bg-dark: 240 15% 10%;      /* #16161e - Darker variant */
+  --tn-bg: 235 19% 13%; /* #1a1b26 - Main background */
+  --tn-bg-dark: 240 15% 10%; /* #16161e - Darker variant */
   --tn-bg-highlight: 229 24% 19%; /* #24283b - Elevated surfaces */
-  --tn-bg-visual: 229 24% 24%;    /* #292e42 - Visual selection */
+  --tn-bg-visual: 229 24% 24%; /* #292e42 - Visual selection */
 
   /* Foreground colors */
-  --tn-fg: 229 73% 86%;           /* #c0caf5 - Primary text */
-  --tn-fg-dark: 229 35% 75%;      /* #a9b1d6 - Secondary text */
-  --tn-fg-gutter: 229 24% 31%;    /* #3b4261 - Gutters, borders */
+  --tn-fg: 229 73% 86%; /* #c0caf5 - Primary text */
+  --tn-fg-dark: 229 35% 75%; /* #a9b1d6 - Secondary text */
+  --tn-fg-gutter: 229 24% 31%; /* #3b4261 - Gutters, borders */
 
   /* Terminal colors */
-  --tn-comment: 229 23% 44%;      /* #565f89 - Comments */
-  --tn-terminal: 229 23% 33%;     /* #414868 - Terminal bg */
+  --tn-comment: 229 23% 44%; /* #565f89 - Comments */
+  --tn-terminal: 229 23% 33%; /* #414868 - Terminal bg */
 
   /* Accent colors */
-  --tn-blue: 225 86% 70%;         /* #7aa2f7 - Primary accent */
-  --tn-cyan: 197 95% 74%;         /* #7dcfff - Info */
-  --tn-teal: 167 67% 63%;         /* #73daca - Success alt */
-  --tn-green: 89 51% 61%;         /* #9ece6a - Success */
-  --tn-yellow: 36 66% 64%;        /* #e0af68 - Warning */
-  --tn-orange: 22 100% 70%;       /* #ff9e64 - Warning alt */
-  --tn-red: 349 89% 72%;          /* #f7768e - Error */
-  --tn-magenta: 325 78% 73%;      /* #ff007c - Highlight */
-  --tn-purple: 264 85% 74%;       /* #bb9af7 - Accent */
+  --tn-blue: 225 86% 70%; /* #7aa2f7 - Primary accent */
+  --tn-cyan: 197 95% 74%; /* #7dcfff - Info */
+  --tn-teal: 167 67% 63%; /* #73daca - Success alt */
+  --tn-green: 89 51% 61%; /* #9ece6a - Success */
+  --tn-yellow: 36 66% 64%; /* #e0af68 - Warning */
+  --tn-orange: 22 100% 70%; /* #ff9e64 - Warning alt */
+  --tn-red: 349 89% 72%; /* #f7768e - Error */
+  --tn-magenta: 325 78% 73%; /* #ff007c - Highlight */
+  --tn-purple: 264 85% 74%; /* #bb9af7 - Accent */
 
   /* Semantic tokens (shadcn/ui compatible) */
   --background: var(--tn-bg);
@@ -130,13 +130,21 @@
 }
 
 @keyframes accordion-down {
-  from { height: 0; }
-  to { height: var(--radix-accordion-content-height); }
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
 }
 
 @keyframes accordion-up {
-  from { height: var(--radix-accordion-content-height); }
-  to { height: 0; }
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
 }
 
 /* ========================================
@@ -150,7 +158,13 @@
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 }
 
 /* ========================================
@@ -183,11 +197,7 @@ body {
   position: relative;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-  background: linear-gradient(
-    90deg,
-    hsl(var(--tn-blue) / 0.06) 0%,
-    transparent 50%
-  );
+  background: linear-gradient(90deg, hsl(var(--tn-blue) / 0.06) 0%, transparent 50%);
 }
 
 /* Accent line on left edge */
@@ -198,11 +208,7 @@ body {
   top: 0;
   bottom: 0;
   width: 3px;
-  background: linear-gradient(
-    to bottom,
-    hsl(var(--tn-blue) / 0.6),
-    hsl(var(--tn-purple) / 0.3)
-  );
+  background: linear-gradient(to bottom, hsl(var(--tn-blue) / 0.6), hsl(var(--tn-purple) / 0.3));
 }
 
 .slab-header h3,
@@ -255,7 +261,9 @@ body {
   border-radius: 0 !important;
   flex: 1;
   justify-content: center;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .slab-actions > *:hover {
@@ -361,11 +369,7 @@ body {
    ======================================== */
 
 .header-bar {
-  background: linear-gradient(
-    to bottom,
-    hsl(var(--tn-bg-highlight) / 0.5),
-    hsl(var(--tn-bg-dark))
-  );
+  background: linear-gradient(to bottom, hsl(var(--tn-bg-highlight) / 0.5), hsl(var(--tn-bg-dark)));
   border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
 }
 

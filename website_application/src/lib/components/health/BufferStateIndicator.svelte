@@ -9,7 +9,12 @@
     compact?: boolean;
   }
 
-  let { bufferState = "EMPTY", bufferHealth = null, size = "md", compact = false }: Props = $props();
+  let {
+    bufferState = "EMPTY",
+    bufferHealth = null,
+    size = "md",
+    compact = false,
+  }: Props = $props();
 
   const normalizedState = $derived(
     typeof bufferState === "string" && bufferState.length > 0 ? bufferState : "UNKNOWN"
@@ -47,11 +52,7 @@
 
   let colorClass = $derived(getBufferStateColor(normalizedState));
   let bgClass = $derived(getBufferBgColor(normalizedState));
-  let healthPercent = $derived(
-    bufferHealth != null
-      ? Math.round(bufferHealth * 100)
-      : null,
-  );
+  let healthPercent = $derived(bufferHealth != null ? Math.round(bufferHealth * 100) : null);
 
   const sizeClasses = {
     sm: "w-4 h-4",
@@ -101,7 +102,9 @@
   <div class="group relative flex items-center gap-1" title={getStateDescription(bufferState)}>
     {#each Array(4) as _, i (i)}
       <div
-        class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount ? bgClass : 'bg-muted-foreground/30'}"
+        class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount
+          ? bgClass
+          : 'bg-muted-foreground/30'}"
       ></div>
     {/each}
   </div>
@@ -113,7 +116,9 @@
       <div class="flex items-center gap-0.5">
         {#each Array(4) as _, i (i)}
           <div
-            class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount ? bgClass : 'bg-muted-foreground/30'}"
+            class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount
+              ? bgClass
+              : 'bg-muted-foreground/30'}"
           ></div>
         {/each}
       </div>

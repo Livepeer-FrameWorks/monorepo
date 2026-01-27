@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { preventDefault } from 'svelte/legacy';
+  import { preventDefault } from "svelte/legacy";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
@@ -21,7 +21,8 @@
   // Bot protection fields
   let phone_number = $state(""); // Honeypot - must remain empty
   // @ts-expect-error - Vite env types not available in this context
-  const turnstileSiteKey = (import.meta as { env: Record<string, string> }).env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
+  const turnstileSiteKey =
+    (import.meta as { env: Record<string, string> }).env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
   const defaultHumanCheck = turnstileSiteKey ? "robot" : "human";
 
   let human_check = $state(defaultHumanCheck); // "human" or "robot" - expect "human"
@@ -112,7 +113,7 @@
         error = result.error || "Login failed";
       }
     } catch (_err) {
-      console.error('Login error:', _err);
+      console.error("Login error:", _err);
       error = _err instanceof Error ? _err.message : "Login failed";
     } finally {
       loading = false;
@@ -125,10 +126,10 @@
     }
   }
 
-  const SvelteComponent = $derived(getIconComponent('Film'));
-  const SvelteComponent_1 = $derived(getIconComponent('Bot'));
-  const SvelteComponent_2 = $derived(getIconComponent('Globe'));
-  const SvelteComponent_3 = $derived(getIconComponent('CreditCard'));
+  const SvelteComponent = $derived(getIconComponent("Film"));
+  const SvelteComponent_1 = $derived(getIconComponent("Bot"));
+  const SvelteComponent_2 = $derived(getIconComponent("Globe"));
+  const SvelteComponent_3 = $derived(getIconComponent("CreditCard"));
 </script>
 
 <svelte:head>
@@ -180,8 +181,18 @@
           }}
         >
           Learn More About FrameWorks
-          <svg class="w-3 h-3 ml-1 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M7 17L17 7M17 7H7M17 7V17" />
+          <svg
+            class="w-3 h-3 ml-1 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all duration-200"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              d="M7 17L17 7M17 7H7M17 7V17"
+            />
           </svg>
         </Button>
       </div>
@@ -196,7 +207,10 @@
       <form id="login-form" onsubmit={preventDefault(handleSubmit)}>
         <!-- Email field -->
         <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-          <label for="email" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          <label
+            for="email"
+            class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+          >
             Email Address
           </label>
           <Input
@@ -210,7 +224,10 @@
 
         <!-- Password field -->
         <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-          <label for="password" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          <label
+            for="password"
+            class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+          >
             Password
           </label>
           <Input
@@ -225,19 +242,16 @@
         <!-- Honeypot field (hidden, should remain empty) -->
         {#if !turnstileSiteKey}
           <div class="hidden" aria-hidden="true">
-            <Input
-              type="text"
-              bind:value={phone_number}
-              tabindex={-1}
-              autocomplete="off"
-            />
+            <Input type="text" bind:value={phone_number} tabindex={-1} autocomplete="off" />
           </div>
         {/if}
 
         <!-- Human verification (fallback when Turnstile not configured) -->
         {#if !turnstileSiteKey}
           <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-            <p class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+            <p
+              class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+            >
               Verification
             </p>
             <RadioGroup bind:value={human_check} class="flex gap-6">
@@ -255,7 +269,9 @@
 
         {#if turnstileSiteKey}
           <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-            <p class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+            <p
+              class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+            >
               Verification
             </p>
             <Turnstile
@@ -284,7 +300,9 @@
               Error
             </p>
             <p class="text-destructive text-sm">{error}</p>
-            {#if error.toLowerCase().includes("not verified") || error.toLowerCase().includes("verify")}
+            {#if error.toLowerCase().includes("not verified") || error
+                .toLowerCase()
+                .includes("verify")}
               <p class="mt-2 text-sm text-muted-foreground">
                 Need a new verification link? <a
                   href={resolve("/verify-email")}
@@ -312,12 +330,8 @@
         </Button>
       </div>
       <div class="slab-actions slab-actions--row">
-        <Button href={resolve("/forgot-password")} variant="ghost">
-          Forgot password?
-        </Button>
-        <Button href={resolve("/register")} variant="ghost">
-          Create account
-        </Button>
+        <Button href={resolve("/forgot-password")} variant="ghost">Forgot password?</Button>
+        <Button href={resolve("/register")} variant="ghost">Create account</Button>
       </div>
 
       <!-- Wallet Login Option -->

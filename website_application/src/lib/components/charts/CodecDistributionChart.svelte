@@ -36,22 +36,22 @@
     if (!ctx) return;
 
     // Filter out zero values
-    const filteredData = data.filter(d => d.minutes > 0);
+    const filteredData = data.filter((d) => d.minutes > 0);
     const totalMinutes = filteredData.reduce((acc, d) => acc + d.minutes, 0);
 
     const config: ChartConfiguration<"pie"> = {
       type: "pie",
       data: {
-        labels: filteredData.map(d => d.codec),
+        labels: filteredData.map((d) => d.codec),
         datasets: [
           {
-            data: filteredData.map(d => d.minutes),
+            data: filteredData.map((d) => d.minutes),
             backgroundColor: [
               "rgb(59, 130, 246)", // H.264 (Blue)
               "rgb(168, 85, 247)", // H.265 (Purple)
-              "rgb(34, 197, 94)",  // VP9 (Green)
+              "rgb(34, 197, 94)", // VP9 (Green)
               "rgb(245, 158, 11)", // AV1 (Amber)
-              "rgb(239, 68, 68)",  // Other (Red)
+              "rgb(239, 68, 68)", // Other (Red)
             ],
             borderColor: "rgb(30, 41, 59)", // Dark border for segments
             borderWidth: 2,
@@ -104,11 +104,13 @@
   });
 
   onMount(() => createChart());
-  onDestroy(() => { if (chart) chart.destroy(); });
+  onDestroy(() => {
+    if (chart) chart.destroy();
+  });
 </script>
 
 <div class="chart-container" style="height: {height}px;">
-  {#if data.length > 0 && data.some(d => d.minutes > 0)}
+  {#if data.length > 0 && data.some((d) => d.minutes > 0)}
     <canvas bind:this={canvas}></canvas>
   {:else}
     <div class="flex items-center justify-center h-full text-muted-foreground text-sm">

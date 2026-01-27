@@ -5,14 +5,18 @@ sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental Feature">
-Hybrid deployment is a cutting-edge feature currently in **active development and testing**. The CLI workflows and APIs described here are highly experimental and subject to significant change without notice. **This feature is not yet ready for production use.**
+  Hybrid deployment is a cutting-edge feature currently in **active development and testing**. The
+  CLI workflows and APIs described here are highly experimental and subject to significant change
+  without notice. **This feature is not yet ready for production use.**
 </Aside>
 
 <Aside type="note" title="Edge Node Connectivity">
-Hybrid edge nodes communicate with the FrameWorks network via public APIs (HTTP/gRPC). They do **not** participate in the internal WireGuard mesh (Privateer), which is reserved for backend infrastructure nodes.
+  Hybrid edge nodes communicate with the FrameWorks network via public APIs (HTTP/gRPC). They do
+  **not** participate in the internal WireGuard mesh (Privateer), which is reserved for backend
+  infrastructure nodes.
 </Aside>
 
 The vision for FrameWorks' hybrid deployment is to offer the best of both worlds: the control of self-hosted infrastructure with the convenience of managed services. This will enable you to do the heavy lifting on your own hardware, while the FrameWorks network handles crucial services like load balancing, analytics, and orchestration.
@@ -22,12 +26,14 @@ The vision for FrameWorks' hybrid deployment is to offer the best of both worlds
 Our goal for hybrid deployment is to empower you with:
 
 **Leveraging your own hardware:**
+
 - The ability to run edge nodes anywhere you have servers.
 - Flexibility to ingest streams locally or route them through the network.
 - Optimized delivery by serving viewers from your nodes when they are geographically closest.
 - Integrated analytics and monitoring without the need for you to build it yourself.
 
 **Seamless integration with the FrameWorks network:**
+
 - The core Control Plane services (Commodore, Quartermaster) remain centrally managed.
 - Analytics ingestion and storage are handled by the FrameWorks platform.
 - Load balancer decisions (Foghorn) are orchestrated by the network.
@@ -60,6 +66,7 @@ graph LR
 ## Prerequisites
 
 Before you start:
+
 - A server with Docker and Docker Compose
 - Public IP (for viewers to reach you)
 - DNS record pointing to your server
@@ -75,6 +82,7 @@ Before you start:
 - A paid FrameWorks account with self-hosted clusters enabled, plus a CLI enrollment token to connect the node
 
 Hardware minimums:
+
 - **Starting point for light workloads** (scale with streams/transcodes):
   - 4 CPU cores (or less for very low volume)
   - 8 GB RAM
@@ -92,12 +100,14 @@ Once hybrid deployment is stable, these guides will help you:
 ## Envisioned Use Cases
 
 **Hybrid deployment will be a strong consideration if:**
+
 - You possess existing, underutilized server capacity.
 - Your primary viewer base is concentrated in a geographic region not optimally served by our existing edge network.
 - Compliance regulations necessitate keeping stream data on-premise.
 - You require ultra-low latency streaming, surpassing what our nearest edge nodes can provide.
 
 **Conversely, hybrid deployment might not be the most suitable option if:**
+
 - You lack the operational capacity or expertise to maintain server infrastructure.
 - Your viewer base is broadly distributed globally, where our comprehensive network coverage is already optimized.
 - Your primary goal is to stream with minimal infrastructure management overhead.
@@ -106,11 +116,11 @@ Once hybrid deployment is stable, these guides will help you:
 
 Hybrid gives you edge nodes. Full self-hosting gives you everything: the control plane, databases, Kafka, the dashboard, etc.
 
-| Aspect | Hybrid | Full Self-Host |
-|--------|--------|----------------|
-| You manage | Edge nodes only | Everything |
-| Analytics | FrameWorks-hosted | Your ClickHouse |
-| Dashboard | Hosted dashboard | Your deployment |
-| Complexity | Low-medium | High |
+| Aspect     | Hybrid            | Full Self-Host  |
+| ---------- | ----------------- | --------------- |
+| You manage | Edge nodes only   | Everything      |
+| Analytics  | FrameWorks-hosted | Your ClickHouse |
+| Dashboard  | Hosted dashboard  | Your deployment |
+| Complexity | Low-medium        | High            |
 
 If you want total independence, see the [Infrastructure Operators](/operators/deployment) guide.

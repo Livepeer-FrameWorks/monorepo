@@ -3,12 +3,12 @@
  * Mirrors viewerEndpoints from npm_player for consistency
  */
 
-import { writable, derived, type Readable } from 'svelte/store';
+import { writable, derived, type Readable } from "svelte/store";
 import {
   IngestClient,
   type IngestEndpoints,
   type IngestClientStatus,
-} from '@livepeer-frameworks/streamcrafter-core';
+} from "@livepeer-frameworks/streamcrafter-core";
 
 export interface IngestEndpointsOptions {
   /** Gateway GraphQL URL */
@@ -47,7 +47,7 @@ export interface IngestEndpointsStore extends Readable<IngestEndpointsState> {
 export function createIngestEndpointsStore(): IngestEndpointsStore {
   const { subscribe, set, update } = writable<IngestEndpointsState>({
     endpoints: null,
-    status: 'idle',
+    status: "idle",
     error: null,
   });
 
@@ -64,7 +64,7 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
     cleanup();
     set({
       endpoints: null,
-      status: 'idle',
+      status: "idle",
       error: null,
     });
   }
@@ -89,7 +89,7 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
     });
 
     // Set up event listeners
-    client.on('statusChange', ({ status, error }) => {
+    client.on("statusChange", ({ status, error }) => {
       update((state) => ({
         ...state,
         status,
@@ -97,7 +97,7 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
       }));
     });
 
-    client.on('endpointsResolved', ({ endpoints }) => {
+    client.on("endpointsResolved", ({ endpoints }) => {
       update((state) => ({
         ...state,
         endpoints,
@@ -109,7 +109,7 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
       const resolved = await client.resolve();
       return resolved;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
+      const message = err instanceof Error ? err.message : "Unknown error";
       update((state) => ({
         ...state,
         error: message,

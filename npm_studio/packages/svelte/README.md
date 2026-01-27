@@ -16,8 +16,8 @@ npm install @livepeer-frameworks/streamcrafter-svelte
 
 ```svelte
 <script lang="ts">
-  import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-svelte';
-  import '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
+  import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-svelte";
+  import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
 </script>
 
 <StreamCrafter
@@ -37,6 +37,7 @@ npm install @livepeer-frameworks/streamcrafter-svelte
 ```
 
 Notes:
+
 - There is **no default gateway**; pass either `whipUrl` or (`gatewayUrl` + `streamKey`).
 - If both are provided, `whipUrl` takes priority.
 
@@ -44,15 +45,15 @@ Notes:
 
 ```svelte
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { createStreamCrafterContextV2 } from '@livepeer-frameworks/streamcrafter-svelte';
+  import { onMount, onDestroy } from "svelte";
+  import { createStreamCrafterContextV2 } from "@livepeer-frameworks/streamcrafter-svelte";
 
   const crafter = createStreamCrafterContextV2();
 
   onMount(() => {
     crafter.initialize({
-      whipUrl: 'https://ingest.example.com/webrtc/your-stream-key',
-      profile: 'broadcast',
+      whipUrl: "https://ingest.example.com/webrtc/your-stream-key",
+      profile: "broadcast",
     });
   });
 

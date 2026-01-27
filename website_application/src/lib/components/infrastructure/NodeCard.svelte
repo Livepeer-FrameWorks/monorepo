@@ -64,10 +64,13 @@
       <div class="text-right space-y-1">
         <Badge
           variant="outline"
-          tone={getNodeHealthScore(node.id) >= 80 ? 'green' :
-                getNodeHealthScore(node.id) >= 50 ? 'yellow' :
-                getNodeHealthScore(node.id) > 0 ? 'red' :
-                'neutral'}
+          tone={getNodeHealthScore(node.id) >= 80
+            ? "green"
+            : getNodeHealthScore(node.id) >= 50
+              ? "yellow"
+              : getNodeHealthScore(node.id) > 0
+                ? "red"
+                : "neutral"}
           class="text-xs uppercase"
         >
           {getNodeStatus(node.id)}
@@ -96,7 +99,9 @@
           <p class="font-medium">{formatDiskUsage(node.id)}</p>
         </div>
       {:else}
-        <div class="col-span-3 flex items-center justify-center text-xs text-muted-foreground animate-pulse">
+        <div
+          class="col-span-3 flex items-center justify-center text-xs text-muted-foreground animate-pulse"
+        >
           Waiting for live stats...
         </div>
       {/if}
@@ -172,13 +177,15 @@
       {@const shmUsed = systemHealth[node.id].event.shmUsedBytes || 0}
       {@const shmTotal = systemHealth[node.id].event.shmTotalBytes || 1}
       {@const shmPercent = (shmUsed / shmTotal) * 100}
-      <div
-        class="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-border/40 pt-3 text-xs"
-      >
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-border/40 pt-3 text-xs">
         <div>
           <p class="text-muted-foreground">Disk</p>
           <p>
-            {Math.round((systemHealth[node.id].event.diskUsedBytes || 0) / (systemHealth[node.id].event.diskTotalBytes || 1) * 100)}%
+            {Math.round(
+              ((systemHealth[node.id].event.diskUsedBytes || 0) /
+                (systemHealth[node.id].event.diskTotalBytes || 1)) *
+                100
+            )}%
           </p>
         </div>
         <div>

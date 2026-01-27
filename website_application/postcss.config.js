@@ -12,22 +12,20 @@ export default {
         const cssAliases = {
           "@livepeer-frameworks/player-core/player.css": path.resolve(
             __dirname,
-            "../npm_player/packages/core/src/styles/player.css",
+            "../npm_player/packages/core/src/styles/player.css"
           ),
           "@livepeer-frameworks/player-svelte/player.css": path.resolve(
             __dirname,
-            "../npm_player/packages/svelte/src/player.css",
+            "../npm_player/packages/svelte/src/player.css"
           ),
-          "@livepeer-frameworks/streamcrafter-core/streamcrafter.css":
-            path.resolve(
-              __dirname,
-              "../npm_studio/packages/core/src/styles/streamcrafter.css",
-            ),
-          "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css":
-            path.resolve(
-              __dirname,
-              "../npm_studio/packages/svelte/src/streamcrafter.css",
-            ),
+          "@livepeer-frameworks/streamcrafter-core/streamcrafter.css": path.resolve(
+            __dirname,
+            "../npm_studio/packages/core/src/styles/streamcrafter.css"
+          ),
+          "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css": path.resolve(
+            __dirname,
+            "../npm_studio/packages/svelte/src/streamcrafter.css"
+          ),
         };
         return cssAliases[id] || id;
       },

@@ -1,38 +1,38 @@
-import { isValidElement } from 'react'
-import { cn } from '@/lib/utils'
-import { renderSlot } from '../utils'
-import MarketingStackedSeam from '../layout/MarketingStackedSeam'
+import { isValidElement } from "react";
+import { cn } from "@/lib/utils";
+import { renderSlot } from "../utils";
+import MarketingStackedSeam from "../layout/MarketingStackedSeam";
 
 const normalizeListItem = (item, index, fallbackTone, prefix) => {
-  if (item === null || item === undefined) return null
+  if (item === null || item === undefined) return null;
 
-  if (isValidElement(item) || typeof item === 'string' || typeof item === 'number') {
+  if (isValidElement(item) || typeof item === "string" || typeof item === "number") {
     return {
       key: `${prefix}-${index}`,
       content: item,
       tone: fallbackTone,
-    }
+    };
   }
 
-  if (typeof item === 'object') {
-    const key = item.id ?? item.key ?? `${prefix}-${index}`
-    const tone = item.tone ?? fallbackTone
-    const content = item.content ?? item.children ?? item.label ?? item.text ?? item.value ?? null
-    if (content === null) return null
+  if (typeof item === "object") {
+    const key = item.id ?? item.key ?? `${prefix}-${index}`;
+    const tone = item.tone ?? fallbackTone;
+    const content = item.content ?? item.children ?? item.label ?? item.text ?? item.value ?? null;
+    if (content === null) return null;
 
     return {
       key,
       content,
       tone,
-    }
+    };
   }
 
   return {
     key: `${prefix}-${index}`,
     content: String(item),
     tone: fallbackTone,
-  }
-}
+  };
+};
 
 const MarketingComparisonCard = ({
   badge,
@@ -40,25 +40,28 @@ const MarketingComparisonCard = ({
   description,
   price,
   period,
-  tone = 'accent',
+  tone = "accent",
   meta,
   features = [],
   limitations = [],
-  limitHeading = 'Limitations',
+  limitHeading = "Limitations",
   featured = false,
   footnote,
   action,
 }) => {
   const normalizedFeatures = features
-    .map((feature, index) => normalizeListItem(feature, index, tone, 'feature'))
-    .filter(Boolean)
+    .map((feature, index) => normalizeListItem(feature, index, tone, "feature"))
+    .filter(Boolean);
 
   const normalizedLimits = limitations
-    .map((limit, index) => normalizeListItem(limit, index, 'muted', 'limit'))
-    .filter(Boolean)
+    .map((limit, index) => normalizeListItem(limit, index, "muted", "limit"))
+    .filter(Boolean);
 
   return (
-    <div className={cn('marketing-comparison-card', featured && 'marketing-comparison-card--featured')} data-tone={tone}>
+    <div
+      className={cn("marketing-comparison-card", featured && "marketing-comparison-card--featured")}
+      data-tone={tone}
+    >
       <div className="marketing-comparison-card__header">
         {badge ? <span className="marketing-comparison-card__badge">{badge}</span> : null}
         {title ? <h3 className="marketing-comparison-card__title">{title}</h3> : null}
@@ -69,7 +72,9 @@ const MarketingComparisonCard = ({
           </div>
         ) : null}
         {meta ? <p className="marketing-comparison-card__meta">{renderSlot(meta)}</p> : null}
-        {description ? <p className="marketing-comparison-card__description">{description}</p> : null}
+        {description ? (
+          <p className="marketing-comparison-card__description">{description}</p>
+        ) : null}
       </div>
       {normalizedFeatures.length ? (
         <MarketingStackedSeam gap="sm" className="marketing-comparison-features">
@@ -99,7 +104,7 @@ const MarketingComparisonCard = ({
         {footnote ? <p className="marketing-comparison-card__note">{footnote}</p> : null}
       </div>
     </div>
-  )
-}
+  );
+};
 
-export default MarketingComparisonCard
+export default MarketingComparisonCard;

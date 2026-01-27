@@ -27,20 +27,23 @@ const AnimatedBubble: React.FC<AnimatedBubbleProps> = ({ index }) => {
       // Fade in
       setOpacity(0.15);
 
-      setTimeout(() => {
-        // Fade out
-        setOpacity(0);
+      setTimeout(
+        () => {
+          // Fade out
+          setOpacity(0);
 
-        setTimeout(() => {
-          // Move to new random position with new size while invisible
-          setPosition(getRandomPosition());
-          setSize(getRandomSize());
-          // Start next cycle after a brief delay to ensure position change is complete
           setTimeout(() => {
-            animationCycle();
-          }, 200);
-        }, 1500); // Wait for fade out to complete
-      }, 4000 + Math.random() * 3000); // Stay visible for 4-7 seconds (was 2-4)
+            // Move to new random position with new size while invisible
+            setPosition(getRandomPosition());
+            setSize(getRandomSize());
+            // Start next cycle after a brief delay to ensure position change is complete
+            setTimeout(() => {
+              animationCycle();
+            }, 200);
+          }, 1500); // Wait for fade out to complete
+        },
+        4000 + Math.random() * 3000
+      ); // Stay visible for 4-7 seconds (was 2-4)
     };
 
     // Start the animation cycle with staggered timing
@@ -55,32 +58,34 @@ const AnimatedBubble: React.FC<AnimatedBubbleProps> = ({ index }) => {
   const bubbleColors = [
     "rgba(122, 162, 247, 0.2)", // Terminal Blue
     "rgba(187, 154, 247, 0.2)", // Terminal Magenta
-    "rgba(158, 206, 106, 0.2)", // Strings/CSS classes  
+    "rgba(158, 206, 106, 0.2)", // Strings/CSS classes
     "rgba(115, 218, 202, 0.2)", // Terminal Green
     "rgba(125, 207, 255, 0.2)", // Terminal Cyan
     "rgba(247, 118, 142, 0.2)", // Keywords/Terminal Red
     "rgba(224, 175, 104, 0.2)", // Terminal Yellow
-    "rgba(42, 195, 222, 0.2)",  // Language functions
+    "rgba(42, 195, 222, 0.2)", // Language functions
   ];
 
   return (
     <div
-      style={{
-        position: "absolute",
-        top: `${position.top}%`,
-        left: `${position.left}%`,
-        width: `${size}px`,
-        height: `${size}px`,
-        borderRadius: "50%",
-        background: bubbleColors[index % bubbleColors.length],
-        opacity: opacity,
-        transition: "opacity 1s ease-in-out",
-        pointerEvents: "none",
-        userSelect: "none",
-        WebkitUserSelect: "none",
-        MozUserSelect: "none",
-        msUserSelect: "none",
-      } as React.CSSProperties}
+      style={
+        {
+          position: "absolute",
+          top: `${position.top}%`,
+          left: `${position.left}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          borderRadius: "50%",
+          background: bubbleColors[index % bubbleColors.length],
+          opacity: opacity,
+          transition: "opacity 1s ease-in-out",
+          pointerEvents: "none",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          MozUserSelect: "none",
+          msUserSelect: "none",
+        } as React.CSSProperties
+      }
     />
   );
 };
@@ -154,12 +159,12 @@ const CenterLogo: React.FC<CenterLogoProps> = ({ containerRef, scale = 0.2, onHi
   useEffect(() => {
     if (containerRef.current) {
       const container = containerRef.current;
-      container.addEventListener('mousemove', handleMouseMove);
-      container.addEventListener('mouseleave', handleMouseLeave);
+      container.addEventListener("mousemove", handleMouseMove);
+      container.addEventListener("mouseleave", handleMouseLeave);
 
       return () => {
-        container.removeEventListener('mousemove', handleMouseMove);
-        container.removeEventListener('mouseleave', handleMouseLeave);
+        container.removeEventListener("mousemove", handleMouseMove);
+        container.removeEventListener("mouseleave", handleMouseLeave);
       };
     }
   }, [logoSize, containerRef]);
@@ -190,7 +195,9 @@ const CenterLogo: React.FC<CenterLogoProps> = ({ containerRef, scale = 0.2, onHi
           height: `${logoSize * 1.4}px`,
           borderRadius: "50%",
           background: "rgba(122, 162, 247, 0.15)",
-          animation: isHovered ? "logoPulse 1s ease-in-out infinite" : "logoPulse 3s ease-in-out infinite",
+          animation: isHovered
+            ? "logoPulse 1s ease-in-out infinite"
+            : "logoPulse 3s ease-in-out infinite",
           transform: isHovered ? "scale(1.2)" : "scale(1)",
           transition: "transform 0.3s ease-out",
           userSelect: "none",
@@ -206,24 +213,26 @@ const CenterLogo: React.FC<CenterLogoProps> = ({ containerRef, scale = 0.2, onHi
         src={logomarkAsset}
         alt="FrameWorks Logo"
         onClick={handleLogoClick}
-        style={{
-          width: `${logoSize}px`,
-          height: `${logoSize}px`,
-          position: "relative",
-          zIndex: 1,
-          filter: isHovered
-            ? "drop-shadow(0 6px 12px rgba(36, 40, 59, 0.4)) brightness(1.1)"
-            : "drop-shadow(0 4px 8px rgba(36, 40, 59, 0.3))",
-          transform: isHovered ? "scale(1.1)" : "scale(1)",
-          transition: "all 0.3s ease-out",
-          cursor: isHovered ? "pointer" : "default",
-          userSelect: "none",
-          WebkitUserSelect: "none",
-          MozUserSelect: "none",
-          msUserSelect: "none",
-          WebkitUserDrag: "none",
-          WebkitTouchCallout: "none",
-        } as React.CSSProperties}
+        style={
+          {
+            width: `${logoSize}px`,
+            height: `${logoSize}px`,
+            position: "relative",
+            zIndex: 1,
+            filter: isHovered
+              ? "drop-shadow(0 6px 12px rgba(36, 40, 59, 0.4)) brightness(1.1)"
+              : "drop-shadow(0 4px 8px rgba(36, 40, 59, 0.3))",
+            transform: isHovered ? "scale(1.1)" : "scale(1)",
+            transition: "all 0.3s ease-out",
+            cursor: isHovered ? "pointer" : "default",
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            MozUserSelect: "none",
+            msUserSelect: "none",
+            WebkitUserDrag: "none",
+            WebkitTouchCallout: "none",
+          } as React.CSSProperties
+        }
       />
     </div>
   );
@@ -246,51 +255,52 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
   const playHitmarkerSound = () => {
     try {
       // Embedded hitmarker sound as base64 data URL
-      const hitmarkerDataUrl = 'data:audio/mpeg;base64,SUQzBAAAAAAANFRDT04AAAAHAAADT3RoZXIAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAA' +
-        'AAD/+1QAAAAAAAAAAAAAAAAAAAAA' +
-        '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' +
-        'qqqqqqqqqqqqqqqqqqqqqqqqqqo=';
-      
+      const hitmarkerDataUrl =
+        "data:audio/mpeg;base64,SUQzBAAAAAAANFRDT04AAAAHAAADT3RoZXIAVFNTRQAAAA8AAANMYXZmNTcuODMuMTAwAAAAAAAAAAAA" +
+        "AAD/+1QAAAAAAAAAAAAAAAAAAAAA" +
+        "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" +
+        "qqqqqqqqqqqqqqqqqqqqqqqqqqo=";
+
       const audio = new Audio(hitmarkerDataUrl);
       audio.volume = 0.3;
       audio.play().catch(() => {
@@ -306,106 +316,109 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
   const createSyntheticHitmarkerSound = () => {
     try {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      
+
       // Create a more realistic hitmarker sound with noise and metallic ring
       const oscillator1 = audioContext.createOscillator();
       const oscillator2 = audioContext.createOscillator();
-      const noiseBuffer = audioContext.createBuffer(1, audioContext.sampleRate * 0.1, audioContext.sampleRate);
+      const noiseBuffer = audioContext.createBuffer(
+        1,
+        audioContext.sampleRate * 0.1,
+        audioContext.sampleRate
+      );
       const noiseSource = audioContext.createBufferSource();
-      
+
       // Generate white noise for the initial "crack"
       const noiseData = noiseBuffer.getChannelData(0);
       for (let i = 0; i < noiseData.length; i++) {
         noiseData[i] = Math.random() * 2 - 1;
       }
       noiseSource.buffer = noiseBuffer;
-      
+
       const gainNode1 = audioContext.createGain();
       const gainNode2 = audioContext.createGain();
       const noiseGain = audioContext.createGain();
       const masterGain = audioContext.createGain();
-      
+
       // Connect everything
       oscillator1.connect(gainNode1);
       oscillator2.connect(gainNode2);
       noiseSource.connect(noiseGain);
-      
+
       gainNode1.connect(masterGain);
       gainNode2.connect(masterGain);
       noiseGain.connect(masterGain);
       masterGain.connect(audioContext.destination);
-      
+
       // Sharp metallic frequencies
       oscillator1.frequency.setValueAtTime(1800, audioContext.currentTime);
       oscillator1.frequency.exponentialRampToValueAtTime(900, audioContext.currentTime + 0.08);
-      
+
       oscillator2.frequency.setValueAtTime(3600, audioContext.currentTime);
       oscillator2.frequency.exponentialRampToValueAtTime(1800, audioContext.currentTime + 0.04);
-      
-      oscillator1.type = 'triangle';
-      oscillator2.type = 'sine';
-      
+
+      oscillator1.type = "triangle";
+      oscillator2.type = "sine";
+
       // Sharp attack, quick decay
       gainNode1.gain.setValueAtTime(0, audioContext.currentTime);
       gainNode1.gain.linearRampToValueAtTime(0.4, audioContext.currentTime + 0.002);
       gainNode1.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.12);
-      
+
       gainNode2.gain.setValueAtTime(0, audioContext.currentTime);
       gainNode2.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.001);
       gainNode2.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.06);
-      
+
       // Noise burst for the initial crack
       noiseGain.gain.setValueAtTime(0, audioContext.currentTime);
       noiseGain.gain.linearRampToValueAtTime(0.2, audioContext.currentTime + 0.001);
       noiseGain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.01);
-      
+
       masterGain.gain.setValueAtTime(0.5, audioContext.currentTime);
-      
+
       const startTime = audioContext.currentTime;
       const stopTime = startTime + 0.15;
-      
+
       oscillator1.start(startTime);
       oscillator2.start(startTime);
       noiseSource.start(startTime);
-      
+
       oscillator1.stop(stopTime);
       oscillator2.stop(stopTime);
       noiseSource.stop(startTime + 0.02);
-      
     } catch {
-      console.log('Audio context not available');
+      console.log("Audio context not available");
     }
   };
 
   const createHitmarker = (e: { clientX: number; clientY: number }) => {
     if (!containerRef.current) return;
-    
+
     const rect = containerRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
+
     const newHitmarker: Hitmarker = {
       id: Date.now() + Math.random(),
       x,
       y,
     };
-    
-    setHitmarkers(prev => [...prev, newHitmarker]);
-    
+
+    setHitmarkers((prev) => [...prev, newHitmarker]);
+
     // Play sound
     playHitmarkerSound();
-    
+
     // Remove hitmarker after animation
     setTimeout(() => {
-      setHitmarkers(prev => prev.filter(h => h.id !== newHitmarker.id));
+      setHitmarkers((prev) => prev.filter((h) => h.id !== newHitmarker.id));
     }, 600);
   };
 
   // Inject CSS animations
   useEffect(() => {
-    const styleId = 'loading-screen-animations';
+    const styleId = "loading-screen-animations";
     if (!document.getElementById(styleId)) {
-      const style = document.createElement('style');
+      const style = document.createElement("style");
       style.id = styleId;
       style.textContent = `
         @keyframes fadeInOut {
@@ -516,12 +529,13 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
     <div
       ref={containerRef}
       className="fw-player-root"
-      style={{
-        position: "relative",
-        width: "100%",
-        height: "100%",
-        minHeight: "300px",
-        background: `
+      style={
+        {
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          minHeight: "300px",
+          background: `
           linear-gradient(135deg,
             hsl(var(--tn-bg-dark, 235 21% 11%)) 0%,
             hsl(var(--tn-bg, 233 23% 17%)) 25%,
@@ -530,22 +544,23 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
             hsl(var(--tn-bg-dark, 235 21% 11%)) 100%
           )
         `,
-        backgroundSize: "400% 400%",
-        animation: "gradientShift 16s ease-in-out infinite",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        overflow: "hidden",
-        borderRadius: "0",  /* Slab - no rounded corners */
-        userSelect: "none",
-        WebkitUserSelect: "none",
-        MozUserSelect: "none",
-        msUserSelect: "none",
-      } as React.CSSProperties}
+          backgroundSize: "400% 400%",
+          animation: "gradientShift 16s ease-in-out infinite",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          overflow: "hidden",
+          borderRadius: "0" /* Slab - no rounded corners */,
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          MozUserSelect: "none",
+          msUserSelect: "none",
+        } as React.CSSProperties
+      }
     >
       {/* Hitmarkers */}
-      {hitmarkers.map(hitmarker => (
+      {hitmarkers.map((hitmarker) => (
         <div
           key={hitmarker.id}
           style={{
@@ -634,7 +649,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
             borderRadius: "50%",
             background: [
               "#7aa2f7", // Terminal Blue
-              "#bb9af7", // Terminal Magenta  
+              "#bb9af7", // Terminal Magenta
               "#9ece6a", // Strings/CSS classes
               "#73daca", // Terminal Green
               "#7dcfff", // Terminal Cyan
@@ -657,7 +672,10 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
       ))}
 
       {/* Center logo */}
-      <CenterLogo containerRef={containerRef as React.RefObject<HTMLDivElement>} onHitmarker={createHitmarker} />
+      <CenterLogo
+        containerRef={containerRef as React.RefObject<HTMLDivElement>}
+        onHitmarker={createHitmarker}
+      />
 
       {/* Bouncing DVD Logo */}
       <DvdLogo parentRef={containerRef as React.RefObject<HTMLDivElement>} scale={0.08} />
@@ -707,4 +725,4 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
   );
 };
 
-export default LoadingScreen; 
+export default LoadingScreen;

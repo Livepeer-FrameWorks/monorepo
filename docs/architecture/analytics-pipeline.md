@@ -47,6 +47,7 @@ Helmsman is the boundary where raw MistServer signals become typed protobuf mess
 ### A) MistServer Webhooks (event-driven)
 
 Examples of “push” signals:
+
 - Viewer connects/disconnects (`USER_NEW`, `USER_END`)
 - Stream buffer/health updates (`STREAM_BUFFER`)
 - Recording lifecycle (`RECORDING_*`)
@@ -56,6 +57,7 @@ Helmsman receives these over HTTP, parses them, and forwards to Foghorn as a typ
 ### B) MistServer Poller (state snapshots)
 
 Some “state” is better polled (or only available via Mist APIs), e.g.:
+
 - Stream lifecycle snapshots (`STREAM_LIFECYCLE_UPDATE`)
 - Client lifecycle snapshots (`CLIENT_LIFECYCLE_UPDATE`)
 - Node/system metrics (`NODE_LIFECYCLE_UPDATE`)
@@ -83,11 +85,13 @@ Client IP → GeoIP lookup → (country, city, raw lat/lon)
 ```
 
 **Implementation:**
+
 - GeoIP lookup: `pkg/geoip/geoip.go` (MMDB database)
 - H3 bucketing: `api_balancing/internal/geo/bucket.go`
 - Resolution 5 = ~253 km² hexagons (~8.5 km edge length)
 
 **Proto contract** (`pkg/proto/ipc.proto`):
+
 ```protobuf
 message GeoBucket {
   uint64 h3_index = 1;   // H3 cell id encoded as uint64
@@ -98,6 +102,7 @@ message GeoBucket {
 The centroid coordinates (not raw lat/lon) are written to ClickHouse. This provides regional analytics capability while preventing precise viewer location tracking.
 
 Events enriched with geo data:
+
 - `USER_NEW` / `USER_END` (viewer connect/disconnect): `api_balancing/internal/triggers/processor.go`
 - Routing decisions: `api_balancing/internal/handlers/handlers.go`, `api_balancing/internal/grpc/server.go`
 
@@ -106,6 +111,7 @@ Events enriched with geo data:
 Many downstream tables and queries rely on tenant_id being correct.
 
 Rule of thumb:
+
 - If an event is associated with a stream, Foghorn should be able to derive tenant context from `internal_name` (or stream key validation paths).
 - “Missing tenant” events should not silently sink into a “zero UUID” tenant.
 
@@ -121,6 +127,7 @@ Decklog publishes analytics events to Kafka as a single envelope type (see `api_
 - `Data` (a transparent JSON representation of the underlying protobuf payload)
 
 This provides:
+
 - durable buffering and replay
 - fan-out to multiple consumers (ClickHouse ingest, realtime pipelines, etc.)
 
@@ -133,29 +140,29 @@ It also consumes `service_events` for API usage/audit events (notably `api_reque
 
 Periscope Ingest routes on Kafka `event_type` (the canonical strings emitted by Decklog):
 
-| Kafka `event_type` | Ingest handler | Primary ClickHouse writes |
-|---|---|---|
+| Kafka `event_type`                     | Ingest handler            | Primary ClickHouse writes                                                    |
+| -------------------------------------- | ------------------------- | ---------------------------------------------------------------------------- |
 | `viewer_connect` / `viewer_disconnect` | `processViewerConnection` | `viewer_connection_events` (`event_type` stored as `connect` / `disconnect`) |
-| `stream_buffer` | `processStreamBuffer` | `stream_event_log` + `stream_health_samples` |
-| `stream_end` | `processStreamEnd` | `stream_event_log` |
-| `push_rewrite` | `processPushRewrite` | `stream_event_log` |
-| `play_rewrite` | `skipEvent` | _(no ClickHouse write; non-canonical)_ |
-| `stream_source` | `skipEvent` | _(no ClickHouse write; non-canonical)_ |
-| `push_end` / `push_out_start` | `skipEvent` | _(no ClickHouse write; non-canonical)_ |
-| `stream_track_list` | `processTrackList` | `track_list_events` |
-| `recording_complete` | `skipEvent` | _(no ClickHouse write; non-canonical)_ |
-| `recording_segment` | `skipEvent` | _(no ClickHouse write; non-canonical)_ |
-| `stream_lifecycle_update` | `processStreamLifecycle` | `stream_state_current` (current state) + `stream_event_log` (history) |
-| `node_lifecycle_update` | `processNodeLifecycle` | `node_state_current` (current state) + `node_metrics_samples` (history) |
-| `client_lifecycle_update` | `processClientLifecycle` | `client_qoe_samples` |
-| `load_balancing` | `processLoadBalancing` | `routing_decisions` |
-| `clip_lifecycle` | `processClipLifecycle` | `artifact_state_current` (current state) + `artifact_events` (history) |
-| `dvr_lifecycle` | `processDVRLifecycle` | `artifact_state_current` (current state) + `artifact_events` (history) |
-| `storage_lifecycle` | `processStorageLifecycle` | `storage_events` |
-| `storage_snapshot` | `processStorageSnapshot` | `storage_snapshots` |
-| `process_billing` | `processProcessBilling` | `processing_events` |
-| `vod_lifecycle` | `processVodLifecycle` | `artifact_state_current` + `artifact_events` (`content_type='vod'`) |
-| `api_request_batch` | `processAPIRequestBatch` | `api_requests` |
+| `stream_buffer`                        | `processStreamBuffer`     | `stream_event_log` + `stream_health_samples`                                 |
+| `stream_end`                           | `processStreamEnd`        | `stream_event_log`                                                           |
+| `push_rewrite`                         | `processPushRewrite`      | `stream_event_log`                                                           |
+| `play_rewrite`                         | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
+| `stream_source`                        | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
+| `push_end` / `push_out_start`          | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
+| `stream_track_list`                    | `processTrackList`        | `track_list_events`                                                          |
+| `recording_complete`                   | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
+| `recording_segment`                    | `skipEvent`               | _(no ClickHouse write; non-canonical)_                                       |
+| `stream_lifecycle_update`              | `processStreamLifecycle`  | `stream_state_current` (current state) + `stream_event_log` (history)        |
+| `node_lifecycle_update`                | `processNodeLifecycle`    | `node_state_current` (current state) + `node_metrics_samples` (history)      |
+| `client_lifecycle_update`              | `processClientLifecycle`  | `client_qoe_samples`                                                         |
+| `load_balancing`                       | `processLoadBalancing`    | `routing_decisions`                                                          |
+| `clip_lifecycle`                       | `processClipLifecycle`    | `artifact_state_current` (current state) + `artifact_events` (history)       |
+| `dvr_lifecycle`                        | `processDVRLifecycle`     | `artifact_state_current` (current state) + `artifact_events` (history)       |
+| `storage_lifecycle`                    | `processStorageLifecycle` | `storage_events`                                                             |
+| `storage_snapshot`                     | `processStorageSnapshot`  | `storage_snapshots`                                                          |
+| `process_billing`                      | `processProcessBilling`   | `processing_events`                                                          |
+| `vod_lifecycle`                        | `processVodLifecycle`     | `artifact_state_current` + `artifact_events` (`content_type='vod'`)          |
+| `api_request_batch`                    | `processAPIRequestBatch`  | `api_requests`                                                               |
 
 _Note: `api_request_batch` also arrives via `service_events` and is written to `api_requests` (with audit rows in `api_events`)._
 
@@ -186,6 +193,7 @@ The shared Kafka consumer behavior lives in `pkg/kafka/consumer.go`.
 ## 5) Storage: ClickHouse (Periscope schema)
 
 ClickHouse is the platform’s time-series/event store for analytics, optimized for:
+
 - high write rate
 - time-range queries
 - rollups via materialized views
@@ -199,10 +207,12 @@ Rollups exist so that “billing-critical” queries do not need to scan raw `vi
 - `viewer_geo_hourly` (geo rollup)
 
 Realtime-like derived data:
+
 - `viewer_sessions_current` merges connect + disconnect into a single session record for current viewer calculations.
 
 Operational rollups:
-- `client_qoe_5m`, `stream_health_5m`, and other *_5m MVs for fast dashboard queries.
+
+- `client_qoe_5m`, `stream_health_5m`, and other \*\_5m MVs for fast dashboard queries.
 
 ## 6) Query: Periscope Query (gRPC API)
 
@@ -242,6 +252,7 @@ Bridge exposes Periscope Query (and other services) via GraphQL:
 ### Demo mode data
 
 Bridge can serve demo/mock analytics data. When adding new analytics fields, also update:
+
 - `api_gateway/internal/demo/generators.go`
 
 Otherwise demo mode will return `null`/zero for new fields even if prod mode works.
@@ -249,6 +260,7 @@ Otherwise demo mode will return `null`/zero for new fields even if prod mode wor
 ### Privacy + sensitive fields
 
 Privacy policy intent (from schema comments) is:
+
 - Raw client IPs may be stored internally (ClickHouse), but must be redacted from API responses.
 - Realtime paths already redact before broadcast (Signalman).
 
@@ -258,6 +270,7 @@ Privacy policy intent (from schema comments) is:
 ## 8) Realtime: Signalman (Subscriptions)
 
 Signalman is the realtime hub for dashboard subscriptions:
+
 - viewer metric updates (`ViewerMetrics` / client lifecycle)
 - node health events
 - stream lifecycle events
@@ -278,6 +291,7 @@ USER_END / viewer disconnect
 ```
 
 Notes:
+
 - Use `docs/standards/metrics.md` for unit conversions (`_bps`, `_gb`, `_bytes`, etc.).
 - “Peak bandwidth” must be derived from a rate table/rollup (e.g., `client_qoe_5m.avg_bw_out`), not cumulative byte counters.
 
@@ -295,6 +309,7 @@ Notes:
 ### A) ClickHouse sanity checks
 
 Tenant poisoning (volume by tenant, look for all-zero UUID):
+
 ```sql
 SELECT tenant_id, count() FROM periscope.stream_state_current GROUP BY tenant_id ORDER BY count() DESC;
 SELECT tenant_id, count() FROM periscope.client_qoe_samples GROUP BY tenant_id ORDER BY count() DESC;
@@ -302,17 +317,20 @@ SELECT tenant_id, count() FROM periscope.stream_event_log GROUP BY tenant_id ORD
 ```
 
 Connection event completeness:
+
 ```sql
 SELECT event_type, count() FROM periscope.viewer_connection_events GROUP BY event_type;
 SELECT min(timestamp), max(timestamp) FROM periscope.viewer_connection_events;
 ```
 
 Viewer session MV health:
+
 ```sql
 SELECT countIf(disconnected_at IS NULL) AS still_connected, count() AS total FROM periscope.viewer_sessions_current;
 ```
 
 Billing rollups populated:
+
 ```sql
 SELECT day, sum(viewer_hours), sum(egress_gb) FROM periscope.tenant_viewer_daily GROUP BY day ORDER BY day DESC LIMIT 14;
 SELECT hour, sum(viewer_count), sum(egress_gb) FROM periscope.viewer_geo_hourly GROUP BY hour ORDER BY hour DESC LIMIT 48;
@@ -321,6 +339,7 @@ SELECT hour, sum(viewer_count), sum(egress_gb) FROM periscope.viewer_geo_hourly 
 ### B) Kafka health
 
 If billing or analytics data appears to “freeze”, check:
+
 - consumer group lag for the relevant group (Periscope Ingest, Purser)
 - service logs around handler errors (schema mismatches often show here first)
 

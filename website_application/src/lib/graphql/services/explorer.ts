@@ -28,10 +28,7 @@ import {
 
 // Re-export template types for consumers
 export type { Template, TemplateGroups };
-export type {
-  ResolvedExplorerSection,
-  ResolvedExplorerExample,
-} from "./explorerCatalog";
+export type { ResolvedExplorerSection, ResolvedExplorerExample } from "./explorerCatalog";
 
 // Also export the search function
 export { searchTemplatesFromLoader as searchTemplates };
@@ -44,15 +41,9 @@ const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL ?? "";
 // Cached templates for field-to-template matching
 let cachedTemplatesMap: Map<string, Template> | null = null;
 
-function resolveCatalogTemplates(
-  templates: TemplateGroups,
-): ResolvedExplorerSection[] {
+function resolveCatalogTemplates(templates: TemplateGroups): ResolvedExplorerSection[] {
   const templateByPath = new Map<string, Template>();
-  const allTemplates = [
-    ...templates.queries,
-    ...templates.mutations,
-    ...templates.subscriptions,
-  ];
+  const allTemplates = [...templates.queries, ...templates.mutations, ...templates.subscriptions];
 
   for (const template of allTemplates) {
     if (template.filePath) {
@@ -65,9 +56,7 @@ function resolveCatalogTemplates(
     title: section.title,
     description: section.description,
     examples: section.examples.map((example) => {
-      const template = example.templatePath
-        ? templateByPath.get(example.templatePath)
-        : undefined;
+      const template = example.templatePath ? templateByPath.get(example.templatePath) : undefined;
       return {
         ...example,
         template,
@@ -144,7 +133,7 @@ interface GraphQLResponse {
 async function executeGraphQL(
   query: string,
   variables: Record<string, unknown> = {},
-  headers: Record<string, string> = {},
+  headers: Record<string, string> = {}
 ): Promise<GraphQLResponse> {
   const url = import.meta.env.VITE_GRAPHQL_HTTP_URL || "/graphql/";
 
@@ -466,15 +455,13 @@ export const explorerService = {
     query: string,
     variables: Record<string, unknown> = {},
     _operationType: string = "query",
-    demoMode: boolean = false,
+    demoMode: boolean = false
   ): Promise<ExplorerResult> {
     try {
       const startTime = Date.now();
 
       // Configure headers for demo mode
-      const headers: Record<string, string> = demoMode
-        ? { "X-Demo-Mode": "true" }
-        : {};
+      const headers: Record<string, string> = demoMode ? { "X-Demo-Mode": "true" } : {};
 
       const result = await executeGraphQL(query, variables, headers);
 
@@ -531,10 +518,7 @@ export const explorerService = {
    * Returns the template if found, null otherwise
    * This is synchronous and uses a cached map - call ensureTemplatesLoaded() first
    */
-  findTemplateForField(
-    fieldName: string,
-    operationType: string,
-  ): Template | null {
+  findTemplateForField(fieldName: string, operationType: string): Template | null {
     if (!cachedTemplatesMap) return null;
     const key = `${operationType}:${fieldName}`;
     return cachedTemplatesMap.get(key) || null;
@@ -555,9 +539,7 @@ export const explorerService = {
    */
   getQueryTemplates(): QueryTemplates {
     // Return empty arrays - consumers should migrate to async getTemplates()
-    console.warn(
-      "getQueryTemplates() is deprecated. Use getTemplates() instead.",
-    );
+    console.warn("getQueryTemplates() is deprecated. Use getTemplates() instead.");
     return {
       queries: [],
       mutations: [],
@@ -571,7 +553,7 @@ export const explorerService = {
   generateCodeExamples(
     query: string,
     variables: Record<string, unknown> = {},
-    token: string | null = null,
+    token: string | null = null
   ): CodeExamples {
     const tokenValue = token || "your_token_here";
     const hasVariables = Object.keys(variables).length > 0;
@@ -787,17 +769,13 @@ ${Object.entries(variables)
   generateQueryFromField(
     field: SchemaField,
     operationType: string,
-    schema?: IntrospectedSchema,
+    schema?: IntrospectedSchema
   ): GeneratedQuery {
-    const fieldNamePascal =
-      field.name.charAt(0).toUpperCase() + field.name.slice(1);
+    const fieldNamePascal = field.name.charAt(0).toUpperCase() + field.name.slice(1);
 
     // Check if we have a cached template for this field (loaded from Houdini .gql files)
     // Templates are the source of truth for comprehensive queries
-    const matchingTemplate = this.findTemplateForField(
-      field.name,
-      operationType,
-    );
+    const matchingTemplate = this.findTemplateForField(field.name, operationType);
     if (matchingTemplate) {
       return {
         query: matchingTemplate.query,
@@ -828,8 +806,7 @@ ${Object.entries(variables)
       if (arg.name === "nodeId") value = "node_id";
       if (arg.name === "clusterId") value = "cluster_id";
       if (arg.name === "page") value = { first: 50 };
-      if (arg.name === "timeRange")
-        value = this.getDefaultForInputType("TimeRangeInput");
+      if (arg.name === "timeRange") value = this.getDefaultForInputType("TimeRangeInput");
       variables[arg.name] = value;
     }
 
@@ -1078,10 +1055,7 @@ ${Object.entries(variables)
    * Get common return fields based on the return type
    * Uses schema introspection to properly handle union types with inline fragments
    */
-  getCommonReturnFields(
-    type: TypeRef | undefined,
-    schema?: IntrospectedSchema | null,
-  ): string {
+  getCommonReturnFields(type: TypeRef | undefined, schema?: IntrospectedSchema | null): string {
     if (!type) return "";
 
     // Get the base type name (unwrap NON_NULL and LIST)
@@ -1198,7 +1172,7 @@ ${Object.entries(variables)
   buildFieldSelection(
     field: SchemaField,
     schema: IntrospectedSchema,
-    depth: number = 0,
+    depth: number = 0
   ): string | null {
     const baseTypeName = getBaseTypeName(field.type);
     const typeDef = findType(schema, baseTypeName);
@@ -1228,11 +1202,7 @@ ${Object.entries(variables)
             const childBase = getBaseTypeName(child.type);
             const childTypeDef = findType(schema, childBase);
 
-            if (
-              isScalarType(childBase) ||
-              childTypeDef?.kind === "ENUM" ||
-              childBase === "ID"
-            ) {
+            if (isScalarType(childBase) || childTypeDef?.kind === "ENUM" || childBase === "ID") {
               return child.name;
             }
 
@@ -1246,10 +1216,7 @@ ${Object.entries(variables)
           })
           .filter((f): f is string => Boolean(f)) || [];
 
-      const body =
-        childSelections.length > 0
-          ? childSelections.join("\n      ")
-          : "__typename";
+      const body = childSelections.length > 0 ? childSelections.join("\n      ") : "__typename";
       return `${field.name} {\n      ${body}\n    }`;
     }
 
@@ -1260,10 +1227,7 @@ ${Object.entries(variables)
    * Generate inline fragments for union types using schema introspection
    * Dynamically gets the actual member types and their fields from the schema
    */
-  generateUnionFields(
-    unionTypeName: string,
-    schema: IntrospectedSchema,
-  ): string {
+  generateUnionFields(unionTypeName: string, schema: IntrospectedSchema): string {
     // Get all possible types in this union from the schema
     const possibleTypes = getPossibleTypes(schema, unionTypeName);
 
@@ -1308,8 +1272,7 @@ ${fragments.join("\n")}
   validateQuery(query: string): ValidationResult {
     try {
       // Basic validation - check for balanced braces and basic structure
-      const braceCount =
-        (query.match(/\{/g) || []).length - (query.match(/\}/g) || []).length;
+      const braceCount = (query.match(/\{/g) || []).length - (query.match(/\}/g) || []).length;
       if (braceCount !== 0) {
         return {
           valid: false,
@@ -1336,10 +1299,7 @@ ${fragments.join("\n")}
     } catch (error: unknown) {
       return {
         valid: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error || "Unknown error"),
+        error: error instanceof Error ? error.message : String(error || "Unknown error"),
       };
     }
   },

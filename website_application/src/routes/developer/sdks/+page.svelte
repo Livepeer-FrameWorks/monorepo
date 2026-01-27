@@ -2,7 +2,13 @@
   import { resolve } from "$app/paths";
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getDocsSiteUrl, getGithubUrl, getGraphqlHttpUrl, getMcpEndpoint, getRtmpServerUrl } from "$lib/config";
+  import {
+    getDocsSiteUrl,
+    getGithubUrl,
+    getGraphqlHttpUrl,
+    getMcpEndpoint,
+    getRtmpServerUrl,
+  } from "$lib/config";
 
   type Framework = "react" | "svelte" | "vanilla";
 
@@ -18,7 +24,8 @@
   // SDK definitions
   const playerSdk = {
     name: "Player SDK",
-    description: "Adaptive video player with HLS, DASH, WebRTC, and WebCodecs support. Automatic protocol selection based on stream type and browser capabilities.",
+    description:
+      "Adaptive video player with HLS, DASH, WebRTC, and WebCodecs support. Automatic protocol selection based on stream type and browser capabilities.",
     icon: "Play",
     packages: {
       core: "@livepeer-frameworks/player-core",
@@ -72,7 +79,8 @@ player.destroy();`,
 
   const studioSdk = {
     name: "Studio SDK",
-    description: "Browser-based streaming with WebCodecs encoding. Stream directly from camera/microphone or screen share with real-time preview and scene management.",
+    description:
+      "Browser-based streaming with WebCodecs encoding. Stream directly from camera/microphone or screen share with real-time preview and scene management.",
     icon: "Radio",
     packages: {
       core: "@livepeer-frameworks/streamcrafter-core",
@@ -138,7 +146,8 @@ await controller.stopStreaming();`,
 
   const mcpServer = {
     name: "MCP Server",
-    description: "AI agent integration via Model Context Protocol. Let AI assistants manage streams, check analytics, handle billing, and automate operations through any MCP-compatible client.",
+    description:
+      "AI agent integration via Model Context Protocol. Let AI assistants manage streams, check analytics, handle billing, and automate operations through any MCP-compatible client.",
     icon: "Bot",
     endpoint: mcpEndpoint,
     features: [
@@ -168,7 +177,8 @@ await controller.stopStreaming();`,
     },
     {
       name: "CLI Tools",
-      description: "Command-line tools for stream management, analytics, and deployment automation.",
+      description:
+        "Command-line tools for stream management, analytics, and deployment automation.",
       icon: "Terminal",
       status: "Coming Soon",
     },
@@ -203,13 +213,20 @@ await controller.stopStreaming();`,
 
   function getIconByName(name: string) {
     switch (name) {
-      case "Play": return PlayIcon;
-      case "Radio": return RadioIcon;
-      case "Code2": return Code2Icon;
-      case "Terminal": return TerminalIcon;
-      case "Webhook": return WebhookIcon;
-      case "Bot": return BotIcon;
-      default: return PackageIcon;
+      case "Play":
+        return PlayIcon;
+      case "Radio":
+        return RadioIcon;
+      case "Code2":
+        return Code2Icon;
+      case "Terminal":
+        return TerminalIcon;
+      case "Webhook":
+        return WebhookIcon;
+      case "Bot":
+        return BotIcon;
+      default:
+        return PackageIcon;
     }
   }
 </script>
@@ -220,7 +237,9 @@ await controller.stopStreaming();`,
 
 <div class="h-full flex flex-col overflow-hidden">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background">
+  <div
+    class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background"
+  >
     <div class="flex justify-between items-center">
       <div class="flex items-center gap-3">
         <PackageIcon class="w-5 h-5 text-primary" />
@@ -238,28 +257,38 @@ await controller.stopStreaming();`,
   <div class="flex-1 overflow-y-auto bg-background/50">
     <div class="page-transition">
       <!-- Framework Selector -->
-      <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] bg-muted/30">
+      <div
+        class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] bg-muted/30"
+      >
         <div class="flex items-center gap-4">
           <span class="text-sm font-medium text-muted-foreground">Framework:</span>
           <div class="flex border border-border rounded-md overflow-hidden">
             <button
               type="button"
-              class="px-4 py-2 text-sm font-medium transition-colors {selectedFramework === 'react' ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
-              onclick={() => selectedFramework = 'react'}
+              class="px-4 py-2 text-sm font-medium transition-colors {selectedFramework === 'react'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+              onclick={() => (selectedFramework = "react")}
             >
               React
             </button>
             <button
               type="button"
-              class="px-4 py-2 text-sm font-medium transition-colors border-x border-border {selectedFramework === 'svelte' ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
-              onclick={() => selectedFramework = 'svelte'}
+              class="px-4 py-2 text-sm font-medium transition-colors border-x border-border {selectedFramework ===
+              'svelte'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+              onclick={() => (selectedFramework = "svelte")}
             >
               Svelte
             </button>
             <button
               type="button"
-              class="px-4 py-2 text-sm font-medium transition-colors {selectedFramework === 'vanilla' ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
-              onclick={() => selectedFramework = 'vanilla'}
+              class="px-4 py-2 text-sm font-medium transition-colors {selectedFramework ===
+              'vanilla'
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+              onclick={() => (selectedFramework = "vanilla")}
             >
               Vanilla JS
             </button>
@@ -308,7 +337,9 @@ await controller.stopStreaming();`,
 
             <!-- Features -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Features</h4>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Features
+              </h4>
               <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {#each playerSdk.features as feature (feature)}
                   <div class="flex items-center gap-2 text-sm text-foreground">
@@ -321,14 +352,21 @@ await controller.stopStreaming();`,
 
             <!-- Install -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Installation</h4>
-              <div class="relative bg-muted/50 border border-border rounded-md p-3 font-mono text-sm">
-                <code class="text-foreground">{getFrameworkInstall(playerSdk.packages, selectedFramework)}</code>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Installation
+              </h4>
+              <div
+                class="relative bg-muted/50 border border-border rounded-md p-3 font-mono text-sm"
+              >
+                <code class="text-foreground"
+                  >{getFrameworkInstall(playerSdk.packages, selectedFramework)}</code
+                >
                 <Button
                   variant="ghost"
                   size="sm"
                   class="absolute right-2 top-2 h-7 w-7 p-0"
-                  onclick={() => copyToClipboard(getFrameworkInstall(playerSdk.packages, selectedFramework))}
+                  onclick={() =>
+                    copyToClipboard(getFrameworkInstall(playerSdk.packages, selectedFramework))}
                 >
                   <CopyIcon class="w-3.5 h-3.5" />
                 </Button>
@@ -337,9 +375,13 @@ await controller.stopStreaming();`,
 
             <!-- Quick Start -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Quick Start</h4>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Quick Start
+              </h4>
               <div class="relative bg-muted/50 border border-border rounded-md p-4 overflow-x-auto">
-                <pre class="text-sm font-mono text-foreground whitespace-pre"><code>{playerSdk.codeExamples[selectedFramework]}</code></pre>
+                <pre class="text-sm font-mono text-foreground whitespace-pre"><code
+                    >{playerSdk.codeExamples[selectedFramework]}</code
+                  ></pre>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -393,7 +435,9 @@ await controller.stopStreaming();`,
 
             <!-- Features -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Features</h4>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Features
+              </h4>
               <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {#each studioSdk.features as feature (feature)}
                   <div class="flex items-center gap-2 text-sm text-foreground">
@@ -406,14 +450,21 @@ await controller.stopStreaming();`,
 
             <!-- Install -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Installation</h4>
-              <div class="relative bg-muted/50 border border-border rounded-md p-3 font-mono text-sm">
-                <code class="text-foreground">{getFrameworkInstall(studioSdk.packages, selectedFramework)}</code>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Installation
+              </h4>
+              <div
+                class="relative bg-muted/50 border border-border rounded-md p-3 font-mono text-sm"
+              >
+                <code class="text-foreground"
+                  >{getFrameworkInstall(studioSdk.packages, selectedFramework)}</code
+                >
                 <Button
                   variant="ghost"
                   size="sm"
                   class="absolute right-2 top-2 h-7 w-7 p-0"
-                  onclick={() => copyToClipboard(getFrameworkInstall(studioSdk.packages, selectedFramework))}
+                  onclick={() =>
+                    copyToClipboard(getFrameworkInstall(studioSdk.packages, selectedFramework))}
                 >
                   <CopyIcon class="w-3.5 h-3.5" />
                 </Button>
@@ -422,9 +473,13 @@ await controller.stopStreaming();`,
 
             <!-- Quick Start -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Quick Start</h4>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Quick Start
+              </h4>
               <div class="relative bg-muted/50 border border-border rounded-md p-4 overflow-x-auto">
-                <pre class="text-sm font-mono text-foreground whitespace-pre"><code>{studioSdk.codeExamples[selectedFramework]}</code></pre>
+                <pre class="text-sm font-mono text-foreground whitespace-pre"><code
+                    >{studioSdk.codeExamples[selectedFramework]}</code
+                  ></pre>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -478,7 +533,9 @@ await controller.stopStreaming();`,
 
             <!-- Features -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Capabilities</h4>
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Capabilities
+              </h4>
               <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
                 {#each mcpServer.features as feature (feature)}
                   <div class="flex items-center gap-2 text-sm text-foreground">
@@ -491,8 +548,12 @@ await controller.stopStreaming();`,
 
             <!-- Endpoint -->
             <div>
-              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Endpoint</h4>
-              <div class="relative bg-muted/50 border border-border rounded-md p-3 font-mono text-sm">
+              <h4 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Endpoint
+              </h4>
+              <div
+                class="relative bg-muted/50 border border-border rounded-md p-3 font-mono text-sm"
+              >
                 <code class="text-foreground">{mcpServer.endpoint}</code>
                 <Button
                   variant="ghost"
@@ -506,9 +567,11 @@ await controller.stopStreaming();`,
             </div>
 
             <!-- Usage note -->
-            <div class="text-sm text-muted-foreground bg-muted/30 border border-border/50 rounded-md p-3">
-              Configure this endpoint in your MCP-compatible AI client (Claude Desktop, Claude Code, etc).
-              Requires Bearer token or wallet signature for authentication.
+            <div
+              class="text-sm text-muted-foreground bg-muted/30 border border-border/50 rounded-md p-3"
+            >
+              Configure this endpoint in your MCP-compatible AI client (Claude Desktop, Claude Code,
+              etc). Requires Bearer token or wallet signature for authentication.
             </div>
           </div>
         </div>
@@ -560,7 +623,9 @@ await controller.stopStreaming();`,
               >
                 <BookOpenIcon class="w-5 h-5 text-muted-foreground group-hover:text-primary" />
                 <div>
-                  <div class="font-medium text-foreground group-hover:text-primary">Documentation</div>
+                  <div class="font-medium text-foreground group-hover:text-primary">
+                    Documentation
+                  </div>
                   <div class="text-xs text-muted-foreground">Complete API reference</div>
                 </div>
                 <ExternalLinkIcon class="w-4 h-4 text-muted-foreground ml-auto" />
@@ -588,7 +653,9 @@ await controller.stopStreaming();`,
               >
                 <PackageIcon class="w-5 h-5 text-muted-foreground group-hover:text-primary" />
                 <div>
-                  <div class="font-medium text-foreground group-hover:text-primary">npm Registry</div>
+                  <div class="font-medium text-foreground group-hover:text-primary">
+                    npm Registry
+                  </div>
                   <div class="text-xs text-muted-foreground">All packages</div>
                 </div>
                 <ExternalLinkIcon class="w-4 h-4 text-muted-foreground ml-auto" />
@@ -600,7 +667,9 @@ await controller.stopStreaming();`,
               >
                 <Code2Icon class="w-5 h-5 text-muted-foreground group-hover:text-primary" />
                 <div>
-                  <div class="font-medium text-foreground group-hover:text-primary">API Explorer</div>
+                  <div class="font-medium text-foreground group-hover:text-primary">
+                    API Explorer
+                  </div>
                   <div class="text-xs text-muted-foreground">Test the GraphQL API</div>
                 </div>
               </a>

@@ -57,7 +57,7 @@ export abstract class BaseDisposable implements Disposable {
    * Throw if this object has been disposed.
    * Use at the start of methods that shouldn't run after disposal.
    */
-  protected throwIfDisposed(operation: string = 'operation'): void {
+  protected throwIfDisposed(operation: string = "operation"): void {
     if (this._disposed) {
       throw new Error(`Cannot perform ${operation} on disposed object`);
     }
@@ -80,7 +80,7 @@ export function disposeAll(...disposables: (Disposable | null | undefined)[]): v
       try {
         d.dispose();
       } catch (err) {
-        console.warn('[Disposable] Error during disposal:', err);
+        console.warn("[Disposable] Error during disposal:", err);
       }
     }
   }
@@ -104,13 +104,13 @@ export function createCompositeDisposable(
 
       for (const d of disposables) {
         try {
-          if (typeof d === 'function') {
+          if (typeof d === "function") {
             d();
           } else if (d && !d.disposed) {
             d.dispose();
           }
         } catch (err) {
-          console.warn('[CompositeDisposable] Error during disposal:', err);
+          console.warn("[CompositeDisposable] Error during disposal:", err);
         }
       }
     },

@@ -5,12 +5,14 @@ sidebar:
   order: 1
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 Welcome to FrameWorks! This guide will get you streaming your first live video in just a few minutes. Follow these simple steps to go from account creation to a live broadcast.
 
 <Aside type="tip" title="Self-hosting?">
-This guide uses the managed FrameWorks service. Want full control? See [Infrastructure Operators](/operators/deployment) to deploy on your own servers. Core streaming features are the same; managed‑only services and UI flows may differ.
+  This guide uses the managed FrameWorks service. Want full control? See [Infrastructure
+  Operators](/operators/deployment) to deploy on your own servers. Core streaming features are the
+  same; managed‑only services and UI flows may differ.
 </Aside>
 
 ## 1. Create an Account
@@ -20,6 +22,7 @@ Head to [%APP_URL%](%APP_URL%) and sign up with your email.
 ## 2. Create a Stream
 
 In the dashboard:
+
 1. Click **Content → Streams** in the sidebar
 2. Click **Create Stream**
 3. Give it a name (this is just for you to identify it)
@@ -38,6 +41,7 @@ Keep this secret—anyone with your stream key can broadcast to your channel. St
 Open OBS Studio (or your preferred streaming software). For the quickest setup, we'll use RTMP. For advanced configurations like WHIP or specific optimizations (e.g., keyframe intervals, OBS profiles), refer to our [Encoder Setup Guide](/streamers/encoder-setup).
 
 **In OBS Studio:**
+
 1. Go to **Settings** → **Stream**.
 2. Set **Service:** `Custom`.
 3. For **Server:** Enter `%RTMP_URL%` (you can also copy the RTMP URL from the **Ingest** tab).

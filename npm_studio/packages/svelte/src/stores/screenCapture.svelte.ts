@@ -3,7 +3,7 @@
  * Svelte 5 store for screen capture
  */
 
-import { ScreenCapture, type ScreenCaptureOptions } from '@livepeer-frameworks/streamcrafter-core';
+import { ScreenCapture, type ScreenCaptureOptions } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface ScreenCaptureState {
   stream: MediaStream | null;
@@ -40,21 +40,21 @@ export function createScreenCaptureStore(): ScreenCaptureStore {
 
     screenCapture = new ScreenCapture();
 
-    screenCapture.on('started', (event) => {
+    screenCapture.on("started", (event) => {
       state.stream = event.stream;
       state.isActive = true;
       state.hasAudio = event.stream.getAudioTracks().length > 0;
       notify();
     });
 
-    screenCapture.on('ended', () => {
+    screenCapture.on("ended", () => {
       state.stream = null;
       state.isActive = false;
       state.hasAudio = false;
       notify();
     });
 
-    screenCapture.on('error', (event) => {
+    screenCapture.on("error", (event) => {
       state.error = event.message;
       notify();
     });

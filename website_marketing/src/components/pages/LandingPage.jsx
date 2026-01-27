@@ -1,7 +1,7 @@
-import { motion } from 'framer-motion'
-import SdkCodePreview from './SdkCodePreview'
+import { motion } from "framer-motion";
+import SdkCodePreview from "./SdkCodePreview";
 // Demo player wrapper with status/health integration
-import { Player as FrameworksPlayer } from '@livepeer-frameworks/player-react'
+import { Player as FrameworksPlayer } from "@livepeer-frameworks/player-react";
 import {
   MarketingFinalCTA,
   MarketingScrollProgress,
@@ -15,19 +15,15 @@ import {
   MarketingHero,
   MarketingGridSplit,
   IconList,
-  SectionDivider
-} from '@/components/marketing'
-import { Section, SectionContainer } from '@/components/ui/section'
-import { useState, useEffect, useMemo } from 'react'
-import config from '../../config'
-import {
-  ServerStackIcon,
-  CodeBracketIcon,
-  ChartBarIcon,
-} from '@heroicons/react/24/outline'
+  SectionDivider,
+} from "@/components/marketing";
+import { Section, SectionContainer } from "@/components/ui/section";
+import { useState, useEffect, useMemo } from "react";
+import config from "../../config";
+import { ServerStackIcon, CodeBracketIcon, ChartBarIcon } from "@heroicons/react/24/outline";
 
 const generateGlitchStrips = () => {
-  const strips = []
+  const strips = [];
   for (let i = 0; i < 15; i++) {
     strips.push({
       stripHeight: 20 + Math.random() * 40,
@@ -38,66 +34,66 @@ const generateGlitchStrips = () => {
       animationDelayFactor: Math.random(),
       animationDuration: 2000 + Math.random() * 3000,
       animationName: `glitch-${(i % 6) + 5}`,
-    })
+    });
   }
-  return strips
-}
+  return strips;
+};
 
 const LandingPage = () => {
-  const [showPlayer, setShowPlayer] = useState(false)
-  const [logoAnimationComplete, setLogoAnimationComplete] = useState(false)
-  const [demoState, setDemoState] = useState('booting')
+  const [showPlayer, setShowPlayer] = useState(false);
+  const [logoAnimationComplete, setLogoAnimationComplete] = useState(false);
+  const [demoState, setDemoState] = useState("booting");
 
-  const glitchStripData = useMemo(() => generateGlitchStrips(), [])
+  const glitchStripData = useMemo(() => generateGlitchStrips(), []);
 
   useEffect(() => {
     // Preload logo image so glitch strips can start immediately
-    const img = new Image()
-    img.src = '/frameworks-dark-vertical-lockup.svg'
+    const img = new Image();
+    img.src = "/frameworks-dark-vertical-lockup.svg";
 
     // Logo enters with glitch, then reveals player
     const playerTimer = setTimeout(() => {
-      console.log('revealing player')
-      setShowPlayer(true)
-    }, 2000)
+      console.log("revealing player");
+      setShowPlayer(true);
+    }, 2000);
 
     // Remove logo element after fade animation completes
     const cleanupTimer = setTimeout(() => {
-      setLogoAnimationComplete(true)
-    }, 4200) // 2000ms delay + 2200ms animation duration
+      setLogoAnimationComplete(true);
+    }, 4200); // 2000ms delay + 2200ms animation duration
 
     return () => {
-      clearTimeout(playerTimer)
-      clearTimeout(cleanupTimer)
-    }
-  }, [])
+      clearTimeout(playerTimer);
+      clearTimeout(cleanupTimer);
+    };
+  }, []);
 
   const corePillars = [
     {
-      title: 'Developer-First Platform',
+      title: "Developer-First Platform",
       description:
-        'Relay-style GraphQL API with typed SDKs. MCP server for AI agents. x402 for machine-to-machine payments. Build with confidence.',
+        "Relay-style GraphQL API with typed SDKs. MCP server for AI agents. x402 for machine-to-machine payments. Build with confidence.",
       icon: CodeBracketIcon,
-      tone: 'accent',
-      badge: 'Core',
+      tone: "accent",
+      badge: "Core",
     },
     {
-      title: 'Unmatched Analytics',
+      title: "Unmatched Analytics",
       description:
-        'Routing decisions, QoE metrics, player telemetry. See exactly why viewer X connected to edge Y.',
+        "Routing decisions, QoE metrics, player telemetry. See exactly why viewer X connected to edge Y.",
       icon: ChartBarIcon,
-      tone: 'green',
-      badge: 'Core',
+      tone: "green",
+      badge: "Core",
     },
     {
-      title: 'Sovereignty Without Pain',
+      title: "Sovereignty Without Pain",
       description:
-        'Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.',
+        "Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.",
       icon: ServerStackIcon,
-      tone: 'purple',
-      badge: 'Core',
+      tone: "purple",
+      badge: "Core",
     },
-  ]
+  ];
 
   const pillarCards = corePillars.map((pillar) => ({
     icon: pillar.icon,
@@ -106,96 +102,96 @@ const LandingPage = () => {
     badge: pillar.badge,
     title: pillar.title,
     description: pillar.description,
-    hover: 'subtle',
+    hover: "subtle",
     stripe: true,
     flush: true,
-  }))
+  }));
 
   const freeTierFeatures = [
-    'All self-hosted features',
-    'Shared bandwidth pool',
-    'Livepeer-backed compute',
-    'Open source & permissive licenses',
-    'No cloud dependencies - runs anywhere',
-    'Web dashboard with analytics included',
-  ]
+    "All self-hosted features",
+    "Shared bandwidth pool",
+    "Livepeer-backed compute",
+    "Open source & permissive licenses",
+    "No cloud dependencies - runs anywhere",
+    "Web dashboard with analytics included",
+  ];
 
   const paidPlanHighlights = [
-    'Custom subdomains and hosted load balancers',
-    'Reserved GPU hours and bandwidth pools',
-    'Team collaboration and advanced analytics',
-    'Priority support with 24/7 options',
-  ]
+    "Custom subdomains and hosted load balancers",
+    "Reserved GPU hours and bandwidth pools",
+    "Team collaboration and advanced analytics",
+    "Priority support with 24/7 options",
+  ];
 
   const pricingPlans = [
     {
-      id: 'free',
-      tone: 'green',
-      badge: 'Backed by Livepeer',
-      name: 'Free Tier',
-      price: 'Free',
-      period: '',
+      id: "free",
+      tone: "green",
+      badge: "Backed by Livepeer",
+      name: "Free Tier",
+      price: "Free",
+      period: "",
       description:
-        'Complete self-hosting stack with shared pool access. Open source with permissive licenses: deploy it anywhere.',
+        "Complete self-hosting stack with shared pool access. Open source with permissive licenses: deploy it anywhere.",
       features: freeTierFeatures,
-      ctaType: 'external',
-      ctalabel: 'Start Free',
+      ctaType: "external",
+      ctalabel: "Start Free",
       ctaHref: config.appUrl,
-      note: 'No credit card required · Deploy in minutes',
+      note: "No credit card required · Deploy in minutes",
     },
     {
-      id: 'paid',
-      tone: 'purple',
-      badge: 'Paid plans',
-      name: 'Hybrid & Hosted',
-      price: '€50+',
-      period: '/month',
+      id: "paid",
+      tone: "purple",
+      badge: "Paid plans",
+      name: "Hybrid & Hosted",
+      price: "€50+",
+      period: "/month",
       description:
-        'GPU-intensive features like AI processing and multi-stream compositing, plus hosted services and enterprise support.',
+        "GPU-intensive features like AI processing and multi-stream compositing, plus hosted services and enterprise support.",
       features: paidPlanHighlights,
-      ctaType: 'internal',
-      ctaLabel: 'View All Plans',
-      ctaTo: '/pricing',
-      note: 'Supporter · Developer · Production · Enterprise',
+      ctaType: "internal",
+      ctaLabel: "View All Plans",
+      ctaTo: "/pricing",
+      note: "Supporter · Developer · Production · Enterprise",
     },
-  ]
+  ];
 
-  const docsBase = (config.docsUrl ?? '/docs').replace(/\/+$/, '')
+  const docsBase = (config.docsUrl ?? "/docs").replace(/\/+$/, "");
 
   const landingHeroAccents = [
     {
-      kind: 'beam',
+      kind: "beam",
       x: 18,
       y: 34,
-      width: 'clamp(28rem, 52vw, 44rem)',
-      height: 'clamp(18rem, 32vw, 28rem)',
+      width: "clamp(28rem, 52vw, 44rem)",
+      height: "clamp(18rem, 32vw, 28rem)",
       rotate: -14,
-      fill: 'linear-gradient(130deg, rgba(122, 162, 247, 0.38), rgba(30, 42, 84, 0.18))',
+      fill: "linear-gradient(130deg, rgba(122, 162, 247, 0.38), rgba(30, 42, 84, 0.18))",
       opacity: 0.55,
-      radius: '48px',
+      radius: "48px",
     },
     {
-      kind: 'beam',
+      kind: "beam",
       x: 78,
       y: 28,
-      width: 'clamp(22rem, 42vw, 34rem)',
-      height: 'clamp(16rem, 26vw, 22rem)',
+      width: "clamp(22rem, 42vw, 34rem)",
+      height: "clamp(16rem, 26vw, 22rem)",
       rotate: 16,
-      fill: 'linear-gradient(150deg, rgba(69, 208, 255, 0.3), rgba(18, 24, 48, 0.16))',
+      fill: "linear-gradient(150deg, rgba(69, 208, 255, 0.3), rgba(18, 24, 48, 0.16))",
       opacity: 0.52,
-      radius: '42px',
+      radius: "42px",
     },
     {
-      kind: 'spot',
+      kind: "spot",
       x: 24,
       y: 78,
-      width: 'clamp(22rem, 46vw, 34rem)',
-      height: 'clamp(22rem, 46vw, 34rem)',
-      fill: 'radial-gradient(circle, rgba(125, 207, 255, 0.26) 0%, transparent 68%)',
+      width: "clamp(22rem, 46vw, 34rem)",
+      height: "clamp(22rem, 46vw, 34rem)",
+      fill: "radial-gradient(circle, rgba(125, 207, 255, 0.26) 0%, transparent 68%)",
       opacity: 0.4,
-      blur: '90px',
+      blur: "90px",
     },
-  ]
+  ];
 
   return (
     <div className="pt-16">
@@ -210,17 +206,17 @@ const LandingPage = () => {
         description="Most streaming platforms lock you into their ecosystem. We give you the keys."
         support="SaaS → Hybrid (self-hosted edge) → Fully self-hosted • One platform, three modes • Public domain licensed."
         primaryAction={{
-          label: 'Start Free',
+          label: "Start Free",
           href: config.appUrl,
           external: true,
-          className: 'cta-motion',
+          className: "cta-motion",
         }}
         secondaryAction={{
-          label: 'View Pricing',
-          to: '/pricing',
-          icon: 'auto',
-          className: 'cta-motion',
-          variant: 'secondary',
+          label: "View Pricing",
+          to: "/pricing",
+          icon: "auto",
+          className: "cta-motion",
+          variant: "secondary",
         }}
         footnote="Free tier includes self-hosting + access to shared bandwidth pool"
         mediaSurface="none"
@@ -243,24 +239,63 @@ const LandingPage = () => {
                   </div>
                   <div className="flex justify-center">
                     {(() => {
-                      const s = demoState
+                      const s = demoState;
                       const map = {
-                        booting: { label: 'BOOTING', cls: 'bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]' },
-                        gateway_loading: { label: 'RESOLVING', cls: 'bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]' },
-                        gateway_ready: { label: 'ENDPOINT READY', cls: 'bg-primary/20 text-primary border-primary/40' },
-                        gateway_error: { label: 'GATEWAY ERROR', cls: 'bg-red-500/20 text-red-400 border-red-500/40' },
-                        no_endpoint: { label: 'WAITING FOR ENDPOINT', cls: 'bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]' },
-                        selecting_player: { label: 'SELECTING PLAYER', cls: 'bg-primary/20 text-primary border-primary/40' },
-                        connecting: { label: 'CONNECTING', cls: 'bg-primary/20 text-primary border-primary/40' },
-                        buffering: { label: 'BUFFERING', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' },
-                        playing: { label: 'STREAMING', cls: 'bg-green-500/20 text-green-400 border-green-500/40' },
-                        paused: { label: 'PAUSED', cls: 'bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]' },
-                        ended: { label: 'ENDED', cls: 'bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]' },
-                        error: { label: 'ERROR', cls: 'bg-red-500/20 text-red-400 border-red-500/40' },
-                        destroyed: { label: 'STOPPED', cls: 'bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]' }
-                      }
-                      const m = map[s] || map.booting
-                      return <span className={`hero-demo-status ${m.cls}`}>{m.label}</span>
+                        booting: {
+                          label: "BOOTING",
+                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
+                        },
+                        gateway_loading: {
+                          label: "RESOLVING",
+                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
+                        },
+                        gateway_ready: {
+                          label: "ENDPOINT READY",
+                          cls: "bg-primary/20 text-primary border-primary/40",
+                        },
+                        gateway_error: {
+                          label: "GATEWAY ERROR",
+                          cls: "bg-red-500/20 text-red-400 border-red-500/40",
+                        },
+                        no_endpoint: {
+                          label: "WAITING FOR ENDPOINT",
+                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
+                        },
+                        selecting_player: {
+                          label: "SELECTING PLAYER",
+                          cls: "bg-primary/20 text-primary border-primary/40",
+                        },
+                        connecting: {
+                          label: "CONNECTING",
+                          cls: "bg-primary/20 text-primary border-primary/40",
+                        },
+                        buffering: {
+                          label: "BUFFERING",
+                          cls: "bg-yellow-500/20 text-yellow-400 border-yellow-500/40",
+                        },
+                        playing: {
+                          label: "STREAMING",
+                          cls: "bg-green-500/20 text-green-400 border-green-500/40",
+                        },
+                        paused: {
+                          label: "PAUSED",
+                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
+                        },
+                        ended: {
+                          label: "ENDED",
+                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
+                        },
+                        error: {
+                          label: "ERROR",
+                          cls: "bg-red-500/20 text-red-400 border-red-500/40",
+                        },
+                        destroyed: {
+                          label: "STOPPED",
+                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
+                        },
+                      };
+                      const m = map[s] || map.booting;
+                      return <span className={`hero-demo-status ${m.cls}`}>{m.label}</span>;
                     })()}
                   </div>
                   <p className="text-muted-foreground text-sm mt-3">
@@ -275,7 +310,12 @@ const LandingPage = () => {
                       <FrameworksPlayer
                         contentId={config.demoStreamName}
                         contentType="live"
-                        options={{ autoplay: true, muted: true, controls: false, gatewayUrl: config.gatewayUrl || undefined }}
+                        options={{
+                          autoplay: true,
+                          muted: true,
+                          controls: false,
+                          gatewayUrl: config.gatewayUrl || undefined,
+                        }}
                         onStateChange={(st) => setDemoState(st)}
                       />
                     </div>
@@ -290,13 +330,13 @@ const LandingPage = () => {
                   initial={{ opacity: 1 }}
                   animate={{
                     opacity: showPlayer ? 0 : 1,
-                    scale: showPlayer ? 1.05 : 1
+                    scale: showPlayer ? 1.05 : 1,
                   }}
                   transition={{
                     duration: 2,
                     ease: [0.25, 0.46, 0.45, 0.94],
                     opacity: { duration: 2 },
-                    scale: { duration: 2.2 }
+                    scale: { duration: 2.2 },
                   }}
                 >
                   {/* Logo Entry Animation */}
@@ -306,11 +346,11 @@ const LandingPage = () => {
                     animate={{
                       scale: 1,
                       opacity: 1,
-                      y: 0
+                      y: 0,
                     }}
                     transition={{
                       duration: 0.3,
-                      ease: [0.25, 0.46, 0.45, 0.94]
+                      ease: [0.25, 0.46, 0.45, 0.94],
                     }}
                   >
                     {/* Main logo - centered vertical lockup */}
@@ -327,13 +367,14 @@ const LandingPage = () => {
                   <div
                     className="absolute inset-0 w-full h-full rounded-xl"
                     style={{
-                      overflow: 'visible',
-                      transform: 'translateZ(0)',
-                      willChange: 'transform'
+                      overflow: "visible",
+                      transform: "translateZ(0)",
+                      willChange: "transform",
                     }}
                   >
                     {(() => {
-                      const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
+                      const viewportWidth =
+                        typeof window !== "undefined" ? window.innerWidth : 1024;
                       let maxSafeTranslation, stripExtension;
 
                       if (showPlayer) {
@@ -351,37 +392,48 @@ const LandingPage = () => {
 
                       let currentPosition = 0;
                       return glitchStripData.map((data, i) => {
-                        const glitchX1 = Math.max(-maxSafeTranslation, Math.min(maxSafeTranslation, data.rawGlitchX1));
-                        const glitchX2 = Math.max(-maxSafeTranslation, Math.min(maxSafeTranslation, data.rawGlitchX2));
-                        const animationDelay = i < 3 ? 0 : i < 8 ? data.animationDelayFactor * 0.5 : data.animationDelayFactor * 1.5;
+                        const glitchX1 = Math.max(
+                          -maxSafeTranslation,
+                          Math.min(maxSafeTranslation, data.rawGlitchX1)
+                        );
+                        const glitchX2 = Math.max(
+                          -maxSafeTranslation,
+                          Math.min(maxSafeTranslation, data.rawGlitchX2)
+                        );
+                        const animationDelay =
+                          i < 3
+                            ? 0
+                            : i < 8
+                              ? data.animationDelayFactor * 0.5
+                              : data.animationDelayFactor * 1.5;
                         const top = currentPosition;
                         currentPosition += data.stripHeight;
 
                         return (
                           <div
                             key={i}
-                            className={`absolute${top === 0 ? ' rounded-t-xl' : i === 14 ? ' rounded-b-xl' : ''}`}
+                            className={`absolute${top === 0 ? " rounded-t-xl" : i === 14 ? " rounded-b-xl" : ""}`}
                             style={{
                               left: `-${stripExtension}px`,
                               right: `-${stripExtension}px`,
                               top: `${top}px`,
                               height: `${data.stripHeight}px`,
-                              backgroundImage: 'url(/frameworks-dark-vertical-lockup.svg)',
+                              backgroundImage: "url(/frameworks-dark-vertical-lockup.svg)",
                               backgroundSize: `calc(100% - ${stripExtension * 2}px) auto`,
                               backgroundPosition: `${stripExtension}px -${top}px`,
-                              backgroundRepeat: 'no-repeat',
-                              overflow: top === 0 || i === 14 ? 'hidden' : 'visible',
-                              '--glitch-x-1': `${glitchX1}px`,
-                              '--glitch-x-2': `${glitchX2}px`,
-                              '--glitch-hue-1': `${data.glitchHue1}deg`,
-                              '--glitch-hue-2': `${data.glitchHue2}deg`,
+                              backgroundRepeat: "no-repeat",
+                              overflow: top === 0 || i === 14 ? "hidden" : "visible",
+                              "--glitch-x-1": `${glitchX1}px`,
+                              "--glitch-x-2": `${glitchX2}px`,
+                              "--glitch-hue-1": `${data.glitchHue1}deg`,
+                              "--glitch-hue-2": `${data.glitchHue2}deg`,
                               animationName: data.animationName,
                               animationDuration: `${data.animationDuration}ms`,
                               animationDelay: `${animationDelay}s`,
-                              animationIterationCount: 'infinite',
-                              animationDirection: 'alternate',
-                              animationTimingFunction: 'linear',
-                              imageRendering: 'pixelated'
+                              animationIterationCount: "infinite",
+                              animationDirection: "alternate",
+                              animationTimingFunction: "linear",
+                              imageRendering: "pixelated",
                             }}
                           />
                         );
@@ -532,10 +584,7 @@ const LandingPage = () => {
                   </CTACluster>
                 }
               />
-              <MarketingFeatureWall
-                items={pillarCards}
-                columns={3}
-              />
+              <MarketingFeatureWall items={pillarCards} columns={3} />
             </MarketingBand>
           </SectionContainer>
         </Section>
@@ -562,16 +611,19 @@ const LandingPage = () => {
                     <IconList
                       items={[
                         {
-                          title: 'Universal Playback',
-                          description: 'One player, every device. Auto-selects the best transport for the browser and network conditions.',
+                          title: "Universal Playback",
+                          description:
+                            "One player, every device. Auto-selects the best transport for the browser and network conditions.",
                         },
                         {
-                          title: 'OBS in the Browser',
-                          description: 'StreamCrafter gives you compositing, encoding, and multi-source mixing. Drop in and go live.',
+                          title: "OBS in the Browser",
+                          description:
+                            "StreamCrafter gives you compositing, encoding, and multi-source mixing. Drop in and go live.",
                         },
                         {
-                          title: 'WebRTC-First',
-                          description: 'Sub-second latency by default. Real-time streaming without the complexity.',
+                          title: "WebRTC-First",
+                          description:
+                            "Sub-second latency by default. Real-time streaming without the complexity.",
                         },
                       ]}
                       variant="list"
@@ -616,7 +668,7 @@ const LandingPage = () => {
                   <>
                     <span className="transparent-word" data-text="Transparent">
                       Transparent
-                    </span>{' '}
+                    </span>{" "}
                     Pricing
                   </>
                 }
@@ -636,9 +688,9 @@ const LandingPage = () => {
                 className="landing-pricing-grid"
                 items={pricingPlans.map((plan, index) => {
                   const ctaProps =
-                    plan.ctaType === 'external'
+                    plan.ctaType === "external"
                       ? { href: plan.ctaHref, external: true }
-                      : { to: plan.ctaTo }
+                      : { to: plan.ctaTo };
 
                   return {
                     id: plan.id,
@@ -651,7 +703,7 @@ const LandingPage = () => {
                     features: plan.features,
                     action: (
                       <MarketingCTAButton
-                        intent={plan.ctaType === 'external' ? 'primary' : 'secondary'}
+                        intent={plan.ctaType === "external" ? "primary" : "secondary"}
                         label={plan.ctaLabel}
                         className="w-full justify-center"
                         {...ctaProps}
@@ -659,7 +711,7 @@ const LandingPage = () => {
                     ),
                     footnote: plan.note,
                     motionDelay: index * 0.12,
-                  }
+                  };
                 })}
                 renderCard={(item, index) => (
                   <motion.div
@@ -693,31 +745,30 @@ const LandingPage = () => {
               description="Full SaaS when you want it easy. Full self-hosting when you want control. Your call."
               variant="band"
               primaryAction={{
-                label: 'Start Free',
+                label: "Start Free",
                 href: config.appUrl,
                 external: true,
               }}
               secondaryAction={[
                 {
-                  label: 'Talk to our team',
-                  to: '/contact',
+                  label: "Talk to our team",
+                  to: "/contact",
                 },
                 {
-                  label: 'View Open Source',
+                  label: "View Open Source",
                   href: config.githubUrl,
-                  icon: 'auto',
+                  icon: "auto",
                   external: true,
                 },
               ]}
             />
           </motion.div>
         </Section>
-
       </div>
 
       <MarketingScrollProgress />
     </div>
-  )
-}
+  );
+};
 
-export default LandingPage 
+export default LandingPage;

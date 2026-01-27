@@ -15,6 +15,7 @@ Foghorn is the **regional orchestration hub** for the media pipeline. It sits be
 ## Overview
 
 Routes streaming traffic to the best available media nodes based on:
+
 - Geographic proximity
 - Node performance (CPU, RAM, bandwidth)
 - Stream availability
@@ -23,6 +24,7 @@ Routes streaming traffic to the best available media nodes based on:
 ## Integration
 
 ### Edge Nodes (Helmsman)
+
 - Maintains persistent gRPC streams with all connected Helmsman instances
 - Receives all MistServer triggers forwarded by Helmsman
 - Sends responses for blocking triggers (stream key validation, viewer auth)
@@ -30,17 +32,20 @@ Routes streaming traffic to the best available media nodes based on:
 - Tracks node health, capabilities, and stream state
 
 ### Control Plane (Commodore, Quartermaster)
+
 - Validates stream keys via Commodore gRPC
 - Resolves playback IDs (view keys) via Commodore
 - Resolves node fingerprints to tenants via Quartermaster
 - Handles edge node enrollment via Quartermaster bootstrap tokens
 
 ### Data Plane (Decklog)
+
 - Geo-enriches all events before forwarding
 - Batches and sends analytics events to Decklog gRPC
 - Event types: stream lifecycle, viewer connections, buffer states, DVR/clip lifecycle
 
 ### MistServer Compatibility
+
 - Provides 100% compatible load balancer API for MistServer nodes
 - Handles stream routing, origin lookup, ingest selection
 
@@ -58,6 +63,7 @@ GET /resolve/:viewkey                 → Alias to /play
 ```
 
 **Examples:**
+
 ```bash
 # HLS playback (works with VLC, Safari, etc.)
 GET /play/abc123def/index.m3u8
@@ -100,10 +106,12 @@ GET /?weights=<json>             → Get/set balancer weights
 All control-plane APIs are gRPC (viewer/ingest resolution, clips, DVR, processing). Use the Foghorn gRPC service definitions in `pkg/proto`.
 
 ## Run (dev)
+
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Foghorn: `cd api_balancing && go run ./cmd/foghorn`
 
 ## Health & ports
+
 - Health: `GET /health`
 - HTTP: 18008 (routing API)
 - gRPC control: 18019
@@ -113,10 +121,12 @@ Configuration is sourced from `config/env/base.env` + `config/env/secrets.env`. 
 ## View Key Validation
 
 Generic viewer endpoints validate view keys via Commodore gRPC (ResolvePlaybackID):
+
 - Cached for 60 seconds (30s Stale-While-Revalidate)
 - Returns `internal_name`, `tenant_id`, `status`
 - Invalid keys return HTTP 404
 
 ## Related
+
 - Root `README.md` (ports, stack overview)
 - `website_docs/` (DNS, viewer endpoints, balancing strategy)

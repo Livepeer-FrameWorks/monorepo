@@ -1,16 +1,14 @@
-declare module 'hls.js' {
+declare module "hls.js" {
   const Hls: any;
   export default Hls;
 }
 
-declare module 'dashjs' {
+declare module "dashjs" {
   const dashjs: any;
   export default dashjs;
 }
 
-declare module 'video.js' {
+declare module "video.js" {
   const videojs: any;
   export default videojs;
 }
-
-

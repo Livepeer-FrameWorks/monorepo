@@ -21,9 +21,7 @@ function loadFromStorage(): SidebarPreferences {
       const parsed = JSON.parse(stored);
       return {
         collapsed:
-          typeof parsed.collapsed === "boolean"
-            ? parsed.collapsed
-            : DEFAULT_PREFS.collapsed,
+          typeof parsed.collapsed === "boolean" ? parsed.collapsed : DEFAULT_PREFS.collapsed,
         expandedSections: Array.isArray(parsed.expandedSections)
           ? parsed.expandedSections
           : DEFAULT_PREFS.expandedSections,
@@ -48,9 +46,7 @@ function saveToStorage(prefs: SidebarPreferences): void {
 
 function createSidebarStore() {
   let collapsed = $state(DEFAULT_PREFS.collapsed);
-  let expandedSections = $state<Set<string>>(
-    new Set(DEFAULT_PREFS.expandedSections),
-  );
+  let expandedSections = $state<Set<string>>(new Set(DEFAULT_PREFS.expandedSections));
   let initialized = $state(false);
 
   // Load from storage on init (browser only)

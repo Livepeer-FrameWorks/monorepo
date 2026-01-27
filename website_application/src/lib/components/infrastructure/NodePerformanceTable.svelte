@@ -38,9 +38,7 @@
   <div class="overflow-x-auto border border-border/50">
     <table class="w-full text-sm">
       <thead>
-        <tr
-          class="border-b border-border/50 bg-background/40 text-left text-muted-foreground"
-        >
+        <tr class="border-b border-border/50 bg-background/40 text-left text-muted-foreground">
           <th class="py-3 px-4">Node</th>
           <th class="py-3 px-4">Status</th>
           <th class="py-3 px-4">CPU (Avg)</th>
@@ -52,9 +50,7 @@
       <tbody>
         {#each nodePerformanceMetrics.slice(0, 10) as metric (metric.nodeId)}
           {@const health = systemHealth[metric.nodeId]}
-          <tr
-            class="border-b border-border/20 transition hover:bg-background/40"
-          >
+          <tr class="border-b border-border/20 transition hover:bg-background/40">
             <td class="py-3 px-4 font-mono text-xs">{metric.nodeId}</td>
             <td class="py-3 px-4">
               {#if health}

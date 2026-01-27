@@ -32,12 +32,12 @@
   let chart: Chart | null = null;
 
   const tierColors = {
-    "2160p": "rgb(14, 165, 233)",  // sky
-    "1440p": "rgb(34, 197, 94)",   // green
-    "1080p": "rgb(59, 130, 246)",  // blue
-    "720p": "rgb(234, 179, 8)",    // yellow
-    "480p": "rgb(249, 115, 22)",   // orange
-    "SD": "rgb(148, 163, 184)",    // muted gray
+    "2160p": "rgb(14, 165, 233)", // sky
+    "1440p": "rgb(34, 197, 94)", // green
+    "1080p": "rgb(59, 130, 246)", // blue
+    "720p": "rgb(234, 179, 8)", // yellow
+    "480p": "rgb(249, 115, 22)", // orange
+    SD: "rgb(148, 163, 184)", // muted gray
   };
 
   const createChart = () => {
@@ -108,21 +108,20 @@
               },
               generateLabels: (chart: Chart<"doughnut">) => {
                 const dataset = chart.data.datasets[0];
-                const total = (dataset.data as number[]).reduce(
-                  (a, b) => a + b,
-                  0
+                const total = (dataset.data as number[]).reduce((a, b) => a + b, 0);
+                return (
+                  chart.data.labels?.map((label: unknown, i: number) => {
+                    const value = dataset.data[i] as number;
+                    const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : "0";
+                    return {
+                      text: `${label}: ${percentage}%`,
+                      fillStyle: (dataset.backgroundColor as string[])[i],
+                      fontColor: "rgb(148, 163, 184)",
+                      hidden: false,
+                      index: i,
+                    };
+                  }) ?? []
                 );
-                return chart.data.labels?.map((label: unknown, i: number) => {
-                  const value = dataset.data[i] as number;
-                  const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : "0";
-                  return {
-                    text: `${label}: ${percentage}%`,
-                    fillStyle: (dataset.backgroundColor as string[])[i],
-                    fontColor: "rgb(148, 163, 184)",
-                    hidden: false,
-                    index: i,
-                  };
-                }) ?? [];
               },
             },
           },

@@ -5,13 +5,14 @@ sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 StreamCrafter lets you broadcast directly from your browser - no encoder software needed. Add a camera, share your screen, or combine both with audio mixing. Drop in the component and go live.
 
 <Aside type="tip" title="When to use StreamCrafter vs OBS">
-- **StreamCrafter** - Quick browser-based streaming, screen shares, webcam broadcasts, interactive apps
-- **OBS/Encoder** - Professional production, scene switching, complex overlays, maximum quality control
+  - **StreamCrafter** - Quick browser-based streaming, screen shares, webcam broadcasts, interactive
+  apps - **OBS/Encoder** - Professional production, scene switching, complex overlays, maximum
+  quality control
 </Aside>
 
 ## Quick Start
@@ -35,9 +36,10 @@ Import the StreamCrafter CSS once in your app (React/Svelte examples below inclu
 Drop in the component. **Gateway Mode** is the standard production path (stream key → best ingest endpoint). **Direct Mode** is for development or BYO WHIP ingest.
 
 **Option A: Gateway Mode (Recommended)**
+
 ```tsx
-import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-react';
-import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
+import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
+import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
 function BroadcastPage() {
   return (
@@ -51,20 +53,19 @@ function BroadcastPage() {
 ```
 
 **Option B: Direct Mode (Dev / BYO WHIP)**
+
 ```tsx
-<StreamCrafter
-  whipUrl="%INGEST_URL%/webrtc/your-stream-key"
-  initialProfile="broadcast"
-/>
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/your-stream-key" initialProfile="broadcast" />
 ```
 
 <Aside type="note" title="Gateway vs Direct">
-- There is **no default gateway**; you must pass either `whipUrl` or (`gatewayUrl` + `streamKey`).
-- If both are provided, `whipUrl` takes priority.
-- Gateway mode is key‑based and resolves the best ingest endpoint for your stream.
+  - There is **no default gateway**; you must pass either `whipUrl` or (`gatewayUrl` + `streamKey`).
+  - If both are provided, `whipUrl` takes priority. - Gateway mode is key‑based and resolves the
+  best ingest endpoint for your stream.
 </Aside>
 
 That's it. The component includes:
+
 - Video preview
 - Camera/Screen share controls
 - Quality selection (1080p Professional, Broadcast, or 720p Conference)
@@ -84,7 +85,7 @@ FrameWorks uses MistServer's `/webrtc/{streamKey}` path for WHIP ingest.
 If you're using Gateway Mode, you only need the stream key — the WHIP URL is resolved for you.
 
 <Aside type="caution" title="Stream Key is Secret">
-Your stream key grants permission to broadcast to your stream. Never share it publicly.
+  Your stream key grants permission to broadcast to your stream. Never share it publicly.
 </Aside>
 
 ## React Usage
@@ -94,24 +95,23 @@ Your stream key grants permission to broadcast to your stream. Never share it pu
 The `<StreamCrafter />` component is fully self-contained.
 
 **Gateway Mode:**
+
 ```tsx
-import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-react';
-import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
+import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
+import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 
 <StreamCrafter
   gatewayUrl="%GATEWAY_URL%/graphql"
   streamKey="<YOUR_STREAM_KEY>"
   initialProfile="broadcast"
   onStateChange={(state) => console.log(state)}
-/>
+/>;
 ```
 
 **Direct Mode:**
+
 ```tsx
-<StreamCrafter
-  whipUrl="%INGEST_URL%/webrtc/stream-key"
-  initialProfile="broadcast"
-/>
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
 ```
 
 ### Using Hooks (Custom UI)
@@ -119,7 +119,7 @@ import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
 For complete UI customization, use the `useStreamCrafterV2` hook. It accepts the core config (direct `whipUrl`).
 
 ```tsx
-import { useStreamCrafterV2 } from '@livepeer-frameworks/streamcrafter-react';
+import { useStreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-react";
 
 function CustomBroadcaster() {
   const {
@@ -127,8 +127,8 @@ function CustomBroadcaster() {
     isStreaming,
     // ...
   } = useStreamCrafterV2({
-    whipUrl: '%INGEST_URL%/webrtc/key',
-    profile: 'broadcast',
+    whipUrl: "%INGEST_URL%/webrtc/key",
+    profile: "broadcast",
     reconnection: { enabled: true },
   });
 
@@ -144,38 +144,31 @@ If you need gateway resolution in a custom UI, resolve a WHIP URL first with `In
 
 ```svelte
 <script lang="ts">
-  import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-svelte';
-  import '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
+  import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-svelte";
+  import "@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css";
 </script>
 
 <!-- Gateway Mode -->
-<StreamCrafter
-  gatewayUrl="%GATEWAY_URL%/graphql"
-  streamKey="abc-123"
-  initialProfile="broadcast"
-/>
+<StreamCrafter gatewayUrl="%GATEWAY_URL%/graphql" streamKey="abc-123" initialProfile="broadcast" />
 
 <!-- Direct Mode -->
-<StreamCrafter
-  whipUrl="%INGEST_URL%/webrtc/stream-key"
-  initialProfile="broadcast"
-/>
+<StreamCrafter whipUrl="%INGEST_URL%/webrtc/stream-key" initialProfile="broadcast" />
 ```
 
 ### Using Stores (Custom UI)
 
 ```svelte
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { createStreamCrafterContextV2 } from '@livepeer-frameworks/streamcrafter-svelte';
+  import { onMount, onDestroy } from "svelte";
+  import { createStreamCrafterContextV2 } from "@livepeer-frameworks/streamcrafter-svelte";
 
   const crafter = createStreamCrafterContextV2();
 
   onMount(() => {
     crafter.initialize({
       // Direct WHIP URL (resolve via gateway if needed)
-      whipUrl: '%INGEST_URL%/webrtc/key',
-      profile: 'broadcast',
+      whipUrl: "%INGEST_URL%/webrtc/key",
+      profile: "broadcast",
       reconnection: { enabled: true },
     });
   });
@@ -191,18 +184,18 @@ If you need gateway resolution in a custom UI, resolve a WHIP URL first with `In
 For non-React/Svelte environments:
 
 ```ts
-import { StreamCrafterV2 } from '@livepeer-frameworks/streamcrafter-core';
-import '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
+import { StreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-core";
+import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";
 
 const crafter = new StreamCrafterV2({
-  whipUrl: '%INGEST_URL%/webrtc/stream-key',
-  profile: 'broadcast',
+  whipUrl: "%INGEST_URL%/webrtc/stream-key",
+  profile: "broadcast",
   debug: true,
 });
 
 // Listen to state changes
-crafter.on('stateChange', ({ state }) => {
-  console.log('State:', state);
+crafter.on("stateChange", ({ state }) => {
+  console.log("State:", state);
 });
 
 // Start camera and go live
@@ -218,11 +211,11 @@ crafter.destroy();
 
 StreamCrafter includes three quality presets:
 
-| Profile | Resolution | Use Case |
-|---------|------------|----------|
-| `professional` | 1920x1080 | High quality, good upload |
-| `broadcast` | 1920x1080 | Balanced quality/bandwidth |
-| `conference` | 1280x720 | Limited bandwidth, meetings |
+| Profile        | Resolution | Use Case                    |
+| -------------- | ---------- | --------------------------- |
+| `professional` | 1920x1080  | High quality, good upload   |
+| `broadcast`    | 1920x1080  | Balanced quality/bandwidth  |
+| `conference`   | 1280x720   | Limited bandwidth, meetings |
 
 Bitrate and codec settings depend on browser capabilities and encoding path. Advanced UIs can override encoder settings if needed.
 
@@ -238,7 +231,8 @@ await setQualityProfile('professional');
 ```
 
 <Aside type="note" title="Quality Changes">
-Quality profile changes apply new constraints and take effect after a short adaptation (typically by the next keyframe).
+  Quality profile changes apply new constraints and take effect after a short adaptation (typically
+  by the next keyframe).
 </Aside>
 
 ## Multi-Source Streaming
@@ -293,12 +287,12 @@ Configure reconnection via hook:
 
 ```tsx
 useStreamCrafterV2({
-  whipUrl: '...',
+  whipUrl: "...",
   reconnection: {
     enabled: true,
     maxAttempts: 5,
-    baseDelay: 1000,    // 1 second initial delay
-    maxDelay: 30000,    // 30 second maximum
+    baseDelay: 1000, // 1 second initial delay
+    maxDelay: 30000, // 30 second maximum
     backoffMultiplier: 2,
   },
 });
@@ -318,24 +312,24 @@ if (isReconnecting) {
 
 The streaming lifecycle follows these states:
 
-| State | Description |
-|-------|-------------|
-| `idle` | Ready, no capture active |
-| `requesting_permissions` | Waiting for camera/mic permission |
-| `capturing` | Media captured, not streaming |
-| `connecting` | Establishing WHIP connection |
-| `streaming` | Live and streaming |
-| `reconnecting` | Connection lost, attempting reconnect |
-| `error` | Error occurred |
-| `destroyed` | Cleanup complete |
+| State                    | Description                           |
+| ------------------------ | ------------------------------------- |
+| `idle`                   | Ready, no capture active              |
+| `requesting_permissions` | Waiting for camera/mic permission     |
+| `capturing`              | Media captured, not streaming         |
+| `connecting`             | Establishing WHIP connection          |
+| `streaming`              | Live and streaming                    |
+| `reconnecting`           | Connection lost, attempting reconnect |
+| `error`                  | Error occurred                        |
+| `destroyed`              | Cleanup complete                      |
 
 ```tsx
 <StreamCrafter
   onStateChange={(state, context) => {
-    if (state === 'streaming') {
+    if (state === "streaming") {
       showLiveBadge();
     }
-    if (state === 'error') {
+    if (state === "error") {
       showError(context?.error);
     }
   }}
@@ -345,39 +339,45 @@ The streaming lifecycle follows these states:
 ## Browser Support
 
 StreamCrafter requires:
+
 - **WebRTC** - RTCPeerConnection
 - **MediaDevices** - getUserMedia, getDisplayMedia
 - **WebCodecs** (optional) - For background-safe encoding
 
-| Browser | Tested |
-|---------|-----------|
-| Chrome 90+ | Full support |
-| Firefox 90+ | Full support |
+| Browser      | Tested       |
+| ------------ | ------------ |
+| Chrome 90+   | Full support |
+| Firefox 90+  | Full support |
 | Safari 14.1+ | Full support |
-| Edge 90+ | Full support |
+| Edge 90+     | Full support |
 
 <Aside type="note" title="Background Tab Behavior">
-Background‑safe encoding requires WebCodecs **and** RTCRtpScriptTransform support (Chromium‑family). Without that path, browser encoders may pause when the tab loses focus.
+  Background‑safe encoding requires WebCodecs **and** RTCRtpScriptTransform support
+  (Chromium‑family). Without that path, browser encoders may pause when the tab loses focus.
 </Aside>
 
 ## Troubleshooting
 
 ### Camera/Microphone Not Working
+
 - **Check permissions** - Ensure the browser has camera/mic access
 - **HTTPS required** - MediaDevices API requires secure context
 - **Device in use** - Close other apps using the camera
 
 ### Stream Won't Connect
+
 - **Check WHIP URL** - Verify the endpoint is correct
 - **Firewall/NAT** - WebRTC may need TURN servers for restrictive networks (pass `iceServers` in config)
 - **Stream key** - Ensure the stream key is valid
 
 ### High Latency
+
 - **Upload bandwidth** - Check your upload speed matches the profile bitrate
 - **Profile mismatch** - Try `conference` profile for limited bandwidth
 - **Network congestion** - StreamCrafter will reconnect, but sustained issues need network fixes
 
 ### Screen Share Audio Missing
+
 - **System audio** - Screen share audio only works with `{ audio: true }` option
 - **Browser support** - System audio capture requires Chrome/Edge (not Firefox/Safari)
 - **User selection** - User must check "Share audio" in the browser dialog

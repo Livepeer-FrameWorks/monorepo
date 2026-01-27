@@ -9,12 +9,14 @@ import type {
   QualityProfileInfo,
   AudioConstraintProfile,
   VideoConstraintProfile,
-} from '../types';
+} from "../types";
 
 /**
  * Get audio constraints for a quality profile
  */
-export function getAudioConstraints(profile: QualityProfile = 'professional'): AudioConstraintProfile {
+export function getAudioConstraints(
+  profile: QualityProfile = "professional"
+): AudioConstraintProfile {
   const profiles: Record<QualityProfile, AudioConstraintProfile> = {
     professional: {
       // Raw audio for professional streaming/recording
@@ -62,7 +64,9 @@ export function getAudioConstraints(profile: QualityProfile = 'professional'): A
 /**
  * Get video constraints for a quality profile
  */
-export function getVideoConstraints(profile: QualityProfile = 'professional'): VideoConstraintProfile {
+export function getVideoConstraints(
+  profile: QualityProfile = "professional"
+): VideoConstraintProfile {
   const profiles: Record<QualityProfile, VideoConstraintProfile> = {
     professional: {
       // Raw video for professional streaming
@@ -102,24 +106,24 @@ export function getVideoConstraints(profile: QualityProfile = 'professional'): V
 export function getAvailableProfiles(): QualityProfileInfo[] {
   return [
     {
-      id: 'professional',
-      name: 'Professional',
-      description: 'Raw quality for content creators - disables all browser processing',
+      id: "professional",
+      name: "Professional",
+      description: "Raw quality for content creators - disables all browser processing",
     },
     {
-      id: 'broadcast',
-      name: 'Broadcast',
-      description: 'Minimal processing optimized for live streaming',
+      id: "broadcast",
+      name: "Broadcast",
+      description: "Minimal processing optimized for live streaming",
     },
     {
-      id: 'conference',
-      name: 'Conference',
-      description: 'Full processing for video calls and meetings',
+      id: "conference",
+      name: "Conference",
+      description: "Full processing for video calls and meetings",
     },
     {
-      id: 'auto',
-      name: 'Auto',
-      description: 'Let browser decide optimal settings',
+      id: "auto",
+      name: "Auto",
+      description: "Let browser decide optimal settings",
     },
   ];
 }
@@ -132,7 +136,7 @@ export function buildMediaConstraints(
   options?: {
     videoDeviceId?: string;
     audioDeviceId?: string;
-    facingMode?: 'user' | 'environment';
+    facingMode?: "user" | "environment";
   }
 ): MediaStreamConstraints {
   const audioProfile = getAudioConstraints(profile);
@@ -170,31 +174,31 @@ export function mergeWithCustomConstraints(
 
   return {
     audio:
-      typeof baseConstraints.audio === 'object' && typeof customConstraints.audio === 'object'
+      typeof baseConstraints.audio === "object" && typeof customConstraints.audio === "object"
         ? { ...baseConstraints.audio, ...customConstraints.audio }
-        : customConstraints.audio ?? baseConstraints.audio,
+        : (customConstraints.audio ?? baseConstraints.audio),
     video:
-      typeof baseConstraints.video === 'object' && typeof customConstraints.video === 'object'
+      typeof baseConstraints.video === "object" && typeof customConstraints.video === "object"
         ? { ...baseConstraints.video, ...customConstraints.video }
-        : customConstraints.video ?? baseConstraints.video,
+        : (customConstraints.video ?? baseConstraints.video),
   };
 }
 
 /**
  * Get encoder settings for a quality profile
  */
-export function getEncoderSettings(profile: QualityProfile = 'professional') {
+export function getEncoderSettings(profile: QualityProfile = "professional") {
   const settings = {
     professional: {
       video: {
-        codec: 'avc1.42E01E', // H.264 Baseline
+        codec: "avc1.42E01E", // H.264 Baseline
         width: 1920,
         height: 1080,
         bitrate: 4_000_000, // 4 Mbps
         framerate: 30,
       },
       audio: {
-        codec: 'opus',
+        codec: "opus",
         sampleRate: 48000,
         numberOfChannels: 2,
         bitrate: 128_000, // 128 kbps
@@ -203,14 +207,14 @@ export function getEncoderSettings(profile: QualityProfile = 'professional') {
 
     broadcast: {
       video: {
-        codec: 'avc1.42E01E',
+        codec: "avc1.42E01E",
         width: 1920,
         height: 1080,
         bitrate: 2_500_000, // 2.5 Mbps
         framerate: 30,
       },
       audio: {
-        codec: 'opus',
+        codec: "opus",
         sampleRate: 48000,
         numberOfChannels: 2,
         bitrate: 128_000,
@@ -219,14 +223,14 @@ export function getEncoderSettings(profile: QualityProfile = 'professional') {
 
     conference: {
       video: {
-        codec: 'avc1.42E01E',
+        codec: "avc1.42E01E",
         width: 1280,
         height: 720,
         bitrate: 1_500_000, // 1.5 Mbps
         framerate: 24,
       },
       audio: {
-        codec: 'opus',
+        codec: "opus",
         sampleRate: 48000,
         numberOfChannels: 2,
         bitrate: 128_000, // 128 kbps - same as other profiles
@@ -235,14 +239,14 @@ export function getEncoderSettings(profile: QualityProfile = 'professional') {
 
     auto: {
       video: {
-        codec: 'avc1.42E01E',
+        codec: "avc1.42E01E",
         width: 1920,
         height: 1080,
         bitrate: 2_000_000, // 2 Mbps
         framerate: 30,
       },
       audio: {
-        codec: 'opus',
+        codec: "opus",
         sampleRate: 48000,
         numberOfChannels: 2,
         bitrate: 128_000,

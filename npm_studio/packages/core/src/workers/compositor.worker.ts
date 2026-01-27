@@ -30,14 +30,14 @@ import type {
   FilterConfig,
   RendererType,
   EasingType,
-} from '../types';
+} from "../types";
 
 // Import renderers (importing registers them with the factory)
-import { Canvas2DRenderer } from '../core/renderers/Canvas2DRenderer';
-import { WebGLRenderer } from '../core/renderers/WebGLRenderer';
-import { WebGPURenderer } from '../core/renderers/WebGPURenderer';
-import { createRenderer, type CompositorRenderer } from '../core/renderers';
-import { TransitionEngine } from '../core/TransitionEngine';
+import { Canvas2DRenderer } from "../core/renderers/Canvas2DRenderer";
+import { WebGLRenderer } from "../core/renderers/WebGLRenderer";
+import { WebGPURenderer } from "../core/renderers/WebGPURenderer";
+import { createRenderer, type CompositorRenderer } from "../core/renderers";
+import { TransitionEngine } from "../core/TransitionEngine";
 
 // Reference renderers to ensure they're bundled and registered
 void Canvas2DRenderer;
@@ -93,56 +93,59 @@ self.onmessage = async (e: MessageEvent<CompositorMainToWorker>) => {
 
   try {
     switch (message.type) {
-      case 'init':
+      case "init":
         await handleInit(message.config, message.canvas);
         break;
 
-      case 'updateScene':
+      case "updateScene":
         handleUpdateScene(message.scene);
         break;
 
-      case 'sourceFrame':
+      case "sourceFrame":
         handleSourceFrame(message.sourceId, message.frame);
         break;
 
-      case 'sourceImage':
+      case "sourceImage":
         handleSourceImage(message.sourceId, message.bitmap);
         break;
 
-      case 'startTransition':
+      case "startTransition":
         handleStartTransition(message.transition, message.toSceneId);
         break;
 
-      case 'updateLayout':
+      case "updateLayout":
         handleUpdateLayout(message.layout);
         break;
 
-      case 'animateLayout':
+      case "animateLayout":
         handleAnimateLayout(message.targetScene, message.transition);
         break;
 
-      case 'resize':
+      case "resize":
         await handleResize(message.width, message.height, message.frameRate);
         break;
 
-      case 'setRenderer':
+      case "setRenderer":
         handleSetRenderer(message.renderer);
         break;
 
-      case 'applyFilter':
+      case "applyFilter":
         handleApplyFilter(message.layerId, message.filter);
         break;
 
-      case 'destroy':
+      case "destroy":
         handleDestroy();
         break;
 
       default:
-        console.warn('[CompositorWorker] Unknown message type:', (message as unknown as { type: string }).type);
+        console.warn(
+          "[CompositorWorker] Unknown message type:",
+          (message as unknown as { type: string }).type
+        );
     }
   } catch (error) {
     sendMessage({
-      type: 'error',
+      type: "error",
       message: error instanceof Error ? error.message : String(error),
     });
   }
@@ -159,9 +162,9 @@ async function handleInit(cfg: CompositorConfig, offscreenCanvas: OffscreenCanva
   // Create the renderer using the factory with fallback chain
   // Try the requested renderer, then fall back through the chain
   const fallbackChain: RendererType[] =
-    config.renderer === 'auto'
-      ? ['webgpu', 'webgl', 'canvas2d']
-      : [config.renderer, 'webgl', 'canvas2d'];
+    config.renderer === "auto"
+      ? ["webgpu", "webgl", "canvas2d"]
+      : [config.renderer, "webgl", "canvas2d"];
 
   let lastError: Error | null = null;
 
@@ -178,30 +181,30 @@ async function handleInit(cfg: CompositorConfig, offscreenCanvas: OffscreenCanva
       renderer = null;
 
       // If this wasn't canvas2d, try the next one in the chain
-      if (rendererType !== 'canvas2d') {
+      if (rendererType !== "canvas2d") {
         continue;
       }
     }
   }
 
   if (!renderer) {
-    throw new Error(`All renderers failed. Last error: ${lastError?.message ?? 'unknown'}`);
+    throw new Error(`All renderers failed. Last error: ${lastError?.message ?? "unknown"}`);
   }
 
   // Create default empty scene
   currentScene = {
-    id: 'default',
-    name: 'Default Scene',
+    id: "default",
+    name: "Default Scene",
     layers: [],
-    backgroundColor: '#000000',
+    backgroundColor: "#000000",
   };
 
   // Start the composition loop
   isRunning = true;
   startCompositionLoop();
 
-  sendMessage({ type: 'ready' });
-  sendMessage({ type: 'rendererChanged', renderer: renderer.type });
+  sendMessage({ type: "ready" });
+  sendMessage({ type: "rendererChanged", renderer: renderer.type });
 }
 
 // ============================================================================
@@ -222,7 +225,7 @@ function handleStartTransition(transition: TransitionConfig, toSceneId: string):
   if (!currentScene || !renderer) return;
 
   // Capture current scene as "from" snapshot
-  captureSceneSnapshot('from');
+  captureSceneSnapshot("from");
 
   // The "to" scene should have been set via updateScene
   if (nextScene && nextScene.id === toSceneId) {
@@ -230,22 +233,22 @@ function handleStartTransition(transition: TransitionConfig, toSceneId: string):
     const tempScene = currentScene;
     currentScene = nextScene;
     renderCurrentScene();
-    captureSceneSnapshot('to');
+    captureSceneSnapshot("to");
     currentScene = tempScene;
 
     // Start the transition
     transitionEngine.start(currentScene.id, toSceneId, transition);
   } else {
-    console.warn('[CompositorWorker] Next scene not found for transition:', toSceneId);
+    console.warn("[CompositorWorker] Next scene not found for transition:", toSceneId);
   }
 }
 
-function captureSceneSnapshot(target: 'from' | 'to'): void {
+function captureSceneSnapshot(target: "from" | "to"): void {
   if (!canvas) return;
 
   // Use createImageBitmap to capture the current canvas state
   createImageBitmap(canvas).then((bitmap) => {
-    if (target === 'from') {
+    if (target === "from") {
       if (fromSceneSnapshot) fromSceneSnapshot.close();
       fromSceneSnapshot = bitmap;
     } else {
@@ -261,7 +264,7 @@ function handleUpdateLayout(layout: LayoutConfig): void {
   // This handler is kept for potential future use (e.g., storing layout metadata)
   // but should NOT recalculate layers here as that would overwrite the correct
   // layer data from SceneManager.
-  console.log('[CompositorWorker] Layout updated:', layout.mode);
+  console.log("[CompositorWorker] Layout updated:", layout.mode);
 }
 
 // ============================================================================
@@ -275,16 +278,14 @@ function applyEasing(progress: number, easing: EasingType): number {
   const t = Math.max(0, Math.min(1, progress));
 
   switch (easing) {
-    case 'linear':
+    case "linear":
       return t;
-    case 'ease-in':
+    case "ease-in":
       return t * t;
-    case 'ease-out':
+    case "ease-out":
       return 1 - (1 - t) * (1 - t);
-    case 'ease-in-out':
-      return t < 0.5
-        ? 2 * t * t
-        : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    case "ease-in-out":
+      return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
     default:
       return t;
   }
@@ -354,7 +355,7 @@ function handleAnimateLayout(targetScene: Scene, transition: LayoutTransitionCon
     targetScene,
   };
 
-  console.log('[CompositorWorker] Layout animation started', {
+  console.log("[CompositorWorker] Layout animation started", {
     durationMs: transition.durationMs,
     easing: transition.easing,
     layerCount: targetScene.layers.length,
@@ -399,7 +400,7 @@ function updateLayoutAnimation(): Scene | null {
     // Animation complete - set final scene
     currentScene = layoutAnimation.targetScene;
     layoutAnimation = null;
-    sendMessage({ type: 'layoutAnimationComplete' });
+    sendMessage({ type: "layoutAnimationComplete" });
     return null; // Return null to indicate we should use currentScene now
   }
 
@@ -413,7 +414,7 @@ function updateLayoutAnimation(): Scene | null {
 function handleSourceFrame(sourceId: string, frame: VideoFrame): void {
   // Close the old frame to prevent memory leaks
   const oldFrame = frames.get(sourceId);
-  if (oldFrame && 'close' in oldFrame) {
+  if (oldFrame && "close" in oldFrame) {
     (oldFrame as VideoFrame).close();
   }
 
@@ -423,7 +424,7 @@ function handleSourceFrame(sourceId: string, frame: VideoFrame): void {
 function handleSourceImage(sourceId: string, bitmap: ImageBitmap): void {
   // Close the old bitmap if it exists
   const oldBitmap = frames.get(sourceId);
-  if (oldBitmap && 'close' in oldBitmap) {
+  if (oldBitmap && "close" in oldBitmap) {
     oldBitmap.close();
   }
 
@@ -436,7 +437,7 @@ function handleSourceImage(sourceId: string, bitmap: ImageBitmap): void {
 
 async function handleSetRenderer(rendererType: RendererType): Promise<void> {
   if (!canvas || !config) {
-    console.warn('[CompositorWorker] Cannot switch renderer - not initialized');
+    console.warn("[CompositorWorker] Cannot switch renderer - not initialized");
     return;
   }
 
@@ -455,19 +456,21 @@ async function handleSetRenderer(rendererType: RendererType): Promise<void> {
     renderer = createRenderer(rendererType);
     await renderer.init(canvas, config);
 
-    sendMessage({ type: 'rendererChanged', renderer: renderer.type });
+    sendMessage({ type: "rendererChanged", renderer: renderer.type });
   } catch {
     // If requested renderer fails, fall back to Canvas2D
-    console.warn(`[CompositorWorker] Failed to create ${rendererType} renderer, falling back to canvas2d`);
-    renderer = createRenderer('canvas2d');
+    console.warn(
+      `[CompositorWorker] Failed to create ${rendererType} renderer, falling back to canvas2d`
+    );
+    renderer = createRenderer("canvas2d");
     await renderer.init(canvas, config);
-    sendMessage({ type: 'rendererChanged', renderer: 'canvas2d' });
+    sendMessage({ type: "rendererChanged", renderer: "canvas2d" });
   }
 }
 
 async function handleResize(width: number, height: number, frameRate?: number): Promise<void> {
   if (!canvas || !config) {
-    console.warn('[CompositorWorker] Cannot resize - not initialized');
+    console.warn("[CompositorWorker] Cannot resize - not initialized");
     return;
   }
 
@@ -490,11 +493,14 @@ async function handleResize(width: number, height: number, frameRate?: number): 
     // If renderer wasn't initialized yet, create it now
     renderer = createRenderer(targetRenderer);
     await renderer.init(canvas, config);
-    sendMessage({ type: 'rendererChanged', renderer: renderer.type });
+    sendMessage({ type: "rendererChanged", renderer: renderer.type });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[CompositorWorker] Failed to resize with ${targetRenderer}: ${message}`);
-    sendMessage({ type: 'error', message: `Failed to resize renderer (${targetRenderer}): ${message}` });
+    sendMessage({
+      type: "error",
+      message: `Failed to resize renderer (${targetRenderer}): ${message}`,
+    });
   }
 }
 
@@ -537,7 +543,10 @@ function startCompositionLoop(): void {
     }
 
     // Use setTimeout for timing (more reliable in workers than requestAnimationFrame)
-    compositionLoopId = self.setTimeout(loop, Math.max(1, frameTime - (performance.now() - lastFrameTime)));
+    compositionLoopId = self.setTimeout(
+      loop,
+      Math.max(1, frameTime - (performance.now() - lastFrameTime))
+    );
   }
 
   loop();
@@ -567,12 +576,7 @@ function renderTransition(): void {
   const state = transitionEngine.update();
 
   if (state) {
-    renderer.renderTransition(
-      fromSceneSnapshot,
-      toSceneSnapshot,
-      state.progress,
-      state.type
-    );
+    renderer.renderTransition(fromSceneSnapshot, toSceneSnapshot, state.progress, state.type);
 
     // Check if transition completed
     if (!state.active) {
@@ -599,8 +603,8 @@ function completeTransition(): void {
 
   // Notify main thread
   sendMessage({
-    type: 'transitionComplete',
-    sceneId: currentScene?.id ?? '',
+    type: "transitionComplete",
+    sceneId: currentScene?.id ?? "",
   });
 }
 
@@ -612,7 +616,7 @@ function sendStats(): void {
   if (!renderer) return;
 
   const stats = renderer.getStats();
-  sendMessage({ type: 'stats', stats });
+  sendMessage({ type: "stats", stats });
 }
 
 // ============================================================================
@@ -625,7 +629,7 @@ function handleDestroy(): void {
 
   // Close all frames
   for (const frame of frames.values()) {
-    if ('close' in frame) {
+    if ("close" in frame) {
       frame.close();
     }
   }

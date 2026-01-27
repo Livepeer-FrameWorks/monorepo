@@ -9,11 +9,7 @@
   }: { class?: string; checked?: boolean } & Record<string, any> = $props();
 </script>
 
-<ContextMenu.CheckboxItem
-  class={cn("fw-context-menu-checkbox", className)}
-  {checked}
-  {...rest}
->
+<ContextMenu.CheckboxItem class={cn("fw-context-menu-checkbox", className)} {checked} {...rest}>
   <div class="fw-context-menu-indicator">
     {#if checked}
       <svg

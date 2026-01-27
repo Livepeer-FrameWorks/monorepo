@@ -5,14 +5,14 @@
  * Uses event-driven updates instead of polling - no render spam.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from "react";
 import type {
   PlayerManager,
   PlayerSelection,
   PlayerCombination,
   StreamInfo,
   PlaybackMode,
-} from '@livepeer-frameworks/player-core';
+} from "@livepeer-frameworks/player-core";
 
 export interface UsePlayerSelectionOptions {
   /** Stream info to compute selections for */
@@ -67,16 +67,16 @@ export function usePlayerSelection(
 
   // Subscribe to events
   useEffect(() => {
-    const unsubSelection = manager.on('selection-changed', (sel) => {
+    const unsubSelection = manager.on("selection-changed", (sel) => {
       if (debug) {
-        console.log('[usePlayerSelection] Selection changed:', sel?.player, sel?.source?.type);
+        console.log("[usePlayerSelection] Selection changed:", sel?.player, sel?.source?.type);
       }
       setSelection(sel);
     });
 
-    const unsubCombos = manager.on('combinations-updated', (combos) => {
+    const unsubCombos = manager.on("combinations-updated", (combos) => {
       if (debug) {
-        console.log('[usePlayerSelection] Combinations updated:', combos.length);
+        console.log("[usePlayerSelection] Combinations updated:", combos.length);
       }
       setCombinations(combos);
       setReady(true);

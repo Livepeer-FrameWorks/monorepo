@@ -21,9 +21,7 @@ export function resolveTimeRange(value: string, now: Date = new Date()) {
 
   if (!option) {
     const endFallback = now.toISOString();
-    const startFallback = new Date(
-      now.getTime() - 7 * 24 * 60 * 60 * 1000,
-    ).toISOString();
+    const startFallback = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
     return {
       start: startFallback,
       end: endFallback,
@@ -54,8 +52,5 @@ export function resolveTimeRange(value: string, now: Date = new Date()) {
 }
 
 export function timeRangeLabel(value: string) {
-  return (
-    TIME_RANGE_OPTIONS.find((item) => item.value === value)?.label ??
-    "Custom Range"
-  );
+  return TIME_RANGE_OPTIONS.find((item) => item.value === value)?.label ?? "Custom Range";
 }

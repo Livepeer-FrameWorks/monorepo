@@ -1,12 +1,12 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { MetaTrackManager, type MetaTrackEvent } from '@livepeer-frameworks/player-core';
-import type { UseMetaTrackOptions } from '../types';
+import { useEffect, useState, useRef, useCallback } from "react";
+import { MetaTrackManager, type MetaTrackEvent } from "@livepeer-frameworks/player-core";
+import type { UseMetaTrackOptions } from "../types";
 
 export interface UseMetaTrackReturn {
   /** Whether connected to MistServer WebSocket */
   isConnected: boolean;
   /** Connection state */
-  connectionState: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+  connectionState: "disconnected" | "connecting" | "connected" | "reconnecting";
   /** List of subscribed track IDs */
   subscribedTracks: string[];
   /** Subscribe to a meta track */
@@ -54,15 +54,12 @@ export interface UseMetaTrackReturn {
  * ```
  */
 export function useMetaTrack(options: UseMetaTrackOptions): UseMetaTrackReturn {
-  const {
-    mistBaseUrl,
-    streamName,
-    subscriptions: initialSubscriptions,
-    enabled = true,
-  } = options;
+  const { mistBaseUrl, streamName, subscriptions: initialSubscriptions, enabled = true } = options;
 
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionState, setConnectionState] = useState<'disconnected' | 'connecting' | 'connected' | 'reconnecting'>('disconnected');
+  const [connectionState, setConnectionState] = useState<
+    "disconnected" | "connecting" | "connected" | "reconnecting"
+  >("disconnected");
   const [subscribedTracks, setSubscribedTracks] = useState<string[]>([]);
   const managerRef = useRef<MetaTrackManager | null>(null);
 
@@ -74,7 +71,7 @@ export function useMetaTrack(options: UseMetaTrackOptions): UseMetaTrackReturn {
         managerRef.current = null;
       }
       setIsConnected(false);
-      setConnectionState('disconnected');
+      setConnectionState("disconnected");
       return;
     }
 
@@ -90,7 +87,7 @@ export function useMetaTrack(options: UseMetaTrackOptions): UseMetaTrackReturn {
       if (managerRef.current) {
         const state = managerRef.current.getState();
         setConnectionState(state);
-        setIsConnected(state === 'connected');
+        setIsConnected(state === "connected");
         setSubscribedTracks(managerRef.current.getSubscribedTracks());
       }
     };
@@ -108,28 +105,31 @@ export function useMetaTrack(options: UseMetaTrackOptions): UseMetaTrackReturn {
         managerRef.current = null;
       }
       setIsConnected(false);
-      setConnectionState('disconnected');
+      setConnectionState("disconnected");
     };
   }, [enabled, mistBaseUrl, streamName, initialSubscriptions]);
 
   /**
    * Subscribe to a meta track
    */
-  const subscribe = useCallback((trackId: string, callback: (event: MetaTrackEvent) => void): () => void => {
-    if (!managerRef.current) {
-      return () => {};
-    }
-
-    const unsubscribe = managerRef.current.subscribe(trackId, callback);
-    setSubscribedTracks(managerRef.current.getSubscribedTracks());
-
-    return () => {
-      unsubscribe();
-      if (managerRef.current) {
-        setSubscribedTracks(managerRef.current.getSubscribedTracks());
+  const subscribe = useCallback(
+    (trackId: string, callback: (event: MetaTrackEvent) => void): (() => void) => {
+      if (!managerRef.current) {
+        return () => {};
       }
-    };
-  }, []);
+
+      const unsubscribe = managerRef.current.subscribe(trackId, callback);
+      setSubscribedTracks(managerRef.current.getSubscribedTracks());
+
+      return () => {
+        unsubscribe();
+        if (managerRef.current) {
+          setSubscribedTracks(managerRef.current.getSubscribedTracks());
+        }
+      };
+    },
+    []
+  );
 
   /**
    * Unsubscribe from a meta track

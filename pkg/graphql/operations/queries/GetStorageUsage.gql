@@ -10,7 +10,12 @@ query GetStorageUsage(
   analytics {
     usage {
       storage {
-        storageUsageConnection(nodeId: $nodeId, storageScope: $storageScope, timeRange: $timeRange, page: { first: $first, after: $after }) {
+        storageUsageConnection(
+          nodeId: $nodeId
+          storageScope: $storageScope
+          timeRange: $timeRange
+          page: { first: $first, after: $after }
+        ) {
           edges {
             cursor
             node {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SvelteSet } from 'svelte/reactivity';
+  import { SvelteSet } from "svelte/reactivity";
   import {
     explorerService,
     type Template,
@@ -7,7 +7,12 @@
     type ResolvedExplorerSection,
     type ResolvedExplorerExample,
   } from "$lib/graphql/services/explorer.js";
-  import { extractOperationType, extractDescription, extractVariableDefinitions, extractFragmentSpreads } from "$lib/graphql/services/gqlParser.js";
+  import {
+    extractOperationType,
+    extractDescription,
+    extractVariableDefinitions,
+    extractFragmentSpreads,
+  } from "$lib/graphql/services/gqlParser.js";
   import { toast } from "$lib/stores/toast.js";
   import ExplorerHeader from "$lib/components/explorer/ExplorerHeader.svelte";
   import QueryEditor from "$lib/components/explorer/QueryEditor.svelte";
@@ -144,7 +149,7 @@
   let activeDoc = $state<FocusDoc>(null);
 
   // Panel state: which panel is active ('templates', 'schema', or null for closed)
-  type PanelView = 'templates' | 'schema' | null;
+  type PanelView = "templates" | "schema" | null;
   let activePanel = $state<PanelView>(null);
 
   // For responsive behavior - default to desktop (sidebar visible)
@@ -155,8 +160,8 @@
       isMobile = window.innerWidth < 1024;
     };
     handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   });
 
   function handlePanelChange(panel: PanelView) {
@@ -253,9 +258,7 @@
       addToHistory(query, parsedVariables, response);
 
       if (result.error) {
-        toast.error(
-          "Query execution failed - check the response panel for details"
-        );
+        toast.error("Query execution failed - check the response panel for details");
       } else if (response) {
         const modeIndicator = demoMode ? " (Demo)" : "";
         toast.success(`Query executed successfully in ${response.duration}${modeIndicator}`);
@@ -274,11 +277,7 @@
     variables = JSON.stringify(template.variables, null, 2);
   }
 
-  function addToHistory(
-    queryText: string,
-    vars: Record<string, unknown>,
-    result: unknown,
-  ) {
+  function addToHistory(queryText: string, vars: Record<string, unknown>, result: unknown) {
     const historyItem: QueryHistoryItem = {
       id: Date.now(),
       query: queryText,
@@ -299,10 +298,7 @@
 
   function saveQueryHistory() {
     try {
-      localStorage.setItem(
-        "graphql_explorer_history",
-        JSON.stringify(queryHistory)
-      );
+      localStorage.setItem("graphql_explorer_history", JSON.stringify(queryHistory));
     } catch (error) {
       console.error("Failed to save query history:", error);
     }
@@ -388,7 +384,7 @@
       const next = withoutComments[i + 1];
       const next2 = withoutComments[i + 2];
 
-      if (!inString && ch === "\"" && next === "\"" && next2 === "\"") {
+      if (!inString && ch === '"' && next === '"' && next2 === '"') {
         inBlockString = !inBlockString;
         i += 3;
         continue;
@@ -397,12 +393,12 @@
         i += 1;
         continue;
       }
-      if (ch === "\"" && !inString) {
+      if (ch === '"' && !inString) {
         inString = true;
         i += 1;
         continue;
       }
-      if (ch === "\"" && inString) {
+      if (ch === '"' && inString) {
         inString = false;
         i += 1;
         continue;
@@ -483,12 +479,9 @@
       variables = JSON.stringify(example.variables ?? {}, null, 2);
     }
   }
-
 </script>
 
-<div
-  class="graphql-explorer h-full flex flex-col border border-border/50 overflow-hidden"
->
+<div class="graphql-explorer h-full flex flex-col border border-border/50 overflow-hidden">
   <ExplorerHeader
     {showQueryEditor}
     {showCodeExamples}

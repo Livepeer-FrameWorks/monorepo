@@ -1,5 +1,10 @@
-import { BasePlayer } from '../core/PlayerInterface';
-import type { StreamSource, StreamInfo, PlayerOptions, PlayerCapability } from '../core/PlayerInterface';
+import { BasePlayer } from "../core/PlayerInterface";
+import type {
+  StreamSource,
+  StreamInfo,
+  PlayerOptions,
+  PlayerCapability,
+} from "../core/PlayerInterface";
 
 /**
  * MistPlayerImpl - Legacy fallback player
@@ -14,7 +19,7 @@ export class MistPlayerImpl extends BasePlayer {
     shortname: "mist-legacy",
     priority: 99, // Final fallback - lowest priority
     // Single special type - PlayerManager adds this as ONE option
-    mimes: ["mist/legacy"]
+    mimes: ["mist/legacy"],
   };
 
   private container: HTMLElement | null = null;
@@ -28,31 +33,39 @@ export class MistPlayerImpl extends BasePlayer {
     return mimetype === "mist/legacy";
   }
 
-  isBrowserSupported(mimetype: string, _source: StreamSource, _streamInfo: StreamInfo): boolean | string[] {
+  isBrowserSupported(
+    mimetype: string,
+    _source: StreamSource,
+    _streamInfo: StreamInfo
+  ): boolean | string[] {
     // Only compatible with our special type
     if (mimetype !== "mist/legacy") return false;
-    return ['video', 'audio'];
+    return ["video", "audio"];
   }
 
-  async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
+  async initialize(
+    container: HTMLElement,
+    source: StreamSource,
+    options: PlayerOptions
+  ): Promise<HTMLVideoElement> {
     this.destroyed = false;
     this.container = container;
-    container.classList.add('fw-player-container');
+    container.classList.add("fw-player-container");
 
     // Generate unique ID for this embed
-    const streamName = source.streamName || 'stream';
-    const uniqueId = `${streamName.replace(/[^a-zA-Z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 10)}`;
+    const streamName = source.streamName || "stream";
+    const uniqueId = `${streamName.replace(/[^a-zA-Z0-9]/g, "_")}_${Math.random().toString(36).slice(2, 10)}`;
 
     // Create the mistvideo div
-    this.mistDiv = document.createElement('div');
-    this.mistDiv.className = 'mistvideo fw-player-container';
+    this.mistDiv = document.createElement("div");
+    this.mistDiv.className = "mistvideo fw-player-container";
     this.mistDiv.id = uniqueId;
-    this.mistDiv.style.width = '100%';
-    this.mistDiv.style.height = '100%';
-    this.mistDiv.style.overflow = 'hidden'; // Prevent legacy player overflow
+    this.mistDiv.style.width = "100%";
+    this.mistDiv.style.height = "100%";
+    this.mistDiv.style.overflow = "hidden"; // Prevent legacy player overflow
     // Also on container, but restore on destroy (don't clobber consumer styles permanently)
-    this.previousContainerOverflow = container.style.overflow ?? '';
-    container.style.overflow = 'hidden';
+    this.previousContainerOverflow = container.style.overflow ?? "";
+    container.style.overflow = "hidden";
     container.appendChild(this.mistDiv);
 
     // Derive player.js URL from source URL
@@ -79,11 +92,16 @@ export class MistPlayerImpl extends BasePlayer {
       return `${url.protocol}//${url.host}/player.js`;
     } catch {
       // Fallback: relative path
-      return '/player.js';
+      return "/player.js";
     }
   }
 
-  private async loadAndPlay(streamName: string, targetId: string, playerJsUrl: string, options: PlayerOptions): Promise<void> {
+  private async loadAndPlay(
+    streamName: string,
+    targetId: string,
+    playerJsUrl: string,
+    options: PlayerOptions
+  ): Promise<void> {
     const play = () => {
       if (this.destroyed) return;
       if ((window as any).mistPlay) {
@@ -94,14 +112,14 @@ export class MistPlayerImpl extends BasePlayer {
           // MistServer's player.js has its own UI - always enable controls
           controls: true,
           // Use dev skin when devMode is enabled - shows MistServer's source selection UI
-          skin: options.devMode ? 'dev' : 'default',
+          skin: options.devMode ? "dev" : "default",
           // Only pass basic playback options
           ...(options.autoplay !== undefined && { autoplay: options.autoplay }),
           ...(options.muted !== undefined && { muted: options.muted }),
           ...(options.poster && { poster: options.poster }),
         };
 
-        console.debug('[Legacy] mistPlay options:', mistOptions);
+        console.debug("[Legacy] mistPlay options:", mistOptions);
         (window as any).mistPlay(streamName, mistOptions);
       }
     };
@@ -109,13 +127,14 @@ export class MistPlayerImpl extends BasePlayer {
     if (!(window as any).mistplayers) {
       // Load player.js
       await new Promise<void>((resolve, reject) => {
-        const script = document.createElement('script');
+        const script = document.createElement("script");
         script.src = playerJsUrl;
         script.onload = () => {
           play();
           resolve();
         };
-        script.onerror = () => reject(new Error(`Failed to load MistServer player from ${playerJsUrl}`));
+        script.onerror = () =>
+          reject(new Error(`Failed to load MistServer player from ${playerJsUrl}`));
         document.head.appendChild(script);
       });
     } else {
@@ -125,12 +144,12 @@ export class MistPlayerImpl extends BasePlayer {
 
   private findVideoElement(): HTMLVideoElement | null {
     if (!this.mistDiv) return null;
-    return this.mistDiv.querySelector('video');
+    return this.mistDiv.querySelector("video");
   }
 
   private createProxyVideo(container: HTMLElement): HTMLVideoElement {
-    const video = document.createElement('video');
-    video.style.display = 'none';
+    const video = document.createElement("video");
+    video.style.display = "none";
     container.appendChild(video);
     this.proxyVideo = video;
     return video;
@@ -143,7 +162,7 @@ export class MistPlayerImpl extends BasePlayer {
     if (this.mistDiv) {
       try {
         const ref = (this.mistDiv as any).MistVideoObject?.reference;
-        if (ref && typeof ref.unload === 'function') {
+        if (ref && typeof ref.unload === "function") {
           ref.unload();
         }
       } catch {

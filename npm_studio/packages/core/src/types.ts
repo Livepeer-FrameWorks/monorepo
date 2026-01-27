@@ -8,23 +8,18 @@
 // ============================================================================
 
 export type IngestState =
-  | 'idle'
-  | 'requesting_permissions'
-  | 'capturing'
-  | 'connecting'
-  | 'streaming'
-  | 'reconnecting'
-  | 'error'
-  | 'destroyed';
+  | "idle"
+  | "requesting_permissions"
+  | "capturing"
+  | "connecting"
+  | "streaming"
+  | "reconnecting"
+  | "error"
+  | "destroyed";
 
-export type WhipConnectionState =
-  | 'disconnected'
-  | 'connecting'
-  | 'connected'
-  | 'failed'
-  | 'closed';
+export type WhipConnectionState = "disconnected" | "connecting" | "connected" | "failed" | "closed";
 
-export type QualityProfile = 'professional' | 'broadcast' | 'conference' | 'auto';
+export type QualityProfile = "professional" | "broadcast" | "conference" | "auto";
 
 // ============================================================================
 // Device Types
@@ -32,7 +27,7 @@ export type QualityProfile = 'professional' | 'broadcast' | 'conference' | 'auto
 
 export interface DeviceInfo {
   deviceId: string;
-  kind: 'audioinput' | 'videoinput' | 'audiooutput';
+  kind: "audioinput" | "videoinput" | "audiooutput";
   label: string;
   groupId: string;
 }
@@ -40,24 +35,24 @@ export interface DeviceInfo {
 export interface CaptureOptions {
   videoDeviceId?: string;
   audioDeviceId?: string;
-  facingMode?: 'user' | 'environment';
+  facingMode?: "user" | "environment";
   profile?: QualityProfile;
   customConstraints?: MediaStreamConstraints;
 }
 
 export interface ScreenCaptureOptions {
-  video?: boolean | DisplayMediaStreamOptions['video'];
-  audio?: boolean | DisplayMediaStreamOptions['audio'];
+  video?: boolean | DisplayMediaStreamOptions["video"];
+  audio?: boolean | DisplayMediaStreamOptions["audio"];
   preferCurrentTab?: boolean;
-  systemAudio?: 'include' | 'exclude';
+  systemAudio?: "include" | "exclude";
   /** Cursor visibility in screen capture */
-  cursor?: 'always' | 'motion' | 'never';
+  cursor?: "always" | "motion" | "never";
   /** Allow switching surfaces during capture (Chrome 107+) */
   surfaceSwitching?: boolean;
   /** Include/exclude self browser surface (Chrome 107+) */
-  selfBrowserSurface?: 'include' | 'exclude';
+  selfBrowserSurface?: "include" | "exclude";
   /** Monitor type surfaces (Chrome 119+) */
-  monitorTypeSurfaces?: 'include' | 'exclude';
+  monitorTypeSurfaces?: "include" | "exclude";
 }
 
 // ============================================================================
@@ -182,7 +177,7 @@ export interface BrowserCapabilities {
     getDisplayMedia: boolean;
     enumerateDevices: boolean;
   };
-  recommended: 'webcodecs' | 'mediastream';
+  recommended: "webcodecs" | "mediastream";
 }
 
 // ============================================================================
@@ -232,15 +227,15 @@ export interface EncoderOverrides {
 // ============================================================================
 
 export type WorkerMessageType =
-  | 'initialize'
-  | 'videoFrame'
-  | 'audioData'
-  | 'start'
-  | 'stop'
-  | 'updateConfig'
-  | 'ready'
-  | 'error'
-  | 'stats';
+  | "initialize"
+  | "videoFrame"
+  | "audioData"
+  | "start"
+  | "stop"
+  | "updateConfig"
+  | "ready"
+  | "error"
+  | "stats";
 
 export interface WorkerMessage {
   type: WorkerMessageType;
@@ -248,12 +243,12 @@ export interface WorkerMessage {
 }
 
 export interface WorkerInitMessage extends WorkerMessage {
-  type: 'initialize';
+  type: "initialize";
   data: EncoderConfig;
 }
 
 export interface WorkerFrameMessage extends WorkerMessage {
-  type: 'videoFrame';
+  type: "videoFrame";
   data: {
     frame: VideoFrame;
     timestamp: number;
@@ -261,7 +256,7 @@ export interface WorkerFrameMessage extends WorkerMessage {
 }
 
 export interface WorkerAudioMessage extends WorkerMessage {
-  type: 'audioData';
+  type: "audioData";
   data: {
     audioData: AudioData;
     timestamp: number;
@@ -272,7 +267,7 @@ export interface WorkerAudioMessage extends WorkerMessage {
 // Multi-Source Types (Phase 2)
 // ============================================================================
 
-export type SourceType = 'camera' | 'screen' | 'custom';
+export type SourceType = "camera" | "screen" | "custom";
 
 export interface MediaSource {
   id: string;
@@ -422,39 +417,39 @@ export interface CropConfig {
 // ============================================================================
 
 export type LayoutMode =
-  | 'solo'           // Single source fullscreen
-  | 'pip-br'         // PiP bottom-right
-  | 'pip-bl'         // PiP bottom-left
-  | 'pip-tr'         // PiP top-right
-  | 'pip-tl'         // PiP top-left
-  | 'split-h'        // Split horizontal 50/50
-  | 'split-v'        // Split vertical 50/50
-  | 'focus-l'        // Focus left (70/30)
-  | 'focus-r'        // Focus right (30/70)
-  | 'grid'           // Auto grid (2x2, 3x3, etc based on source count)
-  | 'stack'          // Vertical stack
+  | "solo" // Single source fullscreen
+  | "pip-br" // PiP bottom-right
+  | "pip-bl" // PiP bottom-left
+  | "pip-tr" // PiP top-right
+  | "pip-tl" // PiP top-left
+  | "split-h" // Split horizontal 50/50
+  | "split-v" // Split vertical 50/50
+  | "focus-l" // Focus left (70/30)
+  | "focus-r" // Focus right (30/70)
+  | "grid" // Auto grid (2x2, 3x3, etc based on source count)
+  | "stack" // Vertical stack
   // 3-source layouts
-  | 'pip-dual-br'    // Main + 2 PiPs bottom-right
-  | 'pip-dual-bl'    // Main + 2 PiPs bottom-left
-  | 'split-pip-l'    // Split + PiP on left side
-  | 'split-pip-r'    // Split + PiP on right side
+  | "pip-dual-br" // Main + 2 PiPs bottom-right
+  | "pip-dual-bl" // Main + 2 PiPs bottom-left
+  | "split-pip-l" // Split + PiP on left side
+  | "split-pip-r" // Split + PiP on right side
   // Featured layout (1 big, rest in strip)
-  | 'featured'       // Main source large, others in bottom strip
-  | 'featured-r'     // Main source large, others in right strip
+  | "featured" // Main source large, others in bottom strip
+  | "featured-r" // Main source large, others in right strip
   // Legacy aliases
-  | 'fullscreen'     // Alias for 'solo'
-  | 'pip'            // Alias for 'pip-br'
-  | 'side-by-side';  // Alias for 'split-h'
+  | "fullscreen" // Alias for 'solo'
+  | "pip" // Alias for 'pip-br'
+  | "side-by-side"; // Alias for 'split-h'
 
 // Legacy types for compatibility
-export type PipPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
-export type SplitDirection = 'horizontal' | 'vertical';
+export type PipPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export type SplitDirection = "horizontal" | "vertical";
 
 // How sources are scaled to fit their layer bounds
 export type ScalingMode =
-  | 'stretch'        // Stretch to fill (may distort)
-  | 'letterbox'      // Fit with black bars (preserve aspect)
-  | 'crop';          // Fill and crop overflow (preserve aspect)
+  | "stretch" // Stretch to fill (may distort)
+  | "letterbox" // Fit with black bars (preserve aspect)
+  | "crop"; // Fill and crop overflow (preserve aspect)
 
 export interface LayoutConfig {
   mode: LayoutMode;
@@ -473,14 +468,14 @@ export interface LayoutConfig {
 // ============================================================================
 
 export type TransitionType =
-  | 'cut'
-  | 'fade'
-  | 'slide-left'
-  | 'slide-right'
-  | 'slide-up'
-  | 'slide-down';
+  | "cut"
+  | "fade"
+  | "slide-left"
+  | "slide-right"
+  | "slide-up"
+  | "slide-down";
 
-export type EasingType = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out';
+export type EasingType = "linear" | "ease-in" | "ease-out" | "ease-in-out";
 
 export interface TransitionConfig {
   type: TransitionType;
@@ -502,7 +497,7 @@ export interface TransitionState {
 // Renderer Types (Phase 3 - Compositor)
 // ============================================================================
 
-export type RendererType = 'canvas2d' | 'webgl' | 'webgpu' | 'auto';
+export type RendererType = "canvas2d" | "webgl" | "webgpu" | "auto";
 
 export interface RendererStats {
   fps: number;
@@ -510,7 +505,7 @@ export interface RendererStats {
   gpuMemoryMB?: number;
 }
 
-export type FilterType = 'blur' | 'colorMatrix' | 'glow' | 'grayscale' | 'sepia' | 'invert';
+export type FilterType = "blur" | "colorMatrix" | "glow" | "grayscale" | "sepia" | "invert";
 
 export interface FilterConfig {
   type: FilterType;
@@ -540,11 +535,11 @@ export const DEFAULT_COMPOSITOR_CONFIG: CompositorConfig = {
   width: 1920,
   height: 1080,
   frameRate: 30,
-  renderer: 'auto',
+  renderer: "auto",
   defaultTransition: {
-    type: 'fade',
+    type: "fade",
     durationMs: 500,
-    easing: 'ease-in-out',
+    easing: "ease-in-out",
   },
 };
 
@@ -573,25 +568,25 @@ export interface LayoutTransitionConfig {
 }
 
 export type CompositorMainToWorker =
-  | { type: 'init'; config: CompositorConfig; canvas: OffscreenCanvas }
-  | { type: 'updateScene'; scene: Scene }
-  | { type: 'sourceFrame'; sourceId: string; frame: VideoFrame }
-  | { type: 'sourceImage'; sourceId: string; bitmap: ImageBitmap }
-  | { type: 'startTransition'; transition: TransitionConfig; toSceneId: string }
-  | { type: 'updateLayout'; layout: LayoutConfig }
-  | { type: 'animateLayout'; targetScene: Scene; transition: LayoutTransitionConfig }
-  | { type: 'resize'; width: number; height: number; frameRate?: number }
-  | { type: 'setRenderer'; renderer: RendererType }
-  | { type: 'applyFilter'; layerId: string; filter: FilterConfig }
-  | { type: 'destroy' };
+  | { type: "init"; config: CompositorConfig; canvas: OffscreenCanvas }
+  | { type: "updateScene"; scene: Scene }
+  | { type: "sourceFrame"; sourceId: string; frame: VideoFrame }
+  | { type: "sourceImage"; sourceId: string; bitmap: ImageBitmap }
+  | { type: "startTransition"; transition: TransitionConfig; toSceneId: string }
+  | { type: "updateLayout"; layout: LayoutConfig }
+  | { type: "animateLayout"; targetScene: Scene; transition: LayoutTransitionConfig }
+  | { type: "resize"; width: number; height: number; frameRate?: number }
+  | { type: "setRenderer"; renderer: RendererType }
+  | { type: "applyFilter"; layerId: string; filter: FilterConfig }
+  | { type: "destroy" };
 
 export type CompositorWorkerToMain =
-  | { type: 'ready' }
-  | { type: 'stats'; stats: RendererStats }
-  | { type: 'transitionComplete'; sceneId: string }
-  | { type: 'layoutAnimationComplete' }
-  | { type: 'rendererChanged'; renderer: RendererType }
-  | { type: 'error'; message: string };
+  | { type: "ready" }
+  | { type: "stats"; stats: RendererStats }
+  | { type: "transitionComplete"; sceneId: string }
+  | { type: "layoutAnimationComplete" }
+  | { type: "rendererChanged"; renderer: RendererType }
+  | { type: "error"; message: string };
 
 // ============================================================================
 // Scene Manager Events (Phase 3)
@@ -648,7 +643,7 @@ export interface IngestClientConfig {
   initialDelayMs?: number;
 }
 
-export type IngestClientStatus = 'idle' | 'loading' | 'ready' | 'error';
+export type IngestClientStatus = "idle" | "loading" | "ready" | "error";
 
 export interface IngestClientEvents {
   statusChange: { status: IngestClientStatus; error?: string };

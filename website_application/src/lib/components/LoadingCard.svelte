@@ -2,13 +2,7 @@
   import { cn } from "$lib/utils";
 
   interface Props {
-    variant?:
-      | "stream"
-      | "clip"
-      | "metric"
-      | "analytics"
-      | "infrastructure"
-      | "generic";
+    variant?: "stream" | "clip" | "metric" | "analytics" | "infrastructure" | "generic";
     class?: string;
   }
 

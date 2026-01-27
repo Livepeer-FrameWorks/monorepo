@@ -16,25 +16,25 @@
  */
 .fw-player-surface {
   /* Tokyo Night color palette */
-  --tn-bg-dark: 235 21% 11%;      /* #1a1b26 - Darkest (slab backgrounds) */
-  --tn-bg: 233 23% 17%;            /* #24283b - Main background */
-  --tn-bg-highlight: 233 23% 21%;  /* #292e42 - Elevated surfaces */
-  --tn-bg-visual: 232 27% 25%;     /* #33395e - Selection/active states */
+  --tn-bg-dark: 235 21% 11%; /* #1a1b26 - Darkest (slab backgrounds) */
+  --tn-bg: 233 23% 17%; /* #24283b - Main background */
+  --tn-bg-highlight: 233 23% 21%; /* #292e42 - Elevated surfaces */
+  --tn-bg-visual: 232 27% 25%; /* #33395e - Selection/active states */
 
   /* Text hierarchy */
-  --tn-fg: 223 27% 76%;            /* #a9b1d6 - Primary text */
-  --tn-fg-bright: 220 13% 91%;     /* #e2e4ea - Bright/highlighted text */
-  --tn-fg-dark: 224 16% 53%;       /* #787c99 - Secondary text (muted) */
-  --tn-fg-gutter: 228 15% 45%;     /* #5a607f - Borders, seams */
+  --tn-fg: 223 27% 76%; /* #a9b1d6 - Primary text */
+  --tn-fg-bright: 220 13% 91%; /* #e2e4ea - Bright/highlighted text */
+  --tn-fg-dark: 224 16% 53%; /* #787c99 - Secondary text (muted) */
+  --tn-fg-gutter: 228 15% 45%; /* #5a607f - Borders, seams */
 
   /* Accent colors (semantic) */
-  --tn-blue: 218 79% 73%;          /* #7aa2f7 - Primary actions */
-  --tn-green: 95 53% 55%;          /* #9ece6a - Success */
-  --tn-red: 348 74% 64%;           /* #f7768e - Destructive, live */
-  --tn-yellow: 35 79% 64%;         /* #e0af68 - Warnings */
-  --tn-purple: 267 82% 77%;        /* #bb9af7 - Secondary accent */
-  --tn-cyan: 178 64% 63%;          /* #7dcfff - Info */
-  --tn-teal: 162 66% 62%;          /* #73daca - Terminal green */
+  --tn-blue: 218 79% 73%; /* #7aa2f7 - Primary actions */
+  --tn-green: 95 53% 55%; /* #9ece6a - Success */
+  --tn-red: 348 74% 64%; /* #f7768e - Destructive, live */
+  --tn-yellow: 35 79% 64%; /* #e0af68 - Warnings */
+  --tn-purple: 267 82% 77%; /* #bb9af7 - Secondary accent */
+  --tn-cyan: 178 64% 63%; /* #7dcfff - Info */
+  --tn-teal: 162 66% 62%; /* #73daca - Terminal green */
 
   /* Player-internal variables (not shared with host) */
   --fw-background: var(--tn-bg);
@@ -74,7 +74,8 @@
      ANIMATIONS
      ===================================================== */
   @keyframes float {
-    0%, 100% {
+    0%,
+    100% {
       transform: translateY(0px) scale(1);
     }
     50% {
@@ -183,7 +184,9 @@
     border-radius: 0;
     background: transparent;
     color: hsl(var(--tn-fg));
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
     cursor: pointer;
     border: none;
   }
@@ -201,10 +204,18 @@
   }
 
   /* Status indicators */
-  .fw-status-online { color: hsl(var(--tn-green)); }
-  .fw-status-offline { color: hsl(var(--tn-red)); }
-  .fw-status-warning { color: hsl(var(--tn-yellow)); }
-  .fw-status-info { color: hsl(var(--tn-cyan)); }
+  .fw-status-online {
+    color: hsl(var(--tn-green));
+  }
+  .fw-status-offline {
+    color: hsl(var(--tn-red));
+  }
+  .fw-status-warning {
+    color: hsl(var(--tn-yellow));
+  }
+  .fw-status-info {
+    color: hsl(var(--tn-cyan));
+  }
 
   /* =====================================================
      PLAYER CONTAINER STYLES (Slab-based)
@@ -215,7 +226,7 @@
     height: 100%;
     width: 100%;
     overflow: hidden;
-    border-radius: 0;  /* Slabs don't have rounded corners */
+    border-radius: 0; /* Slabs don't have rounded corners */
     background-color: hsl(var(--tn-bg-dark));
     border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
   }
@@ -317,7 +328,9 @@
     overflow-y: auto;
     background: hsl(var(--tn-bg-dark));
     border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    box-shadow:
+      0 10px 15px -3px rgb(0 0 0 / 0.1),
+      0 4px 6px -4px rgb(0 0 0 / 0.1);
     border-radius: 0.25rem;
     z-index: 50;
   }
@@ -358,7 +371,9 @@
     color: hsl(var(--tn-fg));
     border: none;
     cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
   }
 
   .fw-settings-btn:hover {
@@ -413,7 +428,9 @@
     background: hsl(var(--tn-bg-dark));
     padding: 0;
     color: hsl(var(--tn-fg));
-    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    box-shadow:
+      0 10px 15px -3px rgb(0 0 0 / 0.1),
+      0 4px 6px -4px rgb(0 0 0 / 0.1);
   }
 
   .fw-context-menu-item {
@@ -426,7 +443,9 @@
     font-size: 0.875rem;
     outline: none;
     color: hsl(var(--tn-fg));
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
   }
 
   .fw-context-menu-item:hover,
@@ -467,7 +486,9 @@
     font-size: 0.875rem;
     outline: none;
     color: hsl(var(--tn-fg));
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
   }
 
   .fw-context-menu-checkbox:hover,
@@ -496,7 +517,9 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
     border: none;
     cursor: pointer;
   }
@@ -517,13 +540,14 @@
     color: white;
   }
 
-
   /* --- Volume Control --- */
   .fw-volume-group {
     display: flex;
     align-items: center;
     border-radius: 0.25rem;
-    transition: background-color 0.2s, width 0.2s;
+    transition:
+      background-color 0.2s,
+      width 0.2s;
     cursor: pointer;
   }
 
@@ -565,7 +589,9 @@
     display: flex;
     align-items: center;
     overflow: hidden;
-    transition: width 0.2s ease-out, opacity 0.2s ease-out;
+    transition:
+      width 0.2s ease-out,
+      opacity 0.2s ease-out;
   }
 
   .fw-volume-slider-wrapper--collapsed {
@@ -676,7 +702,9 @@
     background: hsl(var(--tn-blue));
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     transform: translate(-50%, -50%);
-    transition: opacity 0.15s ease, transform 0.15s ease;
+    transition:
+      opacity 0.15s ease,
+      transform 0.15s ease;
     opacity: 0;
     pointer-events: none;
   }
@@ -949,7 +977,9 @@
     border: none;
     color: hsl(var(--tn-fg-dark));
     cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
   }
 
   .fw-error-close:hover {
@@ -980,7 +1010,9 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
   }
 
   .fw-error-btn:hover {
@@ -1076,7 +1108,9 @@
     border-right: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
     color: hsl(var(--tn-fg-dark));
     cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
   }
 
   .fw-dev-tab:hover {
@@ -1183,7 +1217,9 @@
     border: none;
     color: hsl(var(--tn-fg-dark));
     cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
   }
 
   .fw-dev-mode-btn:hover {
@@ -1211,7 +1247,9 @@
     color: hsl(var(--tn-fg));
     font-size: 0.75rem;
     cursor: pointer;
-    transition: background-color 0.15s, color 0.15s;
+    transition:
+      background-color 0.15s,
+      color 0.15s;
   }
 
   .fw-dev-action-btn:last-child {
@@ -1378,7 +1416,9 @@
     z-index: 50;
     background: hsl(var(--tn-bg-dark));
     border: 1px solid hsl(var(--tn-fg-gutter));
-    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    box-shadow:
+      0 4px 6px -1px rgb(0 0 0 / 0.1),
+      0 2px 4px -2px rgb(0 0 0 / 0.1);
     padding: 0.5rem;
     font-size: 10px;
     white-space: nowrap;

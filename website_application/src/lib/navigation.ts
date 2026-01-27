@@ -65,8 +65,7 @@ export const navigationConfig: Record<string, NavigationItem> = {
         href: "/composer",
         icon: "Clapperboard",
         active: "soon",
-        description:
-          "Compose multiple input streams with picture-in-picture layouts",
+        description: "Compose multiple input streams with picture-in-picture layouts",
       },
     },
   },

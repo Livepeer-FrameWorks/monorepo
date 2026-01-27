@@ -39,7 +39,9 @@
 
 <div class="slab border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
   <div class="slab-header">
-    <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Playback URLs</h3>
+    <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+      Playback URLs
+    </h3>
     <p class="text-xs text-muted-foreground/70 mt-1">
       Share these URLs with viewers to watch your stream.
       <a
@@ -55,7 +57,9 @@
 
   {#if !playbackId}
     <div class="slab-body--padded">
-      <div class="bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.3)] p-6 text-center">
+      <div
+        class="bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.3)] p-6 text-center"
+      >
         <p class="text-muted-foreground">
           Playback ID not available. Stream may still be initializing.
         </p>
@@ -83,13 +87,11 @@
             <h4 class="text-sm font-medium text-foreground">React Player Component</h4>
           </div>
           <p class="text-xs text-muted-foreground mb-3">
-            Embed using the <code class="bg-muted px-1 rounded">@livepeer-frameworks/player-react</code> NPM package
+            Embed using the <code class="bg-muted px-1 rounded"
+              >@livepeer-frameworks/player-react</code
+            > NPM package
           </p>
-          <Textarea
-            readonly
-            value={urls.embed}
-            class="font-mono text-xs h-40 resize-none"
-          />
+          <Textarea readonly value={urls.embed} class="font-mono text-xs h-40 resize-none" />
           <div class="mt-3 flex gap-2">
             <Button
               variant="ghost"
@@ -109,7 +111,7 @@
               variant="ghost"
               size="sm"
               class="border border-border/30"
-              onclick={() => window.open(`${getDocsSiteUrl()}/streamers/playback`, '_blank')}
+              onclick={() => window.open(`${getDocsSiteUrl()}/streamers/playback`, "_blank")}
             >
               <ExternalLinkIcon class="w-4 h-4 mr-2" />
               Player Docs

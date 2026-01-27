@@ -5,10 +5,11 @@ sidebar:
   order: 8
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="note" title="Self-Hosting Status">
-Self-hosted and hybrid deployments are in active testing. This page reflects the current implementation and may evolve as the platform hardens.
+  Self-hosted and hybrid deployments are in active testing. This page reflects the current
+  implementation and may evolve as the platform hardens.
 </Aside>
 
 FrameWorks utilizes a dual-database architecture to optimize for both transactional integrity and high-volume analytics. This hybrid approach ensures that configuration changes are immediate and reliable (ACID), while millions of data points from the edge are ingested and queried in realtime.
@@ -21,86 +22,92 @@ FrameWorks utilizes a dual-database architecture to optimize for both transactio
 ## PostgreSQL Schemas
 
 ### Commodore (Control Plane)
+
 Manages user identities, stream configurations, and API access.
 
-| Table | Purpose |
-|-------|---------|
-| `users` | User accounts, authentication, and profiles. |
-| `refresh_tokens` | Secure refresh token storage for JWT renewal. |
-| `api_tokens` | Developer API tokens. |
-| `wallet_identities` | Wallet-based identities (x402 / agent access). |
-| `streams` | Stream configuration, playback IDs, recording settings. |
-| `stream_keys` | RTMP ingest keys (supports rotation). |
-| `clips` | Clip metadata and ownership. |
-| `dvr_recordings` | DVR recording metadata. |
-| `vod_assets` | VOD asset registry. |
+| Table               | Purpose                                                 |
+| ------------------- | ------------------------------------------------------- |
+| `users`             | User accounts, authentication, and profiles.            |
+| `refresh_tokens`    | Secure refresh token storage for JWT renewal.           |
+| `api_tokens`        | Developer API tokens.                                   |
+| `wallet_identities` | Wallet-based identities (x402 / agent access).          |
+| `streams`           | Stream configuration, playback IDs, recording settings. |
+| `stream_keys`       | RTMP ingest keys (supports rotation).                   |
+| `clips`             | Clip metadata and ownership.                            |
+| `dvr_recordings`    | DVR recording metadata.                                 |
+| `vod_assets`        | VOD asset registry.                                     |
 
 ### Quartermaster (Infrastructure)
+
 Manages multi-tenant infrastructure registry and service orchestration.
 
-| Table | Purpose |
-|-------|---------|
-| `tenants` | Tenant accounts, limits, and branding configuration. |
-| `infrastructure_clusters` | Physical/logical cluster definitions. |
-| `infrastructure_nodes` | Edge/central nodes with capacity and health status. |
-| `services` | Master catalog of microservices. |
-| `service_instances` | Running instances on specific nodes. |
-| `cluster_services` | Service deployment specs per cluster. |
-| `tenant_cluster_assignments` | Maps tenants to specific clusters. |
-| `tenant_cluster_access` | Runtime access control and quota tracking. |
-| `bootstrap_tokens` | One-time tokens for edge node enrollment. |
-| `node_fingerprints` | Stable identity mapping for nodes. |
-| `cluster_invites` | Tenant invite links for cluster access. |
+| Table                        | Purpose                                              |
+| ---------------------------- | ---------------------------------------------------- |
+| `tenants`                    | Tenant accounts, limits, and branding configuration. |
+| `infrastructure_clusters`    | Physical/logical cluster definitions.                |
+| `infrastructure_nodes`       | Edge/central nodes with capacity and health status.  |
+| `services`                   | Master catalog of microservices.                     |
+| `service_instances`          | Running instances on specific nodes.                 |
+| `cluster_services`           | Service deployment specs per cluster.                |
+| `tenant_cluster_assignments` | Maps tenants to specific clusters.                   |
+| `tenant_cluster_access`      | Runtime access control and quota tracking.           |
+| `bootstrap_tokens`           | One-time tokens for edge node enrollment.            |
+| `node_fingerprints`          | Stable identity mapping for nodes.                   |
+| `cluster_invites`            | Tenant invite links for cluster access.              |
 
 ### Purser (Billing)
+
 Manages invoicing, payments, and subscription tiers.
 
-| Table | Purpose |
-|-------|---------|
-| `billing_invoices` | Draft + finalized invoices (status, totals, line items). |
-| `billing_payments` | Payment transactions (stripe, mollie, crypto, bank transfer). |
-| `billing_tiers` | Plan definitions and limits. |
-| `tenant_subscriptions` | Active tenant subscriptions. |
-| `cluster_pricing` | Cluster-level pricing overrides (Stripe price/meter IDs). |
-| `cluster_subscriptions` | Paid cluster subscriptions. |
-| `usage_records` | Aggregated usage metrics for billing. |
-| `prepaid_balances` | Prepaid balance tracking. |
-| `balance_transactions` | Balance changes (credits/debits). |
-| `pending_topups` | Pending top-up records. |
-| `crypto_wallets` | Ephemeral wallets for crypto payments. |
-| `hd_wallet_state` | HD wallet cursor/state. |
-| `mollie_customers` | Mollie customer mappings. |
-| `mollie_mandates` | Mollie mandate records. |
-| `webhook_events` | Webhook ingestion tracking. |
-| `x402_nonces` | x402 replay protection. |
-| `simplified_invoices` | Simplified invoice projections for UI. |
-| `tenant_balance_rollups` | Daily balance rollups. |
+| Table                    | Purpose                                                       |
+| ------------------------ | ------------------------------------------------------------- |
+| `billing_invoices`       | Draft + finalized invoices (status, totals, line items).      |
+| `billing_payments`       | Payment transactions (stripe, mollie, crypto, bank transfer). |
+| `billing_tiers`          | Plan definitions and limits.                                  |
+| `tenant_subscriptions`   | Active tenant subscriptions.                                  |
+| `cluster_pricing`        | Cluster-level pricing overrides (Stripe price/meter IDs).     |
+| `cluster_subscriptions`  | Paid cluster subscriptions.                                   |
+| `usage_records`          | Aggregated usage metrics for billing.                         |
+| `prepaid_balances`       | Prepaid balance tracking.                                     |
+| `balance_transactions`   | Balance changes (credits/debits).                             |
+| `pending_topups`         | Pending top-up records.                                       |
+| `crypto_wallets`         | Ephemeral wallets for crypto payments.                        |
+| `hd_wallet_state`        | HD wallet cursor/state.                                       |
+| `mollie_customers`       | Mollie customer mappings.                                     |
+| `mollie_mandates`        | Mollie mandate records.                                       |
+| `webhook_events`         | Webhook ingestion tracking.                                   |
+| `x402_nonces`            | x402 replay protection.                                       |
+| `simplified_invoices`    | Simplified invoice projections for UI.                        |
+| `tenant_balance_rollups` | Daily balance rollups.                                        |
 
 ### Periscope (Analytics)
+
 Stores billing coordination state.
 
-| Table | Purpose |
-|-------|---------|
+| Table             | Purpose                                                         |
+| ----------------- | --------------------------------------------------------------- |
 | `billing_cursors` | Tracks last-processed timestamp for billing summary generation. |
 
 ### Foghorn (Media Control)
+
 Manages artifacts, processing jobs, and node outputs.
 
-| Table | Purpose |
-|-------|---------|
-| `artifacts` | Stored artifacts (clips, recordings, outputs). |
-| `artifact_nodes` | Artifact placement across nodes. |
-| `node_outputs` | Cached node output configurations. |
-| `node_lifecycle` | Full node lifecycle snapshot storage. |
-| `vod_metadata` | VOD metadata records. |
-| `processing_jobs` | Transcoding/processing job tracking. |
+| Table             | Purpose                                        |
+| ----------------- | ---------------------------------------------- |
+| `artifacts`       | Stored artifacts (clips, recordings, outputs). |
+| `artifact_nodes`  | Artifact placement across nodes.               |
+| `node_outputs`    | Cached node output configurations.             |
+| `node_lifecycle`  | Full node lifecycle snapshot storage.          |
+| `vod_metadata`    | VOD metadata records.                          |
+| `processing_jobs` | Transcoding/processing job tracking.           |
 
 ### Navigator (DNS & Certificates)
+
 Manages DNS automation and SSL certificate issuance.
 
-| Table | Purpose |
-|-------|---------|
-| `certificates` | SSL/TLS certificate storage. |
+| Table           | Purpose                         |
+| --------------- | ------------------------------- |
+| `certificates`  | SSL/TLS certificate storage.    |
 | `acme_accounts` | ACME account registration data. |
 
 > **Note**: Real-time stream state (viewers, health) lives in ClickHouse state tables (`stream_state_current`, `node_state_current`, `artifact_state_current`). PostgreSQL holds configuration and billing data.
@@ -112,56 +119,62 @@ Manages DNS automation and SSL certificate issuance.
 ClickHouse stores immutable event logs and materialized views for fast querying.
 
 ### State Tables (Current Snapshots)
+
 Current state snapshots, deduplicated by primary key. Check `periscope.sql` for the exact engine semantics (ReplacingMergeTree vs AggregatingMergeTree).
 
-| Table | Description |
-|-------|-------------|
-| `stream_state_current` | Current stream state (status, viewers, health, quality). |
-| `node_state_current` | Current node state (CPU, RAM, disk, health). |
-| `artifact_state_current` | Current clip/DVR job state (stage, progress, output). |
-| `viewer_sessions_current` | Active viewer session tracking. |
+| Table                     | Description                                              |
+| ------------------------- | -------------------------------------------------------- |
+| `stream_state_current`    | Current stream state (status, viewers, health, quality). |
+| `node_state_current`      | Current node state (CPU, RAM, disk, health).             |
+| `artifact_state_current`  | Current clip/DVR job state (stage, progress, output).    |
+| `viewer_sessions_current` | Active viewer session tracking.                          |
 
 ### Event Logs (MergeTree)
+
 High-cardinality, append-only tables receiving raw data from Kafka. Key tables include:
 
-| Table | Description |
-|-------|-------------|
-| `stream_event_log` | Lifecycle events (start, end, buffer) and push status. |
-| `viewer_connection_events` | Viewer connect/disconnect sessions. |
-| `client_qoe_samples` | Player-side QoE metrics (bandwidth, errors). |
-| `node_metrics_samples` | Infrastructure health (CPU, RAM, Network). |
-| `routing_decisions` | Load balancer decision logs (Foghorn). |
-| `stream_health_samples` | Encoder-level health stats (bitrate, FPS, jitter). |
-| `track_list_events` | Track inventory snapshots (audio/video tracks). |
-| `rebuffering_events` | Derived rebuffer incidents. |
-| `artifact_events` | Clip/DVR lifecycle events. |
-| `storage_snapshots` | Periodic storage state snapshots. |
-| `storage_events` | Storage lifecycle events (freeze/defrost). |
-| `processing_events` | Transcoding/processing usage events. |
-| `ingest_errors` | Ingest error tracking. |
-| `api_requests` | API request logs. |
-| `api_events` | API event logs. |
+| Table                      | Description                                            |
+| -------------------------- | ------------------------------------------------------ |
+| `stream_event_log`         | Lifecycle events (start, end, buffer) and push status. |
+| `viewer_connection_events` | Viewer connect/disconnect sessions.                    |
+| `client_qoe_samples`       | Player-side QoE metrics (bandwidth, errors).           |
+| `node_metrics_samples`     | Infrastructure health (CPU, RAM, Network).             |
+| `routing_decisions`        | Load balancer decision logs (Foghorn).                 |
+| `stream_health_samples`    | Encoder-level health stats (bitrate, FPS, jitter).     |
+| `track_list_events`        | Track inventory snapshots (audio/video tracks).        |
+| `rebuffering_events`       | Derived rebuffer incidents.                            |
+| `artifact_events`          | Clip/DVR lifecycle events.                             |
+| `storage_snapshots`        | Periodic storage state snapshots.                      |
+| `storage_events`           | Storage lifecycle events (freeze/defrost).             |
+| `processing_events`        | Transcoding/processing usage events.                   |
+| `ingest_errors`            | Ingest error tracking.                                 |
+| `api_requests`             | API request logs.                                      |
+| `api_events`               | API event logs.                                        |
 
 ### Materialized Views (Aggregations)
+
 Background processes that roll up raw data into optimized summaries. See `periscope.sql` for the full list.
 
-*   **5‑Minute Rollups**: `stream_viewer_5m`, `client_qoe_5m`, `node_performance_5m`, `stream_health_5m`, `tenant_usage_5m`.
-*   **Hourly Rollups**: `stream_connection_hourly`, `viewer_hours_hourly`, `viewer_geo_hourly`, `viewer_city_hourly`, `node_metrics_1h`, `processing_hourly`, `api_usage_hourly`, `storage_usage_hourly`.
-*   **Daily Rollups**: `tenant_viewer_daily`, `tenant_analytics_daily`, `stream_analytics_daily`, `processing_daily`, `api_usage_daily`, `quality_tier_daily`.
+- **5‑Minute Rollups**: `stream_viewer_5m`, `client_qoe_5m`, `node_performance_5m`, `stream_health_5m`, `tenant_usage_5m`.
+- **Hourly Rollups**: `stream_connection_hourly`, `viewer_hours_hourly`, `viewer_geo_hourly`, `viewer_city_hourly`, `node_metrics_1h`, `processing_hourly`, `api_usage_hourly`, `storage_usage_hourly`.
+- **Daily Rollups**: `tenant_viewer_daily`, `tenant_analytics_daily`, `stream_analytics_daily`, `processing_daily`, `api_usage_daily`, `quality_tier_daily`.
 
 ---
 
 ## Data Access Patterns
 
 ### Pagination
+
 Most list endpoints in the Control Plane and Analytics API use cursor-based pagination (`first/after` and `last/before`).
-*   **Default Limit**: 50
-*   **Max Limit**: 500
-*   **Response Metadata**: Total count is returned in connection `totalCount` fields.
+
+- **Default Limit**: 50
+- **Max Limit**: 500
+- **Response Metadata**: Total count is returned in connection `totalCount` fields.
 
 ### Isolation
-*   **Tenant ID**: Mandatory filter for all queries. Enforced by middleware.
-*   **Service Boundaries**: Services connect only to their own Postgres schema. Cross-service access happens via gRPC (and a few HTTP endpoints where explicitly defined), never direct DB links.
+
+- **Tenant ID**: Mandatory filter for all queries. Enforced by middleware.
+- **Service Boundaries**: Services connect only to their own Postgres schema. Cross-service access happens via gRPC (and a few HTTP endpoints where explicitly defined), never direct DB links.
 
 ---
 
@@ -171,18 +184,19 @@ Most list endpoints in the Control Plane and Analytics API use cursor-based pagi
 
 Client IP addresses are stored in ClickHouse for internal analytics but **redacted from API responses**:
 
-| Layer | Behavior |
-|-------|----------|
-| **ClickHouse** | Raw client IP stored in `host` field |
-| **GraphQL API** | Returns `null` for `connectionAddr` and `host` fields |
-| **Signalman** | Redacts `host` before WebSocket/subscription broadcast |
+| Layer           | Behavior                                               |
+| --------------- | ------------------------------------------------------ |
+| **ClickHouse**  | Raw client IP stored in `host` field                   |
+| **GraphQL API** | Returns `null` for `connectionAddr` and `host` fields  |
+| **Signalman**   | Redacts `host` before WebSocket/subscription broadcast |
 
 **Exposed:** Geographic aggregates, viewer counts, session data, service/node IPs (infrastructure visibility)
 
 **Redacted:** Raw viewer IP addresses, connection addresses
 
 <Aside type="tip">
-Raw IPs remain in ClickHouse for future per-tenant analytics features. Operators with direct database access can query these, but platform APIs enforce redaction.
+  Raw IPs remain in ClickHouse for future per-tenant analytics features. Operators with direct
+  database access can query these, but platform APIs enforce redaction.
 </Aside>
 
 ### Geographic Normalization (H3 Bucketing)
@@ -195,30 +209,31 @@ Viewer geographic data goes through two transformations before storage:
 The platform uses [Uber's H3](https://h3geo.org/) spatial indexing at **resolution 5**:
 
 | Resolution | Avg. Hexagon Area | Avg. Edge Length |
-|------------|-------------------|------------------|
-| 5 | ~253 km² | ~8.5 km |
+| ---------- | ----------------- | ---------------- |
+| 5          | ~253 km²          | ~8.5 km          |
 
 **What this means:**
+
 - Coordinates stored/exposed are **cell centroids**, not actual viewer locations
 - Viewers within the same ~253 km² hexagon map to identical coordinates
 - Sufficient for regional analytics; prevents precise location tracking
 
 **Geographic fields in ClickHouse:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `country_code` | FixedString(2) | ISO country code |
-| `city` | String | City name from GeoIP |
-| `latitude` | Float64 | H3 cell centroid (normalized) |
-| `longitude` | Float64 | H3 cell centroid (normalized) |
+| Field          | Type           | Description                   |
+| -------------- | -------------- | ----------------------------- |
+| `country_code` | FixedString(2) | ISO country code              |
+| `city`         | String         | City name from GeoIP          |
+| `latitude`     | Float64        | H3 cell centroid (normalized) |
+| `longitude`    | Float64        | H3 cell centroid (normalized) |
 
 ### Bandwidth Tracking
 
 Bandwidth is tracked at multiple granularities:
 
-| Level | Table | Use Case |
-|-------|-------|----------|
+| Level   | Table                      | Use Case                     |
+| ------- | -------------------------- | ---------------------------- |
 | Session | `viewer_connection_events` | Per-viewer bytes transferred |
-| Stream | `stream_analytics_daily` | Daily per-stream totals |
-| Tenant | `tenant_viewer_daily` | Billing rollups |
-| Node | `node_metrics_samples` | Infrastructure capacity |
+| Stream  | `stream_analytics_daily`   | Daily per-stream totals      |
+| Tenant  | `tenant_viewer_daily`      | Billing rollups              |
+| Node    | `node_metrics_samples`     | Infrastructure capacity      |

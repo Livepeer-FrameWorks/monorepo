@@ -23,7 +23,9 @@ export function UriRow({ label, uri }: UriRowProps) {
   return (
     <div className="endpoint-row flex items-center justify-between gap-3">
       <div className="min-w-0 flex-1">
-        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {label}
+        </div>
         <div className="truncate font-mono text-sm text-foreground">{uri}</div>
       </div>
       <button

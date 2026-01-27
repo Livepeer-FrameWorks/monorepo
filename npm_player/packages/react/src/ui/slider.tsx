@@ -13,7 +13,19 @@ export interface SliderProps extends React.ComponentPropsWithoutRef<typeof Slide
 }
 
 const Slider = React.forwardRef<React.ElementRef<typeof SliderPrimitive.Root>, SliderProps>(
-  ({ className, trackClassName, thumbClassName, showTrack = true, hoverThumb: _hoverThumb = false, accentColor = false, orientation = "horizontal", ...props }, ref) => {
+  (
+    {
+      className,
+      trackClassName,
+      thumbClassName,
+      showTrack = true,
+      hoverThumb: _hoverThumb = false,
+      accentColor = false,
+      orientation = "horizontal",
+      ...props
+    },
+    ref
+  ) => {
     // Colors based on accentColor prop
     const rangeColorClass = accentColor ? "bg-[hsl(var(--tn-cyan,195_100%_50%))]" : "bg-white/90";
     const thumbColorClass = accentColor ? "bg-[hsl(var(--tn-cyan,195_100%_50%))]" : "bg-white";

@@ -18,7 +18,7 @@
  * - set_speed: Set playback rate { play_rate: number | "auto" }
  */
 
-import { TypedEventEmitter } from './EventEmitter';
+import { TypedEventEmitter } from "./EventEmitter";
 
 export interface MistSignalingConfig {
   /** WebSocket URL (will convert http to ws) */
@@ -46,24 +46,24 @@ export interface MistTimeUpdate {
 
 export interface MistSignalingEvents {
   /** Connection established */
-  'connected': void;
+  connected: void;
   /** Connection closed */
-  'disconnected': { code: number };
+  disconnected: { code: number };
   /** SDP answer received */
-  'answer_sdp': { result: boolean; answer_sdp: string };
+  answer_sdp: { result: boolean; answer_sdp: string };
   /** Time/track update */
-  'time_update': MistTimeUpdate;
+  time_update: MistTimeUpdate;
   /** Seek completed */
-  'seeked': { live_point?: boolean };
+  seeked: { live_point?: boolean };
   /** Playback speed changed */
-  'speed_changed': { play_rate: number; play_rate_curr: number };
+  speed_changed: { play_rate: number; play_rate_curr: number };
   /** Stream ended */
-  'stopped': void;
+  stopped: void;
   /** Error occurred */
-  'error': { message: string };
+  error: { message: string };
 }
 
-export type MistSignalingState = 'connecting' | 'connected' | 'disconnected' | 'closed';
+export type MistSignalingState = "connecting" | "connected" | "disconnected" | "closed";
 
 /**
  * MistSignaling handles WebSocket communication with MistServer for WebRTC
@@ -74,7 +74,7 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
   private timeout: number;
   private timeoutId: ReturnType<typeof setTimeout> | null = null;
   private onLog: (message: string) => void;
-  private _state: MistSignalingState = 'disconnected';
+  private _state: MistSignalingState = "disconnected";
 
   // Promise for seek operation
   public seekPromise: {
@@ -85,7 +85,7 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
   constructor(config: MistSignalingConfig) {
     super();
     // Convert http(s) to ws(s)
-    this.url = config.url.replace(/^http/, 'ws');
+    this.url = config.url.replace(/^http/, "ws");
     this.timeout = config.timeout ?? 5000;
     this.onLog = config.onLog ?? (() => {});
   }
@@ -101,36 +101,39 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    * Check if connected
    */
   get isConnected(): boolean {
-    return this._state === 'connected';
+    return this._state === "connected";
   }
 
   /**
    * Connect to MistServer WebSocket
    */
   connect(): void {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-      this.onLog('Already connected or connecting');
+    if (
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      this.onLog("Already connected or connecting");
       return;
     }
 
-    this._state = 'connecting';
+    this._state = "connecting";
     this.onLog(`Connecting to ${this.url}`);
 
     try {
       this.ws = new WebSocket(this.url);
     } catch (e) {
       this.onLog(`Failed to create WebSocket: ${e}`);
-      this._state = 'disconnected';
+      this._state = "disconnected";
       return;
     }
 
     // Connection timeout
     this.timeoutId = setTimeout(() => {
       if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
-        this.onLog('WebSocket connection timeout');
+        this.onLog("WebSocket connection timeout");
         this.ws.close();
-        this._state = 'disconnected';
-        this.emit('error', { message: 'Connection timeout' });
+        this._state = "disconnected";
+        this.emit("error", { message: "Connection timeout" });
       }
     }, this.timeout);
 
@@ -139,9 +142,9 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
         clearTimeout(this.timeoutId);
         this.timeoutId = null;
       }
-      this._state = 'connected';
-      this.onLog('WebSocket connected');
-      this.emit('connected', undefined);
+      this._state = "connected";
+      this.onLog("WebSocket connected");
+      this.emit("connected", undefined);
     };
 
     this.ws.onmessage = (event) => {
@@ -158,9 +161,9 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
         clearTimeout(this.timeoutId);
         this.timeoutId = null;
       }
-      this._state = 'closed';
+      this._state = "closed";
       this.onLog(`WebSocket closed (code: ${event.code})`);
-      this.emit('disconnected', { code: event.code });
+      this.emit("disconnected", { code: event.code });
     };
 
     this.ws.onerror = (event) => {
@@ -175,24 +178,24 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
     const type = cmd.type as string;
 
     switch (type) {
-      case 'on_connected':
+      case "on_connected":
         // Already handled by onopen
         break;
 
-      case 'on_disconnected':
-        this._state = 'disconnected';
-        this.emit('disconnected', { code: (cmd.code as number) || 0 });
+      case "on_disconnected":
+        this._state = "disconnected";
+        this.emit("disconnected", { code: (cmd.code as number) || 0 });
         break;
 
-      case 'on_answer_sdp':
-        this.emit('answer_sdp', {
+      case "on_answer_sdp":
+        this.emit("answer_sdp", {
           result: cmd.result as boolean,
           answer_sdp: cmd.answer_sdp as string,
         });
         break;
 
-      case 'on_time':
-        this.emit('time_update', {
+      case "on_time":
+        this.emit("time_update", {
           current: cmd.current as number,
           end: cmd.end as number,
           begin: cmd.begin as number,
@@ -202,30 +205,30 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
         });
         break;
 
-      case 'seek':
-        this.emit('seeked', {
+      case "seek":
+        this.emit("seeked", {
           live_point: (cmd as Record<string, unknown>).live_point as boolean | undefined,
         });
         // Resolve seek promise if pending
         if (this.seekPromise) {
-          this.seekPromise.resolve('Seeked');
+          this.seekPromise.resolve("Seeked");
           this.seekPromise = null;
         }
         break;
 
-      case 'set_speed':
-        this.emit('speed_changed', {
+      case "set_speed":
+        this.emit("speed_changed", {
           play_rate: (cmd as Record<string, unknown>).play_rate as number,
           play_rate_curr: (cmd as Record<string, unknown>).play_rate_curr as number,
         });
         break;
 
-      case 'on_stop':
-        this.emit('stopped', undefined);
+      case "on_stop":
+        this.emit("stopped", undefined);
         break;
 
-      case 'on_error':
-        this.emit('error', { message: cmd.message as string });
+      case "on_error":
+        this.emit("error", { message: cmd.message as string });
         break;
 
       default:
@@ -238,7 +241,7 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    */
   send(cmd: Record<string, unknown>): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.onLog('Cannot send: WebSocket not connected');
+      this.onLog("Cannot send: WebSocket not connected");
       return false;
     }
 
@@ -255,27 +258,27 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    * Send SDP offer to MistServer
    */
   sendOfferSDP(sdp: string): boolean {
-    return this.send({ type: 'offer_sdp', offer_sdp: sdp });
+    return this.send({ type: "offer_sdp", offer_sdp: sdp });
   }
 
   /**
    * Seek to position (in seconds or "live")
    */
-  seek(time: number | 'live'): Promise<string> {
+  seek(time: number | "live"): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!this.isConnected) {
-        reject('Not connected');
+        reject("Not connected");
         return;
       }
 
       // Cancel previous seek if pending
       if (this.seekPromise) {
-        this.seekPromise.reject('New seek requested');
+        this.seekPromise.reject("New seek requested");
       }
 
       // Send seek command (time in ms for MistServer)
-      const seekTime = time === 'live' ? 'live' : time * 1000;
-      this.send({ type: 'seek', seek_time: seekTime });
+      const seekTime = time === "live" ? "live" : time * 1000;
+      this.send({ type: "seek", seek_time: seekTime });
 
       // Store promise handlers
       this.seekPromise = { resolve, reject };
@@ -286,14 +289,14 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    * Pause playback (hold)
    */
   pause(): boolean {
-    return this.send({ type: 'hold' });
+    return this.send({ type: "hold" });
   }
 
   /**
    * Stop playback
    */
   stop(): boolean {
-    return this.send({ type: 'stop' });
+    return this.send({ type: "stop" });
   }
 
   /**
@@ -302,15 +305,15 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
    * @param audio - Audio track selection (e.g., "eng", "none")
    */
   setTracks(options: { video?: string; audio?: string }): boolean {
-    return this.send({ type: 'tracks', ...options });
+    return this.send({ type: "tracks", ...options });
   }
 
   /**
    * Set playback speed
    * @param rate - Playback rate (1.0 normal, "auto" for live catch-up)
    */
-  setSpeed(rate: number | 'auto'): boolean {
-    return this.send({ type: 'set_speed', play_rate: rate });
+  setSpeed(rate: number | "auto"): boolean {
+    return this.send({ type: "set_speed", play_rate: rate });
   }
 
   /**
@@ -323,12 +326,12 @@ export class MistSignaling extends TypedEventEmitter<MistSignalingEvents> {
     }
 
     if (this.seekPromise) {
-      this.seekPromise.reject('Connection closed');
+      this.seekPromise.reject("Connection closed");
       this.seekPromise = null;
     }
 
     if (this.ws) {
-      this._state = 'closed';
+      this._state = "closed";
       this.ws.close();
       this.ws = null;
     }

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { cn } from '@livepeer-frameworks/player-core';
-  import { buttonVariants, type ButtonSize, type ButtonVariant } from './button';
-  import { getContext, setContext } from 'svelte';
+  import { cn } from "@livepeer-frameworks/player-core";
+  import { buttonVariants, type ButtonSize, type ButtonVariant } from "./button";
+  import { getContext, setContext } from "svelte";
 
   type $$Props = {
     variant?: ButtonVariant;
@@ -22,11 +22,11 @@
 
   let Comp: string = "button";
   if (asChild) {
-    Comp = getContext('__svelte_slot_element') || 'div';
+    Comp = getContext("__svelte_slot_element") || "div";
   }
 
   // Set context for potential nested slots (though less common for Button)
-  setContext('__svelte_slot_element', Comp);
+  setContext("__svelte_slot_element", Comp);
 
   let mergedClasses = $derived(cn(buttonVariants(variant, size, className)));
 </script>
@@ -36,7 +36,7 @@
     <slot />
   </svelte:element>
 {:else}
-  <button class={mergedClasses} type={type} {...rest}>
+  <button class={mergedClasses} {type} {...rest}>
     <slot />
   </button>
 {/if}

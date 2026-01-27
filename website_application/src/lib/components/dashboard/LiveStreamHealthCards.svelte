@@ -33,20 +33,14 @@
 
 {#if hasLiveStreams}
   <div class="space-y-3">
-    <h3 class="font-semibold text-foreground text-sm">
-      Live Stream Health
-    </h3>
+    <h3 class="font-semibold text-foreground text-sm">Live Stream Health</h3>
 
     {#each Object.entries(liveMetrics) as [streamId, metrics] (streamId)}
       <div class="p-3 bg-muted">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-sm font-medium text-foreground"
-            >Stream {streamId.slice(0, 8)}</span
-          >
+          <span class="text-sm font-medium text-foreground">Stream {streamId.slice(0, 8)}</span>
           <div class="flex items-center space-x-1">
-            <div
-              class="w-2 h-2 bg-success rounded-full animate-pulse"
-            ></div>
+            <div class="w-2 h-2 bg-success rounded-full animate-pulse"></div>
             <span class="text-xs text-muted-foreground">Live</span>
           </div>
         </div>
@@ -62,9 +56,7 @@
           </div>
           <div>
             <span class="text-muted-foreground">Bitrate:</span>
-            <span class="text-foreground ml-1"
-              >{metrics.bitrate_kbps || "Unknown"} kbps</span
-            >
+            <span class="text-foreground ml-1">{metrics.bitrate_kbps || "Unknown"} kbps</span>
           </div>
           {#if metrics.video_codec || metrics.audio_codec}
             <div class="col-span-2">

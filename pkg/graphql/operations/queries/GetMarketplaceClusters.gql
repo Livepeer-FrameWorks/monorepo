@@ -1,13 +1,7 @@
 # Fetch available marketplace clusters with pricing and subscription status
 # Returns publicly available clusters users can subscribe to
-query GetMarketplaceClusters(
-  $first: Int = 50
-  $after: String
-) {
-  marketplaceClusters(
-    first: $first
-    after: $after
-  ) {
+query GetMarketplaceClusters($first: Int = 50, $after: String) {
+  marketplaceClusters(first: $first, after: $after) {
     clusterId
     clusterName
     shortDescription

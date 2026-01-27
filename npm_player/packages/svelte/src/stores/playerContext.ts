@@ -4,12 +4,16 @@
  * Port of PlayerContext.tsx React context to Svelte 5 stores.
  */
 
-import { writable, derived, type Readable } from 'svelte/store';
-import { getContext, setContext } from 'svelte';
-import { globalPlayerManager, type StreamInfo, type IPlayer } from '@livepeer-frameworks/player-core';
+import { writable, derived, type Readable } from "svelte/store";
+import { getContext, setContext } from "svelte";
+import {
+  globalPlayerManager,
+  type StreamInfo,
+  type IPlayer,
+} from "@livepeer-frameworks/player-core";
 
 // Context key
-const PLAYER_CONTEXT_KEY = Symbol('player-context');
+const PLAYER_CONTEXT_KEY = Symbol("player-context");
 
 export interface PlayerContextState {
   /** Current video element (if available) */
@@ -74,11 +78,11 @@ export function createPlayerContext(): PlayerContextStore {
   const store = writable<PlayerContextState>(initialState);
 
   function setVideoElement(el: HTMLVideoElement | null) {
-    store.update(s => ({ ...s, videoElement: el }));
+    store.update((s) => ({ ...s, videoElement: el }));
   }
 
   function setPlayer(player: IPlayer | null) {
-    store.update(s => ({
+    store.update((s) => ({
       ...s,
       player,
       playerName: player?.capability.name ?? null,
@@ -87,15 +91,15 @@ export function createPlayerContext(): PlayerContextStore {
   }
 
   function setSource(type: string | null, url: string | null) {
-    store.update(s => ({ ...s, sourceType: type, sourceUrl: url }));
+    store.update((s) => ({ ...s, sourceType: type, sourceUrl: url }));
   }
 
   function setStreamInfo(info: StreamInfo | null) {
-    store.update(s => ({ ...s, streamInfo: info }));
+    store.update((s) => ({ ...s, streamInfo: info }));
   }
 
   function setReady(ready: boolean) {
-    store.update(s => ({ ...s, isReady: ready }));
+    store.update((s) => ({ ...s, isReady: ready }));
   }
 
   function reset() {
@@ -150,7 +154,7 @@ function createFallbackContext(): PlayerContextStore {
     const player = globalPlayerManager.getCurrentPlayer();
     const videoEl = player?.getVideoElement() ?? null;
 
-    store.update(s => ({
+    store.update((s) => ({
       ...s,
       videoElement: videoEl,
       player: player ?? null,
@@ -174,8 +178,8 @@ function createFallbackContext(): PlayerContextStore {
       // Initial sync
       syncState();
       // Subscribe to events
-      globalPlayerManager.on('playerInitialized', handleInitialized);
-      globalPlayerManager.on('selection-changed', handleSelectionChanged);
+      globalPlayerManager.on("playerInitialized", handleInitialized);
+      globalPlayerManager.on("selection-changed", handleSelectionChanged);
     }
 
     const unsubscribe = originalSubscribe(run, invalidate);
@@ -185,8 +189,8 @@ function createFallbackContext(): PlayerContextStore {
       subscribers--;
       if (subscribers === 0) {
         // Unsubscribe from events
-        globalPlayerManager.off('playerInitialized', handleInitialized);
-        globalPlayerManager.off('selection-changed', handleSelectionChanged);
+        globalPlayerManager.off("playerInitialized", handleInitialized);
+        globalPlayerManager.off("selection-changed", handleSelectionChanged);
       }
     };
   };
@@ -204,15 +208,15 @@ function createFallbackContext(): PlayerContextStore {
 
 // Convenience derived stores
 export function createDerivedVideoElement(store: PlayerContextStore) {
-  return derived(store, $state => $state.videoElement);
+  return derived(store, ($state) => $state.videoElement);
 }
 
 export function createDerivedIsReady(store: PlayerContextStore) {
-  return derived(store, $state => $state.isReady);
+  return derived(store, ($state) => $state.isReady);
 }
 
 export function createDerivedPlayerInfo(store: PlayerContextStore) {
-  return derived(store, $state => ({
+  return derived(store, ($state) => ({
     name: $state.playerName,
     shortname: $state.playerShortname,
   }));

@@ -4,16 +4,20 @@
  * Ported from StreamCrafter useWhipStreaming.js
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import type { WhipClientConfig, WhipConnectionState, WhipClientEvents } from '../types';
-import type { EncoderManager, EncodedVideoChunkData, EncodedAudioChunkData } from './EncoderManager';
+import { TypedEventEmitter } from "./EventEmitter";
+import type { WhipClientConfig, WhipConnectionState, WhipClientEvents } from "../types";
+import type {
+  EncoderManager,
+  EncodedVideoChunkData,
+  EncodedAudioChunkData,
+} from "./EncoderManager";
 
 export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
   private config: WhipClientConfig;
   private peerConnection: RTCPeerConnection | null = null;
   private videoTrackGenerator: MediaStreamTrackGenerator | null = null;
   private audioTrackGenerator: MediaStreamTrackGenerator | null = null;
-  private state: WhipConnectionState = 'disconnected';
+  private state: WhipConnectionState = "disconnected";
 
   // Writer management to prevent locking issues
   private videoWriter: WritableStreamDefaultWriter<VideoFrame> | null = null;
@@ -53,7 +57,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    */
   private log(message: string, data?: unknown): void {
     if (this.config.debug) {
-      console.log(`[WHIP] ${message}`, data ?? '');
+      console.log(`[WHIP] ${message}`, data ?? "");
     }
   }
 
@@ -61,8 +65,8 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    * Error logging helper
    */
   private logError(message: string, error?: Error): void {
-    console.error(`[WHIP ERROR] ${message}`, error ?? '');
-    this.emit('error', { message, error });
+    console.error(`[WHIP ERROR] ${message}`, error ?? "");
+    this.emit("error", { message, error });
   }
 
   /**
@@ -71,7 +75,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
   private setState(newState: WhipConnectionState): void {
     const previousState = this.state;
     this.state = newState;
-    this.emit('stateChange', { state: newState, previousState });
+    this.emit("stateChange", { state: newState, previousState });
   }
 
   // ==========================================================================
@@ -93,43 +97,49 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
       const trackKind = transceiver.sender.track?.kind;
 
-      if (trackKind === 'video') {
-        const capabilities = RTCRtpSender.getCapabilities('video');
+      if (trackKind === "video") {
+        const capabilities = RTCRtpSender.getCapabilities("video");
         if (!capabilities?.codecs) continue;
 
         // Filter to VP9 and H264, preferring VP9
         const preferred = capabilities.codecs
-          .filter((c) => c.mimeType === 'video/VP9' || c.mimeType === 'video/H264')
+          .filter((c) => c.mimeType === "video/VP9" || c.mimeType === "video/H264")
           .sort((a, b) => {
             // VP9 first, then H264
-            if (a.mimeType === 'video/VP9' && b.mimeType !== 'video/VP9') return -1;
-            if (a.mimeType !== 'video/VP9' && b.mimeType === 'video/VP9') return 1;
+            if (a.mimeType === "video/VP9" && b.mimeType !== "video/VP9") return -1;
+            if (a.mimeType !== "video/VP9" && b.mimeType === "video/VP9") return 1;
             return 0;
           });
 
         if (preferred.length > 0) {
           try {
             transceiver.setCodecPreferences(preferred);
-            this.log('Set video codec preferences', preferred.map((c) => c.mimeType));
+            this.log(
+              "Set video codec preferences",
+              preferred.map((c) => c.mimeType)
+            );
           } catch (err) {
-            this.log('Failed to set video codec preferences', err);
+            this.log("Failed to set video codec preferences", err);
           }
         }
       }
 
-      if (trackKind === 'audio') {
-        const capabilities = RTCRtpSender.getCapabilities('audio');
+      if (trackKind === "audio") {
+        const capabilities = RTCRtpSender.getCapabilities("audio");
         if (!capabilities?.codecs) continue;
 
         // Filter to Opus only
-        const preferred = capabilities.codecs.filter((c) => c.mimeType === 'audio/opus');
+        const preferred = capabilities.codecs.filter((c) => c.mimeType === "audio/opus");
 
         if (preferred.length > 0) {
           try {
             transceiver.setCodecPreferences(preferred);
-            this.log('Set audio codec preferences', preferred.map((c) => c.mimeType));
+            this.log(
+              "Set audio codec preferences",
+              preferred.map((c) => c.mimeType)
+            );
           } catch (err) {
-            this.log('Failed to set audio codec preferences', err);
+            this.log("Failed to set audio codec preferences", err);
           }
         }
       }
@@ -149,14 +159,14 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       const params = sender.getParameters();
       const codec = params.codecs?.[0];
 
-      if (sender.track?.kind === 'video' && codec?.mimeType) {
+      if (sender.track?.kind === "video" && codec?.mimeType) {
         this.negotiatedVideoCodec = codec.mimeType;
-        this.log('Negotiated video codec', codec.mimeType);
+        this.log("Negotiated video codec", codec.mimeType);
       }
 
-      if (sender.track?.kind === 'audio' && codec?.mimeType) {
+      if (sender.track?.kind === "audio" && codec?.mimeType) {
         this.negotiatedAudioCodec = codec.mimeType;
-        this.log('Negotiated audio codec', codec.mimeType);
+        this.log("Negotiated audio codec", codec.mimeType);
       }
     }
   }
@@ -171,43 +181,45 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    */
   canUseEncodedInsertion(): boolean {
     // Must have a connection
-    if (!this.peerConnection || this.state !== 'connected') {
-      this.log('canUseEncodedInsertion: no connection', { hasPC: !!this.peerConnection, state: this.state });
+    if (!this.peerConnection || this.state !== "connected") {
+      this.log("canUseEncodedInsertion: no connection", {
+        hasPC: !!this.peerConnection,
+        state: this.state,
+      });
       return false;
     }
 
     // Must have RTCRtpScriptTransform support
-    if (typeof RTCRtpScriptTransform === 'undefined') {
-      this.log('canUseEncodedInsertion: RTCRtpScriptTransform not supported');
+    if (typeof RTCRtpScriptTransform === "undefined") {
+      this.log("canUseEncodedInsertion: RTCRtpScriptTransform not supported");
       return false;
     }
 
     // Must have senders with transform support
     const senders = this.peerConnection.getSenders();
-    const hasTransformSupport = senders.some((s) => 'transform' in s);
+    const hasTransformSupport = senders.some((s) => "transform" in s);
     if (!hasTransformSupport) {
-      this.log('Sender transform not supported');
+      this.log("Sender transform not supported");
       return false;
     }
 
     // Check video codec alignment
     if (this.negotiatedVideoCodec) {
       const videoOk =
-        this.negotiatedVideoCodec === 'video/VP9' ||
-        this.negotiatedVideoCodec === 'video/H264';
+        this.negotiatedVideoCodec === "video/VP9" || this.negotiatedVideoCodec === "video/H264";
 
       if (!videoOk) {
-        this.log('Video codec not compatible with WebCodecs', this.negotiatedVideoCodec);
+        this.log("Video codec not compatible with WebCodecs", this.negotiatedVideoCodec);
         return false;
       }
     }
 
     // Check audio codec alignment
     if (this.negotiatedAudioCodec) {
-      const audioOk = this.negotiatedAudioCodec === 'audio/opus';
+      const audioOk = this.negotiatedAudioCodec === "audio/opus";
 
       if (!audioOk) {
-        this.log('Audio codec not compatible with WebCodecs', this.negotiatedAudioCodec);
+        this.log("Audio codec not compatible with WebCodecs", this.negotiatedAudioCodec);
         return false;
       }
     }
@@ -233,7 +245,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    * Check if connected.
    */
   get isConnected(): boolean {
-    return this.state === 'connected';
+    return this.state === "connected";
   }
 
   /**
@@ -241,11 +253,11 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    */
   async connect(stream: MediaStream): Promise<void> {
     try {
-      this.log('Starting WHIP connection');
-      this.setState('connecting');
+      this.log("Starting WHIP connection");
+      this.setState("connecting");
 
       if (!this.config.whipUrl) {
-        throw new Error('WHIP URL is required');
+        throw new Error("WHIP URL is required");
       }
 
       // Create RTCPeerConnection
@@ -253,7 +265,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         iceServers: this.config.iceServers || [],
       };
 
-      this.log('Creating RTCPeerConnection', pcConfig);
+      this.log("Creating RTCPeerConnection", pcConfig);
       const pc = new RTCPeerConnection(pcConfig);
 
       // Set up connection state monitoring
@@ -262,18 +274,18 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         this.log(`Connection state changed: ${state}`);
 
         switch (state) {
-          case 'connected':
-            this.log('WHIP streaming connected successfully');
-            this.setState('connected');
+          case "connected":
+            this.log("WHIP streaming connected successfully");
+            this.setState("connected");
             break;
-          case 'disconnected':
-            this.setState('disconnected');
+          case "disconnected":
+            this.setState("disconnected");
             break;
-          case 'failed':
-            this.setState('failed');
+          case "failed":
+            this.setState("failed");
             break;
-          case 'closed':
-            this.setState('closed');
+          case "closed":
+            this.setState("closed");
             break;
         }
       };
@@ -287,16 +299,16 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       };
 
       pc.onicecandidate = (event) => {
-        this.emit('iceCandidate', { candidate: event.candidate });
+        this.emit("iceCandidate", { candidate: event.candidate });
         if (event.candidate) {
-          this.log('ICE candidate generated', event.candidate.candidate);
+          this.log("ICE candidate generated", event.candidate.candidate);
         } else {
-          this.log('ICE candidate gathering complete');
+          this.log("ICE candidate gathering complete");
         }
       };
 
       // Add tracks from the stream
-      this.log('Adding tracks to peer connection');
+      this.log("Adding tracks to peer connection");
       stream.getTracks().forEach((track, index) => {
         this.log(`Adding ${track.kind} track ${index}`, {
           id: track.id,
@@ -313,16 +325,16 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       this.preferCodecs(pc);
 
       // Create and set local description
-      this.log('Creating offer');
+      this.log("Creating offer");
       const offer = await pc.createOffer({
         offerToReceiveAudio: false,
         offerToReceiveVideo: false,
       });
 
-      this.log('Setting local description');
+      this.log("Setting local description");
       await pc.setLocalDescription(offer);
 
-      this.log('Local SDP offer created', {
+      this.log("Local SDP offer created", {
         type: offer.type,
         sdpLength: offer.sdp?.length,
       });
@@ -331,10 +343,10 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       this.log(`Sending offer to WHIP endpoint: ${this.config.whipUrl}`);
 
       const response = await fetch(this.config.whipUrl, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/sdp',
-          Accept: 'application/sdp',
+          "Content-Type": "application/sdp",
+          Accept: "application/sdp",
         },
         body: offer.sdp,
       });
@@ -342,37 +354,39 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       this.log(`WHIP response status: ${response.status} ${response.statusText}`);
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
-        throw new Error(`WHIP request failed: ${response.status} ${response.statusText} - ${errorText}`);
+        const errorText = await response.text().catch(() => "Unknown error");
+        throw new Error(
+          `WHIP request failed: ${response.status} ${response.statusText} - ${errorText}`
+        );
       }
 
       // Store WHIP resource URL from Location header (per RFC 9725)
       // This URL is used for DELETE on disconnect
-      this.resourceUrl = response.headers.get('Location');
+      this.resourceUrl = response.headers.get("Location");
       if (this.resourceUrl) {
-        this.log('WHIP resource URL:', this.resourceUrl);
+        this.log("WHIP resource URL:", this.resourceUrl);
       }
 
       // Get and set remote description
       const answerSdp = await response.text();
-      this.log('Received SDP answer', {
+      this.log("Received SDP answer", {
         length: answerSdp.length,
       });
 
       await pc.setRemoteDescription({
-        type: 'answer',
+        type: "answer",
         sdp: answerSdp,
       });
 
-      this.log('Remote description set successfully');
+      this.log("Remote description set successfully");
 
       // Verify negotiated codecs for WebCodecs alignment
       this.verifyCodecAlignment();
 
-      this.log('WHIP connection established, waiting for ICE connection...');
+      this.log("WHIP connection established, waiting for ICE connection...");
     } catch (error) {
-      this.logError('Failed to connect', error instanceof Error ? error : new Error(String(error)));
-      this.setState('failed');
+      this.logError("Failed to connect", error instanceof Error ? error : new Error(String(error)));
+      this.setState("failed");
       this.cleanup();
       throw error;
     }
@@ -386,29 +400,29 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
     audioGenerator: MediaStreamTrackGenerator;
   }> {
     try {
-      this.log('Starting WHIP connection with track generators');
-      this.setState('connecting');
+      this.log("Starting WHIP connection with track generators");
+      this.setState("connecting");
 
       if (!this.config.whipUrl) {
-        throw new Error('WHIP URL is required');
+        throw new Error("WHIP URL is required");
       }
 
       // Create track generators
-      this.log('Creating MediaStreamTrackGenerators');
-      const videoGenerator = new MediaStreamTrackGenerator({ kind: 'video' });
-      const audioGenerator = new MediaStreamTrackGenerator({ kind: 'audio' });
+      this.log("Creating MediaStreamTrackGenerators");
+      const videoGenerator = new MediaStreamTrackGenerator({ kind: "video" });
+      const audioGenerator = new MediaStreamTrackGenerator({ kind: "audio" });
 
       this.videoTrackGenerator = videoGenerator;
       this.audioTrackGenerator = audioGenerator;
 
-      this.log('Track generators created successfully');
+      this.log("Track generators created successfully");
 
       // Create RTCPeerConnection
       const pcConfig: RTCConfiguration = {
         iceServers: this.config.iceServers || [],
       };
 
-      this.log('Creating RTCPeerConnection', pcConfig);
+      this.log("Creating RTCPeerConnection", pcConfig);
       const pc = new RTCPeerConnection(pcConfig);
 
       // Set up connection state monitoring
@@ -417,18 +431,18 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         this.log(`Connection state changed: ${state}`);
 
         switch (state) {
-          case 'connected':
-            this.log('WHIP streaming connected successfully');
-            this.setState('connected');
+          case "connected":
+            this.log("WHIP streaming connected successfully");
+            this.setState("connected");
             break;
-          case 'disconnected':
-            this.setState('disconnected');
+          case "disconnected":
+            this.setState("disconnected");
             break;
-          case 'failed':
-            this.setState('failed');
+          case "failed":
+            this.setState("failed");
             break;
-          case 'closed':
-            this.setState('closed');
+          case "closed":
+            this.setState("closed");
             break;
         }
       };
@@ -442,18 +456,18 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       };
 
       pc.onicecandidate = (event) => {
-        this.emit('iceCandidate', { candidate: event.candidate });
+        this.emit("iceCandidate", { candidate: event.candidate });
         if (event.candidate) {
-          this.log('ICE candidate generated', event.candidate.candidate);
+          this.log("ICE candidate generated", event.candidate.candidate);
         } else {
-          this.log('ICE candidate gathering complete');
+          this.log("ICE candidate gathering complete");
         }
       };
 
       // Add tracks to peer connection
       const mediaStream = new MediaStream([videoGenerator, audioGenerator]);
 
-      this.log('Adding tracks to peer connection');
+      this.log("Adding tracks to peer connection");
       mediaStream.getTracks().forEach((track, index) => {
         this.log(`Adding ${track.kind} track ${index}`, {
           id: track.id,
@@ -470,23 +484,23 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       this.preferCodecs(pc);
 
       // Create and set local description
-      this.log('Creating offer');
+      this.log("Creating offer");
       const offer = await pc.createOffer({
         offerToReceiveAudio: false,
         offerToReceiveVideo: false,
       });
 
-      this.log('Setting local description');
+      this.log("Setting local description");
       await pc.setLocalDescription(offer);
 
       // Send offer to WHIP endpoint
       this.log(`Sending offer to WHIP endpoint: ${this.config.whipUrl}`);
 
       const response = await fetch(this.config.whipUrl, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/sdp',
-          Accept: 'application/sdp',
+          "Content-Type": "application/sdp",
+          Accept: "application/sdp",
         },
         body: offer.sdp,
       });
@@ -494,30 +508,35 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
       this.log(`WHIP response status: ${response.status} ${response.statusText}`);
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
-        throw new Error(`WHIP request failed: ${response.status} ${response.statusText} - ${errorText}`);
+        const errorText = await response.text().catch(() => "Unknown error");
+        throw new Error(
+          `WHIP request failed: ${response.status} ${response.statusText} - ${errorText}`
+        );
       }
 
       // Get and set remote description
       const answerSdp = await response.text();
-      this.log('Received SDP answer', { length: answerSdp.length });
+      this.log("Received SDP answer", { length: answerSdp.length });
 
       await pc.setRemoteDescription({
-        type: 'answer',
+        type: "answer",
         sdp: answerSdp,
       });
 
-      this.log('Remote description set successfully');
+      this.log("Remote description set successfully");
 
       // Verify negotiated codecs
       this.verifyCodecAlignment();
 
-      this.log('WHIP connection established with generators');
+      this.log("WHIP connection established with generators");
 
       return { videoGenerator, audioGenerator };
     } catch (error) {
-      this.logError('Failed to connect with generators', error instanceof Error ? error : new Error(String(error)));
-      this.setState('failed');
+      this.logError(
+        "Failed to connect with generators",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      this.setState("failed");
       this.cleanup();
       throw error;
     }
@@ -541,7 +560,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         const { frame, resolve, reject } = item;
 
         if (!this.videoTrackGenerator) {
-          reject(new Error('Video track generator not available'));
+          reject(new Error("Video track generator not available"));
           continue;
         }
 
@@ -588,7 +607,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         const { audioData, resolve, reject } = item;
 
         if (!this.audioTrackGenerator) {
-          reject(new Error('Audio track generator not available'));
+          reject(new Error("Audio track generator not available"));
           continue;
         }
 
@@ -623,7 +642,11 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
   async sendVideoFrame(frame: VideoFrame): Promise<boolean> {
     if (!this.videoTrackGenerator) {
       if (frame) {
-        try { frame.close(); } catch { /* ignore */ }
+        try {
+          frame.close();
+        } catch {
+          /* ignore */
+        }
       }
       return false;
     }
@@ -640,7 +663,11 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
   async sendAudioData(audioData: AudioData): Promise<boolean> {
     if (!this.audioTrackGenerator) {
       if (audioData) {
-        try { audioData.close(); } catch { /* ignore */ }
+        try {
+          audioData.close();
+        } catch {
+          /* ignore */
+        }
       }
       return false;
     }
@@ -656,12 +683,10 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    */
   async replaceTrack(oldTrack: MediaStreamTrack, newTrack: MediaStreamTrack): Promise<void> {
     if (!this.peerConnection) {
-      throw new Error('No peer connection');
+      throw new Error("No peer connection");
     }
 
-    const sender = this.peerConnection
-      .getSenders()
-      .find((s) => s.track?.kind === oldTrack.kind);
+    const sender = this.peerConnection.getSenders().find((s) => s.track?.kind === oldTrack.kind);
 
     if (!sender) {
       throw new Error(`No sender found for ${oldTrack.kind} track`);
@@ -676,7 +701,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    */
   async addTrack(track: MediaStreamTrack, stream?: MediaStream): Promise<void> {
     if (!this.peerConnection) {
-      throw new Error('No peer connection');
+      throw new Error("No peer connection");
     }
 
     this.peerConnection.addTrack(track, stream || new MediaStream([track]));
@@ -694,7 +719,10 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
     try {
       return await this.peerConnection.getStats();
     } catch (error) {
-      this.logError('Failed to get connection stats', error instanceof Error ? error : new Error(String(error)));
+      this.logError(
+        "Failed to get connection stats",
+        error instanceof Error ? error : new Error(String(error))
+      );
       return null;
     }
   }
@@ -722,46 +750,43 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    * @param encoderManager - The EncoderManager that produces encoded chunks
    * @param workerUrl - Optional URL to the rtcTransform worker (for bundled usage)
    */
-  attachEncoderTransform(
-    encoderManager: EncoderManager,
-    workerUrl?: string
-  ): void {
+  attachEncoderTransform(encoderManager: EncoderManager, workerUrl?: string): void {
     if (!this.peerConnection) {
-      throw new Error('No peer connection - call connect() first');
+      throw new Error("No peer connection - call connect() first");
     }
 
     // Check for RTCRtpScriptTransform support
-    if (typeof RTCRtpScriptTransform === 'undefined') {
-      this.log('RTCRtpScriptTransform not supported, skipping encoder transform');
+    if (typeof RTCRtpScriptTransform === "undefined") {
+      this.log("RTCRtpScriptTransform not supported, skipping encoder transform");
       return;
     }
 
-    this.log('Attaching encoder transform');
+    this.log("Attaching encoder transform");
 
     // Create transform workers using inlined worker bundle
     const createWorker = (): Worker | null => {
       // Custom worker URL takes precedence (for consumers who bundle separately)
       if (workerUrl) {
-        return new Worker(workerUrl, { type: 'module' });
+        return new Worker(workerUrl, { type: "module" });
       }
 
       // Preferred: load packaged worker relative to the built module URL.
       try {
-        const packagedUrl = new URL('../workers/rtcTransform.worker.js', import.meta.url);
-        return new Worker(packagedUrl, { type: 'module' });
+        const packagedUrl = new URL("../workers/rtcTransform.worker.js", import.meta.url);
+        return new Worker(packagedUrl, { type: "module" });
       } catch (err) {
-        this.log('Packaged worker URL failed, trying fallback paths', err);
+        this.log("Packaged worker URL failed, trying fallback paths", err);
       }
 
       const fallbackPaths = [
-        '/workers/rtcTransform.worker.js',
-        './workers/rtcTransform.worker.js',
-        '/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/rtcTransform.worker.js',
+        "/workers/rtcTransform.worker.js",
+        "./workers/rtcTransform.worker.js",
+        "/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/rtcTransform.worker.js",
       ];
 
       for (const path of fallbackPaths) {
         try {
-          return new Worker(path, { type: 'module' });
+          return new Worker(path, { type: "module" });
         } catch {
           try {
             return new Worker(path);
@@ -776,18 +801,18 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
     // Get senders
     const senders = this.peerConnection.getSenders();
-    const videoSender = senders.find((s) => s.track?.kind === 'video');
-    const audioSender = senders.find((s) => s.track?.kind === 'audio');
+    const videoSender = senders.find((s) => s.track?.kind === "video");
+    const audioSender = senders.find((s) => s.track?.kind === "audio");
 
     // Attach video transform
-    if (videoSender && 'transform' in videoSender) {
-      this.log('Creating video transform worker');
+    if (videoSender && "transform" in videoSender) {
+      this.log("Creating video transform worker");
       this.videoTransformWorker = createWorker();
 
       if (this.videoTransformWorker) {
         // Configure worker
         this.videoTransformWorker.postMessage({
-          type: 'configure',
+          type: "configure",
           config: {
             debug: this.config.debug,
             maxQueueSize: 30, // ~1 second at 30fps
@@ -797,23 +822,23 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         // Attach transform to sender
         // RTCRtpScriptTransform options are passed to worker via rtctransform event
         (videoSender as RTCRtpSender & { transform: unknown }).transform =
-          new RTCRtpScriptTransform(this.videoTransformWorker, { kind: 'video' });
+          new RTCRtpScriptTransform(this.videoTransformWorker, { kind: "video" });
 
-        this.log('Video transform attached');
+        this.log("Video transform attached");
       } else {
-        this.logError('Failed to create video transform worker');
+        this.logError("Failed to create video transform worker");
       }
     }
 
     // Attach audio transform
-    if (audioSender && 'transform' in audioSender) {
-      this.log('Creating audio transform worker');
+    if (audioSender && "transform" in audioSender) {
+      this.log("Creating audio transform worker");
       this.audioTransformWorker = createWorker();
 
       if (this.audioTransformWorker) {
         // Configure worker
         this.audioTransformWorker.postMessage({
-          type: 'configure',
+          type: "configure",
           config: {
             debug: this.config.debug,
             maxQueueSize: 50, // Audio packets are smaller/more frequent
@@ -822,11 +847,11 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
         // Attach transform to sender
         (audioSender as RTCRtpSender & { transform: unknown }).transform =
-          new RTCRtpScriptTransform(this.audioTransformWorker, { kind: 'audio' });
+          new RTCRtpScriptTransform(this.audioTransformWorker, { kind: "audio" });
 
-        this.log('Audio transform attached');
+        this.log("Audio transform attached");
       } else {
-        this.logError('Failed to create audio transform worker');
+        this.logError("Failed to create audio transform worker");
       }
     }
 
@@ -834,7 +859,7 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
     const handleVideoChunk = (chunk: EncodedVideoChunkData): void => {
       if (this.videoTransformWorker) {
         this.videoTransformWorker.postMessage(
-          { type: 'videoChunk', data: chunk },
+          { type: "videoChunk", data: chunk },
           [chunk.data] // Transfer ArrayBuffer ownership
         );
       }
@@ -843,23 +868,23 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
     const handleAudioChunk = (chunk: EncodedAudioChunkData): void => {
       if (this.audioTransformWorker) {
         this.audioTransformWorker.postMessage(
-          { type: 'audioChunk', data: chunk },
+          { type: "audioChunk", data: chunk },
           [chunk.data] // Transfer ArrayBuffer ownership
         );
       }
     };
 
     // Subscribe to encoder events
-    encoderManager.on('videoChunk', handleVideoChunk);
-    encoderManager.on('audioChunk', handleAudioChunk);
+    encoderManager.on("videoChunk", handleVideoChunk);
+    encoderManager.on("audioChunk", handleAudioChunk);
 
     // Store cleanup function
     this.encoderListenerCleanup = () => {
-      encoderManager.off('videoChunk', handleVideoChunk);
-      encoderManager.off('audioChunk', handleAudioChunk);
+      encoderManager.off("videoChunk", handleVideoChunk);
+      encoderManager.off("audioChunk", handleAudioChunk);
     };
 
-    this.log('Encoder transform attached successfully');
+    this.log("Encoder transform attached successfully");
   }
 
   /**
@@ -881,19 +906,19 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
 
     // Stop video transform worker
     if (this.videoTransformWorker) {
-      this.videoTransformWorker.postMessage({ type: 'stop' });
+      this.videoTransformWorker.postMessage({ type: "stop" });
       this.videoTransformWorker.terminate();
       this.videoTransformWorker = null;
     }
 
     // Stop audio transform worker
     if (this.audioTransformWorker) {
-      this.audioTransformWorker.postMessage({ type: 'stop' });
+      this.audioTransformWorker.postMessage({ type: "stop" });
       this.audioTransformWorker.terminate();
       this.audioTransformWorker = null;
     }
 
-    this.log('Encoder transform detached');
+    this.log("Encoder transform detached");
   }
 
   /**
@@ -954,22 +979,22 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
    * Disconnect from WHIP endpoint
    */
   async disconnect(): Promise<void> {
-    this.log('Disconnecting WHIP');
+    this.log("Disconnecting WHIP");
 
     // Send DELETE to WHIP resource URL per RFC 9725
     if (this.resourceUrl) {
       try {
-        this.log('Sending DELETE to WHIP resource:', this.resourceUrl);
-        await fetch(this.resourceUrl, { method: 'DELETE' });
+        this.log("Sending DELETE to WHIP resource:", this.resourceUrl);
+        await fetch(this.resourceUrl, { method: "DELETE" });
       } catch (error) {
         // Don't block disconnect on DELETE failure
-        this.log('Failed to delete WHIP resource (non-fatal)', error);
+        this.log("Failed to delete WHIP resource (non-fatal)", error);
       }
       this.resourceUrl = null;
     }
 
     this.cleanup();
-    this.setState('disconnected');
+    this.setState("disconnected");
   }
 
   /**

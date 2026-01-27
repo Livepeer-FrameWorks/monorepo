@@ -50,7 +50,11 @@
     font-size: clamp(2.1rem, 2vw, 3.6rem);
     line-height: 1.05;
     font-weight: 700;
-    background: linear-gradient(135deg, hsl(var(--foreground)), color-mix(in srgb, hsl(var(--accent)) 35%, hsl(var(--foreground)) 65%));
+    background: linear-gradient(
+      135deg,
+      hsl(var(--foreground)),
+      color-mix(in srgb, hsl(var(--accent)) 35%, hsl(var(--foreground)) 65%)
+    );
     -webkit-background-clip: text;
     color: transparent;
   }
@@ -64,14 +68,19 @@
   }
 
   .hero-subtitle::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 50%;
     bottom: 0;
     width: clamp(6rem, 30vw, 12rem);
     height: 3px;
     border-radius: 999px;
-    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--brand-green)));
+    background: linear-gradient(
+      90deg,
+      hsl(var(--primary)),
+      hsl(var(--accent)),
+      hsl(var(--brand-green))
+    );
     box-shadow: 0 0 18px hsl(var(--accent) / 0.35);
     transform: translateX(-50%);
   }

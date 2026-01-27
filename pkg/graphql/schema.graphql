@@ -28,7 +28,9 @@ Relay-style global node interface.
 All fetchable objects implement this interface and can be retrieved by their global ID.
 """
 interface Node {
-  """The globally unique identifier for this object."""
+  """
+  The globally unique identifier for this object.
+  """
   id: ID!
 }
 
@@ -49,13 +51,21 @@ streamsConnection(page: { last: 10, before: "cursor..." })
 ```
 """
 input ConnectionInput {
-  """Number of items to fetch (forward pagination). Default: 50, Max: 500."""
+  """
+  Number of items to fetch (forward pagination). Default: 50, Max: 500.
+  """
   first: Int = 50
-  """Cursor to start fetching after (forward pagination)."""
+  """
+  Cursor to start fetching after (forward pagination).
+  """
   after: String
-  """Number of items to fetch (backward pagination)."""
+  """
+  Number of items to fetch (backward pagination).
+  """
   last: Int
-  """Cursor to start fetching before (backward pagination)."""
+  """
+  Cursor to start fetching before (backward pagination).
+  """
   before: String
 }
 
@@ -73,65 +83,107 @@ type Query {
   """
   analytics: Analytics!
 
-  """List all streams for the current tenant with pagination."""
+  """
+  List all streams for the current tenant with pagination.
+  """
   streamsConnection(
-    """Pagination options."""
+    """
+    Pagination options.
+    """
     page: ConnectionInput
   ): StreamsConnection!
 
-  """Fetch a single stream by its global ID."""
+  """
+  Fetch a single stream by its global ID.
+  """
   stream(
-    """The global ID of the stream."""
+    """
+    The global ID of the stream.
+    """
     id: ID!
   ): Stream
 
-  """Validate a stream key and return the associated stream info."""
+  """
+  Validate a stream key and return the associated stream info.
+  """
   validateStreamKey(
-    """The stream key to validate."""
+    """
+    The stream key to validate.
+    """
     streamKey: String!
   ): StreamValidation
 
-  """List all stream keys for a specific stream."""
+  """
+  List all stream keys for a specific stream.
+  """
   streamKeysConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """The stream ID to list keys for (Stream.id, Relay global ID)."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    The stream ID to list keys for (Stream.id, Relay global ID).
+    """
     streamId: ID!
   ): StreamKeysConnection!
 
-  """List clips created from streams."""
+  """
+  List clips created from streams.
+  """
   clipsConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """Filter by stream ID (Stream.id, Relay global ID)."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Filter by stream ID (Stream.id, Relay global ID).
+    """
     streamId: ID
   ): ClipsConnection!
 
-  """Fetch a single clip by its global ID."""
+  """
+  Fetch a single clip by its global ID.
+  """
   clip(
-    """The global ID of the clip."""
+    """
+    The global ID of the clip.
+    """
     id: ID!
   ): Clip
 
-  """List available billing tiers and their pricing."""
+  """
+  List available billing tiers and their pricing.
+  """
   billingTiers: [BillingTier!]
 
-  """List invoices for the current tenant."""
+  """
+  List invoices for the current tenant.
+  """
   invoicesConnection(
-    """Pagination options."""
+    """
+    Pagination options.
+    """
     page: ConnectionInput
   ): InvoicesConnection!
 
-  """Fetch a single invoice by ID."""
+  """
+  Fetch a single invoice by ID.
+  """
   invoice(
-    """The invoice ID."""
+    """
+    The invoice ID.
+    """
     id: ID!
   ): Invoice
 
-  """Get the current billing status including subscription tier and usage."""
+  """
+  Get the current billing status including subscription tier and usage.
+  """
   billingStatus: BillingStatus
 
-  """List Mollie mandates for the current tenant."""
+  """
+  List Mollie mandates for the current tenant.
+  """
   mollieMandates: [MollieMandate!]!
 
   """
@@ -139,7 +191,9 @@ type Query {
   Only available for tenants with billing_model = 'prepaid'.
   """
   prepaidBalance(
-    """Currency code (defaults to USD)."""
+    """
+    Currency code (defaults to USD).
+    """
     currency: String = "USD"
   ): PrepaidBalance
 
@@ -153,146 +207,254 @@ type Query {
   List balance transactions for the tenant with pagination.
   """
   balanceTransactionsConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """Filter by transaction type: topup, usage, refund, adjustment."""
-    transactionType: String,
-    """Time range to query."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Filter by transaction type: topup, usage, refund, adjustment.
+    """
+    transactionType: String
+    """
+    Time range to query.
+    """
     timeRange: TimeRangeInput
   ): BalanceTransactionsConnection!
 
-  """Get aggregated usage metrics for the tenant."""
+  """
+  Get aggregated usage metrics for the tenant.
+  """
   tenantUsage(
-    """Time range to query."""
+    """
+    Time range to query.
+    """
     timeRange: TimeRangeInput
   ): TenantUsage
 
-  """List detailed usage records with pagination."""
+  """
+  List detailed usage records with pagination.
+  """
   usageRecordsConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """Time range to query."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Time range to query.
+    """
     timeRange: TimeRangeInput
   ): UsageRecordsConnection!
 
-  """Get aggregated usage data grouped by time interval."""
+  """
+  Get aggregated usage data grouped by time interval.
+  """
   usageAggregates(
-    """Time range to query (required)."""
-    timeRange: TimeRangeInput!,
-    """Aggregation granularity: hourly, daily, or monthly."""
-    granularity: String = "daily",
-    """Filter by usage types."""
+    """
+    Time range to query (required).
+    """
+    timeRange: TimeRangeInput!
+    """
+    Aggregation granularity: hourly, daily, or monthly.
+    """
+    granularity: String = "daily"
+    """
+    Filter by usage types.
+    """
     usageTypes: [String!]
   ): [UsageAggregate!]!
 
-  """Get the current tenant's profile and settings."""
+  """
+  Get the current tenant's profile and settings.
+  """
   tenant: Tenant
 
-  """List clusters the tenant has access to."""
+  """
+  List clusters the tenant has access to.
+  """
   clustersConnection(
-    """Pagination options."""
+    """
+    Pagination options.
+    """
     page: ConnectionInput
   ): ClustersConnection!
 
-  """Fetch a single cluster by ID."""
+  """
+  Fetch a single cluster by ID.
+  """
   cluster(
-    """The cluster ID."""
+    """
+    The cluster ID.
+    """
     id: ID!
   ): Cluster
 
-  """List nodes (edge servers) with optional filters."""
+  """
+  List nodes (edge servers) with optional filters.
+  """
   nodesConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """Filter by cluster ID."""
-    clusterId: String,
-    """Filter by node status."""
-    status: NodeStatus,
-    """Filter by node type."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Filter by cluster ID.
+    """
+    clusterId: String
+    """
+    Filter by node status.
+    """
+    status: NodeStatus
+    """
+    Filter by node type.
+    """
     type: String
   ): NodesConnection!
 
-  """Fetch a single node by its global ID."""
+  """
+  Fetch a single node by its global ID.
+  """
   node(
-    """The global ID of the node."""
+    """
+    The global ID of the node.
+    """
     id: ID!
   ): Node
 
-  """Discover service instances by type."""
+  """
+  Discover service instances by type.
+  """
   discoverServicesConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """Service type to discover (e.g., mistserver, foghorn)."""
-    type: String!,
-    """Filter by cluster ID."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Service type to discover (e.g., mistserver, foghorn).
+    """
+    type: String!
+    """
+    Filter by cluster ID.
+    """
     clusterId: String
   ): ServiceInstancesConnection!
 
-  """List clusters the tenant has access to."""
-  clustersAccess(first: Int = 50, after: String): [ClusterAccess!] @deprecated(reason: "Use clustersAccessConnection instead")
+  """
+  List clusters the tenant has access to.
+  """
+  clustersAccess(first: Int = 50, after: String): [ClusterAccess!]
+    @deprecated(reason: "Use clustersAccessConnection instead")
 
-  """List clusters the tenant has access to (paginated)."""
+  """
+  List clusters the tenant has access to (paginated).
+  """
   clustersAccessConnection(page: ConnectionInput): ClusterAccessConnection!
 
-  """List available clusters for subscription."""
-  clustersAvailable(first: Int = 50, after: String): [AvailableCluster!] @deprecated(reason: "Use clustersAvailableConnection instead")
+  """
+  List available clusters for subscription.
+  """
+  clustersAvailable(first: Int = 50, after: String): [AvailableCluster!]
+    @deprecated(reason: "Use clustersAvailableConnection instead")
 
-  """List available clusters for subscription (paginated)."""
+  """
+  List available clusters for subscription (paginated).
+  """
   clustersAvailableConnection(page: ConnectionInput): AvailableClusterConnection!
 
-  """List clusters the tenant is subscribed to."""
-  mySubscriptions(first: Int = 50, after: String): [Cluster!]! @deprecated(reason: "Use mySubscriptionsConnection instead")
+  """
+  List clusters the tenant is subscribed to.
+  """
+  mySubscriptions(first: Int = 50, after: String): [Cluster!]!
+    @deprecated(reason: "Use mySubscriptionsConnection instead")
 
-  """List clusters the tenant is subscribed to (paginated)."""
+  """
+  List clusters the tenant is subscribed to (paginated).
+  """
   mySubscriptionsConnection(page: ConnectionInput): MySubscriptionsConnection!
 
-  """Check health status of service instances (public allowlist)."""
+  """
+  Check health status of service instances (public allowlist).
+  """
   serviceInstancesHealth(
-    """Filter by service ID."""
+    """
+    Filter by service ID.
+    """
     serviceId: String
   ): [ServiceInstanceHealth!]
 
-  """List clusters available in the marketplace."""
-  marketplaceClusters(first: Int = 50, after: String): [MarketplaceCluster!]! @deprecated(reason: "Use marketplaceClustersConnection instead")
+  """
+  List clusters available in the marketplace.
+  """
+  marketplaceClusters(first: Int = 50, after: String): [MarketplaceCluster!]!
+    @deprecated(reason: "Use marketplaceClustersConnection instead")
 
-  """List clusters available in the marketplace (paginated)."""
+  """
+  List clusters available in the marketplace (paginated).
+  """
   marketplaceClustersConnection(
-    """Pagination options."""
+    """
+    Pagination options.
+    """
     page: ConnectionInput
   ): MarketplaceClusterConnection!
 
-  """Get details for a specific marketplace cluster."""
+  """
+  Get details for a specific marketplace cluster.
+  """
   marketplaceCluster(
-    """The cluster ID."""
+    """
+    The cluster ID.
+    """
     clusterId: String!
   ): MarketplaceCluster
 
-  """List pending subscription requests for a cluster."""
-  pendingSubscriptions(clusterId: ID!): [ClusterSubscription!]! @deprecated(reason: "Use pendingSubscriptionsConnection instead")
+  """
+  List pending subscription requests for a cluster.
+  """
+  pendingSubscriptions(clusterId: ID!): [ClusterSubscription!]!
+    @deprecated(reason: "Use pendingSubscriptionsConnection instead")
 
-  """List pending subscription requests (paginated)."""
+  """
+  List pending subscription requests (paginated).
+  """
   pendingSubscriptionsConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """The cluster ID."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    The cluster ID.
+    """
     clusterId: ID!
   ): ClusterSubscriptionConnection!
 
-  """List invites for a cluster."""
-  clusterInvites(clusterId: ID!): [ClusterInvite!]! @deprecated(reason: "Use clusterInvitesConnection instead")
+  """
+  List invites for a cluster.
+  """
+  clusterInvites(clusterId: ID!): [ClusterInvite!]!
+    @deprecated(reason: "Use clusterInvitesConnection instead")
 
-  """List invites for a cluster (paginated)."""
+  """
+  List invites for a cluster (paginated).
+  """
   clusterInvitesConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """The cluster ID."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    The cluster ID.
+    """
     clusterId: ID!
   ): ClusterInviteConnection!
 
-  """List cluster invites sent to the current tenant."""
+  """
+  List cluster invites sent to the current tenant.
+  """
   myClusterInvites: [ClusterInvite!]! @deprecated(reason: "Use myClusterInvitesConnection instead")
 
-  """List cluster invites sent to the current tenant (paginated)."""
+  """
+  List cluster invites sent to the current tenant (paginated).
+  """
   myClusterInvitesConnection(page: ConnectionInput): ClusterInviteConnection!
 
   """
@@ -301,11 +463,17 @@ type Query {
   """
   developerTokensConnection(page: ConnectionInput): DeveloperTokensConnection!
 
-  """List bootstrap tokens for node provisioning (service token required)."""
+  """
+  List bootstrap tokens for node provisioning (service token required).
+  """
   bootstrapTokensConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """Filter by token kind."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Filter by token kind.
+    """
     kind: String
   ): BootstrapTokenConnection!
 
@@ -314,19 +482,29 @@ type Query {
   DVR allows viewers to seek back in a live stream.
   """
   dvrRecordingsConnection(
-    """Pagination options."""
-    page: ConnectionInput,
-    """Filter by stream ID (Stream.id, Relay global ID)."""
+    """
+    Pagination options.
+    """
+    page: ConnectionInput
+    """
+    Filter by stream ID (Stream.id, Relay global ID).
+    """
     streamId: ID
   ): DVRRecordingsConnection
 
-  """Fetch a single VOD asset by ID."""
+  """
+  Fetch a single VOD asset by ID.
+  """
   vodAsset(
-    """The VOD asset ID."""
+    """
+    The VOD asset ID.
+    """
     id: ID!
   ): VodAsset
 
-  """List VOD assets uploaded by the tenant."""
+  """
+  List VOD assets uploaded by the tenant.
+  """
   vodAssetsConnection(page: ConnectionInput): VodAssetsConnection!
 
   """
@@ -334,7 +512,9 @@ type Query {
   Used by players to get the optimal CDN endpoint for playback.
   """
   resolveViewerEndpoint(
-    """Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR."""
+    """
+    Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR.
+    """
     contentId: String!
   ): ViewerEndpointResponse
 
@@ -343,7 +523,9 @@ type Query {
   Returns RTMP/SRT/WHIP endpoints for the stream.
   """
   resolveIngestEndpoint(
-    """The stream key."""
+    """
+    The stream key.
+    """
     streamKey: String!
   ): IngestEndpointResponse
 
@@ -354,13 +536,19 @@ type Query {
   Conversations are ordered by last activity, most recent first.
   """
   conversationsConnection(
-    """Pagination options."""
+    """
+    Pagination options.
+    """
     page: ConnectionInput
   ): ConversationsConnection!
 
-  """Fetch a single conversation by ID."""
+  """
+  Fetch a single conversation by ID.
+  """
   conversation(
-    """The conversation ID."""
+    """
+    The conversation ID.
+    """
     id: ID!
   ): Conversation
 
@@ -369,9 +557,13 @@ type Query {
   Messages are ordered chronologically, oldest first.
   """
   messagesConnection(
-    """The conversation ID."""
-    conversationId: ID!,
-    """Pagination options."""
+    """
+    The conversation ID.
+    """
+    conversationId: ID!
+    """
+    Pagination options.
+    """
     page: ConnectionInput
   ): MessagesConnection!
 }
@@ -381,37 +573,59 @@ Unified analytics surface for all platform metrics.
 Organized into logical domains: usage, health, lifecycle, and infrastructure.
 """
 type Analytics {
-  """Platform-wide overview metrics for the given time range."""
+  """
+  Platform-wide overview metrics for the given time range.
+  """
   overview(
-    """Time range for the overview."""
+    """
+    Time range for the overview.
+    """
     timeRange: TimeRangeInput
   ): PlatformOverview
 
-  """Usage analytics: streaming hours, storage, and processing."""
+  """
+  Usage analytics: streaming hours, storage, and processing.
+  """
   usage: AnalyticsUsage!
 
-  """Health analytics: stream quality, rebuffering, client QoE."""
+  """
+  Health analytics: stream quality, rebuffering, client QoE.
+  """
   health: AnalyticsHealth!
 
-  """Lifecycle analytics: stream events, artifacts, connections."""
+  """
+  Lifecycle analytics: stream events, artifacts, connections.
+  """
   lifecycle: AnalyticsLifecycle!
 
-  """Infrastructure analytics: routing, node metrics, services."""
+  """
+  Infrastructure analytics: routing, node metrics, services.
+  """
   infra: AnalyticsInfra!
 }
 
-"""Usage analytics grouped by type."""
+"""
+Usage analytics grouped by type.
+"""
 type AnalyticsUsage {
-  """Streaming usage: viewer hours, geographic distribution, quality tiers."""
+  """
+  Streaming usage: viewer hours, geographic distribution, quality tiers.
+  """
   streaming: StreamingUsage!
 
-  """Storage usage: disk utilization by node and scope."""
+  """
+  Storage usage: disk utilization by node and scope.
+  """
   storage: StorageUsage!
 
-  """Processing usage: transcoding, clipping, DVR operations."""
+  """
+  Processing usage: transcoding, clipping, DVR operations.
+  """
   processing: ProcessingUsage!
 
-  """API usage: GraphQL request counts, auth type breakdown, operation analytics."""
+  """
+  API usage: GraphQL request counts, auth type breakdown, operation analytics.
+  """
   api: APIUsage!
 }
 
@@ -420,20 +634,67 @@ Streaming usage analytics.
 `streamId` arguments accept Stream.id (Relay global ID).
 """
 type StreamingUsage {
-  viewerGeographicsConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput): ViewerGeographicsConnection!
-  geographicDistribution(streamId: ID, timeRange: TimeRangeInput, topN: Int = 10): GeographicDistribution
+  viewerGeographicsConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+  ): ViewerGeographicsConnection!
+  geographicDistribution(
+    streamId: ID
+    timeRange: TimeRangeInput
+    topN: Int = 10
+  ): GeographicDistribution
   streamAnalyticsSummary(streamId: ID!, timeRange: TimeRangeInput): StreamAnalyticsSummary!
-  viewerHoursHourlyConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): ViewerHoursHourlyConnection!
-  viewerGeoHourlyConnection(page: ConnectionInput, timeRange: TimeRangeInput, noCache: Boolean = false): ViewerGeoHourlyConnection!
-  viewerTimeSeriesConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, interval: String): ViewerTimeSeriesConnection!
-  qualityTierDailyConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): QualityTierDailyConnection!
-  streamConnectionHourlyConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): StreamConnectionHourlyConnection!
-  tenantAnalyticsDailyConnection(page: ConnectionInput, timeRange: TimeRangeInput, noCache: Boolean = false): TenantAnalyticsDailyConnection!
-  streamAnalyticsDailyConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): StreamAnalyticsDailyConnection!
+  viewerHoursHourlyConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ViewerHoursHourlyConnection!
+  viewerGeoHourlyConnection(
+    page: ConnectionInput
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ViewerGeoHourlyConnection!
+  viewerTimeSeriesConnection(
+    page: ConnectionInput
+    streamId: ID!
+    timeRange: TimeRangeInput
+    interval: String
+  ): ViewerTimeSeriesConnection!
+  qualityTierDailyConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): QualityTierDailyConnection!
+  streamConnectionHourlyConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamConnectionHourlyConnection!
+  tenantAnalyticsDailyConnection(
+    page: ConnectionInput
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): TenantAnalyticsDailyConnection!
+  streamAnalyticsDailyConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamAnalyticsDailyConnection!
 }
 
 type StorageUsage {
-  storageUsageConnection(page: ConnectionInput, nodeId: String, storageScope: String, timeRange: TimeRangeInput, noCache: Boolean = false): StorageUsageConnection!
+  storageUsageConnection(
+    page: ConnectionInput
+    nodeId: String
+    storageScope: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StorageUsageConnection!
 }
 
 """
@@ -441,7 +702,13 @@ Processing usage analytics.
 `streamId` arguments accept Stream.id (Relay global ID).
 """
 type ProcessingUsage {
-  processingUsageConnection(page: ConnectionInput, streamId: ID, processType: String, timeRange: TimeRangeInput, noCache: Boolean = false): ProcessingUsageConnection!
+  processingUsageConnection(
+    page: ConnectionInput
+    streamId: ID
+    processType: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ProcessingUsageConnection!
 }
 
 """
@@ -449,7 +716,13 @@ API usage analytics.
 Tracks GraphQL API request counts by auth type, operation type, and operation name.
 """
 type APIUsage {
-  apiUsageConnection(page: ConnectionInput, authType: String, operationType: String, timeRange: TimeRangeInput, noCache: Boolean = false): APIUsageConnection!
+  apiUsageConnection(
+    page: ConnectionInput
+    authType: String
+    operationType: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): APIUsageConnection!
 }
 
 """
@@ -457,10 +730,32 @@ Health analytics for streams.
 `streamId` arguments accept Stream.id (Relay global ID).
 """
 type AnalyticsHealth {
-  streamHealthConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): StreamHealthMetricsConnection!
-  streamHealth5mConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, noCache: Boolean = false): StreamHealth5mConnection!
-  rebufferingEventsConnection(page: ConnectionInput, streamId: ID, nodeId: String, timeRange: TimeRangeInput, noCache: Boolean = false): RebufferingEventsConnection!
-  clientQoeConnection(page: ConnectionInput, streamId: ID, nodeId: String, timeRange: TimeRangeInput, noCache: Boolean = false): ClientMetrics5mConnection!
+  streamHealthConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamHealthMetricsConnection!
+  streamHealth5mConnection(
+    page: ConnectionInput
+    streamId: ID!
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamHealth5mConnection!
+  rebufferingEventsConnection(
+    page: ConnectionInput
+    streamId: ID
+    nodeId: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): RebufferingEventsConnection!
+  clientQoeConnection(
+    page: ConnectionInput
+    streamId: ID
+    nodeId: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ClientMetrics5mConnection!
 }
 
 """
@@ -468,14 +763,57 @@ Lifecycle analytics for streams and artifacts.
 `streamId` arguments accept Stream.id (Relay global ID).
 """
 type AnalyticsLifecycle {
-  streamEventsConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, noCache: Boolean = false): StreamEventsConnection!
-  bufferEventsConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, noCache: Boolean = false): BufferEventsConnection!
-  artifactEventsConnection(page: ConnectionInput, streamId: ID, stage: String, contentType: String, timeRange: TimeRangeInput, noCache: Boolean = false): ArtifactEventsConnection!
-  storageEventsConnection(page: ConnectionInput, assetType: String, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): StorageEventsConnection!
-  connectionEventsConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): ConnectionEventsConnection!
-  viewerSessionsConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, noCache: Boolean = false): ViewerSessionsConnection!
-  trackListConnection(page: ConnectionInput, streamId: ID!, timeRange: TimeRangeInput, noCache: Boolean = false): TrackListEventsConnection!
-  artifactStatesConnection(page: ConnectionInput, streamId: ID, contentType: String, stage: String): ArtifactStatesConnection!
+  streamEventsConnection(
+    page: ConnectionInput
+    streamId: ID!
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamEventsConnection!
+  bufferEventsConnection(
+    page: ConnectionInput
+    streamId: ID!
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): BufferEventsConnection!
+  artifactEventsConnection(
+    page: ConnectionInput
+    streamId: ID
+    stage: String
+    contentType: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ArtifactEventsConnection!
+  storageEventsConnection(
+    page: ConnectionInput
+    assetType: String
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StorageEventsConnection!
+  connectionEventsConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ConnectionEventsConnection!
+  viewerSessionsConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ViewerSessionsConnection!
+  trackListConnection(
+    page: ConnectionInput
+    streamId: ID!
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): TrackListEventsConnection!
+  artifactStatesConnection(
+    page: ConnectionInput
+    streamId: ID
+    contentType: String
+    stage: String
+  ): ArtifactStatesConnection!
 }
 
 """
@@ -483,12 +821,43 @@ Infrastructure analytics.
 `streamId` arguments accept Stream.id (Relay global ID) where present.
 """
 type AnalyticsInfra {
-  routingEventsConnection(page: ConnectionInput, streamId: ID, timeRange: TimeRangeInput, subjectTenantId: ID, clusterId: String, noCache: Boolean = false): RoutingEventsConnection!
-  nodeMetricsConnection(page: ConnectionInput, nodeId: String, timeRange: TimeRangeInput, noCache: Boolean = false): NodeMetricsConnection!
-  nodeMetrics1hConnection(page: ConnectionInput, timeRange: TimeRangeInput, nodeId: String, noCache: Boolean = false): NodeMetrics1hConnection!
-  nodeMetricsAggregated(timeRange: TimeRangeInput, nodeId: String, noCache: Boolean = false): [NodeMetricsAggregated!]!
-  nodePerformance5mConnection(page: ConnectionInput, nodeId: String, timeRange: TimeRangeInput, noCache: Boolean = false): NodePerformance5mConnection!
-  serviceInstancesConnection(page: ConnectionInput, clusterId: String, nodeId: String, status: InstanceStatus): ServiceInstancesConnection!
+  routingEventsConnection(
+    page: ConnectionInput
+    streamId: ID
+    timeRange: TimeRangeInput
+    subjectTenantId: ID
+    clusterId: String
+    noCache: Boolean = false
+  ): RoutingEventsConnection!
+  nodeMetricsConnection(
+    page: ConnectionInput
+    nodeId: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): NodeMetricsConnection!
+  nodeMetrics1hConnection(
+    page: ConnectionInput
+    timeRange: TimeRangeInput
+    nodeId: String
+    noCache: Boolean = false
+  ): NodeMetrics1hConnection!
+  nodeMetricsAggregated(
+    timeRange: TimeRangeInput
+    nodeId: String
+    noCache: Boolean = false
+  ): [NodeMetricsAggregated!]!
+  nodePerformance5mConnection(
+    page: ConnectionInput
+    nodeId: String
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): NodePerformance5mConnection!
+  serviceInstancesConnection(
+    page: ConnectionInput
+    clusterId: String
+    nodeId: String
+    status: InstanceStatus
+  ): ServiceInstancesConnection!
   serviceInstancesHealth(serviceId: String): [ServiceInstanceHealth!]
 }
 
@@ -499,29 +868,47 @@ All mutations return union types with explicit error states per GraphQL best pra
 Check the result type to handle success/error cases appropriately.
 """
 type Mutation {
-  """Create a new stream for live broadcasting."""
+  """
+  Create a new stream for live broadcasting.
+  """
   createStream(
-    """Stream configuration."""
+    """
+    Stream configuration.
+    """
     input: CreateStreamInput!
   ): CreateStreamResult!
 
-  """Update an existing stream's configuration."""
+  """
+  Update an existing stream's configuration.
+  """
   updateStream(
-    """The stream ID."""
-    id: ID!,
-    """Updated stream configuration."""
+    """
+    The stream ID.
+    """
+    id: ID!
+    """
+    Updated stream configuration.
+    """
     input: UpdateStreamInput!
   ): UpdateStreamResult!
 
-  """Delete a stream and all associated data."""
+  """
+  Delete a stream and all associated data.
+  """
   deleteStream(
-    """The stream ID to delete."""
+    """
+    The stream ID to delete.
+    """
     id: ID!
   ): DeleteStreamResult!
 
-  """Generate a new stream key, invalidating the old one."""
+  """
+  Generate a new stream key, invalidating the old one.
+  """
   refreshStreamKey(
-    """The stream ID."""
+    """
+    The stream ID.
+    """
     id: ID!
   ): UpdateStreamResult!
 
@@ -530,13 +917,19 @@ type Mutation {
   Clips are short video segments extracted from a stream.
   """
   createClip(
-    """Clip configuration including time range."""
+    """
+    Clip configuration including time range.
+    """
     input: CreateClipInput!
   ): CreateClipResult!
 
-  """Delete a clip."""
+  """
+  Delete a clip.
+  """
   deleteClip(
-    """The clip ID to delete."""
+    """
+    The clip ID to delete.
+    """
     id: ID!
   ): DeleteClipResult!
 
@@ -545,21 +938,33 @@ type Mutation {
   DVR allows viewers to seek back in a live stream.
   """
   startDVR(
-    """The stream ID to start DVR for (Stream.id, Relay global ID)."""
-    streamId: ID!,
-    """Optional expiration time (Unix timestamp)."""
+    """
+    The stream ID to start DVR for (Stream.id, Relay global ID).
+    """
+    streamId: ID!
+    """
+    Optional expiration time (Unix timestamp).
+    """
     expiresAt: Int
   ): StartDVRResult!
 
-  """Stop DVR recording for a stream."""
+  """
+  Stop DVR recording for a stream.
+  """
   stopDVR(
-    """The DVR hash to stop."""
+    """
+    The DVR hash to stop.
+    """
     dvrHash: ID!
   ): StopDVRResult!
 
-  """Delete a DVR recording."""
+  """
+  Delete a DVR recording.
+  """
   deleteDVR(
-    """The DVR hash to delete."""
+    """
+    The DVR hash to delete.
+    """
     dvrHash: ID!
   ): DeleteDVRResult!
 
@@ -568,7 +973,9 @@ type Mutation {
   Returns presigned URLs for multipart upload.
   """
   createVodUpload(
-    """Upload configuration."""
+    """
+    Upload configuration.
+    """
     input: CreateVodUploadInput!
   ): CreateVodUploadResult!
 
@@ -577,25 +984,39 @@ type Mutation {
   Triggers processing and thumbnail generation.
   """
   completeVodUpload(
-    """Upload completion data."""
+    """
+    Upload completion data.
+    """
     input: CompleteVodUploadInput!
   ): CompleteVodUploadResult!
 
-  """Abort an in-progress VOD upload."""
+  """
+  Abort an in-progress VOD upload.
+  """
   abortVodUpload(
-    """The upload ID to abort."""
+    """
+    The upload ID to abort.
+    """
     uploadId: ID!
   ): AbortVodUploadResult!
 
-  """Delete a VOD asset."""
+  """
+  Delete a VOD asset.
+  """
   deleteVodAsset(
-    """The VOD asset ID to delete."""
+    """
+    The VOD asset ID to delete.
+    """
     id: ID!
   ): DeleteVodAssetResult!
 
-  """Create a payment for subscription or usage."""
+  """
+  Create a payment for subscription or usage.
+  """
   createPayment(
-    """Payment details."""
+    """
+    Payment details.
+    """
     input: CreatePaymentInput!
   ): CreatePaymentResult!
 
@@ -603,9 +1024,13 @@ type Mutation {
   Submit an x402 payment payload to settle a 402 response or top up balance.
   """
   submitX402Payment(
-    """Base64-encoded x402 payment payload."""
+    """
+    Base64-encoded x402 payment payload.
+    """
     payment: String!
-    """Optional resource being paid for (defaults to authenticated tenant when omitted)."""
+    """
+    Optional resource being paid for (defaults to authenticated tenant when omitted).
+    """
     resource: String
   ): SubmitX402PaymentResult!
 
@@ -615,13 +1040,21 @@ type Mutation {
   After successful payment, user is redirected to successUrl.
   """
   createStripeCheckout(
-    """The billing tier to subscribe to."""
-    tierId: ID!,
-    """Billing period: 'monthly' or 'yearly'."""
-    billingPeriod: String!,
-    """URL to redirect to after successful checkout."""
-    successUrl: String!,
-    """URL to redirect to if user cancels."""
+    """
+    The billing tier to subscribe to.
+    """
+    tierId: ID!
+    """
+    Billing period: 'monthly' or 'yearly'.
+    """
+    billingPeriod: String!
+    """
+    URL to redirect to after successful checkout.
+    """
+    successUrl: String!
+    """
+    URL to redirect to if user cancels.
+    """
     cancelUrl: String!
   ): StripeCheckoutResult!
 
@@ -630,7 +1063,9 @@ type Mutation {
   Returns a URL to redirect the user to manage their subscription.
   """
   createStripeBillingPortal(
-    """URL to redirect to when user is done."""
+    """
+    URL to redirect to when user is done.
+    """
     returnUrl: String!
   ): StripeBillingPortalResult!
 
@@ -641,11 +1076,17 @@ type Mutation {
   After successful payment, call createMollieSubscription to start recurring billing.
   """
   createMollieFirstPayment(
-    """The billing tier to subscribe to."""
-    tierId: ID!,
-    """Payment method: 'ideal', 'creditcard', 'bancontact'."""
-    method: String!,
-    """URL to redirect to after payment."""
+    """
+    The billing tier to subscribe to.
+    """
+    tierId: ID!
+    """
+    Payment method: 'ideal', 'creditcard', 'bancontact'.
+    """
+    method: String!
+    """
+    URL to redirect to after payment.
+    """
     redirectUrl: String!
   ): MollieFirstPaymentResult!
 
@@ -654,11 +1095,17 @@ type Mutation {
   Call this after the first payment webhook confirms mandate creation.
   """
   createMollieSubscription(
-    """The billing tier to subscribe to."""
-    tierId: ID!,
-    """The mandate ID from the first payment."""
-    mandateId: String!,
-    """Optional description for the subscription."""
+    """
+    The billing tier to subscribe to.
+    """
+    tierId: ID!
+    """
+    The mandate ID from the first payment.
+    """
+    mandateId: String!
+    """
+    Optional description for the subscription.
+    """
     description: String
   ): MollieSubscriptionResult!
 
@@ -692,123 +1139,207 @@ type Mutation {
   # Admin operations go through CLI → direct gRPC to Purser.
   # We have no RBAC in Gateway to safely expose admin routes.
 
-  """Update custom billing terms for a tenant subscription."""
+  """
+  Update custom billing terms for a tenant subscription.
+  """
   updateSubscriptionCustomTerms(
-    """The tenant ID."""
-    tenantId: ID!,
-    """Updated subscription terms."""
+    """
+    The tenant ID.
+    """
+    tenantId: ID!
+    """
+    Updated subscription terms.
+    """
     input: UpdateSubscriptionCustomTermsInput!
   ): TenantSubscription
 
-  """Update the current tenant's profile."""
+  """
+  Update the current tenant's profile.
+  """
   updateTenant(
-    """Updated tenant configuration."""
+    """
+    Updated tenant configuration.
+    """
     input: UpdateTenantInput!
   ): UpdateTenantResult!
 
-  """Subscribe to a cluster for streaming access."""
+  """
+  Subscribe to a cluster for streaming access.
+  """
   subscribeToCluster(
-    """The cluster ID to subscribe to."""
+    """
+    The cluster ID to subscribe to.
+    """
     clusterId: ID!
   ): Boolean!
 
-  """Unsubscribe from a cluster."""
+  """
+  Unsubscribe from a cluster.
+  """
   unsubscribeFromCluster(
-    """The cluster ID to unsubscribe from."""
+    """
+    The cluster ID to unsubscribe from.
+    """
     clusterId: ID!
   ): Boolean!
 
-  """Create a new private cluster."""
+  """
+  Create a new private cluster.
+  """
   createPrivateCluster(
-    """Cluster configuration."""
+    """
+    Cluster configuration.
+    """
     input: CreatePrivateClusterInput!
   ): CreatePrivateClusterResult!
 
-  """Update marketplace settings for a cluster."""
+  """
+  Update marketplace settings for a cluster.
+  """
   updateClusterMarketplace(
-    """The cluster ID."""
-    clusterId: ID!,
-    """Updated marketplace settings."""
+    """
+    The cluster ID.
+    """
+    clusterId: ID!
+    """
+    Updated marketplace settings.
+    """
     input: UpdateClusterMarketplaceInput!
   ): UpdateClusterResult!
 
-  """Create an invite for a cluster."""
+  """
+  Create an invite for a cluster.
+  """
   createClusterInvite(
-    """Invite configuration."""
+    """
+    Invite configuration.
+    """
     input: CreateClusterInviteInput!
   ): CreateClusterInviteResult!
 
-  """Revoke a cluster invite."""
+  """
+  Revoke a cluster invite.
+  """
   revokeClusterInvite(
-    """The invite ID to revoke."""
+    """
+    The invite ID to revoke.
+    """
     inviteId: ID!
   ): RevokeClusterInviteResult!
 
-  """Request to subscribe to a cluster."""
+  """
+  Request to subscribe to a cluster.
+  """
   requestClusterSubscription(
-    """The cluster ID."""
-    clusterId: ID!,
-    """Optional invite token."""
+    """
+    The cluster ID.
+    """
+    clusterId: ID!
+    """
+    Optional invite token.
+    """
     inviteToken: String
   ): ClusterSubscriptionResult!
 
-  """Accept a cluster invite."""
+  """
+  Accept a cluster invite.
+  """
   acceptClusterInvite(
-    """The invite token."""
+    """
+    The invite token.
+    """
     inviteToken: String!
   ): ClusterSubscriptionResult!
 
-  """Approve a pending cluster subscription request."""
+  """
+  Approve a pending cluster subscription request.
+  """
   approveClusterSubscription(
-    """The subscription ID to approve."""
+    """
+    The subscription ID to approve.
+    """
     subscriptionId: ID!
   ): ClusterSubscriptionResult!
 
-  """Reject a pending cluster subscription request."""
+  """
+  Reject a pending cluster subscription request.
+  """
   rejectClusterSubscription(
-    """The subscription ID to reject."""
-    subscriptionId: ID!,
-    """Optional rejection reason."""
+    """
+    The subscription ID to reject.
+    """
+    subscriptionId: ID!
+    """
+    Optional rejection reason.
+    """
     reason: String
   ): ClusterSubscriptionResult!
 
-  """Create a new API token for programmatic access."""
+  """
+  Create a new API token for programmatic access.
+  """
   createDeveloperToken(
-    """Token configuration."""
+    """
+    Token configuration.
+    """
     input: CreateDeveloperTokenInput!
   ): CreateDeveloperTokenResult!
 
-  """Revoke an API token."""
+  """
+  Revoke an API token.
+  """
   revokeDeveloperToken(
-    """The token ID to revoke."""
+    """
+    The token ID to revoke.
+    """
     id: ID!
   ): RevokeDeveloperTokenResult!
 
-  """Create a bootstrap token for node provisioning (service token required)."""
+  """
+  Create a bootstrap token for node provisioning (service token required).
+  """
   createBootstrapToken(
-    """Token configuration."""
+    """
+    Token configuration.
+    """
     input: CreateBootstrapTokenInput!
   ): CreateBootstrapTokenResult!
 
-  """Revoke a bootstrap token (service token required)."""
+  """
+  Revoke a bootstrap token (service token required).
+  """
   revokeBootstrapToken(
-    """The token ID to revoke."""
+    """
+    The token ID to revoke.
+    """
     id: ID!
   ): RevokeBootstrapTokenResult!
 
-  """Create an additional stream key for a stream."""
+  """
+  Create an additional stream key for a stream.
+  """
   createStreamKey(
-    """The stream ID (Stream.id, Relay global ID)."""
-    streamId: ID!,
-    """Stream key configuration."""
+    """
+    The stream ID (Stream.id, Relay global ID).
+    """
+    streamId: ID!
+    """
+    Stream key configuration.
+    """
     input: CreateStreamKeyInput!
   ): CreateStreamKeyResult!
 
-  """Delete a stream key."""
+  """
+  Delete a stream key.
+  """
   deleteStreamKey(
-    """The stream ID (Stream.id, Relay global ID)."""
-    streamId: ID!,
-    """The key ID to delete."""
+    """
+    The stream ID (Stream.id, Relay global ID).
+    """
+    streamId: ID!
+    """
+    The key ID to delete.
+    """
     keyId: ID!
   ): DeleteStreamKeyResult!
 
@@ -820,7 +1351,9 @@ type Mutation {
   has not been seen before (auto-provisioning).
   """
   walletLogin(
-    """The wallet input containing address, message, and signature."""
+    """
+    The wallet input containing address, message, and signature.
+    """
     input: WalletLoginInput!
   ): WalletLoginResult!
 
@@ -829,7 +1362,9 @@ type Mutation {
   Requires an existing authenticated session.
   """
   linkWallet(
-    """The wallet input containing address, message, and signature."""
+    """
+    The wallet input containing address, message, and signature.
+    """
     input: WalletLoginInput!
   ): LinkWalletResult!
 
@@ -838,7 +1373,9 @@ type Mutation {
   Cannot unlink the last wallet if user has no email.
   """
   unlinkWallet(
-    """The wallet identity ID to unlink."""
+    """
+    The wallet identity ID to unlink.
+    """
     walletId: ID!
   ): UnlinkWalletResult!
 
@@ -848,7 +1385,9 @@ type Mutation {
   A verification email will be sent to confirm the address.
   """
   linkEmail(
-    """Email and password to set on the account."""
+    """
+    Email and password to set on the account.
+    """
     input: LinkEmailInput!
   ): LinkEmailResult!
 
@@ -858,7 +1397,9 @@ type Mutation {
   Existing prepaid balance is carried forward as credit.
   """
   promoteToPaid(
-    """The billing tier to subscribe to."""
+    """
+    The billing tier to subscribe to.
+    """
     tierId: ID!
   ): PromoteToPaidResult!
 
@@ -869,7 +1410,9 @@ type Mutation {
   Optionally include an initial message.
   """
   createConversation(
-    """Conversation configuration."""
+    """
+    Conversation configuration.
+    """
     input: CreateConversationInput!
   ): CreateConversationResult!
 
@@ -878,7 +1421,9 @@ type Mutation {
   Messages are delivered to support agents in real-time.
   """
   sendMessage(
-    """Message configuration."""
+    """
+    Message configuration.
+    """
     input: SendMessageInput!
   ): SendMessageResult!
 }
@@ -944,7 +1489,11 @@ union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
 union CreatePaymentResult = Payment | ValidationError | AuthError
 union SubmitX402PaymentResult = X402PaymentResult | ValidationError | NotFoundError | AuthError
 union StripeCheckoutResult = StripeCheckoutSession | ValidationError | NotFoundError | AuthError
-union StripeBillingPortalResult = StripeBillingPortalSession | ValidationError | NotFoundError | AuthError
+union StripeBillingPortalResult =
+  | StripeBillingPortalSession
+  | ValidationError
+  | NotFoundError
+  | AuthError
 union MollieFirstPaymentResult = MollieFirstPayment | ValidationError | NotFoundError | AuthError
 union MollieSubscriptionResult = MollieSubscription | ValidationError | NotFoundError | AuthError
 union UpdateTenantResult = Tenant | ValidationError | AuthError
@@ -1054,7 +1603,9 @@ type Subscription {
   Fires when agent replies are received.
   """
   liveMessageReceived(
-    """The conversation ID to watch."""
+    """
+    The conversation ID to watch.
+    """
     conversationId: ID!
   ): Message!
 
@@ -1063,25 +1614,27 @@ type Subscription {
   Optionally filter by conversationId.
   """
   liveConversationUpdates(
-    """The conversation ID to watch (optional)."""
+    """
+    The conversation ID to watch (optional).
+    """
     conversationId: ID
   ): Conversation!
 }
 
 # Union type for all possible tenant events in firehose
 type TenantEvent {
-  type: String!     # Proto enum string (e.g., EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, EVENT_TYPE_VIEWER_CONNECT)
-  channel: String!  # STREAMS, ANALYTICS, or SYSTEM
+  type: String! # Proto enum string (e.g., EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, EVENT_TYPE_VIEWER_CONNECT)
+  channel: String! # STREAMS, ANALYTICS, or SYSTEM
   timestamp: Time!
 
   # One of these will be populated based on event type
   streamEvent: StreamEvent
   viewerMetrics: ViewerMetrics
   connectionEvent: ConnectionEvent
-  trackListUpdate: TrackListUpdate  # Real-time track updates from Signalman
-  clipLifecycle: ClipLifecycle      # Real-time clip lifecycle from Signalman
+  trackListUpdate: TrackListUpdate # Real-time track updates from Signalman
+  clipLifecycle: ClipLifecycle # Real-time clip lifecycle from Signalman
   dvrEvent: DVREvent
-  vodLifecycle: VodLifecycle        # Real-time VOD upload lifecycle from Signalman
+  vodLifecycle: VodLifecycle # Real-time VOD upload lifecycle from Signalman
   storageEvent: StorageEvent
   storageSnapshot: StorageSnapshot
   processingEvent: ProcessingUsageRecord
@@ -1149,23 +1702,23 @@ type ClipLifecycle {
 
 # Real-time VOD upload lifecycle event from Signalman - bound to proto.VodLifecycleData
 type VodLifecycle {
-  status: Int!             # VodLifecycleData.Status enum value
-  vodHash: String!         # Artifact hash (from Commodore)
+  status: Int! # VodLifecycleData.Status enum value
+  vodHash: String! # Artifact hash (from Commodore)
   playbackId: String
-  uploadId: String         # S3 multipart upload ID
+  uploadId: String # S3 multipart upload ID
   filename: String
-  contentType: String      # MIME type (video/mp4, etc.)
-  sizeBytes: Float         # Expected or actual size
-  s3Url: String            # Final S3 URL when completed
-  filePath: String         # Local file path (if applicable)
+  contentType: String # MIME type (video/mp4, etc.)
+  sizeBytes: Float # Expected or actual size
+  s3Url: String # Final S3 URL when completed
+  filePath: String # Local file path (if applicable)
   error: String
-  startedAt: Int           # When upload started (unix timestamp)
-  completedAt: Int         # When upload/processing completed
-  nodeId: String           # Processing node (if any)
-  expiresAt: Int           # Retention expiration (unix timestamp)
+  startedAt: Int # When upload started (unix timestamp)
+  completedAt: Int # When upload/processing completed
+  nodeId: String # Processing node (if any)
+  expiresAt: Int # Retention expiration (unix timestamp)
   # Media metadata (populated after processing)
   durationMs: Int
-  resolution: String       # "1920x1080"
+  resolution: String # "1920x1080"
   videoCodec: String
   audioCodec: String
 }
@@ -1251,12 +1804,12 @@ input CreateClipInput {
 # DVR types
 type DVRRequest {
   # Business metadata (from Commodore registry)
-  id: ID                     # UUID from Commodore business registry
+  id: ID # UUID from Commodore business registry
   dvrHash: ID!
   playbackId: String!
   streamId: ID!
   stream: Stream
-  title: String              # Stream title or custom title
+  title: String # Stream title or custom title
   createdAt: Time!
   updatedAt: Time!
   expiresAt: Time
@@ -1270,7 +1823,7 @@ type DVRRequest {
   manifestPath: String
   errorMessage: String
   # Cold storage info
-  storageLocation: String   # "local", "s3", "freezing", "defrosting"
+  storageLocation: String # "local", "s3", "freezing", "defrosting"
   isFrozen: Boolean!
   frozenAt: Time
   s3Url: String
@@ -1445,7 +1998,6 @@ input CreatePaymentInput {
   method: PaymentMethod!
   returnUrl: String
 }
-
 
 """
 Input for updating enterprise subscription custom terms.
@@ -2019,14 +2571,14 @@ type ViewerMetrics {
   nodeId: String!
   streamId: ID!
   stream: Stream
-  action: String!              # "connect" or "disconnect"
+  action: String! # "connect" or "disconnect"
   protocol: String!
-  host: String                 # Client IP - redacted for privacy (returns null)
+  host: String # Client IP - redacted for privacy (returns null)
   sessionId: String
-  connectionTime: Float        # seconds connected
-  position: Float              # playback position
-  bandwidthInBps: Int          # upload bandwidth (bits/sec)
-  bandwidthOutBps: Int         # download bandwidth (bits/sec)
+  connectionTime: Float # seconds connected
+  position: Float # playback position
+  bandwidthInBps: Int # upload bandwidth (bits/sec)
+  bandwidthOutBps: Int # download bandwidth (bits/sec)
   bytesDownloaded: Float
   bytesUploaded: Float
   packetsSent: Int
@@ -2070,16 +2622,16 @@ type StreamTrack {
 }
 
 type SystemHealthEvent {
-  nodeId: ID                  # Database UUID (for reliable lookups)
-  node: String!               # Logical name (for display/fallback)
-  location: String!           # Region/city name (e.g. "NYC")
+  nodeId: ID # Database UUID (for reliable lookups)
+  node: String! # Logical name (for display/fallback)
+  location: String! # Region/city name (e.g. "NYC")
   status: NodeStatus!
-  cpuTenths: Int!             # CPU usage 0-1000 (divide by 10 for %)
+  cpuTenths: Int! # CPU usage 0-1000 (divide by 10 for %)
   isHealthy: Boolean!
 
   # Resource metrics (RAM in MiB; disk/shm in bytes)
-  ramMax: Float               # Max RAM in MiB
-  ramCurrent: Float           # Current RAM usage in MiB
+  ramMax: Float # Max RAM in MiB
+  ramCurrent: Float # Current RAM usage in MiB
   diskTotalBytes: Float
   diskUsedBytes: Float
   shmTotalBytes: Float
@@ -2120,7 +2672,6 @@ type WalletIdentity {
   "When this wallet was last used for authentication."
   lastAuthAt: Time
 }
-
 
 type Tenant {
   id: ID!
@@ -2273,7 +2824,7 @@ type QualityTierSummary {
 type ViewerCountBucket {
   timestamp: Time!
   viewerCount: Int!
-  streamId: ID      # Optional Stream.id (Relay global ID) when querying across streams
+  streamId: ID # Optional Stream.id (Relay global ID) when querying across streams
   stream: Stream
 }
 
@@ -2372,7 +2923,7 @@ type ViewerSession implements Node {
   sessionId: String!
   connectedAt: Time
   disconnectedAt: Time
-  connector: String                    # Protocol: HLS, WebRTC, RTMP
+  connector: String # Protocol: HLS, WebRTC, RTMP
   countryCode: String
   city: String
   latitude: Float
@@ -2433,7 +2984,7 @@ type NodePerformance5m implements Node {
   maxCpu: Float!
   avgMemory: Float!
   maxMemory: Float!
-  totalBandwidth: Float!     # Legacy: alias of peakBandwidth (rate, not total bytes)
+  totalBandwidth: Float! # Legacy: alias of peakBandwidth (rate, not total bytes)
   avgStreams: Int!
   maxStreams: Int!
 }
@@ -2676,15 +3227,15 @@ type StorageEvent implements Node {
   timestamp: Time!
   streamId: ID!
   stream: Stream
-  assetHash: String!         # clip_hash or dvr_hash
-  action: String!            # freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
-  assetType: String!         # clip, dvr
+  assetHash: String! # clip_hash or dvr_hash
+  action: String! # freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
+  assetType: String! # clip, dvr
   sizeBytes: Float!
   s3Url: String
   localPath: String
   nodeId: String!
-  durationMs: Int            # Time taken for operation
-  warmDurationMs: Int        # For evicted: how long asset was cached before eviction
+  durationMs: Int # Time taken for operation
+  warmDurationMs: Int # For evicted: how long asset was cached before eviction
   error: String
 }
 
@@ -2711,16 +3262,16 @@ type ProcessingUsageRecord implements Node {
   nodeId: String!
   streamId: ID!
   stream: Stream
-  processType: String!              # "Livepeer", "AV", "FFmpeg"
-  trackType: String                 # "audio" or "video" (KEY FOR BILLING)
-  durationMs: Int!                  # Segment duration or time since last event
+  processType: String! # "Livepeer", "AV", "FFmpeg"
+  trackType: String # "audio" or "video" (KEY FOR BILLING)
+  durationMs: Int! # Segment duration or time since last event
   inputCodec: String
   outputCodec: String
 
   # Livepeer-specific fields
   segmentNumber: Int
-  width: Int                        # Source width
-  height: Int                       # Source height
+  width: Int # Source width
+  height: Int # Source height
   renditionCount: Int
   broadcasterUrl: String
   uploadTimeUs: Int
@@ -2729,18 +3280,16 @@ type ProcessingUsageRecord implements Node {
   inputBytes: Float
   outputBytesTotal: Float
   attemptCount: Int
-  turnaroundMs: Int                 # Full transcode roundtrip
-  speedFactor: Float                # Real-time factor (1.0 = real-time)
-  renditionsJson: String            # JSON array: [{name, bytes}, ...]
-
+  turnaroundMs: Int # Full transcode roundtrip
+  speedFactor: Float # Real-time factor (1.0 = real-time)
+  renditionsJson: String # JSON array: [{name, bytes}, ...]
   # MistProcAV cumulative fields
   inputFrames: Int
   outputFrames: Int
   decodeUsPerFrame: Int
   transformUsPerFrame: Int
   encodeUsPerFrame: Int
-  isFinal: Boolean                  # Session end flag
-
+  isFinal: Boolean # Session end flag
   # MistProcAV delta values (this reporting window)
   inputFramesDelta: Int
   outputFramesDelta: Int
@@ -2754,11 +3303,10 @@ type ProcessingUsageRecord implements Node {
   outputHeight: Int
 
   # MistProcAV frame/audio info
-  inputFpks: Int                    # Input frames per 1000s
-  outputFpsMeasured: Float          # Measured output FPS
-  sampleRate: Int                   # Audio sample rate
-  channels: Int                     # Audio channels
-
+  inputFpks: Int # Input frames per 1000s
+  outputFpsMeasured: Float # Measured output FPS
+  sampleRate: Int # Audio sample rate
+  channels: Int # Audio channels
   # MistProcAV timing
   sourceTimestampMs: Int
   sinkTimestampMs: Int
@@ -2766,38 +3314,38 @@ type ProcessingUsageRecord implements Node {
   sinkAdvancedMs: Int
 
   # MistProcAV performance
-  rtfIn: Float                      # Real-time factor input
-  rtfOut: Float                     # Real-time factor output
-  pipelineLagMs: Int                # Processing delay
-  outputBitrateBps: Int             # Output bitrate
+  rtfIn: Float # Real-time factor input
+  rtfOut: Float # Real-time factor output
+  pipelineLagMs: Int # Processing delay
+  outputBitrateBps: Int # Output bitrate
 }
 
 # Daily summary for billing display
 type ProcessingUsageSummary {
   date: Time!
   # Livepeer (totals)
-  livepeerSeconds: Float!           # Total Livepeer Gateway transcode seconds
-  livepeerSegmentCount: Int!        # Number of segments transcoded via Livepeer
-  livepeerUniqueStreams: Int!       # Unique streams using Livepeer
+  livepeerSeconds: Float! # Total Livepeer Gateway transcode seconds
+  livepeerSegmentCount: Int! # Number of segments transcoded via Livepeer
+  livepeerUniqueStreams: Int! # Unique streams using Livepeer
   # Livepeer per-codec breakdown
   livepeerH264Seconds: Float!
   livepeerVp9Seconds: Float!
   livepeerAv1Seconds: Float!
   livepeerHevcSeconds: Float!
   # Native AV (totals)
-  nativeAvSeconds: Float!           # Total local audio/video transcode seconds
-  nativeAvSegmentCount: Int!        # Number of segments processed locally
-  nativeAvUniqueStreams: Int!       # Unique streams using local AV processing
+  nativeAvSeconds: Float! # Total local audio/video transcode seconds
+  nativeAvSegmentCount: Int! # Number of segments processed locally
+  nativeAvUniqueStreams: Int! # Unique streams using local AV processing
   # Native AV per-codec breakdown
   nativeAvH264Seconds: Float!
   nativeAvVp9Seconds: Float!
   nativeAvAv1Seconds: Float!
   nativeAvHevcSeconds: Float!
-  nativeAvAacSeconds: Float!        # Audio is FREE but tracked
-  nativeAvOpusSeconds: Float!       # Audio is FREE but tracked
+  nativeAvAacSeconds: Float! # Audio is FREE but tracked
+  nativeAvOpusSeconds: Float! # Audio is FREE but tracked
   # Track type aggregates
-  audioSeconds: Float!              # Total audio transcode seconds (free)
-  videoSeconds: Float!              # Total video transcode seconds (billable)
+  audioSeconds: Float! # Total audio transcode seconds (free)
+  videoSeconds: Float! # Total video transcode seconds (billable)
 }
 
 type ProcessingUsageEdge {
@@ -2810,7 +3358,7 @@ type ProcessingUsageConnection {
   nodes: [ProcessingUsageRecord!]!
   pageInfo: PageInfo!
   totalCount: Int!
-  summaries: [ProcessingUsageSummary!]!  # Daily summaries (always returned)
+  summaries: [ProcessingUsageSummary!]! # Daily summaries (always returned)
 }
 
 # API Usage Analytics (hourly aggregates from api_usage_hourly)
@@ -2866,10 +3414,10 @@ type APIUsageConnection {
 type TenantAnalyticsDaily {
   id: ID!
   day: Time!
-  totalStreams: Int!                 # Unique streams with activity
-  totalViews: Int!                   # Total view events
-  uniqueViewers: Int!                # Unique viewer count
-  egressBytes: Float!                # Total bytes delivered
+  totalStreams: Int! # Unique streams with activity
+  totalViews: Int! # Total view events
+  uniqueViewers: Int! # Unique viewer count
+  egressBytes: Float! # Total bytes delivered
 }
 
 type TenantAnalyticsDailyEdge {
@@ -2890,11 +3438,11 @@ type StreamAnalyticsDaily implements Node {
   day: Time!
   streamId: ID!
   stream: Stream
-  totalViews: Int!                   # Total view events
-  uniqueViewers: Int!                # Unique viewer count
-  uniqueCountries: Int!              # Geographic diversity
-  uniqueCities: Int!                 # City-level diversity
-  egressBytes: Float!                # Total bytes delivered
+  totalViews: Int! # Total view events
+  uniqueViewers: Int! # Unique viewer count
+  uniqueCountries: Int! # Geographic diversity
+  uniqueCities: Int! # City-level diversity
+  egressBytes: Float! # Total bytes delivered
 }
 
 type StreamAnalyticsDailyEdge {
@@ -3145,27 +3693,27 @@ type BootstrapTokenConnection {
 
 type PlatformOverview {
   totalStreams: Int!
-  activeStreams: Int!       # Streams currently live (from stream_state_current)
+  activeStreams: Int! # Streams currently live (from stream_state_current)
   totalViewers: Int!
-  averageViewers: Float!    # Avg concurrent viewers (from stream_state_current)
+  averageViewers: Float! # Avg concurrent viewers (from stream_state_current)
   totalBandwidth: Float!
-  peakBandwidth: Float!     # Peak bandwidth rate in time range (from client_qoe_5m)
-  streamHours: Float!        # Total streaming hours in time range (ingest hours)
-  egressGb: Float!           # Total bandwidth in GiB
-  peakViewers: Int!          # Peak concurrent viewers (NOTE: currently unique_viewers, not true peak)
+  peakBandwidth: Float! # Peak bandwidth rate in time range (from client_qoe_5m)
+  streamHours: Float! # Total streaming hours in time range (ingest hours)
+  egressGb: Float! # Total bandwidth in GiB
+  peakViewers: Int! # Peak concurrent viewers (NOTE: currently unique_viewers, not true peak)
   timeRange: TimeRange!
   # Real-time bandwidth metrics (from stream_state_current)
-  totalUploadBytes: Float!     # Total ingest bytes (sum across all streams)
-  totalDownloadBytes: Float!   # Total egress bytes (sum across all streams)
+  totalUploadBytes: Float! # Total ingest bytes (sum across all streams)
+  totalDownloadBytes: Float! # Total egress bytes (sum across all streams)
   # Viewer consumption metrics (from tenant_viewer_daily)
-  viewerHours: Float!        # Total accumulated viewer watch time in hours
-  deliveredMinutes: Float!   # viewer_hours * 60 (convenience field)
-  uniqueViewers: Int!        # Unique viewer count for the time range
-  ingestHours: Float!        # Total hours streams were live (alias for streamHours)
+  viewerHours: Float! # Total accumulated viewer watch time in hours
+  deliveredMinutes: Float! # viewer_hours * 60 (convenience field)
+  uniqueViewers: Int! # Unique viewer count for the time range
+  ingestHours: Float! # Total hours streams were live (alias for streamHours)
   # True peak concurrent (from stream_events max(total_viewers))
   peakConcurrentViewers: Int! # Maximum concurrent viewers at any instant in time range
   # Total views (session starts from tenant_analytics_daily)
-  totalViews: Int!           # Total number of view sessions started in time range
+  totalViews: Int! # Total number of view sessions started in time range
   # Daily breakdown for charts (from tenant_viewer_daily)
   dailyStats(days: Int = 7): [TenantDailyStat!]!
 }
@@ -3321,9 +3869,9 @@ type InvoicesConnection {
 
 # Custom pricing override for enterprise tenants
 type CustomPricing {
-  basePrice: Float                # Custom base price (overrides tier)
-  discountRate: Float             # Discount rate (0-1)
-  overageRates: OverageRates      # Custom overage rates
+  basePrice: Float # Custom base price (overrides tier)
+  discountRate: Float # Discount rate (0-1)
+  overageRates: OverageRates # Custom overage rates
 }
 
 # Tenant subscription with custom terms
@@ -3350,15 +3898,15 @@ type TenantSubscription {
 # Bound to proto.BillingStatusResponse
 type BillingStatus {
   currentTier: BillingTier
-  subscription: TenantSubscription  # Full subscription details with custom terms
+  subscription: TenantSubscription # Full subscription details with custom terms
   billingStatus: String!
   nextBillingDate: Time
-  trialEndsAt: Time               # Trial end date (from TenantSubscription.trial_ends_at)
+  trialEndsAt: Time # Trial end date (from TenantSubscription.trial_ends_at)
   outstandingAmount: Float!
   currency: String!
-  liveUsage: LiveUsageSummary!    # Near-real-time usage (Periscope)
-  invoicePreview: Invoice         # Authoritative draft invoice (Purser)
-  usageReconciled: Boolean!       # True if liveUsage matches invoicePreview within tolerance
+  liveUsage: LiveUsageSummary! # Near-real-time usage (Periscope)
+  invoicePreview: Invoice # Authoritative draft invoice (Purser)
+  usageReconciled: Boolean! # True if liveUsage matches invoicePreview within tolerance
 }
 
 # Live usage summary from Periscope (near-real-time)
@@ -3377,7 +3925,7 @@ type LiveUsageSummary {
 # Bound to proto.UsageSummary - rich usage metrics from Purser
 type UsageSummary {
   clusterId: String
-  period: String!                 # "15m", "1h", "1d"
+  period: String! # "15m", "1h", "1d"
   periodStart: Time
   periodEnd: Time
   timestamp: Time
@@ -3390,13 +3938,12 @@ type UsageSummary {
   peakBandwidthMbps: Float!
 
   # Processing/transcoding usage (from Livepeer Gateway and local AV processing)
-  livepeerSeconds: Float!           # Total Livepeer Gateway transcode seconds
-  livepeerSegmentCount: Int!        # Number of segments transcoded via Livepeer
-  livepeerUniqueStreams: Int!       # Unique streams using Livepeer
-  nativeAvSeconds: Float!           # Total local audio/video transcode seconds
-  nativeAvSegmentCount: Int!        # Number of segments processed locally
-  nativeAvUniqueStreams: Int!       # Unique streams using local AV processing
-
+  livepeerSeconds: Float! # Total Livepeer Gateway transcode seconds
+  livepeerSegmentCount: Int! # Number of segments transcoded via Livepeer
+  livepeerUniqueStreams: Int! # Unique streams using Livepeer
+  nativeAvSeconds: Float! # Total local audio/video transcode seconds
+  nativeAvSegmentCount: Int! # Number of segments processed locally
+  nativeAvUniqueStreams: Int! # Unique streams using local AV processing
   # Per-codec breakdown: Livepeer (external gateway)
   livepeerH264Seconds: Float!
   livepeerVp9Seconds: Float!
@@ -3486,9 +4033,13 @@ type Payment {
 Stripe Checkout Session - redirect URL for hosted checkout.
 """
 type StripeCheckoutSession {
-  """Stripe Checkout Session ID (cs_xxx)."""
+  """
+  Stripe Checkout Session ID (cs_xxx).
+  """
   sessionId: ID!
-  """URL to redirect user to for checkout."""
+  """
+  URL to redirect user to for checkout.
+  """
   checkoutUrl: String!
 }
 
@@ -3496,7 +4047,9 @@ type StripeCheckoutSession {
 Stripe Billing Portal Session - redirect URL for subscription management.
 """
 type StripeBillingPortalSession {
-  """URL to redirect user to for billing management."""
+  """
+  URL to redirect user to for billing management.
+  """
   portalUrl: String!
 }
 
@@ -3504,11 +4057,17 @@ type StripeBillingPortalSession {
 Mollie First Payment - redirect URL for initial payment that creates a mandate.
 """
 type MollieFirstPayment {
-  """Mollie payment ID (tr_xxx)."""
+  """
+  Mollie payment ID (tr_xxx).
+  """
   paymentId: ID!
-  """Mollie customer ID (cst_xxx)."""
+  """
+  Mollie customer ID (cst_xxx).
+  """
   customerId: String!
-  """URL to redirect user to for payment."""
+  """
+  URL to redirect user to for payment.
+  """
   paymentUrl: String!
 }
 
@@ -3516,11 +4075,17 @@ type MollieFirstPayment {
 Mollie Subscription - recurring subscription created after mandate is valid.
 """
 type MollieSubscription {
-  """Mollie subscription ID (sub_xxx)."""
+  """
+  Mollie subscription ID (sub_xxx).
+  """
   subscriptionId: ID!
-  """Subscription status (active, pending, etc.)."""
+  """
+  Subscription status (active, pending, etc.).
+  """
   status: String!
-  """Next payment date (ISO 8601)."""
+  """
+  Next payment date (ISO 8601).
+  """
   nextPaymentDate: String
 }
 
@@ -3528,17 +4093,29 @@ type MollieSubscription {
 Mollie Mandate - recurring payment authorization for a customer.
 """
 type MollieMandate {
-  """Mollie mandate ID (mdt_xxx)."""
+  """
+  Mollie mandate ID (mdt_xxx).
+  """
   mandateId: ID!
-  """Mollie customer ID (cst_xxx)."""
+  """
+  Mollie customer ID (cst_xxx).
+  """
   customerId: String!
-  """Mandate status (valid, pending, invalid, revoked)."""
+  """
+  Mandate status (valid, pending, invalid, revoked).
+  """
   status: String!
-  """Mandate method (directdebit, creditcard, ideal)."""
+  """
+  Mandate method (directdebit, creditcard, ideal).
+  """
   method: String!
-  """Mandate details (bank/card info)."""
+  """
+  Mandate details (bank/card info).
+  """
   details: JSON
-  """Mandate creation timestamp."""
+  """
+  Mandate creation timestamp.
+  """
   createdAt: Time
 }
 
@@ -3629,7 +4206,9 @@ type BalanceTransaction {
   createdAt: Time!
 }
 
-"""Balance transaction connection for pagination."""
+"""
+Balance transaction connection for pagination.
+"""
 type BalanceTransactionEdge {
   cursor: String!
   node: BalanceTransaction!
@@ -3664,7 +4243,9 @@ type BillingDetails {
   updatedAt: Time
 }
 
-"""Structured billing address for invoices."""
+"""
+Structured billing address for invoices.
+"""
 type BillingAddress {
   "Street address line 1."
   street: String!
@@ -3678,7 +4259,9 @@ type BillingAddress {
   country: String!
 }
 
-"""Input for updating billing details."""
+"""
+Input for updating billing details.
+"""
 input UpdateBillingDetailsInput {
   "Billing contact email."
   email: String
@@ -3690,7 +4273,9 @@ input UpdateBillingDetailsInput {
   address: BillingAddressInput
 }
 
-"""Input for billing address."""
+"""
+Input for billing address.
+"""
 input BillingAddressInput {
   "Street address line 1."
   street: String!
@@ -4002,7 +4587,6 @@ enum BufferState {
   RECOVER
 }
 
-
 # Stream health metrics from detailed monitoring
 # Note: For packet stats, see client_qoe_* rollups or stream_state_current
 type StreamHealthMetric implements Node {
@@ -4022,10 +4606,9 @@ type StreamHealthMetric implements Node {
   width: Int
   height: Int
   codec: String
-  qualityTier: String           # Rich quality string e.g. "1080p60 H264 @ 6Mbps"
-
+  qualityTier: String # Rich quality string e.g. "1080p60 H264 @ 6Mbps"
   # Encoding parameters
-  gopSize: Int                  # Group of Pictures size (frames between keyframes)
+  gopSize: Int # Group of Pictures size (frames between keyframes)
   frameMsMax: Float
   frameMsMin: Float
   framesMax: Int
@@ -4036,9 +4619,8 @@ type StreamHealthMetric implements Node {
 
   # Buffer state
   bufferState: BufferState!
-  bufferHealth: Float           # Ratio of buffer_size / max_keepaway (0.0-1.0)
-  bufferSize: Int               # Buffer duration in milliseconds
-
+  bufferHealth: Float # Ratio of buffer_size / max_keepaway (0.0-1.0)
+  bufferSize: Int # Buffer duration in milliseconds
   # Audio metrics
   audioChannels: Int
   audioSampleRate: Int
@@ -4087,9 +4669,9 @@ type ViewerGeographic {
   source: String
 
   # Session metrics (for disconnect events)
-  sessionDurationSeconds: Int  # Duration in seconds
-  bytesTransferred: Float      # Bytes transferred during session
-  connector: String            # Protocol: HLS, DASH, WebRTC, etc.
+  sessionDurationSeconds: Int # Duration in seconds
+  bytesTransferred: Float # Bytes transferred during session
+  connector: String # Protocol: HLS, DASH, WebRTC, etc.
 }
 
 # Aggregated geographic distribution analytics
@@ -4097,16 +4679,16 @@ type GeographicDistribution {
   timeRange: TimeRange!
   streamId: ID
   stream: Stream
-  
+
   # Top countries and cities
   topCountries: [CountryMetric!]!
   topCities: [CityMetric!]!
-  
+
   # Geographic spread metrics
   uniqueCountries: Int!
   uniqueCities: Int!
   totalViewers: Int!
-  
+
   # Geographic viewer distribution over time
   viewersByCountry: [CountryTimeSeries!]!
 }
@@ -4118,7 +4700,7 @@ type CountryMetric {
   percentage: Float!
 }
 
-# City-level metrics  
+# City-level metrics
 type CityMetric {
   city: String!
   countryCode: String
@@ -4166,8 +4748,8 @@ type RoutingEvent {
   routingDistance: Float
 
   # Routing decision metadata
-  candidatesCount: Int        # Number of candidate nodes evaluated
-  latencyMs: Float            # Routing decision latency in milliseconds
+  candidatesCount: Int # Number of candidate nodes evaluated
+  latencyMs: Float # Routing decision latency in milliseconds
   eventType: String
   source: String
 
@@ -4186,7 +4768,7 @@ type ConnectionEvent implements Node {
   streamId: ID!
   stream: Stream
   sessionId: String!
-  connectionAddr: String       # Client IP - redacted for privacy (returns null)
+  connectionAddr: String # Client IP - redacted for privacy (returns null)
   connector: String!
   nodeId: String!
   countryCode: String
@@ -4199,8 +4781,8 @@ type ConnectionEvent implements Node {
   requestUrl: String
 
   # Session metrics (for disconnect events)
-  sessionDurationSeconds: Int  # Duration in seconds
-  bytesTransferred: Float      # Bytes transferred during session
+  sessionDurationSeconds: Int # Duration in seconds
+  bytesTransferred: Float # Bytes transferred during session
 }
 
 # Coarse geospatial bucket (H3)
@@ -4401,17 +4983,17 @@ type ServiceInstance {
   clusterId: String!
   nodeId: String
   serviceId: String!
-  
+
   # Instance details
   version: String
   port: Int
   processId: Int
   containerId: String
-  
+
   # Status tracking
   status: InstanceStatus!
   healthStatus: NodeStatus!
-  
+
   # Timestamps
   startedAt: Time
   stoppedAt: Time
@@ -4480,9 +5062,9 @@ type IngestEndpointResponse {
 type IngestEndpoint {
   nodeId: String!
   baseUrl: String!
-  whipUrl: String          # WHIP ingest URL
-  rtmpUrl: String          # RTMP ingest URL
-  srtUrl: String           # SRT ingest URL
+  whipUrl: String # WHIP ingest URL
+  rtmpUrl: String # RTMP ingest URL
+  srtUrl: String # SRT ingest URL
   region: String
   loadScore: Float
 }
@@ -4513,11 +5095,11 @@ type ViewerEndpointResponse {
 type ViewerEndpoint {
   nodeId: String!
   baseUrl: String!
-  protocol: String!        # "webrtc", "hls", "dash", etc from MistServer outputs
-  url: String!             # Complete URL with stream name substituted
-  geoDistance: Float       # Distance from viewer in km
-  loadScore: Float         # Load balancer score
-  outputs: JSON            # MistServer outputs configuration (map<string, OutputEndpoint> in proto)
+  protocol: String! # "webrtc", "hls", "dash", etc from MistServer outputs
+  url: String! # Complete URL with stream name substituted
+  geoDistance: Float # Distance from viewer in km
+  loadScore: Float # Load balancer score
+  outputs: JSON # MistServer outputs configuration (map<string, OutputEndpoint> in proto)
 }
 
 # Playback metadata for any content type (matches proto PlaybackMetadata)
@@ -4574,104 +5156,186 @@ A support conversation between tenant and support team.
 Conversations can contain multiple messages and have a status.
 """
 type Conversation implements Node {
-  """The globally unique identifier for this conversation."""
+  """
+  The globally unique identifier for this conversation.
+  """
   id: ID!
-  """Optional subject line for the conversation."""
+  """
+  Optional subject line for the conversation.
+  """
   subject: String
-  """Current status of the conversation."""
+  """
+  Current status of the conversation.
+  """
   status: ConversationStatus!
-  """The last message in this conversation."""
+  """
+  The last message in this conversation.
+  """
   lastMessage: Message
-  """Number of unread messages."""
+  """
+  Number of unread messages.
+  """
   unreadCount: Int!
-  """When the conversation was created."""
+  """
+  When the conversation was created.
+  """
   createdAt: Time!
-  """When the conversation was last updated."""
+  """
+  When the conversation was last updated.
+  """
   updatedAt: Time!
 }
 
-"""Status of a support conversation."""
+"""
+Status of a support conversation.
+"""
 enum ConversationStatus {
-  """Conversation is open and awaiting response."""
+  """
+  Conversation is open and awaiting response.
+  """
   OPEN
-  """Conversation has been resolved."""
+  """
+  Conversation has been resolved.
+  """
   RESOLVED
-  """Conversation is pending action."""
+  """
+  Conversation is pending action.
+  """
   PENDING
 }
 
-"""A message within a support conversation."""
+"""
+A message within a support conversation.
+"""
 type Message implements Node {
-  """The globally unique identifier for this message."""
+  """
+  The globally unique identifier for this message.
+  """
   id: ID!
-  """The conversation this message belongs to."""
+  """
+  The conversation this message belongs to.
+  """
   conversationId: ID!
-  """The message content."""
+  """
+  The message content.
+  """
   content: String!
-  """Who sent this message."""
+  """
+  Who sent this message.
+  """
   sender: MessageSender!
-  """When the message was sent."""
+  """
+  When the message was sent.
+  """
   createdAt: Time!
 }
 
-"""Who sent a message."""
+"""
+Who sent a message.
+"""
 enum MessageSender {
-  """Message from the user (customer)."""
+  """
+  Message from the user (customer).
+  """
   USER
-  """Message from a support agent."""
+  """
+  Message from a support agent.
+  """
   AGENT
 }
 
-"""Input for creating a new conversation."""
+"""
+Input for creating a new conversation.
+"""
 input CreateConversationInput {
-  """Optional subject line."""
+  """
+  Optional subject line.
+  """
   subject: String
-  """Initial message content (required)."""
+  """
+  Initial message content (required).
+  """
   message: String!
-  """Optional page URL where conversation was initiated."""
+  """
+  Optional page URL where conversation was initiated.
+  """
   pageUrl: String
 }
 
-"""Input for sending a message."""
+"""
+Input for sending a message.
+"""
 input SendMessageInput {
-  """The conversation ID to send the message to."""
+  """
+  The conversation ID to send the message to.
+  """
   conversationId: ID!
-  """The message content."""
+  """
+  The message content.
+  """
   content: String!
 }
 
-"""Paginated list of conversations."""
+"""
+Paginated list of conversations.
+"""
 type ConversationsConnection {
-  """List of conversations."""
+  """
+  List of conversations.
+  """
   edges: [ConversationEdge!]!
-  """Pagination information."""
+  """
+  Pagination information.
+  """
   pageInfo: PageInfo!
-  """Total count of conversations."""
+  """
+  Total count of conversations.
+  """
   totalCount: Int!
 }
 
-"""A conversation edge in a connection."""
+"""
+A conversation edge in a connection.
+"""
 type ConversationEdge {
-  """The conversation."""
+  """
+  The conversation.
+  """
   node: Conversation!
-  """Cursor for this edge."""
+  """
+  Cursor for this edge.
+  """
   cursor: String!
 }
 
-"""Paginated list of messages."""
+"""
+Paginated list of messages.
+"""
 type MessagesConnection {
-  """List of messages."""
+  """
+  List of messages.
+  """
   edges: [MessageEdge!]!
-  """Pagination information."""
+  """
+  Pagination information.
+  """
   pageInfo: PageInfo!
-  """Total count of messages."""
+  """
+  Total count of messages.
+  """
   totalCount: Int!
 }
 
-"""A message edge in a connection."""
+"""
+A message edge in a connection.
+"""
 type MessageEdge {
-  """The message."""
+  """
+  The message.
+  """
   node: Message!
-  """Cursor for this edge."""
+  """
+  Cursor for this edge.
+  """
   cursor: String!
 }

@@ -1,12 +1,12 @@
 apiVersion: 1
 
 providers:
-  - name: 'FrameWorks Dashboards'
+  - name: "FrameWorks Dashboards"
     orgId: 1
-    folder: 'FrameWorks'
+    folder: "FrameWorks"
     type: file
     disableDeletion: false
     updateIntervalSeconds: 10
     allowUiUpdates: true
     options:
-      path: /var/lib/grafana/dashboards 
+      path: /var/lib/grafana/dashboards

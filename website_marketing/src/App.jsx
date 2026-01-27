@@ -1,16 +1,16 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
-import Navigation from './components/Navigation'
-import LandingPage from './components/pages/LandingPage'
-import Pricing from './components/pages/Pricing'
-import About from './components/pages/About'
-import Contact from './components/pages/Contact'
-import ScrollToTop from './components/shared/ScrollToTop'
-import Footer from './components/Footer'
-import StatusPage from './components/pages/StatusPage'
-import ChangelogPage from './components/pages/ChangelogPage'
-import PrivacyPage from './components/pages/PrivacyPage'
-import TermsPage from './components/pages/TermsPage'
-import AupPage from './components/pages/AupPage'
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import Navigation from "./components/Navigation";
+import LandingPage from "./components/pages/LandingPage";
+import Pricing from "./components/pages/Pricing";
+import About from "./components/pages/About";
+import Contact from "./components/pages/Contact";
+import ScrollToTop from "./components/shared/ScrollToTop";
+import Footer from "./components/Footer";
+import StatusPage from "./components/pages/StatusPage";
+import ChangelogPage from "./components/pages/ChangelogPage";
+import PrivacyPage from "./components/pages/PrivacyPage";
+import TermsPage from "./components/pages/TermsPage";
+import AupPage from "./components/pages/AupPage";
 
 function App() {
   return (
@@ -32,7 +32,7 @@ function App() {
       </div>
       <Footer />
     </Router>
-  )
+  );
 }
 
-export default App
+export default App;

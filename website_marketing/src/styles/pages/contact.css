@@ -8,8 +8,8 @@
     border: 1px solid rgba(var(--accent-rgb) / 0.18);
     box-shadow: 0 30px 60px rgba(6, 10, 28, 0.42);
   }
-  .contact-form .space-y-2>label,
-  .contact-form .space-y-2>.contact-turnstile__label {
+  .contact-form .space-y-2 > label,
+  .contact-form .space-y-2 > .contact-turnstile__label {
     font-size: 0.82rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
@@ -37,7 +37,9 @@
     width: 1rem;
     height: 1rem;
     color: hsl(var(--accent));
-    transition: transform 0.25s ease, color 0.25s ease;
+    transition:
+      transform 0.25s ease,
+      color 0.25s ease;
   }
   .contact-method-link:hover .contact-method-chevron,
   .contact-method-link:focus-visible .contact-method-chevron {
@@ -88,7 +90,9 @@
     border: 1px solid rgba(var(--accent-rgb) / 0.16);
     background: rgba(16, 20, 32, 0.72);
     cursor: pointer;
-    transition: border-color 0.25s ease, background 0.25s ease;
+    transition:
+      border-color 0.25s ease,
+      background 0.25s ease;
   }
   .contact-verification__option:hover,
   .contact-verification__option:focus-within {

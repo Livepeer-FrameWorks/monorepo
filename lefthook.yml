@@ -1,0 +1,28 @@
+# Lefthook pre-commit hooks
+# Install: pnpm install (runs automatically via prepare script)
+# Skip temporarily: git commit --no-verify
+
+pre-commit:
+  parallel: true
+  commands:
+    go-fmt:
+      glob: "**/*.go"
+      exclude: ".*\\.pb\\.go$|.*_grpc\\.pb\\.go$|graph/generated/.*|graph/model/models_gen\\.go$"
+      run: gofmt -l -w {staged_files}
+      stage_fixed: true
+
+    go-lint:
+      glob: "**/*.go"
+      exclude: ".*\\.pb\\.go$|.*_grpc\\.pb\\.go$|graph/generated/.*|graph/model/models_gen\\.go$"
+      run: golangci-lint run --new --fix {staged_files} || true
+      stage_fixed: true
+
+    frontend-format:
+      glob: "*.{js,ts,jsx,tsx,svelte,json,yaml,yml,md,mdx}"
+      run: pnpm prettier --write {staged_files}
+      stage_fixed: true
+
+    frontend-lint:
+      glob: "*.{js,ts,jsx,tsx,svelte}"
+      run: pnpm eslint --fix {staged_files} || true
+      stage_fixed: true

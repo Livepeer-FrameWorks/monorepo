@@ -1,5 +1,10 @@
-import { useEffect, useRef, useCallback } from 'react';
-import { TelemetryReporter, type TelemetryOptions, type PlaybackQuality, type ContentType } from '@livepeer-frameworks/player-core';
+import { useEffect, useRef, useCallback } from "react";
+import {
+  TelemetryReporter,
+  type TelemetryOptions,
+  type PlaybackQuality,
+  type ContentType,
+} from "@livepeer-frameworks/player-core";
 
 export interface UseTelemetryOptions extends TelemetryOptions {
   /** Video element to monitor */
@@ -87,7 +92,17 @@ export function useTelemetry(options: UseTelemetryOptions) {
       reporterRef.current?.stop();
       reporterRef.current = null;
     };
-  }, [enabled, endpoint, authToken, interval, batchSize, contentId, contentType, playerType, protocol]);
+  }, [
+    enabled,
+    endpoint,
+    authToken,
+    interval,
+    batchSize,
+    contentId,
+    contentType,
+    playerType,
+    protocol,
+  ]);
 
   // Start/stop reporting when video element changes
   useEffect(() => {

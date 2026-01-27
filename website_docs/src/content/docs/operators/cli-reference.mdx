@@ -5,12 +5,12 @@ sidebar:
   order: 6
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 The FrameWorks CLI is your swiss-army knife for platform management. Provisioning uses Ansible for some infrastructure tasks, while most commands run direct SSH or API calls.
 
 <Aside type="tip">
-Use `frameworks menu` to launch an interactive menu for exploring these commands.
+  Use `frameworks menu` to launch an interactive menu for exploring these commands.
 </Aside>
 
 ## Global Flags
@@ -31,11 +31,13 @@ Note: The `--manifest` flag is used by cluster subcommands and `frameworks edge 
 Detect the current state of all services in the cluster using multi-method detection.
 
 **Usage:**
+
 ```bash
 frameworks cluster detect [flags]
 ```
 
 **Detection Methods:**
+
 1. Check inventory file (`/etc/frameworks/inventory.json`)
 2. Check Docker containers
 3. Check systemd services
@@ -44,6 +46,7 @@ frameworks cluster detect [flags]
 6. Try direct connections (DB, Kafka, etc.)
 
 **Output:**
+
 ```
 ✓ commodore (central-01): running [docker, v0.0.0-rc1, detected by: health-endpoint]
 ✓ postgres (central-01): running [docker, v15.2, detected by: port-check]
@@ -51,9 +54,11 @@ frameworks cluster detect [flags]
 ```
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file (default: cluster.yaml)
 
 **Examples:**
+
 ```bash
 # Detect all services
 frameworks cluster detect
@@ -72,11 +77,13 @@ frameworks cluster detect --verbose
 Run comprehensive health checks across the entire cluster.
 
 **Usage:**
+
 ```bash
 frameworks cluster doctor [flags]
 ```
 
 **Checks:**
+
 - **Infrastructure:** Postgres/Yugabyte, ClickHouse, and Kafka broker connectivity
 - **Applications:** Health endpoints for enabled services
 - **Interfaces:** Health endpoints for enabled interfaces
@@ -85,6 +92,7 @@ frameworks cluster doctor [flags]
 Note: This command does not validate schemas or run mesh checks.
 
 **Output:**
+
 ```
 Infrastructure Health:
 
@@ -108,9 +116,11 @@ Recommendations:
 ```
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 
 **Examples:**
+
 ```bash
 # Full health check
 frameworks cluster doctor
@@ -128,15 +138,18 @@ frameworks cluster doctor --verbose
 Deploy services to hosts based on the cluster manifest.
 
 **Usage:**
+
 ```bash
 frameworks cluster provision [flags]
 ```
 
 **Deployment Modes:**
+
 - **Docker:** Uses docker-compose files (default for most services)
 - **Native:** Uses systemd units (for services with native binaries)
 
 **Process:**
+
 1. Load the cluster manifest and build an execution plan
 2. Generate configuration files (docker-compose.yml or systemd units)
 3. Transfer files to target hosts via SSH and provision (Ansible for some infra)
@@ -144,6 +157,7 @@ frameworks cluster provision [flags]
 5. Validate health (unless `--ignore-validation`)
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 - `--only string` - Phase to provision (`infrastructure`, `applications`, `interfaces`, `all`)
 - `--dry-run` - Show what would be deployed without actually deploying
@@ -151,6 +165,7 @@ frameworks cluster provision [flags]
 - `--ignore-validation` - Continue even if health validation fails (dangerous)
 
 **Examples:**
+
 ```bash
 # Provision entire cluster
 frameworks cluster provision
@@ -185,10 +200,12 @@ During provisioning, the CLI automatically bootstraps the system tenant and clus
    - Usage limit not set (defaults to single-use until used)
 
 **Important:** The auto-generated cluster ID format (`{type}-{profile}`) is needed when using:
+
 - `admin bootstrap-tokens create --cluster-id`
 - `services discover --cluster-id`
 
 To discover existing cluster IDs after provisioning:
+
 ```bash
 frameworks admin clusters list
 ```
@@ -200,20 +217,24 @@ frameworks admin clusters list
 Initialize databases and create required schemas/tables.
 
 **Usage:**
+
 ```bash
 frameworks cluster init [service] [flags]
 ```
 
 **Initialization:**
+
 - Creates PostgreSQL databases and schemas
 - Creates ClickHouse databases and tables
 - Creates Kafka topics
 - Applies embedded schemas and static seeds (per service)
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 
 **Examples:**
+
 ```bash
 # Initialize everything
 frameworks cluster init all
@@ -231,20 +252,24 @@ frameworks cluster init postgres --manifest production.yaml
 View or stream service logs.
 
 **Usage:**
+
 ```bash
 frameworks cluster logs <service> [flags]
 ```
 
 **Supports:**
+
 - Docker Compose logs (`docker compose logs`)
 - Systemd journal logs (`journalctl -u`)
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 - `--follow, -f` - Follow log output (stream)
 - `--tail, -n int` - Number of lines to show (default: 50)
 
 **Examples:**
+
 ```bash
 # View last 50 lines (default)
 frameworks cluster logs commodore
@@ -266,21 +291,25 @@ frameworks cluster logs decklog -n 100 -f
 Restart services with optional health validation.
 
 **Usage:**
+
 ```bash
 frameworks cluster restart <service> [flags]
 ```
 
 **Process:**
+
 1. Stop service gracefully
 2. Wait for shutdown
 3. Start service
 4. Validate health (if enabled)
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 - `--validate` - Validate service health after restart
 
 **Examples:**
+
 ```bash
 # Restart with health check
 frameworks cluster restart commodore
@@ -296,16 +325,19 @@ frameworks cluster restart bridge --validate
 Upgrade services to new versions from GitOps manifests.
 
 **Usage:**
+
 ```bash
 frameworks cluster upgrade <service> [flags]
 ```
 
 **Version Resolution:**
+
 - `stable` - Latest stable release
 - `rc` - Latest release candidate
 - `v0.0.0-rc1` - Specific version tag
 
 **Process:**
+
 1. Detect current state
 2. Fetch GitOps manifest for target version
 3. Stop service
@@ -314,6 +346,7 @@ frameworks cluster upgrade <service> [flags]
 6. Validate health
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 - `--version string` - Target version (default: `stable`)
 - `--dry-run` - Preview upgrade without executing
@@ -322,6 +355,7 @@ frameworks cluster upgrade <service> [flags]
 - `--no-rollback` - Skip automatic rollback on health check failure
 
 **Examples:**
+
 ```bash
 # Upgrade to latest stable
 frameworks cluster upgrade commodore --version stable
@@ -345,11 +379,13 @@ frameworks cluster upgrade decklog --version stable --skip-validation
 Backup cluster components to local storage.
 
 **Usage:**
+
 ```bash
 frameworks cluster backup <component> [flags]
 ```
 
 **Components:**
+
 - `postgres` - PostgreSQL/YugabyteDB dump (pg_dumpall)
 - `clickhouse` - ClickHouse databases (TSV format)
 - `volumes` - Docker volumes (tar.gz archives)
@@ -357,15 +393,18 @@ frameworks cluster backup <component> [flags]
 - `all` - Backup everything
 
 **Output:**
+
 - Files stored in the output directory with timestamps
 - Timestamped filenames: `postgres-20250117-143000.sql`
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 - `--output string` - Output directory (default: `./backups`)
 - `--skip-upload` - Placeholder only (uploads are not wired yet)
 
 **Examples:**
+
 ```bash
 # Backup everything
 frameworks cluster backup all --output /backups
@@ -390,6 +429,7 @@ frameworks cluster backup config --output /backups
 Restore components from backup files.
 
 **Usage:**
+
 ```bash
 frameworks cluster restore <component> [flags]
 ```
@@ -397,18 +437,21 @@ frameworks cluster restore <component> [flags]
 **⚠️ Warning:** Restore will STOP services and OVERWRITE existing data!
 
 **Components:**
+
 - `postgres` - Restore from SQL dump
 - `clickhouse` - Restore from TSV directory
 - `volumes` - Restore from tar.gz archive
 - `config` - Restore configuration files
 
 **Flags:**
+
 - `--manifest string` - Cluster manifest file
 - `--from string` - Path to backup file or directory (required)
 - `--skip-validation` - Skip health validation after restore
 - `--yes` - Skip confirmation prompt
 
 **Examples:**
+
 ```bash
 # Restore Postgres
 frameworks cluster restore postgres \
@@ -440,15 +483,18 @@ frameworks cluster restore postgres \
 Test network connectivity between all hosts in the cluster.
 
 **Usage:**
+
 ```bash
 frameworks cluster diagnose network [flags]
 ```
 
 **Tests:**
+
 - Ping test from each host to every other host
 - Reports success/failure matrix
 
 **Output:**
+
 ```
 Network Connectivity Diagnostics
 
@@ -458,6 +504,7 @@ Network Connectivity Diagnostics
 ```
 
 **Examples:**
+
 ```bash
 frameworks cluster diagnose network
 ```
@@ -469,17 +516,20 @@ frameworks cluster diagnose network
 Check CPU, memory, disk, and load average on all hosts.
 
 **Usage:**
+
 ```bash
 frameworks cluster diagnose resources [flags]
 ```
 
 **Metrics:**
+
 - CPU usage (%)
 - Memory usage (used/total)
 - Disk usage (/)
 - Load average (1m, 5m, 15m)
 
 **Output:**
+
 ```
 Resource Usage Diagnostics
 
@@ -491,6 +541,7 @@ Host: central-01 (10.0.1.10)
 ```
 
 **Examples:**
+
 ```bash
 frameworks cluster diagnose resources
 ```
@@ -502,6 +553,7 @@ frameworks cluster diagnose resources
 Check for port conflicts on all hosts.
 
 **Usage:**
+
 ```bash
 frameworks cluster diagnose ports [flags]
 ```
@@ -510,6 +562,7 @@ frameworks cluster diagnose ports [flags]
 Uses the CLI's built-in port list for core services, interfaces, and gRPC endpoints. For the canonical port table, see [Architecture Overview](/operators/architecture#core-services).
 
 **Output:**
+
 ```
 Port Conflict Diagnostics
 
@@ -521,6 +574,7 @@ Host: central-01 (10.0.1.10)
 ```
 
 **Examples:**
+
 ```bash
 frameworks cluster diagnose ports
 ```
@@ -532,17 +586,20 @@ frameworks cluster diagnose ports
 Check Kafka cluster health, topics, consumer groups, and broker status.
 
 **Usage:**
+
 ```bash
 frameworks cluster diagnose kafka [flags]
 ```
 
 **Checks:**
+
 - List all topics
 - List consumer groups
 - Broker API version check
 - Cluster responsiveness
 
 **Output:**
+
 ```
 Kafka Diagnostics
 
@@ -560,6 +617,7 @@ Broker Status:
 ```
 
 **Examples:**
+
 ```bash
 frameworks cluster diagnose kafka
 ```
@@ -573,6 +631,7 @@ frameworks cluster diagnose kafka
 Verify public DNS records match Quartermaster inventory.
 
 **Usage:**
+
 ```bash
 frameworks dns doctor --domain example.com
 ```
@@ -588,6 +647,7 @@ Compares expected IPs from node inventory against actual DNS resolution. Useful 
 Show WireGuard mesh status from Quartermaster inventory.
 
 **Usage:**
+
 ```bash
 frameworks mesh status
 ```
@@ -619,6 +679,7 @@ frameworks admin tokens revoke <token-id>
 ```
 
 **Flags for create:**
+
 - `--name` - Token name/label (required)
 - `--expires` - Expiry duration (e.g., `720h`, `30d`)
 - `--perms` - Comma-separated permissions
@@ -648,6 +709,7 @@ frameworks admin bootstrap-tokens revoke <token-id>
 ```
 
 **Flags for create:**
+
 - `--name` - Display name (required)
 - `--kind` - Token kind: `edge_node`, `service`, or `infrastructure_node` (default: `edge_node`)
 - `--ttl` - Time-to-live (e.g., `24h`, `7d`) (default: `24h`)
@@ -668,6 +730,7 @@ frameworks admin tenants list
 ```
 
 **Sample output:**
+
 ```
 Tenants (2)
  - FrameWorks (id=abc123-...) tier=global
@@ -681,6 +744,7 @@ Tenants (2)
 List and manage clusters.
 
 **Subcommands:**
+
 - `list` - List clusters
 - `create` - Create a cluster
 - `update` - Update a cluster
@@ -704,6 +768,7 @@ frameworks admin clusters update --cluster-id central-production --is-active
 ```
 
 **Sample output:**
+
 ```
 Clusters (2)
  - FrameWorks Central Production (id=central-production) type=central url=http://10.0.1.10:18002
@@ -719,6 +784,7 @@ Clusters (2)
 List registered infrastructure nodes.
 
 **Subcommands:**
+
 - `list` - List nodes
 - `create` - Create/register a node record
 - `hardware` - Update hardware metadata (cpu/mem/disk)
@@ -747,6 +813,7 @@ frameworks admin nodes hardware --node-id edge-nyc-01 --cpu-cores 16 --memory-gb
 ```
 
 **Flags:**
+
 - `--cluster-id` - Filter by cluster ID
 - `--type` - Filter by node type (common: `edge`, `core`; some deployments use `regional`/`central`)
 - `--region` - Filter by region
@@ -770,6 +837,7 @@ frameworks edge preflight --domain edge1.example.com
 ```
 
 **Flags:**
+
 - `--domain` - Edge domain to validate DNS for
 
 ---
@@ -787,11 +855,13 @@ frameworks edge tune --write
 ```
 
 **Flags:**
+
 - `--write` - Write to system paths (requires sudo)
 - `--sysctl-path` - Target sysctl path (default: `/etc/sysctl.d/frameworks-edge.conf`)
 - `--limits-path` - Target limits path (default: `/etc/security/limits.d/frameworks-edge.conf`)
 
 **Tuning Applied:**
+
 - `net.core.rmem_max = 16777216`
 - `net.core.wmem_max = 16777216`
 - `net.core.somaxconn = 8192`
@@ -810,11 +880,11 @@ frameworks edge init --domain edge1.example.com --email admin@example.com
 ```
 
 **Flags:**
+
 - `--dir` - Target directory for templates (default: `.`)
 - `--domain` - Edge domain to configure
 - `--email` - ACME email for Let's Encrypt certificate issuance
 - `--overwrite` - Overwrite existing files
-
 
 ---
 
@@ -834,6 +904,7 @@ frameworks edge enroll --dir /opt/frameworks-edge --ssh admin@edge1.example.com
 ```
 
 **Flags:**
+
 - `--dir` - Directory containing `docker-compose.edge.yml` and `.edge.env`
 - `--timeout` - Maximum time to wait for HTTPS readiness (default: `2m`)
 - `--ssh` - Run remotely on `user@host` via SSH
@@ -848,6 +919,7 @@ frameworks edge enroll --dir /opt/frameworks-edge --ssh admin@edge1.example.com
 Orchestrate full edge node provisioning (preflight, tune, register, init, enroll).
 
 **Usage:**
+
 ```bash
 # Single node provisioning
 frameworks edge provision --ssh user@host [flags]
@@ -857,6 +929,7 @@ frameworks edge provision --manifest edges.yaml
 ```
 
 **Process:**
+
 1. Run preflight checks
 2. Apply system tuning (optional)
 3. Register node in Quartermaster (optional)
@@ -866,6 +939,7 @@ frameworks edge provision --manifest edges.yaml
 7. Verify HTTPS readiness
 
 **Flags:**
+
 - `--ssh string` - SSH target (user@host)
 - `--ssh-key` - SSH private key path
 - `--pool-domain string` - Shared LB pool domain (e.g., edge.example.com)
@@ -883,6 +957,7 @@ frameworks edge provision --manifest edges.yaml
 - `--skip-preflight` - Skip preflight checks
 
 **Examples:**
+
 ```bash
 # Provision single node
 frameworks edge provision --ssh ubuntu@10.0.0.5 \
@@ -906,6 +981,7 @@ frameworks edge status --domain edge1.example.com --ssh admin@edge1.example.com
 ```
 
 **Flags:**
+
 - `--dir` - Directory with compose/env files
 - `--domain` - Override `EDGE_DOMAIN` from env file
 - `--ssh` - Run remotely via SSH
@@ -923,6 +999,7 @@ frameworks edge update --ssh admin@edge1.example.com
 ```
 
 **Flags:**
+
 - `--dir` - Directory
 - `--ssh` - Run remotely via SSH
 - `--ssh-key` - SSH private key path
@@ -939,6 +1016,7 @@ frameworks edge cert --reload  # Reload Caddy after check
 ```
 
 **Flags:**
+
 - `--dir` - Directory
 - `--domain` - Domain to check
 - `--reload` - Reload Caddy after certificate check
@@ -957,6 +1035,7 @@ frameworks edge logs --follow --tail 500
 ```
 
 **Flags:**
+
 - `--dir` - Directory
 - `--follow` - Follow/tail logs
 - `--tail` - Number of lines to show
@@ -974,6 +1053,7 @@ frameworks edge doctor --domain edge1.example.com
 ```
 
 **Flags:**
+
 - `--dir` - Directory
 - `--domain` - Domain to check
 - `--ssh` - Run remotely via SSH
@@ -1004,10 +1084,12 @@ frameworks services plan --include commodore,quartermaster --exclude purser
 ```
 
 **Output:**
+
 - `svc-<service>.yml` fragments (one per service)
 - `.central.env` (merged env file)
 
 **Flags:**
+
 - `--profile` - Preset: `central-all` | `control-core` | `routing-only` | `analytics-suite` | `billing-only` (default: `central-all`)
 - `--include` - Comma-separated services to include
 - `--exclude` - Comma-separated services to exclude
@@ -1032,6 +1114,7 @@ frameworks services up --ssh admin@central-01
 ```
 
 **Flags:**
+
 - `--dir` - Directory containing generated compose files
 - `--only` - Comma-separated services to start
 - `--ssh` - Run remotely on `user@host` via SSH
@@ -1049,6 +1132,7 @@ frameworks services down --only commodore
 ```
 
 **Flags:**
+
 - `--dir` - Directory containing generated compose files
 - `--only` - Comma-separated services to stop
 - `--ssh` - Run remotely via SSH
@@ -1066,6 +1150,7 @@ frameworks services status --only commodore,bridge
 ```
 
 **Flags:**
+
 - `--dir` - Directory containing generated compose files
 - `--only` - Comma-separated services to filter
 - `--ssh` - Run remotely via SSH
@@ -1083,6 +1168,7 @@ frameworks services logs --only commodore --follow --tail 500
 ```
 
 **Flags:**
+
 - `--dir` - Directory containing generated compose files
 - `--only` - Comma-separated services to filter
 - `--follow` - Follow/tail logs
@@ -1108,6 +1194,7 @@ frameworks services health --service-id commodore-prod-01
 ```
 
 **Flags:**
+
 - `--service-id` - Filter by service ID
 - `--type` - Filter by service type (catalog name)
 
@@ -1123,6 +1210,7 @@ frameworks services discover --type foghorn --cluster-id central-production
 ```
 
 **Flags:**
+
 - `--type` - Service type/catalog name (required)
 - `--cluster-id` - Filter by cluster ID
 
@@ -1153,6 +1241,7 @@ frameworks context list
 ```
 
 **Sample output:**
+
 ```
 * local
   production
@@ -1223,6 +1312,7 @@ frameworks login --service-account
 ```
 
 **Flags:**
+
 - `--service-account` - Use service token instead of API token
 
 Tokens are stored in `~/.frameworks/.env` and never appear in shell history.
@@ -1250,6 +1340,7 @@ frameworks menu
 ```
 
 Provides a guided interface for:
+
 - Edge Operations
 - Services & Health
 - Control Plane (Admin)
@@ -1278,6 +1369,7 @@ frameworks config env --context production
 ```
 
 **Flags:**
+
 - `--base` - Path to base env file (default: `config/env/base.env`)
 - `--secrets` - Path to secrets env file (default: `config/env/secrets.env`)
 - `--output` - Output path (default: `.env`, use `-` for stdout)
@@ -1293,5 +1385,7 @@ frameworks config env --context production
 - `3` - Service not found
 - `4` - Connection error
 - `5` - Health check failed
+
+```
 
 ```

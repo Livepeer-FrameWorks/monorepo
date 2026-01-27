@@ -4,16 +4,16 @@
  */
 
 // Types
-export * from './types';
+export * from "./types";
 
 // Core classes
-export { TypedEventEmitter } from './core/EventEmitter';
-export { DeviceManager } from './core/DeviceManager';
-export { ScreenCapture } from './core/ScreenCapture';
-export { WhipClient } from './core/WhipClient';
+export { TypedEventEmitter } from "./core/EventEmitter";
+export { DeviceManager } from "./core/DeviceManager";
+export { ScreenCapture } from "./core/ScreenCapture";
+export { WhipClient } from "./core/WhipClient";
 // IngestController (V2 is now the primary, V1 removed)
-export { IngestControllerV2 as IngestController } from './core/IngestControllerV2';
-export { IngestControllerV2 } from './core/IngestControllerV2'; // Alias for backwards compat
+export { IngestControllerV2 as IngestController } from "./core/IngestControllerV2";
+export { IngestControllerV2 } from "./core/IngestControllerV2"; // Alias for backwards compat
 export {
   EncoderManager,
   createEncoderConfig,
@@ -21,17 +21,14 @@ export {
   DEFAULT_AUDIO_SETTINGS,
   type EncodedVideoChunkData,
   type EncodedAudioChunkData,
-} from './core/EncoderManager';
+} from "./core/EncoderManager";
 
 // Phase 2: Audio mixing and reconnection
-export { AudioMixer } from './core/AudioMixer';
-export {
-  ReconnectionManager,
-  DEFAULT_RECONNECTION_CONFIG,
-} from './core/ReconnectionManager';
+export { AudioMixer } from "./core/AudioMixer";
+export { ReconnectionManager, DEFAULT_RECONNECTION_CONFIG } from "./core/ReconnectionManager";
 
 // Phase 3.5: Gateway integration (ingest endpoint resolution)
-export { IngestClient } from './core/IngestClient';
+export { IngestClient } from "./core/IngestClient";
 
 // Feature detection
 export {
@@ -47,7 +44,7 @@ export {
   isAudioCodecSupported,
   getSupportedVideoCodecs,
   getSupportedAudioCodecs,
-} from './core/FeatureDetection';
+} from "./core/FeatureDetection";
 
 // Media constraints
 export {
@@ -57,10 +54,10 @@ export {
   buildMediaConstraints,
   mergeWithCustomConstraints,
   getEncoderSettings,
-} from './core/MediaConstraints';
+} from "./core/MediaConstraints";
 
 // Phase 3: Compositor and scene management
-export { SceneManager } from './core/SceneManager';
+export { SceneManager } from "./core/SceneManager";
 export {
   TransitionEngine,
   createDefaultTransitionConfig,
@@ -70,7 +67,7 @@ export {
   getAvailableTransitionTypes,
   getAvailableEasingTypes,
   validateTransitionConfig,
-} from './core/TransitionEngine';
+} from "./core/TransitionEngine";
 
 // Layouts
 export {
@@ -88,8 +85,8 @@ export {
   createPipLayoutConfig,
   createSideBySideLayoutConfig,
   getAvailableLayoutModes,
-} from './core/layouts';
-export type { LayoutPreset } from './core/layouts';
+} from "./core/layouts";
+export type { LayoutPreset } from "./core/layouts";
 
 // Renderers
 export {
@@ -97,8 +94,8 @@ export {
   registerRenderer,
   getSupportedRenderers,
   getRecommendedRenderer,
-} from './core/renderers';
-export type { CompositorRenderer } from './core/renderers';
-export { Canvas2DRenderer } from './core/renderers/Canvas2DRenderer';
-export { WebGLRenderer } from './core/renderers/WebGLRenderer';
-export { WebGPURenderer } from './core/renderers/WebGPURenderer';
+} from "./core/renderers";
+export type { CompositorRenderer } from "./core/renderers";
+export { Canvas2DRenderer } from "./core/renderers/Canvas2DRenderer";
+export { WebGLRenderer } from "./core/renderers/WebGLRenderer";
+export { WebGPURenderer } from "./core/renderers/WebGPURenderer";

@@ -7,7 +7,11 @@ query GetViewerSessionsConnection(
 ) {
   analytics {
     lifecycle {
-      viewerSessionsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first, after: $after }) @paginate {
+      viewerSessionsConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $first, after: $after }
+      ) @paginate {
         edges {
           cursor
           node {

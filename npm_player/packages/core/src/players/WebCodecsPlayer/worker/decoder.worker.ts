@@ -19,15 +19,15 @@ import type {
   DecodedFrame,
   VideoDecoderInit,
   AudioDecoderInit,
-} from './types';
-import type { PipelineStats, FrameTrackerStats } from '../types';
+} from "./types";
+import type { PipelineStats, FrameTrackerStats } from "../types";
 
 // ============================================================================
 // Global State
 // ============================================================================
 
 const pipelines = new Map<number, PipelineState>();
-let debugging: boolean | 'verbose' = false;
+let debugging: boolean | "verbose" = false;
 let uidCounter = 0;
 
 // Frame timing state (shared across all pipelines)
@@ -62,7 +62,9 @@ const WARMUP_TIMEOUT_MS = 300; // Reduced from 500ms - start faster to reduce la
 function getTrackBaseTime(idx: number, frameTimeMs: number, now: number): number {
   if (!trackBaseTimes.has(idx)) {
     trackBaseTimes.set(idx, now - frameTimeMs / frameTiming.speed.combined);
-    log(`Track ${idx} baseTime: ${trackBaseTimes.get(idx)!.toFixed(0)} (first frame @ ${frameTimeMs.toFixed(0)}ms)`);
+    log(
+      `Track ${idx} baseTime: ${trackBaseTimes.get(idx)!.toFixed(0)} (first frame @ ${frameTimeMs.toFixed(0)}ms)`
+    );
   }
   return trackBaseTimes.get(idx)!;
 }
@@ -77,7 +79,7 @@ function resetBaseTime(): void {
 
 function cloneVideoFrame(frame: VideoFrame): VideoFrame | null {
   try {
-    if ('clone' in frame) {
+    if ("clone" in frame) {
       return (frame as VideoFrame).clone();
     }
     return new VideoFrame(frame);
@@ -87,7 +89,7 @@ function cloneVideoFrame(frame: VideoFrame): VideoFrame | null {
 }
 
 function pushFrameHistory(pipeline: PipelineState, frame: VideoFrame, timestamp: number): void {
-  if (pipeline.track.type !== 'video') return;
+  if (pipeline.track.type !== "video") return;
   if (!pipeline.frameHistory) pipeline.frameHistory = [];
 
   const cloned = cloneVideoFrame(frame);
@@ -99,7 +101,9 @@ function pushFrameHistory(pipeline: PipelineState, frame: VideoFrame, timestamp:
   while (pipeline.frameHistory.length > MAX_FRAME_HISTORY) {
     const entry = pipeline.frameHistory.shift();
     if (entry) {
-      try { entry.frame.close(); } catch {}
+      try {
+        entry.frame.close();
+      } catch {}
     }
   }
 
@@ -114,7 +118,7 @@ function alignHistoryCursorToLastOutput(pipeline: PipelineState): void {
     return;
   }
   // Find first history entry greater than last output, then step back one
-  const idx = pipeline.frameHistory.findIndex(entry => entry.timestamp > lastTs);
+  const idx = pipeline.frameHistory.findIndex((entry) => entry.timestamp > lastTs);
   if (idx === -1) {
     pipeline.historyCursor = pipeline.frameHistory.length - 1;
     return;
@@ -125,7 +129,7 @@ function alignHistoryCursorToLastOutput(pipeline: PipelineState): void {
 function getPrimaryVideoPipeline(): PipelineState | null {
   let selected: PipelineState | null = null;
   for (const pipeline of pipelines.values()) {
-    if (pipeline.track.type === 'video') {
+    if (pipeline.track.type === "video") {
       if (!selected || pipeline.idx < selected.idx) {
         selected = pipeline;
       }
@@ -153,11 +157,11 @@ const MAX_PAUSED_INPUT_QUEUE = 600;
 // Logging
 // ============================================================================
 
-function log(msg: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+function log(msg: string, level: "info" | "warn" | "error" = "info"): void {
   if (!debugging) return;
 
   const message: WorkerToMainMessage = {
-    type: 'log',
+    type: "log",
     msg,
     level,
     uid: uidCounter++,
@@ -166,7 +170,7 @@ function log(msg: string, level: 'info' | 'warn' | 'error' = 'info'): void {
 }
 
 function logVerbose(msg: string): void {
-  if (debugging !== 'verbose') return;
+  if (debugging !== "verbose") return;
   log(msg);
 }
 
@@ -178,49 +182,49 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
   const msg = event.data;
 
   switch (msg.type) {
-    case 'create':
+    case "create":
       handleCreate(msg);
       break;
 
-    case 'configure':
+    case "configure":
       handleConfigure(msg);
       break;
 
-    case 'receive':
+    case "receive":
       handleReceive(msg);
       break;
 
-    case 'setwritable':
+    case "setwritable":
       handleSetWritable(msg);
       break;
 
-    case 'creategenerator':
+    case "creategenerator":
       handleCreateGenerator(msg);
       break;
 
-    case 'close':
+    case "close":
       handleClose(msg);
       break;
 
-    case 'frametiming':
+    case "frametiming":
       handleFrameTiming(msg);
       break;
 
-    case 'seek':
+    case "seek":
       handleSeek(msg);
       break;
 
-    case 'framestep':
+    case "framestep":
       handleFrameStep(msg);
       break;
 
-    case 'debugging':
+    case "debugging":
       debugging = msg.value;
       log(`Debugging set to: ${msg.value}`);
       break;
 
     default:
-      log(`Unknown message type: ${(msg as any).type}`, 'warn');
+      log(`Unknown message type: ${(msg as any).type}`, "warn");
   }
 };
 
@@ -228,7 +232,7 @@ self.onmessage = (event: MessageEvent<MainToWorkerMessage>) => {
 // Pipeline Management
 // ============================================================================
 
-function handleCreate(msg: MainToWorkerMessage & { type: 'create' }): void {
+function handleCreate(msg: MainToWorkerMessage & { type: "create" }): void {
   const { idx, track, opts, uid } = msg;
 
   log(`Creating pipeline for track ${idx} (${track.type} ${track.codec})`);
@@ -243,8 +247,8 @@ function handleCreate(msg: MainToWorkerMessage & { type: 'create' }): void {
     writer: null,
     inputQueue: [],
     outputQueue: [],
-    frameHistory: track.type === 'video' ? [] : undefined,
-    historyCursor: track.type === 'video' ? null : undefined,
+    frameHistory: track.type === "video" ? [] : undefined,
+    historyCursor: track.type === "video" ? null : undefined,
     stats: {
       framesIn: 0,
       framesDecoded: 0,
@@ -254,12 +258,12 @@ function handleCreate(msg: MainToWorkerMessage & { type: 'create' }): void {
       lastOutputTimestamp: 0,
       decoderQueueSize: 0,
       // Debug info for error diagnosis
-      lastChunkType: '' as string,
+      lastChunkType: "" as string,
       lastChunkSize: 0,
-      lastChunkBytes: '' as string,
+      lastChunkBytes: "" as string,
     },
     optimizeForLatency: opts.optimizeForLatency,
-    payloadFormat: opts.payloadFormat || 'avcc',
+    payloadFormat: opts.payloadFormat || "avcc",
   };
 
   pipelines.set(idx, pipeline);
@@ -272,32 +276,32 @@ function handleCreate(msg: MainToWorkerMessage & { type: 'create' }): void {
   sendAck(uid, idx);
 }
 
-function handleConfigure(msg: MainToWorkerMessage & { type: 'configure' }): void {
+function handleConfigure(msg: MainToWorkerMessage & { type: "configure" }): void {
   const { idx, header, uid } = msg;
 
-  log(`Received configure for track ${idx}, header length=${header?.byteLength ?? 'null'}`);
+  log(`Received configure for track ${idx}, header length=${header?.byteLength ?? "null"}`);
 
   const pipeline = pipelines.get(idx);
 
   if (!pipeline) {
-    log(`Cannot configure: pipeline ${idx} not found`, 'error');
-    sendError(uid, idx, 'Pipeline not found');
+    log(`Cannot configure: pipeline ${idx} not found`, "error");
+    sendError(uid, idx, "Pipeline not found");
     return;
   }
 
   // Skip if already configured and decoder is ready
   // This prevents duplicate configuration when both WS INIT and HTTP fallback fire
-  if (pipeline.configured && pipeline.decoder && pipeline.decoder.state === 'configured') {
+  if (pipeline.configured && pipeline.decoder && pipeline.decoder.state === "configured") {
     log(`Track ${idx} already configured, skipping duplicate configure`);
     sendAck(uid, idx);
     return;
   }
 
   try {
-    if (pipeline.track.type === 'video') {
+    if (pipeline.track.type === "video") {
       log(`Configuring video decoder for track ${idx}...`);
       configureVideoDecoder(pipeline, header);
-    } else if (pipeline.track.type === 'audio') {
+    } else if (pipeline.track.type === "audio") {
       log(`Configuring audio decoder for track ${idx}...`);
       configureAudioDecoder(pipeline, header);
     }
@@ -306,7 +310,7 @@ function handleConfigure(msg: MainToWorkerMessage & { type: 'configure' }): void
     log(`Successfully configured decoder for track ${idx}`);
     sendAck(uid, idx);
   } catch (err) {
-    log(`Failed to configure decoder for track ${idx}: ${err}`, 'error');
+    log(`Failed to configure decoder for track ${idx}: ${err}`, "error");
     sendError(uid, idx, String(err));
   }
 }
@@ -315,8 +319,8 @@ function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array
   const track = pipeline.track;
 
   // Handle JPEG codec separately via ImageDecoder (Phase 2C)
-  if (track.codec === 'JPEG' || track.codec.toLowerCase() === 'jpeg') {
-    log('JPEG codec detected - will use ImageDecoder');
+  if (track.codec === "JPEG" || track.codec.toLowerCase() === "jpeg") {
+    log("JPEG codec detected - will use ImageDecoder");
     pipeline.configured = true;
     // JPEG doesn't need a persistent decoder - each frame is decoded individually
     return;
@@ -324,14 +328,14 @@ function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array
 
   // Close existing decoder if any (per rawws.js reconfiguration pattern)
   if (pipeline.decoder) {
-    if (pipeline.decoder.state === 'configured') {
+    if (pipeline.decoder.state === "configured") {
       try {
         pipeline.decoder.reset();
       } catch {
         // Ignore reset errors
       }
     }
-    if (pipeline.decoder.state !== 'closed') {
+    if (pipeline.decoder.state !== "closed") {
       try {
         pipeline.decoder.close();
       } catch {
@@ -346,18 +350,18 @@ function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array
   const config: VideoDecoderInit = {
     codec: track.codecstring || track.codec.toLowerCase(),
     optimizeForLatency: pipeline.optimizeForLatency,
-    hardwareAcceleration: 'prefer-hardware',
+    hardwareAcceleration: "prefer-hardware",
   };
 
   // Pass description directly from WebSocket INIT data (per reference rawws.js line 1052)
   // For Annex B format (ws/video/h264), SPS/PPS comes inline in the bitstream - skip description
-  if (pipeline.payloadFormat === 'annexb') {
+  if (pipeline.payloadFormat === "annexb") {
     log(`Annex B mode - SPS/PPS inline in bitstream, no description needed`);
   } else if (description && description.byteLength > 0) {
     config.description = description;
     log(`Configuring with description (${description.byteLength} bytes)`);
   } else {
-    log(`No description provided - decoder may fail on H.264/HEVC`, 'warn');
+    log(`No description provided - decoder may fail on H.264/HEVC`, "warn");
   }
 
   log(`Configuring video decoder: ${config.codec}`);
@@ -379,29 +383,29 @@ function configureVideoDecoder(pipeline: PipelineState, description?: Uint8Array
  */
 function mapAudioCodec(codec: string, codecstring?: string): string {
   // If we have a full codec string like "mp4a.40.2", use it
-  if (codecstring && codecstring.startsWith('mp4a.')) {
+  if (codecstring && codecstring.startsWith("mp4a.")) {
     return codecstring;
   }
 
   // Map common MistServer codec names to WebCodecs codec strings
   const normalized = codec.toLowerCase();
   switch (normalized) {
-    case 'aac':
-    case 'mp4a':
-      return 'mp4a.40.2'; // AAC-LC
-    case 'mp3':
-      return 'mp3';
-    case 'opus':
-      return 'opus';
-    case 'flac':
-      return 'flac';
-    case 'ac3':
-    case 'ac-3':
-      return 'ac-3';
-    case 'pcm_s16le':
-    case 'pcm_s32le':
-    case 'pcm_f32le':
-      return 'pcm-' + normalized.replace('pcm_', '').replace('le', '-le');
+    case "aac":
+    case "mp4a":
+      return "mp4a.40.2"; // AAC-LC
+    case "mp3":
+      return "mp3";
+    case "opus":
+      return "opus";
+    case "flac":
+      return "flac";
+    case "ac3":
+    case "ac-3":
+      return "ac-3";
+    case "pcm_s16le":
+    case "pcm_s32le":
+    case "pcm_f32le":
+      return "pcm-" + normalized.replace("pcm_", "").replace("le", "-le");
     default:
       log(`Unknown audio codec: ${codec}, trying as-is`);
       return codecstring || codec;
@@ -432,7 +436,9 @@ function configureAudioDecoder(pipeline: PipelineState, description?: Uint8Array
   decoder.configure(config as AudioDecoderConfig);
   pipeline.decoder = decoder;
 
-  log(`Audio decoder configured: ${config.codec} ${config.sampleRate}Hz ${config.numberOfChannels}ch`);
+  log(
+    `Audio decoder configured: ${config.codec} ${config.sampleRate}Hz ${config.numberOfChannels}ch`
+  );
 }
 
 function handleDecodedFrame(pipeline: PipelineState, frame: VideoFrame | AudioData): void {
@@ -450,10 +456,13 @@ function handleDecodedFrame(pipeline: PipelineState, frame: VideoFrame | AudioDa
   // Log first few decoded frames
   if (pipeline.stats.framesDecoded <= 3) {
     const frameType = pipeline.track.type;
-    const extraInfo = frameType === 'audio'
-      ? ` (${(frame as AudioData).numberOfFrames} samples, ${(frame as AudioData).sampleRate}Hz)`
-      : ` (${(frame as VideoFrame).displayWidth}x${(frame as VideoFrame).displayHeight})`;
-    log(`Decoded ${frameType} frame ${pipeline.stats.framesDecoded} for track ${pipeline.idx}: ts=${timestamp}μs${extraInfo}`);
+    const extraInfo =
+      frameType === "audio"
+        ? ` (${(frame as AudioData).numberOfFrames} samples, ${(frame as AudioData).sampleRate}Hz)`
+        : ` (${(frame as VideoFrame).displayWidth}x${(frame as VideoFrame).displayHeight})`;
+    log(
+      `Decoded ${frameType} frame ${pipeline.stats.framesDecoded} for track ${pipeline.idx}: ts=${timestamp}μs${extraInfo}`
+    );
   }
 
   // Add to output queue for scheduled release
@@ -468,16 +477,19 @@ function handleDecodedFrame(pipeline: PipelineState, frame: VideoFrame | AudioDa
 }
 
 function handleDecoderError(pipeline: PipelineState, err: DOMException): void {
-  log(`Decoder error on track ${pipeline.idx}: ${err.name}: ${err.message}`, 'error');
-  log(`  Last chunk info: type=${pipeline.stats.lastChunkType}, size=${pipeline.stats.lastChunkSize}, first bytes=[${pipeline.stats.lastChunkBytes}]`, 'error');
+  log(`Decoder error on track ${pipeline.idx}: ${err.name}: ${err.message}`, "error");
+  log(
+    `  Last chunk info: type=${pipeline.stats.lastChunkType}, size=${pipeline.stats.lastChunkSize}, first bytes=[${pipeline.stats.lastChunkBytes}]`,
+    "error"
+  );
 
   // Per rawws.js: reset the pipeline after decoder error
   // This clears queues and recreates the decoder if needed
   resetPipelineAfterError(pipeline);
 
   const message: WorkerToMainMessage = {
-    type: 'sendevent',
-    kind: 'error',
+    type: "sendevent",
+    kind: "error",
     message: `Decoder error: ${err.message}`,
     idx: pipeline.idx,
     uid: uidCounter++,
@@ -501,16 +513,16 @@ function resetPipelineAfterError(pipeline: PipelineState): void {
   pipeline.configured = false;
 
   // If decoder is closed, we need to recreate it (can't reset a closed decoder)
-  if (pipeline.decoder && pipeline.decoder.state === 'closed') {
+  if (pipeline.decoder && pipeline.decoder.state === "closed") {
     log(`Decoder closed for track ${pipeline.idx}, will recreate on next configure`);
     pipeline.decoder = null;
-  } else if (pipeline.decoder && pipeline.decoder.state !== 'closed') {
+  } else if (pipeline.decoder && pipeline.decoder.state !== "closed") {
     // Try to reset if not closed
     try {
       pipeline.decoder.reset();
       log(`Reset decoder for track ${pipeline.idx}`);
     } catch (e) {
-      log(`Failed to reset decoder for track ${pipeline.idx}: ${e}`, 'warn');
+      log(`Failed to reset decoder for track ${pipeline.idx}: ${e}`, "warn");
       pipeline.decoder = null;
     }
   }
@@ -520,7 +532,7 @@ function resetPipelineAfterError(pipeline: PipelineState): void {
 // Frame Input/Output
 // ============================================================================
 
-function handleReceive(msg: MainToWorkerMessage & { type: 'receive' }): void {
+function handleReceive(msg: MainToWorkerMessage & { type: "receive" }): void {
   const { idx, chunk } = msg;
   const pipeline = pipelines.get(idx);
 
@@ -532,7 +544,9 @@ function handleReceive(msg: MainToWorkerMessage & { type: 'receive' }): void {
   if (!pipeline.configured || !pipeline.decoder) {
     // Queue for later
     pipeline.inputQueue.push(chunk);
-    logVerbose(`Queued chunk for track ${idx} (configured=${pipeline.configured}, decoder=${!!pipeline.decoder})`);
+    logVerbose(
+      `Queued chunk for track ${idx} (configured=${pipeline.configured}, decoder=${!!pipeline.decoder})`
+    );
     return;
   }
 
@@ -548,19 +562,23 @@ function handleReceive(msg: MainToWorkerMessage & { type: 'receive' }): void {
 
   // Log only first 3 chunks per track to confirm receiving
   if (pipeline.stats.framesIn < 3) {
-    log(`Received chunk ${pipeline.stats.framesIn} for track ${idx}: type=${chunk.type}, ts=${chunk.timestamp / 1000}ms, size=${chunk.data.byteLength}`);
+    log(
+      `Received chunk ${pipeline.stats.framesIn} for track ${idx}: type=${chunk.type}, ts=${chunk.timestamp / 1000}ms, size=${chunk.data.byteLength}`
+    );
   }
 
   // Check if we need to drop frames due to decoder pressure (Phase 2B)
   if (shouldDropFramesDueToDecoderPressure(pipeline)) {
-    if (chunk.type === 'key') {
+    if (chunk.type === "key") {
       // Always accept keyframes - they're needed to resume
       decodeChunk(pipeline, chunk);
     } else {
       // Drop delta frames when decoder is overwhelmed
       pipeline.stats.framesDropped++;
       _totalFramesDropped++;
-      logVerbose(`Dropped delta frame @ ${chunk.timestamp / 1000}ms (decoder queue: ${pipeline.decoder.decodeQueueSize})`);
+      logVerbose(
+        `Dropped delta frame @ ${chunk.timestamp / 1000}ms (decoder queue: ${pipeline.decoder.decodeQueueSize})`
+      );
     }
     return;
   }
@@ -591,7 +609,7 @@ function _dropToNextKeyframe(pipeline: PipelineState): number {
   if (pipeline.inputQueue.length === 0) return 0;
 
   // Find next keyframe in queue
-  const keyframeIdx = pipeline.inputQueue.findIndex(c => c.type === 'key');
+  const keyframeIdx = pipeline.inputQueue.findIndex((c) => c.type === "key");
 
   if (keyframeIdx <= 0) {
     // No keyframe or keyframe is first - nothing to drop
@@ -603,14 +621,14 @@ function _dropToNextKeyframe(pipeline: PipelineState): number {
   pipeline.stats.framesDropped += dropped.length;
   _totalFramesDropped += dropped.length;
 
-  log(`Dropped ${dropped.length} frames to next keyframe`, 'warn');
+  log(`Dropped ${dropped.length} frames to next keyframe`, "warn");
 
   return dropped.length;
 }
 
 function decodeChunk(
   pipeline: PipelineState,
-  chunk: { type: 'key' | 'delta'; timestamp: number; data: Uint8Array }
+  chunk: { type: "key" | "delta"; timestamp: number; data: Uint8Array }
 ): void {
   if (pipeline.closed) return;
 
@@ -622,7 +640,7 @@ function decodeChunk(
   try {
     // Handle JPEG via ImageDecoder (Phase 2C)
     const codec = pipeline.track.codec;
-    if (codec === 'JPEG' || codec.toLowerCase() === 'jpeg') {
+    if (codec === "JPEG" || codec.toLowerCase() === "jpeg") {
       decodeJpegFrame(pipeline, chunk);
       return;
     }
@@ -636,10 +654,12 @@ function decodeChunk(
     pipeline.stats.lastChunkType = chunk.type;
     pipeline.stats.lastChunkSize = chunk.data.byteLength;
     // Show first 8 bytes to identify format (Annex B starts 0x00 0x00 0x00 0x01, AVCC starts with length)
-    const firstBytes = Array.from(chunk.data.slice(0, 8)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(' ');
+    const firstBytes = Array.from(chunk.data.slice(0, 8))
+      .map((b) => "0x" + b.toString(16).padStart(2, "0"))
+      .join(" ");
     pipeline.stats.lastChunkBytes = firstBytes;
 
-    if (pipeline.track.type === 'video') {
+    if (pipeline.track.type === "video") {
       // AVCC mode: frames pass through unchanged (decoder has SPS/PPS from description)
       const encodedChunk = new EncodedVideoChunk({
         type: chunk.type,
@@ -649,8 +669,12 @@ function decodeChunk(
 
       const decoder = pipeline.decoder as VideoDecoder;
       if (pipeline.stats.framesIn <= 3) {
-        const firstBytes = Array.from(chunk.data.slice(0, 16)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(' ');
-        log(`Calling decode() for track ${pipeline.idx}: state=${decoder.state}, queueSize=${decoder.decodeQueueSize}, chunk type=${chunk.type}, ts=${timestampUs}μs`);
+        const firstBytes = Array.from(chunk.data.slice(0, 16))
+          .map((b) => "0x" + b.toString(16).padStart(2, "0"))
+          .join(" ");
+        log(
+          `Calling decode() for track ${pipeline.idx}: state=${decoder.state}, queueSize=${decoder.decodeQueueSize}, chunk type=${chunk.type}, ts=${timestampUs}μs`
+        );
         log(`  First 16 bytes: ${firstBytes}`);
       }
 
@@ -659,11 +683,11 @@ function decodeChunk(
       if (pipeline.stats.framesIn <= 3) {
         log(`After decode() for track ${pipeline.idx}: queueSize=${decoder.decodeQueueSize}`);
       }
-    } else if (pipeline.track.type === 'audio') {
+    } else if (pipeline.track.type === "audio") {
       // Audio chunks are always treated as "key" frames - per MistServer rawws.js line 1127
       // Audio codecs don't use inter-frame dependencies like video does
       const encodedChunk = new EncodedAudioChunk({
-        type: 'key',
+        type: "key",
         timestamp: timestampUs,
         data: chunk.data,
       });
@@ -675,9 +699,11 @@ function decodeChunk(
       pipeline.stats.decoderQueueSize = pipeline.decoder.decodeQueueSize;
     }
 
-    logVerbose(`Decoded chunk ${chunk.type} @ ${chunk.timestamp / 1000}ms for track ${pipeline.idx}`);
+    logVerbose(
+      `Decoded chunk ${chunk.type} @ ${chunk.timestamp / 1000}ms for track ${pipeline.idx}`
+    );
   } catch (err) {
-    log(`Decode error on track ${pipeline.idx}: ${err}`, 'error');
+    log(`Decode error on track ${pipeline.idx}: ${err}`, "error");
   }
 }
 
@@ -687,20 +713,20 @@ function decodeChunk(
  */
 async function decodeJpegFrame(
   pipeline: PipelineState,
-  chunk: { type: 'key' | 'delta'; timestamp: number; data: Uint8Array }
+  chunk: { type: "key" | "delta"; timestamp: number; data: Uint8Array }
 ): Promise<void> {
   if (pipeline.closed) return;
 
   // Check if ImageDecoder is available
-  if (typeof ImageDecoder === 'undefined') {
-    log('ImageDecoder not available - JPEG streams not supported', 'error');
+  if (typeof ImageDecoder === "undefined") {
+    log("ImageDecoder not available - JPEG streams not supported", "error");
     return;
   }
 
   try {
     // Create ImageDecoder for this frame
     const decoder = new ImageDecoder({
-      type: 'image/jpeg',
+      type: "image/jpeg",
       data: chunk.data,
     });
 
@@ -721,7 +747,7 @@ async function decodeJpegFrame(
 
     logVerbose(`Decoded JPEG frame @ ${chunk.timestamp / 1000}ms for track ${pipeline.idx}`);
   } catch (err) {
-    log(`JPEG decode error on track ${pipeline.idx}: ${err}`, 'error');
+    log(`JPEG decode error on track ${pipeline.idx}: ${err}`, "error");
   }
 }
 
@@ -740,7 +766,10 @@ function processOutputQueue(pipeline: PipelineState): void {
 
   if (!pipeline.writer || pipeline.outputQueue.length === 0) {
     if (pipeline.outputQueue.length > 0 && !pipeline.writer) {
-      log(`Cannot output: no writer for track ${pipeline.idx} (queue has ${pipeline.outputQueue.length} frames)`, 'warn');
+      log(
+        `Cannot output: no writer for track ${pipeline.idx} (queue has ${pipeline.outputQueue.length} frames)`,
+        "warn"
+      );
     }
     return;
   }
@@ -750,8 +779,8 @@ function processOutputQueue(pipeline: PipelineState): void {
   // Sort output queue by timestamp - MistServer can send frames out of order
   // This is more robust than just swapping adjacent frames
   if (pipeline.outputQueue.length > 1) {
-    const wasSorted = pipeline.outputQueue.every((entry, i, arr) =>
-      i === 0 || arr[i - 1].timestamp <= entry.timestamp
+    const wasSorted = pipeline.outputQueue.every(
+      (entry, i, arr) => i === 0 || arr[i - 1].timestamp <= entry.timestamp
     );
     if (!wasSorted) {
       pipeline.outputQueue.sort((a, b) => a.timestamp - b.timestamp);
@@ -779,7 +808,9 @@ function processOutputQueue(pipeline: PipelineState): void {
       // Complete warmup when we have enough buffer OR timeout
       if (bufferMs >= WARMUP_BUFFER_MS || elapsed >= WARMUP_TIMEOUT_MS) {
         warmupComplete = true;
-        log(`Buffer warmup complete: ${bufferMs.toFixed(0)}ms buffer, ${pipeline.outputQueue.length} frames queued (track ${pipeline.idx})`);
+        log(
+          `Buffer warmup complete: ${bufferMs.toFixed(0)}ms buffer, ${pipeline.outputQueue.length} frames queued (track ${pipeline.idx})`
+        );
       } else {
         // Not ready yet - schedule another check
         setTimeout(() => processOutputQueue(pipeline), 10);
@@ -789,7 +820,9 @@ function processOutputQueue(pipeline: PipelineState): void {
       // Not enough frames yet - schedule another check
       if (elapsed >= WARMUP_TIMEOUT_MS) {
         warmupComplete = true;
-        log(`Buffer warmup timeout - starting with ${pipeline.outputQueue.length} frame(s) (track ${pipeline.idx})`);
+        log(
+          `Buffer warmup timeout - starting with ${pipeline.outputQueue.length} frame(s) (track ${pipeline.idx})`
+        );
       } else {
         setTimeout(() => processOutputQueue(pipeline), 10);
         return;
@@ -845,7 +878,9 @@ function shouldOutputFrame(
   // How early/late is this frame? Positive = too early, negative = late
   const delay = targetTime - now;
 
-  logVerbose(`Frame timing: track=${trackIdx} frame=${frameTimeMs.toFixed(0)}ms, target=${targetTime.toFixed(0)}, now=${now.toFixed(0)}, delay=${delay.toFixed(1)}ms`);
+  logVerbose(
+    `Frame timing: track=${trackIdx} frame=${frameTimeMs.toFixed(0)}ms, target=${targetTime.toFixed(0)}, now=${now.toFixed(0)}, delay=${delay.toFixed(1)}ms`
+  );
 
   // Output immediately if ready or late (per rawws.js line 889: delay <= 2)
   if (delay <= 2) {
@@ -856,7 +891,11 @@ function shouldOutputFrame(
   return { shouldOutput: false, earliness: -delay, checkDelayMs: Math.max(1, Math.floor(delay)) };
 }
 
-function outputFrame(pipeline: PipelineState, entry: DecodedFrame, options?: { skipHistory?: boolean }): void {
+function outputFrame(
+  pipeline: PipelineState,
+  entry: DecodedFrame,
+  options?: { skipHistory?: boolean }
+): void {
   if (!pipeline.writer || pipeline.closed) {
     entry.frame.close();
     return;
@@ -869,55 +908,60 @@ function outputFrame(pipeline: PipelineState, entry: DecodedFrame, options?: { s
 
   // Log first few output frames
   if (pipeline.stats.framesOut <= 3) {
-    log(`Output frame ${pipeline.stats.framesOut} for track ${pipeline.idx}: ts=${entry.timestamp}μs`);
+    log(
+      `Output frame ${pipeline.stats.framesOut} for track ${pipeline.idx}: ts=${entry.timestamp}μs`
+    );
   }
 
   // Store history for frame stepping (video only)
-  if (pipeline.track.type === 'video' && !(options?.skipHistory)) {
+  if (pipeline.track.type === "video" && !options?.skipHistory) {
     pushFrameHistory(pipeline, entry.frame as VideoFrame, entry.timestamp);
   }
 
   // Write returns a Promise - handle rejection to avoid unhandled promise errors
   // Frame ownership is transferred to the stream, so we don't need to close() on success
-  pipeline.writer.write(entry.frame).then(() => {
-    // Send timeupdate event on successful write
-    const message: WorkerToMainMessage = {
-      type: 'sendevent',
-      kind: 'timeupdate',
-      idx: pipeline.idx,
-      time: entry.timestamp / 1e6,
-      uid: uidCounter++,
-    };
-    self.postMessage(message);
-  }).catch((err: Error) => {
-    // Check for "stream closed" errors - these are expected during cleanup
-    const errStr = String(err);
-    if (errStr.includes('Stream closed') || errStr.includes('InvalidStateError')) {
-      // Expected during player cleanup - silently mark pipeline as closed
-      pipeline.closed = true;
-    } else {
-      log(`Failed to write frame: ${err}`, 'error');
-    }
-    // Frame may not have been consumed by the stream - try to close it
-    try {
-      entry.frame.close();
-    } catch {
-      // Frame may already be detached/closed
-    }
-  });
+  pipeline.writer
+    .write(entry.frame)
+    .then(() => {
+      // Send timeupdate event on successful write
+      const message: WorkerToMainMessage = {
+        type: "sendevent",
+        kind: "timeupdate",
+        idx: pipeline.idx,
+        time: entry.timestamp / 1e6,
+        uid: uidCounter++,
+      };
+      self.postMessage(message);
+    })
+    .catch((err: Error) => {
+      // Check for "stream closed" errors - these are expected during cleanup
+      const errStr = String(err);
+      if (errStr.includes("Stream closed") || errStr.includes("InvalidStateError")) {
+        // Expected during player cleanup - silently mark pipeline as closed
+        pipeline.closed = true;
+      } else {
+        log(`Failed to write frame: ${err}`, "error");
+      }
+      // Frame may not have been consumed by the stream - try to close it
+      try {
+        entry.frame.close();
+      } catch {
+        // Frame may already be detached/closed
+      }
+    });
 }
 
 // ============================================================================
 // Track Generator / Writable Stream
 // ============================================================================
 
-function handleSetWritable(msg: MainToWorkerMessage & { type: 'setwritable' }): void {
+function handleSetWritable(msg: MainToWorkerMessage & { type: "setwritable" }): void {
   const { idx, writable, uid } = msg;
   const pipeline = pipelines.get(idx);
 
   if (!pipeline) {
-    log(`Cannot set writable: pipeline ${idx} not found`, 'error');
-    sendError(uid, idx, 'Pipeline not found');
+    log(`Cannot set writable: pipeline ${idx} not found`, "error");
+    sendError(uid, idx, "Pipeline not found");
     return;
   }
 
@@ -931,29 +975,29 @@ function handleSetWritable(msg: MainToWorkerMessage & { type: 'setwritable' }): 
 
   // Notify main thread track is ready
   const message: WorkerToMainMessage = {
-    type: 'addtrack',
+    type: "addtrack",
     idx,
     uid,
-    status: 'ok',
+    status: "ok",
   };
   self.postMessage(message);
 }
 
-function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerator' }): void {
+function handleCreateGenerator(msg: MainToWorkerMessage & { type: "creategenerator" }): void {
   const { idx, uid } = msg;
   const pipeline = pipelines.get(idx);
 
   if (!pipeline) {
-    log(`Cannot create generator: pipeline ${idx} not found`, 'error');
-    sendError(uid, idx, 'Pipeline not found');
+    log(`Cannot create generator: pipeline ${idx} not found`, "error");
+    sendError(uid, idx, "Pipeline not found");
     return;
   }
 
   // Safari: VideoTrackGenerator is available in worker (not MediaStreamTrackGenerator)
   // Reference: webcodecsworker.js line 852-863
   // @ts-ignore - VideoTrackGenerator may not be in types
-  if (typeof VideoTrackGenerator !== 'undefined') {
-    if (pipeline.track.type === 'video') {
+  if (typeof VideoTrackGenerator !== "undefined") {
+    if (pipeline.track.type === "video") {
       // Safari video: use VideoTrackGenerator
       // @ts-ignore
       const generator = new VideoTrackGenerator();
@@ -962,16 +1006,16 @@ function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerat
 
       // Send track back to main thread
       const message: WorkerToMainMessage = {
-        type: 'addtrack',
+        type: "addtrack",
         idx,
         track: generator.track,
         uid,
-        status: 'ok',
+        status: "ok",
       };
       // @ts-ignore - transferring MediaStreamTrack
       self.postMessage(message, [generator.track]);
       log(`Created VideoTrackGenerator for track ${idx} (Safari video)`);
-    } else if (pipeline.track.type === 'audio') {
+    } else if (pipeline.track.type === "audio") {
       // Safari audio: relay frames to main thread via postMessage
       // Reference: webcodecsworker.js line 773-800
       // Main thread creates the audio generator, we just send frames
@@ -981,26 +1025,26 @@ function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerat
             const frameUid = uidCounter++;
             // Set up listener for response
             const timeoutId = setTimeout(() => {
-              reject(new Error('writeframe timeout'));
+              reject(new Error("writeframe timeout"));
             }, 5000);
 
             const handler = (e: MessageEvent) => {
               const msg = e.data;
-              if (msg.type === 'writeframe' && msg.idx === idx && msg.uid === frameUid) {
+              if (msg.type === "writeframe" && msg.idx === idx && msg.uid === frameUid) {
                 clearTimeout(timeoutId);
-                self.removeEventListener('message', handler);
-                if (msg.status === 'ok') {
+                self.removeEventListener("message", handler);
+                if (msg.status === "ok") {
                   resolve();
                 } else {
-                  reject(new Error(msg.error || 'writeframe failed'));
+                  reject(new Error(msg.error || "writeframe failed"));
                 }
               }
             };
-            self.addEventListener('message', handler);
+            self.addEventListener("message", handler);
 
             // Send frame to main thread (transfer AudioData)
             const msg = {
-              type: 'writeframe',
+              type: "writeframe",
               idx,
               frame,
               uid: frameUid,
@@ -1013,16 +1057,16 @@ function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerat
 
       // Notify main thread to set up audio generator
       const message: WorkerToMainMessage = {
-        type: 'addtrack',
+        type: "addtrack",
         idx,
         uid,
-        status: 'ok',
+        status: "ok",
       };
       self.postMessage(message);
       log(`Set up frame relay for track ${idx} (Safari audio)`);
     }
     // @ts-ignore - MediaStreamTrackGenerator may not be in standard types
-  } else if (typeof MediaStreamTrackGenerator !== 'undefined') {
+  } else if (typeof MediaStreamTrackGenerator !== "undefined") {
     // Chrome/Edge: use MediaStreamTrackGenerator in worker
     // @ts-ignore
     const generator = new MediaStreamTrackGenerator({ kind: pipeline.track.type });
@@ -1031,18 +1075,18 @@ function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerat
 
     // Send track back to main thread
     const message: WorkerToMainMessage = {
-      type: 'addtrack',
+      type: "addtrack",
       idx,
       track: generator,
       uid,
-      status: 'ok',
+      status: "ok",
     };
     // @ts-ignore - transferring MediaStreamTrack
     self.postMessage(message, [generator]);
     log(`Created MediaStreamTrackGenerator for track ${idx}`);
   } else {
-    log('Neither VideoTrackGenerator nor MediaStreamTrackGenerator available in worker', 'warn');
-    sendError(uid, idx, 'No track generator available');
+    log("Neither VideoTrackGenerator nor MediaStreamTrackGenerator available in worker", "warn");
+    sendError(uid, idx, "No track generator available");
   }
 }
 
@@ -1050,7 +1094,7 @@ function handleCreateGenerator(msg: MainToWorkerMessage & { type: 'creategenerat
 // Seeking & Timing
 // ============================================================================
 
-function handleSeek(msg: MainToWorkerMessage & { type: 'seek' }): void {
+function handleSeek(msg: MainToWorkerMessage & { type: "seek" }): void {
   const { seekTime, uid } = msg;
 
   log(`Seek to ${seekTime}ms`);
@@ -1080,7 +1124,7 @@ function flushPipeline(pipeline: PipelineState): void {
   pipeline.outputQueue = [];
 
   // Reset decoder if possible
-  if (pipeline.decoder && pipeline.decoder.state !== 'closed') {
+  if (pipeline.decoder && pipeline.decoder.state !== "closed") {
     try {
       pipeline.decoder.reset();
     } catch {
@@ -1089,26 +1133,28 @@ function flushPipeline(pipeline: PipelineState): void {
   }
 }
 
-function handleFrameTiming(msg: MainToWorkerMessage & { type: 'frametiming' }): void {
+function handleFrameTiming(msg: MainToWorkerMessage & { type: "frametiming" }): void {
   const { action, speed, tweak, uid } = msg;
 
-  if (action === 'setSpeed') {
+  if (action === "setSpeed") {
     if (speed !== undefined) frameTiming.speed.main = speed;
     if (tweak !== undefined) frameTiming.speed.tweak = tweak;
     frameTiming.speed.combined = frameTiming.speed.main * frameTiming.speed.tweak;
-    log(`Speed set to ${frameTiming.speed.combined} (main: ${frameTiming.speed.main}, tweak: ${frameTiming.speed.tweak})`);
-  } else if (action === 'setPaused') {
+    log(
+      `Speed set to ${frameTiming.speed.combined} (main: ${frameTiming.speed.main}, tweak: ${frameTiming.speed.tweak})`
+    );
+  } else if (action === "setPaused") {
     frameTiming.paused = msg.paused === true;
     log(`Frame timing paused=${frameTiming.paused}`);
-  } else if (action === 'reset') {
+  } else if (action === "reset") {
     frameTiming.seeking = false;
-    log('Frame timing reset (seek complete)');
+    log("Frame timing reset (seek complete)");
   }
 
   sendAck(uid);
 }
 
-function handleFrameStep(msg: MainToWorkerMessage & { type: 'framestep' }): void {
+function handleFrameStep(msg: MainToWorkerMessage & { type: "framestep" }): void {
   const { direction, uid } = msg;
 
   log(`FrameStep request dir=${direction} paused=${frameTiming.paused}`);
@@ -1130,7 +1176,9 @@ function handleFrameStep(msg: MainToWorkerMessage & { type: 'framestep' }): void
   if (pipeline.historyCursor === null || pipeline.historyCursor === undefined) {
     alignHistoryCursorToLastOutput(pipeline);
   }
-  log(`FrameStep pipeline idx=${pipeline.idx} outQueue=${pipeline.outputQueue.length} history=${pipeline.frameHistory.length} cursor=${pipeline.historyCursor}`);
+  log(
+    `FrameStep pipeline idx=${pipeline.idx} outQueue=${pipeline.outputQueue.length} history=${pipeline.frameHistory.length} cursor=${pipeline.historyCursor}`
+  );
 
   if (direction < 0) {
     const nextIndex = (pipeline.historyCursor ?? 0) - 1;
@@ -1148,7 +1196,11 @@ function handleFrameStep(msg: MainToWorkerMessage & { type: 'framestep' }): void
       return;
     }
     log(`FrameStep back: output ts=${entry.timestamp}`);
-    outputFrame(pipeline, { frame: clone, timestamp: entry.timestamp, decodedAt: performance.now() }, { skipHistory: true });
+    outputFrame(
+      pipeline,
+      { frame: clone, timestamp: entry.timestamp, decodedAt: performance.now() },
+      { skipHistory: true }
+    );
     sendAck(uid);
     return;
   }
@@ -1166,15 +1218,19 @@ function handleFrameStep(msg: MainToWorkerMessage & { type: 'framestep' }): void
         return;
       }
       log(`FrameStep forward (history): output ts=${entry.timestamp}`);
-      outputFrame(pipeline, { frame: clone, timestamp: entry.timestamp, decodedAt: performance.now() }, { skipHistory: true });
+      outputFrame(
+        pipeline,
+        { frame: clone, timestamp: entry.timestamp, decodedAt: performance.now() },
+        { skipHistory: true }
+      );
       sendAck(uid);
       return;
     }
 
     // Otherwise, output the next queued frame
     if (pipeline.outputQueue.length > 1) {
-      const wasSorted = pipeline.outputQueue.every((entry, i, arr) =>
-        i === 0 || arr[i - 1].timestamp <= entry.timestamp
+      const wasSorted = pipeline.outputQueue.every(
+        (entry, i, arr) => i === 0 || arr[i - 1].timestamp <= entry.timestamp
       );
       if (!wasSorted) {
         pipeline.outputQueue.sort((a, b) => a.timestamp - b.timestamp);
@@ -1182,7 +1238,7 @@ function handleFrameStep(msg: MainToWorkerMessage & { type: 'framestep' }): void
     }
 
     const lastTs = pipeline.stats.lastOutputTimestamp;
-    let idx = pipeline.outputQueue.findIndex(e => e.timestamp > lastTs);
+    let idx = pipeline.outputQueue.findIndex((e) => e.timestamp > lastTs);
     if (idx === -1 && pipeline.outputQueue.length > 0) idx = 0;
     if (idx === -1) {
       log(`FrameStep forward: no queued frame available`);
@@ -1204,7 +1260,7 @@ function handleFrameStep(msg: MainToWorkerMessage & { type: 'framestep' }): void
 // Cleanup
 // ============================================================================
 
-function handleClose(msg: MainToWorkerMessage & { type: 'close' }): void {
+function handleClose(msg: MainToWorkerMessage & { type: "close" }): void {
   const { idx, waitEmpty, uid } = msg;
   const pipeline = pipelines.get(idx);
 
@@ -1232,7 +1288,7 @@ function closePipeline(pipeline: PipelineState, uid: number): void {
   pipeline.closed = true;
 
   // Close decoder
-  if (pipeline.decoder && pipeline.decoder.state !== 'closed') {
+  if (pipeline.decoder && pipeline.decoder.state !== "closed") {
     try {
       pipeline.decoder.close();
     } catch {
@@ -1270,10 +1326,10 @@ function closePipeline(pipeline: PipelineState, uid: number): void {
   }
 
   const message: WorkerToMainMessage = {
-    type: 'closed',
+    type: "closed",
     idx: pipeline.idx,
     uid,
-    status: 'ok',
+    status: "ok",
   };
   self.postMessage(message);
 }
@@ -1307,7 +1363,7 @@ function sendStats(): void {
   }
 
   const message: WorkerToMainMessage = {
-    type: 'stats',
+    type: "stats",
     stats: {
       frameTiming: {
         in: frameTiming.in,
@@ -1341,20 +1397,20 @@ function createFrameTrackerStats(): FrameTrackerStats {
 
 function sendAck(uid: number, idx?: number): void {
   const message: WorkerToMainMessage = {
-    type: 'ack',
+    type: "ack",
     uid,
     idx,
-    status: 'ok',
+    status: "ok",
   };
   self.postMessage(message);
 }
 
 function sendError(uid: number, idx: number | undefined, error: string): void {
   const message: WorkerToMainMessage = {
-    type: 'ack',
+    type: "ack",
     uid,
     idx,
-    status: 'error',
+    status: "error",
     error,
   };
   self.postMessage(message);
@@ -1364,4 +1420,4 @@ function sendError(uid: number, idx: number | undefined, error: string): void {
 // Worker Initialization
 // ============================================================================
 
-log('WebCodecs decoder worker initialized');
+log("WebCodecs decoder worker initialized");

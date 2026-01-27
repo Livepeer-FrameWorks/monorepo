@@ -1,19 +1,30 @@
-import { forwardRef } from 'react'
-import { cn } from '@/lib/utils'
-import MarketingBand from '../layout/MarketingBand'
-import HeadlineStack from '../content/HeadlineStack'
-import MarketingTimeline from './MarketingTimeline'
+import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
+import MarketingBand from "../layout/MarketingBand";
+import HeadlineStack from "../content/HeadlineStack";
+import MarketingTimeline from "./MarketingTimeline";
 
 const TimelineBand = forwardRef(
   (
-    { eyebrow, title, subtitle, actions, items = [], children, surface = 'mesh', variant = 'band', className, ...props },
+    {
+      eyebrow,
+      title,
+      subtitle,
+      actions,
+      items = [],
+      children,
+      surface = "mesh",
+      variant = "band",
+      className,
+      ...props
+    },
     ref
   ) => (
     <MarketingBand
       ref={ref}
-      surface={variant === 'band' ? surface : 'none'}
-      className={cn('timeline-band', variant === 'plain' && 'timeline-band--plain', className)}
-      flush={variant === 'plain'}
+      surface={variant === "band" ? surface : "none"}
+      className={cn("timeline-band", variant === "plain" && "timeline-band--plain", className)}
+      flush={variant === "plain"}
       {...props}
     >
       {title || subtitle || eyebrow || actions ? (
@@ -29,8 +40,8 @@ const TimelineBand = forwardRef(
       {items.length ? <MarketingTimeline items={items} /> : children}
     </MarketingBand>
   )
-)
+);
 
-TimelineBand.displayName = 'TimelineBand'
+TimelineBand.displayName = "TimelineBand";
 
-export default TimelineBand
+export default TimelineBand;

@@ -13,7 +13,7 @@
  * - Output track management
  */
 
-import { TypedEventEmitter } from './EventEmitter';
+import { TypedEventEmitter } from "./EventEmitter";
 import type {
   Scene,
   Layer,
@@ -28,10 +28,10 @@ import type {
   SceneManagerEvents,
   CompositorMainToWorker,
   CompositorWorkerToMain,
-} from '../types';
-import { DEFAULT_LAYER_TRANSFORM, DEFAULT_COMPOSITOR_CONFIG } from '../types';
-import { applyLayout, createDefaultLayoutConfig } from './layouts';
-import { createDefaultTransitionConfig } from './TransitionEngine';
+} from "../types";
+import { DEFAULT_LAYER_TRANSFORM, DEFAULT_COMPOSITOR_CONFIG } from "../types";
+import { applyLayout, createDefaultLayoutConfig } from "./layouts";
+import { createDefaultTransitionConfig } from "./TransitionEngine";
 
 // ============================================================================
 // SceneManager Class
@@ -42,7 +42,7 @@ import { createDefaultTransitionConfig } from './TransitionEngine';
  */
 const DEFAULT_LAYOUT_TRANSITION: LayoutTransitionConfig = {
   durationMs: 300,
-  easing: 'ease-out',
+  easing: "ease-out",
 };
 
 export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
@@ -92,15 +92,15 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     const workerPaths = [
       // Preferred: packaged worker relative to built module URL
-      new URL('../workers/compositor.worker.js', import.meta.url).href,
+      new URL("../workers/compositor.worker.js", import.meta.url).href,
       // Vite dev server with pnpm workspace symlinks
-      '/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/compositor.worker.js',
+      "/node_modules/@livepeer-frameworks/streamcrafter-core/dist/workers/compositor.worker.js",
       // Public folder paths
-      '/workers/compositor.worker.js',
-      './workers/compositor.worker.js',
+      "/workers/compositor.worker.js",
+      "./workers/compositor.worker.js",
     ];
 
-    console.log('[SceneManager] Trying fallback worker paths:', workerPaths);
+    console.log("[SceneManager] Trying fallback worker paths:", workerPaths);
 
     for (const path of workerPaths) {
       if (this.worker) break;
@@ -109,14 +109,13 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         console.log(`[SceneManager] Trying worker path: ${path}`);
 
         // Worker constructor doesn't throw on 404, need to use a test approach
-        const testWorker =
-          (() => {
-            try {
-              return new Worker(path, { type: 'module' });
-            } catch {
-              return new Worker(path);
-            }
-          })();
+        const testWorker = (() => {
+          try {
+            return new Worker(path, { type: "module" });
+          } catch {
+            return new Worker(path);
+          }
+        })();
 
         // Wait for either successful message or error
         const success = await new Promise<boolean>((resolve) => {
@@ -150,7 +149,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
           // Terminate test worker and create the real one
           testWorker.terminate();
           try {
-            this.worker = new Worker(path, { type: 'module' });
+            this.worker = new Worker(path, { type: "module" });
           } catch {
             this.worker = new Worker(path);
           }
@@ -169,8 +168,8 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     if (!this.worker) {
       throw new Error(
         `Failed to initialize compositor worker. ` +
-        `Make sure the worker is bundled correctly. ` +
-        `Last error: ${lastError?.message ?? 'unknown'}`
+          `Make sure the worker is bundled correctly. ` +
+          `Last error: ${lastError?.message ?? "unknown"}`
       );
     }
   }
@@ -185,38 +184,41 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * Returns when the worker is ready
    */
   async initialize(): Promise<void> {
-    console.log('[SceneManager] initialize() called');
+    console.log("[SceneManager] initialize() called");
 
     if (this.worker) {
-      throw new Error('SceneManager already initialized');
+      throw new Error("SceneManager already initialized");
     }
 
     // Create output canvas
-    console.log('[SceneManager] Creating output canvas', { width: this.config.width, height: this.config.height });
-    this.outputCanvas = document.createElement('canvas');
+    console.log("[SceneManager] Creating output canvas", {
+      width: this.config.width,
+      height: this.config.height,
+    });
+    this.outputCanvas = document.createElement("canvas");
     this.outputCanvas.width = this.config.width;
     this.outputCanvas.height = this.config.height;
 
     // Get OffscreenCanvas for worker
     const offscreen = this.outputCanvas.transferControlToOffscreen();
-    console.log('[SceneManager] Created OffscreenCanvas');
+    console.log("[SceneManager] Created OffscreenCanvas");
 
     // Create the worker using the same strategy as the player
-    console.log('[SceneManager] Initializing worker...');
+    console.log("[SceneManager] Initializing worker...");
     await this.initializeWorker();
-    console.log('[SceneManager] Worker initialized, waiting for ready...');
+    console.log("[SceneManager] Worker initialized, waiting for ready...");
 
     // Create a promise that resolves when worker sends 'ready'
     const readyPromise = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        console.error('[SceneManager] Worker initialization timeout');
-        reject(new Error('Compositor worker initialization timeout'));
+        console.error("[SceneManager] Worker initialization timeout");
+        reject(new Error("Compositor worker initialization timeout"));
       }, 10000); // 10 second timeout
 
       // Set up message handler (worker is guaranteed non-null after initializeWorker)
       this.worker!.onmessage = (e: MessageEvent<CompositorWorkerToMain>) => {
-        console.log('[SceneManager] Worker message:', e.data.type);
-        if (e.data.type === 'ready') {
+        console.log("[SceneManager] Worker message:", e.data.type);
+        if (e.data.type === "ready") {
           clearTimeout(timeout);
           resolve();
         }
@@ -224,7 +226,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       };
 
       this.worker!.onerror = (e: ErrorEvent) => {
-        console.error('[SceneManager] Worker error:', e.message);
+        console.error("[SceneManager] Worker error:", e.message);
         clearTimeout(timeout);
         reject(new Error(e.message));
       };
@@ -232,22 +234,19 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     // Initialize the worker with the offscreen canvas
     // Note: Send directly (not via sendToWorker) because workerReady is still false
-    console.log('[SceneManager] Sending init message to worker');
-    this.worker!.postMessage(
-      { type: 'init', config: this.config, canvas: offscreen },
-      [offscreen]
-    );
+    console.log("[SceneManager] Sending init message to worker");
+    this.worker!.postMessage({ type: "init", config: this.config, canvas: offscreen }, [offscreen]);
 
     // Wait for worker to be ready
     await readyPromise;
-    console.log('[SceneManager] Worker is ready');
+    console.log("[SceneManager] Worker is ready");
 
     // Create default scene
-    console.log('[SceneManager] Creating default scene');
-    const defaultScene = this.createScene('Default');
-    console.log('[SceneManager] Setting active scene:', defaultScene.id);
+    console.log("[SceneManager] Creating default scene");
+    const defaultScene = this.createScene("Default");
+    console.log("[SceneManager] Setting active scene:", defaultScene.id);
     this.setActiveScene(defaultScene.id);
-    console.log('[SceneManager] Initialize complete');
+    console.log("[SceneManager] Initialize complete");
   }
 
   /**
@@ -255,7 +254,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    */
   private handleWorkerMessage(message: CompositorWorkerToMain): void {
     switch (message.type) {
-      case 'ready':
+      case "ready":
         this.workerReady = true;
         // Send any pending messages
         for (const msg of this.pendingMessages) {
@@ -264,37 +263,35 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         this.pendingMessages = [];
         break;
 
-      case 'stats':
+      case "stats":
         this.lastStats = message.stats;
-        this.emit('statsUpdate', { stats: message.stats });
+        this.emit("statsUpdate", { stats: message.stats });
         break;
 
-      case 'transitionComplete':
-        this.emit('transitionCompleted', { sceneId: message.sceneId });
+      case "transitionComplete":
+        this.emit("transitionCompleted", { sceneId: message.sceneId });
         break;
 
-      case 'layoutAnimationComplete': {
+      case "layoutAnimationComplete": {
         this.isAnimating = false;
         // Update local scene with the final layout
         const activeScene = this.getActiveScene();
         if (activeScene) {
-          const sourceIds = activeScene.layers
-            .filter(l => l.visible)
-            .map((l) => l.sourceId);
+          const sourceIds = activeScene.layers.filter((l) => l.visible).map((l) => l.sourceId);
           activeScene.layers = applyLayout(this.currentLayout, sourceIds);
         }
-        this.emit('layoutAnimationCompleted', { layout: this.currentLayout });
+        this.emit("layoutAnimationCompleted", { layout: this.currentLayout });
         break;
       }
 
-      case 'rendererChanged':
+      case "rendererChanged":
         // Update the config with the actual renderer type (important for 'auto' mode)
         this.config.renderer = message.renderer;
-        this.emit('rendererChanged', { renderer: message.renderer });
+        this.emit("rendererChanged", { renderer: message.renderer });
         break;
 
-      case 'error':
-        this.emit('error', { message: message.message });
+      case "error":
+        this.emit("error", { message: message.message });
         break;
     }
   }
@@ -318,7 +315,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   /**
    * Create a new scene
    */
-  createScene(name: string, backgroundColor = '#000000'): Scene {
+  createScene(name: string, backgroundColor = "#000000"): Scene {
     const id = `scene-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
     const scene: Scene = {
@@ -329,7 +326,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     };
 
     this.scenes.set(id, scene);
-    this.emit('sceneCreated', { scene });
+    this.emit("sceneCreated", { scene });
 
     return scene;
   }
@@ -343,11 +340,11 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     }
 
     if (this.activeSceneId === sceneId) {
-      throw new Error('Cannot delete the active scene');
+      throw new Error("Cannot delete the active scene");
     }
 
     this.scenes.delete(sceneId);
-    this.emit('sceneDeleted', { sceneId });
+    this.emit("sceneDeleted", { sceneId });
   }
 
   /**
@@ -384,9 +381,9 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     this.activeSceneId = sceneId;
 
     // Update the worker
-    this.sendToWorker({ type: 'updateScene', scene });
+    this.sendToWorker({ type: "updateScene", scene });
 
-    this.emit('sceneActivated', { scene, previousSceneId });
+    this.emit("sceneActivated", { scene, previousSceneId });
   }
 
   /**
@@ -401,18 +398,18 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     const transitionConfig = transition || this.defaultTransition;
 
     // First, send the target scene to the worker
-    this.sendToWorker({ type: 'updateScene', scene });
+    this.sendToWorker({ type: "updateScene", scene });
 
     // Then start the transition
     this.sendToWorker({
-      type: 'startTransition',
+      type: "startTransition",
       transition: transitionConfig,
       toSceneId: sceneId,
     });
 
     const previousSceneId = this.activeSceneId;
-    this.emit('transitionStarted', {
-      fromSceneId: previousSceneId || '',
+    this.emit("transitionStarted", {
+      fromSceneId: previousSceneId || "",
       toSceneId: sceneId,
       transition: transitionConfig,
     });
@@ -428,11 +425,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   /**
    * Add a layer to a scene
    */
-  addLayer(
-    sceneId: string,
-    sourceId: string,
-    transform?: Partial<LayerTransform>
-  ): Layer {
+  addLayer(sceneId: string, sourceId: string, transform?: Partial<LayerTransform>): Layer {
     const scene = this.scenes.get(sceneId);
     if (!scene) {
       throw new Error(`Scene not found: ${sceneId}`);
@@ -448,13 +441,13 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       locked: false,
       zIndex: maxZIndex + 1,
       transform: { ...DEFAULT_LAYER_TRANSFORM, ...transform },
-      scalingMode: this.currentLayout.scalingMode ?? 'letterbox',
+      scalingMode: this.currentLayout.scalingMode ?? "letterbox",
     };
 
     scene.layers.push(layer);
     this.updateSceneInWorker(scene);
 
-    this.emit('layerAdded', { sceneId, layer });
+    this.emit("layerAdded", { sceneId, layer });
     return layer;
   }
 
@@ -475,17 +468,13 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     scene.layers.splice(index, 1);
     this.updateSceneInWorker(scene);
 
-    this.emit('layerRemoved', { sceneId, layerId });
+    this.emit("layerRemoved", { sceneId, layerId });
   }
 
   /**
    * Update a layer's transform
    */
-  updateLayerTransform(
-    sceneId: string,
-    layerId: string,
-    transform: Partial<LayerTransform>
-  ): void {
+  updateLayerTransform(sceneId: string, layerId: string, transform: Partial<LayerTransform>): void {
     const scene = this.scenes.get(sceneId);
     if (!scene) {
       throw new Error(`Scene not found: ${sceneId}`);
@@ -499,7 +488,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     layer.transform = { ...layer.transform, ...transform };
     this.updateSceneInWorker(scene);
 
-    this.emit('layerUpdated', { sceneId, layer });
+    this.emit("layerUpdated", { sceneId, layer });
   }
 
   /**
@@ -519,7 +508,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     layer.visible = visible;
     this.updateSceneInWorker(scene);
 
-    this.emit('layerUpdated', { sceneId, layer });
+    this.emit("layerUpdated", { sceneId, layer });
   }
 
   /**
@@ -546,27 +535,27 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * Cycle the source order in the active scene (rotate layers)
    * @param direction - 'forward' moves first to last, 'backward' moves last to first
    */
-  cycleSourceOrder(direction: 'forward' | 'backward' = 'forward'): void {
+  cycleSourceOrder(direction: "forward" | "backward" = "forward"): void {
     const scene = this.getActiveScene();
     if (!scene || scene.layers.length < 2) {
-      console.warn('[SceneManager] cycleSourceOrder: Need at least 2 layers');
+      console.warn("[SceneManager] cycleSourceOrder: Need at least 2 layers");
       return;
     }
 
     // Debug: log state BEFORE cycle
-    console.log('[SceneManager] cycleSourceOrder BEFORE:', {
+    console.log("[SceneManager] cycleSourceOrder BEFORE:", {
       direction,
-      layers: scene.layers.map(l => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
+      layers: scene.layers.map((l) => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
     });
 
     // Get layer IDs sorted by current zIndex
     const sortedLayers = [...scene.layers].sort((a, b) => a.zIndex - b.zIndex);
     const layerIds = sortedLayers.map((l) => l.id);
 
-    console.log('[SceneManager] sorted layerIds before rotate:', [...layerIds]);
+    console.log("[SceneManager] sorted layerIds before rotate:", [...layerIds]);
 
     // Rotate the array
-    if (direction === 'forward') {
+    if (direction === "forward") {
       const first = layerIds.shift();
       if (first) layerIds.push(first);
     } else {
@@ -574,27 +563,27 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       if (last) layerIds.unshift(last);
     }
 
-    console.log('[SceneManager] layerIds after rotate:', [...layerIds]);
+    console.log("[SceneManager] layerIds after rotate:", [...layerIds]);
 
     // Apply the new Z-order
     this.reorderLayers(scene.id, layerIds);
 
     // Debug: log state AFTER reorder, BEFORE applyLayout
-    console.log('[SceneManager] after reorderLayers:', {
-      layers: scene.layers.map(l => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
+    console.log("[SceneManager] after reorderLayers:", {
+      layers: scene.layers.map((l) => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
     });
 
     // Re-apply layout to update visual positions based on new Z-order
     if (this.currentLayout) {
-      this.applyLayout(this.currentLayout, true, { durationMs: 200, easing: 'ease-out' });
+      this.applyLayout(this.currentLayout, true, { durationMs: 200, easing: "ease-out" });
     }
 
     // Debug: log state AFTER applyLayout
-    console.log('[SceneManager] cycleSourceOrder AFTER applyLayout:', {
-      layers: scene.layers.map(l => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
+    console.log("[SceneManager] cycleSourceOrder AFTER applyLayout:", {
+      layers: scene.layers.map((l) => ({ id: l.id, sourceId: l.sourceId, zIndex: l.zIndex })),
     });
 
-    this.emit('layerUpdated', { sceneId: scene.id, layer: scene.layers[0] });
+    this.emit("layerUpdated", { sceneId: scene.id, layer: scene.layers[0] });
   }
 
   /**
@@ -602,7 +591,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    */
   private updateSceneInWorker(scene: Scene): void {
     if (this.activeSceneId === scene.id) {
-      this.sendToWorker({ type: 'updateScene', scene });
+      this.sendToWorker({ type: "updateScene", scene });
     }
   }
 
@@ -623,7 +612,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
   ): void {
     const scene = this.getActiveScene();
     if (!scene) {
-      console.warn('[SceneManager] applyLayout: No active scene');
+      console.warn("[SceneManager] applyLayout: No active scene");
       return;
     }
 
@@ -631,10 +620,10 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     // Get source IDs from current layers sorted by zIndex (preserves cycle order)
     const sourceIds = [...scene.layers]
-      .filter(l => l.visible)
+      .filter((l) => l.visible)
       .sort((a, b) => a.zIndex - b.zIndex)
       .map((l) => l.sourceId);
-    console.log('[SceneManager] applyLayout', {
+    console.log("[SceneManager] applyLayout", {
       mode: layout.mode,
       sourceIds,
       currentLayerCount: scene.layers.length,
@@ -661,9 +650,9 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
       };
 
       this.isAnimating = true;
-      this.emit('layoutAnimationStarted', { layout });
+      this.emit("layoutAnimationStarted", { layout });
       this.sendToWorker({
-        type: 'animateLayout',
+        type: "animateLayout",
         targetScene,
         transition: transitionConfig,
       });
@@ -673,7 +662,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     }
 
     // Also send layout update to worker (for metadata tracking)
-    this.sendToWorker({ type: 'updateLayout', layout });
+    this.sendToWorker({ type: "updateLayout", layout });
   }
 
   /**
@@ -712,7 +701,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     // Get the video track
     const videoTrack = stream.getVideoTracks()[0];
     if (!videoTrack) {
-      throw new Error('No video track in stream');
+      throw new Error("No video track in stream");
     }
 
     // Create a MediaStreamTrackProcessor to extract frames
@@ -720,7 +709,9 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const MediaStreamTrackProcessorCtor = (globalThis as any).MediaStreamTrackProcessor;
     if (!MediaStreamTrackProcessorCtor) {
-      console.warn('[SceneManager] MediaStreamTrackProcessor not available, compositor will not work');
+      console.warn(
+        "[SceneManager] MediaStreamTrackProcessor not available, compositor will not work"
+      );
       return;
     }
 
@@ -740,17 +731,14 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
         const frame = value as VideoFrame;
 
         // Send frame to worker (transfer ownership)
-        this.sendToWorker(
-          { type: 'sourceFrame', sourceId, frame },
-          [frame]
-        );
+        this.sendToWorker({ type: "sourceFrame", sourceId, frame }, [frame]);
 
         // Continue reading
         readFrame();
       } catch (error) {
         // Ignore errors from cancelled readers (expected during unbind)
-        if ((error as Error)?.name !== 'AbortError') {
-          console.error('[SceneManager] Frame read error:', error);
+        if ((error as Error)?.name !== "AbortError") {
+          console.error("[SceneManager] Frame read error:", error);
         }
       }
     };
@@ -783,10 +771,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
     const blob = await response.blob();
     const bitmap = await createImageBitmap(blob);
 
-    this.sendToWorker(
-      { type: 'sourceImage', sourceId, bitmap },
-      [bitmap]
-    );
+    this.sendToWorker({ type: "sourceImage", sourceId, bitmap }, [bitmap]);
   }
 
   // ============================================================================
@@ -798,7 +783,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * Note: Only supported with WebGL or WebGPU renderer
    */
   applyFilter(layerId: string, filter: FilterConfig): void {
-    this.sendToWorker({ type: 'applyFilter', layerId, filter });
+    this.sendToWorker({ type: "applyFilter", layerId, filter });
   }
 
   // ============================================================================
@@ -849,7 +834,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    */
   setRenderer(rendererType: RendererType): void {
     this.config.renderer = rendererType;
-    this.sendToWorker({ type: 'setRenderer', renderer: rendererType });
+    this.sendToWorker({ type: "setRenderer", renderer: rendererType });
   }
 
   /**
@@ -870,7 +855,9 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
    * Update output configuration (resolution / frame rate).
    * Resizes the output canvas and reinitializes the renderer.
    */
-  updateOutputConfig(config: Partial<Pick<CompositorConfig, 'width' | 'height' | 'frameRate'>>): boolean {
+  updateOutputConfig(
+    config: Partial<Pick<CompositorConfig, "width" | "height" | "frameRate">>
+  ): boolean {
     const nextWidth = config.width ?? this.config.width;
     const nextHeight = config.height ?? this.config.height;
     const nextFrameRate = config.frameRate ?? this.config.frameRate;
@@ -888,7 +875,12 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     // Canvas size must be updated in the worker (OffscreenCanvas after transfer).
     // Updating the HTMLCanvasElement here throws once control is transferred.
-    this.sendToWorker({ type: 'resize', width: nextWidth, height: nextHeight, frameRate: nextFrameRate });
+    this.sendToWorker({
+      type: "resize",
+      width: nextWidth,
+      height: nextHeight,
+      frameRate: nextFrameRate,
+    });
 
     return true;
   }
@@ -917,7 +909,7 @@ export class SceneManager extends TypedEventEmitter<SceneManagerEvents> {
 
     // Terminate the worker
     if (this.worker) {
-      this.sendToWorker({ type: 'destroy' });
+      this.sendToWorker({ type: "destroy" });
       this.worker.terminate();
       this.worker = null;
     }

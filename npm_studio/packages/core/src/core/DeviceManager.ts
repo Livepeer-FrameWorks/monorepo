@@ -3,9 +3,9 @@
  * Handles camera/microphone enumeration and capture
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import { buildMediaConstraints } from './MediaConstraints';
-import type { DeviceInfo, CaptureOptions, QualityProfile } from '../types';
+import { TypedEventEmitter } from "./EventEmitter";
+import { buildMediaConstraints } from "./MediaConstraints";
+import type { DeviceInfo, CaptureOptions, QualityProfile } from "../types";
 
 interface DeviceManagerEvents {
   devicesChanged: { devices: DeviceInfo[] };
@@ -30,10 +30,10 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    * Set up listener for device changes
    */
   private setupDeviceChangeListener(): void {
-    if (typeof navigator !== 'undefined' && navigator.mediaDevices) {
-      navigator.mediaDevices.addEventListener('devicechange', async () => {
+    if (typeof navigator !== "undefined" && navigator.mediaDevices) {
+      navigator.mediaDevices.addEventListener("devicechange", async () => {
         await this.enumerateDevices();
-        this.emit('devicesChanged', { devices: this.devices });
+        this.emit("devicesChanged", { devices: this.devices });
       });
     }
   }
@@ -43,16 +43,16 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    */
   async enumerateDevices(): Promise<DeviceInfo[]> {
     if (!navigator.mediaDevices?.enumerateDevices) {
-      throw new Error('enumerateDevices not supported');
+      throw new Error("enumerateDevices not supported");
     }
 
     const devices = await navigator.mediaDevices.enumerateDevices();
 
     this.devices = devices
-      .filter((d) => d.kind === 'audioinput' || d.kind === 'videoinput' || d.kind === 'audiooutput')
+      .filter((d) => d.kind === "audioinput" || d.kind === "videoinput" || d.kind === "audiooutput")
       .map((d) => ({
         deviceId: d.deviceId,
-        kind: d.kind as DeviceInfo['kind'],
+        kind: d.kind as DeviceInfo["kind"],
         label: d.label || `${d.kind} (${d.deviceId.slice(0, 8)}...)`,
         groupId: d.groupId,
       }));
@@ -65,7 +65,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    */
   async getVideoInputs(): Promise<DeviceInfo[]> {
     await this.enumerateDevices();
-    return this.devices.filter((d) => d.kind === 'videoinput');
+    return this.devices.filter((d) => d.kind === "videoinput");
   }
 
   /**
@@ -73,7 +73,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    */
   async getAudioInputs(): Promise<DeviceInfo[]> {
     await this.enumerateDevices();
-    return this.devices.filter((d) => d.kind === 'audioinput');
+    return this.devices.filter((d) => d.kind === "audioinput");
   }
 
   /**
@@ -81,13 +81,15 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    */
   async getAudioOutputs(): Promise<DeviceInfo[]> {
     await this.enumerateDevices();
-    return this.devices.filter((d) => d.kind === 'audiooutput');
+    return this.devices.filter((d) => d.kind === "audiooutput");
   }
 
   /**
    * Request permissions for camera and/or microphone
    */
-  async requestPermissions(options: { video?: boolean; audio?: boolean } = { video: true, audio: true }): Promise<{ video: boolean; audio: boolean }> {
+  async requestPermissions(
+    options: { video?: boolean; audio?: boolean } = { video: true, audio: true }
+  ): Promise<{ video: boolean; audio: boolean }> {
     try {
       // Request a temporary stream to trigger permission prompts
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -105,7 +107,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
       // Re-enumerate devices to get labels
       await this.enumerateDevices();
 
-      this.emit('permissionChanged', {
+      this.emit("permissionChanged", {
         granted: true,
         denied: false,
       });
@@ -114,14 +116,14 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
 
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        this.emit('permissionChanged', {
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        this.emit("permissionChanged", {
           granted: false,
           denied: true,
         });
       }
 
-      this.emit('error', {
+      this.emit("error", {
         message: `Permission request failed: ${err.message}`,
         error: err,
       });
@@ -133,7 +135,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   /**
    * Check if permissions are granted
    */
-  hasPermission(kind: 'video' | 'audio'): boolean {
+  hasPermission(kind: "video" | "audio"): boolean {
     return this.permissionStatus[kind];
   }
 
@@ -141,7 +143,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
    * Get user media with quality profile
    */
   async getUserMedia(options: CaptureOptions = {}): Promise<MediaStream> {
-    const profile: QualityProfile = options.profile || 'professional';
+    const profile: QualityProfile = options.profile || "professional";
 
     let constraints: MediaStreamConstraints;
 
@@ -169,7 +171,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
       // Fallback: try without specific device constraints
       const err = error instanceof Error ? error : new Error(String(error));
 
-      if (err.name === 'OverconstrainedError') {
+      if (err.name === "OverconstrainedError") {
         // Try with relaxed constraints
         const relaxedConstraints: MediaStreamConstraints = {
           video: constraints.video ? true : false,
@@ -181,7 +183,7 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
         return stream;
       }
 
-      this.emit('error', {
+      this.emit("error", {
         message: `getUserMedia failed: ${err.message}`,
         error: err,
       });
@@ -212,9 +214,12 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   /**
    * Replace video track in current stream
    */
-  async replaceVideoTrack(deviceId: string, profile: QualityProfile = 'professional'): Promise<MediaStreamTrack | null> {
+  async replaceVideoTrack(
+    deviceId: string,
+    profile: QualityProfile = "professional"
+  ): Promise<MediaStreamTrack | null> {
     if (!this.currentStream) {
-      throw new Error('No active stream to replace track in');
+      throw new Error("No active stream to replace track in");
     }
 
     // Stop current video track
@@ -242,9 +247,12 @@ export class DeviceManager extends TypedEventEmitter<DeviceManagerEvents> {
   /**
    * Replace audio track in current stream
    */
-  async replaceAudioTrack(deviceId: string, profile: QualityProfile = 'professional'): Promise<MediaStreamTrack | null> {
+  async replaceAudioTrack(
+    deviceId: string,
+    profile: QualityProfile = "professional"
+  ): Promise<MediaStreamTrack | null> {
     if (!this.currentStream) {
-      throw new Error('No active stream to replace track in');
+      throw new Error("No active stream to replace track in");
     }
 
     // Stop current audio track

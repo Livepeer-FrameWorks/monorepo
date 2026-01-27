@@ -1,8 +1,17 @@
-import { BasePlayer } from '../core/PlayerInterface';
-import { LiveDurationProxy } from '../core/LiveDurationProxy';
-import { appendUrlParams, parseUrlParams, stripUrlParams } from '../core/UrlUtils';
-import { checkProtocolMismatch, getBrowserInfo, checkWebRTCCodecCompatibility } from '../core/detector';
-import type { StreamSource, StreamInfo, PlayerOptions, PlayerCapability } from '../core/PlayerInterface';
+import { BasePlayer } from "../core/PlayerInterface";
+import { LiveDurationProxy } from "../core/LiveDurationProxy";
+import { appendUrlParams, parseUrlParams, stripUrlParams } from "../core/UrlUtils";
+import {
+  checkProtocolMismatch,
+  getBrowserInfo,
+  checkWebRTCCodecCompatibility,
+} from "../core/detector";
+import type {
+  StreamSource,
+  StreamInfo,
+  PlayerOptions,
+  PlayerCapability,
+} from "../core/PlayerInterface";
 
 /**
  * Native Player Implementation
@@ -32,8 +41,8 @@ export class NativePlayerImpl extends BasePlayer {
       "html5/audio/wav",
       "html5/application/vnd.apple.mpegurl", // Native HLS on Safari/iOS
       "html5/application/vnd.apple.mpegurl;version=7",
-      "whep"
-    ]
+      "whep",
+    ],
   };
 
   private peerConnection: RTCPeerConnection | null = null;
@@ -44,7 +53,7 @@ export class NativePlayerImpl extends BasePlayer {
   private maxReconnectAttempts = 3;
   private reconnectTimer: any = null;
   private currentWhepUrl: string | null = null;
-  private currentHeaders: Record<string,string> | null = null;
+  private currentHeaders: Record<string, string> | null = null;
   private currentIceServers: RTCIceServer[] | null = null;
   private container: HTMLElement | null = null;
   private destroyed = false;
@@ -70,17 +79,24 @@ export class NativePlayerImpl extends BasePlayer {
     return this.capability.mimes.indexOf(mimetype) !== -1;
   }
 
-  isBrowserSupported(mimetype: string, source: StreamSource, streamInfo: StreamInfo): boolean | string[] {
-    if (mimetype === 'whep') {
+  isBrowserSupported(
+    mimetype: string,
+    source: StreamSource,
+    streamInfo: StreamInfo
+  ): boolean | string[] {
+    if (mimetype === "whep") {
       // Check basic WebRTC support
-      if (!('RTCPeerConnection' in window) || !('fetch' in window)) return false;
+      if (!("RTCPeerConnection" in window) || !("fetch" in window)) return false;
 
       // Check codec compatibility - WebRTC can only carry certain codecs
       const codecCompat = checkWebRTCCodecCompatibility(streamInfo.meta.tracks);
       if (!codecCompat.compatible) {
         // Log why we're skipping WebRTC for this stream
         if (codecCompat.incompatibleCodecs.length > 0) {
-          console.debug('[WHEP] Skipping - incompatible codecs:', codecCompat.incompatibleCodecs.join(', '));
+          console.debug(
+            "[WHEP] Skipping - incompatible codecs:",
+            codecCompat.incompatibleCodecs.join(", ")
+          );
         }
         return false;
       }
@@ -88,10 +104,10 @@ export class NativePlayerImpl extends BasePlayer {
       // Return which track types we can play
       const playable: string[] = [];
       if (codecCompat.details.compatibleVideoCodecs.length > 0) {
-        playable.push('video');
+        playable.push("video");
       }
       if (codecCompat.details.compatibleAudioCodecs.length > 0) {
-        playable.push('audio');
+        playable.push("audio");
       }
 
       // If stream has tracks but we found compatible ones, we can play
@@ -100,7 +116,7 @@ export class NativePlayerImpl extends BasePlayer {
     // Check protocol mismatch
     if (checkProtocolMismatch(source.url)) {
       // Allow file:// -> http:// but warn
-      if (!(window.location.protocol === 'file:' && source.url.startsWith('http:'))) {
+      if (!(window.location.protocol === "file:" && source.url.startsWith("http:"))) {
         return false;
       }
     }
@@ -109,38 +125,38 @@ export class NativePlayerImpl extends BasePlayer {
 
     // Safari cannot play WebM - skip entirely
     // Reference: html5.js:28-29
-    if (mimetype === 'html5/video/webm' && browser.isSafari) {
+    if (mimetype === "html5/video/webm" && browser.isSafari) {
       return false;
     }
 
     // Special handling for HLS
     if (mimetype === "html5/application/vnd.apple.mpegurl") {
       // Check for native HLS support
-      const testVideo = document.createElement('video');
-      if (testVideo.canPlayType('application/vnd.apple.mpegurl')) {
+      const testVideo = document.createElement("video");
+      if (testVideo.canPlayType("application/vnd.apple.mpegurl")) {
         // Prefer VideoJS for older Android
         const androidVersion = this.getAndroidVersion();
         if (androidVersion && androidVersion < 7) {
           return false; // Let VideoJS handle it
         }
-        return ['video', 'audio'];
+        return ["video", "audio"];
       }
       return false;
     }
 
     // Test codec support for regular media types
     const supportedTracks: string[] = [];
-    const testVideo = document.createElement('video');
+    const testVideo = document.createElement("video");
 
     // Extract the actual mime type from the format
-    const shortMime = mimetype.replace('html5/', '');
+    const shortMime = mimetype.replace("html5/", "");
 
     // For codec testing, we need to check against stream info
     const tracksByType: Record<string, typeof streamInfo.meta.tracks> = {};
     for (const track of streamInfo.meta.tracks) {
-      if (track.type === 'meta') {
-        if (track.codec === 'subtitle') {
-          supportedTracks.push('subtitle');
+      if (track.type === "meta") {
+        if (track.codec === "subtitle") {
+          supportedTracks.push("subtitle");
         }
         continue;
       }
@@ -157,7 +173,7 @@ export class NativePlayerImpl extends BasePlayer {
 
       for (const track of tracks) {
         // Build codec string for testing
-        let codecString = '';
+        let codecString = "";
         if (track.codecstring) {
           codecString = track.codecstring;
         } else {
@@ -167,13 +183,13 @@ export class NativePlayerImpl extends BasePlayer {
         const testMimeType = `${shortMime};codecs="${codecString}"`;
 
         // Special handling for WebM - Chrome reports issues with codec strings
-        if (shortMime === 'video/webm') {
-          if (testVideo.canPlayType(shortMime) !== '') {
+        if (shortMime === "video/webm") {
+          if (testVideo.canPlayType(shortMime) !== "") {
             hasPlayableTrack = true;
             break;
           }
         } else {
-          if (testVideo.canPlayType(testMimeType) !== '') {
+          if (testVideo.canPlayType(testMimeType) !== "") {
             hasPlayableTrack = true;
             break;
           }
@@ -188,33 +204,37 @@ export class NativePlayerImpl extends BasePlayer {
     return supportedTracks.length > 0 ? supportedTracks : false;
   }
 
-  private translateCodecForHtml5(track: { codec: string; codecstring?: string; init?: string }): string {
+  private translateCodecForHtml5(track: {
+    codec: string;
+    codecstring?: string;
+    init?: string;
+  }): string {
     if (track.codecstring) return track.codecstring;
 
     const bin2hex = (index: number) => {
-      if (!track.init || index >= track.init.length) return '00';
-      return ('0' + track.init.charCodeAt(index).toString(16)).slice(-2);
+      if (!track.init || index >= track.init.length) return "00";
+      return ("0" + track.init.charCodeAt(index).toString(16)).slice(-2);
     };
 
     switch (track.codec) {
-      case 'AAC':
-        return 'mp4a.40.2';
-      case 'MP3':
-        return 'mp4a.40.34';
-      case 'AC3':
-        return 'ec-3';
-      case 'H264':
+      case "AAC":
+        return "mp4a.40.2";
+      case "MP3":
+        return "mp4a.40.34";
+      case "AC3":
+        return "ec-3";
+      case "H264":
         return `avc1.${bin2hex(1)}${bin2hex(2)}${bin2hex(3)}`;
-      case 'HEVC':
+      case "HEVC":
         return `hev1.${bin2hex(1)}${bin2hex(6)}${bin2hex(7)}${bin2hex(8)}${bin2hex(9)}${bin2hex(10)}${bin2hex(11)}${bin2hex(12)}`;
-      case 'VP8':
-        return 'vp8';
-      case 'VP9':
-        return 'vp09.00.10.08';
-      case 'AV1':
-        return 'av01.0.04M.08';
-      case 'Opus':
-        return 'opus';
+      case "VP8":
+        return "vp8";
+      case "VP9":
+        return "vp09.00.10.08";
+      case "AV1":
+        return "av01.0.04M.08";
+      case "Opus":
+        return "opus";
       default:
         return track.codec.toLowerCase();
     }
@@ -227,23 +247,28 @@ export class NativePlayerImpl extends BasePlayer {
     const major = parseInt(match[1], 10);
     const minor = match[2] ? parseInt(match[2], 10) : 0;
 
-    return major + (minor / 10);
+    return major + minor / 10;
   }
 
-  async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions, streamInfo?: StreamInfo): Promise<HTMLVideoElement> {
+  async initialize(
+    container: HTMLElement,
+    source: StreamSource,
+    options: PlayerOptions,
+    streamInfo?: StreamInfo
+  ): Promise<HTMLVideoElement> {
     // Reset destroyed flag for reuse
     this.destroyed = false;
     this.container = container;
     this.currentSourceUrl = source.url;
     this.currentMimeType = source.type;
-    this.isMP3Source = source.type === 'html5/audio/mp3';
-    container.classList.add('fw-player-container');
+    this.isMP3Source = source.type === "html5/audio/mp3";
+    container.classList.add("fw-player-container");
 
     // Create video element
-    const video = document.createElement('video');
-    video.classList.add('fw-player-video');
-    video.setAttribute('playsinline', '');
-    video.setAttribute('crossorigin', 'anonymous');
+    const video = document.createElement("video");
+    video.classList.add("fw-player-video");
+    video.setAttribute("playsinline", "");
+    video.setAttribute("crossorigin", "anonymous");
 
     // Apply options
     if (options.autoplay) video.autoplay = true;
@@ -262,8 +287,8 @@ export class NativePlayerImpl extends BasePlayer {
     // Use LiveDurationProxy for all live streams (non-WHEP)
     // WHEP handles its own live edge via signaling
     // This enables seeking and jump-to-live for native MP4/WebM/HLS live streams
-    const isLiveStream = streamInfo?.type === 'live';
-    if (source.type !== 'whep' && isLiveStream) {
+    const isLiveStream = streamInfo?.type === "live";
+    if (source.type !== "whep" && isLiveStream) {
       this.setupLiveDurationProxy(video);
       this.setupAutoRecovery(video);
       this.liveSeekEnabled = true;
@@ -280,8 +305,8 @@ export class NativePlayerImpl extends BasePlayer {
       const subs = (source as any).subtitles as Array<{ label: string; lang: string; src: string }>;
       if (Array.isArray(subs)) {
         subs.forEach((s, idx) => {
-          const track = document.createElement('track');
-          track.kind = 'subtitles';
+          const track = document.createElement("track");
+          track.kind = "subtitles";
           track.label = s.label;
           track.srclang = s.lang;
           track.src = s.src;
@@ -292,11 +317,11 @@ export class NativePlayerImpl extends BasePlayer {
     } catch {}
 
     try {
-      if (source.type === 'whep') {
+      if (source.type === "whep") {
         // Read optional settings from source
         const s: any = source as any;
-        const headers = (s && s.headers) ? (s.headers as Record<string,string>) : {};
-        const iceServers = (s && s.iceServers) ? (s.iceServers as RTCIceServer[]) : [];
+        const headers = s && s.headers ? (s.headers as Record<string, string>) : {};
+        const iceServers = s && s.iceServers ? (s.iceServers as RTCIceServer[]) : [];
         this.reconnectEnabled = !!(s && s.reconnect);
         this.currentWhepUrl = source.url;
         this.currentHeaders = headers;
@@ -307,13 +332,12 @@ export class NativePlayerImpl extends BasePlayer {
         // Set the source for direct HTML5 playback
         video.src = source.url;
         if (options.autoplay) {
-          video.play().catch(e => console.warn('HTML5 autoplay failed:', e));
+          video.play().catch((e) => console.warn("HTML5 autoplay failed:", e));
         }
         return video;
       }
-
     } catch (error: any) {
-      this.emit('error', error.message || String(error));
+      this.emit("error", error.message || String(error));
       throw error;
     }
   }
@@ -337,19 +361,23 @@ export class NativePlayerImpl extends BasePlayer {
    * reload the stream on play to recover from stale buffer.
    */
   private setupAutoRecovery(video: HTMLVideoElement): void {
-    video.addEventListener('pause', () => {
+    video.addEventListener("pause", () => {
       if (this.destroyed) return;
       this.pausedAt = Date.now();
     });
 
-    video.addEventListener('play', () => {
+    video.addEventListener("play", () => {
       if (this.destroyed) return;
 
       // Check if we need to recover from long pause
       if (this.pausedAt && this.liveDurationProxy?.isLive()) {
         const pauseDuration = Date.now() - this.pausedAt;
         if (pauseDuration > NativePlayerImpl.PAUSE_RECOVERY_THRESHOLD) {
-          console.debug('[NativePlayer] Auto-recovery: reloading stream after', pauseDuration, 'ms pause');
+          console.debug(
+            "[NativePlayer] Auto-recovery: reloading stream after",
+            pauseDuration,
+            "ms pause"
+          );
           video.load();
         }
       }
@@ -378,7 +406,7 @@ export class NativePlayerImpl extends BasePlayer {
    */
   seek(time: number): void {
     if (this.isMP3Source) {
-      console.warn('[NativePlayer] Seek not supported for MP3 files');
+      console.warn("[NativePlayer] Seek not supported for MP3 files");
       return;
     }
 
@@ -493,7 +521,9 @@ export class NativePlayerImpl extends BasePlayer {
     }
 
     if (this.reconnectTimer) {
-      try { clearTimeout(this.reconnectTimer); } catch {}
+      try {
+        clearTimeout(this.reconnectTimer);
+      } catch {}
       this.reconnectTimer = null;
     }
 
@@ -501,24 +531,30 @@ export class NativePlayerImpl extends BasePlayer {
     if (this.sessionUrl) {
       const url = this.sessionUrl;
       this.sessionUrl = null;
-      fetch(url, { method: 'DELETE' }).catch(() => {
+      fetch(url, { method: "DELETE" }).catch(() => {
         // Silently ignore - CORS often blocks DELETE, session will timeout on server
       });
     }
 
     if (this.peerConnection) {
-      try { this.peerConnection.close(); } catch {}
+      try {
+        this.peerConnection.close();
+      } catch {}
       this.peerConnection = null;
     }
 
     if (this.videoElement) {
-      try { (this.videoElement as any).srcObject = null; } catch {}
+      try {
+        (this.videoElement as any).srcObject = null;
+      } catch {}
       this.videoElement.pause();
-      this.videoElement.removeAttribute('src');
+      this.videoElement.removeAttribute("src");
       // Note: Don't call load() - it triggers "Empty src attribute" error event
 
       if (this.container) {
-        try { this.container.removeChild(this.videoElement); } catch {}
+        try {
+          this.container.removeChild(this.videoElement);
+        } catch {}
       }
     }
 
@@ -530,7 +566,7 @@ export class NativePlayerImpl extends BasePlayer {
     this.liveSeekEnabled = false;
     this.liveSeekOffsetSec = 0;
     this.liveSeekBaseUrl = null;
-    this.liveSeekListeners.forEach(cleanup => cleanup());
+    this.liveSeekListeners.forEach((cleanup) => cleanup());
     this.liveSeekListeners = [];
     if (this.liveSeekTimer) {
       clearTimeout(this.liveSeekTimer);
@@ -547,8 +583,8 @@ export class NativePlayerImpl extends BasePlayer {
   }
 
   private buildLiveSeekUrl(offsetSec: number): string {
-    const base = this.liveSeekBaseUrl || this.currentSourceUrl || '';
-    if (!base) return '';
+    const base = this.liveSeekBaseUrl || this.currentSourceUrl || "";
+    if (!base) return "";
     if (!offsetSec || offsetSec >= 0) {
       return this.stripStartUnixParam(base);
     }
@@ -579,11 +615,11 @@ export class NativePlayerImpl extends BasePlayer {
     return {
       length: ranges.length,
       start(index: number): number {
-        if (index < 0 || index >= ranges.length) throw new DOMException('Index out of bounds');
+        if (index < 0 || index >= ranges.length) throw new DOMException("Index out of bounds");
         return ranges[index][0];
       },
       end(index: number): number {
-        if (index < 0 || index >= ranges.length) throw new DOMException('Index out of bounds');
+        if (index < 0 || index >= ranges.length) throw new DOMException("Index out of bounds");
         return ranges[index][1];
       },
     };
@@ -618,51 +654,55 @@ export class NativePlayerImpl extends BasePlayer {
   /**
    * Get WebRTC-specific stats including RTT, packet loss, jitter, bitrate
    */
-  async getStats(): Promise<{
-    type: 'webrtc';
-    video?: {
-      bytesReceived: number;
-      packetsReceived: number;
-      packetsLost: number;
-      packetLossRate: number;
-      jitter: number;
-      framesDecoded: number;
-      framesDropped: number;
-      frameDropRate: number;
-      frameWidth: number;
-      frameHeight: number;
-      framesPerSecond: number;
-      bitrate: number;
-      jitterBufferDelay: number;
-    };
-    audio?: {
-      bytesReceived: number;
-      packetsReceived: number;
-      packetsLost: number;
-      packetLossRate: number;
-      jitter: number;
-      bitrate: number;
-    };
-    network?: {
-      rtt: number;
-      availableOutgoingBitrate: number;
-      availableIncomingBitrate: number;
-      bytesSent: number;
-      bytesReceived: number;
-    };
-    timestamp: number;
-  } | undefined> {
+  async getStats(): Promise<
+    | {
+        type: "webrtc";
+        video?: {
+          bytesReceived: number;
+          packetsReceived: number;
+          packetsLost: number;
+          packetLossRate: number;
+          jitter: number;
+          framesDecoded: number;
+          framesDropped: number;
+          frameDropRate: number;
+          frameWidth: number;
+          frameHeight: number;
+          framesPerSecond: number;
+          bitrate: number;
+          jitterBufferDelay: number;
+        };
+        audio?: {
+          bytesReceived: number;
+          packetsReceived: number;
+          packetsLost: number;
+          packetLossRate: number;
+          jitter: number;
+          bitrate: number;
+        };
+        network?: {
+          rtt: number;
+          availableOutgoingBitrate: number;
+          availableIncomingBitrate: number;
+          bytesSent: number;
+          bytesReceived: number;
+        };
+        timestamp: number;
+      }
+    | undefined
+  > {
     if (!this.peerConnection) return undefined;
     try {
       const stats = await this.peerConnection.getStats();
       const now = Date.now();
-      const result: any = { type: 'webrtc', timestamp: now };
+      const result: any = { type: "webrtc", timestamp: now };
 
       stats.forEach((report: any) => {
-        if (report.type === 'inbound-rtp') {
-          const packetLossRate = report.packetsReceived > 0
-            ? (report.packetsLost / (report.packetsReceived + report.packetsLost)) * 100
-            : 0;
+        if (report.type === "inbound-rtp") {
+          const packetLossRate =
+            report.packetsReceived > 0
+              ? (report.packetsLost / (report.packetsReceived + report.packetsLost)) * 100
+              : 0;
 
           // Calculate bitrate from previous sample
           let bitrate = 0;
@@ -675,10 +715,11 @@ export class NativePlayerImpl extends BasePlayer {
             }
           }
 
-          if (report.kind === 'video') {
-            const frameDropRate = report.framesDecoded > 0
-              ? (report.framesDropped / (report.framesDecoded + report.framesDropped)) * 100
-              : 0;
+          if (report.kind === "video") {
+            const frameDropRate =
+              report.framesDecoded > 0
+                ? (report.framesDropped / (report.framesDecoded + report.framesDropped)) * 100
+                : 0;
 
             result.video = {
               bytesReceived: report.bytesReceived || 0,
@@ -693,12 +734,13 @@ export class NativePlayerImpl extends BasePlayer {
               frameHeight: report.frameHeight || 0,
               framesPerSecond: report.framesPerSecond || 0,
               bitrate,
-              jitterBufferDelay: report.jitterBufferDelay && report.jitterBufferEmittedCount
-                ? (report.jitterBufferDelay / report.jitterBufferEmittedCount) * 1000 // ms
-                : 0,
+              jitterBufferDelay:
+                report.jitterBufferDelay && report.jitterBufferEmittedCount
+                  ? (report.jitterBufferDelay / report.jitterBufferEmittedCount) * 1000 // ms
+                  : 0,
             };
           }
-          if (report.kind === 'audio') {
+          if (report.kind === "audio") {
             result.audio = {
               bytesReceived: report.bytesReceived || 0,
               packetsReceived: report.packetsReceived || 0,
@@ -709,7 +751,7 @@ export class NativePlayerImpl extends BasePlayer {
             };
           }
         }
-        if (report.type === 'candidate-pair' && report.nominated) {
+        if (report.type === "candidate-pair" && report.nominated) {
           result.network = {
             rtt: report.currentRoundTripTime ? report.currentRoundTripTime * 1000 : 0, // ms
             availableOutgoingBitrate: report.availableOutgoingBitrate || 0,
@@ -733,7 +775,9 @@ export class NativePlayerImpl extends BasePlayer {
     }
   }
 
-  async getLatency(): Promise<{ estimatedMs: number; jitterBufferMs: number; rttMs: number } | undefined> {
+  async getLatency(): Promise<
+    { estimatedMs: number; jitterBufferMs: number; rttMs: number } | undefined
+  > {
     const s = await this.getStats();
     if (!s) return undefined;
 
@@ -744,10 +788,17 @@ export class NativePlayerImpl extends BasePlayer {
     };
   }
 
-  private async startWhep(video: HTMLVideoElement, url: string, headers: Record<string,string>, iceServers: RTCIceServer[]) {
+  private async startWhep(
+    video: HTMLVideoElement,
+    url: string,
+    headers: Record<string, string>,
+    iceServers: RTCIceServer[]
+  ) {
     // Clean previous sessionUrl
     if (this.sessionUrl) {
-      try { fetch(this.sessionUrl, { method: 'DELETE' }).catch(() => {}); } catch {}
+      try {
+        fetch(this.sessionUrl, { method: "DELETE" }).catch(() => {});
+      } catch {}
       this.sessionUrl = null;
     }
 
@@ -765,44 +816,53 @@ export class NativePlayerImpl extends BasePlayer {
     pc.oniceconnectionstatechange = () => {
       if (this.destroyed) return; // Guard against zombie callbacks
       const state = pc.iceConnectionState;
-      if (state === 'failed' || state === 'disconnected') {
-        this.emit('error', 'WHEP connection failed');
-        if (this.reconnectEnabled && this.reconnectAttempts < this.maxReconnectAttempts && this.currentWhepUrl) {
+      if (state === "failed" || state === "disconnected") {
+        this.emit("error", "WHEP connection failed");
+        if (
+          this.reconnectEnabled &&
+          this.reconnectAttempts < this.maxReconnectAttempts &&
+          this.currentWhepUrl
+        ) {
           const backoff = Math.min(5000, 500 * Math.pow(2, this.reconnectAttempts));
           this.reconnectAttempts++;
           this.reconnectTimer = setTimeout(() => {
             if (this.destroyed) return; // Guard inside timer callback too
-            this.startWhep(video, this.currentWhepUrl!, this.currentHeaders || {}, this.currentIceServers || []);
+            this.startWhep(
+              video,
+              this.currentWhepUrl!,
+              this.currentHeaders || {},
+              this.currentIceServers || []
+            );
           }, backoff);
         }
       }
-      if (state === 'connected') {
+      if (state === "connected") {
         this.reconnectAttempts = 0;
       }
     };
 
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    const requestHeaders: Record<string,string> = { 'Content-Type': 'application/sdp' };
+    const requestHeaders: Record<string, string> = { "Content-Type": "application/sdp" };
     for (const k in headers) requestHeaders[k] = headers[k];
 
     const response = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: requestHeaders,
-      body: offer.sdp || ''
+      body: offer.sdp || "",
     });
     if (!response.ok) {
       throw new Error(`WHEP request failed: ${response.status}`);
     }
     const answerSdp = await response.text();
-    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answerSdp }));
+    await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: answerSdp }));
 
     // Resolve sessionUrl against the WHEP endpoint URL (Location header may be relative)
-    const locationHeader = response.headers.get('Location');
+    const locationHeader = response.headers.get("Location");
     if (locationHeader) {
       try {
         // Use URL constructor to resolve relative path against the WHEP endpoint

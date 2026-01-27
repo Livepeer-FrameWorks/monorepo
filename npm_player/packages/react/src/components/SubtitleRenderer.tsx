@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
-import type { SubtitleCue, MetaTrackEvent } from '../types';
+import React, { useEffect, useState, useRef } from "react";
+import type { SubtitleCue, MetaTrackEvent } from "../types";
 
 export interface SubtitleRendererProps {
   /** Current video playback time in seconds */
@@ -40,48 +40,48 @@ export interface SubtitleStyle {
 }
 
 const DEFAULT_STYLE: SubtitleStyle = {
-  fontSize: '1.5rem',
-  fontFamily: 'system-ui, -apple-system, sans-serif',
-  color: 'white',
-  backgroundColor: 'rgba(0, 0, 0, 0.75)',
-  textShadow: '2px 2px 4px rgba(0, 0, 0, 0.5)',
-  bottom: '5%',
-  maxWidth: '90%',
-  padding: '0.5em 1em',
-  borderRadius: '4px',
+  fontSize: "1.5rem",
+  fontFamily: "system-ui, -apple-system, sans-serif",
+  color: "white",
+  backgroundColor: "rgba(0, 0, 0, 0.75)",
+  textShadow: "2px 2px 4px rgba(0, 0, 0, 0.5)",
+  bottom: "5%",
+  maxWidth: "90%",
+  padding: "0.5em 1em",
+  borderRadius: "4px",
 };
 
 /**
  * Parse subtitle cue from meta track event data
  */
 function parseSubtitleCue(data: unknown): SubtitleCue | null {
-  if (typeof data !== 'object' || data === null) return null;
+  if (typeof data !== "object" || data === null) return null;
 
   const obj = data as Record<string, unknown>;
 
   // Extract text
-  const text = typeof obj.text === 'string' ? obj.text : String(obj.text ?? '');
+  const text = typeof obj.text === "string" ? obj.text : String(obj.text ?? "");
   if (!text) return null;
 
   // Extract timing
   let startTime = 0;
   let endTime = Infinity;
 
-  if ('startTime' in obj) startTime = Number(obj.startTime);
-  else if ('start' in obj) startTime = Number(obj.start);
+  if ("startTime" in obj) startTime = Number(obj.startTime);
+  else if ("start" in obj) startTime = Number(obj.start);
 
-  if ('endTime' in obj) endTime = Number(obj.endTime);
-  else if ('end' in obj) endTime = Number(obj.end);
+  if ("endTime" in obj) endTime = Number(obj.endTime);
+  else if ("end" in obj) endTime = Number(obj.end);
 
   // Extract ID
-  const id = typeof obj.id === 'string' ? obj.id : String(Date.now());
+  const id = typeof obj.id === "string" ? obj.id : String(Date.now());
 
   return {
     id,
     text,
     startTime,
     endTime,
-    lang: typeof obj.lang === 'string' ? obj.lang : undefined,
+    lang: typeof obj.lang === "string" ? obj.lang : undefined,
   };
 }
 
@@ -121,10 +121,10 @@ export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
   subscribeToMetaTrack,
   metaTrackId,
   style: customStyle,
-  className = '',
+  className = "",
 }) => {
   const [liveCues, setLiveCues] = useState<SubtitleCue[]>([]);
-  const [displayedText, setDisplayedText] = useState<string>('');
+  const [displayedText, setDisplayedText] = useState<string>("");
   const lastCueIdRef = useRef<string | null>(null);
 
   const style = { ...DEFAULT_STYLE, ...customStyle };
@@ -139,12 +139,12 @@ export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
     }
 
     const handleMetaEvent = (event: MetaTrackEvent) => {
-      if (event.type === 'subtitle') {
+      if (event.type === "subtitle") {
         const cue = parseSubtitleCue(event.data);
         if (cue) {
-          setLiveCues(prev => {
+          setLiveCues((prev) => {
             // Deduplicate by ID
-            const existing = prev.find(c => c.id === cue.id);
+            const existing = prev.find((c) => c.id === cue.id);
             if (existing) return prev;
 
             // Keep last 50 cues max
@@ -165,13 +165,13 @@ export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
   // Find active cue based on current time
   useEffect(() => {
     if (!enabled) {
-      setDisplayedText('');
+      setDisplayedText("");
       return;
     }
 
     // Find cue that matches current time
     const currentTimeMs = currentTime * 1000; // Convert to ms if needed
-    const activeCue = allCues.find(cue => {
+    const activeCue = allCues.find((cue) => {
       const start = cue.startTime;
       const end = cue.endTime;
       return currentTimeMs >= start && currentTimeMs < end;
@@ -181,7 +181,7 @@ export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
       setDisplayedText(activeCue.text);
       lastCueIdRef.current = activeCue.id;
     } else {
-      setDisplayedText('');
+      setDisplayedText("");
       lastCueIdRef.current = null;
     }
   }, [enabled, currentTime, allCues]);
@@ -190,9 +190,9 @@ export const SubtitleRenderer: React.FC<SubtitleRendererProps> = ({
   useEffect(() => {
     const currentTimeMs = currentTime * 1000;
 
-    setLiveCues(prev => {
+    setLiveCues((prev) => {
       // Remove cues that are more than 30 seconds old
-      return prev.filter(cue => {
+      return prev.filter((cue) => {
         const endTime = cue.endTime === Infinity ? cue.startTime + 10000 : cue.endTime;
         return endTime >= currentTimeMs - 30000;
       });

@@ -33,11 +33,7 @@ function createErrorBoundaryStore() {
   return {
     subscribe,
 
-    setError(
-      error: Error,
-      userMessage?: string,
-      additionalInfo?: string,
-    ): void {
+    setError(error: Error, userMessage?: string, additionalInfo?: string): void {
       console.error("ErrorBoundary caught error:", error);
 
       set({
@@ -77,10 +73,7 @@ function createErrorBoundaryStore() {
         } else {
           userMessage = "Network error. Please check your connection.";
         }
-      } else if (
-        graphQLError.graphQLErrors &&
-        graphQLError.graphQLErrors.length > 0
-      ) {
+      } else if (graphQLError.graphQLErrors && graphQLError.graphQLErrors.length > 0) {
         const firstError = graphQLError.graphQLErrors[0];
         if (firstError.extensions?.code === "FORBIDDEN") {
           userMessage = "You do not have permission to access this resource.";

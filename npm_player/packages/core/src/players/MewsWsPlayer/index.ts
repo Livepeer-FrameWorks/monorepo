@@ -7,19 +7,24 @@
  * Ported from reference: mews.js (MistMetaPlayer)
  */
 
-import { BasePlayer } from '../../core/PlayerInterface';
-import type { StreamSource, StreamInfo, PlayerOptions, PlayerCapability } from '../../core/PlayerInterface';
-import { WebSocketManager } from './WebSocketManager';
-import { SourceBufferManager } from './SourceBufferManager';
-import { translateCodec } from '../../core/CodecUtils';
-import type { MewsMessage, AnalyticsConfig, OnTimeMessage, MewsMessageListener } from './types';
+import { BasePlayer } from "../../core/PlayerInterface";
+import type {
+  StreamSource,
+  StreamInfo,
+  PlayerOptions,
+  PlayerCapability,
+} from "../../core/PlayerInterface";
+import { WebSocketManager } from "./WebSocketManager";
+import { SourceBufferManager } from "./SourceBufferManager";
+import { translateCodec } from "../../core/CodecUtils";
+import type { MewsMessage, AnalyticsConfig, OnTimeMessage, MewsMessageListener } from "./types";
 
 export class MewsWsPlayerImpl extends BasePlayer {
   readonly capability: PlayerCapability = {
     name: "MEWS WebSocket Player",
     shortname: "mews",
     priority: 2, // High priority - low latency protocol
-    mimes: ["ws/video/mp4", "wss/video/mp4", "ws/video/webm", "wss/video/webm"]
+    mimes: ["ws/video/mp4", "wss/video/mp4", "ws/video/webm", "wss/video/webm"],
   };
 
   private wsManager: WebSocketManager | null = null;
@@ -45,7 +50,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private lastDuration = Infinity;
 
   // Live vs VoD detection (ported from mews.js:105-107, 508)
-  private streamType: 'live' | 'vod' | 'unknown' = 'unknown';
+  private streamType: "live" | "vod" | "unknown" = "unknown";
 
   // Current tracks for change detection (ported from mews.js:455, 593-619)
   private currentTracks: string[] = [];
@@ -74,9 +79,13 @@ export class MewsWsPlayerImpl extends BasePlayer {
     return this.capability.mimes.includes(mimetype);
   }
 
-  isBrowserSupported(mimetype: string, source: StreamSource, streamInfo: StreamInfo): boolean | string[] {
+  isBrowserSupported(
+    mimetype: string,
+    source: StreamSource,
+    streamInfo: StreamInfo
+  ): boolean | string[] {
     // Basic requirements check (mews.js:10)
-    if (!('WebSocket' in window) || !('MediaSource' in window) || !('Promise' in window)) {
+    if (!("WebSocket" in window) || !("MediaSource" in window) || !("Promise" in window)) {
       return false;
     }
 
@@ -88,15 +97,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
     }
 
     // Check codec compatibility using ACTUAL stream codecs (mews.js:45-83)
-    const container = mimetype.split('/')[2] || 'mp4';
+    const container = mimetype.split("/")[2] || "mp4";
     const playableTracks: Record<string, number> = {};
     let hasSubtitles = false;
 
     // Test actual stream codecs against MediaSource
     this.supportedCodecs = [];
     for (const track of streamInfo.meta.tracks) {
-      if (track.type === 'meta') {
-        if (track.codec === 'subtitle') hasSubtitles = true;
+      if (track.type === "meta") {
+        if (track.codec === "subtitle") hasSubtitles = true;
         continue;
       }
 
@@ -111,9 +120,9 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
     // Check for subtitle source (mews.js:73-80)
     if (hasSubtitles) {
-      const hasVttSource = streamInfo.source?.some(s => s.type === 'html5/text/vtt');
+      const hasVttSource = streamInfo.source?.some((s) => s.type === "html5/text/vtt");
       if (hasVttSource) {
-        playableTracks['subtitle'] = 1;
+        playableTracks["subtitle"] = 1;
       }
     }
 
@@ -121,14 +130,19 @@ export class MewsWsPlayerImpl extends BasePlayer {
     return Object.keys(playableTracks);
   }
 
-  async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions, streamInfo?: StreamInfo): Promise<HTMLVideoElement> {
+  async initialize(
+    container: HTMLElement,
+    source: StreamSource,
+    options: PlayerOptions,
+    streamInfo?: StreamInfo
+  ): Promise<HTMLVideoElement> {
     this.container = container;
-    container.classList.add('fw-player-container');
+    container.classList.add("fw-player-container");
 
-    const video = document.createElement('video');
-    video.classList.add('fw-player-video');
-    video.setAttribute('playsinline', ''); // iphones (mews.js:92)
-    video.setAttribute('crossorigin', 'anonymous'); // mews.js:111
+    const video = document.createElement("video");
+    video.classList.add("fw-player-video");
+    video.setAttribute("playsinline", ""); // iphones (mews.js:92)
+    video.setAttribute("crossorigin", "anonymous"); // mews.js:111
 
     // Apply options (mews.js:95-110)
     if (options.autoplay) video.autoplay = true;
@@ -138,7 +152,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     if (options.poster) video.poster = options.poster;
 
     // Live streams don't loop (mews.js:105-107)
-    if (this.streamType === 'live') {
+    if (this.streamType === "live") {
       video.loop = false;
     }
 
@@ -150,15 +164,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
     const anyOpts = options as any;
     this.analyticsConfig = {
       enabled: !!anyOpts.analytics?.enabled,
-      endpoint: anyOpts.analytics?.endpoint || null
+      endpoint: anyOpts.analytics?.endpoint || null,
     };
 
     // Get stream type from streamInfo if available
     // Note: source.type is a MIME string (e.g., 'ws/video/mp4'), not 'live'/'vod'
-    if (streamInfo?.type === 'live') {
-      this.streamType = 'live';
-    } else if (streamInfo?.type === 'vod') {
-      this.streamType = 'vod';
+    if (streamInfo?.type === "live") {
+      this.streamType = "live";
+    } else if (streamInfo?.type === "vod") {
+      this.streamType = "vod";
     }
     // Fallback: will be determined by server on_time messages (end === 0 means live)
 
@@ -167,9 +181,9 @@ export class MewsWsPlayerImpl extends BasePlayer {
       this.mediaSource = new MediaSource();
 
       // Set up MediaSource event handlers (mews.js:143-195)
-      this.mediaSource.addEventListener('sourceopen', () => this.handleSourceOpen(source));
-      this.mediaSource.addEventListener('sourceclose', () => this.handleSourceClose());
-      this.mediaSource.addEventListener('sourceended', () => this.handleSourceEnded());
+      this.mediaSource.addEventListener("sourceopen", () => this.handleSourceOpen(source));
+      this.mediaSource.addEventListener("sourceclose", () => this.handleSourceClose());
+      this.mediaSource.addEventListener("sourceended", () => this.handleSourceEnded());
 
       this.objectUrl = URL.createObjectURL(this.mediaSource);
       video.src = this.objectUrl;
@@ -177,7 +191,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       this.startTelemetry();
       return video;
     } catch (error: any) {
-      this.emit('error', error.message || String(error));
+      this.emit("error", error.message || String(error));
       throw error;
     }
   }
@@ -193,7 +207,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     this.sbManager = new SourceBufferManager({
       mediaSource: this.mediaSource,
       videoElement: this.videoElement,
-      onError: (msg) => this.emit('error', msg)
+      onError: (msg) => this.emit("error", msg),
     });
 
     // Install browser event handlers
@@ -209,7 +223,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       onMessage: (data) => this.handleMessage(data),
       onOpen: () => this.handleWsOpen(),
       onClose: () => this.handleWsClose(),
-      onError: (msg) => this.emit('error', msg)
+      onError: (msg) => this.emit("error", msg),
     });
 
     this.wsManager.connect();
@@ -220,8 +234,8 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Ported from mews.js:150-153
    */
   private handleSourceClose(): void {
-    if (this.debugging) console.log('MEWS: MediaSource closed');
-    this.send({ type: 'stop' });
+    if (this.debugging) console.log("MEWS: MediaSource closed");
+    this.send({ type: "stop" });
   }
 
   /**
@@ -229,8 +243,8 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Ported from mews.js:154-194
    */
   private handleSourceEnded(): void {
-    if (this.debugging) console.log('MEWS: MediaSource ended');
-    this.send({ type: 'stop' });
+    if (this.debugging) console.log("MEWS: MediaSource ended");
+    this.send({ type: "stop" });
   }
 
   /**
@@ -241,7 +255,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     // Request codec data (mews.js:885-902)
     const listener: MewsMessageListener = (msg) => {
       // Got codec data, set up source buffer
-      if (this.mediaSource?.readyState === 'open') {
+      if (this.mediaSource?.readyState === "open") {
         const codecs = msg.data?.codecs || [];
         const initialized = this.sbManager?.initWithCodecs(codecs);
 
@@ -254,15 +268,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
           this.readyResolvers = [];
         }
       }
-      this.wsManager?.removeListener('codec_data', listener);
+      this.wsManager?.removeListener("codec_data", listener);
     };
 
-    this.wsManager?.addListener('codec_data', listener);
-    this.logDelay('codec_data');
+    this.wsManager?.addListener("codec_data", listener);
+    this.logDelay("codec_data");
 
     // Send request with SHORT codec names (mews.js:901)
     // CRITICAL: MistServer expects short names like "H264", not browser codec strings
-    this.send({ type: 'request_codec_data', supported_codecs: this.supportedCodecs });
+    this.send({ type: "request_codec_data", supported_codecs: this.supportedCodecs });
   }
 
   /**
@@ -270,7 +284,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Ported from mews.js:408-431
    */
   private handleWsClose(): void {
-    if (this.debugging) console.log('MEWS: WebSocket closed');
+    if (this.debugging) console.log("MEWS: WebSocket closed");
     // Reconnection is handled by WebSocketManager
   }
 
@@ -280,14 +294,14 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Ported from mews.js:456-830
    */
   private handleMessage(data: ArrayBuffer | string): void {
-    if (typeof data === 'string') {
+    if (typeof data === "string") {
       try {
         const msg = JSON.parse(data) as MewsMessage;
         this.handleControlMessage(msg);
         // Notify listeners (mews.js:795-799)
         this.wsManager?.notifyListeners(msg);
       } catch (e) {
-        if (this.debugging) console.error('MEWS: Failed to parse message', e);
+        if (this.debugging) console.error("MEWS: Failed to parse message", e);
       }
       return;
     }
@@ -303,37 +317,37 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Ported from mews.js:461-799
    */
   private handleControlMessage(msg: MewsMessage): void {
-    if (this.debugging && msg.type !== 'on_time') {
-      console.log('MEWS: message', msg);
+    if (this.debugging && msg.type !== "on_time") {
+      console.log("MEWS: message", msg);
     }
 
     switch (msg.type) {
-      case 'on_stop':
+      case "on_stop":
         this.handleOnStop();
         break;
 
-      case 'on_time':
+      case "on_time":
         this.handleOnTime(msg as OnTimeMessage);
         break;
 
-      case 'tracks':
+      case "tracks":
         this.handleTracks(msg);
         break;
 
-      case 'pause':
+      case "pause":
         this.handlePause();
         break;
 
-      case 'codec_data':
-        this.resolveDelay('codec_data');
+      case "codec_data":
+        this.resolveDelay("codec_data");
         break;
 
-      case 'seek':
-        this.resolveDelay('seek');
+      case "seek":
+        this.resolveDelay("seek");
         break;
 
-      case 'set_speed':
-        this.resolveDelay('set_speed');
+      case "set_speed":
+        this.resolveDelay("set_speed");
         break;
     }
   }
@@ -344,17 +358,17 @@ export class MewsWsPlayerImpl extends BasePlayer {
    */
   private handleOnStop(): void {
     // Mark as VoD (stream ended)
-    this.streamType = 'vod';
+    this.streamType = "vod";
 
     // Wait for buffer to finish playing (mews.js:465-469)
     const onWaiting = () => {
       if (this.sbManager) {
         this.sbManager.paused = true;
       }
-      this.emit('ended', undefined);
-      this.videoElement?.removeEventListener('waiting', onWaiting);
+      this.emit("ended", undefined);
+      this.videoElement?.removeEventListener("waiting", onWaiting);
     };
-    this.videoElement?.addEventListener('waiting', onWaiting);
+    this.videoElement?.addEventListener("waiting", onWaiting);
   }
 
   /**
@@ -379,21 +393,29 @@ export class MewsWsPlayerImpl extends BasePlayer {
     const desiredBufferWithJitter = desiredBuffer + jitter;
 
     // VoD gets extra buffer (mews.js:480)
-    const actualDesiredBuffer = this.streamType !== 'live' ? desiredBuffer + 2000 : desiredBuffer;
+    const actualDesiredBuffer = this.streamType !== "live" ? desiredBuffer + 2000 : desiredBuffer;
 
     if (this.debugging) {
       console.log(
-        'MEWS: on_time',
-        'current:', currentMs / 1000,
-        'video:', this.videoElement.currentTime,
-        'rate:', this.requestedRate + 'x',
-        'buffer:', Math.round(buffer), '/', Math.round(desiredBuffer),
-        this.streamType === 'live' ? 'latency:' + Math.round((endMs || 0) - this.videoElement.currentTime * 1000) + 'ms' : ''
+        "MEWS: on_time",
+        "current:",
+        currentMs / 1000,
+        "video:",
+        this.videoElement.currentTime,
+        "rate:",
+        this.requestedRate + "x",
+        "buffer:",
+        Math.round(buffer),
+        "/",
+        Math.round(desiredBuffer),
+        this.streamType === "live"
+          ? "latency:" + Math.round((endMs || 0) - this.videoElement.currentTime * 1000) + "ms"
+          : ""
       );
     }
 
     if (!this.sbManager) {
-      if (this.debugging) console.log('MEWS: on_time but no sourceBuffer');
+      if (this.debugging) console.log("MEWS: on_time but no sourceBuffer");
       return;
     }
 
@@ -407,7 +429,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     this.sbManager.paused = false;
 
     // Playback rate tuning for LIVE streams (mews.js:508-545)
-    if (this.streamType === 'live') {
+    if (this.streamType === "live") {
       this.tuneLivePlaybackRate(buffer, desiredBufferWithJitter, data.play_rate_curr);
     } else {
       // VoD - adjust server delivery speed (mews.js:547-586)
@@ -415,11 +437,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
     }
 
     // Track change detection (mews.js:593-619)
-    if (data.tracks && this.currentTracks.join(',') !== data.tracks.join(',')) {
+    if (data.tracks && this.currentTracks.join(",") !== data.tracks.join(",")) {
       if (this.debugging) {
         for (const trackId of data.tracks) {
           if (!this.currentTracks.includes(trackId)) {
-            console.log('MEWS: track changed', trackId);
+            console.log("MEWS: track changed", trackId);
           }
         }
       }
@@ -434,27 +456,31 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Fixed: Use direct assignment instead of multiplication to prevent
    * compounding rate adjustments on each on_time message.
    */
-  private tuneLivePlaybackRate(buffer: number, desiredBuffer: number, playRateCurr?: 'auto' | number): void {
+  private tuneLivePlaybackRate(
+    buffer: number,
+    desiredBuffer: number,
+    playRateCurr?: "auto" | number
+  ): void {
     if (!this.videoElement) return;
 
     if (this.requestedRate === 1) {
-      if (playRateCurr === 'auto' && this.videoElement.currentTime > 0) {
+      if (playRateCurr === "auto" && this.videoElement.currentTime > 0) {
         // Assume we want to be as live as possible
         if (buffer > desiredBuffer * 2) {
           // Buffer too big, speed up (mews.js:513-516)
           this.requestedRate = 1 + Math.min(1, (buffer - desiredBuffer) / desiredBuffer) * 0.08;
           this.videoElement.playbackRate = this.requestedRate;
-          if (this.debugging) console.log('MEWS: speeding up to', this.requestedRate);
+          if (this.debugging) console.log("MEWS: speeding up to", this.requestedRate);
         } else if (buffer < 0) {
           // Negative buffer, slow down (mews.js:518-521)
           this.requestedRate = 0.8;
           this.videoElement.playbackRate = this.requestedRate;
-          if (this.debugging) console.log('MEWS: slowing down to', this.requestedRate);
+          if (this.debugging) console.log("MEWS: slowing down to", this.requestedRate);
         } else if (buffer < desiredBuffer / 2) {
           // Buffer too small, slow down (mews.js:523-526)
           this.requestedRate = 1 + Math.min(1, (buffer - desiredBuffer) / desiredBuffer) * 0.08;
           this.videoElement.playbackRate = this.requestedRate;
-          if (this.debugging) console.log('MEWS: adjusting to', this.requestedRate);
+          if (this.debugging) console.log("MEWS: adjusting to", this.requestedRate);
         }
       }
     } else if (this.requestedRate > 1) {
@@ -462,14 +488,14 @@ export class MewsWsPlayerImpl extends BasePlayer {
       if (buffer < desiredBuffer) {
         this.videoElement.playbackRate = 1;
         this.requestedRate = 1;
-        if (this.debugging) console.log('MEWS: returning to normal rate');
+        if (this.debugging) console.log("MEWS: returning to normal rate");
       }
     } else {
       // requestedRate < 1, return to normal when buffer is big enough (mews.js:538-544)
       if (buffer > desiredBuffer) {
         this.videoElement.playbackRate = 1;
         this.requestedRate = 1;
-        if (this.debugging) console.log('MEWS: returning to normal rate');
+        if (this.debugging) console.log("MEWS: returning to normal rate");
       }
     }
   }
@@ -478,39 +504,46 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Tune server delivery speed for VoD.
    * Ported from mews.js:547-586
    */
-  private tuneVodDeliverySpeed(buffer: number, desiredBuffer: number, playRateCurr?: 'auto' | number): void {
+  private tuneVodDeliverySpeed(
+    buffer: number,
+    desiredBuffer: number,
+    playRateCurr?: "auto" | number
+  ): void {
     if (this.requestedRate === 1) {
-      if (playRateCurr === 'auto') {
+      if (playRateCurr === "auto") {
         if (buffer < desiredBuffer / 2) {
           if (buffer < -10000) {
             // Way behind, seek to current position (mews.js:553-554)
-            this.send({ type: 'seek', seek_time: Math.round((this.videoElement?.currentTime || 0) * 1000) });
+            this.send({
+              type: "seek",
+              seek_time: Math.round((this.videoElement?.currentTime || 0) * 1000),
+            });
           } else {
             // Request faster delivery (mews.js:557-560)
             this.requestedRate = 2;
-            this.send({ type: 'set_speed', play_rate: this.requestedRate });
-            if (this.debugging) console.log('MEWS: requesting faster delivery');
+            this.send({ type: "set_speed", play_rate: this.requestedRate });
+            if (this.debugging) console.log("MEWS: requesting faster delivery");
           }
         } else if (buffer - desiredBuffer > desiredBuffer) {
           // Too much buffer, slow down (mews.js:563-566)
           this.requestedRate = 0.5;
-          this.send({ type: 'set_speed', play_rate: this.requestedRate });
-          if (this.debugging) console.log('MEWS: requesting slower delivery');
+          this.send({ type: "set_speed", play_rate: this.requestedRate });
+          if (this.debugging) console.log("MEWS: requesting slower delivery");
         }
       }
     } else if (this.requestedRate > 1) {
       if (buffer > desiredBuffer) {
         // Enough buffer, return to realtime (mews.js:571-575)
-        this.send({ type: 'set_speed', play_rate: 'auto' });
+        this.send({ type: "set_speed", play_rate: "auto" });
         this.requestedRate = 1;
-        if (this.debugging) console.log('MEWS: returning to realtime delivery');
+        if (this.debugging) console.log("MEWS: returning to realtime delivery");
       }
     } else {
       if (buffer < desiredBuffer) {
         // Buffer small enough, return to realtime (mews.js:579-583)
-        this.send({ type: 'set_speed', play_rate: 'auto' });
+        this.send({ type: "set_speed", play_rate: "auto" });
         this.requestedRate = 1;
-        if (this.debugging) console.log('MEWS: returning to realtime delivery');
+        if (this.debugging) console.log("MEWS: returning to realtime delivery");
       }
     }
   }
@@ -524,14 +557,14 @@ export class MewsWsPlayerImpl extends BasePlayer {
     const switchPointMs = msg.data?.current;
 
     if (!codecs.length) {
-      this.emit('error', 'Track switch contains no codecs');
+      this.emit("error", "Track switch contains no codecs");
       return;
     }
 
     // Check if codecs are same as before (mews.js:676)
     const prevCodecs = this.lastCodecs || this.sbManager?.getCodecs() || [];
     if (this.codecsEqual(prevCodecs, codecs)) {
-      if (this.debugging) console.log('MEWS: keeping buffer, codecs same');
+      if (this.debugging) console.log("MEWS: keeping buffer, codecs same");
       // If at position 0 and switch point is not 0, seek to switch point (mews.js:678-679)
       if (this.videoElement?.currentTime === 0 && switchPointMs && switchPointMs !== 0) {
         this.setSeekingPosition(switchPointMs / 1000);
@@ -612,7 +645,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     if (!this.isReady) {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
-          reject(new Error('MEWS: Timeout waiting for codec data'));
+          reject(new Error("MEWS: Timeout waiting for codec data"));
         }, 5000);
         this.readyResolvers.push(() => {
           clearTimeout(timeout);
@@ -631,34 +664,39 @@ export class MewsWsPlayerImpl extends BasePlayer {
         // Remove listener immediately to prevent race condition (single-use pattern)
         if (handled) return;
         handled = true;
-        this.wsManager?.removeListener('on_time', onTime);
+        this.wsManager?.removeListener("on_time", onTime);
 
         if (!this.sbManager) {
-          if (this.debugging) console.log('MEWS: play waiting for sourceBuffer');
+          if (this.debugging) console.log("MEWS: play waiting for sourceBuffer");
           handled = false; // Allow retry
-          this.wsManager?.addListener('on_time', onTime);
+          this.wsManager?.addListener("on_time", onTime);
           return;
         }
 
         const data = (msg as OnTimeMessage).data;
 
-        if (this.streamType === 'live') {
+        if (this.streamType === "live") {
           // Live stream - wait for buffer then seek to live edge (mews.js:978-998)
           const waitForBuffer = () => {
             if (!v.buffered.length) return;
 
             const bufferIdx = this.sbManager?.findBufferIndex(data.current / 1000);
-            if (typeof bufferIdx === 'number') {
+            if (typeof bufferIdx === "number") {
               // Check if current position is in buffer
-              if (v.buffered.start(bufferIdx) > v.currentTime || v.buffered.end(bufferIdx) < v.currentTime) {
+              if (
+                v.buffered.start(bufferIdx) > v.currentTime ||
+                v.buffered.end(bufferIdx) < v.currentTime
+              ) {
                 v.currentTime = data.current / 1000;
-                if (this.debugging) console.log('MEWS: seeking to live position', v.currentTime);
+                if (this.debugging) console.log("MEWS: seeking to live position", v.currentTime);
               }
 
-              v.play().then(resolve).catch((err) => {
-                this.pause();
-                reject(err);
-              });
+              v.play()
+                .then(resolve)
+                .catch((err) => {
+                  this.pause();
+                  reject(err);
+                });
 
               this.sbManager!.paused = false;
             }
@@ -676,14 +714,14 @@ export class MewsWsPlayerImpl extends BasePlayer {
         }
       };
 
-      this.wsManager?.addListener('on_time', onTime);
+      this.wsManager?.addListener("on_time", onTime);
 
       // Send play command (mews.js:1020-1022)
-      const skipToLive = this.streamType === 'live' && v.currentTime === 0;
+      const skipToLive = this.streamType === "live" && v.currentTime === 0;
       if (skipToLive) {
-        this.send({ type: 'play', seek_time: 'live' });
+        this.send({ type: "play", seek_time: "live" });
       } else {
-        this.send({ type: 'play' });
+        this.send({ type: "play" });
       }
     });
   }
@@ -694,7 +732,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
    */
   pause(): void {
     this.videoElement?.pause();
-    this.send({ type: 'hold' });
+    this.send({ type: "hold" });
     if (this.sbManager) {
       this.sbManager.paused = true;
     }
@@ -710,29 +748,29 @@ export class MewsWsPlayerImpl extends BasePlayer {
     // Calculate seek time with server delay compensation (mews.js:1082)
     const seekMs = Math.round(Math.max(0, time * 1000 - (250 + this.getServerDelay())));
 
-    this.logDelay('seek');
-    this.send({ type: 'seek', seek_time: seekMs });
+    this.logDelay("seek");
+    this.send({ type: "seek", seek_time: seekMs });
 
     // Wait for seek acknowledgment then on_time (mews.js:1084-1108)
     const onSeek: MewsMessageListener = () => {
-      this.wsManager?.removeListener('seek', onSeek);
+      this.wsManager?.removeListener("seek", onSeek);
 
       const onTime: MewsMessageListener = (msg) => {
-        this.wsManager?.removeListener('on_time', onTime);
+        this.wsManager?.removeListener("on_time", onTime);
 
         // Use server's actual position (mews.js:1089)
         const actualTime = (msg as OnTimeMessage).data.current / 1000;
         this.trySetCurrentTime(actualTime);
       };
 
-      this.wsManager?.addListener('on_time', onTime);
+      this.wsManager?.addListener("on_time", onTime);
     };
 
-    this.wsManager?.addListener('seek', onSeek);
+    this.wsManager?.addListener("seek", onSeek);
 
     // Also set directly as fallback
     this.videoElement.currentTime = time;
-    if (this.debugging) console.log('MEWS: seeking to', time);
+    if (this.debugging) console.log("MEWS: seeking to", time);
   }
 
   /**
@@ -765,18 +803,18 @@ export class MewsWsPlayerImpl extends BasePlayer {
    */
   setPlaybackRate(rate: number): void {
     super.setPlaybackRate(rate);
-    const playRate = rate === 1 ? 'auto' : rate;
-    this.logDelay('set_speed');
-    this.send({ type: 'set_speed', play_rate: playRate });
+    const playRate = rate === 1 ? "auto" : rate;
+    this.logDelay("set_speed");
+    this.send({ type: "set_speed", play_rate: playRate });
   }
 
   getQualities(): Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> {
-    return [{ id: 'auto', label: 'Auto', isAuto: true, active: true }];
+    return [{ id: "auto", label: "Auto", isAuto: true, active: true }];
   }
 
   selectQuality(id: string): void {
-    if (id === 'auto') {
-      this.send({ type: 'set_speed', play_rate: 'auto' });
+    if (id === "auto") {
+      this.send({ type: "set_speed", play_rate: "auto" });
     }
   }
 
@@ -786,7 +824,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
    */
   setTracks(obj: { video?: string; audio?: string; subtitle?: string }): void {
     if (!Object.keys(obj).length) return;
-    this.send({ type: 'tracks', ...obj });
+    this.send({ type: "tracks", ...obj });
   }
 
   /**
@@ -794,22 +832,22 @@ export class MewsWsPlayerImpl extends BasePlayer {
    */
   selectTextTrack(id: string | null): void {
     if (id === null) {
-      this.send({ type: 'tracks', subtitle: 'none' });
+      this.send({ type: "tracks", subtitle: "none" });
     } else {
-      this.send({ type: 'tracks', subtitle: id });
+      this.send({ type: "tracks", subtitle: id });
     }
   }
 
   isLive(): boolean {
-    return this.streamType === 'live';
+    return this.streamType === "live";
   }
 
   /**
    * Jump to live edge.
    */
   jumpToLive(): void {
-    if (this.streamType !== 'live' || !this.wsManager) return;
-    this.send({ type: 'play', seek_time: 'live' });
+    if (this.streamType !== "live" || !this.wsManager) return;
+    this.send({ type: "play", seek_time: "live" });
     this.videoElement?.play().catch(() => {});
   }
 
@@ -817,8 +855,8 @@ export class MewsWsPlayerImpl extends BasePlayer {
     return {
       currentBps: this.currentBps,
       waitingEvents: this.nWaiting,
-      isLive: this.streamType === 'live',
-      serverDelay: this.getServerDelay()
+      isLive: this.streamType === "live",
+      serverDelay: this.getServerDelay(),
     };
   }
 
@@ -832,7 +870,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private installWaitingHandler(): void {
     if (!this.videoElement) return;
 
-    this.videoElement.addEventListener('waiting', () => {
+    this.videoElement.addEventListener("waiting", () => {
       if (this.seeking) return;
 
       const v = this.videoElement!;
@@ -840,11 +878,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
       // Check for buffer gap and jump it (mews.js:1180-1186)
       const bufferIdx = this.sbManager?.findBufferIndex(v.currentTime);
-      if (bufferIdx !== false && typeof bufferIdx === 'number') {
+      if (bufferIdx !== false && typeof bufferIdx === "number") {
         if (bufferIdx + 1 < v.buffered.length) {
           const nextStart = v.buffered.start(bufferIdx + 1);
           if (nextStart - v.currentTime < 10) {
-            if (this.debugging) console.log('MEWS: skipping buffer gap to', nextStart);
+            if (this.debugging) console.log("MEWS: skipping buffer gap to", nextStart);
             v.currentTime = nextStart;
           }
         }
@@ -854,7 +892,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
       this.nWaiting++;
       if (this.nWaiting >= this.nWaitingThreshold && this.currentBps) {
         this.nWaiting = 0;
-        if (this.debugging) console.log('MEWS: ABR triggered, requesting lower bitrate');
+        if (this.debugging) console.log("MEWS: ABR triggered, requesting lower bitrate");
         this.setTracks({ video: `<${Math.round(this.currentBps)}bps,minbps` });
       }
     });
@@ -867,11 +905,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private installSeekingHandler(): void {
     if (!this.videoElement) return;
 
-    this.videoElement.addEventListener('seeking', () => {
+    this.videoElement.addEventListener("seeking", () => {
       this.seeking = true;
     });
 
-    this.videoElement.addEventListener('seeked', () => {
+    this.videoElement.addEventListener("seeked", () => {
       this.seeking = false;
     });
   }
@@ -883,21 +921,21 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private installPauseHandler(): void {
     if (!this.videoElement) return;
 
-    this.videoElement.addEventListener('pause', () => {
+    this.videoElement.addEventListener("pause", () => {
       if (this.sbManager && !this.sbManager.paused) {
         // Browser paused (probably tab hidden) - pause download (mews.js:1189-1192)
-        if (this.debugging) console.log('MEWS: browser paused, pausing download');
-        this.send({ type: 'hold' });
+        if (this.debugging) console.log("MEWS: browser paused, pausing download");
+        this.send({ type: "hold" });
         this.sbManager.paused = true;
 
         // Resume on play (mews.js:1193-1197)
         const onPlay = () => {
           if (this.sbManager?.paused) {
-            this.send({ type: 'play' });
+            this.send({ type: "play" });
           }
-          this.videoElement?.removeEventListener('play', onPlay);
+          this.videoElement?.removeEventListener("play", onPlay);
         };
-        this.videoElement?.addEventListener('play', onPlay);
+        this.videoElement?.addEventListener("play", onPlay);
       }
     });
   }
@@ -909,11 +947,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private installLoopHandler(): void {
     if (!this.videoElement) return;
 
-    this.videoElement.addEventListener('ended', () => {
+    this.videoElement.addEventListener("ended", () => {
       const v = this.videoElement;
       if (!v) return;
 
-      if (v.loop && this.streamType !== 'live') {
+      if (v.loop && this.streamType !== "live") {
         // Loop VoD content (mews.js:1159-1166)
         this.seek(0);
         this.sbManager?._do(() => {
@@ -1011,21 +1049,21 @@ export class MewsWsPlayerImpl extends BasePlayer {
       const payload = {
         t: Date.now(),
         bps: stats.currentBps || 0,
-        waiting: stats.waitingEvents || 0
+        waiting: stats.waitingEvents || 0,
       };
 
       try {
         await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
         });
       } catch {}
     }, 5000);
   }
 
   async destroy(): Promise<void> {
-    console.debug('[MEWS] destroy() called');
+    console.debug("[MEWS] destroy() called");
     this.isDestroyed = true;
     this.isReady = false;
     this.readyResolvers = [];
@@ -1043,7 +1081,7 @@ export class MewsWsPlayerImpl extends BasePlayer {
     this.sbManager?.destroy();
     this.sbManager = null;
 
-    if (this.mediaSource?.readyState === 'open') {
+    if (this.mediaSource?.readyState === "open") {
       try {
         this.mediaSource.endOfStream();
       } catch {}
@@ -1055,13 +1093,15 @@ export class MewsWsPlayerImpl extends BasePlayer {
     }
 
     if (this.videoElement && this.container) {
-      try { this.container.removeChild(this.videoElement); } catch {}
+      try {
+        this.container.removeChild(this.videoElement);
+      } catch {}
     }
 
     this.videoElement = null;
     this.container = null;
     this.mediaSource = null;
     this.listeners.clear();
-    console.debug('[MEWS] destroy() completed');
+    console.debug("[MEWS] destroy() completed");
   }
 }

@@ -13,10 +13,7 @@
 
 <Card>
   <CardContent class="py-4 text-center space-y-2">
-    <Badge
-      variant="outline"
-      class="mx-auto w-fit uppercase tracking-wide text-[0.65rem]"
-    >
+    <Badge variant="outline" class="mx-auto w-fit uppercase tracking-wide text-[0.65rem]">
       {label}
     </Badge>
     <span class="text-2xl font-semibold {tone}">{value}</span>

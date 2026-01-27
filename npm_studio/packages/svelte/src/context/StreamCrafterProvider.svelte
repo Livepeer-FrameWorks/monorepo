@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { setContext, type Snippet } from 'svelte';
-  import { createStreamCrafterContextV2 as createStreamCrafterContext } from '../stores/streamCrafterContextV2';
+  import { setContext, type Snippet } from "svelte";
+  import { createStreamCrafterContextV2 as createStreamCrafterContext } from "../stores/streamCrafterContextV2";
 
   // Define prop types (similar to React's StreamCrafterProviderProps)
-  let { children, ...options }: {
+  let {
+    children,
+    ...options
+  }: {
     children?: Snippet;
   } = $props();
 
@@ -13,7 +16,7 @@
   }
 
   // Set the context for descendant components
-  setContext('StreamCrafterContext', streamCrafterContext);
+  setContext("StreamCrafterContext", streamCrafterContext);
 </script>
 
 {@render children?.()}

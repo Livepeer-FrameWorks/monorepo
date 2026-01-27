@@ -3,7 +3,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function ConnectionSlab() {
-  const { baseUrl, viewerPath, streamName, setBaseUrl, setViewerPath, setStreamName } = usePlayground();
+  const { baseUrl, viewerPath, streamName, setBaseUrl, setViewerPath, setStreamName } =
+    usePlayground();
 
   return (
     <div className="slab">

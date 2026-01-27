@@ -3,7 +3,7 @@
  * Manages compositor state with scenes, layers, and transitions
  */
 
-import { writable, derived, type Readable, type Writable } from 'svelte/store';
+import { writable, derived, type Readable, type Writable } from "svelte/store";
 import type {
   Scene,
   Layer,
@@ -13,8 +13,8 @@ import type {
   RendererType,
   RendererStats,
   CompositorConfig,
-} from '@livepeer-frameworks/streamcrafter-core';
-import type { IngestControllerV2 } from '@livepeer-frameworks/streamcrafter-core';
+} from "@livepeer-frameworks/streamcrafter-core";
+import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface CompositorState {
   isEnabled: boolean;
@@ -41,15 +41,23 @@ export interface CompositorStore extends Readable<CompositorState> {
   transitionTo: (sceneId: string, transition?: TransitionConfig) => Promise<void>;
 
   // Layer management
-  addLayer: (sceneId: string, sourceId: string, transform?: Partial<LayerTransform>) => Layer | null;
+  addLayer: (
+    sceneId: string,
+    sourceId: string,
+    transform?: Partial<LayerTransform>
+  ) => Layer | null;
   removeLayer: (sceneId: string, layerId: string) => void;
-  updateLayerTransform: (sceneId: string, layerId: string, transform: Partial<LayerTransform>) => void;
+  updateLayerTransform: (
+    sceneId: string,
+    layerId: string,
+    transform: Partial<LayerTransform>
+  ) => void;
   setLayerVisibility: (sceneId: string, layerId: string, visible: boolean) => void;
   reorderLayers: (sceneId: string, layerIds: string[]) => void;
 
   // Layout presets
   applyLayout: (layout: LayoutConfig) => void;
-  cycleSourceOrder: (direction?: 'forward' | 'backward') => void;
+  cycleSourceOrder: (direction?: "forward" | "backward") => void;
 
   // Lifecycle
   destroy: () => void;
@@ -105,18 +113,18 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     if (!sceneManager) return;
 
     unsubscribers = [
-      sceneManager.on('sceneCreated', syncState),
-      sceneManager.on('sceneDeleted', syncState),
-      sceneManager.on('sceneActivated', syncState),
-      sceneManager.on('layerAdded', syncState),
-      sceneManager.on('layerRemoved', syncState),
-      sceneManager.on('layerUpdated', syncState),
-      sceneManager.on('transitionStarted', syncState),
-      sceneManager.on('transitionCompleted', syncState),
-      sceneManager.on('statsUpdate', ({ stats }) => {
+      sceneManager.on("sceneCreated", syncState),
+      sceneManager.on("sceneDeleted", syncState),
+      sceneManager.on("sceneActivated", syncState),
+      sceneManager.on("layerAdded", syncState),
+      sceneManager.on("layerRemoved", syncState),
+      sceneManager.on("layerUpdated", syncState),
+      sceneManager.on("transitionStarted", syncState),
+      sceneManager.on("transitionCompleted", syncState),
+      sceneManager.on("statsUpdate", ({ stats }) => {
         store.update((state) => ({ ...state, stats }));
       }),
-      sceneManager.on('rendererChanged', ({ renderer }) => {
+      sceneManager.on("rendererChanged", ({ renderer }) => {
         store.update((state) => ({ ...state, rendererType: renderer }));
       }),
     ];
@@ -126,35 +134,38 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
 
   // Auto-enable if requested
   if (autoEnable && controller) {
-    console.log('[CompositorStore] Auto-enabling compositor...');
-    controller.enableCompositor(config).then(() => {
-      console.log('[CompositorStore] Compositor enabled successfully');
-      store.update((state) => ({ ...state, isEnabled: true }));
-      setupListeners();
-    }).catch((error) => {
-      console.error('[CompositorStore] Failed to enable compositor:', error);
-      store.update((state) => ({
-        ...state,
-        isEnabled: false,
-        isInitialized: false,
-      }));
-    });
+    console.log("[CompositorStore] Auto-enabling compositor...");
+    controller
+      .enableCompositor(config)
+      .then(() => {
+        console.log("[CompositorStore] Compositor enabled successfully");
+        store.update((state) => ({ ...state, isEnabled: true }));
+        setupListeners();
+      })
+      .catch((error) => {
+        console.error("[CompositorStore] Failed to enable compositor:", error);
+        store.update((state) => ({
+          ...state,
+          isEnabled: false,
+          isInitialized: false,
+        }));
+      });
   }
 
   // Actions
   async function enable(enableConfig?: Partial<CompositorConfig>): Promise<void> {
     if (!controller) {
-      console.warn('[CompositorStore] Cannot enable: no controller');
+      console.warn("[CompositorStore] Cannot enable: no controller");
       return;
     }
     try {
-      console.log('[CompositorStore] Enabling compositor...');
+      console.log("[CompositorStore] Enabling compositor...");
       await controller.enableCompositor(enableConfig || config);
-      console.log('[CompositorStore] Compositor enabled successfully');
+      console.log("[CompositorStore] Compositor enabled successfully");
       store.update((state) => ({ ...state, isEnabled: true }));
       setupListeners();
     } catch (error) {
-      console.error('[CompositorStore] Failed to enable compositor:', error);
+      console.error("[CompositorStore] Failed to enable compositor:", error);
       store.update((state) => ({
         ...state,
         isEnabled: false,
@@ -181,7 +192,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
   }
 
   // Scene management
-  function createScene(name: string, backgroundColor = '#000000'): Scene | null {
+  function createScene(name: string, backgroundColor = "#000000"): Scene | null {
     const sceneManager = controller?.getSceneManager();
     if (!sceneManager) return null;
     const scene = sceneManager.createScene(name, backgroundColor);
@@ -211,7 +222,11 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
   }
 
   // Layer management
-  function addLayer(sceneId: string, sourceId: string, transform?: Partial<LayerTransform>): Layer | null {
+  function addLayer(
+    sceneId: string,
+    sourceId: string,
+    transform?: Partial<LayerTransform>
+  ): Layer | null {
     const sceneManager = controller?.getSceneManager();
     if (!sceneManager) return null;
     const layer = sceneManager.addLayer(sceneId, sourceId, transform);
@@ -226,7 +241,11 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     syncState();
   }
 
-  function updateLayerTransform(sceneId: string, layerId: string, transform: Partial<LayerTransform>): void {
+  function updateLayerTransform(
+    sceneId: string,
+    layerId: string,
+    transform: Partial<LayerTransform>
+  ): void {
     const sceneManager = controller?.getSceneManager();
     if (!sceneManager) return;
     sceneManager.updateLayerTransform(sceneId, layerId, transform);
@@ -272,7 +291,7 @@ export function createCompositorStore(options: CreateCompositorStoreOptions): Co
     syncState();
   }
 
-  function cycleSourceOrder(direction: 'forward' | 'backward' = 'forward'): void {
+  function cycleSourceOrder(direction: "forward" | "backward" = "forward"): void {
     const sceneManager = controller?.getSceneManager();
     if (!sceneManager) return;
 

@@ -1,15 +1,15 @@
 # Fetch stream session/analytics data including hourly aggregates, quality metrics, and viewer sessions
 # Used for analytics expansion and session details
-query GetStreamSessions(
-  $streamId: ID!
-  $timeRange: TimeRangeInput
-  $first: Int = 50
-) {
+query GetStreamSessions($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 50) {
   analytics {
     usage {
       streaming {
         # Hourly connection aggregates (bandwidth, viewers per hour)
-        streamConnectionHourlyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+        streamConnectionHourlyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $first }
+        ) {
           edges {
             cursor
             node {
@@ -30,7 +30,11 @@ query GetStreamSessions(
     }
     lifecycle {
       # Individual viewer sessions (geo, quality, duration)
-      viewerSessionsConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+      viewerSessionsConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $first }
+      ) {
         edges {
           cursor
           node {

@@ -1,6 +1,6 @@
-import { forwardRef } from 'react'
-import { cn } from '@/lib/utils'
-import MarketingStack from '../layout/MarketingStack'
+import { forwardRef } from "react";
+import { cn } from "@/lib/utils";
+import MarketingStack from "../layout/MarketingStack";
 
 const HeadlineStack = forwardRef(
   (
@@ -10,30 +10,32 @@ const HeadlineStack = forwardRef(
       subtitle,
       kicker,
       actions,
-      actionsPlacement = 'stack',
-      align = 'left',
+      actionsPlacement = "stack",
+      align = "left",
       underline = true,
-      underlineAlign = 'auto',
+      underlineAlign = "auto",
       className,
       children,
       ...props
     },
     ref
   ) => {
-    const stackAlign = align === 'center' ? 'center' : 'start'
-    const resolvedUnderlineAlign = underlineAlign === 'auto' ? (stackAlign === 'center' ? 'center' : 'start') : underlineAlign
-    const inlineActions = Boolean(actionsPlacement === 'inline')
+    const stackAlign = align === "center" ? "center" : "start";
+    const resolvedUnderlineAlign =
+      underlineAlign === "auto" ? (stackAlign === "center" ? "center" : "start") : underlineAlign;
+    const inlineActions = Boolean(actionsPlacement === "inline");
 
-    const eyebrowNode = eyebrow ? <span className="headline-stack__eyebrow marketing-pill">{eyebrow}</span> : null
-    const titleNode = title ? <h2 className="headline-stack__title">{title}</h2> : null
-    const kickerNode = kicker ? <span className="headline-stack__kicker">{kicker}</span> : null
-    const subtitleNode = subtitle ? <p className="headline-stack__subtitle">{subtitle}</p> : null
+    const eyebrowNode = eyebrow ? (
+      <span className="headline-stack__eyebrow marketing-pill">{eyebrow}</span>
+    ) : null;
+    const titleNode = title ? <h2 className="headline-stack__title">{title}</h2> : null;
+    const kickerNode = kicker ? <span className="headline-stack__kicker">{kicker}</span> : null;
+    const subtitleNode = subtitle ? <p className="headline-stack__subtitle">{subtitle}</p> : null;
     const stackedActionsNode =
-      actions && !inlineActions ? <div className="headline-stack__actions">{actions}</div> : null
-    const inlineActionsNode =
-      inlineActions ? (
-        <div className="headline-stack__actions headline-stack__actions--inline">{actions}</div>
-      ) : null
+      actions && !inlineActions ? <div className="headline-stack__actions">{actions}</div> : null;
+    const inlineActionsNode = inlineActions ? (
+      <div className="headline-stack__actions headline-stack__actions--inline">{actions}</div>
+    ) : null;
 
     const copyContent = (
       <div className="headline-stack__copy">
@@ -41,19 +43,15 @@ const HeadlineStack = forwardRef(
         {titleNode}
         {kickerNode}
       </div>
-    )
+    );
 
     return (
       <MarketingStack
         ref={ref}
         align={stackAlign}
-        className={cn(
-          'headline-stack',
-          inlineActions && 'headline-stack--inline',
-          className
-        )}
+        className={cn("headline-stack", inlineActions && "headline-stack--inline", className)}
         data-align={align}
-        data-underline={underline ? 'true' : 'false'}
+        data-underline={underline ? "true" : "false"}
         data-underline-align={resolvedUnderlineAlign}
         {...props}
       >
@@ -75,10 +73,10 @@ const HeadlineStack = forwardRef(
           </>
         )}
       </MarketingStack>
-    )
+    );
   }
-)
+);
 
-HeadlineStack.displayName = 'HeadlineStack'
+HeadlineStack.displayName = "HeadlineStack";
 
-export default HeadlineStack
+export default HeadlineStack;

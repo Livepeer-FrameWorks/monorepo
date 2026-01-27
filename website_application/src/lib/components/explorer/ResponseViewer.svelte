@@ -16,7 +16,11 @@
     fieldDocs?: Array<{
       name: string;
       description?: string;
-      args?: Array<{ name: string; description?: string; type?: { name?: string; kind?: string; ofType?: { name?: string } } }>;
+      args?: Array<{
+        name: string;
+        description?: string;
+        type?: { name?: string; kind?: string; ofType?: { name?: string } };
+      }>;
       type?: { name?: string; kind?: string; ofType?: { name?: string } };
     }>;
     focusDoc?: {
@@ -128,7 +132,9 @@
                 <div class="text-[11px] text-muted-foreground mb-1">Enum values</div>
                 <div class="flex flex-wrap gap-1">
                   {#each focusDoc.enumValues as enumVal (enumVal.name)}
-                    <span class="text-[10px] bg-muted px-1.5 py-0.5 border border-border/40 font-mono">
+                    <span
+                      class="text-[10px] bg-muted px-1.5 py-0.5 border border-border/40 font-mono"
+                    >
                       {enumVal.name}
                     </span>
                   {/each}
@@ -156,13 +162,17 @@
                   <span class="text-muted-foreground">{formatTypeString(field.type)}</span>
                 </div>
                 {#if field.description}
-                  <div class="text-[11px] text-muted-foreground mt-0.5 break-words">{field.description}</div>
+                  <div class="text-[11px] text-muted-foreground mt-0.5 break-words">
+                    {field.description}
+                  </div>
                 {/if}
                 {#if field.args && field.args.length > 0}
                   <div class="text-[10px] text-muted-foreground mt-0.5 break-words">
-                    Args: {field.args.map((arg) => `${arg.name}: ${formatTypeString(arg.type)}`).join(", ")}
+                    Args: {field.args
+                      .map((arg) => `${arg.name}: ${formatTypeString(arg.type)}`)
+                      .join(", ")}
                   </div>
-                  {#each field.args.filter(a => a.description) as arg (arg.name)}
+                  {#each field.args.filter((a) => a.description) as arg (arg.name)}
                     <div class="text-[10px] text-muted-foreground ml-2">
                       <span class="font-mono">{arg.name}</span>: {arg.description}
                     </div>
@@ -200,19 +210,16 @@
       {:else if response}
         <div class="relative h-full min-h-[300px] min-w-0 overflow-auto">
           <pre
-            class="text-sm p-4 text-foreground font-mono whitespace-pre-wrap break-words"
-          >{#if response.error}{JSON.stringify(
+            class="text-sm p-4 text-foreground font-mono whitespace-pre-wrap break-words">{#if response.error}{JSON.stringify(
                 response.error,
                 null,
-                2,
+                2
               )}{:else}{response.data}{/if}</pre>
           <button
             class="absolute top-2 right-2 text-xs border border-border/50 px-2 py-1 hover:bg-muted/50 transition-colors bg-background/80 backdrop-blur-sm"
             onclick={() =>
               onCopy(
-                response.error
-                  ? JSON.stringify(response.error, null, 2)
-                  : response.data || "",
+                response.error ? JSON.stringify(response.error, null, 2) : response.data || ""
               )}
           >
             Copy
@@ -221,12 +228,8 @@
       {:else}
         <div class="flex items-center justify-center h-full min-h-[300px]">
           <div class="text-center">
-            <div class="text-foreground font-medium mb-2">
-              GraphQL Explorer
-            </div>
-            <div class="text-muted-foreground text-sm">
-              Execute a query to see results here
-            </div>
+            <div class="text-foreground font-medium mb-2">GraphQL Explorer</div>
+            <div class="text-muted-foreground text-sm">Execute a query to see results here</div>
           </div>
         </div>
       {/if}

@@ -13,11 +13,13 @@ Connecting your edge node is the final step in the setup process. Enrollment est
 You need a bootstrap token from an admin, or from your tenant's dashboard (owner).
 
 **Via Dashboard (tenant owner):**
+
 1. Go to **Infrastructure → Network**
 2. Click **Create Private Cluster**
 3. Copy the bootstrap token shown in the modal
 
 **Via CLI (admin):**
+
 ```bash
 frameworks admin bootstrap-tokens create \
   --kind edge_node \
@@ -45,6 +47,7 @@ frameworks edge enroll --dir /opt/frameworks-edge
 ```
 
 This:
+
 1. Starts the MistServer, Helmsman, and Caddy containers
 2. Waits for HTTPS to become available
 3. Helmsman connects to Foghorn (gRPC) and sends the enrollment token
@@ -61,6 +64,7 @@ frameworks edge status
 ```
 
 This shows:
+
 - **Docker container status** for MistServer, Helmsman, and edge-proxy
 - **HTTPS health check** against your configured `EDGE_DOMAIN`
 
@@ -76,6 +80,7 @@ Once enrolled, Foghorn (the load balancer) knows about your node. When a viewer 
 4. **Redirect** sends the viewer to the best node (possibly yours)
 
 Your node will receive traffic when:
+
 - A stream is ingesting to your node
 - Viewers are geographically closer to you than other edges
 - Other edges are overloaded
@@ -85,6 +90,7 @@ Your node will receive traffic when:
 Streamers can push directly to your node instead of the default ingest. Direct ingest requires MistServer ports to be exposed on the host; the default edge template only maps 80/443.
 
 Open/forward as needed:
+
 - **1935/tcp** (RTMP ingest)
 - **8889/udp** (SRT ingest)
 - **5554/tcp** (RTSP)
@@ -98,6 +104,7 @@ rtmp://stream.yourdomain.com:1935/live/{stream-key}
 ```
 
 Or use the network's default ingest and let Foghorn route:
+
 ```
 %RTMP_URL%/{stream-key}
 ```
@@ -117,6 +124,7 @@ HELMSMAN_CAP_PROCESSING=true # Can transcode
 ```
 
 Disable capabilities you don't want:
+
 ```bash
 # Viewer-only node (no ingest)
 HELMSMAN_CAP_INGEST=false

@@ -59,6 +59,7 @@ type ServiceHandler interface {
 Route: `POST /webhooks/:service/:provider`
 
 Examples:
+
 - `POST /webhooks/billing/stripe` → Purser gRPC ProcessWebhook
 - `POST /webhooks/billing/mollie` → Purser gRPC ProcessWebhook
 
@@ -104,6 +105,7 @@ func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookReques
 1. **Define WebhookService in Proto**
 
    Add to your service's proto file:
+
    ```protobuf
    import "shared.proto";
 
@@ -115,6 +117,7 @@ func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookReques
 2. **Implement ProcessWebhook**
 
    In your gRPC server:
+
    ```go
    func (s *MyServer) ProcessWebhook(ctx context.Context, req *pb.WebhookRequest) (*pb.WebhookResponse, error) {
        // Verify signature using req.Headers and req.Body
@@ -126,6 +129,7 @@ func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookReques
 3. **Register with Gateway**
 
    In `api_gateway/cmd/bridge/main.go`:
+
    ```go
    webhookRouter.RegisterService("myservice", serviceClients.MyService)
    ```
@@ -139,9 +143,11 @@ func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookReques
 ### Stripe (`/webhooks/billing/stripe`)
 
 Headers used for signature verification:
+
 - `Stripe-Signature`: HMAC signature
 
 Events handled:
+
 - `checkout.session.completed` - Subscription created
 - `customer.subscription.*` - Status changes/cancellations
 - `invoice.paid` - Payment confirmed
@@ -152,9 +158,11 @@ Events handled:
 ### Mollie (`/webhooks/billing/mollie`)
 
 Mollie doesn't sign webhooks by default. Verification is done by:
+
 1. Fetching the payment/subscription from Mollie API
 
 Events handled:
+
 - Payment status changes (paid, failed, expired)
 - Subscription status changes
 - Mandate changes

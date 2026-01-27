@@ -66,16 +66,28 @@
     flex-shrink: 0;
   }
 
-  .mission-pillars__entry[data-tone='green'] .mission-pillars__dot {
-    background: linear-gradient(135deg, hsl(var(--brand-green)), color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%));
+  .mission-pillars__entry[data-tone="green"] .mission-pillars__dot {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-green)),
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+    );
   }
 
-  .mission-pillars__entry[data-tone='yellow'] .mission-pillars__dot {
-    background: linear-gradient(135deg, hsl(var(--brand-yellow)), color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%));
+  .mission-pillars__entry[data-tone="yellow"] .mission-pillars__dot {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-yellow)),
+      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%)
+    );
   }
 
-  .mission-pillars__entry[data-tone='purple'] .mission-pillars__dot {
-    background: linear-gradient(135deg, hsl(var(--brand-purple)), color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%));
+  .mission-pillars__entry[data-tone="purple"] .mission-pillars__dot {
+    background: linear-gradient(
+      135deg,
+      hsl(var(--brand-purple)),
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+    );
   }
 
   .mission-pillars__body {
@@ -202,14 +214,19 @@
   }
 
   .about-hero .marketing-hero__description::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 50%;
     bottom: 0;
     width: clamp(6rem, 26vw, 11rem);
     height: 3px;
     border-radius: 999px;
-    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--brand-green)));
+    background: linear-gradient(
+      90deg,
+      hsl(var(--primary)),
+      hsl(var(--accent)),
+      hsl(var(--brand-green))
+    );
     box-shadow: 0 0 18px hsl(var(--accent) / 0.35);
     transform: translateX(-50%);
   }

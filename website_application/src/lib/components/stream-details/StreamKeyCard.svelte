@@ -22,9 +22,7 @@
     <div>
       <span class="text-sm text-muted-foreground">Primary Key</span>
       <div class="flex items-center space-x-2 mt-1">
-        <code
-          class="flex-1 min-w-0 px-3 py-2 text-xs font-mono text-info bg-muted/20 truncate"
-        >
+        <code class="flex-1 min-w-0 px-3 py-2 text-xs font-mono text-info bg-muted/20 truncate">
           {stream?.streamKey || "Not set"}
         </code>
         <button

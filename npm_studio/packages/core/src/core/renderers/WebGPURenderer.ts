@@ -30,8 +30,8 @@ import type {
   FilterConfig,
   RendererType,
   RendererStats,
-} from '../../types';
-import { registerRenderer, type CompositorRenderer } from './index';
+} from "../../types";
+import { registerRenderer, type CompositorRenderer } from "./index";
 
 // ============================================================================
 // WGSL Shaders
@@ -166,8 +166,8 @@ fn main(@location(0) texCoord: vec2f) -> @location(0) vec4f {
 
 function checkWebGPUSupport(): boolean {
   // Check if we're in a context where navigator exists and has gpu
-  if (typeof navigator === 'undefined') return false;
-  return 'gpu' in navigator;
+  if (typeof navigator === "undefined") return false;
+  return "gpu" in navigator;
 }
 
 // ============================================================================
@@ -175,7 +175,7 @@ function checkWebGPUSupport(): boolean {
 // ============================================================================
 
 export class WebGPURenderer implements CompositorRenderer {
-  readonly type: RendererType = 'webgpu';
+  readonly type: RendererType = "webgpu";
   readonly isSupported = checkWebGPUSupport();
 
   private device: GPUDevice | null = null;
@@ -209,7 +209,7 @@ export class WebGPURenderer implements CompositorRenderer {
 
   async init(canvas: OffscreenCanvas, config: CompositorConfig): Promise<void> {
     if (!this.isSupported) {
-      throw new Error('WebGPU is not supported in this environment');
+      throw new Error("WebGPU is not supported in this environment");
     }
 
     this.canvas = canvas;
@@ -217,19 +217,19 @@ export class WebGPURenderer implements CompositorRenderer {
 
     // Request adapter and device
     const adapter = await navigator.gpu.requestAdapter({
-      powerPreference: 'high-performance',
+      powerPreference: "high-performance",
     });
 
     if (!adapter) {
-      throw new Error('Failed to get WebGPU adapter');
+      throw new Error("Failed to get WebGPU adapter");
     }
 
     this.device = await adapter.requestDevice();
 
     // Configure canvas context
-    this.context = canvas.getContext('webgpu') as GPUCanvasContext;
+    this.context = canvas.getContext("webgpu") as GPUCanvasContext;
     if (!this.context) {
-      throw new Error('Failed to get WebGPU context');
+      throw new Error("Failed to get WebGPU context");
     }
 
     const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
@@ -237,7 +237,7 @@ export class WebGPURenderer implements CompositorRenderer {
     this.context.configure({
       device: this.device,
       format: presentationFormat,
-      alphaMode: 'premultiplied',
+      alphaMode: "premultiplied",
     });
 
     // Create render pipeline
@@ -248,9 +248,9 @@ export class WebGPURenderer implements CompositorRenderer {
 
     // Create sampler
     this.sampler = this.device.createSampler({
-      magFilter: 'linear',
-      minFilter: 'linear',
-      mipmapFilter: 'linear',
+      magFilter: "linear",
+      minFilter: "linear",
+      mipmapFilter: "linear",
     });
 
     this.lastFrameTime = performance.now();
@@ -273,17 +273,17 @@ export class WebGPURenderer implements CompositorRenderer {
         {
           binding: 0,
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: 'uniform' },
+          buffer: { type: "uniform" },
         },
         {
           binding: 1,
           visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: 'filtering' },
+          sampler: { type: "filtering" },
         },
         {
           binding: 2,
           visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float' },
+          texture: { sampleType: "float" },
         },
       ],
     });
@@ -296,40 +296,40 @@ export class WebGPURenderer implements CompositorRenderer {
       layout: pipelineLayout,
       vertex: {
         module: vertexModule,
-        entryPoint: 'main',
+        entryPoint: "main",
         buffers: [
           {
             arrayStride: 16, // 2 floats position + 2 floats texCoord
             attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x2' },
-              { shaderLocation: 1, offset: 8, format: 'float32x2' },
+              { shaderLocation: 0, offset: 0, format: "float32x2" },
+              { shaderLocation: 1, offset: 8, format: "float32x2" },
             ],
           },
         ],
       },
       fragment: {
         module: fragmentModule,
-        entryPoint: 'main',
+        entryPoint: "main",
         targets: [
           {
             format,
             blend: {
               color: {
-                srcFactor: 'src-alpha',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
+                srcFactor: "src-alpha",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
               },
               alpha: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add",
               },
             },
           },
         ],
       },
       primitive: {
-        topology: 'triangle-list',
+        topology: "triangle-list",
       },
     });
   }
@@ -381,16 +381,16 @@ export class WebGPURenderer implements CompositorRenderer {
       colorAttachments: [
         {
           view: textureView,
-          clearValue: this.parseColor(scene.backgroundColor || '#000000'),
-          loadOp: 'clear',
-          storeOp: 'store',
+          clearValue: this.parseColor(scene.backgroundColor || "#000000"),
+          loadOp: "clear",
+          storeOp: "store",
         },
       ],
     });
 
     renderPass.setPipeline(this.renderPipeline);
     renderPass.setVertexBuffer(0, this.vertexBuffer!);
-    renderPass.setIndexBuffer(this.indexBuffer!, 'uint16');
+    renderPass.setIndexBuffer(this.indexBuffer!, "uint16");
 
     // Sort and render layers
     const visibleLayers = scene.layers
@@ -423,7 +423,7 @@ export class WebGPURenderer implements CompositorRenderer {
       this.context.configure({
         device: this.device,
         format: this.presentationFormat,
-        alphaMode: 'premultiplied',
+        alphaMode: "premultiplied",
       });
     }
   }
@@ -432,8 +432,8 @@ export class WebGPURenderer implements CompositorRenderer {
     if (!this.device) return;
 
     for (const [sourceId, frame] of frames) {
-      const width = 'displayWidth' in frame ? frame.displayWidth : frame.width;
-      const height = 'displayHeight' in frame ? frame.displayHeight : frame.height;
+      const width = "displayWidth" in frame ? frame.displayWidth : frame.width;
+      const height = "displayHeight" in frame ? frame.displayHeight : frame.height;
 
       let texture = this.textures.get(sourceId);
 
@@ -462,7 +462,7 @@ export class WebGPURenderer implements CompositorRenderer {
 
         texture = this.device.createTexture({
           size: { width, height },
-          format: 'rgba8unorm',
+          format: "rgba8unorm",
           usage:
             GPUTextureUsage.TEXTURE_BINDING |
             GPUTextureUsage.COPY_DST |
@@ -533,7 +533,7 @@ export class WebGPURenderer implements CompositorRenderer {
     if (!uniformBuffer) return;
 
     const { x, y, width, height, opacity, rotation, crop } = layer.transform;
-    const scalingMode = layer.scalingMode || 'letterbox';
+    const scalingMode = layer.scalingMode || "letterbox";
 
     // Get source texture dimensions for aspect ratio
     const texture = this.textures.get(layer.sourceId);
@@ -569,11 +569,11 @@ export class WebGPURenderer implements CompositorRenderer {
     let uvCropBottom = manualCropBottom;
 
     switch (scalingMode) {
-      case 'stretch':
+      case "stretch":
         // No changes - stretch to fill, use only manual crop
         break;
 
-      case 'letterbox': {
+      case "letterbox": {
         // Fit source within destination, preserving aspect ratio
         // No additional UV crop needed - we just resize the quad
         let newWidth: number, newHeight: number;
@@ -596,7 +596,7 @@ export class WebGPURenderer implements CompositorRenderer {
         break;
       }
 
-      case 'crop': {
+      case "crop": {
         // Fill destination completely, crop source overflow via UV coordinates
         // Match WebGL's calculation exactly: work in pixel space, divide by full texture size
 
@@ -698,8 +698,8 @@ export class WebGPURenderer implements CompositorRenderer {
         {
           view: textureView,
           clearValue: { r: 0, g: 0, b: 0, a: 1 },
-          loadOp: 'clear',
-          storeOp: 'store',
+          loadOp: "clear",
+          storeOp: "store",
         },
       ],
     });
@@ -729,12 +729,12 @@ export class WebGPURenderer implements CompositorRenderer {
 
     const texture = this.device.createTexture({
       size: { width: this.config.width, height: this.config.height },
-      format: 'rgba8unorm',
+      format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
 
     // For cut/instant, just show target
-    if (type === 'cut' || p >= 1) {
+    if (type === "cut" || p >= 1) {
       this.device.queue.copyExternalImageToTexture(
         { source: to },
         { texture },
@@ -762,7 +762,7 @@ export class WebGPURenderer implements CompositorRenderer {
     // WebGPU filters would require compute shaders
     // This is a future enhancement
     console.warn(
-      '[WebGPURenderer] Filter effects not yet implemented. Use WebGL renderer for filters.'
+      "[WebGPURenderer] Filter effects not yet implemented. Use WebGL renderer for filters."
     );
   }
 
@@ -820,4 +820,4 @@ export class WebGPURenderer implements CompositorRenderer {
 }
 
 // Register this renderer with the factory
-registerRenderer('webgpu', WebGPURenderer);
+registerRenderer("webgpu", WebGPURenderer);

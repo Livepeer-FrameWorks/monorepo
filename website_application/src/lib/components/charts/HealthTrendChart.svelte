@@ -32,7 +32,7 @@
     timestamp: string;
     bufferHealth?: number | null;
     bitrate?: number | null;
-    packetLoss?: number | null;  // 0.0-1.0 ratio
+    packetLoss?: number | null; // 0.0-1.0 ratio
   }
 
   interface Props {
@@ -67,8 +67,7 @@
 
     // Sort data by timestamp
     const sortedData = [...data].sort(
-      (a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
     const datasets: ChartConfiguration<"line">["data"]["datasets"] = [];
@@ -76,9 +75,7 @@
     if (showBufferHealth) {
       datasets.push({
         label: "Buffer Health (%)",
-        data: sortedData.map((d) =>
-          d.bufferHealth != null ? d.bufferHealth * 100 : null
-        ),
+        data: sortedData.map((d) => (d.bufferHealth != null ? d.bufferHealth * 100 : null)),
         borderColor: "rgb(34, 197, 94)", // green
         backgroundColor: "rgba(34, 197, 94, 0.1)",
         fill: true,
@@ -93,8 +90,8 @@
     if (showBitrate) {
       datasets.push({
         label: "Bitrate (Mbps)",
-        data: sortedData.map((d) =>
-          d.bitrate != null ? d.bitrate / 1000 : null  // bitrate stored in kbps
+        data: sortedData.map(
+          (d) => (d.bitrate != null ? d.bitrate / 1000 : null) // bitrate stored in kbps
         ),
         borderColor: "rgb(59, 130, 246)", // blue
         backgroundColor: "transparent",
@@ -110,8 +107,8 @@
     if (showPacketLoss) {
       datasets.push({
         label: "Packet Loss (%)",
-        data: sortedData.map((d) =>
-          d.packetLoss != null ? d.packetLoss * 100 : null  // 0-1 → 0-100%
+        data: sortedData.map(
+          (d) => (d.packetLoss != null ? d.packetLoss * 100 : null) // 0-1 → 0-100%
         ),
         borderColor: "rgb(239, 68, 68)", // red
         backgroundColor: "transparent",
@@ -247,7 +244,7 @@
             display: showPacketLoss,
             position: "right",
             min: 0,
-            max: 5,  // 0-5% scale (packet loss rarely exceeds this)
+            max: 5, // 0-5% scale (packet loss rarely exceeds this)
             grid: {
               drawOnChartArea: false,
             },

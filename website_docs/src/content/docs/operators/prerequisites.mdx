@@ -5,32 +5,37 @@ sidebar:
   order: 3
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { Steps } from "@astrojs/starlight/components";
 
 Before you fire up the CLI, let's make sure your environment is ready. FrameWorks has specific requirements for network topology and access control to function correctly.
 
 ## Hardware & OS Requirements
 
 ### Minimum Development Requirements
+
 For testing or small-scale deployments, you can run a consolidated stack on a single node:
+
 - **Single Node:** 4+ cores, 16GB RAM, 100GB SSD.
 - **Note:** Performance will be limited for high-concurrency streaming or heavy analytics loads.
 
 ### Hardware (recommended)
 
 **Central Tier:**
+
 - CPU: 8+ cores
 - RAM: 32GB+ (64GB recommended if running database services on the same node)
 - Disk: 500GB+ SSD
 - Network: 1Gbps+ connectivity
 
 **Regional Tier:**
+
 - CPU: 4+ cores
 - RAM: 16GB+
 - Disk: 250GB+ SSD
 - Network: 1Gbps+ connectivity
 
 **Edge Tier:**
+
 - CPU: 8+ cores
 - RAM: 16GB+
 - Disk: 1TB+ SSD (for recordings)
@@ -39,14 +44,17 @@ For testing or small-scale deployments, you can run a consolidated stack on a si
 ### Required Software
 
 **Docker Deployment:**
+
 - Docker Engine (24.0+) and Docker Compose (2.20+) for containerized service deployment.
 
 **Native Deployment:**
+
 - `systemd` for service management.
 - PostgreSQL client tools (or Postgres-compatible).
 - Basic build tools (GCC, Make, Git) for native compilation.
 
 **Both:**
+
 - SSH server with key-based authentication.
 - `curl`, `wget`, `tar`, `gzip`.
 - `netstat` or `ss` for network diagnostics.
@@ -120,6 +128,7 @@ Host edge-eu-01
 ### User Permissions
 
 The CLI user needs sudo privileges for:
+
 - Installing packages
 - Managing systemd services
 - Configuring network settings
@@ -138,11 +147,13 @@ admin ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker
 FrameWorks requires several external services. See [External Services](/operators/external-services) for detailed setup guides.
 
 **Required:**
+
 - Cloudflare (required if using Navigator-managed DNS; self-hosted Anycast DNS planned)
 - SSL/TLS certificates (ACME/Let's Encrypt managed via Navigator/Caddy, or bring your own)
 - SMTP provider (email notifications)
 
 **Optional:**
+
 - Stripe (billing)
 - MaxMind GeoIP (geographic routing)
 

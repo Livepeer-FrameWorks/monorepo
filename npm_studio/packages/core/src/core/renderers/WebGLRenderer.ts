@@ -25,8 +25,8 @@ import type {
   FilterConfig,
   RendererType,
   RendererStats,
-} from '../../types';
-import { registerRenderer, type CompositorRenderer } from './index';
+} from "../../types";
+import { registerRenderer, type CompositorRenderer } from "./index";
 
 // ============================================================================
 // Shader Sources
@@ -208,14 +208,14 @@ void main() {
 
 function checkWebGLSupport(): boolean {
   try {
-    return typeof WebGL2RenderingContext !== 'undefined';
+    return typeof WebGL2RenderingContext !== "undefined";
   } catch {
     return false;
   }
 }
 
 export class WebGLRenderer implements CompositorRenderer {
-  readonly type: RendererType = 'webgl';
+  readonly type: RendererType = "webgl";
   readonly isSupported = checkWebGLSupport();
 
   private gl!: WebGL2RenderingContext;
@@ -263,26 +263,26 @@ export class WebGLRenderer implements CompositorRenderer {
 
   async init(canvas: OffscreenCanvas, config: CompositorConfig): Promise<void> {
     if (!this.isSupported) {
-      throw new Error('WebGL2 is not supported in this environment');
+      throw new Error("WebGL2 is not supported in this environment");
     }
 
     this.canvas = canvas;
     this.config = config;
 
     // Create WebGL2 context
-    const gl = canvas.getContext('webgl2', {
+    const gl = canvas.getContext("webgl2", {
       alpha: false,
       antialias: false,
       depth: false,
       stencil: false,
       premultipliedAlpha: true,
       preserveDrawingBuffer: false,
-      powerPreference: 'high-performance',
+      powerPreference: "high-performance",
       desynchronized: true, // Lower latency
     });
 
     if (!gl) {
-      throw new Error('Failed to create WebGL2 context');
+      throw new Error("Failed to create WebGL2 context");
     }
 
     this.gl = gl;
@@ -293,35 +293,38 @@ export class WebGLRenderer implements CompositorRenderer {
 
     // Compile shaders and create programs
     this.layerProgram = this.createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
-    this.transitionProgram = this.createProgram(TRANSITION_VERTEX_SHADER, TRANSITION_FRAGMENT_SHADER);
+    this.transitionProgram = this.createProgram(
+      TRANSITION_VERTEX_SHADER,
+      TRANSITION_FRAGMENT_SHADER
+    );
 
     // Get uniform locations for layer program
     this.layerUniforms = {
-      resolution: gl.getUniformLocation(this.layerProgram, 'u_resolution')!,
-      position: gl.getUniformLocation(this.layerProgram, 'u_position')!,
-      size: gl.getUniformLocation(this.layerProgram, 'u_size')!,
-      rotation: gl.getUniformLocation(this.layerProgram, 'u_rotation')!,
-      crop: gl.getUniformLocation(this.layerProgram, 'u_crop')!,
-      texture: gl.getUniformLocation(this.layerProgram, 'u_texture')!,
-      opacity: gl.getUniformLocation(this.layerProgram, 'u_opacity')!,
-      borderRadius: gl.getUniformLocation(this.layerProgram, 'u_borderRadius')!,
-      filterType: gl.getUniformLocation(this.layerProgram, 'u_filterType')!,
-      filterStrength: gl.getUniformLocation(this.layerProgram, 'u_filterStrength')!,
-      colorMatrix: gl.getUniformLocation(this.layerProgram, 'u_colorMatrix')!,
+      resolution: gl.getUniformLocation(this.layerProgram, "u_resolution")!,
+      position: gl.getUniformLocation(this.layerProgram, "u_position")!,
+      size: gl.getUniformLocation(this.layerProgram, "u_size")!,
+      rotation: gl.getUniformLocation(this.layerProgram, "u_rotation")!,
+      crop: gl.getUniformLocation(this.layerProgram, "u_crop")!,
+      texture: gl.getUniformLocation(this.layerProgram, "u_texture")!,
+      opacity: gl.getUniformLocation(this.layerProgram, "u_opacity")!,
+      borderRadius: gl.getUniformLocation(this.layerProgram, "u_borderRadius")!,
+      filterType: gl.getUniformLocation(this.layerProgram, "u_filterType")!,
+      filterStrength: gl.getUniformLocation(this.layerProgram, "u_filterStrength")!,
+      colorMatrix: gl.getUniformLocation(this.layerProgram, "u_colorMatrix")!,
     };
 
     // Get uniform locations for transition program
     this.transitionUniforms = {
-      texture: gl.getUniformLocation(this.transitionProgram, 'u_texture')!,
-      opacity: gl.getUniformLocation(this.transitionProgram, 'u_opacity')!,
-      offset: gl.getUniformLocation(this.transitionProgram, 'u_offset')!,
+      texture: gl.getUniformLocation(this.transitionProgram, "u_texture")!,
+      opacity: gl.getUniformLocation(this.transitionProgram, "u_opacity")!,
+      offset: gl.getUniformLocation(this.transitionProgram, "u_offset")!,
     };
 
     // Set viewport
     gl.viewport(0, 0, config.width, config.height);
 
     this.lastFrameTime = performance.now();
-    console.log('[WebGLRenderer] Initialized with raw WebGL2');
+    console.log("[WebGLRenderer] Initialized with raw WebGL2");
   }
 
   private createProgram(vertexSource: string, fragmentSource: string): WebGLProgram {
@@ -379,7 +382,7 @@ export class WebGLRenderer implements CompositorRenderer {
     this.updateTextures(frames);
 
     // Clear with background color
-    const bgColor = this.parseColor(scene.backgroundColor || '#000000');
+    const bgColor = this.parseColor(scene.backgroundColor || "#000000");
     gl.clearColor(bgColor.r, bgColor.g, bgColor.b, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -418,8 +421,8 @@ export class WebGLRenderer implements CompositorRenderer {
 
     for (const [sourceId, frame] of frames) {
       let texture = this.textures.get(sourceId);
-      const width = 'displayWidth' in frame ? frame.displayWidth : frame.width;
-      const height = 'displayHeight' in frame ? frame.displayHeight : frame.height;
+      const width = "displayWidth" in frame ? frame.displayWidth : frame.width;
+      const height = "displayHeight" in frame ? frame.displayHeight : frame.height;
       const cached = this.textureCache.get(sourceId);
 
       if (!texture) {
@@ -454,7 +457,7 @@ export class WebGLRenderer implements CompositorRenderer {
   private renderLayer(layer: Layer, texture: WebGLTexture): void {
     const gl = this.gl;
     const { x, y, width, height, opacity, rotation, borderRadius, crop } = layer.transform;
-    const scalingMode = layer.scalingMode || 'letterbox';
+    const scalingMode = layer.scalingMode || "letterbox";
 
     // Get texture dimensions for aspect ratio calculation
     const textureInfo = this.textureCache.get(layer.sourceId);
@@ -481,11 +484,11 @@ export class WebGLRenderer implements CompositorRenderer {
     let finalCropBottom = crop.bottom;
 
     switch (scalingMode) {
-      case 'stretch':
+      case "stretch":
         // No changes - stretch to fill
         break;
 
-      case 'letterbox': {
+      case "letterbox": {
         // Fit source within destination, preserving aspect ratio
         let newWidth: number, newHeight: number;
 
@@ -507,7 +510,7 @@ export class WebGLRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'crop': {
+      case "crop": {
         // Fill destination, preserving aspect ratio, crop source overflow
         if (srcAspect > destAspect) {
           // Source is wider - crop sides
@@ -535,7 +538,13 @@ export class WebGLRenderer implements CompositorRenderer {
     gl.uniform2f(this.layerUniforms.position, finalX, finalY);
     gl.uniform2f(this.layerUniforms.size, finalWidth, finalHeight);
     gl.uniform1f(this.layerUniforms.rotation, (rotation * Math.PI) / 180);
-    gl.uniform4f(this.layerUniforms.crop, finalCropLeft, finalCropTop, finalCropRight, finalCropBottom);
+    gl.uniform4f(
+      this.layerUniforms.crop,
+      finalCropLeft,
+      finalCropTop,
+      finalCropRight,
+      finalCropBottom
+    );
     gl.uniform1f(this.layerUniforms.opacity, Math.max(0, Math.min(1, opacity)));
     gl.uniform1f(this.layerUniforms.borderRadius, borderRadius);
 
@@ -555,7 +564,7 @@ export class WebGLRenderer implements CompositorRenderer {
     const gl = this.gl;
 
     switch (filter.type) {
-      case 'colorMatrix': {
+      case "colorMatrix": {
         gl.uniform1i(this.layerUniforms.filterType, 2);
         // Build color matrix from filter settings
         const b = filter.brightness ?? 1;
@@ -568,29 +577,43 @@ export class WebGLRenderer implements CompositorRenderer {
         const sb = (1 - s) * 0.114;
 
         const matrix = new Float32Array([
-          (sr + s) * c * b, sg * c * b, sb * c * b, 0,
-          sr * c * b, (sg + s) * c * b, sb * c * b, 0,
-          sr * c * b, sg * c * b, (sb + s) * c * b, 0,
-          0, 0, 0, 1,
+          (sr + s) * c * b,
+          sg * c * b,
+          sb * c * b,
+          0,
+          sr * c * b,
+          (sg + s) * c * b,
+          sb * c * b,
+          0,
+          sr * c * b,
+          sg * c * b,
+          (sb + s) * c * b,
+          0,
+          0,
+          0,
+          0,
+          1,
         ]);
         gl.uniformMatrix4fv(this.layerUniforms.colorMatrix, false, matrix);
         break;
       }
 
-      case 'grayscale':
+      case "grayscale":
         gl.uniform1i(this.layerUniforms.filterType, 3);
         gl.uniform1f(this.layerUniforms.filterStrength, filter.strength ?? 1);
         break;
 
-      case 'sepia':
+      case "sepia":
         gl.uniform1i(this.layerUniforms.filterType, 4);
         gl.uniform1f(this.layerUniforms.filterStrength, filter.strength ?? 1);
         break;
 
-      case 'blur':
+      case "blur":
         // Blur would require multi-pass rendering with framebuffers
         // For now, just log a warning
-        console.warn('[WebGLRenderer] Blur filter requires multi-pass rendering, not yet implemented');
+        console.warn(
+          "[WebGLRenderer] Blur filter requires multi-pass rendering, not yet implemented"
+        );
         gl.uniform1i(this.layerUniforms.filterType, 0);
         break;
 
@@ -620,7 +643,7 @@ export class WebGLRenderer implements CompositorRenderer {
     const toTexture = this.createTempTexture(to);
 
     switch (type) {
-      case 'fade':
+      case "fade":
         // Draw "from" at decreasing opacity
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, fromTexture);
@@ -635,7 +658,7 @@ export class WebGLRenderer implements CompositorRenderer {
         gl.drawArrays(gl.TRIANGLES, 0, 6);
         break;
 
-      case 'slide-left': {
+      case "slide-left": {
         const offset = p;
         // Draw "from" sliding out
         gl.bindTexture(gl.TEXTURE_2D, fromTexture);
@@ -650,7 +673,7 @@ export class WebGLRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'slide-right': {
+      case "slide-right": {
         const offset = p;
         gl.bindTexture(gl.TEXTURE_2D, fromTexture);
         gl.uniform1f(this.transitionUniforms.opacity, 1);
@@ -663,7 +686,7 @@ export class WebGLRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'slide-up': {
+      case "slide-up": {
         const offset = p;
         gl.bindTexture(gl.TEXTURE_2D, fromTexture);
         gl.uniform1f(this.transitionUniforms.opacity, 1);
@@ -676,7 +699,7 @@ export class WebGLRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'slide-down': {
+      case "slide-down": {
         const offset = p;
         gl.bindTexture(gl.TEXTURE_2D, fromTexture);
         gl.uniform1f(this.transitionUniforms.opacity, 1);
@@ -689,7 +712,7 @@ export class WebGLRenderer implements CompositorRenderer {
         break;
       }
 
-      case 'cut':
+      case "cut":
       default:
         // Just draw the target
         gl.bindTexture(gl.TEXTURE_2D, toTexture);
@@ -735,9 +758,11 @@ export class WebGLRenderer implements CompositorRenderer {
 
   private parseColor(hex: string): { r: number; g: number; b: number } {
     // Parse hex color like '#000000' or '#000'
-    let r = 0, g = 0, b = 0;
+    let r = 0,
+      g = 0,
+      b = 0;
 
-    if (hex.startsWith('#')) {
+    if (hex.startsWith("#")) {
       hex = hex.slice(1);
     }
 
@@ -795,7 +820,7 @@ export class WebGLRenderer implements CompositorRenderer {
     this.filterConfigs.clear();
 
     // Lose context to free GPU resources
-    const ext = gl.getExtension('WEBGL_lose_context');
+    const ext = gl.getExtension("WEBGL_lose_context");
     if (ext) {
       ext.loseContext();
     }
@@ -803,4 +828,4 @@ export class WebGLRenderer implements CompositorRenderer {
 }
 
 // Register this renderer with the factory
-registerRenderer('webgl', WebGLRenderer);
+registerRenderer("webgl", WebGLRenderer);

@@ -1,5 +1,5 @@
-import type { PlaybackQuality, QualityThresholds } from '../types';
-import { TimerManager } from './TimerManager';
+import type { PlaybackQuality, QualityThresholds } from "../types";
+import { TimerManager } from "./TimerManager";
 
 /**
  * Default quality thresholds
@@ -19,21 +19,21 @@ const ROLLING_WINDOW_SIZE = 20;
  * Playback score history entry (for MistPlayer-style 0-2.0 score)
  */
 interface PlaybackScoreEntry {
-  clock: number;  // Wall clock time in seconds
-  video: number;  // Video currentTime
-  score: number;  // Calculated score for this sample
+  clock: number; // Wall clock time in seconds
+  video: number; // Video currentTime
+  score: number; // Calculated score for this sample
 }
 
 /** Protocol type for threshold selection */
-export type PlayerProtocol = 'webrtc' | 'hls' | 'dash' | 'html5' | 'unknown';
+export type PlayerProtocol = "webrtc" | "hls" | "dash" | "html5" | "unknown";
 
 /** Protocol-specific playback score thresholds (MistMetaPlayer reference) */
 export const PROTOCOL_THRESHOLDS: Record<PlayerProtocol, number> = {
-  webrtc: 0.95,   // Very strict for low-latency
-  hls: 0.75,      // More lenient for adaptive streaming
-  dash: 0.75,     // More lenient for adaptive streaming
-  html5: 0.75,    // Standard threshold
-  unknown: 0.75,  // Default
+  webrtc: 0.95, // Very strict for low-latency
+  hls: 0.75, // More lenient for adaptive streaming
+  dash: 0.75, // More lenient for adaptive streaming
+  html5: 0.75, // Standard threshold
+  unknown: 0.75, // Default
 };
 
 export interface QualityMonitorOptions {
@@ -82,7 +82,7 @@ export interface QualityMonitorState {
  */
 export class QualityMonitor {
   private videoElement: HTMLVideoElement | null = null;
-  private options: Required<Omit<QualityMonitorOptions, 'protocol' | 'playbackScoreThreshold'>> & {
+  private options: Required<Omit<QualityMonitorOptions, "protocol" | "playbackScoreThreshold">> & {
     protocol: PlayerProtocol;
     playbackScoreThreshold: number | null;
   };
@@ -112,7 +112,7 @@ export class QualityMonitor {
       thresholds: options.thresholds ?? {},
       onQualityDegraded: options.onQualityDegraded ?? (() => {}),
       onSample: options.onSample ?? (() => {}),
-      protocol: options.protocol ?? 'unknown',
+      protocol: options.protocol ?? "unknown",
       playbackScoreThreshold: options.playbackScoreThreshold ?? null,
       onFallbackRequest: options.onFallbackRequest ?? (() => {}),
       poorSamplesBeforeFallback: options.poorSamplesBeforeFallback ?? 5,
@@ -190,18 +190,18 @@ export class QualityMonitor {
       }
     };
 
-    videoElement.addEventListener('waiting', onWaiting);
-    videoElement.addEventListener('playing', onPlaying);
-    videoElement.addEventListener('canplay', onCanPlay);
+    videoElement.addEventListener("waiting", onWaiting);
+    videoElement.addEventListener("playing", onPlaying);
+    videoElement.addEventListener("canplay", onCanPlay);
 
     this.listeners = [
-      () => videoElement.removeEventListener('waiting', onWaiting),
-      () => videoElement.removeEventListener('playing', onPlaying),
-      () => videoElement.removeEventListener('canplay', onCanPlay),
+      () => videoElement.removeEventListener("waiting", onWaiting),
+      () => videoElement.removeEventListener("playing", onPlaying),
+      () => videoElement.removeEventListener("canplay", onCanPlay),
     ];
 
     // Start sampling interval
-    this.timers.startInterval(() => this.sample(), this.options.sampleInterval, 'sampling');
+    this.timers.startInterval(() => this.sample(), this.options.sampleInterval, "sampling");
 
     // Take initial sample
     this.sample();
@@ -213,7 +213,7 @@ export class QualityMonitor {
   stop(): void {
     this.timers.destroy();
 
-    this.listeners.forEach(cleanup => cleanup());
+    this.listeners.forEach((cleanup) => cleanup());
     this.listeners = [];
 
     this.videoElement = null;
@@ -241,9 +241,11 @@ export class QualityMonitor {
     this.options.onSample(quality);
 
     // Check for quality degradation
-    if (quality.score < this.thresholds.minScore ||
-        quality.stallCount > this.thresholds.maxStalls ||
-        quality.bufferedAhead < this.thresholds.minBuffer) {
+    if (
+      quality.score < this.thresholds.minScore ||
+      quality.stallCount > this.thresholds.maxStalls ||
+      quality.bufferedAhead < this.thresholds.minBuffer
+    ) {
       this.options.onQualityDegraded(quality);
     }
 
@@ -254,13 +256,15 @@ export class QualityMonitor {
 
       // Trigger fallback after sustained poor quality
       // Only trigger once until quality improves or reset
-      if (!this.fallbackTriggered &&
-          this.consecutivePoorSamples >= this.options.poorSamplesBeforeFallback) {
+      if (
+        !this.fallbackTriggered &&
+        this.consecutivePoorSamples >= this.options.poorSamplesBeforeFallback
+      ) {
         this.fallbackTriggered = true;
         console.warn(
           `[QualityMonitor] Poor playback detected: ${Math.round(this.playbackScore * 100)}% ` +
-          `(threshold: ${Math.round(this.getPlaybackScoreThreshold() * 100)}%, ` +
-          `protocol: ${this.options.protocol})`
+            `(threshold: ${Math.round(this.getPlaybackScoreThreshold() * 100)}%, ` +
+            `protocol: ${this.options.protocol})`
         );
         this.options.onFallbackRequest({
           score: this.playbackScore,
@@ -284,7 +288,10 @@ export class QualityMonitor {
     let bufferedAhead = 0;
     if (video.buffered.length > 0) {
       for (let i = 0; i < video.buffered.length; i++) {
-        if (video.buffered.start(i) <= video.currentTime && video.buffered.end(i) > video.currentTime) {
+        if (
+          video.buffered.start(i) <= video.currentTime &&
+          video.buffered.end(i) > video.currentTime
+        ) {
           bufferedAhead = video.buffered.end(i) - video.currentTime;
           break;
         }
@@ -296,7 +303,7 @@ export class QualityMonitor {
     let framesDropped = 0;
     let frameDropRate = 0;
 
-    if ('getVideoPlaybackQuality' in video) {
+    if ("getVideoPlaybackQuality" in video) {
       const stats = video.getVideoPlaybackQuality();
       framesDecoded = stats.totalVideoFrames;
       framesDropped = stats.droppedVideoFrames;
@@ -505,7 +512,7 @@ export class QualityMonitor {
 
     if (clockDelta <= 0) return 1.0;
 
-    return (videoDelta / clockDelta) / rate;
+    return videoDelta / clockDelta / rate;
   }
 
   /**

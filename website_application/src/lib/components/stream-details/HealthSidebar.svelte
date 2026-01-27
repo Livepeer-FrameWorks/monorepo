@@ -21,11 +21,11 @@
     fps?: number | null;
     issuesDescription?: string | null;
     // Rich health data from STREAM_BUFFER subscription
-    streamBufferMs?: number | null;    // Actual buffer depth in milliseconds
-    streamJitterMs?: number | null;    // Max jitter across tracks
-    maxKeepawaMs?: number | null;      // Viewer lag from live edge
+    streamBufferMs?: number | null; // Actual buffer depth in milliseconds
+    streamJitterMs?: number | null; // Max jitter across tracks
+    maxKeepawaMs?: number | null; // Viewer lag from live edge
     hasIssues?: boolean | null;
-    mistIssues?: string | null;        // Raw Mist issue string
+    mistIssues?: string | null; // Raw Mist issue string
     trackCount?: number | null;
   }
 
@@ -50,7 +50,7 @@
   // Derive global health state
   let globalHealth = $derived.by((): HealthState => {
     if (!isLive) return "IDLE";
-    if (!health) return "LOADING";  // Stream is live but health data hasn't loaded yet
+    if (!health) return "LOADING"; // Stream is live but health data hasn't loaded yet
 
     // Check for critical issues
     if (health.bufferState === "DRY") return "UNHEALTHY";
@@ -69,10 +69,14 @@
     const checks: HealthCheck[] = [];
 
     // Buffer check
-    const bufferStatus = health.bufferState === "FULL" ? "ok"
-      : health.bufferState === "DRY" ? "error"
-      : health.bufferState === "RECOVER" ? "warning"
-      : "ok";
+    const bufferStatus =
+      health.bufferState === "FULL"
+        ? "ok"
+        : health.bufferState === "DRY"
+          ? "error"
+          : health.bufferState === "RECOVER"
+            ? "warning"
+            : "ok";
     checks.push({
       name: "Buffer",
       status: bufferStatus,
@@ -120,37 +124,53 @@
 
   function getHealthColor(state: HealthState): string {
     switch (state) {
-      case "HEALTHY": return "text-success";
-      case "UNHEALTHY": return "text-error";
-      case "LOADING": return "text-muted-foreground animate-pulse";
-      case "IDLE": return "text-muted-foreground";
+      case "HEALTHY":
+        return "text-success";
+      case "UNHEALTHY":
+        return "text-error";
+      case "LOADING":
+        return "text-muted-foreground animate-pulse";
+      case "IDLE":
+        return "text-muted-foreground";
     }
   }
 
   function getHealthBg(state: HealthState): string {
     switch (state) {
-      case "HEALTHY": return "bg-success/10";
-      case "UNHEALTHY": return "bg-error/10";
-      case "LOADING": return "bg-muted/30";
-      case "IDLE": return "bg-muted/50";
+      case "HEALTHY":
+        return "bg-success/10";
+      case "UNHEALTHY":
+        return "bg-error/10";
+      case "LOADING":
+        return "bg-muted/30";
+      case "IDLE":
+        return "bg-muted/50";
     }
   }
 
   function getCheckIcon(status: HealthCheck["status"]): string {
     switch (status) {
-      case "ok": return "CheckCircle";
-      case "warning": return "AlertTriangle";
-      case "error": return "XCircle";
-      default: return "HelpCircle";
+      case "ok":
+        return "CheckCircle";
+      case "warning":
+        return "AlertTriangle";
+      case "error":
+        return "XCircle";
+      default:
+        return "HelpCircle";
     }
   }
 
   function getCheckColor(status: HealthCheck["status"]): string {
     switch (status) {
-      case "ok": return "text-success";
-      case "warning": return "text-warning";
-      case "error": return "text-error";
-      default: return "text-muted-foreground";
+      case "ok":
+        return "text-success";
+      case "warning":
+        return "text-warning";
+      case "error":
+        return "text-error";
+      default:
+        return "text-muted-foreground";
     }
   }
 
@@ -229,7 +249,9 @@
     <!-- Buffer Depth & Jitter (from real-time subscription) -->
     {#if isLive && (health?.streamBufferMs || health?.streamJitterMs || health?.maxKeepawaMs)}
       <div class="p-4 border-b border-border">
-        <div class="text-xs text-muted-foreground uppercase tracking-wide mb-2">Real-time Metrics</div>
+        <div class="text-xs text-muted-foreground uppercase tracking-wide mb-2">
+          Real-time Metrics
+        </div>
         <div class="space-y-2">
           {#if health.streamBufferMs !== undefined && health.streamBufferMs !== null}
             <div class="flex justify-between text-sm">
@@ -240,7 +262,13 @@
           {#if health.streamJitterMs !== undefined && health.streamJitterMs !== null}
             <div class="flex justify-between text-sm">
               <span class="text-muted-foreground">Jitter</span>
-              <span class="font-mono {health.streamJitterMs > 100 ? 'text-error' : health.streamJitterMs > 50 ? 'text-warning' : 'text-success'}">
+              <span
+                class="font-mono {health.streamJitterMs > 100
+                  ? 'text-error'
+                  : health.streamJitterMs > 50
+                    ? 'text-warning'
+                    : 'text-success'}"
+              >
                 {health.streamJitterMs}ms
               </span>
             </div>
@@ -286,11 +314,7 @@
 
     <!-- Footer Action -->
     <div class="p-4 border-t border-border">
-      <Button
-        variant="ghost"
-        class="w-full justify-between"
-        onclick={navigateToHealth}
-      >
+      <Button variant="ghost" class="w-full justify-between" onclick={navigateToHealth}>
         <span>Full Health Dashboard</span>
         <ChevronRightIcon class="w-4 h-4" />
       </Button>

@@ -21,7 +21,7 @@ export {};
 // Type declarations for WebRTC Encoded Transform APIs (not in standard lib.dom.d.ts yet)
 declare global {
   interface RTCEncodedVideoFrame {
-    readonly type: 'key' | 'delta' | 'empty';
+    readonly type: "key" | "delta" | "empty";
     readonly timestamp: number;
     data: ArrayBuffer;
     getMetadata(): RTCEncodedVideoFrameMetadata;
@@ -69,12 +69,12 @@ declare global {
 interface EncodedChunkData {
   timestamp: number;
   duration: number | null;
-  type: 'key' | 'delta';
+  type: "key" | "delta";
   data: ArrayBuffer;
 }
 
 interface TransformWorkerMessage {
-  type: 'videoChunk' | 'audioChunk' | 'configure' | 'flush' | 'stop';
+  type: "videoChunk" | "audioChunk" | "configure" | "flush" | "stop";
   data?: EncodedChunkData;
   config?: {
     debug?: boolean;
@@ -107,9 +107,9 @@ interface TransformStats {
 // Constants
 // ============================================================================
 
-const DEFAULT_MAX_QUEUE_SIZE = 30;           // ~1 second at 30fps
-const DEFAULT_MAX_TIMESTAMP_DRIFT_US = 100_000;  // 100ms in microseconds
-const DEFAULT_MAX_CONSECUTIVE_MISSES = 30;   // ~1s at 30fps
+const DEFAULT_MAX_QUEUE_SIZE = 30; // ~1 second at 30fps
+const DEFAULT_MAX_TIMESTAMP_DRIFT_US = 100_000; // 100ms in microseconds
+const DEFAULT_MAX_CONSECUTIVE_MISSES = 30; // ~1s at 30fps
 
 // ============================================================================
 // State
@@ -160,7 +160,7 @@ const stats: TransformStats = {
 
 function log(message: string, data?: unknown): void {
   if (debug) {
-    console.log(`[RTCTransformWorker] ${message}`, data ?? '');
+    console.log(`[RTCTransformWorker] ${message}`, data ?? "");
   }
 }
 
@@ -168,9 +168,9 @@ function log(message: string, data?: unknown): void {
  * Handle incoming encoded chunk from main thread.
  * Maintains bounded queue with FIFO drop policy.
  */
-function handleChunk(type: 'video' | 'audio', chunk: EncodedChunkData): void {
-  const queue = type === 'video' ? videoChunkQueue : audioChunkQueue;
-  const statsObj = type === 'video' ? stats.video : stats.audio;
+function handleChunk(type: "video" | "audio", chunk: EncodedChunkData): void {
+  const queue = type === "video" ? videoChunkQueue : audioChunkQueue;
+  const statsObj = type === "video" ? stats.video : stats.audio;
 
   statsObj.chunksReceived++;
 
@@ -188,11 +188,11 @@ function handleChunk(type: 'video' | 'audio', chunk: EncodedChunkData): void {
  * Returns the chunk and removes it from the queue.
  */
 function findMatchingChunk(
-  type: 'video' | 'audio',
+  type: "video" | "audio",
   targetTimestamp: number
 ): EncodedChunkData | undefined {
-  const queue = type === 'video' ? videoChunkQueue : audioChunkQueue;
-  const statsObj = type === 'video' ? stats.video : stats.audio;
+  const queue = type === "video" ? videoChunkQueue : audioChunkQueue;
+  const statsObj = type === "video" ? stats.video : stats.audio;
 
   if (queue.length === 0) {
     return undefined;
@@ -228,7 +228,7 @@ function resetVideoSync(): void {
   hasInjectedKeyframe = false;
   consecutiveVideoMisses = 0;
   stats.video.syncResets++;
-  log('Video sync reset - waiting for next keyframe');
+  log("Video sync reset - waiting for next keyframe");
 }
 
 // ============================================================================
@@ -250,7 +250,7 @@ function createVideoTransform(): TransformStream<RTCEncodedVideoFrame, RTCEncode
       }
 
       // Try to find a matching replacement chunk
-      const replacement = findMatchingChunk('video', frame.timestamp);
+      const replacement = findMatchingChunk("video", frame.timestamp);
 
       if (!replacement) {
         // No replacement available
@@ -262,7 +262,7 @@ function createVideoTransform(): TransformStream<RTCEncodedVideoFrame, RTCEncode
         }
 
         stats.video.framesPassedThrough++;
-        log('Passed through browser video frame', {
+        log("Passed through browser video frame", {
           ts: frame.timestamp,
           queueSize: videoChunkQueue.length,
           misses: consecutiveVideoMisses,
@@ -278,11 +278,11 @@ function createVideoTransform(): TransformStream<RTCEncodedVideoFrame, RTCEncode
 
       // Keyframe sync gating: Don't inject deltas until we've injected a keyframe
       if (!hasInjectedKeyframe) {
-        if (replacement.type !== 'key') {
+        if (replacement.type !== "key") {
           // Can't inject delta before keyframe - pass through browser frame
           // (but we already consumed the chunk, so we lose it)
           stats.video.framesPassedThrough++;
-          log('Skipped delta chunk (no keyframe yet)', {
+          log("Skipped delta chunk (no keyframe yet)", {
             ts: frame.timestamp,
             chunkType: replacement.type,
           });
@@ -293,11 +293,11 @@ function createVideoTransform(): TransformStream<RTCEncodedVideoFrame, RTCEncode
         // First keyframe - enable injection
         hasInjectedKeyframe = true;
         stats.video.keyframesInjected++;
-        log('Keyframe sync established');
+        log("Keyframe sync established");
       }
 
       // Track keyframes for stats
-      if (replacement.type === 'key') {
+      if (replacement.type === "key") {
         stats.video.keyframesInjected++;
       }
 
@@ -305,7 +305,7 @@ function createVideoTransform(): TransformStream<RTCEncodedVideoFrame, RTCEncode
       // Buffer is already transferred and single-use - no need to copy
       frame.data = replacement.data;
 
-      log('Replaced video frame', {
+      log("Replaced video frame", {
         originalTs: frame.timestamp,
         chunkTs: replacement.timestamp,
         size: replacement.data.byteLength,
@@ -331,13 +331,13 @@ function createAudioTransform(): TransformStream<RTCEncodedAudioFrame, RTCEncode
         return;
       }
 
-      const replacement = findMatchingChunk('audio', frame.timestamp);
+      const replacement = findMatchingChunk("audio", frame.timestamp);
 
       if (replacement) {
         // Replace frame data - no copy needed
         frame.data = replacement.data;
 
-        log('Replaced audio frame', {
+        log("Replaced audio frame", {
           originalTs: frame.timestamp,
           chunkTs: replacement.timestamp,
           size: replacement.data.byteLength,
@@ -361,14 +361,14 @@ function createAudioTransform(): TransformStream<RTCEncodedAudioFrame, RTCEncode
  */
 function handleRTCTransform(event: RTCTransformEvent): void {
   const { readable, writable } = event.transformer;
-  const options = event.transformer.options as { kind?: 'video' | 'audio' } | undefined;
-  const kind = options?.kind ?? 'video';
+  const options = event.transformer.options as { kind?: "video" | "audio" } | undefined;
+  const kind = options?.kind ?? "video";
 
   log(`RTCTransform initialized for ${kind}`, { options });
 
-  if (kind === 'video') {
+  if (kind === "video") {
     if (videoTransformActive) {
-      console.warn('[RTCTransformWorker] Video transform already active');
+      console.warn("[RTCTransformWorker] Video transform already active");
       return;
     }
     videoTransformActive = true;
@@ -378,22 +378,28 @@ function handleRTCTransform(event: RTCTransformEvent): void {
     consecutiveVideoMisses = 0;
 
     const transform = createVideoTransform();
-    readable.pipeThrough(transform).pipeTo(writable).catch((error: unknown) => {
-      console.error('[RTCTransformWorker] Video transform pipeline error:', error);
-      videoTransformActive = false;
-    });
+    readable
+      .pipeThrough(transform)
+      .pipeTo(writable)
+      .catch((error: unknown) => {
+        console.error("[RTCTransformWorker] Video transform pipeline error:", error);
+        videoTransformActive = false;
+      });
   } else {
     if (audioTransformActive) {
-      console.warn('[RTCTransformWorker] Audio transform already active');
+      console.warn("[RTCTransformWorker] Audio transform already active");
       return;
     }
     audioTransformActive = true;
 
     const transform = createAudioTransform();
-    readable.pipeThrough(transform).pipeTo(writable).catch((error: unknown) => {
-      console.error('[RTCTransformWorker] Audio transform pipeline error:', error);
-      audioTransformActive = false;
-    });
+    readable
+      .pipeThrough(transform)
+      .pipeTo(writable)
+      .catch((error: unknown) => {
+        console.error("[RTCTransformWorker] Audio transform pipeline error:", error);
+        audioTransformActive = false;
+      });
   }
 }
 
@@ -401,23 +407,23 @@ function handleRTCTransform(event: RTCTransformEvent): void {
 // Message Handler
 // ============================================================================
 
-self.addEventListener('message', (event: MessageEvent<TransformWorkerMessage>) => {
+self.addEventListener("message", (event: MessageEvent<TransformWorkerMessage>) => {
   const message = event.data;
 
   switch (message.type) {
-    case 'videoChunk':
+    case "videoChunk":
       if (message.data) {
-        handleChunk('video', message.data);
+        handleChunk("video", message.data);
       }
       break;
 
-    case 'audioChunk':
+    case "audioChunk":
       if (message.data) {
-        handleChunk('audio', message.data);
+        handleChunk("audio", message.data);
       }
       break;
 
-    case 'configure':
+    case "configure":
       if (message.config) {
         if (message.config.debug !== undefined) {
           debug = message.config.debug;
@@ -431,32 +437,32 @@ self.addEventListener('message', (event: MessageEvent<TransformWorkerMessage>) =
         if (message.config.maxConsecutiveMisses !== undefined) {
           maxConsecutiveMisses = message.config.maxConsecutiveMisses;
         }
-        log('Configuration updated', message.config);
+        log("Configuration updated", message.config);
       }
       break;
 
-    case 'flush':
+    case "flush":
       // Clear queues and reset sync
       videoChunkQueue.length = 0;
       audioChunkQueue.length = 0;
       hasInjectedKeyframe = false;
       consecutiveVideoMisses = 0;
-      log('Queues flushed, sync reset');
+      log("Queues flushed, sync reset");
       break;
 
-    case 'stop':
+    case "stop":
       isRunning = false;
       videoChunkQueue.length = 0;
       audioChunkQueue.length = 0;
       hasInjectedKeyframe = false;
       consecutiveVideoMisses = 0;
-      log('Transform stopped', stats);
+      log("Transform stopped", stats);
 
-      self.postMessage({ type: 'stopped', stats });
+      self.postMessage({ type: "stopped", stats });
       break;
 
     default:
-      log('Unknown message type', message);
+      log("Unknown message type", message);
   }
 });
 
@@ -464,13 +470,13 @@ self.addEventListener('message', (event: MessageEvent<TransformWorkerMessage>) =
 // Event Listeners
 // ============================================================================
 
-self.addEventListener('rtctransform', handleRTCTransform as EventListener);
+self.addEventListener("rtctransform", handleRTCTransform as EventListener);
 
 // Periodic stats reporting (every 5 seconds in debug mode)
 setInterval(() => {
   if (debug && isRunning) {
     self.postMessage({
-      type: 'stats',
+      type: "stats",
       stats: { ...stats },
       syncState: {
         hasInjectedKeyframe,
@@ -482,4 +488,4 @@ setInterval(() => {
   }
 }, 5000);
 
-log('Worker loaded');
+log("Worker loaded");

@@ -3,7 +3,7 @@
   Port of src/components/TitleOverlay.tsx
 -->
 <script lang="ts">
-  import { cn } from '@livepeer-frameworks/player-core';
+  import { cn } from "@livepeer-frameworks/player-core";
 
   interface Props {
     title?: string | null;
@@ -12,12 +12,7 @@
     class?: string;
   }
 
-  let {
-    title = null,
-    description = null,
-    isVisible,
-    class: className = '',
-  }: Props = $props();
+  let { title = null, description = null, isVisible, class: className = "" }: Props = $props();
 
   // Don't render if no content
   let hasContent = $derived(!!title || !!description);
@@ -26,10 +21,10 @@
 {#if hasContent}
   <div
     class={cn(
-      'fw-title-overlay absolute inset-x-0 top-0 z-20 pointer-events-none',
-      'bg-gradient-to-b from-black/70 via-black/40 to-transparent',
-      'px-4 py-3 transition-opacity duration-300',
-      isVisible ? 'opacity-100' : 'opacity-0',
+      "fw-title-overlay absolute inset-x-0 top-0 z-20 pointer-events-none",
+      "bg-gradient-to-b from-black/70 via-black/40 to-transparent",
+      "px-4 py-3 transition-opacity duration-300",
+      isVisible ? "opacity-100" : "opacity-0",
       className
     )}
   >

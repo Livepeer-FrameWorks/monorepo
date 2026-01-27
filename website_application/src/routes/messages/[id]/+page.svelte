@@ -8,7 +8,7 @@
     GetConversationStore,
     GetMessagesConnectionStore,
     SendMessageStore,
-    LiveMessageReceivedStore
+    LiveMessageReceivedStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { Button } from "$lib/components/ui/button";
@@ -34,13 +34,13 @@
   let messagesLoading = $derived($messagesStore.fetching);
 
   // Local messages state (for real-time updates)
-  type MessageNode = NonNullable<typeof messagesEdges[number]["node"]>;
+  type MessageNode = NonNullable<(typeof messagesEdges)[number]["node"]>;
   let localMessages = $state<MessageNode[]>([]);
 
   // Sync messages from store to local state
   $effect(() => {
     if (messagesEdges.length > 0) {
-      localMessages = messagesEdges.map(e => e.node).filter((m): m is MessageNode => m != null);
+      localMessages = messagesEdges.map((e) => e.node).filter((m): m is MessageNode => m != null);
     }
   });
 
@@ -61,7 +61,7 @@
     const newMsg = $messageSubscription.data?.liveMessageReceived;
     if (newMsg && newMsg.conversationId === conversationId) {
       // Check if message already exists
-      const exists = localMessages.some(m => m.id === newMsg.id);
+      const exists = localMessages.some((m) => m.id === newMsg.id);
       if (!exists) {
         localMessages = [...localMessages, newMsg as MessageNode];
         // Scroll to bottom after adding new message
@@ -74,10 +74,7 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
-    await Promise.all([
-      loadConversation(),
-      loadMessages()
-    ]);
+    await Promise.all([loadConversation(), loadMessages()]);
 
     // Start subscription for real-time messages
     if (conversationId) {
@@ -132,7 +129,7 @@
       const sendResult = result.data?.sendMessage;
       if (sendResult?.__typename === "Message") {
         // Add to local messages if not already added by subscription
-        const exists = localMessages.some(m => m.id === sendResult.id);
+        const exists = localMessages.some((m) => m.id === sendResult.id);
         if (!exists) {
           localMessages = [...localMessages, sendResult as MessageNode];
         }
@@ -190,14 +187,11 @@
 
 <div class="h-full flex flex-col overflow-hidden">
   <!-- Fixed Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background">
+  <div
+    class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background"
+  >
     <div class="flex items-center gap-4">
-      <Button
-        variant="ghost"
-        size="sm"
-        class="gap-2"
-        onclick={() => goto(resolve("/messages"))}
-      >
+      <Button variant="ghost" size="sm" class="gap-2" onclick={() => goto(resolve("/messages"))}>
         <ArrowLeftIcon class="w-4 h-4" />
         Back
       </Button>
@@ -211,7 +205,11 @@
               {conversation?.subject || "Conversation"}
             </h1>
             {#if conversation?.status}
-              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusBadgeClass(conversation.status)} shrink-0">
+              <span
+                class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusBadgeClass(
+                  conversation.status
+                )} shrink-0"
+              >
                 {conversation.status}
               </span>
             {/if}
@@ -227,10 +225,7 @@
   </div>
 
   <!-- Messages Area -->
-  <div
-    bind:this={messagesContainer}
-    class="flex-1 overflow-y-auto bg-background/50 p-4 sm:p-6"
-  >
+  <div bind:this={messagesContainer} class="flex-1 overflow-y-auto bg-background/50 p-4 sm:p-6">
     {#if messagesLoading && localMessages.length === 0}
       <!-- Loading skeleton -->
       <div class="space-y-4 max-w-3xl mx-auto">
@@ -258,7 +253,11 @@
           {@const isUser = message.sender === "USER"}
           <div class="flex gap-3 {isUser ? 'flex-row-reverse' : ''}">
             <!-- Avatar -->
-            <div class="w-8 h-8 rounded-full shrink-0 flex items-center justify-center {isUser ? 'bg-primary/20' : 'bg-accent/20'}">
+            <div
+              class="w-8 h-8 rounded-full shrink-0 flex items-center justify-center {isUser
+                ? 'bg-primary/20'
+                : 'bg-accent/20'}"
+            >
               {#if isUser}
                 <UserIcon class="w-4 h-4 text-primary" />
               {:else}
@@ -268,10 +267,16 @@
 
             <!-- Message bubble -->
             <div class="max-w-[70%] {isUser ? 'text-right' : ''}">
-              <div class="inline-block px-4 py-2 rounded-lg {isUser ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'}">
+              <div
+                class="inline-block px-4 py-2 rounded-lg {isUser
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-foreground'}"
+              >
                 <p class="text-sm whitespace-pre-wrap break-words text-left">{message.content}</p>
               </div>
-              <p class="text-[10px] text-muted-foreground mt-1 {isUser ? 'text-right' : 'text-left'}">
+              <p
+                class="text-[10px] text-muted-foreground mt-1 {isUser ? 'text-right' : 'text-left'}"
+              >
                 {#if message.createdAt}
                   {format(new Date(message.createdAt), "MMM d, h:mm a")}
                 {/if}
@@ -295,13 +300,11 @@
           onkeydown={handleKeydown}
           disabled={sending}
         />
-        <Button
-          onclick={sendMessage}
-          disabled={sending || !newMessage.trim()}
-          class="self-end"
-        >
+        <Button onclick={sendMessage} disabled={sending || !newMessage.trim()} class="self-end">
           {#if sending}
-            <span class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+            <span
+              class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"
+            ></span>
           {:else}
             <SendIcon class="w-4 h-4" />
           {/if}

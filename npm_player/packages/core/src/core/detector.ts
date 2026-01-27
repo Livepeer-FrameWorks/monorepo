@@ -6,7 +6,7 @@
  * Removes legacy IE/Flash detection code
  */
 
-import { translateCodec } from './CodecUtils';
+import { translateCodec } from "./CodecUtils";
 
 export interface BrowserInfo {
   isChrome: boolean;
@@ -37,7 +37,7 @@ export interface CodecSupport {
  */
 export function getBrowserInfo(): BrowserInfo {
   const ua = navigator.userAgent.toLowerCase();
-  
+
   return {
     isChrome: /chrome|crios/.test(ua) && !/edge|edg/.test(ua),
     isFirefox: /firefox/.test(ua),
@@ -46,9 +46,9 @@ export function getBrowserInfo(): BrowserInfo {
     isAndroid: /android/.test(ua),
     isIOS: /iphone|ipad|ipod/.test(ua),
     isMobile: /mobile|android|iphone|ipad|ipod/.test(ua),
-    supportsMediaSource: 'MediaSource' in window,
-    supportsWebRTC: 'RTCPeerConnection' in window,
-    supportsWebSocket: 'WebSocket' in window
+    supportsMediaSource: "MediaSource" in window,
+    supportsWebRTC: "RTCPeerConnection" in window,
+    supportsWebSocket: "WebSocket" in window,
   };
 }
 
@@ -59,7 +59,7 @@ export { translateCodec };
  * Test codec support using MediaSource API
  */
 export function testCodecSupport(mimeType: string, codec: string): boolean {
-  if (!('MediaSource' in window)) {
+  if (!("MediaSource" in window)) {
     return false;
   }
 
@@ -76,14 +76,14 @@ export function testCodecSupport(mimeType: string, codec: string): boolean {
  */
 export function getCodecSupport(): CodecSupport {
   return {
-    h264: testCodecSupport('video/mp4', 'avc1.42E01E'),
-    h265: testCodecSupport('video/mp4', 'hev1.1.6.L93.90'),
-    vp8: testCodecSupport('video/webm', 'vp8'),
-    vp9: testCodecSupport('video/webm', 'vp09.00.10.08'),
-    av1: testCodecSupport('video/mp4', 'av01.0.04M.08'),
-    aac: testCodecSupport('video/mp4', 'mp4a.40.2'),
-    mp3: testCodecSupport('audio/mpeg', 'mp3'),
-    opus: testCodecSupport('audio/webm', 'opus')
+    h264: testCodecSupport("video/mp4", "avc1.42E01E"),
+    h265: testCodecSupport("video/mp4", "hev1.1.6.L93.90"),
+    vp8: testCodecSupport("video/webm", "vp8"),
+    vp9: testCodecSupport("video/webm", "vp09.00.10.08"),
+    av1: testCodecSupport("video/mp4", "av01.0.04M.08"),
+    aac: testCodecSupport("video/mp4", "mp4a.40.2"),
+    mp3: testCodecSupport("audio/mpeg", "mp3"),
+    opus: testCodecSupport("audio/webm", "opus"),
   };
 }
 
@@ -98,11 +98,11 @@ export function checkTrackPlayability(
   const supported: string[] = [];
 
   const tracksByType: Record<string, typeof tracks> = {};
-  
+
   // Group tracks by type
   for (const track of tracks) {
-    if (track.type === 'meta') continue;
-    
+    if (track.type === "meta") continue;
+
     if (!tracksByType[track.type]) {
       tracksByType[track.type] = [];
     }
@@ -112,7 +112,7 @@ export function checkTrackPlayability(
   // Test each track type
   for (const [trackType, typeTracks] of Object.entries(tracksByType)) {
     let hasPlayableTrack = false;
-    
+
     for (const track of typeTracks) {
       const codecString = translateCodec(track);
       if (testCodecSupport(containerType, codecString)) {
@@ -120,7 +120,7 @@ export function checkTrackPlayability(
         hasPlayableTrack = true;
       }
     }
-    
+
     if (hasPlayableTrack) {
       playable.push(trackType);
     }
@@ -135,12 +135,12 @@ export function checkTrackPlayability(
 export function checkProtocolMismatch(sourceUrl: string): boolean {
   const pageProtocol = window.location.protocol;
   const sourceProtocol = new URL(sourceUrl).protocol;
-  
+
   // Allow file:// to access http://
-  if (pageProtocol === 'file:' && sourceProtocol === 'http:') {
+  if (pageProtocol === "file:" && sourceProtocol === "http:") {
     return false; // No mismatch
   }
-  
+
   return pageProtocol !== sourceProtocol;
 }
 
@@ -148,7 +148,7 @@ export function checkProtocolMismatch(sourceUrl: string): boolean {
  * Check if current page is loaded over file://
  */
 export function isFileProtocol(): boolean {
-  return window.location.protocol === 'file:';
+  return window.location.protocol === "file:";
 }
 
 /**
@@ -157,11 +157,11 @@ export function isFileProtocol(): boolean {
 export function getAndroidVersion(): number | null {
   const match = navigator.userAgent.match(/Android (\d+)(?:\.(\d+))?(?:\.(\d+))*/i);
   if (!match) return null;
-  
+
   const major = parseInt(match[1], 10);
   const minor = match[2] ? parseInt(match[2], 10) : 0;
-  
-  return major + (minor / 10);
+
+  return major + minor / 10;
 }
 
 /**
@@ -182,14 +182,14 @@ export function getBrowserCompatibility() {
     supportsWebSocket: browser.supportsWebSocket,
 
     // WebRTC support
-    supportsWebRTC: browser.supportsWebRTC && 'RTCRtpReceiver' in window,
+    supportsWebRTC: browser.supportsWebRTC && "RTCRtpReceiver" in window,
 
     // Specific player recommendations
     preferVideoJs: android && android < 7, // VideoJS better for older Android
     avoidMEWSOnMac: browser.isSafari, // MEWS breaks often on Safari/macOS
 
     // File protocol limitations
-    fileProtocolLimitations: isFileProtocol()
+    fileProtocolLimitations: isFileProtocol(),
   };
 }
 
@@ -202,18 +202,18 @@ export function getBrowserCompatibility() {
  * These are the only codecs that can be used in RTP streams
  */
 export const WEBRTC_COMPATIBLE_CODECS = {
-  video: ['H264', 'VP8', 'VP9', 'AV1'],
+  video: ["H264", "VP8", "VP9", "AV1"],
   // Note: AAC is NOT natively supported in browser WebRTC - OPUS is standard
   // MistServer may transcode to OPUS for WebRTC output
-  audio: ['OPUS', 'PCMU', 'PCMA', 'G711', 'G722'],
+  audio: ["OPUS", "PCMU", "PCMA", "G711", "G722"],
 } as const;
 
 /**
  * Codecs that are explicitly incompatible with WebRTC
  */
 export const WEBRTC_INCOMPATIBLE_CODECS = {
-  video: ['HEVC', 'H265', 'THEORA', 'MPEG2'],
-  audio: ['AC3', 'EAC3', 'EC3', 'MP3', 'FLAC', 'VORBIS', 'DTS'],
+  video: ["HEVC", "H265", "THEORA", "MPEG2"],
+  audio: ["AC3", "EAC3", "EC3", "MP3", "FLAC", "VORBIS", "DTS"],
 } as const;
 
 export interface WebRTCCodecCompatibility {
@@ -239,14 +239,14 @@ export interface WebRTCCodecCompatibility {
  * Uses RTCRtpReceiver.getCapabilities() for dynamic browser detection (reference: webrtc.js:38-46)
  * Falls back to static list if API unavailable
  */
-function isBrowserWebRTCCodecSupported(type: 'video' | 'audio', codec: string): boolean {
+function isBrowserWebRTCCodecSupported(type: "video" | "audio", codec: string): boolean {
   // Try dynamic browser API first (reference: webrtc.js:39)
-  if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
+  if (typeof RTCRtpReceiver !== "undefined" && RTCRtpReceiver.getCapabilities) {
     try {
       const capabilities = RTCRtpReceiver.getCapabilities(type);
       if (capabilities?.codecs) {
         const targetMime = `${type}/${codec}`.toLowerCase();
-        return capabilities.codecs.some(c => c.mimeType.toLowerCase() === targetMime);
+        return capabilities.codecs.some((c) => c.mimeType.toLowerCase() === targetMime);
       }
     } catch {
       // Fall through to static list
@@ -270,8 +270,8 @@ function isBrowserWebRTCCodecSupported(type: 'video' | 'audio', codec: string): 
 export function checkWebRTCCodecCompatibility(
   tracks: Array<{ type: string; codec: string }>
 ): WebRTCCodecCompatibility {
-  const videoTracks = tracks.filter(t => t.type === 'video');
-  const audioTracks = tracks.filter(t => t.type === 'audio');
+  const videoTracks = tracks.filter((t) => t.type === "video");
+  const audioTracks = tracks.filter((t) => t.type === "audio");
 
   const compatibleVideoCodecs: string[] = [];
   const compatibleAudioCodecs: string[] = [];
@@ -279,7 +279,7 @@ export function checkWebRTCCodecCompatibility(
 
   // Check video tracks using dynamic browser detection
   for (const track of videoTracks) {
-    if (isBrowserWebRTCCodecSupported('video', track.codec)) {
+    if (isBrowserWebRTCCodecSupported("video", track.codec)) {
       compatibleVideoCodecs.push(track.codec);
     } else {
       incompatibleCodecs.push(`video:${track.codec}`);
@@ -288,7 +288,7 @@ export function checkWebRTCCodecCompatibility(
 
   // Check audio tracks using dynamic browser detection
   for (const track of audioTracks) {
-    if (isBrowserWebRTCCodecSupported('audio', track.codec)) {
+    if (isBrowserWebRTCCodecSupported("audio", track.codec)) {
       compatibleAudioCodecs.push(track.codec);
     } else {
       incompatibleCodecs.push(`audio:${track.codec}`);
@@ -343,10 +343,10 @@ export interface MSECodecCompatibility {
  */
 export function checkMSECodecCompatibility(
   tracks: Array<{ type: string; codec: string; codecstring?: string; init?: string }>,
-  containerType = 'video/mp4'
+  containerType = "video/mp4"
 ): MSECodecCompatibility {
-  const videoTracks = tracks.filter(t => t.type === 'video');
-  const audioTracks = tracks.filter(t => t.type === 'audio');
+  const videoTracks = tracks.filter((t) => t.type === "video");
+  const audioTracks = tracks.filter((t) => t.type === "audio");
   const unsupportedCodecs: string[] = [];
 
   let hasCompatibleVideo = videoTracks.length === 0;
@@ -365,7 +365,7 @@ export function checkMSECodecCompatibility(
   // Test each audio track
   for (const track of audioTracks) {
     const codecString = translateCodec(track);
-    const audioContainer = track.codec === 'MP3' ? 'audio/mpeg' : containerType;
+    const audioContainer = track.codec === "MP3" ? "audio/mpeg" : containerType;
     if (testCodecSupport(audioContainer, codecString)) {
       hasCompatibleAudio = true;
     } else {

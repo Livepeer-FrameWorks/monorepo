@@ -32,13 +32,13 @@ export class ScreenWakeLockManager {
 
   constructor(config: ScreenWakeLockConfig = {}) {
     this.config = config;
-    this.isSupported = 'wakeLock' in navigator;
+    this.isSupported = "wakeLock" in navigator;
 
     this.boundVisibilityChange = this.handleVisibilityChange.bind(this);
 
     // Re-acquire wake lock when page becomes visible again
     if (this.isSupported) {
-      document.addEventListener('visibilitychange', this.boundVisibilityChange);
+      document.addEventListener("visibilitychange", this.boundVisibilityChange);
     }
   }
 
@@ -46,7 +46,7 @@ export class ScreenWakeLockManager {
    * Check if Screen Wake Lock API is supported
    */
   static isSupported(): boolean {
-    return 'wakeLock' in navigator;
+    return "wakeLock" in navigator;
   }
 
   /**
@@ -85,8 +85,8 @@ export class ScreenWakeLockManager {
     if (this.wakeLock) return;
 
     try {
-      this.wakeLock = await navigator.wakeLock.request('screen');
-      this.wakeLock.addEventListener('release', this.handleRelease.bind(this));
+      this.wakeLock = await navigator.wakeLock.request("screen");
+      this.wakeLock.addEventListener("release", this.handleRelease.bind(this));
       this.config.onAcquire?.();
     } catch (err) {
       // Wake lock request can fail if:
@@ -119,7 +119,7 @@ export class ScreenWakeLockManager {
     this.release();
 
     if (this.isSupported) {
-      document.removeEventListener('visibilitychange', this.boundVisibilityChange);
+      document.removeEventListener("visibilitychange", this.boundVisibilityChange);
     }
   }
 
@@ -127,8 +127,7 @@ export class ScreenWakeLockManager {
    * Update wake lock based on current state
    */
   private updateWakeLock(): void {
-    const shouldHold =
-      this.isPlaying && (this.isFullscreen || this.config.acquireOnPlay);
+    const shouldHold = this.isPlaying && (this.isFullscreen || this.config.acquireOnPlay);
 
     if (shouldHold && !this.wakeLock) {
       this.acquire();
@@ -154,7 +153,7 @@ export class ScreenWakeLockManager {
    * Handle visibility change - re-acquire if page becomes visible
    */
   private handleVisibilityChange(): void {
-    if (document.visibilityState === 'visible' && !this.wakeLock) {
+    if (document.visibilityState === "visible" && !this.wakeLock) {
       this.updateWakeLock();
     }
   }

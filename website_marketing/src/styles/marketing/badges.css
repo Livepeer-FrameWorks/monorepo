@@ -16,7 +16,7 @@
   }
 
   .badge-glow::after {
-    content: '';
+    content: "";
     position: absolute;
     inset: 0;
     background: radial-gradient(circle at top, rgba(255, 255, 255, 0.35), transparent 55%);
@@ -68,8 +68,16 @@
   }
 
   .badge-tone-neutral {
-    --badge-gradient-start: color-mix(in srgb, hsl(var(--brand-surface-strong)) 90%, rgba(125, 207, 255, 0.1));
-    --badge-gradient-end: color-mix(in srgb, hsl(var(--brand-surface)) 85%, rgba(125, 207, 255, 0.05));
+    --badge-gradient-start: color-mix(
+      in srgb,
+      hsl(var(--brand-surface-strong)) 90%,
+      rgba(125, 207, 255, 0.1)
+    );
+    --badge-gradient-end: color-mix(
+      in srgb,
+      hsl(var(--brand-surface)) 85%,
+      rgba(125, 207, 255, 0.05)
+    );
     --badge-foreground: hsl(var(--brand-terminal));
     --badge-border-color: hsl(var(--border) / 0.55);
   }

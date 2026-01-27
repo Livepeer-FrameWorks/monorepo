@@ -3,7 +3,7 @@
  */
 
 // Web Worker inline imports (rollup-plugin-web-worker-loader)
-declare module 'web-worker:*' {
+declare module "web-worker:*" {
   const WorkerFactory: {
     new (): Worker;
   };

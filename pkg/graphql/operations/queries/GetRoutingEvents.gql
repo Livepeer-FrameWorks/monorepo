@@ -9,7 +9,12 @@ query GetRoutingEvents(
 ) {
   analytics {
     infra {
-      routingEventsConnection(streamId: $streamId, timeRange: $timeRange, noCache: $noCache, page: { first: $first, after: $after }) @paginate {
+      routingEventsConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        noCache: $noCache
+        page: { first: $first, after: $after }
+      ) @paginate {
         edges {
           cursor
           node {

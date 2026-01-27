@@ -36,9 +36,18 @@ export { TelemetryReporter } from "./core/TelemetryReporter";
 export { ABRController } from "./core/ABRController";
 export { MetaTrackManager } from "./core/MetaTrackManager";
 export { MistReporter } from "./core/MistReporter";
-export type { MistReporterStats, MistReporterOptions, MistReporterInitialReport } from "./core/MistReporter";
+export type {
+  MistReporterStats,
+  MistReporterOptions,
+  MistReporterInitialReport,
+} from "./core/MistReporter";
 export { MistSignaling } from "./core/MistSignaling";
-export type { MistSignalingConfig, MistSignalingEvents, MistTimeUpdate, MistSignalingState } from "./core/MistSignaling";
+export type {
+  MistSignalingConfig,
+  MistSignalingEvents,
+  MistTimeUpdate,
+  MistSignalingState,
+} from "./core/MistSignaling";
 export { LiveDurationProxy, createLiveVideoProxy } from "./core/LiveDurationProxy";
 export type { LiveDurationProxyOptions, LiveDurationState } from "./core/LiveDurationProxy";
 export { TimerManager } from "./core/TimerManager";
@@ -56,11 +65,7 @@ export {
 } from "./core/UrlUtils";
 
 // Codec utilities
-export {
-  translateCodec,
-  isCodecSupported,
-  getBestSupportedTrack,
-} from "./core/CodecUtils";
+export { translateCodec, isCodecSupported, getBestSupportedTrack } from "./core/CodecUtils";
 export type { TrackInfo as CodecTrackInfo } from "./core/CodecUtils";
 
 // Subtitle management

@@ -1,9 +1,14 @@
-import { BasePlayer } from '../core/PlayerInterface';
-import { checkProtocolMismatch, getBrowserInfo } from '../core/detector';
-import { translateCodec } from '../core/CodecUtils';
-import { LiveDurationProxy } from '../core/LiveDurationProxy';
-import type { StreamSource, StreamInfo, PlayerOptions, PlayerCapability } from '../core/PlayerInterface';
-import type { HlsJsConfig } from '../types';
+import { BasePlayer } from "../core/PlayerInterface";
+import { checkProtocolMismatch, getBrowserInfo } from "../core/detector";
+import { translateCodec } from "../core/CodecUtils";
+import { LiveDurationProxy } from "../core/LiveDurationProxy";
+import type {
+  StreamSource,
+  StreamInfo,
+  PlayerOptions,
+  PlayerCapability,
+} from "../core/PlayerInterface";
+import type { HlsJsConfig } from "../types";
 
 // Player implementation class
 export class HlsJsPlayerImpl extends BasePlayer {
@@ -11,7 +16,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     name: "HLS.js Player",
     shortname: "hlsjs",
     priority: 3,
-    mimes: ["html5/application/vnd.apple.mpegurl", "html5/application/vnd.apple.mpegurl;version=7"]
+    mimes: ["html5/application/vnd.apple.mpegurl", "html5/application/vnd.apple.mpegurl;version=7"],
   };
 
   private hls: any = null;
@@ -24,7 +29,11 @@ export class HlsJsPlayerImpl extends BasePlayer {
     return this.capability.mimes.includes(mimetype);
   }
 
-  isBrowserSupported(mimetype: string, source: StreamSource, streamInfo: StreamInfo): boolean | string[] {
+  isBrowserSupported(
+    mimetype: string,
+    source: StreamSource,
+    streamInfo: StreamInfo
+  ): boolean | string[] {
     // Check protocol mismatch
     if (checkProtocolMismatch(source.url)) {
       return false;
@@ -42,9 +51,9 @@ export class HlsJsPlayerImpl extends BasePlayer {
     // Check MediaSource support (required for HLS.js)
     if (!browser.supportsMediaSource) {
       // Fall back to native if available
-      const testVideo = document.createElement('video');
-      if (testVideo.canPlayType('application/vnd.apple.mpegurl')) {
-        return ['video', 'audio'];
+      const testVideo = document.createElement("video");
+      if (testVideo.canPlayType("application/vnd.apple.mpegurl")) {
+        return ["video", "audio"];
       }
       return false;
     }
@@ -56,17 +65,17 @@ export class HlsJsPlayerImpl extends BasePlayer {
     // If no track info available yet, assume compatible (like upstream does)
     // Track info comes async from MistServer - don't block on it
     if (!streamInfo.meta.tracks || streamInfo.meta.tracks.length === 0) {
-      return ['video', 'audio']; // Assume standard tracks until we know better
+      return ["video", "audio"]; // Assume standard tracks until we know better
     }
 
     // Group tracks by type
     for (const track of streamInfo.meta.tracks) {
-      if (track.type === 'meta') {
-        if (track.codec === 'subtitle') {
+      if (track.type === "meta") {
+        if (track.codec === "subtitle") {
           // Check for WebVTT subtitle support
           for (const src of streamInfo.source) {
-            if (src.type === 'html5/text/vtt') {
-              playableTracks.push('subtitle');
+            if (src.type === "html5/text/vtt") {
+              playableTracks.push("subtitle");
               break;
             }
           }
@@ -82,7 +91,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
     // HLS-incompatible audio codecs (even if browser MSE supports them in fMP4)
     // HLS standard only supports: AAC, MP3, AC-3/E-AC-3
-    const HLS_INCOMPATIBLE_AUDIO = ['OPUS', 'Opus', 'opus', 'VORBIS', 'Vorbis', 'FLAC'];
+    const HLS_INCOMPATIBLE_AUDIO = ["OPUS", "Opus", "opus", "VORBIS", "Vorbis", "FLAC"];
 
     // Test codec support for video/audio tracks
     for (const [trackType, tracks] of Object.entries(tracksByType)) {
@@ -90,14 +99,14 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
       for (const track of tracks) {
         // Explicit HLS codec filtering - OPUS doesn't work in HLS even if MSE supports it
-        if (trackType === 'audio' && HLS_INCOMPATIBLE_AUDIO.includes(track.codec)) {
+        if (trackType === "audio" && HLS_INCOMPATIBLE_AUDIO.includes(track.codec)) {
           console.debug(`[HLS.js] Codec incompatible with HLS: ${track.codec}`);
           continue;
         }
 
         const codecString = translateCodec(track);
         // Use correct container type for audio vs video tracks
-        const container = trackType === 'audio' ? 'audio/mp4' : 'video/mp4';
+        const container = trackType === "audio" ? "audio/mp4" : "video/mp4";
         const mimeType = `${container};codecs="${codecString}"`;
 
         if (MediaSource.isTypeSupported && MediaSource.isTypeSupported(mimeType)) {
@@ -116,17 +125,21 @@ export class HlsJsPlayerImpl extends BasePlayer {
     return playableTracks.length > 0 ? playableTracks : false;
   }
 
-  async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
-    console.log('[HLS.js] initialize() starting for', source.url.slice(0, 60) + '...');
+  async initialize(
+    container: HTMLElement,
+    source: StreamSource,
+    options: PlayerOptions
+  ): Promise<HTMLVideoElement> {
+    console.log("[HLS.js] initialize() starting for", source.url.slice(0, 60) + "...");
     this.destroyed = false;
     this.container = container;
-    container.classList.add('fw-player-container');
+    container.classList.add("fw-player-container");
 
     // Create video element
-    const video = document.createElement('video');
-    video.classList.add('fw-player-video');
-    video.setAttribute('playsinline', '');
-    video.setAttribute('crossorigin', 'anonymous');
+    const video = document.createElement("video");
+    video.classList.add("fw-player-video");
+    video.setAttribute("playsinline", "");
+    video.setAttribute("crossorigin", "anonymous");
 
     // Apply options
     if (options.autoplay) video.autoplay = true;
@@ -143,10 +156,10 @@ export class HlsJsPlayerImpl extends BasePlayer {
 
     try {
       // Dynamic import of HLS.js
-      console.log('[HLS.js] Dynamically importing hls.js module...');
-      const mod = await import('hls.js');
+      console.log("[HLS.js] Dynamically importing hls.js module...");
+      const mod = await import("hls.js");
       const Hls = (mod as any).default || (mod as any);
-      console.log('[HLS.js] hls.js module imported, Hls.isSupported():', Hls.isSupported?.());
+      console.log("[HLS.js] hls.js module imported, Hls.isSupported():", Hls.isSupported?.());
 
       if (Hls.isSupported()) {
         // Build optimized HLS.js config with user overrides
@@ -162,17 +175,17 @@ export class HlsJsPlayerImpl extends BasePlayer {
           abrEwmaDefaultEstimate: 5_000_000,
 
           // AGGRESSIVE: Minimal buffers for fastest startup
-          maxBufferLength: 6,         // Reduced from 15 (just 2 segments @ 3s)
-          maxMaxBufferLength: 15,     // Reduced from 60
+          maxBufferLength: 6, // Reduced from 15 (just 2 segments @ 3s)
+          maxMaxBufferLength: 15, // Reduced from 60
           backBufferLength: Infinity, // Let browser manage (per maintainer advice)
 
           // Stay close to live edge but not too aggressive
-          liveSyncDuration: 4,        // Target 4 seconds behind live edge
-          liveMaxLatencyDuration: 8,  // Max 8 seconds before seeking to live
+          liveSyncDuration: 4, // Target 4 seconds behind live edge
+          liveMaxLatencyDuration: 8, // Max 8 seconds before seeking to live
 
           // Faster ABR adaptation for live
-          abrEwmaFastLive: 2.0,       // Faster than default 3.0
-          abrEwmaSlowLive: 6.0,       // Faster than default 9.0
+          abrEwmaFastLive: 2.0, // Faster than default 3.0
+          abrEwmaSlowLive: 6.0, // Faster than default 9.0
 
           // Allow user overrides
           ...options.hlsConfig,
@@ -191,10 +204,12 @@ export class HlsJsPlayerImpl extends BasePlayer {
           if (data?.fatal) {
             if (this.failureCount < 3) {
               this.failureCount++;
-              try { this.hls.recoverMediaError(); } catch {}
+              try {
+                this.hls.recoverMediaError();
+              } catch {}
             } else {
-              const error = `HLS fatal error: ${data?.type || 'unknown'}`;
-              this.emit('error', error);
+              const error = `HLS fatal error: ${data?.type || "unknown"}`;
+              this.emit("error", error);
             }
           }
         });
@@ -210,31 +225,34 @@ export class HlsJsPlayerImpl extends BasePlayer {
               constrainSeek: true,
               liveOffset: 0,
             });
-            console.debug('[HLS.js] LiveDurationProxy initialized for live stream');
+            console.debug("[HLS.js] LiveDurationProxy initialized for live stream");
           }
 
           if (options.autoplay) {
-            video.play().catch(e => console.warn('HLS autoplay failed:', e));
+            video.play().catch((e) => console.warn("HLS autoplay failed:", e));
           }
         });
-
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
         // Use native HLS support
         video.src = source.url;
         if (options.autoplay) {
-          video.play().catch(e => console.warn('Native HLS autoplay failed:', e));
+          video.play().catch((e) => console.warn("Native HLS autoplay failed:", e));
         }
       } else {
-        throw new Error('HLS not supported in this browser');
+        throw new Error("HLS not supported in this browser");
       }
 
       // Optional subtitle tracks helper from source extras
       try {
-        const subs = (source as any).subtitles as Array<{ label: string; lang: string; src: string }>;
+        const subs = (source as any).subtitles as Array<{
+          label: string;
+          lang: string;
+          src: string;
+        }>;
         if (Array.isArray(subs)) {
           subs.forEach((s, idx) => {
-            const track = document.createElement('track');
-            track.kind = 'subtitles';
+            const track = document.createElement("track");
+            track.kind = "subtitles";
             track.label = s.label;
             track.srclang = s.lang;
             track.src = s.src;
@@ -244,17 +262,16 @@ export class HlsJsPlayerImpl extends BasePlayer {
         }
       } catch {}
 
-      console.log('[HLS.js] initialize() complete, returning video element');
+      console.log("[HLS.js] initialize() complete, returning video element");
       return video;
-
     } catch (error: any) {
-      this.emit('error', error.message || String(error));
+      this.emit("error", error.message || String(error));
       throw error;
     }
   }
 
   async destroy(): Promise<void> {
-    console.debug('[HLS.js] destroy() called');
+    console.debug("[HLS.js] destroy() called");
     this.destroyed = true;
 
     if (this.liveDurationProxy) {
@@ -265,15 +282,17 @@ export class HlsJsPlayerImpl extends BasePlayer {
     if (this.hls) {
       try {
         this.hls.destroy();
-        console.debug('[HLS.js] hls.destroy() completed');
+        console.debug("[HLS.js] hls.destroy() completed");
       } catch (e) {
-        console.warn('[HLS.js] Error destroying:', e);
+        console.warn("[HLS.js] Error destroying:", e);
       }
       this.hls = null;
     }
 
     if (this.videoElement && this.container) {
-      try { this.container.removeChild(this.videoElement); } catch {}
+      try {
+        this.container.removeChild(this.videoElement);
+      } catch {}
     }
 
     this.videoElement = null;
@@ -334,15 +353,19 @@ export class HlsJsPlayerImpl extends BasePlayer {
     if (!video) return;
 
     // HLS.js provides liveSyncPosition for live streams - use that first
-    if (this.hls && typeof this.hls.liveSyncPosition === 'number' && this.hls.liveSyncPosition > 0) {
-      console.debug('[HLS.js] jumpToLive using liveSyncPosition:', this.hls.liveSyncPosition);
+    if (
+      this.hls &&
+      typeof this.hls.liveSyncPosition === "number" &&
+      this.hls.liveSyncPosition > 0
+    ) {
+      console.debug("[HLS.js] jumpToLive using liveSyncPosition:", this.hls.liveSyncPosition);
       video.currentTime = this.hls.liveSyncPosition;
       return;
     }
 
     // Fall back to LiveDurationProxy
     if (this.liveDurationProxy && this.liveDurationProxy.isLive()) {
-      console.debug('[HLS.js] jumpToLive using LiveDurationProxy');
+      console.debug("[HLS.js] jumpToLive using LiveDurationProxy");
       this.liveDurationProxy.jumpToLive();
       return;
     }
@@ -351,7 +374,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     if (video.seekable && video.seekable.length > 0) {
       const liveEdge = video.seekable.end(video.seekable.length - 1);
       if (isFinite(liveEdge) && liveEdge > 0) {
-        console.debug('[HLS.js] jumpToLive using seekable.end:', liveEdge);
+        console.debug("[HLS.js] jumpToLive using seekable.end:", liveEdge);
         video.currentTime = liveEdge;
       }
     }
@@ -367,7 +390,11 @@ export class HlsJsPlayerImpl extends BasePlayer {
     const start = video.seekable.start(0);
     let end = video.seekable.end(video.seekable.length - 1);
 
-    if (this.liveDurationProxy?.isLive() && this.hls && typeof this.hls.liveSyncPosition === 'number') {
+    if (
+      this.liveDurationProxy?.isLive() &&
+      this.hls &&
+      typeof this.hls.liveSyncPosition === "number"
+    ) {
       const sync = this.hls.liveSyncPosition;
       if (Number.isFinite(sync) && sync > 0) {
         end = Math.min(end, sync);
@@ -386,7 +413,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     if (!video) return 0;
 
     // HLS.js provides liveSyncPosition
-    if (this.hls && typeof this.hls.liveSyncPosition === 'number') {
+    if (this.hls && typeof this.hls.liveSyncPosition === "number") {
       return Math.max(0, (this.hls.liveSyncPosition - video.currentTime) * 1000);
     }
 
@@ -401,22 +428,37 @@ export class HlsJsPlayerImpl extends BasePlayer {
   // ============================================================================
   // Quality API (Auto + levels)
   // ============================================================================
-  getQualities(): Array<{ id: string; label: string; bitrate?: number; width?: number; height?: number; isAuto?: boolean; active?: boolean }> {
+  getQualities(): Array<{
+    id: string;
+    label: string;
+    bitrate?: number;
+    width?: number;
+    height?: number;
+    isAuto?: boolean;
+    active?: boolean;
+  }> {
     const qualities: any[] = [];
     const video = this.videoElement;
     if (!this.hls || !video) return qualities;
     const levels = this.hls.levels || [];
-    const auto = { id: 'auto', label: 'Auto', isAuto: true, active: this.hls.autoLevelEnabled };
+    const auto = { id: "auto", label: "Auto", isAuto: true, active: this.hls.autoLevelEnabled };
     qualities.push(auto);
     levels.forEach((lvl: any, idx: number) => {
-      qualities.push({ id: String(idx), label: lvl.height ? `${lvl.height}p` : `${Math.round((lvl.bitrate||0)/1000)}kbps`, bitrate: lvl.bitrate, width: lvl.width, height: lvl.height, active: this.hls.currentLevel === idx });
+      qualities.push({
+        id: String(idx),
+        label: lvl.height ? `${lvl.height}p` : `${Math.round((lvl.bitrate || 0) / 1000)}kbps`,
+        bitrate: lvl.bitrate,
+        width: lvl.width,
+        height: lvl.height,
+        active: this.hls.currentLevel === idx,
+      });
     });
     return qualities;
   }
 
   selectQuality(id: string): void {
     if (!this.hls) return;
-    if (id === 'auto') {
+    if (id === "auto") {
       this.hls.currentLevel = -1;
       this.hls.autoLevelEnabled = true;
       return;
@@ -436,7 +478,12 @@ export class HlsJsPlayerImpl extends BasePlayer {
     const out: any[] = [];
     for (let i = 0; i < list.length; i++) {
       const tt = list[i];
-      out.push({ id: String(i), label: tt.label || `CC ${i+1}`, lang: (tt as any).language, active: tt.mode === 'showing' });
+      out.push({
+        id: String(i),
+        label: tt.label || `CC ${i + 1}`,
+        lang: (tt as any).language,
+        active: tt.mode === "showing",
+      });
     }
     return out;
   }
@@ -447,23 +494,27 @@ export class HlsJsPlayerImpl extends BasePlayer {
     const list = v.textTracks as TextTrackList;
     for (let i = 0; i < list.length; i++) {
       const tt = list[i];
-      if (id !== null && String(i) === id) tt.mode = 'showing'; else tt.mode = 'disabled';
+      if (id !== null && String(i) === id) tt.mode = "showing";
+      else tt.mode = "disabled";
     }
   }
 
   /**
    * Get HLS.js-specific stats for accurate bitrate and bandwidth
    */
-  async getStats(): Promise<{
-    type: 'hls';
-    bandwidthEstimate: number;
-    currentLevel: number;
-    currentBitrate: number;
-    loadLevel: number;
-    levels: Array<{ bitrate: number; width: number; height: number }>;
-    buffered: number;
-    latency?: number;
-  } | undefined> {
+  async getStats(): Promise<
+    | {
+        type: "hls";
+        bandwidthEstimate: number;
+        currentLevel: number;
+        currentBitrate: number;
+        loadLevel: number;
+        levels: Array<{ bitrate: number; width: number; height: number }>;
+        buffered: number;
+        latency?: number;
+      }
+    | undefined
+  > {
     if (!this.hls) return undefined;
 
     const levels = (this.hls.levels || []).map((lvl: any) => ({
@@ -480,7 +531,10 @@ export class HlsJsPlayerImpl extends BasePlayer {
     const video = this.videoElement;
     if (video && video.buffered.length > 0) {
       for (let i = 0; i < video.buffered.length; i++) {
-        if (video.buffered.start(i) <= video.currentTime && video.buffered.end(i) > video.currentTime) {
+        if (
+          video.buffered.start(i) <= video.currentTime &&
+          video.buffered.end(i) > video.currentTime
+        ) {
           buffered = video.buffered.end(i) - video.currentTime;
           break;
         }
@@ -494,7 +548,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     }
 
     return {
-      type: 'hls',
+      type: "hls",
       bandwidthEstimate: this.hls.bandwidthEstimate || 0,
       currentLevel,
       currentBitrate: currentLevelData?.bitrate || 0,

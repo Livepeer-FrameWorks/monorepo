@@ -12,13 +12,7 @@
     onAction?: () => void;
     size?: "sm" | "md" | "lg";
     variant?: "default" | "accent" | "subtle";
-    buttonVariant?:
-      | "default"
-      | "cta"
-      | "outline"
-      | "ghost"
-      | "secondary"
-      | "destructive";
+    buttonVariant?: "default" | "cta" | "outline" | "ghost" | "secondary" | "destructive";
     class?: string;
     showAction?: boolean;
     children?: Snippet;
@@ -70,8 +64,7 @@
       icon: "text-muted-foreground",
     },
     accent: {
-      iconWrapper:
-        "bg-gradient-to-br from-primary/20 to-info/20 border border-primary/30",
+      iconWrapper: "bg-gradient-to-br from-primary/20 to-info/20 border border-primary/30",
       icon: "text-info",
     },
     subtle: {

@@ -5,8 +5,8 @@
  * The implementation is in @livepeer-frameworks/player-core.
  */
 
-import React, { useEffect, useRef } from 'react';
-import { VideoJsPlayerImpl } from '@livepeer-frameworks/player-core';
+import React, { useEffect, useRef } from "react";
+import { VideoJsPlayerImpl } from "@livepeer-frameworks/player-core";
 
 // Re-export the implementation from core for backwards compatibility
 export { VideoJsPlayerImpl };
@@ -25,7 +25,7 @@ const VideoJsPlayer: React.FC<Props> = ({
   muted = true,
   autoPlay = true,
   controls = true,
-  onError
+  onError,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<VideoJsPlayerImpl | null>(null);
@@ -36,13 +36,15 @@ const VideoJsPlayer: React.FC<Props> = ({
     const player = new VideoJsPlayerImpl();
     playerRef.current = player;
 
-    player.initialize(
-      containerRef.current,
-      { url: src, type: 'html5/application/vnd.apple.mpegurl' },
-      { autoplay: autoPlay, muted, controls }
-    ).catch((e) => {
-      onError?.(e instanceof Error ? e : new Error(String(e)));
-    });
+    player
+      .initialize(
+        containerRef.current,
+        { url: src, type: "html5/application/vnd.apple.mpegurl" },
+        { autoplay: autoPlay, muted, controls }
+      )
+      .catch((e) => {
+        onError?.(e instanceof Error ? e : new Error(String(e)));
+      });
 
     return () => {
       player.destroy();
@@ -50,7 +52,7 @@ const VideoJsPlayer: React.FC<Props> = ({
     };
   }, [src, muted, autoPlay, controls, onError]);
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} />;
+  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 };
 
 export default VideoJsPlayer;

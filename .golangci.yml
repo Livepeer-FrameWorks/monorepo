@@ -4,45 +4,113 @@ run:
   modules-download-mode: readonly
 
 linters:
+  disable-all: true
   enable:
-    - unused        # Finds unused code (variables, constants, functions, types)
-    - ineffassign   # Detects useless assignments
+    # Tier 1: Bug finders (essential, low false positives)
+    - errcheck # Unchecked errors
+    - gosimple # Simplification suggestions
+    - govet # Go vet checks
+    - ineffassign # Useless assignments
+    - staticcheck # Comprehensive static analysis
+    - unused # Unused code
+    # Tier 2: Quality (catches real issues in HTTP/SQL/error handling)
+    - bodyclose # HTTP response body leaks
+    - durationcheck # time.Duration calculation mistakes
+    - errorlint # Error wrapping correctness (Go 1.13+)
+    - nilerr # Returns nil on non-nil error
+    - noctx # HTTP requests without context
+    - sqlclosecheck # Unclosed SQL rows/statements
+    # Tier 3: Style (commented out - enable if desired)
+    # - gofmt       # Formatting (redundant if using go fmt)
+    # - goimports   # Import ordering (can be noisy)
+    # - misspell    # Typo detection
+    # - unconvert   # Unnecessary type conversions
+    # - unparam     # Unused function parameters (false positives on interfaces)
+    # Future consideration:
+    # - gocritic    # Opinionated code suggestions (many rules, can be noisy)
+    # - gocyclo     # Cyclomatic complexity (subjective thresholds)
+    # - gocognit    # Cognitive complexity (subjective thresholds)
+    # - funlen      # Function length limits (can be annoying)
+    # - lll         # Line length limits (style preference)
+    # - exhaustive  # Enum exhaustiveness in switches (causes churn)
+    # - prealloc    # Slice preallocation hints (micro-optimization)
+    # - wrapcheck   # Ensure errors from external packages are wrapped
 
 linters-settings:
-  unused:
-    # Treat exported symbols as potentially used by external code
-    exported-is-used: true
+  errcheck:
+    check-type-assertions: true
+    check-blank: false # Allow _ = fn() for intentional ignores
+  errorlint:
+    errorf: true
+    asserts: true
+    comparison: true
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment # Micro-optimization, too noisy
+  staticcheck:
+    checks: ["all", "-ST1000", "-ST1003", "-ST1016"]
+    # ST1000: Package comments (not enforced)
+    # ST1003: CamelCase naming (generated code has odd names)
+    # ST1016: Method receiver names (style preference)
 
 issues:
   exclude-rules:
     # Exclude generated protobuf files
     - path: ".*\\.pb\\.go$"
-      linters: [unused, ineffassign]
+      linters:
+        - errcheck
+        - govet
+        - staticcheck
+        - unused
+        - ineffassign
 
     # Exclude generated gRPC files
     - path: ".*_grpc\\.pb\\.go$"
-      linters: [unused, ineffassign]
+      linters:
+        - errcheck
+        - govet
+        - staticcheck
+        - unused
+        - ineffassign
 
     # Exclude GraphQL generated code
     - path: "api_gateway/graph/generated/.*\\.go$"
-      linters: [unused, ineffassign]
+      linters:
+        - errcheck
+        - govet
+        - staticcheck
+        - unused
+        - ineffassign
 
     - path: "api_gateway/graph/model/models_gen\\.go$"
-      linters: [unused, ineffassign]
+      linters:
+        - errcheck
+        - govet
+        - staticcheck
+        - unused
+        - ineffassign
 
-    # Test files may have intentionally unused fixtures
+    # Test files: allow unused fixtures and unchecked errors in tests
     - path: "_test\\.go$"
-      linters: [unused]
-      text: "unused"
+      linters:
+        - errcheck
+        - unused
+
+    # Allow context.Background() in main/cmd packages (entry points)
+    - path: "cmd/"
+      linters:
+        - noctx
 
   exclude-dirs:
     - vendor
 
-  # Maximum issues to report (0 = unlimited)
   max-issues-per-linter: 0
   max-same-issues: 0
 
 output:
   formats:
-    - format: line-number
+    - format: colored-line-number
   sort-results: true
+  print-issued-lines: true
+  print-linter-name: true

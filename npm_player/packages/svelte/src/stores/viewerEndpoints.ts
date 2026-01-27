@@ -4,8 +4,8 @@
  * Port of useViewerEndpoints.ts React hook to Svelte 5 stores.
  */
 
-import { writable, derived, type Readable } from 'svelte/store';
-import type { ContentEndpoints, ContentType } from '@livepeer-frameworks/player-core';
+import { writable, derived, type Readable } from "svelte/store";
+import type { ContentEndpoints, ContentType } from "@livepeer-frameworks/player-core";
 
 export interface ViewerEndpointsOptions {
   gatewayUrl: string;
@@ -14,7 +14,7 @@ export interface ViewerEndpointsOptions {
   authToken?: string;
 }
 
-export type EndpointStatus = 'idle' | 'loading' | 'ready' | 'error';
+export type EndpointStatus = "idle" | "loading" | "ready" | "error";
 
 export interface ViewerEndpointsState {
   endpoints: ContentEndpoints | null;
@@ -46,7 +46,7 @@ async function fetchWithRetry(
       const response = await fetch(url, options);
       return response;
     } catch (e) {
-      lastError = e instanceof Error ? e : new Error('Fetch failed');
+      lastError = e instanceof Error ? e : new Error("Fetch failed");
 
       // Don't retry on abort
       if (options.signal?.aborted) {
@@ -57,17 +57,17 @@ async function fetchWithRetry(
       if (attempt < maxRetries - 1) {
         const delay = initialDelay * Math.pow(2, attempt);
         console.warn(`[viewerEndpoints] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
 
-  throw lastError ?? new Error('Gateway unreachable after retries');
+  throw lastError ?? new Error("Gateway unreachable after retries");
 }
 
 const initialState: ViewerEndpointsState = {
   endpoints: null,
-  status: 'idle',
+  status: "idle",
   error: null,
 };
 
@@ -107,10 +107,10 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
     abortController?.abort();
     abortController = new AbortController();
 
-    store.update(s => ({ ...s, status: 'loading', error: null }));
+    store.update((s) => ({ ...s, status: "loading", error: null }));
 
     try {
-      const graphqlEndpoint = gatewayUrl.replace(/\/$/, '');
+      const graphqlEndpoint = gatewayUrl.replace(/\/$/, "");
       const query = `
         query ResolveViewer($contentId: String!) {
           resolveViewerEndpoint(contentId: $contentId) {
@@ -122,9 +122,9 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
       `;
 
       const res = await fetchWithRetry(graphqlEndpoint, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         },
         body: JSON.stringify({ query, variables: { contentId } }),
@@ -135,41 +135,45 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
 
       const payload = await res.json();
       if (payload.errors?.length) {
-        throw new Error(payload.errors[0]?.message || 'GraphQL error');
+        throw new Error(payload.errors[0]?.message || "GraphQL error");
       }
 
       const resp = payload.data?.resolveViewerEndpoint;
       const primary = resp?.primary;
       const fallbacks = Array.isArray(resp?.fallbacks) ? resp.fallbacks : [];
 
-      if (!primary) throw new Error('No endpoints');
+      if (!primary) throw new Error("No endpoints");
 
       // Parse outputs JSON string (GraphQL returns JSON scalar as string)
-      if (primary.outputs && typeof primary.outputs === 'string') {
-        try { primary.outputs = JSON.parse(primary.outputs); } catch {}
+      if (primary.outputs && typeof primary.outputs === "string") {
+        try {
+          primary.outputs = JSON.parse(primary.outputs);
+        } catch {}
       }
       if (fallbacks) {
         fallbacks.forEach((fb: any) => {
-          if (fb.outputs && typeof fb.outputs === 'string') {
-            try { fb.outputs = JSON.parse(fb.outputs); } catch {}
+          if (fb.outputs && typeof fb.outputs === "string") {
+            try {
+              fb.outputs = JSON.parse(fb.outputs);
+            } catch {}
           }
         });
       }
 
       store.set({
         endpoints: { primary, fallbacks, metadata: resp?.metadata },
-        status: 'ready',
+        status: "ready",
         error: null,
       });
     } catch (e) {
       if (abortController?.signal.aborted || !mounted) return;
 
-      const message = e instanceof Error ? e.message : 'Unknown gateway error';
-      console.error('[viewerEndpoints] Gateway resolution failed:', message);
+      const message = e instanceof Error ? e.message : "Unknown gateway error";
+      console.error("[viewerEndpoints] Gateway resolution failed:", message);
 
       store.set({
         endpoints: null,
-        status: 'error',
+        status: "error",
         error: message,
       });
     }
@@ -206,19 +210,19 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
 
 // Convenience derived stores
 export function createDerivedEndpoints(store: ViewerEndpointsStore) {
-  return derived(store, $state => $state.endpoints);
+  return derived(store, ($state) => $state.endpoints);
 }
 
 export function createDerivedPrimaryEndpoint(store: ViewerEndpointsStore) {
-  return derived(store, $state => $state.endpoints?.primary ?? null);
+  return derived(store, ($state) => $state.endpoints?.primary ?? null);
 }
 
 export function createDerivedMetadata(store: ViewerEndpointsStore) {
-  return derived(store, $state => $state.endpoints?.metadata ?? null);
+  return derived(store, ($state) => $state.endpoints?.metadata ?? null);
 }
 
 export function createDerivedStatus(store: ViewerEndpointsStore) {
-  return derived(store, $state => $state.status);
+  return derived(store, ($state) => $state.status);
 }
 
 export default createEndpointResolver;

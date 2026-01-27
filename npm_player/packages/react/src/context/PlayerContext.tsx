@@ -12,12 +12,12 @@
  * ```
  */
 
-import React, { createContext, useContext, type ReactNode } from 'react';
+import React, { createContext, useContext, type ReactNode } from "react";
 import {
   usePlayerController,
   type UsePlayerControllerConfig,
   type UsePlayerControllerReturn,
-} from '../hooks/usePlayerController';
+} from "../hooks/usePlayerController";
 
 // Context holds the full hook return value
 const PlayerContext = createContext<UsePlayerControllerReturn | null>(null);
@@ -35,11 +35,7 @@ export interface PlayerProviderProps {
 export function PlayerProvider({ children, config }: PlayerProviderProps) {
   const playerController = usePlayerController(config);
 
-  return (
-    <PlayerContext.Provider value={playerController}>
-      {children}
-    </PlayerContext.Provider>
-  );
+  return <PlayerContext.Provider value={playerController}>{children}</PlayerContext.Provider>;
 }
 
 /**
@@ -49,7 +45,7 @@ export function PlayerProvider({ children, config }: PlayerProviderProps) {
 export function usePlayerContext(): UsePlayerControllerReturn {
   const context = useContext(PlayerContext);
   if (!context) {
-    throw new Error('usePlayerContext must be used within a PlayerProvider');
+    throw new Error("usePlayerContext must be used within a PlayerProvider");
   }
   return context;
 }

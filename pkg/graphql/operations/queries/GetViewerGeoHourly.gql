@@ -1,9 +1,5 @@
 # Hourly geographic viewer aggregates (from viewer_geo_hourly MV)
-query GetViewerGeoHourly(
-  $timeRange: TimeRangeInput
-  $first: Int = 100
-  $after: String
-) {
+query GetViewerGeoHourly($timeRange: TimeRangeInput, $first: Int = 100, $after: String) {
   analytics {
     usage {
       streaming {

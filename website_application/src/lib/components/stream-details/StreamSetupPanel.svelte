@@ -93,7 +93,9 @@
   <!-- Ingest Section -->
   <div class="slab">
     <div class="slab-header">
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Ingest URLs</h3>
+      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+        Ingest URLs
+      </h3>
       <p class="text-xs text-muted-foreground/70 mt-1">
         Configure your streaming software to broadcast to these endpoints
       </p>
@@ -108,7 +110,9 @@
               <ProtocolIcon class="w-4 h-4 text-info" />
               <span class="font-medium text-foreground">{protocol.name}</span>
               {#if protocol.recommended}
-                <span class="text-xs px-1.5 py-0.5 bg-success/20 text-success rounded-none">Recommended</span>
+                <span class="text-xs px-1.5 py-0.5 bg-success/20 text-success rounded-none"
+                  >Recommended</span
+                >
               {/if}
             </div>
           </div>
@@ -146,13 +150,19 @@
   <div class="slab">
     <div class="slab-header flex items-center justify-between">
       <div>
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Stream Keys Management</h3>
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+          Stream Keys Management
+        </h3>
         <p class="text-xs text-muted-foreground/70 mt-1">
           Manage multiple stream keys for key rotation and security
         </p>
       </div>
       {#if onCreateKey}
-        <Button variant="ghost" class="gap-2 text-primary hover:text-primary/80" onclick={onCreateKey}>
+        <Button
+          variant="ghost"
+          class="gap-2 text-primary hover:text-primary/80"
+          onclick={onCreateKey}
+        >
           <PlusIcon class="w-4 h-4" />
           Create Key
         </Button>
@@ -178,9 +188,7 @@
                 </div>
 
                 <div class="flex items-center space-x-2 mb-2">
-                  <code
-                    class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20"
-                  >
+                  <code class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20">
                     {key.keyValue}
                   </code>
                   <Button

@@ -56,7 +56,12 @@ query GetStreamOverview(
           }
         }
         # Time-series for viewer/connection trends
-        viewerTimeSeriesConnection(streamId: $streamId, timeRange: $timeRange, interval: $viewerInterval, page: { first: $viewerFirst }) {
+        viewerTimeSeriesConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          interval: $viewerInterval
+          page: { first: $viewerFirst }
+        ) {
           edges {
             cursor
             node {
@@ -70,7 +75,11 @@ query GetStreamOverview(
           }
           totalCount
         }
-        streamConnectionHourlyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+        streamConnectionHourlyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $first }
+        ) {
           edges {
             cursor
             node {
@@ -86,7 +95,11 @@ query GetStreamOverview(
           }
           totalCount
         }
-        qualityTierDailyConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $qualityFirst }) {
+        qualityTierDailyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $qualityFirst }
+        ) {
           edges {
             cursor
             node {

@@ -3,7 +3,7 @@
  * Svelte 5 store for VU meter / audio level monitoring
  */
 
-import type { IngestControllerV2 } from '@livepeer-frameworks/streamcrafter-core';
+import type { IngestControllerV2 } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface AudioLevelsState {
   level: number; // Current level 0-1
@@ -61,7 +61,7 @@ export function createAudioLevelsStore(
     if (!audioMixer) return;
 
     // Subscribe to level updates
-    unsubscribeFromMixer = audioMixer.on('levelUpdate', (event) => {
+    unsubscribeFromMixer = audioMixer.on("levelUpdate", (event) => {
       state.level = event.level;
       state.peakLevel = event.peakLevel;
       notify();

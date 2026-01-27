@@ -69,7 +69,7 @@ services:
     title: Foghorn (Routing)
     role: routing
     image: ghcr.io/livepeer-frameworks/frameworks-foghorn:latest
-    ports: ["18008:18008","18019:18019"]
+    ports: ["18008:18008", "18019:18019"]
     health:
       protocol: http
       path: /health
@@ -128,7 +128,7 @@ services:
     title: Navigator (DNS & Certs)
     role: infra
     image: ghcr.io/livepeer-frameworks/frameworks-navigator:latest
-    ports: ["18010:18010","18011:18011"]
+    ports: ["18010:18010", "18011:18011"]
     health:
       protocol: http
       path: /health

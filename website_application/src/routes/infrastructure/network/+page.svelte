@@ -15,7 +15,7 @@
     AcceptClusterInviteStore,
     CreatePrivateClusterStore,
     NodeCoreFieldsStore,
-    BootstrapTokenFieldsStore
+    BootstrapTokenFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -41,22 +41,24 @@
   const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   // Helper to unmask bootstrap token
-  function unmaskBootstrapToken(masked: { readonly " $fragments": { BootstrapTokenFields: object } } | null | undefined) {
+  function unmaskBootstrapToken(
+    masked: { readonly " $fragments": { BootstrapTokenFields: object } } | null | undefined
+  ) {
     if (!masked) return null;
     return get(fragment(masked, bootstrapTokenStore));
   }
 
-  let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map(e => e.node) ?? []);
+  let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
   // Unmask node core fields
-  let nodes = $derived(
-    maskedNodes.map(node => get(fragment(node, nodeCoreStore)))
-  );
+  let nodes = $derived(maskedNodes.map((node) => get(fragment(node, nodeCoreStore))));
   let mySubscriptions = $derived($subscriptionsStore.data?.mySubscriptions ?? []);
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
   let marketplaceClusters = $derived($marketplaceStore.data?.marketplaceClusters ?? []);
-  let pendingInvites = $derived(($invitesStore.data?.myClusterInvites ?? []).filter(i => i.status === "pending"));
+  let pendingInvites = $derived(
+    ($invitesStore.data?.myClusterInvites ?? []).filter((i) => i.status === "pending")
+  );
 
-  let subscribedIds = $derived(new Set(mySubscriptions.map(c => c.clusterId)));
+  let subscribedIds = $derived(new Set(mySubscriptions.map((c) => c.clusterId)));
   let accessByCluster = $derived.by(() => {
     const map = new SvelteMap<string, (typeof accessList)[number]>();
     for (const entry of accessList) {
@@ -66,9 +68,9 @@
   });
   let mutating = $derived(
     $subscribeMutation.fetching ||
-    $unsubscribeMutation.fetching ||
-    $acceptInviteMutation.fetching ||
-    $createClusterMutation.fetching
+      $unsubscribeMutation.fetching ||
+      $acceptInviteMutation.fetching ||
+      $createClusterMutation.fetching
   );
 
   // Modal state
@@ -77,14 +79,15 @@
   let createdBootstrapToken = $state<string | null>(null);
 
   // Map Data
-  let mapNodes = $derived(nodes
-    .filter(n => n.latitude && n.longitude)
-    .map(n => ({
-      id: n.id,
-      name: n.nodeName,
-      lat: n.latitude!,
-      lng: n.longitude!
-    }))
+  let mapNodes = $derived(
+    nodes
+      .filter((n) => n.latitude && n.longitude)
+      .map((n) => ({
+        id: n.id,
+        name: n.nodeName,
+        lat: n.latitude!,
+        lng: n.longitude!,
+      }))
   );
 
   onMount(async () => {
@@ -94,7 +97,7 @@
       accessStore.fetch(),
       subscriptionsStore.fetch(),
       marketplaceStore.fetch(),
-      invitesStore.fetch()
+      invitesStore.fetch(),
     ]);
   });
 
@@ -132,7 +135,7 @@
       await Promise.all([
         subscriptionsStore.fetch(),
         accessStore.fetch(),
-        marketplaceStore.fetch()
+        marketplaceStore.fetch(),
       ]);
     } catch {
       toast.error("Failed to update subscription");
@@ -150,11 +153,7 @@
       const result = await acceptInviteMutation.mutate({ inviteToken: invite.inviteToken });
       if (result.data?.acceptClusterInvite?.__typename === "ClusterSubscription") {
         toast.success(`Joined ${invite.clusterName}`);
-        await Promise.all([
-          invitesStore.fetch(),
-          subscriptionsStore.fetch(),
-          accessStore.fetch()
-        ]);
+        await Promise.all([invitesStore.fetch(), subscriptionsStore.fetch(), accessStore.fetch()]);
       } else {
         toast.error("Failed to accept invite");
       }
@@ -171,18 +170,15 @@
     try {
       const result = await createClusterMutation.mutate({
         input: {
-          clusterName: newClusterName.trim()
-        }
+          clusterName: newClusterName.trim(),
+        },
       });
       const data = result.data?.createPrivateCluster;
       if (data?.__typename === "CreatePrivateClusterResponse") {
         const unmaskedToken = unmaskBootstrapToken(data.bootstrapToken);
         createdBootstrapToken = unmaskedToken?.token ?? null;
         toast.success(`Created cluster "${newClusterName}"`);
-        await Promise.all([
-          accessStore.fetch(),
-          subscriptionsStore.fetch()
-        ]);
+        await Promise.all([accessStore.fetch(), subscriptionsStore.fetch()]);
       } else if (data?.__typename === "ValidationError") {
         toast.error(data.message);
       } else if (data?.__typename === "AuthError") {
@@ -230,7 +226,6 @@
 
   <div class="flex-1 overflow-y-auto">
     <div class="page-transition">
-
       <!-- Metrics -->
       <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
         <div>
@@ -297,12 +292,16 @@
                       <tr class="border-b border-border/30 hover:bg-muted/20">
                         <td class="py-3 px-4 font-medium text-foreground">{invite.clusterName}</td>
                         <td class="py-3 px-4">
-                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-info/10 text-info">
+                          <span
+                            class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-info/10 text-info"
+                          >
                             {invite.accessLevel}
                           </span>
                         </td>
                         <td class="py-3 px-4 text-muted-foreground text-sm">
-                          {invite.expiresAt ? new Date(invite.expiresAt).toLocaleDateString() : "Never"}
+                          {invite.expiresAt
+                            ? new Date(invite.expiresAt).toLocaleDateString()
+                            : "Never"}
                         </td>
                         <td class="py-3 px-4 text-right">
                           <div class="flex items-center justify-end gap-2">
@@ -361,7 +360,9 @@
                           </div>
                         </td>
                         <td class="py-3 px-4">
-                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-success/10 text-success">
+                          <span
+                            class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-success/10 text-success"
+                          >
                             {cluster.healthStatus ?? "Active"}
                           </span>
                         </td>
@@ -399,12 +400,8 @@
             <h3>Global Coverage</h3>
           </div>
           <div class="slab-body--flush h-[350px]">
-            {#if typeof window !== 'undefined'}
-              <RoutingMap
-                nodes={mapNodes}
-                routes={[]}
-                height={350}
-              />
+            {#if typeof window !== "undefined"}
+              <RoutingMap nodes={mapNodes} routes={[]} height={350} />
             {/if}
           </div>
         </div>
@@ -451,7 +448,9 @@
                           {cluster.ownerName ?? "Platform"}
                         </td>
                         <td class="py-3 px-4">
-                          <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary">
+                          <span
+                            class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary/10 text-primary"
+                          >
                             {formatPrice(cluster.pricingModel, cluster.monthlyPriceCents)}
                           </span>
                         </td>
@@ -495,7 +494,7 @@
                   Create a private cluster to get a bootstrap token for your edge nodes.
                 </p>
               </div>
-              <Button onclick={() => showCreateClusterModal = true}>
+              <Button onclick={() => (showCreateClusterModal = true)}>
                 <PlusIcon class="w-4 h-4 mr-2" />
                 Create Private Cluster
               </Button>
@@ -516,7 +515,9 @@
       onclick={closeModal}
       aria-label="Close modal"
     ></button>
-    <div class="relative bg-background border border-border rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+    <div
+      class="relative bg-background border border-border rounded-lg shadow-xl max-w-md w-full mx-4 p-6"
+    >
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-semibold">Create Private Cluster</h2>
         <button onclick={closeModal} class="text-muted-foreground hover:text-foreground">

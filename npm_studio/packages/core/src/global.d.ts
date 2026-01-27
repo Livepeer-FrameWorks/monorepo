@@ -10,7 +10,7 @@ declare class MediaStreamTrackProcessor<T extends VideoFrame | AudioData = Video
 }
 
 declare class MediaStreamTrackGenerator extends MediaStreamTrack {
-  constructor(init: { kind: 'audio' | 'video' });
+  constructor(init: { kind: "audio" | "video" });
   readonly writable: WritableStream<VideoFrame | AudioData>;
 }
 
@@ -26,13 +26,19 @@ interface AudioData {
 
 // DisplayMediaStreamOptions extensions
 interface DisplayMediaStreamOptions {
-  video?: boolean | MediaTrackConstraints | {
-    cursor?: 'always' | 'motion' | 'never';
-    displaySurface?: 'application' | 'browser' | 'monitor' | 'window';
-  };
-  audio?: boolean | MediaTrackConstraints | {
-    systemAudio?: 'include' | 'exclude';
-  };
+  video?:
+    | boolean
+    | MediaTrackConstraints
+    | {
+        cursor?: "always" | "motion" | "never";
+        displaySurface?: "application" | "browser" | "monitor" | "window";
+      };
+  audio?:
+    | boolean
+    | MediaTrackConstraints
+    | {
+        systemAudio?: "include" | "exclude";
+      };
   preferCurrentTab?: boolean;
 }
 

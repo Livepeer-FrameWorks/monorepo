@@ -6,7 +6,7 @@
   import {
     GetConversationsConnectionStore,
     CreateConversationStore,
-    LiveConversationUpdatesStore
+    LiveConversationUpdatesStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { GridSeam } from "$lib/components/layout";
@@ -39,9 +39,9 @@
   let totalCount = $derived($conversationsStore.data?.conversationsConnection?.totalCount ?? 0);
 
   // Computed stats
-  let openCount = $derived(conversations.filter(c => c.node?.status === "OPEN").length);
-  let resolvedCount = $derived(conversations.filter(c => c.node?.status === "RESOLVED").length);
-  let pendingCount = $derived(conversations.filter(c => c.node?.status === "PENDING").length);
+  let openCount = $derived(conversations.filter((c) => c.node?.status === "OPEN").length);
+  let resolvedCount = $derived(conversations.filter((c) => c.node?.status === "RESOLVED").length);
+  let pendingCount = $derived(conversations.filter((c) => c.node?.status === "PENDING").length);
 
   // Create conversation modal
   let showCreateModal = $state(false);
@@ -161,23 +161,18 @@
 
 <div class="h-full flex flex-col overflow-hidden">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background">
+  <div
+    class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background"
+  >
     <div class="flex justify-between items-center">
       <div class="flex items-center gap-3">
         <MessageSquareIcon class="w-5 h-5 text-primary" />
         <div>
           <h1 class="text-xl font-bold text-foreground">Messages</h1>
-          <p class="text-sm text-muted-foreground">
-            Contact support and view conversation history
-          </p>
+          <p class="text-sm text-muted-foreground">Contact support and view conversation history</p>
         </div>
       </div>
-      <Button
-        variant="outline"
-        size="sm"
-        class="gap-2"
-        onclick={() => (showCreateModal = true)}
-      >
+      <Button variant="outline" size="sm" class="gap-2" onclick={() => (showCreateModal = true)}>
         <PlusIcon class="w-4 h-4" />
         New Conversation
       </Button>
@@ -206,7 +201,13 @@
     {:else}
       <div class="page-transition">
         <!-- Stats Bar -->
-        <GridSeam cols={3} stack="2x2" surface="panel" flush={true} class="mb-0 min-h-full content-start">
+        <GridSeam
+          cols={3}
+          stack="2x2"
+          surface="panel"
+          flush={true}
+          class="mb-0 min-h-full content-start"
+        >
           <div>
             <DashboardMetricCard
               icon={InboxIcon}
@@ -283,11 +284,17 @@
                             <span class="font-medium text-foreground truncate">
                               {conv.subject || "New conversation"}
                             </span>
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusBadgeClass(conv.status)}">
+                            <span
+                              class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusBadgeClass(
+                                conv.status
+                              )}"
+                            >
                               {conv.status}
                             </span>
                             {#if conv.unreadCount > 0}
-                              <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                              <span
+                                class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold"
+                              >
                                 {conv.unreadCount}
                               </span>
                             {/if}
@@ -308,7 +315,9 @@
                         </div>
 
                         <!-- Arrow -->
-                        <ChevronRightIcon class="w-5 h-5 text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />
+                        <ChevronRightIcon
+                          class="w-5 h-5 text-muted-foreground group-hover:text-foreground transition-colors shrink-0"
+                        />
                       </button>
                     {/if}
                   {/each}
@@ -334,11 +343,7 @@
     <div class="grid gap-4 py-4">
       <div class="grid gap-2">
         <label for="subject" class="text-sm font-medium">Subject (optional)</label>
-        <Input
-          id="subject"
-          bind:value={newSubject}
-          placeholder="What's this about?"
-        />
+        <Input id="subject" bind:value={newSubject} placeholder="What's this about?" />
       </div>
       <div class="grid gap-2">
         <label for="message" class="text-sm font-medium">Message</label>
@@ -351,9 +356,7 @@
       </div>
     </div>
     <DialogFooter>
-      <Button variant="outline" onclick={() => (showCreateModal = false)}>
-        Cancel
-      </Button>
+      <Button variant="outline" onclick={() => (showCreateModal = false)}>Cancel</Button>
       <Button onclick={createConversation} disabled={creating || !newMessage.trim()}>
         {#if creating}
           Sending...

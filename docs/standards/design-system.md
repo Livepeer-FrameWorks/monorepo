@@ -219,9 +219,8 @@ For 4-item grids (stats, metrics):
 ### Spacing
 
 ```css
---space-xs: 0.25rem /* 4px */ --space-sm: 0.5rem /* 8px */ --space-md: 1rem
-  /* 16px */ --space-lg: 1.5rem /* 24px */ --space-xl: 2rem /* 32px */
-  --space-2xl: 3rem /* 48px */;
+--space-xs: 0.25rem /* 4px */ --space-sm: 0.5rem /* 8px */ --space-md: 1rem /* 16px */
+  --space-lg: 1.5rem /* 24px */ --space-xl: 2rem /* 32px */ --space-2xl: 3rem /* 48px */;
 ```
 
 ### Seam Styling
@@ -248,14 +247,14 @@ color: hsl(var(--tn-fg-dark));
 
 These point to the current canonical implementation. Other apps may extend or override.
 
-| Purpose            | File                                                            |
-| ------------------ | --------------------------------------------------------------- |
-| Design tokens      | `website_application/src/styles/tokens.css`                     |
-| Layout primitives  | `website_application/src/styles/layout.css`                     |
+| Purpose            | File                                                              |
+| ------------------ | ----------------------------------------------------------------- |
+| Design tokens      | `website_application/src/styles/tokens.css`                       |
+| Layout primitives  | `website_application/src/styles/layout.css`                       |
 | Slab classes       | `website_application/src/styles/layout.css` (SLAB SYSTEM section) |
-| GridSeam component | `website_application/src/lib/components/layout/GridSeam.svelte` |
-| Marketing tokens   | `website_marketing/src/index.css`                               |
-| Marketing layout   | `website_marketing/src/styles/marketing/layout.css`             |
+| GridSeam component | `website_application/src/lib/components/layout/GridSeam.svelte`   |
+| Marketing tokens   | `website_marketing/src/index.css`                                 |
+| Marketing layout   | `website_marketing/src/styles/marketing/layout.css`               |
 
 ## Summary: The FrameWorks Look
 

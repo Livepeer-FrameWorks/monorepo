@@ -4,19 +4,19 @@
 
 /** High-level player state machine for UI */
 export type PlayerState =
-  | 'booting'
-  | 'gateway_loading'
-  | 'gateway_ready'
-  | 'gateway_error'
-  | 'no_endpoint'
-  | 'selecting_player'
-  | 'connecting'
-  | 'buffering'
-  | 'playing'
-  | 'paused'
-  | 'ended'
-  | 'error'
-  | 'destroyed';
+  | "booting"
+  | "gateway_loading"
+  | "gateway_ready"
+  | "gateway_error"
+  | "no_endpoint"
+  | "selecting_player"
+  | "connecting"
+  | "buffering"
+  | "playing"
+  | "paused"
+  | "ended"
+  | "error"
+  | "destroyed";
 
 /**
  * Content type (used for Gateway resolution + UI presets).
@@ -25,11 +25,11 @@ export type PlayerState =
  * - `dvr` can be effectively-live when `metadata.dvrStatus === 'recording'`
  * - `vod`/`clip`/completed `dvr` should use VOD-like presets and controls
  */
-export type ContentType = 'live' | 'dvr' | 'clip' | 'vod';
+export type ContentType = "live" | "dvr" | "clip" | "vod";
 
 export interface PlayerStateContext {
   reason?: string;
-  gatewayStatus?: 'idle' | 'loading' | 'ready' | 'error';
+  gatewayStatus?: "idle" | "loading" | "ready" | "error";
   selectedPlayer?: string;
   selectedProtocol?: string;
   nodeId?: string;
@@ -112,7 +112,7 @@ export interface DashJsConfig {
     };
     abr?: {
       autoSwitchBitrate?: { video: boolean; audio: boolean };
-      ABRStrategy?: 'abrDynamic' | 'abrBola' | 'abrL2A' | 'abrLoLP' | 'abrThroughput';
+      ABRStrategy?: "abrDynamic" | "abrBola" | "abrL2A" | "abrLoLP" | "abrThroughput";
       useDefaultABRRules?: boolean;
     };
   };
@@ -136,7 +136,7 @@ export interface VhsConfig {
 }
 
 // Gateway/Foghorn viewer resolution types
-export type StreamProtocol = 'WHEP' | 'HLS' | 'DASH' | 'MP4' | 'WEBM' | 'RTMP' | 'MIST_HTML';
+export type StreamProtocol = "WHEP" | "HLS" | "DASH" | "MP4" | "WEBM" | "RTMP" | "MIST_HTML";
 
 export interface OutputCapabilities {
   supportsSeek: boolean;
@@ -182,29 +182,29 @@ export interface ContentMetadata {
   thumbnailUrl?: string;
   createdAt?: string;
   status?:
-    | 'AVAILABLE'
-    | 'PROCESSING'
-    | 'ERROR'
-    | 'OFFLINE'
-    | 'ONLINE'
-    | 'INITIALIZING'
-    | 'BOOTING'
-    | 'WAITING_FOR_DATA'
-    | 'SHUTTING_DOWN'
-    | 'INVALID';
+    | "AVAILABLE"
+    | "PROCESSING"
+    | "ERROR"
+    | "OFFLINE"
+    | "ONLINE"
+    | "INITIALIZING"
+    | "BOOTING"
+    | "WAITING_FOR_DATA"
+    | "SHUTTING_DOWN"
+    | "INVALID";
   viewers?: number;
   isLive?: boolean;
   recordingSizeBytes?: number;
   clipSource?: string;
   /** DVR recording status: 'recording' = in progress (treat as live), 'completed' = finished (treat as VOD) */
-  dvrStatus?: 'recording' | 'completed';
+  dvrStatus?: "recording" | "completed";
   /** Native container format: mp4, m3u8, webm, etc. */
   format?: string;
   /** MistServer authoritative snapshot (merged into this metadata) */
   mist?: MistStreamInfo;
   /** Parsed track summary (derived from Mist metadata when available) */
   tracks?: Array<{
-    type: 'video' | 'audio' | 'meta';
+    type: "video" | "audio" | "meta";
     codec?: string;
     width?: number;
     height?: number;
@@ -223,20 +223,20 @@ export interface ContentEndpoints {
 
 // Stream State Types (MistServer native polling)
 export type StreamStatus =
-  | 'ONLINE'
-  | 'OFFLINE'
-  | 'INITIALIZING'
-  | 'BOOTING'
-  | 'WAITING_FOR_DATA'
-  | 'SHUTTING_DOWN'
-  | 'INVALID'
-  | 'ERROR';
+  | "ONLINE"
+  | "OFFLINE"
+  | "INITIALIZING"
+  | "BOOTING"
+  | "WAITING_FOR_DATA"
+  | "SHUTTING_DOWN"
+  | "INVALID"
+  | "ERROR";
 
 export interface MistStreamInfo {
   error?: string;
   on_error?: string;
   perc?: number;
-  type?: 'live' | 'vod';
+  type?: "live" | "vod";
   hasVideo?: boolean;
   hasAudio?: boolean;
   unixoffset?: number;
@@ -263,7 +263,7 @@ export interface MistStreamSource {
 }
 
 export interface MistTrackInfo {
-  type: 'video' | 'audio' | 'meta';
+  type: "video" | "audio" | "meta";
   codec: string;
   width?: number;
   height?: number;
@@ -328,7 +328,7 @@ export interface PlaybackQualityOptions {
 }
 
 // Meta Track Types
-export type MetaTrackEventType = 'subtitle' | 'score' | 'event' | 'chapter' | 'unknown';
+export type MetaTrackEventType = "subtitle" | "score" | "event" | "chapter" | "unknown";
 
 export interface MetaTrackEvent {
   type: MetaTrackEventType;
@@ -413,10 +413,10 @@ export interface TelemetryOptions {
  * - 'vod': VOD/clip content - prefer seekable protocols (HLS/MP4), exclude WHEP
  * - 'auto': Balanced selection (MP4/WS → WHEP → HLS)
  */
-export type PlaybackMode = 'low-latency' | 'quality' | 'vod' | 'auto';
+export type PlaybackMode = "low-latency" | "quality" | "vod" | "auto";
 
 /** ABR mode configuration */
-export type ABRMode = 'auto' | 'resize' | 'bitrate' | 'manual';
+export type ABRMode = "auto" | "resize" | "bitrate" | "manual";
 
 /** ABR controller options */
 export interface ABROptions {
@@ -450,7 +450,7 @@ export interface PlayerMetadata {
 
   // From MistServer (real-time)
   tracks?: Array<{
-    type: 'video' | 'audio' | 'meta';
+    type: "video" | "audio" | "meta";
     codec?: string;
     width?: number;
     height?: number;

@@ -1,5 +1,19 @@
-import { createContext, useContext, useState, useMemo, useEffect, useCallback, type ReactNode } from "react";
-import type { PlaygroundState, PlaygroundActions, MistSource, IngestUris, PlayerType } from "../lib/types";
+import {
+  createContext,
+  useContext,
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  type ReactNode,
+} from "react";
+import type {
+  PlaygroundState,
+  PlaygroundActions,
+  MistSource,
+  IngestUris,
+  PlayerType,
+} from "../lib/types";
 import { DEFAULTS, STORAGE_KEYS } from "../lib/constants";
 import {
   sanitizeBaseUrl,
@@ -8,7 +22,7 @@ import {
   buildMistJsonUrl,
   loadString,
   saveString,
-  extractHostname
+  extractHostname,
 } from "../lib/mist-utils";
 
 type PlaygroundContextValue = PlaygroundState & PlaygroundActions;
@@ -22,10 +36,18 @@ function getInitialValue(key: string, fallback: string): string {
 
 export function PlaygroundProvider({ children }: { children: ReactNode }) {
   // Connection config (persisted)
-  const [baseUrl, setBaseUrlState] = useState(() => getInitialValue(STORAGE_KEYS.baseUrl, DEFAULTS.baseUrl));
-  const [viewerPath, setViewerPathState] = useState(() => getInitialValue(STORAGE_KEYS.viewerPath, DEFAULTS.viewerPath));
-  const [streamName, setStreamNameState] = useState(() => getInitialValue(STORAGE_KEYS.streamName, DEFAULTS.streamName));
-  const [thumbnailUrl, setThumbnailUrlState] = useState(() => getInitialValue(STORAGE_KEYS.thumbnailUrl, DEFAULTS.thumbnailUrl));
+  const [baseUrl, setBaseUrlState] = useState(() =>
+    getInitialValue(STORAGE_KEYS.baseUrl, DEFAULTS.baseUrl)
+  );
+  const [viewerPath, setViewerPathState] = useState(() =>
+    getInitialValue(STORAGE_KEYS.viewerPath, DEFAULTS.viewerPath)
+  );
+  const [streamName, setStreamNameState] = useState(() =>
+    getInitialValue(STORAGE_KEYS.streamName, DEFAULTS.streamName)
+  );
+  const [thumbnailUrl, setThumbnailUrlState] = useState(() =>
+    getInitialValue(STORAGE_KEYS.thumbnailUrl, DEFAULTS.thumbnailUrl)
+  );
 
   // Player config
   const [autoplayMuted, setAutoplayMuted] = useState(DEFAULTS.autoplayMuted);
@@ -40,7 +62,10 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
   // Derived values
   const viewerBase = useMemo(() => buildViewerBase(baseUrl, viewerPath), [baseUrl, viewerPath]);
   const host = useMemo(() => extractHostname(baseUrl), [baseUrl]);
-  const ingestUris = useMemo<IngestUris>(() => buildIngestUris(baseUrl, streamName), [baseUrl, streamName]);
+  const ingestUris = useMemo<IngestUris>(
+    () => buildIngestUris(baseUrl, streamName),
+    [baseUrl, streamName]
+  );
 
   // Persist config changes
   useEffect(() => {
@@ -97,7 +122,6 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
     }
   }, [viewerBase, streamName]);
 
-
   // Actions
   const setBaseUrl = useCallback((url: string) => {
     setBaseUrlState(sanitizeBaseUrl(url));
@@ -143,7 +167,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       setAutoplayMuted,
       pollSources,
       setSelectedProtocol,
-      setSelectedPlayer
+      setSelectedPlayer,
     }),
     [
       baseUrl,
@@ -166,7 +190,7 @@ export function PlaygroundProvider({ children }: { children: ReactNode }) {
       setAutoplayMuted,
       pollSources,
       setSelectedProtocol,
-      setSelectedPlayer
+      setSelectedPlayer,
     ]
   );
 

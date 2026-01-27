@@ -5,13 +5,7 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { Badge } from "$lib/components/ui/badge";
 
-  let {
-    streamKeys,
-    onCreateKey,
-    onCopyKey,
-    onDeleteKey,
-    deleteLoading = null,
-  } = $props();
+  let { streamKeys, onCreateKey, onCopyKey, onDeleteKey, deleteLoading = null } = $props();
 
   const PlusIcon = getIconComponent("Plus");
   const CopyIcon = getIconComponent("Copy");
@@ -21,7 +15,9 @@
 
 <div class="slab border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
   <div class="slab-header flex items-center justify-between">
-    <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Stream Keys Management</h3>
+    <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+      Stream Keys Management
+    </h3>
     <Button variant="ghost" class="gap-2 text-primary hover:text-primary/80" onclick={onCreateKey}>
       <PlusIcon class="w-4 h-4" />
       Create Key
@@ -47,9 +43,7 @@
               </div>
 
               <div class="flex items-center space-x-2 mb-2">
-                <code
-                  class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20"
-                >
+                <code class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20">
                   {key.keyValue}
                 </code>
                 <Button

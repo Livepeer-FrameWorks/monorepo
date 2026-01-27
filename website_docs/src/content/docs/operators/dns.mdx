@@ -5,7 +5,7 @@ sidebar:
   order: 10
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="tip" title="Automated DNS Management">
 **Navigator (`api_dns`)** provides automated DNS management for FrameWorks. It syncs DNS records based on Quartermaster node inventory (nodes with external IPs):
@@ -13,6 +13,7 @@ import { Aside } from '@astrojs/starlight/components';
 - **Multiple nodes** → Cloudflare load balancer pool with geo-routing
 
 Navigator also handles ACME certificate issuance via DNS-01 validation (platform-managed subdomains only).
+
 </Aside>
 
 FrameWorks automates the complex dance of DNS records and SSL certificates so you don't have to. Using the Navigator service, the platform ensures your public endpoints are always in sync with your active infrastructure.
@@ -51,6 +52,7 @@ frameworks dns doctor --domain yourdomain.com
 ```
 
 This checks:
+
 - Each subdomain resolves to expected IPs from inventory
 - Reports mismatches between public DNS and Quartermaster
 
@@ -62,16 +64,16 @@ By default, the CLI assumes `frameworks.network` if `--domain` is not provided.
 
 ### Public Endpoints (GeoDNS)
 
-| Subdomain | Purpose | Service |
-|-----------|---------|---------|
-| `example.com` | Marketing site | Foredeck (Website) |
-| `app.example.com` | Web console | Chartroom (Webapp) |
-| `api.example.com` | GraphQL API | Bridge |
-| `play.example.com` | Viewer routing | Foghorn |
-| `ingest.example.com` | Stream ingest | Edge nodes |
-| `edge.example.com` | Edge pool domain | Edge nodes |
-| `docs.example.com` | Docs site | Logbook (Docs) |
-| `forms.example.com` | Forms API | Steward (Forms) |
+| Subdomain            | Purpose          | Service            |
+| -------------------- | ---------------- | ------------------ |
+| `example.com`        | Marketing site   | Foredeck (Website) |
+| `app.example.com`    | Web console      | Chartroom (Webapp) |
+| `api.example.com`    | GraphQL API      | Bridge             |
+| `play.example.com`   | Viewer routing   | Foghorn            |
+| `ingest.example.com` | Stream ingest    | Edge nodes         |
+| `edge.example.com`   | Edge pool domain | Edge nodes         |
+| `docs.example.com`   | Docs site        | Logbook (Docs)     |
+| `forms.example.com`  | Forms API        | Steward (Forms)    |
 
 Navigator only manages subdomains for service types that exist in Quartermaster inventory. If you want separate `ingest` or `play` domains, register nodes with those types; otherwise use the `edge` pool.
 
@@ -84,6 +86,7 @@ Edge nodes do **not** join the mesh.
 - PostgreSQL, ClickHouse, Kafka, Zookeeper
 
 Configure via environment variables with private/mesh IPs:
+
 ```bash
 export COMMODORE_URL=http://10.0.1.10:18001
 export PURSER_URL=http://10.0.1.11:18003
@@ -108,6 +111,7 @@ Navigator requires a Cloudflare API token with these permissions:
 - **Account.Load Balancers**: Edit (for multi-node setups)
 
 Environment variables for Navigator:
+
 ```bash
 CLOUDFLARE_API_TOKEN="your-api-token"
 CLOUDFLARE_ZONE_ID="your-zone-id"
@@ -115,6 +119,7 @@ CLOUDFLARE_ACCOUNT_ID="your-account-id"
 ```
 
 Optional environment variables:
+
 ```bash
 # Cloudflare proxy defaults (comma-separated service types)
 NAVIGATOR_PROXY_SERVICES="app,website,docs"

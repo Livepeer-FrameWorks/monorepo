@@ -127,97 +127,109 @@ const SeekBar: React.FC<SeekBarProps> = ({
 
   // Calculate time from mouse position
   // For live: maps position to time within DVR window
-  const getTimeFromPosition = useCallback((clientX: number): number => {
-    if (!trackRef.current) return 0;
-    const rect = trackRef.current.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const percent = Math.min(1, Math.max(0, x / rect.width));
+  const getTimeFromPosition = useCallback(
+    (clientX: number): number => {
+      if (!trackRef.current) return 0;
+      const rect = trackRef.current.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const percent = Math.min(1, Math.max(0, x / rect.width));
 
-    // Live with valid seekable window
-    if (isLive && Number.isFinite(seekableWindow) && seekableWindow > 0) {
-      return seekableStart + (percent * seekableWindow);
-    }
-
-    // VOD with finite duration
-    if (Number.isFinite(duration) && duration > 0) {
-      return percent * duration;
-    }
-
-    // Fallback: If we have liveEdge, use it even if not marked as live
-    // This handles cases where duration is Infinity but we have valid seekable data
-    if (liveEdge !== undefined && Number.isFinite(liveEdge) && liveEdge > 0) {
-      const start = Number.isFinite(seekableStart) ? seekableStart : 0;
-      const window = liveEdge - start;
-      if (window > 0) {
-        return start + (percent * window);
+      // Live with valid seekable window
+      if (isLive && Number.isFinite(seekableWindow) && seekableWindow > 0) {
+        return seekableStart + percent * seekableWindow;
       }
-    }
 
-    // Last resort: use currentTime as a baseline
-    return percent * (currentTime || 1);
-  }, [duration, isLive, seekableStart, seekableWindow, liveEdge, currentTime]);
+      // VOD with finite duration
+      if (Number.isFinite(duration) && duration > 0) {
+        return percent * duration;
+      }
+
+      // Fallback: If we have liveEdge, use it even if not marked as live
+      // This handles cases where duration is Infinity but we have valid seekable data
+      if (liveEdge !== undefined && Number.isFinite(liveEdge) && liveEdge > 0) {
+        const start = Number.isFinite(seekableStart) ? seekableStart : 0;
+        const window = liveEdge - start;
+        if (window > 0) {
+          return start + percent * window;
+        }
+      }
+
+      // Last resort: use currentTime as a baseline
+      return percent * (currentTime || 1);
+    },
+    [duration, isLive, seekableStart, seekableWindow, liveEdge, currentTime]
+  );
 
   // Handle mouse move for hover preview
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!trackRef.current || disabled) return;
-    const rect = trackRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const percent = Math.min(1, Math.max(0, x / rect.width));
-    setHoverPosition(percent * 100);
-    setHoverTime(getTimeFromPosition(e.clientX));
-  }, [disabled, getTimeFromPosition]);
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!trackRef.current || disabled) return;
+      const rect = trackRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const percent = Math.min(1, Math.max(0, x / rect.width));
+      setHoverPosition(percent * 100);
+      setHoverTime(getTimeFromPosition(e.clientX));
+    },
+    [disabled, getTimeFromPosition]
+  );
 
   // Handle click to seek
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    if (disabled) return;
-    if (!isLive && !Number.isFinite(duration)) return;
-    const time = getTimeFromPosition(e.clientX);
-    onSeek?.(time);
-    setDragTime(null);
-    dragTimeRef.current = null;
-  }, [disabled, duration, isLive, getTimeFromPosition, onSeek]);
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (disabled) return;
+      if (!isLive && !Number.isFinite(duration)) return;
+      const time = getTimeFromPosition(e.clientX);
+      onSeek?.(time);
+      setDragTime(null);
+      dragTimeRef.current = null;
+    },
+    [disabled, duration, isLive, getTimeFromPosition, onSeek]
+  );
 
   // Handle drag start
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (disabled) return;
-    if (!isLive && !Number.isFinite(duration)) return;
-    e.preventDefault();
-    setIsDragging(true);
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (disabled) return;
+      if (!isLive && !Number.isFinite(duration)) return;
+      e.preventDefault();
+      setIsDragging(true);
 
-    const handleDragMove = (moveEvent: MouseEvent) => {
-      const time = getTimeFromPosition(moveEvent.clientX);
+      const handleDragMove = (moveEvent: MouseEvent) => {
+        const time = getTimeFromPosition(moveEvent.clientX);
+        if (commitOnRelease) {
+          setDragTime(time);
+          dragTimeRef.current = time;
+        } else {
+          onSeek?.(time);
+        }
+      };
+
+      const handleDragEnd = () => {
+        setIsDragging(false);
+        document.removeEventListener("mousemove", handleDragMove);
+        document.removeEventListener("mouseup", handleDragEnd);
+        const pending = dragTimeRef.current;
+        if (commitOnRelease && pending !== null) {
+          onSeek?.(pending);
+          setDragTime(null);
+          dragTimeRef.current = null;
+        }
+      };
+
+      document.addEventListener("mousemove", handleDragMove);
+      document.addEventListener("mouseup", handleDragEnd);
+
+      // Initial seek
+      const time = getTimeFromPosition(e.clientX);
       if (commitOnRelease) {
         setDragTime(time);
         dragTimeRef.current = time;
       } else {
         onSeek?.(time);
       }
-    };
-
-    const handleDragEnd = () => {
-      setIsDragging(false);
-      document.removeEventListener("mousemove", handleDragMove);
-      document.removeEventListener("mouseup", handleDragEnd);
-      const pending = dragTimeRef.current;
-      if (commitOnRelease && pending !== null) {
-        onSeek?.(pending);
-        setDragTime(null);
-        dragTimeRef.current = null;
-      }
-    };
-
-    document.addEventListener("mousemove", handleDragMove);
-    document.addEventListener("mouseup", handleDragEnd);
-
-    // Initial seek
-    const time = getTimeFromPosition(e.clientX);
-    if (commitOnRelease) {
-      setDragTime(time);
-      dragTimeRef.current = time;
-    } else {
-      onSeek?.(time);
-    }
-  }, [disabled, duration, isLive, getTimeFromPosition, onSeek, commitOnRelease]);
+    },
+    [disabled, duration, isLive, getTimeFromPosition, onSeek, commitOnRelease]
+  );
 
   const showThumb = isHovering || isDragging;
   const canShowTooltip = isLive ? seekableWindow > 0 : Number.isFinite(duration);
@@ -231,23 +243,25 @@ const SeekBar: React.FC<SeekBarProps> = ({
         className
       )}
       onMouseEnter={() => !disabled && setIsHovering(true)}
-      onMouseLeave={() => { setIsHovering(false); setIsDragging(false); }}
+      onMouseLeave={() => {
+        setIsHovering(false);
+        setIsDragging(false);
+      }}
       onMouseMove={handleMouseMove}
       onClick={handleClick}
       onMouseDown={handleMouseDown}
       role="slider"
       aria-label="Seek"
       aria-valuemin={isLive ? seekableStart : 0}
-      aria-valuemax={isLive ? effectiveLiveEdge : (duration || 100)}
+      aria-valuemax={isLive ? effectiveLiveEdge : duration || 100}
       aria-valuenow={displayTime}
-      aria-valuetext={isLive ? formatLiveTime(displayTime, effectiveLiveEdge) : formatTime(displayTime)}
+      aria-valuetext={
+        isLive ? formatLiveTime(displayTime, effectiveLiveEdge) : formatTime(displayTime)
+      }
       tabIndex={disabled ? -1 : 0}
     >
       {/* Track background */}
-      <div className={cn(
-        "fw-seek-track",
-        isDragging && "fw-seek-track--active"
-      )}>
+      <div className={cn("fw-seek-track", isDragging && "fw-seek-track--active")}>
         {/* Buffered segments - show actual buffered ranges */}
         {bufferedSegments.map((segment, index) => (
           <div
@@ -260,10 +274,7 @@ const SeekBar: React.FC<SeekBarProps> = ({
           />
         ))}
         {/* Playback progress */}
-        <div
-          className="fw-seek-progress"
-          style={{ width: `${progressPercent}%` }}
-        />
+        <div className="fw-seek-progress" style={{ width: `${progressPercent}%` }} />
       </div>
 
       {/* Thumb */}
@@ -277,10 +288,7 @@ const SeekBar: React.FC<SeekBarProps> = ({
 
       {/* Hover time tooltip */}
       {isHovering && !isDragging && canShowTooltip && (
-        <div
-          className="fw-seek-tooltip"
-          style={{ left: `${hoverPosition}%` }}
-        >
+        <div className="fw-seek-tooltip" style={{ left: `${hoverPosition}%` }}>
           {isLive ? formatLiveTime(hoverTime, effectiveLiveEdge) : formatTime(hoverTime)}
         </div>
       )}

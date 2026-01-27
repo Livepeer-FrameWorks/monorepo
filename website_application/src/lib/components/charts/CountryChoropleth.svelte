@@ -24,7 +24,7 @@
   let {
     data = [],
     height = 320,
-    tileLayerUrl = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+    tileLayerUrl = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
   }: Props = $props();
 
   let mapContainer: HTMLElement;
@@ -72,11 +72,11 @@
 
     L.tileLayer(tileLayerUrl, {
       maxZoom: 19,
-      subdomains: "abcd"
+      subdomains: "abcd",
     }).addTo(map);
 
     // Enable scroll zoom only with modifier key
-    mapContainer.addEventListener('wheel', handleWheel, { passive: false });
+    mapContainer.addEventListener("wheel", handleWheel, { passive: false });
 
     drawChoropleth();
   }
@@ -153,7 +153,7 @@
             className: "dark-tooltip",
           });
         }
-      }
+      },
     }).addTo(map);
   }
 
@@ -180,7 +180,11 @@
     <button class="map-control-btn" onclick={resetView} title="Reset view">
       <HomeIcon class="w-4 h-4" />
     </button>
-    <button class="map-control-btn" onclick={toggleFullscreen} title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
+    <button
+      class="map-control-btn"
+      onclick={toggleFullscreen}
+      title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+    >
       {#if isFullscreen}
         <MinimizeIcon class="w-4 h-4" />
       {:else}
@@ -191,7 +195,7 @@
 
   <!-- Scroll Hint Overlay -->
   {#if showScrollHint && !isFullscreen}
-    <button class="scroll-hint" type="button" onclick={() => showScrollHint = false}>
+    <button class="scroll-hint" type="button" onclick={() => (showScrollHint = false)}>
       <span>Hold <kbd>⌥</kbd> or <kbd>Ctrl</kbd> + scroll to zoom</span>
     </button>
   {/if}

@@ -271,7 +271,7 @@ export function getShareUrl(contentId: string): string {
  */
 export function getContentDeliveryUrls(
   contentId: string,
-  contentType: ContentType,
+  contentType: ContentType
 ): ContentDeliveryUrls {
   if (!contentId) {
     return {
@@ -324,10 +324,7 @@ export function getContentDeliveryUrls(
 /**
  * Generate embed code snippet for a given content type
  */
-function getEmbedCodeForContent(
-  contentId: string,
-  contentType: ContentType,
-): string {
+function getEmbedCodeForContent(contentId: string, contentType: ContentType): string {
   return `import { Player } from '@livepeer-frameworks/player-react';
 import '@livepeer-frameworks/player-react/player.css';
 

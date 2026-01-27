@@ -42,7 +42,9 @@
   color: hsl(var(--accent));
   font-weight: 500;
   text-underline-offset: 3px;
-  transition: color 0.2s ease, text-underline-offset 0.2s ease;
+  transition:
+    color 0.2s ease,
+    text-underline-offset 0.2s ease;
 }
 
 .markdown-view .md-link:hover,
@@ -77,7 +79,7 @@
 }
 
 .markdown-view .md-inline-code {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 0.9em;
   padding: 0.1rem 0.4rem;
   border-radius: calc(var(--radius) - 6px);
@@ -100,23 +102,18 @@
 }
 
 .markdown-view .md-hr::before {
-  content: '';
+  content: "";
   position: absolute;
   left: 0;
   right: 0;
   top: -1px;
   height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(191, 214, 255, 0.28),
-    transparent
-  );
+  background: linear-gradient(90deg, transparent, rgba(191, 214, 255, 0.28), transparent);
   pointer-events: none;
 }
 
 .markdown-view .md-hr::after {
-  content: '';
+  content: "";
   position: absolute;
   left: 12%;
   right: 12%;
@@ -152,7 +149,11 @@
   border-radius: calc(var(--radius) + 6px);
   border: 1px solid color-mix(in srgb, var(--md-callout-accent) 28%, transparent);
   border-left: 3px solid var(--md-callout-accent);
-  background: color-mix(in srgb, hsl(var(--brand-surface-strong)) 85%, var(--md-callout-accent) 15%);
+  background: color-mix(
+    in srgb,
+    hsl(var(--brand-surface-strong)) 85%,
+    var(--md-callout-accent) 15%
+  );
   display: grid;
   gap: 0.75rem;
 }
@@ -196,7 +197,11 @@
   padding: 1.6rem 1.75rem;
   border-radius: calc(var(--radius) + 4px);
   border: 1px solid hsl(var(--border));
-  background: color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(var(--accent-rgb), 0.12));
+  background: color-mix(
+    in srgb,
+    hsl(var(--brand-surface-strong)) 92%,
+    rgba(var(--accent-rgb), 0.12)
+  );
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   overflow-x: auto;
 }
@@ -218,7 +223,7 @@
 
 .markdown-view .md-code-block__code {
   display: block;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
   font-size: 0.9rem;
   line-height: 1.6;
   color: hsl(var(--foreground));

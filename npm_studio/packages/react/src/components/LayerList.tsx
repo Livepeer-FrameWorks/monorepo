@@ -5,13 +5,22 @@
  * Each row shows visibility toggle, lock, source name, and controls.
  */
 
-import React, { useState, useCallback } from 'react';
-import type { Layer, LayerTransform, MediaSource } from '@livepeer-frameworks/streamcrafter-core';
+import React, { useState, useCallback } from "react";
+import type { Layer, LayerTransform, MediaSource } from "@livepeer-frameworks/streamcrafter-core";
 
 // SVG Icons
 function EyeIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
@@ -20,7 +29,16 @@ function EyeIcon() {
 
 function EyeOffIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
       <line x1="1" y1="1" x2="23" y2="23" />
     </svg>
@@ -29,7 +47,16 @@ function EyeOffIcon() {
 
 function CameraIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
       <circle cx="12" cy="13" r="4" />
     </svg>
@@ -38,7 +65,16 @@ function CameraIcon() {
 
 function ScreenIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
       <line x1="8" y1="21" x2="16" y2="21" />
       <line x1="12" y1="17" x2="12" y2="21" />
@@ -48,7 +84,16 @@ function ScreenIcon() {
 
 function VideoIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <polygon points="23 7 16 12 23 17 23 7" />
       <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
     </svg>
@@ -57,7 +102,16 @@ function VideoIcon() {
 
 function GearIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
@@ -85,7 +139,7 @@ export function LayerList({
   onRemove,
   onSelect,
   selectedLayerId,
-  className = '',
+  className = "",
 }: LayerListProps) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -106,11 +160,11 @@ export function LayerList({
     (sourceId: string): React.ReactNode => {
       const source = sources.find((s) => s.id === sourceId);
       switch (source?.type) {
-        case 'camera':
+        case "camera":
           return <CameraIcon />;
-        case 'screen':
+        case "screen":
           return <ScreenIcon />;
-        case 'custom':
+        case "custom":
           return <VideoIcon />;
         default:
           return <VideoIcon />;
@@ -122,13 +176,13 @@ export function LayerList({
   // Drag and drop handlers
   const handleDragStart = useCallback((e: React.DragEvent, layerId: string) => {
     setDraggedId(layerId);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', layerId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", layerId);
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent, layerId: string) => {
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+    e.dataTransfer.dropEffect = "move";
     setDragOverId(layerId);
   }, []);
 
@@ -221,7 +275,7 @@ export function LayerList({
           sortedLayers.map((layer, index) => (
             <div
               key={layer.id}
-              className={`fw-sc-layer-item ${layer.id === selectedLayerId ? 'fw-sc-layer-item--selected' : ''} ${layer.id === draggedId ? 'fw-sc-layer-item--dragging' : ''} ${layer.id === dragOverId ? 'fw-sc-layer-item--drag-over' : ''} ${!layer.visible ? 'fw-sc-layer-item--hidden' : ''}`}
+              className={`fw-sc-layer-item ${layer.id === selectedLayerId ? "fw-sc-layer-item--selected" : ""} ${layer.id === draggedId ? "fw-sc-layer-item--dragging" : ""} ${layer.id === dragOverId ? "fw-sc-layer-item--drag-over" : ""} ${!layer.visible ? "fw-sc-layer-item--hidden" : ""}`}
               draggable
               onDragStart={(e) => handleDragStart(e, layer.id)}
               onDragOver={(e) => handleDragOver(e, layer.id)}
@@ -232,12 +286,12 @@ export function LayerList({
             >
               {/* Visibility Toggle */}
               <button
-                className={`fw-sc-layer-visibility ${layer.visible ? 'fw-sc-layer-visibility--visible' : ''}`}
+                className={`fw-sc-layer-visibility ${layer.visible ? "fw-sc-layer-visibility--visible" : ""}`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onVisibilityToggle(layer.id, !layer.visible);
                 }}
-                title={layer.visible ? 'Hide layer' : 'Show layer'}
+                title={layer.visible ? "Hide layer" : "Show layer"}
               >
                 {layer.visible ? <EyeIcon /> : <EyeOffIcon />}
               </button>
@@ -293,7 +347,7 @@ export function LayerList({
                 {/* Edit Transform */}
                 {onTransformEdit && (
                   <button
-                    className={`fw-sc-layer-btn ${editingLayerId === layer.id ? 'fw-sc-layer-btn--active' : ''}`}
+                    className={`fw-sc-layer-btn ${editingLayerId === layer.id ? "fw-sc-layer-btn--active" : ""}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       setEditingLayerId(editingLayerId === layer.id ? null : layer.id);

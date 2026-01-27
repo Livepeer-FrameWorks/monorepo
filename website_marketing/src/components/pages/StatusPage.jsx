@@ -1,117 +1,148 @@
-import { useEffect, useMemo, useState } from 'react'
-import config from '../../config'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { MarketingHero, MarketingFinalCTA, MarketingScrollProgress, SectionDivider } from '@/components/marketing'
-import { Section, SectionContainer } from '@/components/ui/section'
+import { useEffect, useMemo, useState } from "react";
+import config from "../../config";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  MarketingHero,
+  MarketingFinalCTA,
+  MarketingScrollProgress,
+  SectionDivider,
+} from "@/components/marketing";
+import { Section, SectionContainer } from "@/components/ui/section";
 
-const pill = (label, cls) => (
-  <Badge className={cls}>{label}</Badge>
-)
+const pill = (label, cls) => <Badge className={cls}>{label}</Badge>;
 
 const formatTime = (ts) => {
   try {
-    const d = new Date(ts)
-    if (isNaN(+d)) return 'Unknown'
-    return d.toLocaleString()
-  } catch { return 'Unknown' }
-}
+    const d = new Date(ts);
+    if (isNaN(+d)) return "Unknown";
+    return d.toLocaleString();
+  } catch {
+    return "Unknown";
+  }
+};
 
 const computeServiceRollups = (instances) => {
-  const byService = new Map()
+  const byService = new Map();
   for (const inst of instances) {
-    const sid = inst.serviceId || 'unknown'
-    const arr = byService.get(sid) || []
-    arr.push(inst)
-    byService.set(sid, arr)
+    const sid = inst.serviceId || "unknown";
+    const arr = byService.get(sid) || [];
+    arr.push(inst);
+    byService.set(sid, arr);
   }
-  const rollups = []
+  const rollups = [];
   for (const [serviceId, list] of byService) {
-    const total = list.length
-    const healthyCount = list.filter(x => String(x.status).toLowerCase() === 'healthy' || String(x.status).toLowerCase() === 'live' || String(x.status).toLowerCase() === 'ready').length
-    const last = list.reduce((acc, x) => Math.max(acc, x.lastHealthCheck ? Date.parse(x.lastHealthCheck) : 0), 0)
-    let status = 'operational'
-    if (healthyCount === 0) status = 'down'
-    else if (healthyCount < total) status = 'degraded'
-    rollups.push({ serviceId, total, healthy: healthyCount, status, lastHealthCheck: last })
+    const total = list.length;
+    const healthyCount = list.filter(
+      (x) =>
+        String(x.status).toLowerCase() === "healthy" ||
+        String(x.status).toLowerCase() === "live" ||
+        String(x.status).toLowerCase() === "ready"
+    ).length;
+    const last = list.reduce(
+      (acc, x) => Math.max(acc, x.lastHealthCheck ? Date.parse(x.lastHealthCheck) : 0),
+      0
+    );
+    let status = "operational";
+    if (healthyCount === 0) status = "down";
+    else if (healthyCount < total) status = "degraded";
+    rollups.push({ serviceId, total, healthy: healthyCount, status, lastHealthCheck: last });
   }
-  return rollups.sort((a, b) => a.serviceId.localeCompare(b.serviceId))
-}
+  return rollups.sort((a, b) => a.serviceId.localeCompare(b.serviceId));
+};
 
 const overallFromRollups = (rollups) => {
-  if (!rollups.length) return { label: 'Unknown', cls: 'bg-[hsl(var(--brand-comment)/0.2)] text-brand-muted border-[hsl(var(--brand-comment)/0.4)]' }
-  const anyDown = rollups.some(r => r.status === 'down')
-  const anyDegraded = rollups.some(r => r.status === 'degraded')
-  if (anyDown) return { label: 'Partial Outage', cls: 'bg-red-500/20 text-red-400 border-red-500/40' }
-  if (anyDegraded) return { label: 'Degraded Performance', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' }
-  return { label: 'All Systems Operational', cls: 'bg-green-500/20 text-green-400 border-green-500/40' }
-}
+  if (!rollups.length)
+    return {
+      label: "Unknown",
+      cls: "bg-[hsl(var(--brand-comment)/0.2)] text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
+    };
+  const anyDown = rollups.some((r) => r.status === "down");
+  const anyDegraded = rollups.some((r) => r.status === "degraded");
+  if (anyDown)
+    return { label: "Partial Outage", cls: "bg-red-500/20 text-red-400 border-red-500/40" };
+  if (anyDegraded)
+    return {
+      label: "Degraded Performance",
+      cls: "bg-yellow-500/20 text-yellow-400 border-yellow-500/40",
+    };
+  return {
+    label: "All Systems Operational",
+    cls: "bg-green-500/20 text-green-400 border-green-500/40",
+  };
+};
 
 const statusHeroAccents = [
   {
-    kind: 'beam',
+    kind: "beam",
     x: 18,
     y: 40,
-    width: 'clamp(24rem, 44vw, 36rem)',
-    height: 'clamp(18rem, 32vw, 26rem)',
+    width: "clamp(24rem, 44vw, 36rem)",
+    height: "clamp(18rem, 32vw, 26rem)",
     rotate: -19,
-    fill: 'linear-gradient(138deg, rgba(98, 145, 218, 0.33), rgba(24, 32, 56, 0.21))',
+    fill: "linear-gradient(138deg, rgba(98, 145, 218, 0.33), rgba(24, 32, 56, 0.21))",
     opacity: 0.54,
-    radius: '47px',
+    radius: "47px",
   },
   {
-    kind: 'beam',
+    kind: "beam",
     x: 76,
     y: 26,
-    width: 'clamp(20rem, 38vw, 30rem)',
-    height: 'clamp(16rem, 28vw, 23rem)',
+    width: "clamp(20rem, 38vw, 30rem)",
+    height: "clamp(16rem, 28vw, 23rem)",
     rotate: 17,
-    fill: 'linear-gradient(148deg, rgba(64, 188, 243, 0.29), rgba(19, 25, 43, 0.19))',
+    fill: "linear-gradient(148deg, rgba(64, 188, 243, 0.29), rgba(19, 25, 43, 0.19))",
     opacity: 0.5,
-    radius: '43px',
+    radius: "43px",
   },
-]
+];
 
 const StatusPage = () => {
-  const [instances, setInstances] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [lastUpdated, setLastUpdated] = useState(0)
+  const [instances, setInstances] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [lastUpdated, setLastUpdated] = useState(0);
 
-  const rollups = useMemo(() => computeServiceRollups(instances), [instances])
-  const overall = useMemo(() => overallFromRollups(rollups), [rollups])
+  const rollups = useMemo(() => computeServiceRollups(instances), [instances]);
+  const overall = useMemo(() => overallFromRollups(rollups), [rollups]);
   const lastCheck = useMemo(() => {
-    const last = Math.max(...instances.map(i => i.lastHealthCheck ? Date.parse(i.lastHealthCheck) : 0), 0)
-    return last || lastUpdated
-  }, [instances, lastUpdated])
+    const last = Math.max(
+      ...instances.map((i) => (i.lastHealthCheck ? Date.parse(i.lastHealthCheck) : 0)),
+      0
+    );
+    return last || lastUpdated;
+  }, [instances, lastUpdated]);
 
   const fetchHealth = async () => {
-    setLoading(true)
-    setError('')
+    setLoading(true);
+    setError("");
     try {
       const res = await fetch(config.gatewayUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: 'query { serviceInstancesHealth { instanceId serviceId clusterId protocol host port healthEndpoint status lastHealthCheck } }' })
-      })
-      if (!res.ok) throw new Error(`Gateway status ${res.status}`)
-      const json = await res.json()
-      if (json.errors?.length) throw new Error(json.errors[0]?.message || 'GraphQL error')
-      const list = json.data?.serviceInstancesHealth || []
-      setInstances(Array.isArray(list) ? list : [])
-      setLastUpdated(Date.now())
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query:
+            "query { serviceInstancesHealth { instanceId serviceId clusterId protocol host port healthEndpoint status lastHealthCheck } }",
+        }),
+      });
+      if (!res.ok) throw new Error(`Gateway status ${res.status}`);
+      const json = await res.json();
+      if (json.errors?.length) throw new Error(json.errors[0]?.message || "GraphQL error");
+      const list = json.data?.serviceInstancesHealth || [];
+      setInstances(Array.isArray(list) ? list : []);
+      setLastUpdated(Date.now());
     } catch (e) {
-      setError(String(e.message || e))
+      setError(String(e.message || e));
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   useEffect(() => {
-    fetchHealth()
-    const id = setInterval(fetchHealth, 30000)
-    return () => clearInterval(id)
-  }, [])
+    fetchHealth();
+    const id = setInterval(fetchHealth, 30000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="pt-16">
@@ -127,7 +158,7 @@ const StatusPage = () => {
         <div className="flex flex-wrap items-center justify-center gap-3">
           {pill(overall.label, overall.cls)}
           <span className="text-muted-foreground text-sm">
-            {loading ? 'Refreshing…' : `Last check: ${formatTime(lastCheck)}`}
+            {loading ? "Refreshing…" : `Last check: ${formatTime(lastCheck)}`}
           </span>
           <Button onClick={fetchHealth} variant="secondary" size="sm">
             Refresh
@@ -153,12 +184,19 @@ const StatusPage = () => {
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="font-medium text-foreground">{r.serviceId}</div>
-                      {r.status === 'operational' && pill('Operational', 'bg-green-500/20 text-green-400 border-green-500/40')}
-                      {r.status === 'degraded' && pill('Degraded', 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40')}
-                      {r.status === 'down' && pill('Down', 'bg-red-500/20 text-red-400 border-red-500/40')}
+                      {r.status === "operational" &&
+                        pill("Operational", "bg-green-500/20 text-green-400 border-green-500/40")}
+                      {r.status === "degraded" &&
+                        pill("Degraded", "bg-yellow-500/20 text-yellow-400 border-yellow-500/40")}
+                      {r.status === "down" &&
+                        pill("Down", "bg-red-500/20 text-red-400 border-red-500/40")}
                     </div>
-                    <div className="text-muted-foreground text-sm">Instances: {r.healthy}/{r.total} healthy</div>
-                    <div className="text-muted-foreground text-xs mt-1">Last health: {formatTime(r.lastHealthCheck)}</div>
+                    <div className="text-muted-foreground text-sm">
+                      Instances: {r.healthy}/{r.total} healthy
+                    </div>
+                    <div className="text-muted-foreground text-xs mt-1">
+                      Last health: {formatTime(r.lastHealthCheck)}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -187,18 +225,18 @@ const StatusPage = () => {
           title="Ready to get started?"
           description="Monitor your infrastructure health in real-time."
           primaryAction={{
-            label: 'Start Free',
+            label: "Start Free",
             href: config.appUrl,
             external: true,
           }}
           secondaryAction={[
             {
-              label: 'View Documentation',
-              to: '/docs',
+              label: "View Documentation",
+              to: "/docs",
             },
             {
-              label: 'Talk to our team',
-              to: '/contact',
+              label: "Talk to our team",
+              to: "/contact",
             },
           ]}
         />
@@ -206,7 +244,7 @@ const StatusPage = () => {
 
       <MarketingScrollProgress />
     </div>
-  )
-}
+  );
+};
 
-export default StatusPage
+export default StatusPage;

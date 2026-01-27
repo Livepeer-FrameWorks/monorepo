@@ -11,11 +11,7 @@ interface SpeedIndicatorProps {
  * Speed indicator overlay that appears when holding for fast-forward.
  * Shows the current playback speed (e.g., "2x") in a pill overlay.
  */
-const SpeedIndicator: React.FC<SpeedIndicatorProps> = ({
-  isVisible,
-  speed,
-  className,
-}) => {
+const SpeedIndicator: React.FC<SpeedIndicatorProps> = ({ isVisible, speed, className }) => {
   return (
     <div
       className={cn(
@@ -44,12 +40,7 @@ const SpeedIndicator: React.FC<SpeedIndicatorProps> = ({
 
 // Simple fast-forward icon
 const FastForwardIcon: React.FC<{ className?: string }> = ({ className }) => (
-  <svg
-    viewBox="0 0 24 24"
-    fill="currentColor"
-    className={className}
-    aria-hidden="true"
-  >
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
     <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
   </svg>
 );

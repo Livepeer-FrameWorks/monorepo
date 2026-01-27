@@ -30,7 +30,7 @@ export function formatDuration(seconds: number): string {
 
 export function decodeRelayId(
   value: string | null | undefined,
-  expectedType?: string,
+  expectedType?: string
 ): string | null {
   if (!value) return null;
 
@@ -150,8 +150,7 @@ export function isExpired(date: string | Date | null | undefined): boolean {
 export function formatTimestamp(timestamp: string | Date): string {
   if (!timestamp) return "N/A";
 
-  const dateObj =
-    typeof timestamp === "string" ? new Date(timestamp) : timestamp;
+  const dateObj = typeof timestamp === "string" ? new Date(timestamp) : timestamp;
 
   if (isNaN(dateObj.getTime())) return "Invalid Date";
 
@@ -171,11 +170,7 @@ export function formatNumber(num: number): string {
   return new Intl.NumberFormat("en-US").format(num);
 }
 
-export function formatPercentage(
-  value: number,
-  total: number,
-  decimals: number = 1,
-): string {
+export function formatPercentage(value: number, total: number, decimals: number = 1): string {
   if (!value || !total || total === 0) return "0%";
 
   const percentage = (value / total) * 100;
@@ -209,10 +204,7 @@ export function formatResolution(resolution: string): string {
   return resolutionMap[resolution] || resolution;
 }
 
-export function formatCurrency(
-  amount: number,
-  currency: string = "USD",
-): string {
+export function formatCurrency(amount: number, currency: string = "USD"): string {
   if (amount === null || amount === undefined || isNaN(amount)) return "N/A";
 
   return new Intl.NumberFormat("en-US", {

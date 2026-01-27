@@ -23,7 +23,7 @@
     flex-wrap: wrap;
   }
 
-  .marketing-cta-cluster--wrap>* {
+  .marketing-cta-cluster--wrap > * {
     flex-shrink: 0;
   }
 

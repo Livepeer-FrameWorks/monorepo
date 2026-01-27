@@ -2,11 +2,7 @@
   import { ContextMenu } from "bits-ui";
   import { cn } from "@livepeer-frameworks/player-core";
 
-  let {
-    children,
-    class: className,
-    ...rest
-  }: { children?: any; class?: string } = $props();
+  let { children, class: className, ...rest }: { children?: any; class?: string } = $props();
 </script>
 
 <ContextMenu.SubContent

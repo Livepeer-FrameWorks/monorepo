@@ -1,6 +1,7 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
+	lint lint-fix lint-report lint-analyze \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
 # Version information
@@ -280,6 +281,36 @@ fmt:
 		(cd $$service_dir && go fmt ./...); \
 	done
 	@echo "✓ All modules formatted"
+
+# =============================================================================
+# Linting
+# =============================================================================
+
+# Run golangci-lint (shows ALL violations for cleanup work)
+lint:
+	@echo "Running golangci-lint for all Go modules..."
+	@for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		(cd $$service_dir && golangci-lint run --timeout=5m ./...); \
+	done
+
+# Run golangci-lint with auto-fix
+lint-fix:
+	@echo "Running golangci-lint with auto-fix for all Go modules..."
+	@for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		(cd $$service_dir && golangci-lint run --fix --timeout=5m ./...); \
+	done
+
+# Generate lint report to file
+lint-report:
+	@./scripts/lint-report.sh
+
+# Analyze lint report
+lint-analyze:
+	@./scripts/lint-analyze.sh
 
 # =============================================================================
 # Dead Code Analysis

@@ -3,41 +3,40 @@
  * Detects WebCodecs, WebRTC, and MediaDevices capabilities
  */
 
-import type { BrowserCapabilities } from '../types';
+import type { BrowserCapabilities } from "../types";
 
 /**
  * Detect all browser capabilities for streaming
  */
 export function detectCapabilities(): BrowserCapabilities {
   const webcodecs = {
-    videoEncoder: typeof VideoEncoder !== 'undefined',
-    audioEncoder: typeof AudioEncoder !== 'undefined',
-    mediaStreamTrackProcessor: typeof MediaStreamTrackProcessor !== 'undefined',
-    mediaStreamTrackGenerator: typeof MediaStreamTrackGenerator !== 'undefined',
+    videoEncoder: typeof VideoEncoder !== "undefined",
+    audioEncoder: typeof AudioEncoder !== "undefined",
+    mediaStreamTrackProcessor: typeof MediaStreamTrackProcessor !== "undefined",
+    mediaStreamTrackGenerator: typeof MediaStreamTrackGenerator !== "undefined",
   };
 
   const webrtc = {
-    peerConnection: typeof RTCPeerConnection !== 'undefined',
-    replaceTrack: typeof RTCRtpSender !== 'undefined' && 'replaceTrack' in RTCRtpSender.prototype,
+    peerConnection: typeof RTCPeerConnection !== "undefined",
+    replaceTrack: typeof RTCRtpSender !== "undefined" && "replaceTrack" in RTCRtpSender.prototype,
     insertableStreams:
-      typeof RTCRtpSender !== 'undefined' &&
-      'createEncodedStreams' in RTCRtpSender.prototype,
-    scriptTransform: typeof RTCRtpScriptTransform !== 'undefined',
+      typeof RTCRtpSender !== "undefined" && "createEncodedStreams" in RTCRtpSender.prototype,
+    scriptTransform: typeof RTCRtpScriptTransform !== "undefined",
   };
 
   const mediaDevices = {
     getUserMedia:
-      typeof navigator !== 'undefined' &&
-      typeof navigator.mediaDevices !== 'undefined' &&
-      typeof navigator.mediaDevices.getUserMedia === 'function',
+      typeof navigator !== "undefined" &&
+      typeof navigator.mediaDevices !== "undefined" &&
+      typeof navigator.mediaDevices.getUserMedia === "function",
     getDisplayMedia:
-      typeof navigator !== 'undefined' &&
-      typeof navigator.mediaDevices !== 'undefined' &&
-      typeof navigator.mediaDevices.getDisplayMedia === 'function',
+      typeof navigator !== "undefined" &&
+      typeof navigator.mediaDevices !== "undefined" &&
+      typeof navigator.mediaDevices.getDisplayMedia === "function",
     enumerateDevices:
-      typeof navigator !== 'undefined' &&
-      typeof navigator.mediaDevices !== 'undefined' &&
-      typeof navigator.mediaDevices.enumerateDevices === 'function',
+      typeof navigator !== "undefined" &&
+      typeof navigator.mediaDevices !== "undefined" &&
+      typeof navigator.mediaDevices.enumerateDevices === "function",
   };
 
   // Determine recommended path
@@ -47,9 +46,9 @@ export function detectCapabilities(): BrowserCapabilities {
     webcodecs.mediaStreamTrackProcessor &&
     webcodecs.mediaStreamTrackGenerator;
 
-  const recommended: 'webcodecs' | 'mediastream' = webCodecsFullSupport
-    ? 'webcodecs'
-    : 'mediastream';
+  const recommended: "webcodecs" | "mediastream" = webCodecsFullSupport
+    ? "webcodecs"
+    : "mediastream";
 
   return {
     webcodecs,
@@ -64,10 +63,10 @@ export function detectCapabilities(): BrowserCapabilities {
  */
 export function isWebCodecsSupported(): boolean {
   return (
-    typeof VideoEncoder !== 'undefined' &&
-    typeof AudioEncoder !== 'undefined' &&
-    typeof MediaStreamTrackProcessor !== 'undefined' &&
-    typeof MediaStreamTrackGenerator !== 'undefined'
+    typeof VideoEncoder !== "undefined" &&
+    typeof AudioEncoder !== "undefined" &&
+    typeof MediaStreamTrackProcessor !== "undefined" &&
+    typeof MediaStreamTrackGenerator !== "undefined"
   );
 }
 
@@ -75,7 +74,7 @@ export function isWebCodecsSupported(): boolean {
  * Check if basic WebRTC is supported
  */
 export function isWebRTCSupported(): boolean {
-  return typeof RTCPeerConnection !== 'undefined';
+  return typeof RTCPeerConnection !== "undefined";
 }
 
 /**
@@ -83,9 +82,9 @@ export function isWebRTCSupported(): boolean {
  */
 export function isMediaDevicesSupported(): boolean {
   return (
-    typeof navigator !== 'undefined' &&
-    typeof navigator.mediaDevices !== 'undefined' &&
-    typeof navigator.mediaDevices.getUserMedia === 'function'
+    typeof navigator !== "undefined" &&
+    typeof navigator.mediaDevices !== "undefined" &&
+    typeof navigator.mediaDevices.getUserMedia === "function"
   );
 }
 
@@ -94,9 +93,9 @@ export function isMediaDevicesSupported(): boolean {
  */
 export function isScreenCaptureSupported(): boolean {
   return (
-    typeof navigator !== 'undefined' &&
-    typeof navigator.mediaDevices !== 'undefined' &&
-    typeof navigator.mediaDevices.getDisplayMedia === 'function'
+    typeof navigator !== "undefined" &&
+    typeof navigator.mediaDevices !== "undefined" &&
+    typeof navigator.mediaDevices.getDisplayMedia === "function"
   );
 }
 
@@ -105,7 +104,7 @@ export function isScreenCaptureSupported(): boolean {
  * This is required for Path C WebCodecs integration (replacing browser-encoded frames)
  */
 export function isRTCRtpScriptTransformSupported(): boolean {
-  return typeof RTCRtpScriptTransform !== 'undefined';
+  return typeof RTCRtpScriptTransform !== "undefined";
 }
 
 /**
@@ -119,8 +118,8 @@ export function isWebCodecsEncodingPathSupported(): boolean {
 /**
  * Get the recommended streaming path based on browser capabilities
  */
-export function getRecommendedPath(): 'webcodecs' | 'mediastream' {
-  return isWebCodecsSupported() ? 'webcodecs' : 'mediastream';
+export function getRecommendedPath(): "webcodecs" | "mediastream" {
+  return isWebCodecsSupported() ? "webcodecs" : "mediastream";
 }
 
 /**
@@ -171,11 +170,11 @@ export async function isAudioCodecSupported(codec: string): Promise<boolean> {
  */
 export async function getSupportedVideoCodecs(): Promise<string[]> {
   const codecs = [
-    'avc1.42E01E', // H.264 Baseline
-    'avc1.4D401E', // H.264 Main
-    'avc1.64001E', // H.264 High
-    'vp8',
-    'vp09.00.10.08', // VP9 Profile 0
+    "avc1.42E01E", // H.264 Baseline
+    "avc1.4D401E", // H.264 Main
+    "avc1.64001E", // H.264 High
+    "vp8",
+    "vp09.00.10.08", // VP9 Profile 0
   ];
 
   const supported: string[] = [];
@@ -192,7 +191,7 @@ export async function getSupportedVideoCodecs(): Promise<string[]> {
  * Get list of likely supported audio codecs
  */
 export async function getSupportedAudioCodecs(): Promise<string[]> {
-  const codecs = ['opus', 'mp4a.40.2']; // Opus, AAC-LC
+  const codecs = ["opus", "mp4a.40.2"]; // Opus, AAC-LC
 
   const supported: string[] = [];
   for (const codec of codecs) {

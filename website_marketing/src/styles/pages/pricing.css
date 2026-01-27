@@ -49,7 +49,10 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    transition:
+      background 0.2s ease,
+      border-color 0.2s ease,
+      color 0.2s ease;
   }
   .pricing-architecture-modal__close:hover,
   .pricing-architecture-modal__close:focus-visible {
@@ -101,11 +104,11 @@
     list-style: disc;
   }
   .pricing-architecture-modal {
-      padding: 18px;
-    }
+    padding: 18px;
+  }
   .pricing-architecture-modal__panel {
-      padding: 1.8rem 1.4rem;
-    }
+    padding: 1.8rem 1.4rem;
+  }
   .pricing-gpu-feature {
     display: flex;
     flex-direction: column;
@@ -303,11 +306,11 @@
     color: color-mix(in srgb, hsl(var(--muted-foreground)) 40%, rgba(210, 226, 255, 0.82));
   }
   .deployment-option__quote::before {
-    content: '\201C';
+    content: "\201C";
     margin-right: 0.2rem;
   }
   .deployment-option__quote::after {
-    content: '\201D';
+    content: "\201D";
     margin-left: 0.15rem;
   }
   .deployment-option__indicator {
@@ -321,7 +324,10 @@
     color: rgba(var(--accent-rgb) / 0.64);
     font-size: 0.68rem;
     font-weight: 600;
-    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+    transition:
+      background 0.2s ease,
+      color 0.2s ease,
+      border-color 0.2s ease;
   }
   .deployment-option:hover .deployment-option__indicator,
   .deployment-option:focus-visible .deployment-option__indicator {
@@ -345,13 +351,13 @@
     --feature-seam-color: var(--deployment-grid-divider);
     --feature-seam-color-soft: var(--deployment-grid-divider);
     border: 1px solid var(--deployment-grid-border);
-    background:
-      linear-gradient(128deg,
-        color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(8, 12, 24, 0.28)) 0%,
-        color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(12, 16, 30, 0.18)) 100%);
+    background: linear-gradient(
+      128deg,
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(8, 12, 24, 0.28)) 0%,
+      color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(12, 16, 30, 0.18)) 100%
+    );
     overflow: hidden;
   }
-
 
   /* Pricing tier modifiers (from marketing-outline) */
   .marketing-outline.pricing-tier {
@@ -359,17 +365,31 @@
     --outline-padding-y: clamp(1.45rem, 2vw, 2.05rem);
     --outline-radius: 12px;
     --pricing-tier-border: color-mix(in srgb, hsl(var(--accent)) 86%, rgba(125, 207, 255, 0.25));
-    --pricing-tier-surface: linear-gradient(160deg,
-        color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(18, 26, 48, 0.15)),
-        color-mix(in srgb, hsl(var(--brand-surface)) 94%, rgba(10, 14, 26, 0.18)));
+    --pricing-tier-surface: linear-gradient(
+      160deg,
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(18, 26, 48, 0.15)),
+      color-mix(in srgb, hsl(var(--brand-surface)) 94%, rgba(10, 14, 26, 0.18))
+    );
     --pricing-tier-shadow: none;
     --pricing-tier-divider: rgba(213, 229, 255, 0.26);
     --pricing-tier-bullet: linear-gradient(140deg, hsl(var(--brand-green)), hsl(var(--brand-cyan)));
     --pricing-tier-bullet-shadow: rgba(86, 132, 255, 0.35);
     --pricing-tier-dash: rgba(var(--accent-rgb) / 0.3);
-    --pricing-tier-muted: color-mix(in srgb, hsl(var(--muted-foreground)) 64%, rgba(213, 229, 255, 0.32));
-    --pricing-tier-text: color-mix(in srgb, hsl(var(--muted-foreground)) 80%, rgba(213, 229, 255, 0.26));
-    --pricing-tier-list-text: color-mix(in srgb, hsl(var(--muted-foreground)) 76%, rgba(213, 229, 255, 0.26));
+    --pricing-tier-muted: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 64%,
+      rgba(213, 229, 255, 0.32)
+    );
+    --pricing-tier-text: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 80%,
+      rgba(213, 229, 255, 0.26)
+    );
+    --pricing-tier-list-text: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 76%,
+      rgba(213, 229, 255, 0.26)
+    );
     border: 2px solid var(--pricing-tier-border);
     border-radius: 12px;
     background: var(--pricing-tier-surface);
@@ -384,17 +404,39 @@
     padding: 0;
   }
   .marketing-outline.pricing-tier--amber {
-    --pricing-tier-border: color-mix(in srgb, hsl(var(--brand-yellow)) 74%, rgba(255, 255, 255, 0.18));
-    --pricing-tier-surface: linear-gradient(165deg,
-        color-mix(in srgb, hsl(var(--brand-surface-strong)) 90%, rgba(255, 188, 110, 0.12)),
-        color-mix(in srgb, hsl(var(--brand-surface)) 92%, rgba(18, 20, 34, 0.18)));
+    --pricing-tier-border: color-mix(
+      in srgb,
+      hsl(var(--brand-yellow)) 74%,
+      rgba(255, 255, 255, 0.18)
+    );
+    --pricing-tier-surface: linear-gradient(
+      165deg,
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 90%, rgba(255, 188, 110, 0.12)),
+      color-mix(in srgb, hsl(var(--brand-surface)) 92%, rgba(18, 20, 34, 0.18))
+    );
     --pricing-tier-shadow: none;
     --pricing-tier-divider: rgba(255, 214, 170, 0.32);
-    --pricing-tier-bullet: linear-gradient(145deg, hsl(var(--brand-orange)), hsl(var(--brand-yellow)));
+    --pricing-tier-bullet: linear-gradient(
+      145deg,
+      hsl(var(--brand-orange)),
+      hsl(var(--brand-yellow))
+    );
     --pricing-tier-bullet-shadow: rgba(255, 191, 120, 0.38);
     --pricing-tier-dash: rgba(255, 214, 170, 0.35);
-    --pricing-tier-muted: color-mix(in srgb, hsl(var(--muted-foreground)) 60%, rgba(255, 214, 170, 0.38));
-    --pricing-tier-text: color-mix(in srgb, hsl(var(--muted-foreground)) 72%, rgba(255, 214, 170, 0.32));
-    --pricing-tier-list-text: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(255, 214, 170, 0.34));
+    --pricing-tier-muted: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 60%,
+      rgba(255, 214, 170, 0.38)
+    );
+    --pricing-tier-text: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 72%,
+      rgba(255, 214, 170, 0.32)
+    );
+    --pricing-tier-list-text: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 68%,
+      rgba(255, 214, 170, 0.34)
+    );
   }
 }

@@ -15,36 +15,37 @@ npm i @livepeer-frameworks/player-core
 ## Basic Usage
 
 ```ts
-import { PlayerController } from '@livepeer-frameworks/player-core';
+import { PlayerController } from "@livepeer-frameworks/player-core";
 
 const controller = new PlayerController({
-  contentId: 'pk_...', // playbackId
-  contentType: 'live',
-  gatewayUrl: 'https://your-bridge/graphql',
+  contentId: "pk_...", // playbackId
+  contentType: "live",
+  gatewayUrl: "https://your-bridge/graphql",
   debug: true,
 });
 
-const container = document.getElementById('player')!;
+const container = document.getElementById("player")!;
 await controller.attach(container);
 ```
 
 Notes:
+
 - There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
 
 ### Direct MistServer Node (mistUrl)
 
 ```ts
 const controller = new PlayerController({
-  contentId: 'pk_...',
-  contentType: 'live',
-  mistUrl: 'https://edge.example.com',
+  contentId: "pk_...",
+  contentType: "live",
+  mistUrl: "https://edge.example.com",
 });
 ```
 
 ### Styles
 
 ```ts
-import '@livepeer-frameworks/player-core/player.css';
+import "@livepeer-frameworks/player-core/player.css";
 ```
 
 ## Controls & Shortcuts
@@ -73,6 +74,7 @@ The player ships with keyboard/mouse shortcuts when the player is focused (click
 | Click/Tap and hold | 2x speed | Disabled on live-only |
 
 **Constraints**
+
 - Live-only streams disable seeking/skip/2x hold and frame-step.
 - Live with DVR buffer enables the same shortcuts as VOD.
 - Frame stepping only moves within already buffered ranges (no network seek). WebCodecs supports true frame stepping when paused.

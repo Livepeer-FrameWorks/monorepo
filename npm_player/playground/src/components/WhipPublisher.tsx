@@ -9,12 +9,12 @@ import { useState } from "react";
 import { usePlayground } from "@/context/PlaygroundContext";
 import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-react";
 
-type RendererType = 'auto' | 'webgpu' | 'webgl' | 'canvas2d';
+type RendererType = "auto" | "webgpu" | "webgl" | "canvas2d";
 
 export function WhipPublisher() {
   const { ingestUris } = usePlayground();
   const endpoint = ingestUris.whip;
-  const [renderer, setRenderer] = useState<RendererType>('auto');
+  const [renderer, setRenderer] = useState<RendererType>("auto");
   const [key, setKey] = useState(0); // Force remount when renderer changes
 
   const handleRendererChange = (newRenderer: RendererType) => {
@@ -51,10 +51,10 @@ export function WhipPublisher() {
           enableCompositor={true}
           compositorConfig={{ renderer }}
           onStateChange={(state, context) => {
-            console.debug('[StreamCrafter] State:', state, context);
+            console.debug("[StreamCrafter] State:", state, context);
           }}
           onError={(error) => {
-            console.error('[StreamCrafter] Error:', error);
+            console.error("[StreamCrafter] Error:", error);
           }}
         />
       </div>

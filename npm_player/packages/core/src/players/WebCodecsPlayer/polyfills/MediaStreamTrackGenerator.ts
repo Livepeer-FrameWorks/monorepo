@@ -16,7 +16,7 @@
  * Check if native MediaStreamTrackGenerator is available
  */
 export function hasNativeMediaStreamTrackGenerator(): boolean {
-  return typeof (globalThis as any).MediaStreamTrackGenerator !== 'undefined';
+  return typeof (globalThis as any).MediaStreamTrackGenerator !== "undefined";
 }
 
 /**
@@ -34,13 +34,13 @@ export class VideoTrackGeneratorPolyfill {
 
   constructor() {
     // Create offscreen canvas
-    this.canvas = document.createElement('canvas');
+    this.canvas = document.createElement("canvas");
     this.canvas.width = 1920; // Will be resized on first frame
     this.canvas.height = 1080;
 
-    const ctx = this.canvas.getContext('2d', { desynchronized: true });
+    const ctx = this.canvas.getContext("2d", { desynchronized: true });
     if (!ctx) {
-      throw new Error('Failed to create canvas 2D context');
+      throw new Error("Failed to create canvas 2D context");
     }
     this.ctx = ctx;
 
@@ -48,7 +48,7 @@ export class VideoTrackGeneratorPolyfill {
     const stream = this.canvas.captureStream();
     const tracks = stream.getVideoTracks();
     if (tracks.length === 0) {
-      throw new Error('Failed to capture stream from canvas');
+      throw new Error("Failed to capture stream from canvas");
     }
     this.track = tracks[0];
 
@@ -140,13 +140,13 @@ export class AudioTrackGeneratorPolyfill {
 
   constructor() {
     // Create audio context
-    this.audioContext = new AudioContext({ latencyHint: 'interactive' });
+    this.audioContext = new AudioContext({ latencyHint: "interactive" });
 
     // Create destination for MediaStreamTrack
     this.destination = this.audioContext.createMediaStreamDestination();
     const tracks = this.destination.stream.getAudioTracks();
     if (tracks.length === 0) {
-      throw new Error('Failed to create audio destination');
+      throw new Error("Failed to create audio destination");
     }
     this.track = tracks[0];
 
@@ -234,16 +234,13 @@ export class AudioTrackGeneratorPolyfill {
       registerProcessor('synced-audio-processor', SyncedAudioProcessor);
     `;
 
-    const blob = new Blob([workletCode], { type: 'application/javascript' });
+    const blob = new Blob([workletCode], { type: "application/javascript" });
     const url = URL.createObjectURL(blob);
 
     try {
       await this.audioContext.audioWorklet.addModule(url);
 
-      this.workletNode = new AudioWorkletNode(
-        this.audioContext,
-        'synced-audio-processor'
-      );
+      this.workletNode = new AudioWorkletNode(this.audioContext, "synced-audio-processor");
       this.workletNode.connect(this.destination);
 
       this.initialized = true;
@@ -293,7 +290,7 @@ export class AudioTrackGeneratorPolyfill {
     const samples = this.sampleBuffer.shift();
     if (samples) {
       this.workletNode.port.postMessage(
-        { type: 'samples', samples },
+        { type: "samples", samples },
         { transfer: [samples.buffer] }
       );
     }
@@ -340,9 +337,7 @@ export class AudioTrackGeneratorPolyfill {
  * @param kind - 'video' or 'audio'
  * @returns Native generator or polyfill
  */
-export function createTrackGenerator(
-  kind: 'video' | 'audio'
-): {
+export function createTrackGenerator(kind: "video" | "audio"): {
   writable: WritableStream<VideoFrame | AudioData>;
   getTrack: () => MediaStreamTrack;
   close: () => void;
@@ -360,7 +355,7 @@ export function createTrackGenerator(
   }
 
   // Fall back to polyfill
-  if (kind === 'video') {
+  if (kind === "video") {
     const polyfill = new VideoTrackGeneratorPolyfill();
     return {
       writable: polyfill.writable as WritableStream<VideoFrame | AudioData>,

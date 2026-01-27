@@ -3,7 +3,7 @@
  * Svelte 5 store for streaming statistics
  */
 
-import type { IngestStats } from '@livepeer-frameworks/streamcrafter-core';
+import type { IngestStats } from "@livepeer-frameworks/streamcrafter-core";
 
 export interface StreamStatsState {
   stats: IngestStats | null;

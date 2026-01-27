@@ -29,22 +29,19 @@ npm i @livepeer-frameworks/player-svelte
 ```
 
 Notes:
+
 - There is **no default gateway**; provide `gatewayUrl` unless you pass `endpoints` or `mistUrl`.
 
 ### Direct MistServer Node (mistUrl)
 
 ```svelte
-<Player
-  contentType="live"
-  contentId="pk_..."
-  options={{ mistUrl: 'https://edge.example.com' }}
-/>
+<Player contentType="live" contentId="pk_..." options={{ mistUrl: "https://edge.example.com" }} />
 ```
 
 ### Styles
 
 ```ts
-import '@livepeer-frameworks/player-svelte/player.css';
+import "@livepeer-frameworks/player-svelte/player.css";
 ```
 
 ## Controls & Shortcuts
@@ -73,6 +70,7 @@ The player ships with keyboard/mouse shortcuts when the player is focused (click
 | Click/Tap and hold | 2x speed | Disabled on live-only |
 
 **Constraints**
+
 - Live-only streams disable seeking/skip/2x hold and frame-step.
 - Live with DVR buffer enables the same shortcuts as VOD.
 - Frame stepping only moves within already buffered ranges (no network seek). WebCodecs supports true frame stepping when paused.

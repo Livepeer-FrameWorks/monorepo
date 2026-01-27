@@ -5,13 +5,16 @@ sidebar:
   order: 3
 ---
 
-import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Steps, Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Advanced Deployment">
-This guide is for operators who cannot or choose not to use the automated CLI deployment. For most users, we recommend `frameworks cluster provision` instead. See [CLI Reference](/operators/cli-reference).
+  This guide is for operators who cannot or choose not to use the automated CLI deployment. For most
+  users, we recommend `frameworks cluster provision` instead. See [CLI
+  Reference](/operators/cli-reference).
 </Aside>
 
 This guide walks through deploying FrameWorks services manually on bare metal servers. It assumes:
+
 - A private network (WireGuard mesh or VLAN) for backend communication
 - Edge nodes communicate over public internet (not on the mesh)
 - You have root/sudo access to all servers
@@ -20,14 +23,14 @@ This guide walks through deploying FrameWorks services manually on bare metal se
 
 ## Streaming URI Quick Reference
 
-| Purpose | Domain | Path | Example |
-|---------|--------|------|---------|
-| **RTMP Ingest** | `ingest.your-domain.com` | `/live/{streamKey}` | `rtmp://ingest.your-domain.com:1935/live/sk_abc123` |
-| **WHIP Ingest** | `ingest.your-domain.com` | `/webrtc/{streamKey}` | `https://ingest.your-domain.com/webrtc/sk_abc123` |
-| **HLS Playback** | `play.your-domain.com` | `/play/{playbackId}/hls/index.m3u8` | `https://play.your-domain.com/play/pk_xyz789/hls/index.m3u8` |
-| **WebRTC (WHEP)** | `play.your-domain.com` | `/play/{playbackId}/webrtc` | `https://play.your-domain.com/play/pk_xyz789/webrtc` |
-| **Viewer Routing** | `play.your-domain.com` | `/play/{contentId}` | Returns JSON or 307 redirect |
-| **GraphQL API** | `api.your-domain.com` | `/graphql` | `resolveViewerEndpoint` query |
+| Purpose            | Domain                   | Path                                | Example                                                      |
+| ------------------ | ------------------------ | ----------------------------------- | ------------------------------------------------------------ |
+| **RTMP Ingest**    | `ingest.your-domain.com` | `/live/{streamKey}`                 | `rtmp://ingest.your-domain.com:1935/live/sk_abc123`          |
+| **WHIP Ingest**    | `ingest.your-domain.com` | `/webrtc/{streamKey}`               | `https://ingest.your-domain.com/webrtc/sk_abc123`            |
+| **HLS Playback**   | `play.your-domain.com`   | `/play/{playbackId}/hls/index.m3u8` | `https://play.your-domain.com/play/pk_xyz789/hls/index.m3u8` |
+| **WebRTC (WHEP)**  | `play.your-domain.com`   | `/play/{playbackId}/webrtc`         | `https://play.your-domain.com/play/pk_xyz789/webrtc`         |
+| **Viewer Routing** | `play.your-domain.com`   | `/play/{contentId}`                 | Returns JSON or 307 redirect                                 |
+| **GraphQL API**    | `api.your-domain.com`    | `/graphql`                          | `resolveViewerEndpoint` query                                |
 
 **Note:** `/play/*` and `/resolve/*` return JSON unless a protocol/extension is requested (then 307 redirect).
 
@@ -81,12 +84,12 @@ Do **not** add edge nodes here unless they are on the mesh.
 
 ### Server Inventory (Example)
 
-| Role | WireGuard IP | Services |
-|------|--------------|----------|
-| Central | 10.x.0.1 | Quartermaster, Commodore, Purser, Periscope Query, Deckhand, Forms |
-| Database (×3) | 10.x.2.11-13 | PostgreSQL/YugabyteDB, ClickHouse |
-| Regional (×N) | 10.x.1.21+ | Bridge, Foghorn, Decklog, Periscope Ingest, Signalman |
-| Edge (×N) | N/A | MistServer, Helmsman |
+| Role          | WireGuard IP | Services                                                           |
+| ------------- | ------------ | ------------------------------------------------------------------ |
+| Central       | 10.x.0.1     | Quartermaster, Commodore, Purser, Periscope Query, Deckhand, Forms |
+| Database (×3) | 10.x.2.11-13 | PostgreSQL/YugabyteDB, ClickHouse                                  |
+| Regional (×N) | 10.x.1.21+   | Bridge, Foghorn, Decklog, Periscope Ingest, Signalman              |
+| Edge (×N)     | N/A          | MistServer, Helmsman                                               |
 
 ### Directory Structure
 
@@ -127,20 +130,20 @@ Configure your DNS provider with the following records. Exact steps vary by prov
 
 ### Required DNS Records
 
-| Type | Name | Content | Notes |
-|------|------|---------|-------|
-| A | @ | `<central-ip>` | Root domain |
-| A | app | `<central-ip>` | Web console |
-| A | api | `<regional-ip>` | GraphQL API |
-| A | docs | `<central-ip>` | Documentation |
+| Type | Name | Content         | Notes         |
+| ---- | ---- | --------------- | ------------- |
+| A    | @    | `<central-ip>`  | Root domain   |
+| A    | app  | `<central-ip>`  | Web console   |
+| A    | api  | `<regional-ip>` | GraphQL API   |
+| A    | docs | `<central-ip>`  | Documentation |
 
 ### Streaming Records
 
-| Type | Name | Content | Notes |
-|------|------|---------|-------|
-| A/CNAME | edge | Load balancer or edge IP | Edge node delivery |
-| CNAME | ingest | edge.your-domain.com | RTMP/WHIP ingest |
-| A/CNAME | play | `<regional-ip>` | Foghorn routing |
+| Type    | Name   | Content                  | Notes              |
+| ------- | ------ | ------------------------ | ------------------ |
+| A/CNAME | edge   | Load balancer or edge IP | Edge node delivery |
+| CNAME   | ingest | edge.your-domain.com     | RTMP/WHIP ingest   |
+| A/CNAME | play   | `<regional-ip>`          | Foghorn routing    |
 
 ### Load Balancer Setup (Multi-Node)
 
@@ -151,7 +154,8 @@ If running multiple edge nodes, configure a load balancer:
 3. **Load Balancer**: Geographic or round-robin steering
 
 <Aside type="tip">
-For streaming protocols (WebRTC, RTMP, SRT), use DNS-only mode (not proxied) to avoid protocol interference.
+  For streaming protocols (WebRTC, RTMP, SRT), use DNS-only mode (not proxied) to avoid protocol
+  interference.
 </Aside>
 
 ---
@@ -239,22 +243,22 @@ kafka-topics.sh --bootstrap-server $BROKER --create \
 
 ### Service Ports
 
-| Service | HTTP | gRPC | Binary |
-|---------|------|------|--------|
-| Quartermaster | 18002 | 19002 | quartermaster |
-| Commodore | 18001 | 19001 | commodore |
-| Purser | 18003 | 19003 | purser |
+| Service         | HTTP  | gRPC  | Binary          |
+| --------------- | ----- | ----- | --------------- |
+| Quartermaster   | 18002 | 19002 | quartermaster   |
+| Commodore       | 18001 | 19001 | commodore       |
+| Purser          | 18003 | 19003 | purser          |
 | Periscope Query | 18004 | 19004 | periscope-query |
-| Deckhand | 18015 | 19006 | deckhand |
-| Forms | 18032 | - | forms |
+| Deckhand        | 18015 | 19006 | deckhand        |
+| Forms           | 18032 | -     | forms           |
 
 **Support Services (External):**
 
-| Service | Port | Notes |
-|---------|------|-------|
+| Service  | Port | Notes                     |
+| -------- | ---- | ------------------------- |
 | Listmonk | 9000 | Newsletter backend (HTTP) |
-| Chatwoot | 3000 | Support dashboard + API |
-| Redis | 6379 | Chatwoot dependency |
+| Chatwoot | 3000 | Support dashboard + API   |
+| Redis    | 6379 | Chatwoot dependency       |
 
 ### Build Binaries
 
@@ -287,8 +291,10 @@ JWT_SECRET=<your-jwt-secret>
 SERVICE_TOKEN=<your-service-token>
 
 # Optional DNS
+
 NAVIGATOR_URL=
-```
+
+````
 </TabItem>
 <TabItem label="Commodore">
 ```bash
@@ -319,7 +325,8 @@ LISTMONK_URL=
 LISTMONK_USERNAME=
 LISTMONK_PASSWORD=
 DEFAULT_MAILING_LIST_ID=1
-```
+````
+
 </TabItem>
 <TabItem label="Purser">
 ```bash
@@ -338,15 +345,18 @@ SERVICE_TOKEN=<your-service-token>
 QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
 
 # Stripe (optional)
+
 STRIPE_SECRET_KEY=
 STRIPE_WEBHOOK_SECRET=
 
 # Kafka
+
 KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
 BILLING_KAFKA_TOPIC=billing.usage_reports
 KAFKA_GROUP_ID=purser-ingest
 KAFKA_CLIENT_ID=purser
-```
+
+````
 </TabItem>
 <TabItem label="Periscope Query">
 ```bash
@@ -377,7 +387,8 @@ QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
 # Kafka (for billing events)
 KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
 BILLING_KAFKA_TOPIC=billing.usage_reports
-```
+````
+
 </TabItem>
 <TabItem label="Deckhand">
 ```bash
@@ -390,6 +401,7 @@ GIN_MODE=release
 BUILD_ENV=production
 
 # Chatwoot integration
+
 CHATWOOT_HOST=127.0.0.1
 CHATWOOT_PORT=3000
 CHATWOOT_ACCOUNT_ID=1
@@ -397,13 +409,16 @@ CHATWOOT_INBOX_ID=1
 CHATWOOT_API_TOKEN=<your-chatwoot-api-token>
 
 # gRPC dependencies (mesh)
+
 QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
 PURSER_GRPC_ADDR=127.0.0.1:19003
 DECKLOG_GRPC_ADDR=<regional-ip>:18006
 
 # Auth
+
 SERVICE_TOKEN=<your-service-token>
-```
+
+````
 </TabItem>
 <TabItem label="Forms">
 ```bash
@@ -426,7 +441,8 @@ LISTMONK_URL=http://127.0.0.1:9000
 LISTMONK_USERNAME=admin
 LISTMONK_PASSWORD=<listmonk-password>
 DEFAULT_MAILING_LIST_ID=1
-```
+````
+
 </TabItem>
 </Tabs>
 
@@ -496,6 +512,7 @@ docker run -d --name listmonk \
 **Dependencies:** PostgreSQL (YugabyteDB), Redis
 
 Chatwoot requires:
+
 - **PostgreSQL** - Database (use YugabyteDB with `chatwoot` database from Phase 2)
 - **Redis** - Background jobs and caching
 - **Sidekiq** - Worker process (runs alongside Rails)
@@ -559,9 +576,9 @@ After Chatwoot is running, configure it for Deckhand integration:
    - Enable events: `conversation_created`, `conversation_updated`, `message_created`, `message_updated`
 
 <Aside type="note">
-Chatwoot does not support webhook HMAC signature verification.
-See [GitHub Issue #9354](https://github.com/chatwoot/chatwoot/issues/9354).
-Security relies on internal Docker network isolation.
+  Chatwoot does not support webhook HMAC signature verification. See [GitHub Issue
+  #9354](https://github.com/chatwoot/chatwoot/issues/9354). Security relies on internal Docker
+  network isolation.
 </Aside>
 
 ---
@@ -572,15 +589,16 @@ Deploy per region. Each region needs its own set of these services.
 
 ### Service Ports
 
-| Service | HTTP | gRPC | Binary |
-|---------|------|------|--------|
-| Bridge | 18000 | - | bridge |
-| Foghorn | 18008 | 18019 | foghorn |
-| Decklog | 18026 | 18006 | decklog |
-| Periscope Ingest | 18005 | - | periscope-ingest |
-| Signalman | 18009 | 19005 | signalman |
+| Service          | HTTP  | gRPC  | Binary           |
+| ---------------- | ----- | ----- | ---------------- |
+| Bridge           | 18000 | -     | bridge           |
+| Foghorn          | 18008 | 18019 | foghorn          |
+| Decklog          | 18026 | 18006 | decklog          |
+| Periscope Ingest | 18005 | -     | periscope-ingest |
+| Signalman        | 18009 | 19005 | signalman        |
 
 **Notes:**
+
 - Decklog is gRPC-only (metrics/health on 18026)
 - Bridge exposes GraphQL over HTTP (no gRPC)
 - Periscope Ingest is a Kafka consumer (HTTP for health only)
@@ -608,44 +626,53 @@ GIN_MODE=release
 BUILD_ENV=production
 
 # gRPC TLS (Helmsman control plane)
+
 GRPC_USE_TLS=false
 GRPC_TLS_CERT_PATH=
 GRPC_TLS_KEY_PATH=
 
 # Database
+
 DATABASE_URL=postgresql://<user>:<password>@<db-host>:<port>/frameworks?sslmode=disable
 
 # Auth
+
 SERVICE_TOKEN=<your-service-token>
 CLUSTER_ID=<cluster-id>
 
 # Service Dependencies (central over mesh)
+
 COMMODORE_GRPC_ADDR=<central-ip>:19001
 QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 
 # Decklog (local regional)
+
 DECKLOG_GRPC_ADDR=127.0.0.1:18006
 DECKLOG_USE_TLS=false
 
 # GeoIP (MaxMind)
+
 GEOIP_MMDB_PATH=/var/lib/GeoIP/GeoLite2-City.mmdb
 GEOIP_CACHE_TTL=300s
 GEOIP_CACHE_SWR=120s
 GEOIP_CACHE_MAX=50000
 
 # Cache settings
+
 COMMODORE_CACHE_TTL=60s
 COMMODORE_CACHE_SWR=30s
 COMMODORE_CACHE_NEG_TTL=10s
 COMMODORE_CACHE_MAX=10000
 
 # Load balancing weights
+
 CPU_WEIGHT=500
 RAM_WEIGHT=500
 BANDWIDTH_WEIGHT=1000
 GEO_WEIGHT=1000
 STREAM_BONUS=50
-```
+
+````
 </TabItem>
 <TabItem label="Bridge">
 ```bash
@@ -674,7 +701,8 @@ PERISCOPE_GRPC_ADDR=<central-ip>:19004
 # Regional dependencies (local)
 SIGNALMAN_GRPC_ADDR=127.0.0.1:19005
 FOGHORN_GRPC_ADDR=127.0.0.1:18019
-```
+````
+
 </TabItem>
 <TabItem label="Decklog">
 ```bash
@@ -686,23 +714,28 @@ BUILD_ENV=production
 REGION=eu-west
 
 # Kafka (shared cluster)
+
 KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
 ANALYTICS_KAFKA_TOPIC=analytics_events
 KAFKA_CLUSTER_ID=frameworks
 
 # Auth
+
 SERVICE_TOKEN=<your-service-token>
 CLUSTER_ID=<cluster-id>
 QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 
 # Service Events
+
 SERVICE_EVENTS_KAFKA_TOPIC=service_events
 
 # TLS (production - optional but recommended for edge communication)
+
 DECKLOG_ALLOW_INSECURE=true
 DECKLOG_TLS_CERT_FILE=
 DECKLOG_TLS_KEY_FILE=
-```
+
+````
 </TabItem>
 <TabItem label="Periscope Ingest">
 ```bash
@@ -732,7 +765,8 @@ QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
 # Auth
 SERVICE_TOKEN=<your-service-token>
 CLUSTER_ID=<cluster-id>
-```
+````
+
 </TabItem>
 <TabItem label="Signalman">
 ```bash
@@ -744,10 +778,12 @@ BUILD_ENV=production
 REGION=eu-west
 
 # Auth
+
 JWT_SECRET=<your-jwt-secret>
 SERVICE_TOKEN=<your-service-token>
 
 # Kafka (shared cluster)
+
 KAFKA_BROKERS=<broker1>:9092,<broker2>:9092
 ANALYTICS_KAFKA_TOPIC=analytics_events
 SERVICE_EVENTS_KAFKA_TOPIC=service_events
@@ -757,8 +793,10 @@ KAFKA_CLIENT_ID=signalman-<region>
 KAFKA_CLUSTER_ID=frameworks
 
 # Dependencies
+
 QUARTERMASTER_GRPC_ADDR=<central-ip>:19002
-```
+
+````
 </TabItem>
 </Tabs>
 
@@ -790,7 +828,7 @@ EOF
 systemctl daemon-reload
 systemctl enable foghorn
 systemctl start foghorn
-```
+````
 
 ### Start Regional Services
 
@@ -894,7 +932,8 @@ HELMSMAN_STORAGE_CAPACITY_BYTES=1099511627776
 ```
 
 <Aside type="caution">
-Edge nodes are **not** on the mesh. Prefer TLS for Decklog and Foghorn control when exposed publicly.
+  Edge nodes are **not** on the mesh. Prefer TLS for Decklog and Foghorn control when exposed
+  publicly.
 </Aside>
 
 ### Systemd Service
@@ -928,12 +967,12 @@ systemctl start helmsman
 
 Configure MistServer triggers to notify Helmsman:
 
-| Trigger | URL | Events |
-|---------|-----|--------|
-| STREAM_BUFFER | `http://localhost:18007/triggers` | Stream health |
-| USER_NEW | `http://localhost:18007/triggers` | Viewer connect |
-| USER_END | `http://localhost:18007/triggers` | Viewer disconnect |
-| RECORDING_* | `http://localhost:18007/triggers` | Clip/DVR lifecycle |
+| Trigger       | URL                               | Events             |
+| ------------- | --------------------------------- | ------------------ |
+| STREAM_BUFFER | `http://localhost:18007/triggers` | Stream health      |
+| USER_NEW      | `http://localhost:18007/triggers` | Viewer connect     |
+| USER_END      | `http://localhost:18007/triggers` | Viewer disconnect  |
+| RECORDING\_\* | `http://localhost:18007/triggers` | Clip/DVR lifecycle |
 
 ---
 
@@ -942,7 +981,8 @@ Configure MistServer triggers to notify Helmsman:
 Navigator automatically syncs DNS records based on your node inventory. It also issues TLS certificates via Let's Encrypt.
 
 <Aside type="note">
-Navigator is optional for manual deployments. If you prefer to manage DNS records manually (as shown in Phase 1), skip this section.
+  Navigator is optional for manual deployments. If you prefer to manage DNS records manually (as
+  shown in Phase 1), skip this section.
 </Aside>
 
 ### Build Navigator
@@ -1014,11 +1054,11 @@ Deploy the three frontend applications on the central server. All use Docker and
 
 ### Service Ports
 
-| Application | Port | Framework | Notes |
-|-------------|------|-----------|-------|
-| Web Console | 18030 | SvelteKit (SSR) | Main dashboard |
-| Marketing Site | 18031 | React (static) | Public landing page |
-| Documentation | 18033 | Astro (static) | Starlight docs |
+| Application    | Port  | Framework       | Notes               |
+| -------------- | ----- | --------------- | ------------------- |
+| Web Console    | 18030 | SvelteKit (SSR) | Main dashboard      |
+| Marketing Site | 18031 | React (static)  | Public landing page |
+| Documentation  | 18033 | Astro (static)  | Starlight docs      |
 
 ### Build Variables Reference
 
@@ -1044,7 +1084,8 @@ VITE_MARKETING_SITE_URL=https://your-domain.com
 VITE_DOCS_SITE_URL=https://docs.your-domain.com
 VITE_TURNSTILE_AUTH_SITE_KEY=<your-turnstile-site-key>
 BASE_PATH=/app
-```
+
+````
 </TabItem>
 <TabItem label="Marketing Site">
 ```bash
@@ -1064,7 +1105,8 @@ VITE_COMPANY_NAME=YourCompany
 VITE_DOMAIN=your-domain.com
 VITE_CONTACT_API_URL=https://api.your-domain.com/forms
 VITE_TURNSTILE_FORMS_SITE_KEY=<your-turnstile-forms-key>
-```
+````
+
 </TabItem>
 <TabItem label="Documentation">
 ```bash
@@ -1081,7 +1123,8 @@ STREAMING_HLS_PATH=/hls
 STREAMING_WEBRTC_PATH=/webrtc
 DISCORD_URL=https://discord.gg/your-invite
 GITHUB_URL=https://github.com/your-org/your-repo
-```
+
+````
 </TabItem>
 </Tabs>
 
@@ -1129,7 +1172,7 @@ docker run -d --name frameworks-docs \
   --restart unless-stopped \
   -p 18033:18033 \
   frameworks-docs
-```
+````
 
 #### Option B: Native Node.js
 
@@ -1300,7 +1343,8 @@ server {
 ```
 
 <Aside type="tip">
-For streaming endpoints (`edge.your-domain.com`, `ingest.your-domain.com`), use DNS-only mode without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
+  For streaming endpoints (`edge.your-domain.com`, `ingest.your-domain.com`), use DNS-only mode
+  without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
 </Aside>
 
 ---

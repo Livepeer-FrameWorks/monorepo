@@ -3,6 +3,7 @@
 FrameWorks is designed to run entirely on customer infrastructure without vendor lock-in. This document explains why Navigator and Privateer exist.
 
 **Deployment Models**:
+
 - **Shared SaaS**: Multi-tenant clusters on our infrastructure
 - **Dedicated SaaS**: Per-tenant clusters on our infrastructure
 - **Self-Hosted**: Full deployment on customer premises (B2B/government)
@@ -12,12 +13,14 @@ FrameWorks is designed to run entirely on customer infrastructure without vendor
 ## Why Navigator Exists
 
 Every paying customer needs:
+
 - Custom subdomain (`customer.frameworks.network`)
 - Per-tenant load balancer endpoint
 - Automatic TLS certificate provisioning
 - DNS failover to backup clusters
 
 **Terraform/Ansible cannot solve this** because:
+
 1. Tenants self-service provision domains (no human runs `terraform apply`)
 2. DNS records change dynamically based on node health
 3. Certificate issuance is per-tenant, not per-cluster
@@ -45,13 +48,13 @@ Viewers watch at: https://customer.frameworks.network/play/{playback-id}/hls/ind
 
 ### Navigator Roadmap
 
-| Phase | Capability | Status |
-|-------|------------|--------|
-| **1** | Cloudflare DNS API integration | Implemented |
-| **2** | ACME certificate issuance (Let's Encrypt) | Implemented |
-| **3** | Tenant subdomain provisioning/verification | Planned |
-| **4** | Self-hosted DNS (PowerDNS) | See `rfcs/dns-anycast.md` |
-| **5** | Bring-your-own-certificate support | Planned |
+| Phase | Capability                                 | Status                    |
+| ----- | ------------------------------------------ | ------------------------- |
+| **1** | Cloudflare DNS API integration             | Implemented               |
+| **2** | ACME certificate issuance (Let's Encrypt)  | Implemented               |
+| **3** | Tenant subdomain provisioning/verification | Planned                   |
+| **4** | Self-hosted DNS (PowerDNS)                 | See `rfcs/dns-anycast.md` |
+| **5** | Bring-your-own-certificate support         | Planned                   |
 
 **Implementation Note**: Use battle-tested ACME libraries (`github.com/go-acme/lego`), don't implement ACME from scratch.
 
@@ -61,13 +64,13 @@ Viewers watch at: https://customer.frameworks.network/play/{playback-id}/hls/ind
 
 FrameWorks infrastructure spans central services, regional services, and edge nodes. These need secure, private connectivity.
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| Public internet + TLS | Simple | Exposed attack surface |
-| Cloud VPC | Managed | Vendor lock-in, single cloud |
-| Tailscale | Zero-config | SaaS dependency, cost at scale |
-| Headscale | Self-hosted Tailscale | External project dependency |
-| **Privateer** | Full control, tenant isolation | Custom development |
+| Approach              | Pros                           | Cons                           |
+| --------------------- | ------------------------------ | ------------------------------ |
+| Public internet + TLS | Simple                         | Exposed attack surface         |
+| Cloud VPC             | Managed                        | Vendor lock-in, single cloud   |
+| Tailscale             | Zero-config                    | SaaS dependency, cost at scale |
+| Headscale             | Self-hosted Tailscale          | External project dependency    |
+| **Privateer**         | Full control, tenant isolation | Custom development             |
 
 ### Why Not Tailscale/Headscale?
 
@@ -83,6 +86,7 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 ### What Privateer Enables
 
 **Phase 1 (Current)**: Per-cluster shared mesh
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    WireGuard Mesh (10.200.0.0/16)           │
@@ -96,6 +100,7 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 ```
 
 **Phase 2 (B2B)**: Per-tenant cluster isolation
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Shared Mesh (platform)                   │
@@ -119,13 +124,13 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 
 ### Privateer Roadmap
 
-| Phase | Capability | Status |
-|-------|------------|--------|
-| **1** | Single full-mesh topology | In Testing |
-| **2** | Token-based node enrollment | Implemented |
-| **3** | Local DNS for mesh hostnames | Implemented |
+| Phase | Capability                     | Status                       |
+| ----- | ------------------------------ | ---------------------------- |
+| **1** | Single full-mesh topology      | In Testing                   |
+| **2** | Token-based node enrollment    | Implemented                  |
+| **3** | Local DNS for mesh hostnames   | Implemented                  |
 | **4** | WireGuard-OSPF dynamic routing | See `rfcs/wireguard-ospf.md` |
-| **5** | Per-tenant mesh segments | See `rfcs/mesh-isolation.md` |
+| **5** | Per-tenant mesh segments       | See `rfcs/mesh-isolation.md` |
 
 ---
 
@@ -138,12 +143,14 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 **Decision**: Build Navigator.
 
 **Rationale**:
+
 - Terraform requires human intervention (`terraform apply`)
 - Tenants self-service provision subdomains
 - Dynamic DNS based on node health
 - Per-tenant certificate lifecycle
 
 **Consequences**:
+
 - Custom development effort
 - Must use battle-tested ACME libraries
 - Enables self-service tenant subdomains
@@ -155,12 +162,14 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 **Decision**: Build Privateer.
 
 **Rationale**:
+
 - Tailscale is SaaS (sovereignty violation)
 - Headscale introduces external dependency
 - Future need for per-tenant network isolation
 - Must work on air-gapped customer premises
 
 **Consequences**:
+
 - Custom development effort
 - Full control over mesh topology
 - Enables B2B dedicated clusters
@@ -173,11 +182,13 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 **Decision**: Use existing tools, defer custom services.
 
 **Rationale**:
+
 - Not core differentiators
 - Mature solutions exist (Prometheus, Chatwoot)
 - Limited engineering resources
 
 **Consequences**:
+
 - Lookout: Use Prometheus/Grafana/Alertmanager
 - Deckhand: Integrate Chatwoot (see `docs/architecture/deckhand.md`)
 - Parlor: Defer to Q2 2026

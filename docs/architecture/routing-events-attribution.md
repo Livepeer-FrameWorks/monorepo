@@ -5,7 +5,7 @@
 
 ## Summary
 
-“Routing events” represent a *single routing decision* made by Foghorn when resolving viewer playback endpoints (HTTP or gRPC).
+“Routing events” represent a _single routing decision_ made by Foghorn when resolving viewer playback endpoints (HTTP or gRPC).
 They are persisted in ClickHouse (`periscope.routing_decisions`) and exposed through Periscope-Query and Bridge GraphQL.
 
 This document explains the **current** attribution model:

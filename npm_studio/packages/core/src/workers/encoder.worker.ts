@@ -53,37 +53,37 @@ interface EncoderStats {
 
 // Worker messages (main → worker)
 type WorkerInMessage =
-  | { type: 'initialize'; requestId: string; data: { config: EncoderConfig } }
-  | { type: 'start'; requestId: string }
-  | { type: 'stop'; requestId: string }
-  | { type: 'flush'; requestId: string }
-  | { type: 'updateConfig'; requestId: string; data: Partial<EncoderConfig> }
-  | { type: 'videoFrame'; data: VideoFrame }
-  | { type: 'audioData'; data: AudioData };
+  | { type: "initialize"; requestId: string; data: { config: EncoderConfig } }
+  | { type: "start"; requestId: string }
+  | { type: "stop"; requestId: string }
+  | { type: "flush"; requestId: string }
+  | { type: "updateConfig"; requestId: string; data: Partial<EncoderConfig> }
+  | { type: "videoFrame"; data: VideoFrame }
+  | { type: "audioData"; data: AudioData };
 
 // Worker messages (worker → main)
 type WorkerOutMessage =
-  | { type: 'ready'; requestId: string }
-  | { type: 'started'; requestId: string }
-  | { type: 'stopped'; requestId: string }
-  | { type: 'flushed'; requestId: string }
-  | { type: 'error'; requestId?: string; data: { message: string; fatal: boolean } }
-  | { type: 'stats'; data: EncoderStats }
-  | { type: 'encodedVideoChunk'; data: EncodedVideoChunkData }
-  | { type: 'encodedAudioChunk'; data: EncodedAudioChunkData };
+  | { type: "ready"; requestId: string }
+  | { type: "started"; requestId: string }
+  | { type: "stopped"; requestId: string }
+  | { type: "flushed"; requestId: string }
+  | { type: "error"; requestId?: string; data: { message: string; fatal: boolean } }
+  | { type: "stats"; data: EncoderStats }
+  | { type: "encodedVideoChunk"; data: EncodedVideoChunkData }
+  | { type: "encodedAudioChunk"; data: EncodedAudioChunkData };
 
 // Serializable encoded chunk data (for postMessage transfer)
 interface EncodedVideoChunkData {
   timestamp: number;
   duration: number | null;
-  type: 'key' | 'delta';
+  type: "key" | "delta";
   data: ArrayBuffer;
 }
 
 interface EncodedAudioChunkData {
   timestamp: number;
   duration: number | null;
-  type: 'key' | 'delta';
+  type: "key" | "delta";
   data: ArrayBuffer;
 }
 
@@ -91,10 +91,10 @@ interface EncodedAudioChunkData {
 // Constants (backpressure thresholds)
 // ============================================================================
 
-const MAX_VIDEO_QUEUE_SIZE = 3;      // Low-latency: only buffer ~3 frames
-const MAX_AUDIO_QUEUE_SIZE = 10;     // Audio is smaller, buffer a bit more
-const ENCODE_QUEUE_THRESHOLD = 5;    // If encoder queue > 5, start dropping
-const KEYFRAME_INTERVAL = 60;        // Every 60 frames (~2s at 30fps)
+const MAX_VIDEO_QUEUE_SIZE = 3; // Low-latency: only buffer ~3 frames
+const MAX_AUDIO_QUEUE_SIZE = 10; // Audio is smaller, buffer a bit more
+const ENCODE_QUEUE_THRESHOLD = 5; // If encoder queue > 5, start dropping
+const KEYFRAME_INTERVAL = 60; // Every 60 frames (~2s at 30fps)
 const STATS_INTERVAL_MS = 1000;
 
 // ============================================================================
@@ -161,7 +161,7 @@ function postMessage(message: WorkerOutMessage, transfer?: Transferable[]): void
 
 function postError(message: string, fatal: boolean, requestId?: string): void {
   postMessage({
-    type: 'error',
+    type: "error",
     requestId,
     data: { message, fatal },
   });
@@ -188,7 +188,7 @@ function handleVideoOutput(chunk: EncodedVideoChunk, _metadata?: EncodedVideoChu
   };
 
   // Transfer buffer ownership for zero-copy performance
-  postMessage({ type: 'encodedVideoChunk', data: chunkData }, [buffer]);
+  postMessage({ type: "encodedVideoChunk", data: chunkData }, [buffer]);
 }
 
 function handleAudioOutput(chunk: EncodedAudioChunk, _metadata?: EncodedAudioChunkMetadata): void {
@@ -206,10 +206,10 @@ function handleAudioOutput(chunk: EncodedAudioChunk, _metadata?: EncodedAudioChu
     data: buffer,
   };
 
-  postMessage({ type: 'encodedAudioChunk', data: chunkData }, [buffer]);
+  postMessage({ type: "encodedAudioChunk", data: chunkData }, [buffer]);
 }
 
-function handleEncoderError(type: 'video' | 'audio', error: Error): void {
+function handleEncoderError(type: "video" | "audio", error: Error): void {
   console.error(`[EncoderWorker] ${type} encoder error:`, error);
   postError(`${type} encoder error: ${error.message}`, true);
 }
@@ -229,11 +229,11 @@ async function initVideoEncoder(): Promise<boolean> {
     height: video.height,
     bitrate: video.bitrate,
     framerate: video.framerate,
-    latencyMode: 'realtime',
-    bitrateMode: 'variable',
+    latencyMode: "realtime",
+    bitrateMode: "variable",
   };
 
-  console.log('[EncoderWorker] Video encoder config:', codecConfig);
+  console.log("[EncoderWorker] Video encoder config:", codecConfig);
 
   try {
     const support = await VideoEncoder.isConfigSupported(codecConfig);
@@ -242,7 +242,7 @@ async function initVideoEncoder(): Promise<boolean> {
     }
 
     // Close existing encoder if any
-    if (videoEncoder && videoEncoder.state !== 'closed') {
+    if (videoEncoder && videoEncoder.state !== "closed") {
       try {
         videoEncoder.close();
       } catch {
@@ -252,14 +252,14 @@ async function initVideoEncoder(): Promise<boolean> {
 
     videoEncoder = new VideoEncoder({
       output: handleVideoOutput,
-      error: (e) => handleEncoderError('video', e),
+      error: (e) => handleEncoderError("video", e),
     });
 
     videoEncoder.configure(codecConfig);
-    console.log('[EncoderWorker] Video encoder initialized');
+    console.log("[EncoderWorker] Video encoder initialized");
     return true;
   } catch (error) {
-    console.error('[EncoderWorker] Failed to initialize video encoder:', error);
+    console.error("[EncoderWorker] Failed to initialize video encoder:", error);
     return false;
   }
 }
@@ -283,7 +283,7 @@ async function initAudioEncoder(): Promise<boolean> {
     }
 
     // Close existing encoder if any
-    if (audioEncoder && audioEncoder.state !== 'closed') {
+    if (audioEncoder && audioEncoder.state !== "closed") {
       try {
         audioEncoder.close();
       } catch {
@@ -293,14 +293,14 @@ async function initAudioEncoder(): Promise<boolean> {
 
     audioEncoder = new AudioEncoder({
       output: handleAudioOutput,
-      error: (e) => handleEncoderError('audio', e),
+      error: (e) => handleEncoderError("audio", e),
     });
 
     audioEncoder.configure(codecConfig);
-    console.log('[EncoderWorker] Audio encoder initialized');
+    console.log("[EncoderWorker] Audio encoder initialized");
     return true;
   } catch (error) {
-    console.error('[EncoderWorker] Failed to initialize audio encoder:', error);
+    console.error("[EncoderWorker] Failed to initialize audio encoder:", error);
     return false;
   }
 }
@@ -322,7 +322,7 @@ async function processVideoQueue(): Promise<void> {
       if (!frame) continue;
 
       try {
-        if (videoEncoder && videoEncoder.state === 'configured') {
+        if (videoEncoder && videoEncoder.state === "configured") {
           // Backpressure check: if encoder queue is too deep, drop frame
           if (videoEncoder.encodeQueueSize > ENCODE_QUEUE_THRESHOLD) {
             stats.video.framesDropped++;
@@ -339,10 +339,10 @@ async function processVideoQueue(): Promise<void> {
 
           // Input-driven keyframe scheduling
           const forceKeyframe =
-            videoFramesSubmitted === 0 ||                              // First frame
-            videoFramesSubmitted % KEYFRAME_INTERVAL === 0 ||          // Periodic
-            justRecoveredFromBackpressure ||                           // After recovery
-            justReconfigured;                                          // After config change
+            videoFramesSubmitted === 0 || // First frame
+            videoFramesSubmitted % KEYFRAME_INTERVAL === 0 || // Periodic
+            justRecoveredFromBackpressure || // After recovery
+            justReconfigured; // After config change
 
           videoEncoder.encode(frame, { keyFrame: forceKeyframe });
           videoFramesSubmitted++;
@@ -354,7 +354,7 @@ async function processVideoQueue(): Promise<void> {
           justReconfigured = false;
         }
       } catch (error) {
-        console.error('[EncoderWorker] Error encoding video frame:', error);
+        console.error("[EncoderWorker] Error encoding video frame:", error);
         stats.video.framesDropped++;
       } finally {
         // Always close the frame to prevent memory leaks
@@ -388,7 +388,7 @@ async function processAudioQueue(): Promise<void> {
       if (!audioData) continue;
 
       try {
-        if (audioEncoder && audioEncoder.state === 'configured') {
+        if (audioEncoder && audioEncoder.state === "configured") {
           // Backpressure check for audio
           if (audioEncoder.encodeQueueSize > ENCODE_QUEUE_THRESHOLD) {
             stats.audio.samplesDropped++;
@@ -402,7 +402,7 @@ async function processAudioQueue(): Promise<void> {
           stats.audio.samplesPending = audioEncoder.encodeQueueSize;
         }
       } catch (error) {
-        console.error('[EncoderWorker] Error encoding audio data:', error);
+        console.error("[EncoderWorker] Error encoding audio data:", error);
         stats.audio.samplesDropped++;
       } finally {
         try {
@@ -426,7 +426,7 @@ async function processAudioQueue(): Promise<void> {
 // ============================================================================
 
 async function initialize(encoderConfig: EncoderConfig, requestId: string): Promise<void> {
-  console.log('[EncoderWorker] Initializing with config:', encoderConfig);
+  console.log("[EncoderWorker] Initializing with config:", encoderConfig);
   config = encoderConfig;
 
   // Reset state
@@ -459,22 +459,22 @@ async function initialize(encoderConfig: EncoderConfig, requestId: string): Prom
   const audioOk = await initAudioEncoder();
 
   if (!videoOk && !audioOk) {
-    postError('Failed to initialize any encoders', true, requestId);
+    postError("Failed to initialize any encoders", true, requestId);
     return;
   }
 
   isInitialized = true;
-  postMessage({ type: 'ready', requestId });
+  postMessage({ type: "ready", requestId });
 }
 
 function start(requestId: string): void {
   if (!isInitialized) {
-    postError('Worker not initialized', true, requestId);
+    postError("Worker not initialized", true, requestId);
     return;
   }
 
   if (isRunning) {
-    postMessage({ type: 'started', requestId });
+    postMessage({ type: "started", requestId });
     return;
   }
 
@@ -483,10 +483,10 @@ function start(requestId: string): void {
   // Start stats reporting
   statsInterval = setInterval(() => {
     stats.timestamp = performance.now();
-    postMessage({ type: 'stats', data: { ...stats } });
+    postMessage({ type: "stats", data: { ...stats } });
   }, STATS_INTERVAL_MS);
 
-  postMessage({ type: 'started', requestId });
+  postMessage({ type: "started", requestId });
 }
 
 async function stop(requestId: string): Promise<void> {
@@ -517,27 +517,27 @@ async function stop(requestId: string): Promise<void> {
   }
   audioWriteQueue = [];
 
-  postMessage({ type: 'stopped', requestId });
+  postMessage({ type: "stopped", requestId });
 }
 
 async function flush(requestId: string): Promise<void> {
   try {
-    if (videoEncoder && videoEncoder.state === 'configured') {
+    if (videoEncoder && videoEncoder.state === "configured") {
       await videoEncoder.flush();
     }
-    if (audioEncoder && audioEncoder.state === 'configured') {
+    if (audioEncoder && audioEncoder.state === "configured") {
       await audioEncoder.flush();
     }
-    postMessage({ type: 'flushed', requestId });
+    postMessage({ type: "flushed", requestId });
   } catch (error) {
-    console.error('[EncoderWorker] Flush error:', error);
+    console.error("[EncoderWorker] Flush error:", error);
     postError(`Flush failed: ${error}`, false, requestId);
   }
 }
 
 async function updateConfig(newConfig: Partial<EncoderConfig>, requestId: string): Promise<void> {
   if (!config) {
-    postError('Worker not initialized', true, requestId);
+    postError("Worker not initialized", true, requestId);
     return;
   }
 
@@ -554,7 +554,7 @@ async function updateConfig(newConfig: Partial<EncoderConfig>, requestId: string
   }
 
   // Ack config update (reuse ready message type for simplicity)
-  postMessage({ type: 'ready', requestId });
+  postMessage({ type: "ready", requestId });
 }
 
 // ============================================================================
@@ -573,7 +573,7 @@ function cleanup(): void {
   // Close encoders
   if (videoEncoder) {
     try {
-      if (videoEncoder.state !== 'closed') {
+      if (videoEncoder.state !== "closed") {
         videoEncoder.close();
       }
     } catch {
@@ -584,7 +584,7 @@ function cleanup(): void {
 
   if (audioEncoder) {
     try {
-      if (audioEncoder.state !== 'closed') {
+      if (audioEncoder.state !== "closed") {
         audioEncoder.close();
       }
     } catch {
@@ -621,27 +621,27 @@ self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
   const message = event.data;
 
   switch (message.type) {
-    case 'initialize':
+    case "initialize":
       await initialize(message.data.config, message.requestId);
       break;
 
-    case 'start':
+    case "start":
       start(message.requestId);
       break;
 
-    case 'stop':
+    case "stop":
       await stop(message.requestId);
       break;
 
-    case 'flush':
+    case "flush":
       await flush(message.requestId);
       break;
 
-    case 'updateConfig':
+    case "updateConfig":
       await updateConfig(message.data, message.requestId);
       break;
 
-    case 'videoFrame':
+    case "videoFrame":
       if (!isRunning || !message.data) {
         // Drop frame if not running
         if (message.data) {
@@ -671,7 +671,7 @@ self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
       processVideoQueue();
       break;
 
-    case 'audioData':
+    case "audioData":
       if (!isRunning || !message.data) {
         if (message.data) {
           try {
@@ -701,7 +701,7 @@ self.onmessage = async (event: MessageEvent<WorkerInMessage>) => {
       break;
 
     default:
-      console.warn('[EncoderWorker] Unknown message type:', message);
+      console.warn("[EncoderWorker] Unknown message type:", message);
   }
 };
 
@@ -710,4 +710,4 @@ self.onclose = () => {
   cleanup();
 };
 
-console.log('[EncoderWorker] Worker loaded');
+console.log("[EncoderWorker] Worker loaded");

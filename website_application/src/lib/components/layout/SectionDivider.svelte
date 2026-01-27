@@ -8,11 +8,7 @@
     class?: string;
   }
 
-  let {
-    variant = "default",
-    showBar = true,
-    class: className = "",
-  }: Props = $props();
+  let { variant = "default", showBar = true, class: className = "" }: Props = $props();
 </script>
 
 <div

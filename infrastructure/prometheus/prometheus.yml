@@ -12,74 +12,74 @@ alerting:
 
 scrape_configs:
   # Prometheus itself
-  - job_name: 'prometheus'
+  - job_name: "prometheus"
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["localhost:9090"]
 
   # FrameWorks Core Services
-  - job_name: 'bridge'
+  - job_name: "bridge"
     static_configs:
-      - targets: ['bridge:18000']
-    metrics_path: '/metrics'
+      - targets: ["bridge:18000"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'quartermaster'
+  - job_name: "quartermaster"
     static_configs:
-      - targets: ['quartermaster:18002']
-    metrics_path: '/metrics'
+      - targets: ["quartermaster:18002"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'commodore'
+  - job_name: "commodore"
     static_configs:
-      - targets: ['commodore:18001']
-    metrics_path: '/metrics'
+      - targets: ["commodore:18001"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'foghorn'
+  - job_name: "foghorn"
     static_configs:
-      - targets: ['foghorn:18008']
-    metrics_path: '/metrics'
+      - targets: ["foghorn:18008"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'helmsman'
+  - job_name: "helmsman"
     static_configs:
-      - targets: ['helmsman:18007']
-    metrics_path: '/metrics'
+      - targets: ["helmsman:18007"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'signalman'
+  - job_name: "signalman"
     static_configs:
-      - targets: ['signalman:18009']
-    metrics_path: '/metrics'
+      - targets: ["signalman:18009"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'periscope-query'
+  - job_name: "periscope-query"
     static_configs:
-      - targets: ['periscope-query:18004']
-    metrics_path: '/metrics'
+      - targets: ["periscope-query:18004"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'periscope-ingest'
+  - job_name: "periscope-ingest"
     static_configs:
-      - targets: ['periscope-ingest:18005']
-    metrics_path: '/metrics'
+      - targets: ["periscope-ingest:18005"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'purser'
+  - job_name: "purser"
     static_configs:
-      - targets: ['purser:18003']
-    metrics_path: '/metrics'
+      - targets: ["purser:18003"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
-  - job_name: 'decklog'
+  - job_name: "decklog"
     static_configs:
-      - targets: ['decklog:18026']
-    metrics_path: '/metrics'
+      - targets: ["decklog:18026"]
+    metrics_path: "/metrics"
     scrape_interval: 30s
 
   # Infrastructure Services
-  - job_name: 'mistserver'
+  - job_name: "mistserver"
     static_configs:
-      - targets: ['mistserver:4242']
-    metrics_path: '/koekjes'
+      - targets: ["mistserver:4242"]
+    metrics_path: "/koekjes"
     scrape_interval: 60s

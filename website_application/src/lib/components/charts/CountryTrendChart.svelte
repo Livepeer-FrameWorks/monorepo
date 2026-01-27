@@ -106,9 +106,7 @@
 
       // Create data array with null for missing timestamps
       const dataPoints = allTimestamps.map((timestamp) => {
-        const point = country.points.find(
-          (p) => p.timestamp.getTime() === timestamp.getTime()
-        );
+        const point = country.points.find((p) => p.timestamp.getTime() === timestamp.getTime());
         return point ? point.viewerCount : null;
       });
 

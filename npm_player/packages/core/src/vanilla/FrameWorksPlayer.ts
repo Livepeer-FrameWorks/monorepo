@@ -25,8 +25,18 @@
  * ```
  */
 
-import { PlayerController, PlayerControllerConfig, PlayerControllerEvents } from '../core/PlayerController';
-import type { PlayerState, PlayerStateContext, StreamState, ContentEndpoints, ContentType } from '../types';
+import {
+  PlayerController,
+  PlayerControllerConfig,
+  PlayerControllerEvents,
+} from "../core/PlayerController";
+import type {
+  PlayerState,
+  PlayerStateContext,
+  StreamState,
+  ContentEndpoints,
+  ContentType,
+} from "../types";
 
 // ============================================================================
 // Types
@@ -105,18 +115,21 @@ export class FrameWorksPlayer {
    * @param container - DOM element or CSS selector to mount the player
    * @param options - Player options and callbacks
    */
-  constructor(container: HTMLElement | string | null, options: FrameWorksPlayerOptions | LegacyConfig) {
+  constructor(
+    container: HTMLElement | string | null,
+    options: FrameWorksPlayerOptions | LegacyConfig
+  ) {
     // Resolve container
-    if (typeof container === 'string') {
+    if (typeof container === "string") {
       this.container = document.querySelector(container) as HTMLElement;
     } else if (container instanceof HTMLElement) {
       this.container = container;
     } else {
-      throw new Error('Container element not found or invalid');
+      throw new Error("Container element not found or invalid");
     }
 
     if (!this.container) {
-      throw new Error('Container element not found');
+      throw new Error("Container element not found");
     }
 
     // Normalize options (support both new and legacy config formats)
@@ -144,7 +157,7 @@ export class FrameWorksPlayer {
 
     // Auto-attach to container
     this.controller.attach(this.container).catch((err) => {
-      console.error('[FrameWorksPlayer] Failed to attach:', err);
+      console.error("[FrameWorksPlayer] Failed to attach:", err);
       normalizedOptions.onError?.(err instanceof Error ? err.message : String(err));
     });
   }
@@ -306,9 +319,11 @@ export class FrameWorksPlayer {
   // Private Methods
   // ============================================================================
 
-  private normalizeOptions(options: FrameWorksPlayerOptions | LegacyConfig): FrameWorksPlayerOptions {
+  private normalizeOptions(
+    options: FrameWorksPlayerOptions | LegacyConfig
+  ): FrameWorksPlayerOptions {
     // Check if it's legacy format (has nested `options` property)
-    if ('options' in options && typeof options.options === 'object') {
+    if ("options" in options && typeof options.options === "object") {
       const legacy = options as LegacyConfig;
       return {
         contentId: legacy.contentId,
@@ -328,35 +343,35 @@ export class FrameWorksPlayer {
 
   private setupCallbacks(options: FrameWorksPlayerOptions): void {
     if (options.onStateChange) {
-      const unsub = this.controller.on('stateChange', ({ state, context }) => {
+      const unsub = this.controller.on("stateChange", ({ state, context }) => {
         options.onStateChange!(state, context);
       });
       this.cleanupFns.push(unsub);
     }
 
     if (options.onStreamStateChange) {
-      const unsub = this.controller.on('streamStateChange', ({ state }) => {
+      const unsub = this.controller.on("streamStateChange", ({ state }) => {
         options.onStreamStateChange!(state);
       });
       this.cleanupFns.push(unsub);
     }
 
     if (options.onTimeUpdate) {
-      const unsub = this.controller.on('timeUpdate', ({ currentTime, duration }) => {
+      const unsub = this.controller.on("timeUpdate", ({ currentTime, duration }) => {
         options.onTimeUpdate!(currentTime, duration);
       });
       this.cleanupFns.push(unsub);
     }
 
     if (options.onError) {
-      const unsub = this.controller.on('error', ({ error }) => {
+      const unsub = this.controller.on("error", ({ error }) => {
         options.onError!(error);
       });
       this.cleanupFns.push(unsub);
     }
 
     if (options.onReady) {
-      const unsub = this.controller.on('ready', ({ videoElement }) => {
+      const unsub = this.controller.on("ready", ({ videoElement }) => {
         options.onReady!(videoElement);
       });
       this.cleanupFns.push(unsub);

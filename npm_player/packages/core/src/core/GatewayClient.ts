@@ -5,14 +5,14 @@
  * Extracted from useViewerEndpoints.ts for use in headless core.
  */
 
-import { TypedEventEmitter } from './EventEmitter';
-import type { ContentEndpoints, ContentType } from '../types';
+import { TypedEventEmitter } from "./EventEmitter";
+import type { ContentEndpoints, ContentType } from "../types";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export type GatewayStatus = 'idle' | 'loading' | 'ready' | 'error';
+export type GatewayStatus = "idle" | "loading" | "ready" | "error";
 
 export interface GatewayClientConfig {
   /** Gateway GraphQL endpoint URL */
@@ -45,10 +45,10 @@ const DEFAULT_INITIAL_DELAY_MS = 500;
 // F2: Cache TTL for resolved endpoints
 const DEFAULT_CACHE_TTL_MS = 10000;
 // F3: Circuit breaker constants
-const CIRCUIT_BREAKER_THRESHOLD = 5;       // Open after 5 consecutive failures
-const CIRCUIT_BREAKER_TIMEOUT_MS = 30000;  // Half-open after 30 seconds
+const CIRCUIT_BREAKER_THRESHOLD = 5; // Open after 5 consecutive failures
+const CIRCUIT_BREAKER_TIMEOUT_MS = 30000; // Half-open after 30 seconds
 
-type CircuitBreakerState = 'closed' | 'open' | 'half-open';
+type CircuitBreakerState = "closed" | "open" | "half-open";
 
 const RESOLVE_VIEWER_QUERY = `
   query ResolveViewer($contentId: String!) {
@@ -80,7 +80,7 @@ async function fetchWithRetry(
       const response = await fetch(url, options);
       return response;
     } catch (e) {
-      lastError = e instanceof Error ? e : new Error('Fetch failed');
+      lastError = e instanceof Error ? e : new Error("Fetch failed");
 
       // Don't retry on abort
       if (options.signal?.aborted) {
@@ -91,12 +91,12 @@ async function fetchWithRetry(
       if (attempt < maxRetries - 1) {
         const delay = initialDelay * Math.pow(2, attempt);
         console.warn(`[GatewayClient] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
 
-  throw lastError ?? new Error('Gateway unreachable after retries');
+  throw lastError ?? new Error("Gateway unreachable after retries");
 }
 
 // ============================================================================
@@ -121,7 +121,7 @@ async function fetchWithRetry(
  */
 export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
   private config: GatewayClientConfig;
-  private status: GatewayStatus = 'idle';
+  private status: GatewayStatus = "idle";
   private endpoints: ContentEndpoints | null = null;
   private error: string | null = null;
   private abortController: AbortController | null = null;
@@ -133,7 +133,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
   private cacheTtlMs: number;
 
   // F3: Circuit breaker state
-  private circuitState: CircuitBreakerState = 'closed';
+  private circuitState: CircuitBreakerState = "closed";
   private consecutiveFailures = 0;
   private circuitOpenedAt = 0;
 
@@ -159,7 +159,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
 
     // F3: Check circuit breaker
     if (!this.canAttemptRequest()) {
-      throw new Error('Circuit breaker is open - too many recent failures');
+      throw new Error("Circuit breaker is open - too many recent failures");
     }
 
     // F2: Return in-flight request if one exists (deduplication)
@@ -214,18 +214,18 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
    */
   private canAttemptRequest(): boolean {
     switch (this.circuitState) {
-      case 'closed':
+      case "closed":
         return true;
 
-      case 'open':
+      case "open":
         // Check if enough time has passed to try half-open
         if (Date.now() - this.circuitOpenedAt >= CIRCUIT_BREAKER_TIMEOUT_MS) {
-          this.circuitState = 'half-open';
+          this.circuitState = "half-open";
           return true;
         }
         return false;
 
-      case 'half-open':
+      case "half-open":
         // Allow one request to test the circuit
         return true;
     }
@@ -236,7 +236,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
    */
   private onSuccess(): void {
     this.consecutiveFailures = 0;
-    this.circuitState = 'closed';
+    this.circuitState = "closed";
   }
 
   /**
@@ -245,15 +245,17 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
   private onFailure(): void {
     this.consecutiveFailures++;
 
-    if (this.circuitState === 'half-open') {
+    if (this.circuitState === "half-open") {
       // Failed during half-open - re-open the circuit
-      this.circuitState = 'open';
+      this.circuitState = "open";
       this.circuitOpenedAt = Date.now();
     } else if (this.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
       // Threshold reached - open the circuit
-      this.circuitState = 'open';
+      this.circuitState = "open";
       this.circuitOpenedAt = Date.now();
-      console.warn(`[GatewayClient] Circuit breaker opened after ${this.consecutiveFailures} consecutive failures`);
+      console.warn(
+        `[GatewayClient] Circuit breaker opened after ${this.consecutiveFailures} consecutive failures`
+      );
     }
   }
 
@@ -264,7 +266,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
     return {
       state: this.circuitState,
       failures: this.consecutiveFailures,
-      openedAt: this.circuitState === 'open' ? this.circuitOpenedAt : null,
+      openedAt: this.circuitState === "open" ? this.circuitOpenedAt : null,
     };
   }
 
@@ -272,7 +274,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
    * F3: Manually reset the circuit breaker
    */
   resetCircuitBreaker(): void {
-    this.circuitState = 'closed';
+    this.circuitState = "closed";
     this.consecutiveFailures = 0;
     this.circuitOpenedAt = 0;
   }
@@ -295,25 +297,25 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
 
     // Validate required params
     if (!gatewayUrl || !contentId) {
-      const error = 'Missing required parameters: gatewayUrl or contentId';
-      this.setStatus('error', error);
+      const error = "Missing required parameters: gatewayUrl or contentId";
+      this.setStatus("error", error);
       throw new Error(error);
     }
 
-    this.setStatus('loading');
+    this.setStatus("loading");
 
     const ac = new AbortController();
     this.abortController = ac;
 
     try {
-      const graphqlEndpoint = gatewayUrl.replace(/\/$/, '');
+      const graphqlEndpoint = gatewayUrl.replace(/\/$/, "");
 
       const res = await fetchWithRetry(
         graphqlEndpoint,
         {
-          method: 'POST',
+          method: "POST",
           headers: {
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
             ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
           body: JSON.stringify({
@@ -333,7 +335,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       const payload = await res.json();
 
       if (payload.errors?.length) {
-        throw new Error(payload.errors[0]?.message || 'GraphQL error');
+        throw new Error(payload.errors[0]?.message || "GraphQL error");
       }
 
       const resp = payload.data?.resolveViewerEndpoint;
@@ -341,7 +343,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       const fallbacks = Array.isArray(resp?.fallbacks) ? resp.fallbacks : [];
 
       if (!primary) {
-        throw new Error('No endpoints available');
+        throw new Error("No endpoints available");
       }
 
       const endpoints: ContentEndpoints = {
@@ -353,19 +355,19 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       this.endpoints = endpoints;
       // F2: Update cache timestamp
       this.cacheTimestamp = Date.now();
-      this.setStatus('ready');
-      this.emit('endpointsResolved', { endpoints });
+      this.setStatus("ready");
+      this.emit("endpointsResolved", { endpoints });
 
       return endpoints;
     } catch (e) {
       // Ignore abort errors
       if (ac.signal.aborted) {
-        throw new Error('Request aborted');
+        throw new Error("Request aborted");
       }
 
-      const message = e instanceof Error ? e.message : 'Unknown gateway error';
-      console.error('[GatewayClient] Gateway resolution failed:', message);
-      this.setStatus('error', message);
+      const message = e instanceof Error ? e.message : "Unknown gateway error";
+      console.error("[GatewayClient] Gateway resolution failed:", message);
+      this.setStatus("error", message);
       throw new Error(message);
     }
   }
@@ -416,7 +418,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
     this.inFlightRequest = null;
     // F3: Reset circuit breaker for new config
     this.resetCircuitBreaker();
-    this.setStatus('idle');
+    this.setStatus("idle");
   }
 
   /**
@@ -430,7 +432,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
   private setStatus(status: GatewayStatus, error?: string): void {
     this.status = status;
     this.error = error ?? null;
-    this.emit('statusChange', { status, error });
+    this.emit("statusChange", { status, error });
   }
 }
 

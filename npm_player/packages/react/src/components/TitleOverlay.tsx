@@ -31,15 +31,9 @@ const TitleOverlay: React.FC<TitleOverlayProps> = ({
         className
       )}
     >
-      {title && (
-        <h2 className="text-white text-sm font-medium truncate max-w-[80%]">
-          {title}
-        </h2>
-      )}
+      {title && <h2 className="text-white text-sm font-medium truncate max-w-[80%]">{title}</h2>}
       {description && (
-        <p className="text-white/70 text-xs mt-0.5 line-clamp-2 max-w-[70%]">
-          {description}
-        </p>
+        <p className="text-white/70 text-xs mt-0.5 line-clamp-2 max-w-[70%]">{description}</p>
       )}
     </div>
   );

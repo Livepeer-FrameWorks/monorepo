@@ -166,7 +166,8 @@
           <div>
             <h3 class="text-sm font-medium text-warning-alt">Alpha Release</h3>
             <p class="text-sm text-muted-foreground mt-1">
-              FrameWorks is currently in alpha and rapidly evolving. Features may change, and there could be occasional service interruptions.
+              FrameWorks is currently in alpha and rapidly evolving. Features may change, and there
+              could be occasional service interruptions.
             </p>
           </div>
         </div>
@@ -191,7 +192,10 @@
       <form id="register-form" onsubmit={preventDefault(handleRegister)}>
         <!-- Email field -->
         <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-          <label for="email" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          <label
+            for="email"
+            class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+          >
             Email Address
           </label>
           <Input
@@ -206,7 +210,10 @@
 
         <!-- Password field -->
         <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-          <label for="password" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          <label
+            for="password"
+            class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+          >
             Password
           </label>
           <Input
@@ -222,7 +229,10 @@
 
         <!-- Confirm Password field -->
         <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-          <label for="confirmPassword" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+          <label
+            for="confirmPassword"
+            class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+          >
             Confirm Password
           </label>
           <Input
@@ -253,7 +263,9 @@
 
         {#if turnstileSiteKey}
           <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-            <p class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+            <p
+              class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+            >
               Verification
             </p>
             <Turnstile
@@ -282,7 +294,9 @@
         {#if !turnstileSiteKey}
           <!-- Human verification -->
           <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
-            <p class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+            <p
+              class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2"
+            >
               Verification
             </p>
             <RadioGroup bind:value={human_check} required class="flex gap-6">
@@ -322,9 +336,7 @@
         </Button>
       </div>
       <div class="slab-actions slab-actions--row">
-        <Button href={resolve("/login")} variant="ghost">
-          Already have an account?
-        </Button>
+        <Button href={resolve("/login")} variant="ghost">Already have an account?</Button>
       </div>
     </div>
   </div>
