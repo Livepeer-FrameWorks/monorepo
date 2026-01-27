@@ -314,7 +314,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 			if maxStreams, ok := limits["max_streams"].(float64); ok && maxStreams > 0 {
 				// Count tenant's current streams on this cluster
 				var currentTenantStreams int
-				s.db.QueryRowContext(ctx, `
+				if err := s.db.QueryRowContext(ctx, `
 					SELECT COUNT(*) FROM quartermaster.service_instances
 					WHERE cluster_id = $1
 					  AND service_id = 'stream'
@@ -322,7 +322,9 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 					  AND node_id IN (
 					    SELECT node_id FROM quartermaster.infrastructure_nodes WHERE cluster_id = $1
 					  )
-				`, primaryClusterID).Scan(&currentTenantStreams)
+				`, primaryClusterID).Scan(&currentTenantStreams); err != nil {
+					s.logger.WithError(err).Warn("Failed to get current stream count for limit check")
+				}
 
 				// Note: This is a simplified check. In production, you'd want to track
 				// streams per tenant, not total streams on cluster.
@@ -3072,7 +3074,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to start allocation tx: %v", err)
 		}
-		defer tx.Rollback()
+		defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "quartermaster_wireguard_ip"); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to acquire allocation lock: %v", err)
 		}

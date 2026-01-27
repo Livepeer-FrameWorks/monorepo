@@ -141,7 +141,7 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string) (*
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ValidateStreamKeyResponse), nil
+			return v.(*pb.ValidateStreamKeyResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -164,7 +164,7 @@ func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolvePlaybackIDResponse), nil
+			return v.(*pb.ResolvePlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -193,7 +193,7 @@ func (c *GRPCClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID s
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveArtifactPlaybackIDResponse), nil
+			return v.(*pb.ResolveArtifactPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -215,7 +215,7 @@ func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalNa
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveArtifactInternalNameResponse), nil
+			return v.(*pb.ResolveArtifactInternalNameResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -269,7 +269,7 @@ func (c *GRPCClient) ResolveClipHash(ctx context.Context, clipHash string) (*pb.
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveClipHashResponse), nil
+			return v.(*pb.ResolveClipHashResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -293,7 +293,7 @@ func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.Re
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveDVRHashResponse), nil
+			return v.(*pb.ResolveDVRHashResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -318,7 +318,7 @@ func (c *GRPCClient) ResolveIdentifier(ctx context.Context, identifier string) (
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveIdentifierResponse), nil
+			return v.(*pb.ResolveIdentifierResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -365,7 +365,7 @@ func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*pb.Re
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveVodHashResponse), nil
+			return v.(*pb.ResolveVodHashResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 

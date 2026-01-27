@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1194,8 +1195,10 @@ func parsePriceToCents(price string) int {
 	if price == "" {
 		return 0
 	}
-	var f float64
-	fmt.Sscanf(price, "%f", &f)
+	f, err := strconv.ParseFloat(price, 64)
+	if err != nil {
+		return 0
+	}
 	return int(math.Round(f * 100))
 }
 
@@ -1374,9 +1377,9 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 	if err == nil {
 		cluster.PricingModel = pricingModelStringToProto(pricing.PricingModel)
 		if pricing.BasePrice != "" {
-			var basePrice float64
-			fmt.Sscanf(pricing.BasePrice, "%f", &basePrice)
-			cluster.MonthlyPriceCents = int32(basePrice * 100)
+			if basePrice, parseErr := strconv.ParseFloat(pricing.BasePrice, 64); parseErr == nil {
+				cluster.MonthlyPriceCents = int32(basePrice * 100)
+			}
 		}
 	}
 

@@ -198,7 +198,7 @@ func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory
 		sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", backupFile, backupFile)
 		sizeResult, _ := runner.Run(ctx, sizeCmd)
 		var size int64
-		fmt.Sscanf(sizeResult.Stdout, "%d", &size)
+		_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
 
 		backupFiles[filepath.Base(backupFile)] = BackupFile{
 			Path:      backupFile,
@@ -267,7 +267,7 @@ done
 			sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", tarFile, tarFile)
 			sizeResult, _ := runner.Run(ctx, sizeCmd)
 			var size int64
-			fmt.Sscanf(sizeResult.Stdout, "%d", &size)
+			_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
 
 			backupFiles[filepath.Base(tarFile)] = BackupFile{
 				Path:      tarFile,
@@ -330,7 +330,7 @@ docker run --rm -v /var/lib/docker/volumes:/volumes -v %s:/backup alpine tar czf
 			sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", backupFile, backupFile)
 			sizeResult, _ := runner.Run(ctx, sizeCmd)
 			var size int64
-			fmt.Sscanf(sizeResult.Stdout, "%d", &size)
+			_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
 
 			backupFiles[filepath.Base(backupFile)] = BackupFile{
 				Path:      backupFile,
@@ -408,7 +408,7 @@ cd / && tar czf %s \
 			sizeCmd := fmt.Sprintf("stat -c %%s %s 2>/dev/null || stat -f %%z %s", backupFile, backupFile)
 			sizeResult, _ := runner.Run(ctx, sizeCmd)
 			var size int64
-			fmt.Sscanf(sizeResult.Stdout, "%d", &size)
+			_, _ = fmt.Sscanf(sizeResult.Stdout, "%d", &size) //nolint:errcheck // size defaults to 0 on parse failure
 
 			backupFiles[filepath.Base(backupFile)] = BackupFile{
 				Path:      backupFile,

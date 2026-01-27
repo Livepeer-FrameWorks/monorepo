@@ -56,7 +56,7 @@ Always backup current state before restoring.`,
 	cmd.Flags().BoolVar(&skipValidation, "skip-validation", false, "Skip health validation after restore")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt (DANGEROUS)")
 
-	cmd.MarkFlagRequired("from")
+	_ = cmd.MarkFlagRequired("from") //nolint:errcheck // flag was just defined above
 
 	return cmd
 }

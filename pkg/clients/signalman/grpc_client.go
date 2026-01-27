@@ -228,10 +228,10 @@ func (c *GRPCClient) Subscribe(channels ...pb.Channel) error {
 	}
 
 	if c.userID != "" {
-		req.Message.(*pb.ClientMessage_Subscribe).Subscribe.UserId = &c.userID
+		req.Message.(*pb.ClientMessage_Subscribe).Subscribe.UserId = &c.userID //nolint:errcheck // type just set above
 	}
 	if c.tenantID != "" {
-		req.Message.(*pb.ClientMessage_Subscribe).Subscribe.TenantId = &c.tenantID
+		req.Message.(*pb.ClientMessage_Subscribe).Subscribe.TenantId = &c.tenantID //nolint:errcheck // type just set above
 	}
 
 	if err := stream.Send(req); err != nil {

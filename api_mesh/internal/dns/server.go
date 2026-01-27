@@ -51,10 +51,14 @@ func (s *Server) Start() {
 
 func (s *Server) Stop() {
 	if s.udp != nil {
-		s.udp.Shutdown()
+		if err := s.udp.Shutdown(); err != nil {
+			s.logger.WithError(err).Warn("Failed to shutdown DNS UDP server")
+		}
 	}
 	if s.tcp != nil {
-		s.tcp.Shutdown()
+		if err := s.tcp.Shutdown(); err != nil {
+			s.logger.WithError(err).Warn("Failed to shutdown DNS TCP server")
+		}
 	}
 }
 
@@ -107,5 +111,7 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	w.WriteMsg(m)
+	if err := w.WriteMsg(m); err != nil {
+		s.logger.WithError(err).Warn("Failed to write DNS response")
+	}
 }

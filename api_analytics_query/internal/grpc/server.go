@@ -324,11 +324,13 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 	}
 
 	var total int32
-	s.clickhouse.QueryRowContext(ctx, `
+	if err := s.clickhouse.QueryRowContext(ctx, `
 		SELECT count(*) FROM periscope.stream_event_log
 		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
 		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update')
-	`, tenantID, streamID, startTime, endTime).Scan(&total)
+	`, tenantID, streamID, startTime, endTime).Scan(&total); err != nil {
+		s.logger.WithError(err).Warn("Failed to get stream events total count")
+	}
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
@@ -423,11 +425,13 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 	}
 
 	var total int32
-	s.clickhouse.QueryRowContext(ctx, `
+	if err := s.clickhouse.QueryRowContext(ctx, `
 		SELECT count(*) FROM stream_event_log
 		WHERE tenant_id = ? AND stream_id = ? AND event_type = 'stream_buffer'
 			AND timestamp >= ? AND timestamp <= ?
-	`, tenantID, streamID, startTime, endTime).Scan(&total)
+	`, tenantID, streamID, startTime, endTime).Scan(&total); err != nil {
+		s.logger.WithError(err).Warn("Failed to get buffer events total count")
+	}
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
@@ -580,15 +584,19 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 
 	var total int32
 	if streamID := req.GetStreamId(); streamID != "" {
-		s.clickhouse.QueryRowContext(ctx, `
+		if err := s.clickhouse.QueryRowContext(ctx, `
 			SELECT count(*) FROM stream_health_samples
 			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND stream_id = ?
-		`, tenantID, startTime, endTime, streamID).Scan(&total)
+		`, tenantID, startTime, endTime, streamID).Scan(&total); err != nil {
+			s.logger.WithError(err).Warn("Failed to get health samples total count")
+		}
 	} else {
-		s.clickhouse.QueryRowContext(ctx, `
+		if err := s.clickhouse.QueryRowContext(ctx, `
 			SELECT count(*) FROM stream_health_samples
 			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
-		`, tenantID, startTime, endTime).Scan(&total)
+		`, tenantID, startTime, endTime).Scan(&total); err != nil {
+			s.logger.WithError(err).Warn("Failed to get health samples total count")
+		}
 	}
 
 	var startCursor, endCursor string

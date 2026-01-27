@@ -3130,7 +3130,9 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshS
 
 	// Get playback ID
 	var playbackID string
-	s.db.QueryRowContext(ctx, `SELECT playback_id FROM commodore.streams WHERE id = $1`, streamID).Scan(&playbackID)
+	if err := s.db.QueryRowContext(ctx, `SELECT playback_id FROM commodore.streams WHERE id = $1`, streamID).Scan(&playbackID); err != nil {
+		s.logger.WithError(err).Warn("Failed to get playback ID for refreshed stream key")
+	}
 
 	s.emitStreamChangeEvent(eventStreamUpdated, tenantID, userID, streamID, []string{"stream_key"})
 

@@ -291,9 +291,9 @@ func (c *MockConnection) readPump(server *MockWebSocketServer) {
 		c.Close()
 	}()
 
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // test utility
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)) //nolint:errcheck // test utility
 		return nil
 	})
 
@@ -342,9 +342,9 @@ func (c *MockConnection) writePump(server *MockWebSocketServer) {
 	for {
 		select {
 		case message, ok := <-c.messages:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck // test utility
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{}) //nolint:errcheck // test utility
 				return
 			}
 
@@ -354,7 +354,7 @@ func (c *MockConnection) writePump(server *MockWebSocketServer) {
 			}
 
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)) //nolint:errcheck // test utility
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

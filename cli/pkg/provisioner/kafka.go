@@ -116,9 +116,9 @@ func (k *KafkaProvisioner) Initialize(ctx context.Context, host inventory.Host, 
 
 	// Create each topic
 	for _, topicCfg := range topicsConfig {
-		name := topicCfg["name"].(string)
-		partitions := int32(topicCfg["partitions"].(int))
-		replication := int16(topicCfg["replication_factor"].(int))
+		name := topicCfg["name"].(string)                          //nolint:errcheck // config validated by schema
+		partitions := int32(topicCfg["partitions"].(int))          //nolint:errcheck // config validated by schema
+		replication := int16(topicCfg["replication_factor"].(int)) //nolint:errcheck // config validated by schema
 
 		// Convert config to Kafka format
 		kafkaConfig := make(map[string]*string)

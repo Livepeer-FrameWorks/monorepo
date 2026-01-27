@@ -41,7 +41,9 @@ func NewClient(config Config) (*Client, error) {
 	}
 
 	// Set API key
-	client.WithAuthenticationValue(config.APIKey)
+	if err := client.WithAuthenticationValue(config.APIKey); err != nil {
+		return nil, fmt.Errorf("failed to set Mollie API key: %w", err)
+	}
 
 	return &Client{
 		client:        client,

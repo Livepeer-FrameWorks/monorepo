@@ -227,7 +227,11 @@ func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email strin
 
 func (m *CertManager) saveUser(ctx context.Context, tenantID string, user *ACMEUser) error {
 	// Serialize Key
-	keyBytes, err := x509.MarshalECPrivateKey(user.key.(*ecdsa.PrivateKey))
+	ecKey, ok := user.key.(*ecdsa.PrivateKey)
+	if !ok {
+		return fmt.Errorf("unexpected key type: expected *ecdsa.PrivateKey")
+	}
+	keyBytes, err := x509.MarshalECPrivateKey(ecKey)
 	if err != nil {
 		return err
 	}

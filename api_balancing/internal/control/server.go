@@ -703,8 +703,10 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		}).Error("Failed to find storage node for DVR")
 
 		// Update artifact as failed
-		db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
-			err.Error(), dvrHash)
+		if _, dbErr := db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
+			err.Error(), dvrHash); dbErr != nil {
+			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
+		}
 		return
 	}
 
@@ -747,8 +749,10 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		}).Error("Failed to send DVR start to storage node")
 
 		// Update artifact as failed
-		db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
-			err.Error(), dvrHash)
+		if _, dbErr := db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
+			err.Error(), dvrHash); dbErr != nil {
+			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
+		}
 		return
 	}
 

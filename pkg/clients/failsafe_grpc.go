@@ -237,7 +237,7 @@ func GRPCStreamClientInterceptor(cb *CircuitBreaker) grpc.StreamClientIntercepto
 		stream, err := streamer(ctx, desc, cc, method, opts...)
 		if err != nil && cb != nil && isCircuitBreakerFailure(err) {
 			// Record failure through circuit breaker
-			cb.Call(func() error { return err })
+			_ = cb.Call(func() error { return err }) //nolint:errcheck // recording pre-existing failure
 		}
 		return stream, err
 	}

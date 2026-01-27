@@ -339,7 +339,7 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 	// Wait for completion or context cancellation
 	select {
 	case <-ctx.Done():
-		session.Signal(ssh.SIGKILL)
+		_ = session.Signal(ssh.SIGKILL) //nolint:errcheck // best-effort kill on cancellation
 		result.Error = ctx.Err()
 		return result, result.Error
 
@@ -387,8 +387,8 @@ func (c *Client) RunScript(ctx context.Context, script string) (*CommandResult, 
 	// Execute script
 	result, err := c.Run(ctx, tempPath)
 
-	// Cleanup remote file
-	c.Run(ctx, fmt.Sprintf("rm -f %s", tempPath))
+	// Cleanup remote file (best-effort)
+	_, _ = c.Run(ctx, fmt.Sprintf("rm -f %s", tempPath)) //nolint:errcheck // best-effort cleanup
 
 	return result, err
 }
@@ -440,7 +440,9 @@ func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 	fmt.Fprintf(stdinPipe, "C%04o %d %s\n", mode, len(data), filename)
 
 	// Send file data
-	stdinPipe.Write(data)
+	if _, err := stdinPipe.Write(data); err != nil {
+		return fmt.Errorf("failed to write file data: %w", err)
+	}
 
 	// Send completion marker
 	fmt.Fprint(stdinPipe, "\x00")

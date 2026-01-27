@@ -87,7 +87,7 @@ func (rl *RateLimiter) cleanupLoop() {
 func (rl *RateLimiter) cleanup() {
 	threshold := time.Now().Add(-5 * time.Minute)
 	rl.buckets.Range(func(key, value interface{}) bool {
-		bucket := value.(*tokenBucket)
+		bucket := value.(*tokenBucket) //nolint:errcheck // type guaranteed by sync.Map usage
 		bucket.mu.Lock()
 		if bucket.lastRequest.Before(threshold) {
 			bucket.mu.Unlock()
@@ -125,7 +125,7 @@ func (rl *RateLimiter) Allow(tenantID string, limit, burst int) (allowed bool, r
 		burst:       burst,
 		lastRequest: time.Now(),
 	})
-	bucket := bucketI.(*tokenBucket)
+	bucket := bucketI.(*tokenBucket) //nolint:errcheck // type guaranteed by sync.Map usage
 
 	bucket.mu.Lock()
 	defer bucket.mu.Unlock()
@@ -678,7 +678,7 @@ func (tc *TenantCache) GetLimits(tenantID string) (limit, burst int) {
 func (tc *TenantCache) getTenantInfo(tenantID string) *TenantRateLimits {
 	// Check cache first
 	if cached, ok := tc.cache.Load(tenantID); ok {
-		limits := cached.(*TenantRateLimits)
+		limits := cached.(*TenantRateLimits) //nolint:errcheck // type guaranteed by sync.Map usage
 		// Use shorter TTL for prepaid tenants (faster enforcement)
 		ttl := tc.cacheTTLPostpaid
 		if limits.BillingModel == "prepaid" {

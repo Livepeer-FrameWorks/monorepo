@@ -129,8 +129,8 @@ PersistentKeepalive = {{.KeepAlive}}
 	currentIPs, err := exec.Command("ip", "-o", "-4", "addr", "show", m.interfaceName).Output()
 	if err == nil {
 		if !strings.Contains(string(currentIPs), cfg.Address) {
-			// Flush old IPs
-			exec.Command("ip", "addr", "flush", "dev", m.interfaceName).Run()
+			// Flush old IPs (best-effort, continue even if fails)
+			_ = exec.Command("ip", "addr", "flush", "dev", m.interfaceName).Run() //nolint:errcheck // best-effort flush before adding new IP
 			// Add new IP
 			if out, err := exec.Command("ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to set ip address: %w: %s", err, string(out))

@@ -1227,7 +1227,9 @@ func (sm *StorageManager) loadDefrostProgress(dvrHash, localPath string) (*Defro
 func (sm *StorageManager) saveDefrostProgress(progress *DefrostProgress, localPath string) {
 	progressFile := filepath.Join(localPath, ".defrost.json")
 	data, _ := json.Marshal(progress)
-	os.WriteFile(progressFile, data, 0644)
+	if err := os.WriteFile(progressFile, data, 0644); err != nil {
+		sm.logger.WithError(err).Warn("Failed to save defrost progress file")
+	}
 }
 
 func (sm *StorageManager) removeDefrostProgress(localPath string) {
@@ -1253,7 +1255,7 @@ func (sm *StorageManager) getStorageUsage(path string) (float64, uint64, uint64,
 
 func (sm *StorageManager) calculateDirSize(path string) uint64 {
 	var size uint64
-	filepath.Walk(path, func(_ string, info os.FileInfo, _ error) error {
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, _ error) error { //nolint:errcheck // size defaults to 0 on walk failure
 		if info != nil && !info.IsDir() {
 			size += uint64(info.Size())
 		}

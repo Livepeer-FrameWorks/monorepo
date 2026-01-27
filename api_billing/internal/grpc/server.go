@@ -4152,7 +4152,9 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create checkout session")
 		// Mark topup as failed
-		s.db.ExecContext(ctx, `UPDATE purser.pending_topups SET status = 'failed', updated_at = NOW() WHERE id = $1`, topupID)
+		if _, dbErr := s.db.ExecContext(ctx, `UPDATE purser.pending_topups SET status = 'failed', updated_at = NOW() WHERE id = $1`, topupID); dbErr != nil {
+			s.logger.WithError(dbErr).Warn("Failed to update topup status to failed")
+		}
 		s.emitBillingEvent(eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,

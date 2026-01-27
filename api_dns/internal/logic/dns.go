@@ -289,7 +289,9 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 	if err == nil {
 		for _, rec := range records {
 			m.logger.WithField("record_id", rec.ID).Info("Deleting conflicting A record for LB mode")
-			m.cfClient.DeleteDNSRecord(rec.ID)
+			if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
+				m.logger.WithError(err).WithField("record_id", rec.ID).Warn("Failed to delete conflicting A record")
+			}
 		}
 	}
 

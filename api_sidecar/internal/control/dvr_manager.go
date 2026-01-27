@@ -395,7 +395,9 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 		case <-time.After(5 * time.Minute): // Timeout if no updates
 			if job.Status == "starting" {
 				job.Logger.Warn("DVR job timeout during startup")
-				dm.StopRecording(job.DVRHash)
+				if err := dm.StopRecording(job.DVRHash); err != nil {
+					job.Logger.WithError(err).Warn("Failed to stop timed-out DVR job")
+				}
 				return
 			}
 		}

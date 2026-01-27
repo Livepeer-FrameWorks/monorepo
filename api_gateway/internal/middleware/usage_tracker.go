@@ -131,8 +131,8 @@ func (ut *UsageTracker) flush() {
 	var aggregates []*pb.APIRequestAggregate
 
 	ut.aggregates.Range(func(keyI, valueI interface{}) bool {
-		key := keyI.(aggregateKey)
-		agg := valueI.(*aggregate)
+		key := keyI.(aggregateKey) //nolint:errcheck // type guaranteed by sync.Map usage
+		agg := valueI.(*aggregate) //nolint:errcheck // type guaranteed by sync.Map usage
 
 		// Lock and extract values, then reset
 		agg.mu.Lock()
@@ -230,7 +230,7 @@ func (ut *UsageTracker) Record(tenantID, authType, opType, opName, userID string
 
 	// Get or create aggregate
 	aggI, _ := ut.aggregates.LoadOrStore(key, &aggregate{})
-	agg := aggI.(*aggregate)
+	agg := aggI.(*aggregate) //nolint:errcheck // type guaranteed by sync.Map usage
 
 	agg.mu.Lock()
 	agg.RequestCount++

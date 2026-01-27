@@ -282,7 +282,7 @@ func (pm *PrometheusMonitor) monitorNodes() {
 
 				go pm.emitNodeLifecycle(nodeID, baseURL)
 				go pm.emitStreamLifecycle(nodeID, baseURL)
-				go pm.emitClientLifecycle(nodeID, baseURL)
+				go pm.emitClientLifecycle(nodeID, baseURL) //nolint:errcheck // goroutine; errors logged internally
 			} else {
 				pm.mutex.RUnlock()
 			}
