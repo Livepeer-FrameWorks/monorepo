@@ -52,10 +52,11 @@ COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY website_marketing/package.json website_marketing/
 
 # install dependencies for the marketing workspace (dev deps required for build)
+# --ignore-scripts: skip postinstall hooks like lefthook which require git
 RUN if [ "$BUILD_ENV" = "development" ]; then \
-      pnpm install --filter frameworks-website...; \
+      pnpm install --filter frameworks-website... --ignore-scripts; \
     else \
-      pnpm install --filter frameworks-website... --frozen-lockfile; \
+      pnpm install --filter frameworks-website... --frozen-lockfile --ignore-scripts; \
     fi
 
 # copy the remaining sources now that deps are cached

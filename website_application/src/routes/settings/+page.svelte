@@ -6,6 +6,8 @@
   import { toast } from "$lib/stores/toast.js";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
+  import { countryNames } from "$lib/utils/country-names";
   import { getIconComponent } from "$lib/iconUtils";
   import { connect, getConnectors } from "wagmi/actions";
   import { wagmiConfig } from "$lib/wallet/config";
@@ -70,6 +72,11 @@
   });
   let billingDetailsLoading = $state(false);
   let billingDetailsSaving = $state(false);
+
+  // Country options sorted by name for billing address dropdown
+  const countryOptions = Object.entries(countryNames)
+    .map(([code, name]) => ({ code, name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   let lastName = $state("");
   let newsletter = $state(true);
@@ -619,8 +626,11 @@
               </p>
               {#if billingTiers.length > 0}
                 <div class="space-y-2">
-                  <label class="text-sm font-medium text-muted-foreground">Select a tier:</label>
+                  <label for="tierSelect" class="text-sm font-medium text-muted-foreground"
+                    >Select a tier:</label
+                  >
                   <select
+                    id="tierSelect"
                     bind:value={selectedTierId}
                     class="w-full p-2 border border-input rounded-md bg-background text-foreground"
                   >
@@ -707,12 +717,22 @@
                   <label for="billingCountry" class="text-sm font-medium text-muted-foreground"
                     >Country</label
                   >
-                  <Input
-                    id="billingCountry"
-                    type="text"
-                    bind:value={billingDetails.country}
-                    placeholder="DE"
-                  />
+                  <Select
+                    type="single"
+                    value={billingDetails.country}
+                    onValueChange={(v) => (billingDetails.country = v ?? "")}
+                  >
+                    <SelectTrigger id="billingCountry" class="w-full">
+                      {billingDetails.country
+                        ? countryNames[billingDetails.country] || billingDetails.country
+                        : "Select country..."}
+                    </SelectTrigger>
+                    <SelectContent class="max-h-[300px]">
+                      {#each countryOptions as { code, name } (code)}
+                        <SelectItem value={code}>{name}</SelectItem>
+                      {/each}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div class="md:col-span-2">
                   <label for="billingStreet" class="text-sm font-medium text-muted-foreground"

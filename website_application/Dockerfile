@@ -62,11 +62,12 @@ COPY npm_studio/packages/react/package.json npm_studio/packages/react/
 COPY website_application/package.json website_application/
 
 # install deps for the dashboard workspace
+# --ignore-scripts: skip postinstall hooks like lefthook which require git
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
     if [ "$BUILD_ENV" = "development" ]; then \
-      pnpm install --filter frameworks-frontend...; \
+      pnpm install --filter frameworks-frontend... --ignore-scripts; \
     else \
-      pnpm install --filter frameworks-frontend... --frozen-lockfile; \
+      pnpm install --filter frameworks-frontend... --frozen-lockfile --ignore-scripts; \
     fi
 
 # copy sources

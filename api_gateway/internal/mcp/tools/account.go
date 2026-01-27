@@ -8,6 +8,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/countries"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -58,9 +59,10 @@ func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsIn
 		return toolError("Missing required fields: address_line1, city, postal_code, and country are required")
 	}
 
-	// Validate country code format (2 letters)
-	if len(args.Country) != 2 {
-		return toolError("Country must be a 2-letter ISO country code (e.g., US, DE, NL)")
+	// Validate and normalize country code
+	countryCode := countries.Normalize(args.Country)
+	if !countries.IsValid(countryCode) {
+		return toolError(fmt.Sprintf("Invalid country code %q: must be a valid ISO 3166-1 alpha-2 code (e.g., US, DE, NL)", args.Country))
 	}
 
 	// Build address if provided
@@ -74,7 +76,7 @@ func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsIn
 			Street:     street,
 			City:       args.City,
 			PostalCode: args.PostalCode,
-			Country:    args.Country,
+			Country:    countryCode,
 		}
 	}
 

@@ -16,6 +16,7 @@ import (
 
 	"frameworks/pkg/billing"
 	"frameworks/pkg/config"
+	"frameworks/pkg/countries"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 
@@ -1108,7 +1109,7 @@ func (h *X402Handler) getVATRateForTenant(tenantID, clientIP string) (rateBps in
 			Country string `json:"country"`
 		}
 		if json.Unmarshal(billingAddress, &addr) == nil && addr.Country != "" {
-			country = addr.Country
+			country = countries.Normalize(addr.Country)
 
 			// Check for B2B with valid EU VAT number
 			if taxID.Valid && taxID.String != "" {

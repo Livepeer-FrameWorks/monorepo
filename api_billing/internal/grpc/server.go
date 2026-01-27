@@ -20,6 +20,7 @@ import (
 	"frameworks/pkg/billing"
 	decklogclient "frameworks/pkg/clients/decklog"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/countries"
 	"frameworks/pkg/logging"
 
 	"frameworks/pkg/middleware"
@@ -5249,13 +5250,19 @@ func (s *PurserServer) UpdateBillingDetails(ctx context.Context, req *pb.UpdateB
 		argIdx++
 	}
 	if req.Address != nil {
+		// Validate and normalize country code
+		countryCode := countries.Normalize(req.Address.Country)
+		if !countries.IsValid(countryCode) {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid country code %q: must be a valid ISO 3166-1 alpha-2 code (e.g., US, DE, NL)", req.Address.Country)
+		}
+
 		// Convert proto address to JSONB
 		addressJSON, err := json.Marshal(map[string]string{
 			"street":      req.Address.Street,
 			"city":        req.Address.City,
 			"state":       req.Address.State,
 			"postal_code": req.Address.PostalCode,
-			"country":     req.Address.Country,
+			"country":     countryCode,
 		})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to serialize address: %v", err)

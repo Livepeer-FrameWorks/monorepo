@@ -36,10 +36,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY website_docs/package.json website_docs/
 
 # install dependencies for the docs workspace (dev deps required for build)
+# --ignore-scripts: skip postinstall hooks like lefthook which require git
 RUN if [ "$BUILD_ENV" = "development" ]; then \
-      pnpm install --filter website_docs...; \
+      pnpm install --filter website_docs... --ignore-scripts; \
     else \
-      pnpm install --filter website_docs... --frozen-lockfile; \
+      pnpm install --filter website_docs... --frozen-lockfile --ignore-scripts; \
     fi
 
 # copy the remaining sources now that deps are cached
