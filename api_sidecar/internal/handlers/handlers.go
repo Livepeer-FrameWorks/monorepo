@@ -295,7 +295,8 @@ func (h *Handlers) deletePathRecursive(path string) (uint64, error) {
 
 	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip errors
+			//nolint:nilerr // skip errors, continue walking
+			return nil
 		}
 		if !info.IsDir() {
 			totalSize += uint64(info.Size())

@@ -910,7 +910,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		s.logger.WithError(err).Error("Failed to begin transaction for tenant creation")
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback() // Ensure rollback if anything goes wrong before explicit commit
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// 1. Insert into quartermaster.tenants
 	_, err = tx.ExecContext(ctx, `
@@ -3999,7 +3999,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 
 func generateSecureToken(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	rand.Read(b) //nolint:errcheck // crypto/rand.Read rarely fails
 	return hex.EncodeToString(b)
 }
 

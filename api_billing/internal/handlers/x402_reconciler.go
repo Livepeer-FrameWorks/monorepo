@@ -278,7 +278,7 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		r.logger.WithError(err).Error("Failed to begin transaction for balance debit")
 		return
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Get current balance
 	var balance int64

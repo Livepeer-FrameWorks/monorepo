@@ -317,7 +317,7 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	for _, a := range artifacts {
 		// First, ensure the artifact exists in foghorn.artifacts (lifecycle table)

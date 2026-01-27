@@ -1354,7 +1354,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 		s.logger.WithError(err).Error("Failed to begin transaction")
 		return nil, status.Error(codes.Internal, "failed to create wallet account")
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	userID = uuid.NewString()
 	shortAddr := normalizedAddress
@@ -1793,6 +1793,7 @@ func (s *CommodoreServer) Logout(ctx context.Context, req *pb.LogoutRequest) (*p
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		// Still acknowledge logout even without user context
+		//nolint:nilerr // graceful logout even without user context
 		return &pb.LogoutResponse{
 			Success: true,
 			Message: "logged out successfully",
@@ -2060,6 +2061,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 			"email":   email,
 			"error":   err,
 		}).Error("Failed to send verification email")
+		//nolint:nilerr // error returned in response message, not as Go error
 		return &pb.ResendVerificationResponse{
 			Success: false,
 			Message: "failed to send verification email, please try again later",
@@ -3068,7 +3070,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Delete related stream_keys (use UUID, not internal_name)
 	_, err = tx.ExecContext(ctx, `DELETE FROM commodore.stream_keys WHERE stream_id = $1`, streamID)
@@ -3789,6 +3791,7 @@ func (s *CommodoreServer) isTenantSuspended(ctx context.Context, tenantID string
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Warn("Failed to get billing status from Purser, assuming not suspended")
+		//nolint:nilerr // fail-open: assume not suspended on internal errors
 		return false, nil
 	}
 
@@ -3886,7 +3889,7 @@ func (s *CommodoreServer) generateUniqueArtifactIdentifiers(ctx context.Context)
 
 func generateSecureToken(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	rand.Read(b) //nolint:errcheck // crypto/rand.Read rarely fails
 	return hex.EncodeToString(b)
 }
 

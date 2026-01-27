@@ -237,7 +237,8 @@ func (cm *CleanupMonitor) getCleanupCandidates(clipsDir string) ([]ClipCleanupIn
 	// Walk through clips and build candidate list
 	err := filepath.Walk(clipsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip errors, continue walking
+			//nolint:nilerr // skip errors, continue walking
+			return nil
 		}
 
 		if info.IsDir() {

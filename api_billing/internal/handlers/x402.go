@@ -252,6 +252,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	// Validate network is supported for x402
 	network, err := h.getNetworkConfig(payload.Network)
 	if err != nil {
+		//nolint:nilerr // validation failure returned in result struct, not as error
 		return &VerifyResult{Valid: false, Error: err.Error()}, nil
 	}
 
@@ -286,10 +287,12 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	now := time.Now().Unix()
 	validAfter, err := parseUint256String(auth.ValidAfter)
 	if err != nil {
+		//nolint:nilerr // validation failure returned in result struct, not as error
 		return &VerifyResult{Valid: false, Error: "invalid validAfter"}, nil
 	}
 	validBefore, err := parseUint256String(auth.ValidBefore)
 	if err != nil {
+		//nolint:nilerr // validation failure returned in result struct, not as error
 		return &VerifyResult{Valid: false, Error: "invalid validBefore"}, nil
 	}
 
@@ -421,6 +424,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 	// Get network config (already validated in VerifyPayment, but get it again for use here)
 	network, err := h.getNetworkConfig(payload.Network)
 	if err != nil {
+		//nolint:nilerr // settlement failure returned in result struct, not as error
 		return &SettleResult{Success: false, Error: err.Error()}, nil
 	}
 
@@ -715,7 +719,7 @@ func (h *X402Handler) creditPrepaidBalance(ctx context.Context, tenantID string,
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Get current balance
 	var currentBalance int64

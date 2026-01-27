@@ -59,6 +59,7 @@ func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, 
 	exitCode, stdout, _, err := xexec.RunSSH(target, "cat", []string{"/etc/frameworks/inventory.json"}, "")
 
 	if exitCode != 0 || err != nil {
+		//nolint:nilerr // detection failure is not an error, returned in result
 		return &DetectionResult{Method: "inventory", Success: false, Error: err}, nil
 	}
 
@@ -71,6 +72,7 @@ func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, 
 	}
 
 	if err := json.Unmarshal([]byte(stdout), &inv); err != nil {
+		//nolint:nilerr // detection failure is not an error, returned in result
 		return &DetectionResult{Method: "inventory", Success: false, Error: err}, nil
 	}
 
@@ -202,6 +204,7 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 	exitCode, stdout, _, err := xexec.RunSSH(target, "sh", []string{"-c", cmd}, "")
 
 	if exitCode != 0 || err != nil || strings.TrimSpace(stdout) == "" {
+		//nolint:nilerr // detection failure is not an error
 		return &DetectionResult{Method: "port", Success: false}, nil
 	}
 

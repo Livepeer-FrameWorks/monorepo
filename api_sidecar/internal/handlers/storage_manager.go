@@ -357,7 +357,7 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 		// Walk clips directory
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
-				return nil
+				return nil //nolint:nilerr // skip errors, continue walking
 			}
 			if !sm.isClipFile(path) {
 				return nil
@@ -387,7 +387,7 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 		// DVR directories are structured as dvr/{internal_name}/{dvr_hash}/
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return nil, nil
+			return nil, nil //nolint:nilerr // directory missing = no candidates
 		}
 
 		for _, streamDir := range entries {

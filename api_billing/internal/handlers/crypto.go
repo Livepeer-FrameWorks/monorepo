@@ -331,7 +331,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to begin transaction")
 		return
 	}
-	defer dbTx.Rollback()
+	defer dbTx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	now := time.Now()
 

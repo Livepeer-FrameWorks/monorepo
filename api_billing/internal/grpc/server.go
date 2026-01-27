@@ -774,6 +774,7 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 				"tenant_id": tenantID,
 				"error":     err,
 			}).Warn("Failed to get user count from Commodore, allowing by default")
+			//nolint:nilerr // fail-open: allow by default on internal errors
 			return &pb.CheckUserLimitResponse{Allowed: true}, nil
 		}
 		currentUsers = userCount.ActiveCount
@@ -801,6 +802,7 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Warn("Failed to get tier limit, allowing by default")
+		//nolint:nilerr // fail-open: allow by default on internal errors
 		return &pb.CheckUserLimitResponse{Allowed: true}, nil
 	}
 
@@ -3743,7 +3745,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to start transaction")
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// 1. Resolve billing tier (prefer PAYG, fallback to lowest active tier)
 	var tierID string
@@ -3897,7 +3899,7 @@ func (s *PurserServer) recordBalanceTransaction(
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to begin transaction")
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Update balance and get new balance in one query
 	var newBalance int64
@@ -4515,7 +4517,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Update subscription to postpaid with selected tier
 	var subscriptionID string
@@ -5315,6 +5317,7 @@ func (s *PurserServer) GetPaymentRequirements(ctx context.Context, req *pb.GetPa
 		s.logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to get platform x402 address")
+		//nolint:nilerr // error returned in response struct for client handling
 		return &pb.PaymentRequirements{
 			X402Version: 1,
 			Error:       "failed to get payment address",

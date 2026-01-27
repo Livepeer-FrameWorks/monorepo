@@ -451,7 +451,7 @@ func (jm *JobManager) deductPrepaidBalance(tenantID string, amountCents int64, d
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Get or create prepaid balance record
 	var currentBalance int64

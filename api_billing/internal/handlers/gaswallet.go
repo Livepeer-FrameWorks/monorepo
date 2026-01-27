@@ -72,7 +72,7 @@ func NewGasWalletMonitor(log logging.Logger) *GasWalletMonitor {
 		[]string{"network", "chain_id"},
 	)
 	// Register metric (ignore if already registered)
-	prometheus.Register(balanceGauge)
+	prometheus.Register(balanceGauge) //nolint:errcheck // duplicate registration is fine
 
 	return &GasWalletMonitor{
 		logger:          log,

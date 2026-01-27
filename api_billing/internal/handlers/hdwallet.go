@@ -99,7 +99,7 @@ func (hw *HDWallet) GetNextDerivationIndex() (uint32, string, error) {
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Get current state and increment atomically
 	err = tx.QueryRow(`

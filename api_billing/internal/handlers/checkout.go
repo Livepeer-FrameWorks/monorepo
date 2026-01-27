@@ -563,7 +563,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// 1. Update pending_topup status
 	var currentStatus string
