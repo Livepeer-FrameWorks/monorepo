@@ -126,7 +126,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("%s not found", contentType)
 		}
-		return nil, fmt.Errorf("failed to query artifact: %v", err)
+		return nil, fmt.Errorf("failed to query artifact: %w", err)
 	}
 
 	// Query foghorn.artifact_nodes for node assignment
@@ -147,20 +147,20 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 				// Pick a storage node for defrost
 				nodeID, err = pickStorageNodeID()
 				if err != nil {
-					return nil, fmt.Errorf("storage node unknown: %v", err)
+					return nil, fmt.Errorf("storage node unknown: %w", err)
 				}
 				if _, err := StartDefrost(ctx, contentType, artifactResp.ArtifactHash, nodeID, 30*time.Second, controlLogger()); err != nil {
 					// If defrost already in progress, return retry
 					if defrostErr, ok := err.(*DefrostingError); ok {
 						return nil, defrostErr
 					}
-					return nil, fmt.Errorf("failed to start defrost: %v", err)
+					return nil, fmt.Errorf("failed to start defrost: %w", err)
 				}
 				return nil, NewDefrostingError(10, "defrost started")
 			}
 			return nil, fmt.Errorf("storage node unknown: no node assignment found")
 		}
-		return nil, fmt.Errorf("storage node unknown: %v", err)
+		return nil, fmt.Errorf("storage node unknown: %w", err)
 	}
 	if nodeID == "" {
 		return nil, fmt.Errorf("storage node unknown: empty node_id")
@@ -334,7 +334,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	lbctx := context.WithValue(ctx, "cap", "edge")
 	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
 	if err != nil {
-		return nil, fmt.Errorf("no suitable edge nodes available: %v", err)
+		return nil, fmt.Errorf("no suitable edge nodes available: %w", err)
 	}
 
 	var endpoints []*pb.ViewerEndpoint
@@ -496,12 +496,8 @@ func ResolveTemplateURL(raw interface{}, baseURL, streamName string) string {
 	s = strings.Replace(s, "$", streamName, -1)
 	if strings.Contains(s, "HOST") {
 		host := baseURL
-		if strings.HasPrefix(host, "https://") {
-			host = strings.TrimPrefix(host, "https://")
-		}
-		if strings.HasPrefix(host, "http://") {
-			host = strings.TrimPrefix(host, "http://")
-		}
+		host = strings.TrimPrefix(host, "https://")
+		host = strings.TrimPrefix(host, "http://")
 		host = strings.TrimSuffix(host, "/")
 		s = strings.Replace(s, "HOST", host, -1)
 	}

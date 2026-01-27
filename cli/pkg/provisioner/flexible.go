@@ -205,7 +205,7 @@ echo "Binary installed"
 
 	result, err := f.ExecuteScript(ctx, host, installScript)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to install binary: %s\nStderr: %s", err, result.Stderr)
+		return fmt.Errorf("failed to install binary: %w\nStderr: %s", err, result.Stderr)
 	}
 
 	// Generate systemd unit
@@ -243,7 +243,7 @@ echo "Binary installed"
 	enableCmd := fmt.Sprintf("systemctl daemon-reload && systemctl enable frameworks-%s && systemctl start frameworks-%s", f.serviceName, f.serviceName)
 	result, err = f.RunCommand(ctx, host, enableCmd)
 	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to start service: %s\nStderr: %s", err, result.Stderr)
+		return fmt.Errorf("failed to start service: %w\nStderr: %s", err, result.Stderr)
 	}
 
 	fmt.Printf("✓ %s provisioned in native mode\n", f.serviceName)

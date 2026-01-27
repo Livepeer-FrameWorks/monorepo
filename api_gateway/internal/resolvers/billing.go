@@ -10,10 +10,10 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	x402 "frameworks/pkg/x402"
 	periscope "frameworks/pkg/clients/periscope"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
+	x402 "frameworks/pkg/x402"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -298,9 +298,7 @@ func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*pb.BillingTier, er
 	}
 
 	result := make([]*pb.BillingTier, len(resp.Tiers))
-	for i := range resp.Tiers {
-		result[i] = resp.Tiers[i]
-	}
+	copy(result, resp.Tiers)
 
 	return result, nil
 }
@@ -329,9 +327,7 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
 	}
 
 	result := make([]*pb.Invoice, len(resp.Invoices))
-	for i := range resp.Invoices {
-		result[i] = resp.Invoices[i]
-	}
+	copy(result, resp.Invoices)
 
 	return result, nil
 }
@@ -808,14 +804,14 @@ func (r *Resolver) DoSubmitX402Payment(ctx context.Context, payment string, reso
 	}
 
 	settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
-		PaymentHeader:         payment,
-		Resource:              resourceValue,
-		AuthTenantID:          authTenantID,
-		ClientIP:              clientIP,
-		Purser:                r.Clients.Purser,
-		Commodore:             r.Clients.Commodore,
+		PaymentHeader:          payment,
+		Resource:               resourceValue,
+		AuthTenantID:           authTenantID,
+		ClientIP:               clientIP,
+		Purser:                 r.Clients.Purser,
+		Commodore:              r.Clients.Commodore,
 		AllowUnresolvedCreator: false,
-		Logger:                r.Logger,
+		Logger:                 r.Logger,
 	})
 	if settleErr != nil {
 		switch settleErr.Code {
@@ -855,14 +851,14 @@ func (r *Resolver) DoSubmitX402Payment(ctx context.Context, payment string, reso
 	}
 
 	return &model.X402PaymentResult{
-		Success:        true,
-		IsAuthOnly:     false,
-		TenantID:       settleResult.TargetTenantID,
-		WalletAddress:  settleResult.PayerAddress,
-		CreditedCents:  credited,
+		Success:         true,
+		IsAuthOnly:      false,
+		TenantID:        settleResult.TargetTenantID,
+		WalletAddress:   settleResult.PayerAddress,
+		CreditedCents:   credited,
 		NewBalanceCents: &newBalance,
-		TxHash:         txHashPtr,
-		Message:        fmt.Sprintf("Payment successful! %d cents credited to tenant %s.", settleResult.Settle.CreditedCents, settleResult.TargetTenantID),
+		TxHash:          txHashPtr,
+		Message:         fmt.Sprintf("Payment successful! %d cents credited to tenant %s.", settleResult.Settle.CreditedCents, settleResult.TargetTenantID),
 	}, nil
 }
 
@@ -1641,10 +1637,10 @@ func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*pb.BillingDetails,
 		r.Logger.Debug("Demo mode: returning synthetic billing details")
 		now := time.Now()
 		return &pb.BillingDetails{
-			TenantId:   "demo-tenant",
-			Email:      "billing@example.com",
-			Company:    "Demo Company Inc.",
-			VatNumber:  "DE123456789",
+			TenantId:  "demo-tenant",
+			Email:     "billing@example.com",
+			Company:   "Demo Company Inc.",
+			VatNumber: "DE123456789",
 			Address: &pb.BillingAddress{
 				Street:     "123 Demo Street",
 				City:       "Berlin",

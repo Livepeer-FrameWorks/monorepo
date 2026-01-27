@@ -221,9 +221,7 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 
 	// Return metrics
 	result := make([]*pb.StreamHealthMetric, len(resp.Metrics))
-	for i := range resp.Metrics {
-		result[i] = resp.Metrics[i]
-	}
+	copy(result, resp.Metrics)
 
 	return result, nil
 }

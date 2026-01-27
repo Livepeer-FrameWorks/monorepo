@@ -27,13 +27,13 @@ func (m *linuxManager) Init() error {
 	if err != nil {
 		// Create interface
 		if out, err := exec.Command("ip", "link", "add", "dev", m.interfaceName, "type", "wireguard").CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to create interface: %s: %s", err, string(out))
+			return fmt.Errorf("failed to create interface: %w: %s", err, string(out))
 		}
 	}
 
 	// Ensure it is up
 	if out, err := exec.Command("ip", "link", "set", "up", "dev", m.interfaceName).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to set interface up: %s: %s", err, string(out))
+		return fmt.Errorf("failed to set interface up: %w: %s", err, string(out))
 	}
 
 	return nil
@@ -120,7 +120,7 @@ PersistentKeepalive = {{.KeepAlive}}
 	// 2. Apply with wg setconf
 	// setconf replaces the current configuration
 	if out, err := exec.Command("wg", "setconf", m.interfaceName, tmpFile.Name()).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to apply wireguard config: %s: %s", err, string(out))
+		return fmt.Errorf("failed to apply wireguard config: %w: %s", err, string(out))
 	}
 
 	// 3. Set IP Address
@@ -133,7 +133,7 @@ PersistentKeepalive = {{.KeepAlive}}
 			exec.Command("ip", "addr", "flush", "dev", m.interfaceName).Run()
 			// Add new IP
 			if out, err := exec.Command("ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to set ip address: %s: %s", err, string(out))
+				return fmt.Errorf("failed to set ip address: %w: %s", err, string(out))
 			}
 		}
 	}

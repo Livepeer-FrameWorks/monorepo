@@ -2456,9 +2456,7 @@ func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamNam
 
 	// Build summaries (proto → model via binding)
 	summaries := make([]*pb.ProcessingUsageSummary, len(response.Summaries))
-	for i, summary := range response.Summaries {
-		summaries[i] = summary
-	}
+	copy(summaries, response.Summaries)
 
 	totalCount := 0
 	hasMore := false
@@ -2811,13 +2809,9 @@ func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string
 	}
 
 	summaries := make([]*pb.APIUsageSummary, len(response.Summaries))
-	for i, summary := range response.Summaries {
-		summaries[i] = summary
-	}
+	copy(summaries, response.Summaries)
 	operationSummaries := make([]*pb.APIUsageOperationSummary, len(response.OperationSummaries))
-	for i, summary := range response.OperationSummaries {
-		operationSummaries[i] = summary
-	}
+	copy(operationSummaries, response.OperationSummaries)
 
 	totalCount := 0
 	hasMore := false

@@ -26,9 +26,7 @@ func (g *DependencyGraph) AddTask(task *Task) {
 	}
 
 	// Add edges for dependencies
-	for _, dep := range task.DependsOn {
-		g.edges[task.Name] = append(g.edges[task.Name], dep)
-	}
+	g.edges[task.Name] = append(g.edges[task.Name], task.DependsOn...)
 }
 
 // TopologicalSort returns tasks ordered by dependencies (batches that can run in parallel)

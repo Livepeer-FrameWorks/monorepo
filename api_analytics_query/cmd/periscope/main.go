@@ -137,7 +137,12 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
 			AdvertiseHost:  &advertiseHost,
-			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_query) failed")
 		} else {

@@ -134,7 +134,7 @@ func restorePostgres(ctx context.Context, cmd *cobra.Command, manifest *inventor
 	// Stop Postgres
 	stopCmd := "cd /opt/frameworks/postgres && docker compose stop"
 	if result, err := runner.Run(ctx, stopCmd); err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to stop postgres: %v", err)
+		return fmt.Errorf("failed to stop postgres: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Postgres stopped\n")
 
@@ -200,7 +200,7 @@ func restoreClickHouse(ctx context.Context, cmd *cobra.Command, manifest *invent
 	// Stop ClickHouse
 	stopCmd := "cd /opt/frameworks/clickhouse && docker compose stop"
 	if result, err := runner.Run(ctx, stopCmd); err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to stop clickhouse: %v", err)
+		return fmt.Errorf("failed to stop clickhouse: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ ClickHouse stopped\n")
 

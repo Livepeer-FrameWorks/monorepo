@@ -2923,7 +2923,6 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
 		query += " AND " + condition
 		args = append(args, cursorArgs...)
-		argIdx += len(cursorArgs)
 	}
 
 	// Add ORDER BY and LIMIT (fetch limit+1 to detect hasMore)

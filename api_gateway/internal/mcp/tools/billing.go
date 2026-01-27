@@ -71,7 +71,7 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 	}
 
 	// Map asset string to proto enum
-	assetEnum := pb.CryptoAsset_CRYPTO_ASSET_USDC // default
+	var assetEnum pb.CryptoAsset
 	switch strings.ToUpper(args.Asset) {
 	case "ETH":
 		assetEnum = pb.CryptoAsset_CRYPTO_ASSET_ETH
@@ -114,12 +114,12 @@ type CheckTopupInput struct {
 
 // CheckTopupResult represents the result of checking a top-up.
 type CheckTopupResult struct {
-	TopupID         string `json:"topup_id"`
-	Status          string `json:"status"` // pending, completed, expired
-	Confirmed       bool   `json:"confirmed"`
-	CreditedCents   int64  `json:"credited_cents,omitempty"`
-	BalanceCents    int64  `json:"balance_cents,omitempty"`
-	Message         string `json:"message"`
+	TopupID       string `json:"topup_id"`
+	Status        string `json:"status"` // pending, completed, expired
+	Confirmed     bool   `json:"confirmed"`
+	CreditedCents int64  `json:"credited_cents,omitempty"`
+	BalanceCents  int64  `json:"balance_cents,omitempty"`
+	Message       string `json:"message"`
 }
 
 func handleCheckTopup(ctx context.Context, args CheckTopupInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {

@@ -71,9 +71,7 @@ func (inv *Inventory) ToINI() string {
 		if len(group.Children) > 0 {
 			lines = append(lines, "")
 			lines = append(lines, fmt.Sprintf("[%s:children]", groupName))
-			for _, child := range group.Children {
-				lines = append(lines, child)
-			}
+			lines = append(lines, group.Children...)
 		}
 
 		lines = append(lines, "")

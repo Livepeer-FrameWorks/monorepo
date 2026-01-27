@@ -42,7 +42,7 @@ import (
 
 // scanAllocationDetails scans a JSONB column into AllocationDetails proto
 func scanAllocationDetails(data []byte) *pb.AllocationDetails {
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return nil
 	}
 	var raw struct {
@@ -65,7 +65,7 @@ func scanAllocationDetails(data []byte) *pb.AllocationDetails {
 
 // scanBillingFeatures scans a JSONB column into BillingFeatures proto
 func scanBillingFeatures(data []byte) *pb.BillingFeatures {
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return nil
 	}
 	var raw struct {
@@ -146,7 +146,7 @@ func marshalAllocationDetails(ad *pb.AllocationDetails) ([]byte, error) {
 
 // scanOverageRates scans a JSONB column into OverageRates proto
 func scanOverageRates(data []byte) *pb.OverageRates {
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return nil
 	}
 	var raw struct {
@@ -706,7 +706,6 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 	if len(req.GetUsageTypes()) > 0 {
 		whereClause += fmt.Sprintf(" AND usage_type = ANY($%d)", argIdx)
 		args = append(args, pq.Array(req.GetUsageTypes()))
-		argIdx++
 	}
 
 	query := fmt.Sprintf(`
@@ -1674,7 +1673,7 @@ func (s *PurserServer) createStripePayment(invoiceID, tenantID string, amount fl
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("stripe API request failed: %v", err)
+		return "", "", fmt.Errorf("stripe API request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -1688,7 +1687,7 @@ func (s *PurserServer) createStripePayment(invoiceID, tenantID string, amount fl
 		ClientSecret string `json:"client_secret"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", fmt.Errorf("failed to decode stripe response: %v", err)
+		return "", "", fmt.Errorf("failed to decode stripe response: %w", err)
 	}
 
 	if result.ID == "" || result.ClientSecret == "" {
@@ -1750,7 +1749,7 @@ func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount fl
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("mollie API request failed: %v", err)
+		return "", "", fmt.Errorf("mollie API request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -1764,7 +1763,7 @@ func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount fl
 		Links map[string]map[string]string `json:"_links"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", fmt.Errorf("failed to decode mollie response: %v", err)
+		return "", "", fmt.Errorf("failed to decode mollie response: %w", err)
 	}
 
 	checkoutURL := ""
@@ -2451,7 +2450,7 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 
 // scanCustomPricing scans JSONB into CustomPricing proto
 func scanCustomPricing(data []byte) *pb.CustomPricing {
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return nil
 	}
 	var raw struct {
@@ -2469,7 +2468,7 @@ func scanCustomPricing(data []byte) *pb.CustomPricing {
 
 // scanBillingAddress scans JSONB into BillingAddress proto
 func scanBillingAddress(data []byte) *pb.BillingAddress {
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return nil
 	}
 	var raw struct {
@@ -4026,7 +4025,6 @@ func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *pb.List
 		if req.TimeRange.End != nil {
 			query += fmt.Sprintf(" AND created_at <= $%d", argIdx)
 			args = append(args, req.TimeRange.End.AsTime())
-			argIdx++
 		}
 	}
 

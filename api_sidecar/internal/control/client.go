@@ -385,10 +385,6 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	// Use clip_hash for secure file naming (no tenant info exposed)
 	clipHash := req.GetClipHash()
 	streamName := req.GetStreamName()
-	output := req.GetOutputName()
-	if output == "" {
-		output = clipHash // Use opaque clip hash as filename
-	}
 
 	// Build MistServer URL using stream name
 	q := buildClipParams(req)
@@ -1188,10 +1184,10 @@ func handleStopSessions(logger logging.Logger, req *pb.StopSessionsRequest) {
 	}
 
 	logger.WithFields(logging.Fields{
-		"tenant_id":     req.TenantId,
-		"reason":        req.Reason,
-		"stream_count":  len(req.StreamNames),
-		"stream_names":  req.StreamNames,
+		"tenant_id":    req.TenantId,
+		"reason":       req.Reason,
+		"stream_count": len(req.StreamNames),
+		"stream_names": req.StreamNames,
 	}).Info("Stopping sessions for suspended tenant")
 
 	// Use batch stop_sessions API

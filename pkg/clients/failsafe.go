@@ -198,6 +198,27 @@ func (cb *CircuitBreaker) Underlying() circuitbreaker.CircuitBreaker[any] {
 // HTTP Executor with Retry + Circuit Breaker
 // ============================================================================
 
+// DefaultShouldRetry determines if an HTTP request should be retried.
+// Retries on network errors, server errors (5xx), and rate limits (429).
+func DefaultShouldRetry(resp *http.Response, err error) bool {
+	if err != nil {
+		return true
+	}
+	if resp == nil {
+		return true
+	}
+	switch resp.StatusCode {
+	case http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout,
+		http.StatusTooManyRequests:
+		return true
+	default:
+		return false
+	}
+}
+
 // HTTPExecutorConfig configures the HTTP executor
 type HTTPExecutorConfig struct {
 	// Retry settings
@@ -223,6 +244,8 @@ func DefaultHTTPExecutorConfig() HTTPExecutorConfig {
 }
 
 // NewHTTPRetryPolicy creates a retry policy for HTTP requests
+//
+//nolint:bodyclose // false positive: [*http.Response] is a generic type parameter, not an actual response
 func NewHTTPRetryPolicy(cfg HTTPExecutorConfig) retrypolicy.RetryPolicy[*http.Response] {
 	builder := retrypolicy.NewBuilder[*http.Response]().
 		WithBackoff(cfg.BaseDelay, cfg.MaxDelay).
@@ -241,6 +264,8 @@ func NewHTTPRetryPolicy(cfg HTTPExecutorConfig) retrypolicy.RetryPolicy[*http.Re
 
 // NewHTTPExecutor creates a failsafe executor for HTTP requests
 // combining retry policy and optional circuit breaker
+//
+//nolint:bodyclose // false positive: [*http.Response] is a generic type parameter, not an actual response
 func NewHTTPExecutor(cfg HTTPExecutorConfig) failsafe.Executor[*http.Response] {
 	retry := NewHTTPRetryPolicy(cfg)
 

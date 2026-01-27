@@ -245,10 +245,10 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 				c.JSON(http.StatusOK, gin.H{
 					"data": []map[string]interface{}{
 						{
-							"timestamp":    "2024-01-15T10:30:00Z",
-							"stream_id":    "stream-123",
-							"bitrate":      4500,
-							"fps":          60.0,
+							"timestamp":     "2024-01-15T10:30:00Z",
+							"stream_id":     "stream-123",
+							"bitrate":       4500,
+							"fps":           60.0,
 							"buffer_health": 0.92,
 						},
 					},
@@ -258,7 +258,7 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 			})
 
 			// Build request URL
-			reqURL := fmt.Sprintf("/api/v1/analytics/tenant-123/viewer-metrics")
+			reqURL := "/api/v1/analytics/tenant-123/viewer-metrics"
 			if tt.startTime != "" || tt.endTime != "" {
 				params := url.Values{}
 				if tt.startTime != "" {
