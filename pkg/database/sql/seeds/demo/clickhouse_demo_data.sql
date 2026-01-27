@@ -164,7 +164,7 @@ INSERT INTO periscope.stream_event_log (
 );
 
 -- =================================================================================================
--- 2. Stream Health Samples (stream_health_samples) - 6 hours of 10s samples
+-- 2. Stream Health Samples (stream_health_samples) - 7 days of 1-minute samples
 -- =================================================================================================
 INSERT INTO periscope.stream_health_samples (
     timestamp, tenant_id, stream_id, internal_name, node_id,
@@ -177,7 +177,7 @@ INSERT INTO periscope.stream_health_samples (
     audio_channels, audio_sample_rate, audio_codec, audio_bitrate
 )
 SELECT
-    toDateTime(now() - INTERVAL number * 10 SECOND) as timestamp,
+    toDateTime(now() - INTERVAL number MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
@@ -213,10 +213,11 @@ SELECT
     48000 as audio_sample_rate,
     'AAC' as audio_codec,
     192000 as audio_bitrate
-FROM numbers(0, 2160);
+FROM numbers(0, 10080);
 
 -- =================================================================================================
--- 3. Viewer Connection Events (viewer_connection_events) - connect + disconnect pairs
+-- 3. Viewer Connection Events (viewer_connection_events) - 7 days of connect + disconnect pairs
+-- Geographic distribution: US (40%), NL (20%), GB (15%), DE (10%), JP (10%), SG (5%)
 -- =================================================================================================
 INSERT INTO periscope.viewer_connection_events (
     event_id, timestamp, tenant_id, stream_id, internal_name, session_id,
@@ -227,19 +228,40 @@ INSERT INTO periscope.viewer_connection_events (
 )
 SELECT
     generateUUIDv4() as event_id,
-    toDateTime(now() - INTERVAL number * 60 SECOND) as timestamp,
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
     concat('session-', toString(number)) as session_id,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
     arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
-    'edge-leiden' as node_id,
+    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
     '/live/demo_live_stream_001/index.m3u8' as request_url,
-    'US' as country_code,
-    'New York' as city,
-    40.71 + (rand()%100 - 50)/100.0 as latitude,
-    -74.00 + (rand()%100 - 50)/100.0 as longitude,
+    arrayElement(['US', 'US', 'US', 'US', 'NL', 'NL', 'GB', 'GB', 'DE', 'JP', 'JP', 'SG'], 1 + number%12) as country_code,
+    multiIf(
+        number%12 < 4, arrayElement(['New York', 'Los Angeles', 'Chicago', 'San Francisco'], 1 + number%4),
+        number%12 < 6, arrayElement(['Amsterdam', 'Rotterdam'], 1 + number%2),
+        number%12 < 8, arrayElement(['London', 'Manchester'], 1 + number%2),
+        number%12 < 9, arrayElement(['Berlin', 'Munich'], 1 + number%2),
+        number%12 < 11, arrayElement(['Tokyo', 'Osaka'], 1 + number%2),
+        'Singapore'
+    ) as city,
+    multiIf(
+        number%12 < 4, arrayElement([40.71, 34.05, 41.88, 37.77], 1 + number%4) + (rand()%100 - 50)/1000.0,
+        number%12 < 6, 52.37 + (rand()%100 - 50)/1000.0,
+        number%12 < 8, 51.51 + (rand()%100 - 50)/1000.0,
+        number%12 < 9, 52.52 + (rand()%100 - 50)/1000.0,
+        number%12 < 11, 35.68 + (rand()%100 - 50)/1000.0,
+        1.35 + (rand()%100 - 50)/1000.0
+    ) as latitude,
+    multiIf(
+        number%12 < 4, arrayElement([-74.00, -118.24, -87.63, -122.42], 1 + number%4) + (rand()%100 - 50)/1000.0,
+        number%12 < 6, 4.90 + (rand()%100 - 50)/1000.0,
+        number%12 < 8, -0.13 + (rand()%100 - 50)/1000.0,
+        number%12 < 9, 13.40 + (rand()%100 - 50)/1000.0,
+        number%12 < 11, 139.69 + (rand()%100 - 50)/1000.0,
+        103.82 + (rand()%100 - 50)/1000.0
+    ) as longitude,
     NULL as client_bucket_h3,
     NULL as client_bucket_res,
     NULL as node_bucket_h3,
@@ -247,7 +269,7 @@ SELECT
     'connect' as event_type,
     0 as session_duration,
     0 as bytes_transferred
-FROM numbers(0, 600);
+FROM numbers(0, 2016);
 
 INSERT INTO periscope.viewer_connection_events (
     event_id, timestamp, tenant_id, stream_id, internal_name, session_id,
@@ -258,30 +280,51 @@ INSERT INTO periscope.viewer_connection_events (
 )
 SELECT
     generateUUIDv4() as event_id,
-    toDateTime(now() - INTERVAL number * 60 SECOND) + INTERVAL (30 + rand()%600) SECOND as timestamp,
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) + INTERVAL (30 + rand()%600) SECOND as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
     concat('session-', toString(number)) as session_id,
     concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as connection_addr,
     arrayElement(['HLS', 'WebRTC', 'RTMP'], 1 + rand()%3) as connector,
-    'edge-leiden' as node_id,
+    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
     '/live/demo_live_stream_001/index.m3u8' as request_url,
-    'US' as country_code,
-    'New York' as city,
-    40.71 + (rand()%100 - 50)/100.0 as latitude,
-    -74.00 + (rand()%100 - 50)/100.0 as longitude,
+    arrayElement(['US', 'US', 'US', 'US', 'NL', 'NL', 'GB', 'GB', 'DE', 'JP', 'JP', 'SG'], 1 + number%12) as country_code,
+    multiIf(
+        number%12 < 4, arrayElement(['New York', 'Los Angeles', 'Chicago', 'San Francisco'], 1 + number%4),
+        number%12 < 6, arrayElement(['Amsterdam', 'Rotterdam'], 1 + number%2),
+        number%12 < 8, arrayElement(['London', 'Manchester'], 1 + number%2),
+        number%12 < 9, arrayElement(['Berlin', 'Munich'], 1 + number%2),
+        number%12 < 11, arrayElement(['Tokyo', 'Osaka'], 1 + number%2),
+        'Singapore'
+    ) as city,
+    multiIf(
+        number%12 < 4, arrayElement([40.71, 34.05, 41.88, 37.77], 1 + number%4) + (rand()%100 - 50)/1000.0,
+        number%12 < 6, 52.37 + (rand()%100 - 50)/1000.0,
+        number%12 < 8, 51.51 + (rand()%100 - 50)/1000.0,
+        number%12 < 9, 52.52 + (rand()%100 - 50)/1000.0,
+        number%12 < 11, 35.68 + (rand()%100 - 50)/1000.0,
+        1.35 + (rand()%100 - 50)/1000.0
+    ) as latitude,
+    multiIf(
+        number%12 < 4, arrayElement([-74.00, -118.24, -87.63, -122.42], 1 + number%4) + (rand()%100 - 50)/1000.0,
+        number%12 < 6, 4.90 + (rand()%100 - 50)/1000.0,
+        number%12 < 8, -0.13 + (rand()%100 - 50)/1000.0,
+        number%12 < 9, 13.40 + (rand()%100 - 50)/1000.0,
+        number%12 < 11, 139.69 + (rand()%100 - 50)/1000.0,
+        103.82 + (rand()%100 - 50)/1000.0
+    ) as longitude,
     NULL as client_bucket_h3,
     NULL as client_bucket_res,
     NULL as node_bucket_h3,
     NULL as node_bucket_res,
     'disconnect' as event_type,
-    30 + rand()%600 as session_duration,
+    30 + rand()%1800 as session_duration,
     (50 + rand()%450) * 1000000 as bytes_transferred
-FROM numbers(0, 600);
+FROM numbers(0, 2016);
 
 -- =================================================================================================
--- 4. Routing Decisions (routing_decisions)
+-- 4. Routing Decisions (routing_decisions) - 7 days of 5-minute samples
 -- =================================================================================================
 INSERT INTO periscope.routing_decisions (
     timestamp, tenant_id, stream_id, internal_name,
@@ -295,7 +338,7 @@ INSERT INTO periscope.routing_decisions (
     latency_ms, candidates_count, event_type, source
 )
 SELECT
-    toDateTime(now() - INTERVAL number * 30 SECOND) as timestamp,
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
     'demo_live_stream_001' as internal_name,
@@ -322,7 +365,7 @@ SELECT
     toInt32(3 + rand()%5) as candidates_count,
     'resolve_playback' as event_type,
     'foghorn' as source
-FROM numbers(0, 300);
+FROM numbers(0, 2016);
 
 -- =================================================================================================
 -- 5. Track List Events (track_list_events)
@@ -372,7 +415,7 @@ INSERT INTO periscope.track_list_events (
 );
 
 -- =================================================================================================
--- 6. Node Metrics Samples (node_metrics_samples) - 12 hours of 1m samples
+-- 6. Node Metrics Samples (node_metrics_samples) - 7 days of 1-minute samples
 -- =================================================================================================
 INSERT INTO periscope.node_metrics_samples (
     timestamp, tenant_id, cluster_id, node_id,
@@ -384,7 +427,7 @@ INSERT INTO periscope.node_metrics_samples (
     metadata
 )
 SELECT
-    toDateTime(now() - INTERVAL number * 60 SECOND) as timestamp,
+    toDateTime(now() - INTERVAL number MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     'central-primary' as cluster_id,
     'edge-leiden' as node_id,
@@ -405,7 +448,7 @@ SELECT
     52.1601 as latitude,
     4.4970 as longitude,
     '{"region":"eu-west"}' as metadata
-FROM numbers(0, 720);
+FROM numbers(0, 10080);
 
 -- =================================================================================================
 -- 7. Artifact Events + State (clips, DVR, VOD)
@@ -568,7 +611,7 @@ INSERT INTO periscope.storage_events (
 );
 
 -- =================================================================================================
--- 9. Processing Events
+-- 9. Processing Events - 7 days of 5-minute samples
 -- =================================================================================================
 INSERT INTO periscope.processing_events (
     timestamp, tenant_id, node_id, stream_id, internal_name,
@@ -578,7 +621,7 @@ INSERT INTO periscope.processing_events (
     input_bytes, output_bytes_total, output_bitrate_bps
 )
 SELECT
-    toDateTime(now() - INTERVAL number * 120 SECOND) as timestamp,
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) as timestamp,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
     'edge-leiden' as node_id,
     '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
@@ -594,7 +637,7 @@ SELECT
     4000000 + rand()%1000000 as input_bytes,
     9000000 + rand()%2000000 as output_bytes_total,
     4500000 as output_bitrate_bps
-FROM numbers(0, 120);
+FROM numbers(0, 2016);
 
 -- =================================================================================================
 -- 10. Materialized View Finalization (force rollups for demo)
