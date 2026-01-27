@@ -2523,50 +2523,6 @@ func x402NetworkToChainType(network string) string {
 	}
 }
 
-// createWalletUser creates a new user and tenant for a wallet address
-func (s *CommodoreServer) createWalletUser(ctx context.Context, walletAddress string) (userID, tenantID string, err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Create tenant via Quartermaster
-	tenantResp, err := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
-		Name: "Wallet " + walletAddress[:10] + "...",
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create tenant: %w", err)
-	}
-	tenantID = tenantResp.GetTenant().GetId()
-
-	// Create user with NULL email (wallet-only)
-	userID = uuid.New().String()
-	shortAddr := walletAddress[2:8] // First 6 hex chars after 0x
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO commodore.users (id, tenant_id, email, first_name, last_name, role, is_active, is_verified)
-		VALUES ($1, $2, NULL, $3, '', 'owner', true, true)
-	`, userID, tenantID, "Wallet "+shortAddr)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create user: %w", err)
-	}
-
-	// Create wallet identity
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO commodore.wallet_identities (tenant_id, user_id, chain_type, wallet_address)
-		VALUES ($1, $2, 'ethereum', $3)
-	`, tenantID, userID, walletAddress)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create wallet identity: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return "", "", fmt.Errorf("failed to commit: %w", err)
-	}
-
-	return userID, tenantID, nil
-}
-
 // LinkWallet links a wallet to the authenticated user's account
 func (s *CommodoreServer) LinkWallet(ctx context.Context, req *pb.LinkWalletRequest) (*pb.WalletIdentity, error) {
 	userID, tenantID, err := extractUserContext(ctx)

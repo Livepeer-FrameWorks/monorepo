@@ -256,12 +256,12 @@ type TenantSubscription struct {
 	BillingEmail string `json:"billing_email" db:"billing_email"`
 
 	// Subscription period
-	StartedAt       time.Time  `json:"started_at" db:"started_at"`
-	TrialEndsAt     *time.Time `json:"trial_ends_at,omitempty" db:"trial_ends_at"`
-	NextBillingDate *time.Time `json:"next_billing_date,omitempty" db:"next_billing_date"`
+	StartedAt          time.Time  `json:"started_at" db:"started_at"`
+	TrialEndsAt        *time.Time `json:"trial_ends_at,omitempty" db:"trial_ends_at"`
+	NextBillingDate    *time.Time `json:"next_billing_date,omitempty" db:"next_billing_date"`
 	BillingPeriodStart *time.Time `json:"billing_period_start,omitempty" db:"billing_period_start"`
 	BillingPeriodEnd   *time.Time `json:"billing_period_end,omitempty" db:"billing_period_end"`
-	CancelledAt     *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
+	CancelledAt        *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
 
 	// Custom arrangements (for enterprise tiers)
 	CustomPricing     CustomPricing     `json:"custom_pricing" db:"custom_pricing"`

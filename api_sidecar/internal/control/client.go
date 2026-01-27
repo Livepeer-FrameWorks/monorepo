@@ -38,7 +38,6 @@ type DeleteDVRFunc func(dvrHash string) (uint64, error)
 var (
 	currentStream pb.HelmsmanControl_ConnectClient
 	currentNodeID string
-	currentClient pb.HelmsmanControlClient
 	currentConfig *sidecarcfg.HelmsmanConfig
 	onSeed        func()
 	deleteClipFn  DeleteClipFunc
@@ -277,11 +276,10 @@ func runClient(addr string, logger logging.Logger) error {
 		return err
 	}
 
-	// Store current stream and client
+	// Store current stream for external access
 	currentStream = stream
 	currentNodeID = nodeID
-	currentClient = client
-	defer func() { currentStream = nil; currentNodeID = ""; currentClient = nil }()
+	defer func() { currentStream = nil; currentNodeID = "" }()
 
 	// Heartbeat ticker
 	hbTicker := time.NewTicker(30 * time.Second)
@@ -483,34 +481,6 @@ func downloadToFile(url, dst string) error {
 	return err
 }
 
-func envBoolDefault(name string, def bool) bool {
-	v := strings.ToLower(os.Getenv(name))
-	if v == "" {
-		return def
-	}
-	return v == "1" || v == "true" || v == "yes"
-}
-
-func envFloatDefault(name string, def float64) float64 {
-	v := os.Getenv(name)
-	if v == "" {
-		return def
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return def
-	}
-	return f
-}
-
-func hostnameFallback() string {
-	h, _ := os.Hostname()
-	if h == "" {
-		h = "unknown-helmsman"
-	}
-	return h
-}
-
 func deriveRolesFromConfig(cfg *sidecarcfg.HelmsmanConfig) []string {
 	var roles []string
 	if cfg.CapIngest {
@@ -586,56 +556,6 @@ func collectNodeFingerprint() *pb.NodeFingerprint {
 func urlEscape(s string) string {
 	r := strings.NewReplacer(" ", "%20")
 	return r.Replace(s)
-}
-
-// parseArtifactID extracts stream name and clip hash from artifact ID or path
-func parseArtifactID(artifactID, artifactPath string) (streamName, clipHash string) {
-	// Try to extract from path first: clips/{stream_name}/{clip_hash}.{format}
-	if strings.HasPrefix(artifactPath, "clips/") {
-		parts := strings.Split(artifactPath, "/")
-		if len(parts) >= 3 {
-			streamName = parts[1]
-			filename := parts[2]
-			// Remove extension to get clip hash
-			if lastDot := strings.LastIndex(filename, "."); lastDot > 0 {
-				clipHash = filename[:lastDot]
-				return
-			}
-		}
-	}
-
-	// Fallback: extract from artifact ID if it follows pattern stream_name/hash
-	if strings.Contains(artifactID, "/") {
-		parts := strings.SplitN(artifactID, "/", 2)
-		if len(parts) == 2 {
-			streamName = parts[0]
-			clipHash = parts[1]
-			return
-		}
-	}
-
-	// Last resort: use artifact ID as clip hash and try to infer stream from path
-	clipHash = artifactID
-	if artifactPath != "" {
-		// Try to extract stream name from any part of the path
-		pathParts := strings.Split(strings.Trim(artifactPath, "/"), "/")
-		for _, part := range pathParts {
-			if part != "clips" && part != clipHash && !strings.Contains(part, ".") {
-				streamName = part
-				break
-			}
-		}
-	}
-
-	// Default fallback
-	if streamName == "" {
-		streamName = "unknown"
-	}
-	if clipHash == "" {
-		clipHash = "unknown"
-	}
-
-	return
 }
 
 // handleDVRStart handles DVR start requests from Foghorn (for storage nodes)

@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/globalid"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 

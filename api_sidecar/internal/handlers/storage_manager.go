@@ -94,9 +94,6 @@ type StorageManager struct {
 	// Presigned URL client (NO S3 credentials - uses presigned URLs from Foghorn)
 	presignedClient *storage.PresignedClient
 
-	// Cold storage enabled flag (requires Foghorn connection and S3 configured on Foghorn)
-	coldStorageEnabled bool
-
 	// Thresholds
 	freezeThreshold   float64       // Start freezing at this % (default: 85%)
 	targetThreshold   float64       // Target usage after freeze (default: 70%)

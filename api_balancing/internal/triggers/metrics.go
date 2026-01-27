@@ -8,4 +8,3 @@ type ProcessorMetrics struct {
 	// Labels: trigger_type, status
 	DecklogTriggerSends *prometheus.CounterVec
 }
-

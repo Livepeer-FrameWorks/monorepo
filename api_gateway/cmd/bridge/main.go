@@ -316,11 +316,11 @@ func main() {
 
 	// GraphQL endpoint (single route group)
 	graphqlGroup := app.Group("/graphql")
-	graphqlGroup.Use(middleware.DemoMode(logger))                                                                                                                 // Demo mode detection (must be before auth)
-	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients))                                                                               // Allowlist public queries or require auth
-	graphqlGroup.Use(middleware.ViewerX402Middleware(serviceClients, logger))                                                                                     // Resolve viewer x402 before GraphQL executes
+	graphqlGroup.Use(middleware.DemoMode(logger))                                                                                                                                           // Demo mode detection (must be before auth)
+	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients))                                                                                                         // Allowlist public queries or require auth
+	graphqlGroup.Use(middleware.ViewerX402Middleware(serviceClients, logger))                                                                                                               // Resolve viewer x402 before GraphQL executes
 	graphqlGroup.Use(middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore)) // Rate limiting + 402 for prepaid with x402 support (after auth, needs tenant_id)
-	graphqlGroup.Use(middleware.GraphQLContextMiddleware())                                                                                                       // Bridge user context to GraphQL
+	graphqlGroup.Use(middleware.GraphQLContextMiddleware())                                                                                                                                 // Bridge user context to GraphQL
 	graphqlGroup.Use(middleware.GraphQLAttachLoaders(serviceClients))
 	graphqlGroup.Use(middleware.UsageTrackerMiddleware(usageTracker)) // API usage analytics (after auth, records after response)
 	{

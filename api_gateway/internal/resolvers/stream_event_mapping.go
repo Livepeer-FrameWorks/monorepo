@@ -33,7 +33,7 @@ func mapPeriscopeStreamEvent(event *pb.StreamEvent) *model.StreamEvent {
 	}
 
 	return &model.StreamEvent{
-		Id:       globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", event.StreamId, eventID, timestamp.UnixNano())),
+		Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", event.StreamId, eventID, timestamp.UnixNano())),
 		EventId:   eventID,
 		StreamId:  event.StreamId,
 		NodeId:    nodeID,
@@ -44,15 +44,15 @@ func mapPeriscopeStreamEvent(event *pb.StreamEvent) *model.StreamEvent {
 		Payload:   protoPayloadJSON(event.EventPayload),
 		Source:    model.StreamEventSourceHistorical,
 
-		BufferState:    event.BufferState,
-		HasIssues:      event.HasIssues,
-		TrackCount:     intPtrFromInt32(event.TrackCount),
-		QualityTier:    event.QualityTier,
-		PrimaryWidth:   intPtrFromInt32(event.PrimaryWidth),
-		PrimaryHeight:  intPtrFromInt32(event.PrimaryHeight),
-		PrimaryFps:     float64PtrFromFloat32(event.PrimaryFps),
-		PrimaryCodec:   event.PrimaryCodec,
-		PrimaryBitrate: intPtrFromInt32(event.PrimaryBitrate),
+		BufferState:     event.BufferState,
+		HasIssues:       event.HasIssues,
+		TrackCount:      intPtrFromInt32(event.TrackCount),
+		QualityTier:     event.QualityTier,
+		PrimaryWidth:    intPtrFromInt32(event.PrimaryWidth),
+		PrimaryHeight:   intPtrFromInt32(event.PrimaryHeight),
+		PrimaryFps:      float64PtrFromFloat32(event.PrimaryFps),
+		PrimaryCodec:    event.PrimaryCodec,
+		PrimaryBitrate:  intPtrFromInt32(event.PrimaryBitrate),
 		DownloadedBytes: float64PtrFromUint64(event.DownloadedBytes),
 		UploadedBytes:   float64PtrFromUint64(event.UploadedBytes),
 		TotalViewers:    intPtrFromUint32(event.TotalViewers),

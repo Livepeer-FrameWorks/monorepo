@@ -78,7 +78,7 @@ func StartHealthPoller() {
 
 type serviceInstance struct {
 	id, serviceID, proto, defaultProto, host, path string
-	port                                          int
+	port                                           int
 }
 
 func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time.Duration) error {
@@ -233,9 +233,9 @@ func getenvBool(key string, def bool) bool {
 }
 
 type grpcWatchManager struct {
-	mu       sync.Mutex
-	active   map[string]context.CancelFunc
-	backoff  map[string]time.Time
+	mu      sync.Mutex
+	active  map[string]context.CancelFunc
+	backoff map[string]time.Time
 }
 
 func startGrpcHealthWatchers(refreshInterval, dialTimeout, backoff time.Duration, sem chan struct{}) {

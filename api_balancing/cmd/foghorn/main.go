@@ -306,7 +306,7 @@ func main() {
 	}
 
 	// Initialize handlers with injected clients
-	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
+	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader)
 
 	// Initialize trigger processor (Lifted from Handlers)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)

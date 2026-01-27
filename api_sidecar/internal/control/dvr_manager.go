@@ -615,23 +615,6 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 	job.SendFunc(msg)
 }
 
-// logWriter implements io.Writer for process logging
-type logWriter struct {
-	logger logging.Logger
-	level  string
-}
-
-func (lw *logWriter) Write(p []byte) (n int, err error) {
-	msg := string(p)
-	switch lw.level {
-	case "error":
-		lw.logger.Error(msg)
-	default:
-		lw.logger.Info(msg)
-	}
-	return len(p), nil
-}
-
 // GetActiveJobs returns information about active DVR jobs
 func (dm *DVRManager) GetActiveJobs() map[string]string {
 	dm.mutex.RLock()

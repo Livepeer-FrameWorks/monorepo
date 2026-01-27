@@ -95,18 +95,6 @@ func validateGatewayBaseURL(raw string) (string, error) {
 	return strings.TrimRight(raw, "/"), nil
 }
 
-// extractHostFromURL returns the host:port from a URL
-func extractHostFromURL(rawURL string) (string, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("parse URL: %w", err)
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("no host in URL %q", rawURL)
-	}
-	return parsed.Host, nil
-}
-
 // extractPathFromURL returns the path from a URL (defaults to "/" if empty)
 func extractPathFromURL(rawURL string) (string, error) {
 	parsed, err := url.Parse(rawURL)

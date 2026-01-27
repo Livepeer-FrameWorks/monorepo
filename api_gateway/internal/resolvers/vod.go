@@ -8,9 +8,9 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
-	"frameworks/pkg/globalid"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/globalid"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 )

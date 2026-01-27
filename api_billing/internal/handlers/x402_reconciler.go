@@ -233,7 +233,7 @@ func (r *X402Reconciler) getTransactionReceipt(ctx context.Context, network Netw
 
 	var rpcResp struct {
 		Result *TransactionReceipt `json:"result"`
-		Error  *json.RawMessage   `json:"error"`
+		Error  *json.RawMessage    `json:"error"`
 	}
 	if err := json.Unmarshal(body, &rpcResp); err != nil {
 		return nil, err

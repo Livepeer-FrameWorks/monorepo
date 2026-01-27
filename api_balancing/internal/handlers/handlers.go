@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,7 +18,6 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
-	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
 	purserclient "frameworks/pkg/clients/purser"
@@ -36,7 +34,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
@@ -49,7 +46,6 @@ var (
 	quartermasterClient *qmclient.GRPCClient
 	metrics             *FoghornMetrics
 	geoipReader         *geoip.Reader
-	geoipCache          *cache.Cache
 	// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
 	// clusterID = emitting cluster identifier
 	// ownerTenantID = cluster operator tenant (infra owner) for event storage
@@ -61,42 +57,6 @@ var (
 // Returns (clusterID, ownerTenantID) - used by gRPC server for event emission
 func GetClusterInfo() (string, string) {
 	return clusterID, ownerTenantID
-}
-
-func getClipContextByRequestID(requestID string) (string, string, string, string) {
-	if db == nil || requestID == "" {
-		return "", "", "", ""
-	}
-
-	// Get clip_hash, internal_name, and fallback tenant_id from artifacts table
-	var clipHash, internalName string
-	var fallbackTenantID sql.NullString
-	err := db.QueryRow(`
-		SELECT artifact_hash, internal_name, tenant_id
-		FROM foghorn.artifacts
-		WHERE request_id = $1 AND artifact_type = 'clip'
-	`, requestID).Scan(&clipHash, &internalName, &fallbackTenantID)
-	if err != nil {
-		return "", "", "", ""
-	}
-
-	// Resolve tenant context from Commodore (uses cache)
-	if commodoreClient != nil && clipHash != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		resp, err := commodoreClient.ResolveClipHash(ctx, clipHash)
-		if err == nil && resp.Found {
-			return clipHash, resp.TenantId, internalName, resp.StreamId
-		}
-		// Commodore unavailable - log and fall through to local fallback
-		logger.WithField("clip_hash", clipHash).Info("Commodore unavailable, using local tenant_id fallback")
-	}
-
-	// Fallback to denormalized tenant_id stored locally
-	if fallbackTenantID.Valid {
-		return clipHash, fallbackTenantID.String, internalName, ""
-	}
-	return clipHash, "", internalName, ""
 }
 
 type clipLifecycleContext struct {
@@ -218,7 +178,6 @@ func Init(
 	pClient *purserclient.GRPCClient,
 	qClient *qmclient.GRPCClient,
 	geo *geoip.Reader,
-	geoCache *cache.Cache,
 ) {
 	db = database
 	logger = log
@@ -229,7 +188,6 @@ func Init(
 	purserClient = pClient
 	quartermasterClient = qClient
 	geoipReader = geo
-	geoipCache = geoCache
 	// Initialize cluster ID for dual-tenant attribution
 	clusterID = config.GetEnv("CLUSTER_ID", "")
 
@@ -1385,39 +1343,6 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 }
 
-// Orchestrate clip creation: select ingest and storage, then call Helmsman on storage to pull clip from Mist
-
-func deriveMistHTTPBase(base string) string {
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" {
-		// assume host:port or hostname only
-		host := strings.TrimPrefix(base, "http://")
-		host = strings.TrimPrefix(host, "https://")
-		parts := strings.Split(host, ":")
-		hostname := parts[0]
-		port := "8080"
-		return "http://" + hostname + ":" + port
-	}
-	hostname := u.Hostname()
-	port := u.Port()
-	if port == "" || port == "4242" {
-		port = "8080"
-	}
-	return u.Scheme + "://" + hostname + ":" + port
-}
-
-func deriveHelmsmanBase(base string) string {
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" {
-		host := strings.TrimPrefix(base, "http://")
-		host = strings.TrimPrefix(host, "https://")
-		parts := strings.Split(host, ":")
-		hostname := parts[0]
-		return "http://" + hostname + ":18007"
-	}
-	return u.Scheme + "://" + u.Hostname() + ":18007"
-}
-
 // postBalancingEvent posts load balancing decisions to Decklog via gRPC
 // durationMs is the time taken to resolve the routing decision (request processing latency)
 func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32) {
@@ -1833,279 +1758,6 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 	return total
 }
 
-// === DVR MANAGEMENT ENDPOINTS ===
-
-func getDVRContextByRequestID(requestID string) (string, string, string) {
-	if db == nil || requestID == "" {
-		return "", "", ""
-	}
-
-	// Get dvr_hash, internal_name, and fallback tenant_id from artifacts table
-	var dvrHash, internalName string
-	var fallbackTenantID sql.NullString
-	err := db.QueryRow(`
-		SELECT artifact_hash, internal_name, tenant_id
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, requestID).Scan(&dvrHash, &internalName, &fallbackTenantID)
-	if err != nil {
-		return "", "", ""
-	}
-
-	// Resolve tenant context from Commodore (uses cache)
-	if commodoreClient != nil && dvrHash != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		resp, err := commodoreClient.ResolveDVRHash(ctx, dvrHash)
-		if err == nil && resp.Found {
-			return resp.TenantId, internalName, resp.StreamId
-		}
-		// Commodore unavailable - log and fall through to local fallback
-		logger.WithField("dvr_hash", dvrHash).Info("Commodore unavailable, using local tenant_id fallback")
-	}
-
-	// Fallback to denormalized tenant_id stored locally
-	if fallbackTenantID.Valid {
-		return fallbackTenantID.String, internalName, ""
-	}
-	return "", internalName, ""
-}
-
-// buildOutputCapabilities returns default capabilities for a given protocol and content type
-func buildOutputCapabilities(protocol string, isLive bool) *pb.OutputCapability {
-	caps := &pb.OutputCapability{
-		SupportsSeek:          !isLive,
-		SupportsQualitySwitch: true,
-		HasAudio:              true,
-		HasVideo:              true,
-	}
-	switch strings.ToUpper(protocol) {
-	case "WHEP":
-		caps.SupportsQualitySwitch = false
-		caps.SupportsSeek = false
-	case "MP4", "WEBM":
-		caps.SupportsQualitySwitch = false
-		caps.SupportsSeek = true
-	}
-	return caps
-}
-
-func ensureTrailingSlash(s string) string {
-	if !strings.HasSuffix(s, "/") {
-		return s + "/"
-	}
-	return s
-}
-
-// deriveWHEPFromHTML derives a WHEP URL by replacing the trailing .../stream.html with .../webrtc/stream
-func deriveWHEPFromHTML(htmlURL string) string {
-	u, err := url.Parse(htmlURL)
-	if err != nil {
-		return ""
-	}
-	path := strings.Trim(u.Path, "/")
-	parts := strings.Split(path, "/")
-	if len(parts) == 0 {
-		return ""
-	}
-	last := parts[len(parts)-1]
-	if !strings.HasSuffix(last, ".html") {
-		return ""
-	}
-	stream := strings.TrimSuffix(last, ".html")
-	base := parts[:len(parts)-1]
-	base = append(base, "webrtc", stream)
-	u.Path = "/" + strings.Join(base, "/")
-	return u.String()
-}
-
-// resolveTemplateURL replaces placeholders in Mist outputs ($ for stream name, HOST for hostname)
-func resolveTemplateURL(raw interface{}, baseURL, streamName string) string {
-	var s string
-	switch v := raw.(type) {
-	case string:
-		s = v
-	case []interface{}:
-		if len(v) > 0 {
-			if ss, ok := v[0].(string); ok {
-				s = ss
-			}
-		}
-	default:
-		return ""
-	}
-	if s == "" {
-		return ""
-	}
-	s = strings.Replace(s, "$", streamName, -1)
-	if strings.Contains(s, "HOST") {
-		host := baseURL
-		host = strings.TrimPrefix(host, "https://")
-		host = strings.TrimPrefix(host, "http://")
-		host = strings.TrimSuffix(host, "/")
-		s = strings.Replace(s, "HOST", host, -1)
-	}
-	s = strings.Trim(s, "[]\"")
-	return s
-}
-
-// buildOutputsMap constructs the per-protocol outputs for a node/stream
-func buildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamName string, isLive bool) map[string]*pb.OutputEndpoint {
-	outputs := make(map[string]*pb.OutputEndpoint)
-
-	base := ensureTrailingSlash(baseURL)
-	html := base + streamName + ".html"
-	outputs["MIST_HTML"] = &pb.OutputEndpoint{Protocol: "MIST_HTML", Url: html, Capabilities: buildOutputCapabilities("MIST_HTML", isLive)}
-	outputs["PLAYER_JS"] = &pb.OutputEndpoint{Protocol: "PLAYER_JS", Url: base + "player.js", Capabilities: buildOutputCapabilities("PLAYER_JS", isLive)}
-
-	// Prefer explicit WHEP if present; otherwise derive from HTML
-	if raw, ok := rawOutputs["WHEP"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WHEP"] = &pb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: buildOutputCapabilities("WHEP", isLive)}
-		}
-	}
-	if _, ok := outputs["WHEP"]; !ok {
-		if u := deriveWHEPFromHTML(html); u != "" {
-			outputs["WHEP"] = &pb.OutputEndpoint{Protocol: "WHEP", Url: u, Capabilities: buildOutputCapabilities("WHEP", isLive)}
-		}
-	}
-
-	if raw, ok := rawOutputs["HLS"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["HLS"] = &pb.OutputEndpoint{Protocol: "HLS", Url: u, Capabilities: buildOutputCapabilities("HLS", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["DASH"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["DASH"] = &pb.OutputEndpoint{Protocol: "DASH", Url: u, Capabilities: buildOutputCapabilities("DASH", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["MP4"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["MP4"] = &pb.OutputEndpoint{Protocol: "MP4", Url: u, Capabilities: buildOutputCapabilities("MP4", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["WEBM"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WEBM"] = &pb.OutputEndpoint{Protocol: "WEBM", Url: u, Capabilities: buildOutputCapabilities("WEBM", isLive)}
-		}
-	}
-	if raw, ok := rawOutputs["HTTP"]; ok {
-		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["HTTP"] = &pb.OutputEndpoint{Protocol: "HTTP", Url: u, Capabilities: buildOutputCapabilities("HTTP", isLive)}
-		}
-	}
-
-	return outputs
-}
-
-func playbackTracksFromState(tracks []state.StreamTrack) []*pb.PlaybackTrack {
-	if len(tracks) == 0 {
-		return nil
-	}
-	out := make([]*pb.PlaybackTrack, 0, len(tracks))
-	for _, tr := range tracks {
-		pt := &pb.PlaybackTrack{
-			Type:        tr.Type,
-			Codec:       tr.Codec,
-			BitrateKbps: int32(tr.Bitrate),
-			Width:       int32(tr.Width),
-			Height:      int32(tr.Height),
-			Channels:    int32(tr.Channels),
-			SampleRate:  int32(tr.SampleRate),
-		}
-		out = append(out, pt)
-	}
-	return out
-}
-
-func playbackInstancesFromState(instances map[string]state.StreamInstanceState) []*pb.PlaybackInstance {
-	if len(instances) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(instances))
-	for nodeID := range instances {
-		keys = append(keys, nodeID)
-	}
-	sort.Strings(keys)
-	out := make([]*pb.PlaybackInstance, 0, len(keys))
-	for _, nodeID := range keys {
-		inst := instances[nodeID]
-		out = append(out, &pb.PlaybackInstance{
-			NodeId:           nodeID,
-			Viewers:          int32(inst.Viewers),
-			BufferState:      inst.BufferState,
-			BytesUp:          inst.BytesUp,
-			BytesDown:        inst.BytesDown,
-			TotalConnections: int32(inst.TotalConnections),
-			Inputs:           int32(inst.Inputs),
-			LastUpdate:       timestamppb.New(inst.LastUpdate),
-		})
-	}
-	return out
-}
-
-func protocolHintsFromEndpoints(endpoints []*pb.ViewerEndpoint) []string {
-	set := make(map[string]struct{})
-	for _, ep := range endpoints {
-		if ep.Protocol != "" {
-			set[strings.ToUpper(ep.Protocol)] = struct{}{}
-		}
-		for proto := range ep.Outputs {
-			if proto == "" {
-				continue
-			}
-			set[strings.ToUpper(proto)] = struct{}{}
-		}
-	}
-	if len(set) == 0 {
-		return nil
-	}
-	hints := make([]string, 0, len(set))
-	for proto := range set {
-		hints = append(hints, proto)
-	}
-	sort.Strings(hints)
-	return hints
-}
-
-func buildLivePlaybackMetadata(req *pb.ViewerEndpointRequest, endpoints []*pb.ViewerEndpoint) *pb.PlaybackMetadata {
-	sm := state.DefaultManager()
-	streamState := sm.GetStreamState(req.ContentId)
-	if streamState == nil {
-		return nil
-	}
-
-	contentType := "live"
-	meta := &pb.PlaybackMetadata{
-		Status:        streamState.Status,
-		IsLive:        strings.EqualFold(streamState.Status, "live"),
-		Viewers:       int32(streamState.Viewers),
-		BufferState:   streamState.BufferState,
-		TenantId:      streamState.TenantID,
-		ContentId:     req.ContentId,
-		ContentType:   contentType,
-		Tracks:        playbackTracksFromState(streamState.Tracks),
-		Instances:     playbackInstancesFromState(sm.GetStreamInstances(req.ContentId)),
-		ProtocolHints: protocolHintsFromEndpoints(endpoints),
-	}
-
-	if meta.Status == "" {
-		meta.Status = contentType
-	}
-	if !meta.IsLive && strings.EqualFold(contentType, "live") {
-		meta.IsLive = true
-	}
-
-	return meta
-}
-
-func stringOr(v interface{}) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
-}
 func toInt(v interface{}) (int, bool) {
 	switch x := v.(type) {
 	case float64:
@@ -2116,6 +1768,7 @@ func toInt(v interface{}) (int, bool) {
 		return 0, false
 	}
 }
+
 func toInt64(v interface{}) (int64, bool) {
 	switch x := v.(type) {
 	case float64:

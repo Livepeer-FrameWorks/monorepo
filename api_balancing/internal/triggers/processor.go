@@ -2,11 +2,8 @@ package triggers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -247,7 +244,7 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 
 	if len(keysToEvict) > 0 {
 		p.logger.WithFields(logging.Fields{
-			"tenant_id":          tenantID,
+			"tenant_id":           tenantID,
 			"entries_invalidated": len(keysToEvict),
 		}).Info("Invalidated tenant cache entries")
 	}
@@ -1471,41 +1468,6 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	return "", false, nil
 }
 
-// Helper methods
-
-// extractField extracts a field from the raw payload (form data or JSON)
-func (p *Processor) extractField(payload []byte, field string) string {
-	payloadStr := string(payload)
-
-	// Try URL-encoded format first (form data)
-	values, err := url.ParseQuery(payloadStr)
-	if err == nil {
-		if val := values.Get(field); val != "" {
-			return val
-		}
-	}
-
-	// Try JSON format
-	var data map[string]interface{}
-	if err := json.Unmarshal(payload, &data); err == nil {
-		if val, exists := data[field]; exists {
-			return fmt.Sprintf("%v", val)
-		}
-	}
-
-	return ""
-}
-
-// extractIntField extracts an integer field from the raw payload
-func (p *Processor) extractIntField(payload []byte, field string) int {
-	val := p.extractField(payload, field)
-	if val == "" {
-		return 0
-	}
-	intVal, _ := strconv.Atoi(val)
-	return intVal
-}
-
 // resolveNodeUUID resolves a node's logical name (e.g., "edge-node-1") to its database UUID.
 // Uses a local cache to avoid repeated Quartermaster lookups (node IDs rarely change).
 // Returns empty string if lookup fails or Quartermaster is unavailable.
@@ -1720,16 +1682,6 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 
 func stringPtr(s string) *string {
 	return &s
-}
-
-// extractInt64Field extracts an int64 field from the raw payload
-func (p *Processor) extractInt64Field(payload []byte, field string) int64 {
-	val := p.extractField(payload, field)
-	if val == "" {
-		return 0
-	}
-	int64Val, _ := strconv.ParseInt(val, 10, 64)
-	return int64Val
 }
 
 // getStreamContext gets tenant and user IDs from cache, with fallback to Commodore

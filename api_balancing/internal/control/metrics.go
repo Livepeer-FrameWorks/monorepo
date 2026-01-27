@@ -26,4 +26,3 @@ func incMistTrigger(triggerType string, blocking bool, status string) {
 	}
 	controlMetrics.MistTriggers.WithLabelValues(triggerType, b, status).Inc()
 }
-

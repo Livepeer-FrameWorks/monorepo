@@ -15,15 +15,15 @@ type StreamEvent struct {
 	Payload   *string           `json:"payload"`
 	Source    StreamEventSource `json:"source"`
 
-	BufferState    *string  `json:"bufferState"`
-	HasIssues      *bool    `json:"hasIssues"`
-	TrackCount     *int     `json:"trackCount"`
-	QualityTier    *string  `json:"qualityTier"`
-	PrimaryWidth   *int     `json:"primaryWidth"`
-	PrimaryHeight  *int     `json:"primaryHeight"`
-	PrimaryFps     *float64 `json:"primaryFps"`
-	PrimaryCodec   *string  `json:"primaryCodec"`
-	PrimaryBitrate *int     `json:"primaryBitrate"`
+	BufferState     *string  `json:"bufferState"`
+	HasIssues       *bool    `json:"hasIssues"`
+	TrackCount      *int     `json:"trackCount"`
+	QualityTier     *string  `json:"qualityTier"`
+	PrimaryWidth    *int     `json:"primaryWidth"`
+	PrimaryHeight   *int     `json:"primaryHeight"`
+	PrimaryFps      *float64 `json:"primaryFps"`
+	PrimaryCodec    *string  `json:"primaryCodec"`
+	PrimaryBitrate  *int     `json:"primaryBitrate"`
 	DownloadedBytes *float64 `json:"downloadedBytes"`
 	UploadedBytes   *float64 `json:"uploadedBytes"`
 	TotalViewers    *int     `json:"totalViewers"`

@@ -85,7 +85,6 @@ func HandleChatwootWebhook(c *gin.Context) {
 	}
 }
 
-
 // handleConversationCreated enriches a new conversation with tenant context
 func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
@@ -335,9 +334,4 @@ func handleMessageUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
-}
-
-// strPtr returns a pointer to the given string
-func strPtr(s string) *string {
-	return &s
 }

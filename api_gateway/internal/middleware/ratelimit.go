@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"frameworks/pkg/globalid"
-	x402 "frameworks/pkg/x402"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
+	x402 "frameworks/pkg/x402"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -242,12 +242,12 @@ var prepaidAllowlist = map[string]bool{
 	"__type":   true,
 
 	// MCP core discovery
-	"mcp:initialize":             true,
-	"mcp:tools/list":             true,
-	"mcp:resources/list":         true,
+	"mcp:initialize":               true,
+	"mcp:tools/list":               true,
+	"mcp:resources/list":           true,
 	"mcp:resources/templates/list": true,
-	"mcp:prompts/list":           true,
-	"mcp:prompts/get":            true,
+	"mcp:prompts/list":             true,
+	"mcp:prompts/get":              true,
 }
 
 // RateLimitMiddlewareWithX402 creates a Gin middleware with full x402 support
@@ -336,14 +336,14 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 
 	if req.XPayment != "" && x402Settler != nil && !isPublic && !req.X402Processed {
 		settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
-			PaymentHeader:         req.XPayment,
-			Resource:              req.Path,
-			AuthTenantID:          tenantIDStr,
-			ClientIP:              req.ClientIP,
-			Purser:                x402Settler,
-			Commodore:             x402Resolver,
+			PaymentHeader:          req.XPayment,
+			Resource:               req.Path,
+			AuthTenantID:           tenantIDStr,
+			ClientIP:               req.ClientIP,
+			Purser:                 x402Settler,
+			Commodore:              x402Resolver,
 			AllowUnresolvedCreator: true,
-			Logger:                logger,
+			Logger:                 logger,
 		})
 		if settleErr != nil {
 			if settleErr.Code == x402.ErrBillingDetailsRequired {

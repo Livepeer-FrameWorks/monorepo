@@ -278,11 +278,6 @@ func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
 	}
 }
 
-// isValidPayment checks if a transaction is a valid payment (legacy, uses 12 confirmations)
-func (cm *CryptoMonitor) isValidPayment(tx CryptoTransaction, expectedAmount float64, asset string) bool {
-	return cm.isValidPaymentForNetwork(tx, expectedAmount, asset, Networks["ethereum"])
-}
-
 // isValidPaymentForNetwork checks if a transaction is a valid payment for a specific network
 func (cm *CryptoMonitor) isValidPaymentForNetwork(tx CryptoTransaction, expectedAmount float64, asset string, network NetworkConfig) bool {
 	var txAmount float64
@@ -658,24 +653,6 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(network NetworkConfig, a
 	}
 
 	return transactions, nil
-}
-
-// Legacy functions for backwards compatibility (Ethereum mainnet only)
-
-func (cm *CryptoMonitor) getEthereumTransactions(address string) ([]CryptoTransaction, error) {
-	return cm.getETHTransactions(Networks["ethereum"], address)
-}
-
-func (cm *CryptoMonitor) getUSDCTransactions(address string) ([]CryptoTransaction, error) {
-	return cm.getUSDCTransactionsForNetwork(Networks["ethereum"], address)
-}
-
-func (cm *CryptoMonitor) getLivepeerTransactions(address string) ([]CryptoTransaction, error) {
-	return cm.getERC20TransactionsForNetwork(Networks["ethereum"], address, Networks["ethereum"].LPTContract)
-}
-
-func (cm *CryptoMonitor) getERC20Transactions(address, contractAddress string) ([]CryptoTransaction, error) {
-	return cm.getERC20TransactionsForNetwork(Networks["ethereum"], address, contractAddress)
 }
 
 // Amount parsing

@@ -698,94 +698,6 @@ func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 	}).Info("Sent node lifecycle update to Foghorn")
 }
 
-// extractStreamMetrics extracts per-stream metrics from MistServer JSON data
-func (pm *PrometheusMonitor) extractStreamMetrics(jsonData map[string]interface{}) map[string]map[string]interface{} {
-	streamMetrics := make(map[string]map[string]interface{})
-
-	// Extract from JSON data (actual MistServer format)
-	if jsonData != nil {
-		if streams, ok := jsonData["streams"].(map[string]interface{}); ok {
-			for streamName, streamData := range streams {
-				if streamInfo, ok := streamData.(map[string]interface{}); ok {
-					metrics := make(map[string]interface{})
-
-					// Basic stream info
-					metrics["stream_name"] = streamName
-					metrics["source"] = "json"
-
-					// Extract viewer count from curr[0] (current viewers)
-					if curr, ok := streamInfo["curr"].([]interface{}); ok && len(curr) > 0 {
-						if viewers, ok := curr[0].(float64); ok {
-							metrics["viewers"] = int(viewers)
-						} else {
-							metrics["viewers"] = 0
-						}
-					} else {
-						metrics["viewers"] = 0
-					}
-
-					// Extract bandwidth from bw[0] (in) and bw[1] (out)
-					if bw, ok := streamInfo["bw"].([]interface{}); ok && len(bw) >= 2 {
-						if bandwidthIn, ok := bw[0].(float64); ok {
-							metrics["bandwidth_in"] = int64(bandwidthIn)
-						}
-						if bandwidthOut, ok := bw[1].(float64); ok {
-							metrics["bandwidth_out"] = int64(bandwidthOut)
-						}
-					}
-
-					// Extract packet counts from pkts array
-					if pkts, ok := streamInfo["pkts"].([]interface{}); ok && len(pkts) >= 3 {
-						metrics["packet_count"] = pkts
-					}
-
-					// Extract total counts from tot array
-					if tot, ok := streamInfo["tot"].([]interface{}); ok && len(tot) >= 3 {
-						metrics["total_connections"] = tot
-					}
-
-					// Check replication status (CRITICAL: matches C++ parsing)
-					if rep, ok := streamInfo["rep"].(bool); ok {
-						metrics["replicated"] = rep
-					} else {
-						metrics["replicated"] = false
-					}
-
-					// Extract input count from curr[1] (matches C++ parsing)
-					if curr, ok := streamInfo["curr"].([]interface{}); ok && len(curr) > 1 {
-						if inputs, ok := curr[1].(float64); ok {
-							metrics["inputs"] = int(inputs)
-						} else {
-							metrics["inputs"] = 0
-						}
-					} else {
-						metrics["inputs"] = 0
-					}
-
-					// Determine stream status based on available data
-					// Only set to live if we have clear indicators of activity
-					if viewers, ok := metrics["viewers"].(int); ok && viewers > 0 {
-						metrics["status"] = "live"
-					} else if tot, ok := streamInfo["tot"].([]interface{}); ok && len(tot) > 1 {
-						// Check if there have been any connections (tot[1] > 0)
-						if totalConnections, ok := tot[1].(float64); ok && totalConnections > 0 {
-							metrics["status"] = "live"
-						} else {
-							metrics["status"] = "unknown"
-						}
-					} else {
-						metrics["status"] = "unknown"
-					}
-
-					streamMetrics[streamName] = metrics
-				}
-			}
-		}
-	}
-
-	return streamMetrics
-}
-
 // Stop stops the Prometheus monitor
 func (pm *PrometheusMonitor) Stop() {
 	close(pm.stopChannel)
@@ -871,30 +783,12 @@ func RemovePrometheusNode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Node removed successfully"})
 }
 
-// getFloat64Value safely dereferences a *float64, returning 0 if nil
-func getFloat64Value(f *float64) float64 {
-	if f == nil {
-		return 0
-	}
-	return *f
-}
-
 // getFloat64PointerValue safely dereferences a *float64, returning 0 if nil (for embedded structs)
 func getFloat64PointerValue(f *float64) float64 {
 	if f == nil {
 		return 0
 	}
 	return *f
-}
-
-// contains checks if a string slice contains a specific value
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
 
 // getFloat64 safely converts interface{} to float64
@@ -1155,129 +1049,6 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 	return nil
 }
 
-// Helper functions to get metrics from MistServer data
-func (pm *PrometheusMonitor) getCPUUsage() float64 {
-	// Get raw CPU usage from MistServer (tenths of percentage)
-	if jsonData := pm.getLastJSONData(); jsonData != nil {
-		if cpu, ok := jsonData["cpu"].(float64); ok {
-			return cpu // Return raw value from MistServer (tenths of percentage)
-		}
-	}
-	return 1000.0 // Default to 100% (1000 tenths) if unavailable
-}
-
-func (pm *PrometheusMonitor) getRAMMax() uint64 {
-	if jsonData := pm.getLastJSONData(); jsonData != nil {
-		if ram, ok := jsonData["ram"].(map[string]interface{}); ok {
-			if max, ok := ram["max"].(float64); ok {
-				return uint64(max)
-			}
-		}
-	}
-	return 8 * 1024 * 1024 * 1024 // Default to 8GB like C++
-}
-
-func (pm *PrometheusMonitor) getRAMCurrent() uint64 {
-	if jsonData := pm.getLastJSONData(); jsonData != nil {
-		if ram, ok := jsonData["ram"].(map[string]interface{}); ok {
-			if current, ok := ram["current"].(float64); ok {
-				return uint64(current)
-			}
-		}
-	}
-	return 4 * 1024 * 1024 * 1024 // Default to 4GB
-}
-
-func (pm *PrometheusMonitor) getUpSpeed() uint64 {
-	if jsonData := pm.getLastJSONData(); jsonData != nil {
-		if bw, ok := jsonData["bandwidth"].(map[string]interface{}); ok {
-			if up, ok := bw["up"].(float64); ok {
-				return uint64(up)
-			}
-		}
-	}
-	return 0
-}
-
-func (pm *PrometheusMonitor) getDownSpeed() uint64 {
-	if jsonData := pm.getLastJSONData(); jsonData != nil {
-		if bw, ok := jsonData["bandwidth"].(map[string]interface{}); ok {
-			if down, ok := bw["down"].(float64); ok {
-				return uint64(down)
-			}
-		}
-	}
-	return 0
-}
-
-func (pm *PrometheusMonitor) getBandwidthLimit() uint64 {
-	if jsonData := pm.getLastJSONData(); jsonData != nil {
-		if bw, ok := jsonData["bandwidth"].(map[string]interface{}); ok {
-			if limit, ok := bw["limit"].(float64); ok {
-				return uint64(limit)
-			}
-		}
-	}
-	return 128 * 1024 * 1024 // Default to 1Gbps like C++
-}
-
-func (pm *PrometheusMonitor) getStreamMetrics() map[string]interface{} {
-	if jsonData := pm.getLastJSONData(); jsonData != nil {
-		if streams, ok := jsonData["streams"].(map[string]interface{}); ok {
-			streamMetrics := make(map[string]interface{})
-			for streamName, streamData := range streams {
-				if streamInfo, ok := streamData.(map[string]interface{}); ok {
-					metrics := make(map[string]interface{})
-
-					// Extract viewer count (matches C++ curr[0])
-					if curr, ok := streamInfo["curr"].([]interface{}); ok && len(curr) > 0 {
-						if viewers, ok := curr[0].(float64); ok {
-							metrics["total"] = uint64(viewers)
-						}
-					}
-
-					// Extract input count (matches C++ curr[1])
-					if curr, ok := streamInfo["curr"].([]interface{}); ok && len(curr) > 1 {
-						if inputs, ok := curr[1].(float64); ok {
-							metrics["inputs"] = uint32(inputs)
-						}
-					}
-
-					// Extract bandwidth (matches C++ bw[0] and bw[1])
-					if bw, ok := streamInfo["bw"].([]interface{}); ok && len(bw) >= 2 {
-						if bandwidthUp, ok := bw[0].(float64); ok {
-							metrics["bytes_up"] = uint64(bandwidthUp)
-						}
-						if bandwidthDown, ok := bw[1].(float64); ok {
-							metrics["bytes_down"] = uint64(bandwidthDown)
-						}
-					}
-
-					// Check replication status (CRITICAL: matches C++ strm.rep parsing)
-					if rep, ok := streamInfo["rep"].(bool); ok && rep {
-						metrics["replicated"] = true
-					}
-
-					// Calculate approximate bandwidth per viewer (like C++)
-					if total, okTotal := metrics["total"].(uint64); okTotal && total > 0 {
-						if bytesUp, okUp := metrics["bytes_up"].(uint64); okUp {
-							if bytesDown, okDown := metrics["bytes_down"].(uint64); okDown {
-								metrics["bandwidth"] = uint32((bytesUp + bytesDown) / total)
-							}
-						}
-					} else {
-						metrics["bandwidth"] = uint32(131072) // Default 1mbps like C++
-					}
-
-					streamMetrics[streamName] = metrics
-				}
-			}
-			return streamMetrics
-		}
-	}
-	return make(map[string]interface{})
-}
-
 // getLastJSONData safely gets the last JSON data from koekjes endpoint
 func (pm *PrometheusMonitor) getLastJSONData() map[string]interface{} {
 	pm.mutex.RLock()
@@ -1287,26 +1058,6 @@ func (pm *PrometheusMonitor) getLastJSONData() map[string]interface{} {
 		return jsonData
 	}
 	return nil
-}
-
-// getOutputsConfiguration extracts MistServer outputs configuration from JSON data
-func (pm *PrometheusMonitor) getOutputsConfiguration() string {
-	pm.mutex.RLock()
-	jsonData := pm.lastJSONData
-	pm.mutex.RUnlock()
-
-	if jsonData == nil {
-		return ""
-	}
-
-	// Extract outputs directly from top-level JSON
-	if outputs, ok := jsonData["outputs"]; ok {
-		if outputsJSON, err := json.Marshal(outputs); err == nil {
-			return string(outputsJSON)
-		}
-	}
-
-	return ""
 }
 
 // scanLocalArtifacts scans the local storage for clip and DVR artifacts and updates the artifact index

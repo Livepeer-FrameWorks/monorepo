@@ -78,17 +78,6 @@ func (lb *LoadBalancer) hostToBinary(hostname string) [16]byte {
 	return binHost
 }
 
-// compareBinaryHosts compares two binary host addresses (like C++ Socket::matchIPv6Addr)
-func (lb *LoadBalancer) compareBinaryHosts(host1, host2 [16]byte) bool {
-	// Compare all 16 bytes
-	for i := 0; i < 16; i++ {
-		if host1[i] != host2[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // GetAllNodes returns all nodes from unified state (including unhealthy/stale for debugging)
 func (lb *LoadBalancer) GetAllNodes() []state.EnhancedBalancerNodeSnapshot {
 	snapshot := state.DefaultManager().GetAllNodesSnapshot()
@@ -342,11 +331,6 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	}).Info("Load balancing decision")
 
 	return result, nil
-}
-
-func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int, isSourceSelection bool) uint64 {
-	score, _ := lb.rateNodeWithReason(snap, streamName, lat, lon, tagAdjust, isSourceSelection)
-	return score
 }
 
 func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int, isSourceSelection bool) (uint64, nodeRejectionReason) {

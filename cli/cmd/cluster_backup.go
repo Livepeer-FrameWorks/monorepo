@@ -524,21 +524,3 @@ func VerifyBackupManifest(manifestPath string) ([]string, error) {
 
 	return errors, nil
 }
-
-// recordBackupFile calculates checksum and adds file to manifest
-func recordBackupFile(files map[string]BackupFile, filePath, component, hostName string) error {
-	hash, size, err := calculateFileSHA256(filePath)
-	if err != nil {
-		return err
-	}
-
-	key := filepath.Base(filePath)
-	files[key] = BackupFile{
-		Path:      filePath,
-		Size:      size,
-		SHA256:    hash,
-		Host:      hostName,
-		Component: component,
-	}
-	return nil
-}

@@ -10,18 +10,11 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
-	"frameworks/pkg/globalid"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/globalid"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-// timestamppbNew is a helper to create timestamppb.Timestamp from time.Time
-func timestamppbNew(t time.Time) *timestamppb.Timestamp {
-	return timestamppb.New(t)
-}
 
 // Infrastructure pagination constants
 const (

@@ -48,11 +48,11 @@ func RegisterAnalyticsResources(server *mcp.Server, clients *clients.ServiceClie
 
 // UsageAnalytics represents the analytics://usage response.
 type UsageAnalytics struct {
-	Period     string         `json:"period"`
-	StartTime  string         `json:"start_time"`
-	EndTime    string         `json:"end_time"`
-	Streaming  StreamingUsage `json:"streaming"`
-	Storage    StorageUsage   `json:"storage"`
+	Period     string          `json:"period"`
+	StartTime  string          `json:"start_time"`
+	EndTime    string          `json:"end_time"`
+	Streaming  StreamingUsage  `json:"streaming"`
+	Storage    StorageUsage    `json:"storage"`
 	Processing ProcessingUsage `json:"processing"`
 }
 
@@ -88,11 +88,11 @@ func handleUsageAnalytics(ctx context.Context, clients *clients.ServiceClients, 
 	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 	usage := UsageAnalytics{
-		Period:    "current_month",
-		StartTime: startOfMonth.Format("2006-01-02T15:04:05Z"),
-		EndTime:   now.Format("2006-01-02T15:04:05Z"),
-		Streaming: StreamingUsage{},
-		Storage:   StorageUsage{},
+		Period:     "current_month",
+		StartTime:  startOfMonth.Format("2006-01-02T15:04:05Z"),
+		EndTime:    now.Format("2006-01-02T15:04:05Z"),
+		Streaming:  StreamingUsage{},
+		Storage:    StorageUsage{},
 		Processing: ProcessingUsage{},
 	}
 

@@ -70,16 +70,16 @@ type ResourceResolution struct {
 }
 
 type SettlementOptions struct {
-	PaymentHeader         string
-	Payload               *pb.X402PaymentPayload
-	Resource              string
-	AuthTenantID          string
-	ClientIP              string
-	Purser                PurserClient
-	Commodore             CommodoreClient
+	PaymentHeader          string
+	Payload                *pb.X402PaymentPayload
+	Resource               string
+	AuthTenantID           string
+	ClientIP               string
+	Purser                 PurserClient
+	Commodore              CommodoreClient
 	AllowUnresolvedCreator bool
-	Logger                logging.Logger
-	Resolution            *ResourceResolution
+	Logger                 logging.Logger
+	Resolution             *ResourceResolution
 }
 
 type SettlementResult struct {

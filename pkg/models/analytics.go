@@ -37,12 +37,12 @@ type AnalyticsRoutingEvent struct {
 
 // AnalyticsViewerSession5m represents a 5-minute aggregated viewer metric row
 type AnalyticsViewerSession5m struct {
-	Timestamp            time.Time `json:"timestamp"`
-	InternalName         string    `json:"internal_name"`
-	NodeID               string    `json:"node_id"`
-	PeakViewers          int       `json:"peak_viewers"`
-	AvgViewers           float64   `json:"avg_viewers"`
-	UniqueCountries      int       `json:"unique_countries"`
-	UniqueCities         int       `json:"unique_cities"`
-	AvgBufferHealth      float32   `json:"avg_buffer_health"`
+	Timestamp       time.Time `json:"timestamp"`
+	InternalName    string    `json:"internal_name"`
+	NodeID          string    `json:"node_id"`
+	PeakViewers     int       `json:"peak_viewers"`
+	AvgViewers      float64   `json:"avg_viewers"`
+	UniqueCountries int       `json:"unique_countries"`
+	UniqueCities    int       `json:"unique_cities"`
+	AvgBufferHealth float32   `json:"avg_buffer_health"`
 }

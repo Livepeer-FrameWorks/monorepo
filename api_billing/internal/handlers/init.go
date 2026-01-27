@@ -15,7 +15,6 @@ var (
 	db            *sql.DB
 	logger        logging.Logger
 	emailService  *EmailService
-	metrics       *PurserMetrics
 	qmClient      *qmclient.GRPCClient
 	mollieClient  *mollie.Client
 	decklogClient *decklogclient.BatchedClient
@@ -36,7 +35,6 @@ func Init(database *sql.DB, log logging.Logger, purserMetrics *PurserMetrics, qu
 	db = database
 	logger = log
 	emailService = NewEmailService(log)
-	metrics = purserMetrics
 	qmClient = quartermasterClient
 	mollieClient = mollieSvc
 	decklogClient = decklogSvc

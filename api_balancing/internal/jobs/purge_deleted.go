@@ -18,8 +18,8 @@ type PurgeDeletedJob struct {
 	retentionAge    time.Duration // How old a deleted record must be before hard-deletion
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
-	s3Client        S3Client                // Interface for S3 operations
-	commodoreClient *commodore.GRPCClient   // For tenant context resolution
+	s3Client        S3Client              // Interface for S3 operations
+	commodoreClient *commodore.GRPCClient // For tenant context resolution
 }
 
 // S3Client interface for dependency injection

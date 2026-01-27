@@ -68,15 +68,6 @@ func parseEventPayload(eventData string) *structpb.Struct {
 	return s
 }
 
-// validateStreamID validates stream UUID format
-func validateStreamID(id string) bool {
-	if id == "" {
-		return false
-	}
-	_, err := uuid.Parse(id)
-	return err == nil
-}
-
 // getTenantID extracts tenant_id from request or context.
 // Prefers the request body value, falls back to context (set by auth interceptor).
 func getTenantID(ctx context.Context, reqTenantID string) string {
@@ -100,40 +91,6 @@ func validateTimeRangeProto(tr *pb.TimeRange) (time.Time, time.Time, error) {
 	if endTime.IsZero() {
 		endTime = time.Now()
 	}
-	return startTime, endTime, nil
-}
-
-// validateTimeRange validates time range parameters and returns defaults if needed
-func validateTimeRange(startTimeStr, endTimeStr string) (time.Time, time.Time, error) {
-	var startTime, endTime time.Time
-	var err error
-
-	if startTimeStr == "" {
-		startTime = time.Now().Add(-24 * time.Hour)
-	} else {
-		startTime, err = time.Parse(time.RFC3339, startTimeStr)
-		if err != nil {
-			return time.Time{}, time.Time{}, err
-		}
-	}
-
-	if endTimeStr == "" {
-		endTime = time.Now()
-	} else {
-		endTime, err = time.Parse(time.RFC3339, endTimeStr)
-		if err != nil {
-			return time.Time{}, time.Time{}, err
-		}
-	}
-
-	if endTime.Before(startTime) {
-		return time.Time{}, time.Time{}, fmt.Errorf("end time must be after start time")
-	}
-
-	if endTime.Sub(startTime) > 90*24*time.Hour {
-		return time.Time{}, time.Time{}, fmt.Errorf("time range cannot exceed 90 days")
-	}
-
 	return startTime, endTime, nil
 }
 
@@ -4906,12 +4863,4 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 		}).Debug("gRPC request processed")
 		return resp, err
 	}
-}
-
-func mapToStruct(m map[string]interface{}) *structpb.Struct {
-	s, err := structpb.NewStruct(m)
-	if err != nil {
-		return nil
-	}
-	return s
 }

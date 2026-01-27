@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
-	x402 "frameworks/pkg/x402"
 	"frameworks/pkg/logging"
+	x402 "frameworks/pkg/x402"
 
 	"github.com/gin-gonic/gin"
 )
@@ -139,19 +139,6 @@ func resolveContentID(payload graphqlRequestEnvelope) string {
 		if matches := resolveViewerRegex.FindStringSubmatch(payload.Query); len(matches) > 1 {
 			return matches[1]
 		}
-	}
-	return ""
-}
-
-func resolvePlaybackOwnerTenant(ctx context.Context, serviceClients *clients.ServiceClients, contentID string) string {
-	if serviceClients == nil || serviceClients.Commodore == nil {
-		return ""
-	}
-	if resp, err := serviceClients.Commodore.ResolveArtifactPlaybackID(ctx, contentID); err == nil && resp.Found && resp.TenantId != "" {
-		return resp.TenantId
-	}
-	if resp, err := serviceClients.Commodore.ResolvePlaybackID(ctx, contentID); err == nil && resp.TenantId != "" {
-		return resp.TenantId
 	}
 	return ""
 }

@@ -20,19 +20,6 @@ import (
 	pb "frameworks/pkg/proto"
 )
 
-// isClusterMetered checks if a cluster is metered based on the metered clusters list
-func isClusterMetered(meteredClusters []string, primaryClusterID string) bool {
-	if meteredClusters == nil { // All clusters metered
-		return true
-	}
-	for _, cluster := range meteredClusters {
-		if cluster == primaryClusterID {
-			return true
-		}
-	}
-	return false
-}
-
 // calculateCharges computes base and metered charges based on usage and pricing rules.
 func calculateCharges(usageData map[string]float64, basePrice float64, meteringEnabled bool, overageRates models.OverageRates, storageAllocation, bandwidthAllocation models.AllocationDetails, customPricing models.CustomPricing, customAllocations models.AllocationDetails) (baseAmount, meteredAmount float64) {
 	// Base price (custom override if provided)

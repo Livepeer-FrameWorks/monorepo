@@ -23,14 +23,6 @@ type Summary struct {
 	Checks []Check
 }
 
-func (s *Summary) add(ok bool, name, detail string, err error) {
-	c := Check{Name: name, OK: ok, Detail: detail}
-	if err != nil {
-		c.Error = err.Error()
-	}
-	s.Checks = append(s.Checks, c)
-}
-
 // DNSResolution checks that a domain resolves.
 func DNSResolution(domain string) Check {
 	if strings.TrimSpace(domain) == "" {

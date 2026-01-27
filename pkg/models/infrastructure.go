@@ -38,9 +38,9 @@ type InfrastructureCluster struct {
 	LastSeen         *time.Time `json:"last_seen,omitempty" db:"last_seen"`
 
 	// Marketplace fields
-	Visibility          string                 `json:"visibility" db:"visibility"`                       // public, unlisted, private
-	PricingModel        string                 `json:"pricing_model" db:"pricing_model"`                 // free_unmetered, metered, monthly, custom, tier_inherit
-	MonthlyPriceCents   int                    `json:"monthly_price_cents" db:"monthly_price_cents"`     // For monthly pricing
+	Visibility        string                 `json:"visibility" db:"visibility"`                   // public, unlisted, private
+	PricingModel      string                 `json:"pricing_model" db:"pricing_model"`             // free_unmetered, metered, monthly, custom, tier_inherit
+	MonthlyPriceCents int                    `json:"monthly_price_cents" db:"monthly_price_cents"` // For monthly pricing
 	MeteredRateConfig map[string]interface{} `json:"metered_rate_config,omitempty" db:"metered_rate_config"`
 	RequiresApproval  bool                   `json:"requires_approval" db:"requires_approval"`
 	ShortDescription  *string                `json:"short_description,omitempty" db:"short_description"`
@@ -136,18 +136,18 @@ type ServiceInstance struct {
 
 // ClusterInvite represents an invitation for a tenant to join a cluster
 type ClusterInvite struct {
-	ID               string                 `json:"id" db:"id"`
-	ClusterID        string                 `json:"cluster_id" db:"cluster_id"`
-	InvitedTenantID  string                 `json:"invited_tenant_id" db:"invited_tenant_id"`
-	InviteToken      string                 `json:"invite_token" db:"invite_token"`
-	AccessLevel      string                 `json:"access_level" db:"access_level"`
-	ResourceLimits   map[string]interface{} `json:"resource_limits,omitempty" db:"resource_limits"`
-	Status           string                 `json:"status" db:"status"` // pending, accepted, expired, revoked
-	CreatedBy        string                 `json:"created_by" db:"created_by"`
-	CreatedAt        time.Time              `json:"created_at" db:"created_at"`
-	ExpiresAt        *time.Time             `json:"expires_at,omitempty" db:"expires_at"`
-	AcceptedAt       *time.Time             `json:"accepted_at,omitempty" db:"accepted_at"`
-	InvitedTenantName *string               `json:"invited_tenant_name,omitempty"` // Joined field
+	ID                string                 `json:"id" db:"id"`
+	ClusterID         string                 `json:"cluster_id" db:"cluster_id"`
+	InvitedTenantID   string                 `json:"invited_tenant_id" db:"invited_tenant_id"`
+	InviteToken       string                 `json:"invite_token" db:"invite_token"`
+	AccessLevel       string                 `json:"access_level" db:"access_level"`
+	ResourceLimits    map[string]interface{} `json:"resource_limits,omitempty" db:"resource_limits"`
+	Status            string                 `json:"status" db:"status"` // pending, accepted, expired, revoked
+	CreatedBy         string                 `json:"created_by" db:"created_by"`
+	CreatedAt         time.Time              `json:"created_at" db:"created_at"`
+	ExpiresAt         *time.Time             `json:"expires_at,omitempty" db:"expires_at"`
+	AcceptedAt        *time.Time             `json:"accepted_at,omitempty" db:"accepted_at"`
+	InvitedTenantName *string                `json:"invited_tenant_name,omitempty"` // Joined field
 }
 
 // ClusterSubscription represents a tenant's subscription to a cluster with status

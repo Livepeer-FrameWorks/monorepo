@@ -327,32 +327,6 @@ func HealthCheck(c *gin.Context) {
 	})
 }
 
-// getCurrentNodeID gets the current node ID from the prometheus monitor
-func getCurrentNodeID() string {
-	if prometheusMonitor == nil {
-		logger.Warn("PrometheusMonitor is nil in getCurrentNodeID")
-		return "unknown"
-	}
-
-	// Direct access to nodeID - more reliable than GetNodes()
-	prometheusMonitor.mutex.RLock()
-	nodeID := prometheusMonitor.nodeID
-	prometheusMonitor.mutex.RUnlock()
-
-	if nodeID == "" {
-		logger.WithFields(logging.Fields{
-			"prometheus_monitor": prometheusMonitor != nil,
-		}).Warn("PrometheusMonitor nodeID is empty")
-		return "unknown"
-	}
-
-	logger.WithFields(logging.Fields{
-		"node_id": nodeID,
-	}).Debug("Retrieved node ID from PrometheusMonitor")
-
-	return nodeID
-}
-
 // HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer
 // This is a critical blocking trigger - validates stream keys and routes to wildcard streams
 func HandlePushRewrite(c *gin.Context) {
@@ -1371,10 +1345,10 @@ func determineQualityTier(tracks []*pb.StreamTrack) string {
 // HandleLivepeerSegmentComplete handles LIVEPEER_SEGMENT_COMPLETE webhook
 // This is a non-blocking trigger that reports Livepeer transcoding segment completion for billing
 // Payload (15 fields):
-//   0. stream name, 1. livepeer session ID, 2. segment number, 3. segment start ms,
-//   4. segment duration ms, 5. source width, 6. source height, 7. input bytes,
-//   8. output bytes total, 9. rendition count, 10. attempt count, 11. broadcaster URL,
-//   12. turnaround ms, 13. speed factor, 14. renditions JSON
+//  0. stream name, 1. livepeer session ID, 2. segment number, 3. segment start ms,
+//  4. segment duration ms, 5. source width, 6. source height, 7. input bytes,
+//  8. output bytes total, 9. rendition count, 10. attempt count, 11. broadcaster URL,
+//  12. turnaround ms, 13. speed factor, 14. renditions JSON
 func HandleLivepeerSegmentComplete(c *gin.Context) {
 	incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "received")
 	body, err := io.ReadAll(c.Request.Body)
@@ -1477,14 +1451,14 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 // This is a non-blocking trigger that reports MistProcAV transcoding progress for billing
 // Fires every 5 seconds during operation AND once on exit (is_final=1)
 // Payload (31 fields):
-//   0. stream name, 1. track type, 2. seconds since last, 3. input frames cumulative,
-//   4. output frames cumulative, 5. input frames delta, 6. output frames delta,
-//   7. input bytes delta, 8. output bytes delta, 9. decode us/frame, 10. transform us/frame,
-//   11. encode us/frame, 12. input codec, 13. output codec, 14. input width, 15. input height,
-//   16. output width, 17. output height, 18. input fpks, 19. output fps, 20. sample rate,
-//   21. channels, 22. source timestamp ms, 23. sink timestamp ms, 24. source advanced ms,
-//   25. sink advanced ms, 26. rtf in, 27. rtf out, 28. pipeline lag ms, 29. output bitrate bps,
-//   30. is_final
+//  0. stream name, 1. track type, 2. seconds since last, 3. input frames cumulative,
+//  4. output frames cumulative, 5. input frames delta, 6. output frames delta,
+//  7. input bytes delta, 8. output bytes delta, 9. decode us/frame, 10. transform us/frame,
+//  11. encode us/frame, 12. input codec, 13. output codec, 14. input width, 15. input height,
+//  16. output width, 17. output height, 18. input fpks, 19. output fps, 20. sample rate,
+//  21. channels, 22. source timestamp ms, 23. sink timestamp ms, 24. source advanced ms,
+//  25. sink advanced ms, 26. rtf in, 27. rtf out, 28. pipeline lag ms, 29. output bitrate bps,
+//  30. is_final
 func HandleProcessAVSegmentComplete(c *gin.Context) {
 	incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "received")
 	body, err := io.ReadAll(c.Request.Body)

@@ -94,7 +94,6 @@ type StripeInvoiceObject struct {
 	} `json:"metadata"`
 }
 
-
 // verifyStripeSignature verifies the Stripe webhook signature using HMAC-SHA256
 func verifyStripeSignature(payload []byte, signature, secret string) bool {
 	if signature == "" || secret == "" {
@@ -278,7 +277,6 @@ func sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string,
 		}
 	}
 }
-
 
 // ============================================================================
 // GRPC WEBHOOK PROCESSING

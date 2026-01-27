@@ -7,8 +7,8 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
-	"frameworks/pkg/globalid"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )

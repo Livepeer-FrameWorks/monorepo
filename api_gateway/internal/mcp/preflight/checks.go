@@ -13,12 +13,12 @@ import (
 
 // Blocker represents something preventing an operation.
 type Blocker struct {
-	Code        string        `json:"code"`
-	Message     string        `json:"message"`
-	Resolution  string        `json:"resolution"`
-	Tool        string        `json:"tool,omitempty"`
-	Required    []string      `json:"required_fields,omitempty"`
-	X402Accepts []X402Accept  `json:"x402_accepts,omitempty"` // x402 payment options (for INSUFFICIENT_BALANCE)
+	Code        string       `json:"code"`
+	Message     string       `json:"message"`
+	Resolution  string       `json:"resolution"`
+	Tool        string       `json:"tool,omitempty"`
+	Required    []string     `json:"required_fields,omitempty"`
+	X402Accepts []X402Accept `json:"x402_accepts,omitempty"` // x402 payment options (for INSUFFICIENT_BALANCE)
 }
 
 // X402Accept represents an x402 payment option.
@@ -141,7 +141,7 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		}
 
 		// Fetch x402 payment options so agents with wallets can pay directly
-			paymentReqs, err := c.clients.Purser.GetPaymentRequirements(ctx, tenantID, "graphql://operation")
+		paymentReqs, err := c.clients.Purser.GetPaymentRequirements(ctx, tenantID, "graphql://operation")
 		if err != nil {
 			c.logger.WithError(err).Debug("Failed to get x402 payment requirements")
 		} else if paymentReqs != nil {
@@ -220,22 +220,22 @@ func IsPreflightError(err error) (*PreflightError, bool) {
 // GetCapabilities returns what operations the tenant can perform right now.
 func (c *Checker) GetCapabilities(ctx context.Context) map[string]bool {
 	caps := map[string]bool{
-		"read_streams":               true, // Free reads always work
-		"read_analytics":             true,
-		"read_billing":               true,
-		"read_vod":                   true, // Free reads
-		"update_billing_details":     true, // Always allowed
-		"resolve_playback_endpoint":  true, // Free
-		"validate_stream_key":        true, // Free
-		"create_stream":              false,
-		"update_stream":              false,
-		"delete_stream":              false,
-		"create_clip":                false,
-		"start_dvr":                  false,
-		"create_vod_upload":          false,
-		"complete_vod_upload":        false,
-		"delete_vod_asset":           false,
-		"topup_balance":              false,
+		"read_streams":              true, // Free reads always work
+		"read_analytics":            true,
+		"read_billing":              true,
+		"read_vod":                  true, // Free reads
+		"update_billing_details":    true, // Always allowed
+		"resolve_playback_endpoint": true, // Free
+		"validate_stream_key":       true, // Free
+		"create_stream":             false,
+		"update_stream":             false,
+		"delete_stream":             false,
+		"create_clip":               false,
+		"start_dvr":                 false,
+		"create_vod_upload":         false,
+		"complete_vod_upload":       false,
+		"delete_vod_asset":          false,
+		"topup_balance":             false,
 	}
 
 	// Check billing details

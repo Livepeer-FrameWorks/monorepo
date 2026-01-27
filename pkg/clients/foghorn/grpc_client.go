@@ -186,8 +186,8 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string
 	defer cancel()
 
 	return c.viewer.ResolveViewerEndpoint(ctx, &pb.ViewerEndpointRequest{
-		ContentId:   contentID,
-		ViewerIp:    viewerIP,
+		ContentId: contentID,
+		ViewerIp:  viewerIP,
 	})
 }
 

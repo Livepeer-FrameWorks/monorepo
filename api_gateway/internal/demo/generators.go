@@ -4342,7 +4342,6 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 	}
 }
 
-func intPtr(v int) *int                                        { return &v }
 func int32Ptr(v int32) *int32                                  { return &v }
 func int64Ptr(v int64) *int64                                  { return &v }
 func uint32Ptr(v uint32) *uint32                               { return &v }
@@ -4350,5 +4349,4 @@ func uint64Ptr(v uint64) *uint64                               { return &v }
 func float32Ptr(v float32) *float32                            { return &v }
 func float64Ptr(v float64) *float64                            { return &v }
 func stringPtr(s string) *string                               { return &s }
-func boolPtr(v bool) *bool                                     { return &v }
 func ptrStreamStatus(v model.StreamStatus) *model.StreamStatus { return &v }

@@ -1085,17 +1085,6 @@ var euVATRates = map[string]int{
 	"SE": 2500, // Sweden
 }
 
-// getVATRate returns VAT rate for a tenant based on billing country or GeoIP
-// Logic: 1) B2B with EU VAT → 0% reverse charge
-//        2) EU location → that country's rate
-//        3) Non-EU → 0% export exempt
-//        4) Unknown → NL fallback
-func (h *X402Handler) getVATRate(clientIP string) int {
-	// Simple path: just use GeoIP country
-	country := h.getCountryFromIP(clientIP)
-	return h.getVATRateForCountry(country)
-}
-
 // getVATRateForTenant returns VAT rate considering tenant's billing details
 func (h *X402Handler) getVATRateForTenant(tenantID, clientIP string) (rateBps int, country string, isB2B bool) {
 	// 1. Check tenant's billing details (country and VAT number)
@@ -1161,15 +1150,6 @@ func isBillingDetailsComplete(billingEmail sql.NullString, billingAddress []byte
 		return false
 	}
 	return addr.Street != "" && addr.City != "" && addr.PostalCode != "" && addr.Country != ""
-}
-
-// getVATRateForCountry returns the VAT rate for a given country code
-func (h *X402Handler) getVATRateForCountry(countryCode string) int {
-	if rate, ok := euVATRates[countryCode]; ok {
-		return rate
-	}
-	// Non-EU country: export exempt (0% VAT)
-	return 0
 }
 
 // isValidEUVATFormat checks if a VAT number has valid EU format
@@ -1327,7 +1307,7 @@ type X402PaymentPayload struct {
 
 // X402ExactPayload contains the signature and authorization details
 type X402ExactPayload struct {
-	Signature     string            `json:"signature"`
+	Signature     string             `json:"signature"`
 	Authorization *X402Authorization `json:"authorization"`
 }
 

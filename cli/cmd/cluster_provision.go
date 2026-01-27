@@ -390,56 +390,6 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 	return nil
 }
 
-func resolveTaskPort(task *orchestrator.Task, manifest *inventory.Manifest) int {
-	if manifest == nil {
-		return 0
-	}
-
-	// Infrastructure ports
-	switch task.Type {
-	case "postgres":
-		if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Port != 0 {
-			return manifest.Infrastructure.Postgres.Port
-		}
-	case "clickhouse":
-		if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Port != 0 {
-			return manifest.Infrastructure.ClickHouse.Port
-		}
-	case "kafka":
-		if manifest.Infrastructure.Kafka != nil {
-			for _, broker := range manifest.Infrastructure.Kafka.Brokers {
-				if task.Name == fmt.Sprintf("kafka-broker-%d", broker.ID) && broker.Port != 0 {
-					return broker.Port
-				}
-			}
-		}
-	case "zookeeper":
-		if manifest.Infrastructure.Zookeeper != nil {
-			for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
-				if task.Name == fmt.Sprintf("zookeeper-%d", node.ID) && node.Port != 0 {
-					return node.Port
-				}
-			}
-		}
-	}
-
-	// Application services
-	if svc, ok := manifest.Services[task.Name]; ok {
-		if p, err := resolvePort(task.Name, svc); err == nil {
-			return p
-		}
-	}
-
-	// Interfaces
-	if iface, ok := manifest.Interfaces[task.Name]; ok {
-		if p, err := resolvePort(task.Name, iface); err == nil {
-			return p
-		}
-	}
-
-	return 0
-}
-
 // runBootstrap connects to Quartermaster and generates an infrastructure token
 func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, string, string, error) {
 	serviceToken := os.Getenv("SERVICE_TOKEN")
@@ -693,22 +643,6 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 
 	fmt.Printf("    ✓ Generated Infrastructure Token: %s\n", resp.Token.Id)
 	return resp.Token.Token, serviceToken, grpcAddr, nil
-}
-
-// getDefaultPort returns default port for a service type
-func getDefaultPort(serviceType string) int {
-	ports := map[string]int{
-		"postgres":   5432,
-		"kafka":      9092,
-		"zookeeper":  2181,
-		"clickhouse": 9000,
-	}
-
-	if port, ok := ports[serviceType]; ok {
-		return port
-	}
-
-	return 8080 // Default
 }
 
 // publicServiceType maps public-facing services to DNS node types.

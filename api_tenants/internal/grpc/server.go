@@ -731,10 +731,6 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	return resp, nil
 }
 
-func generateInstanceID(serviceType string) string {
-	return serviceType + "-" + time.Now().Format("20060102-150405")
-}
-
 // ============================================================================
 // TENANT SERVICE - Additional Methods
 // ============================================================================
@@ -3926,22 +3922,6 @@ func subscriptionStatusStringToProto(s string) pb.ClusterSubscriptionStatus {
 		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_REJECTED
 	default:
 		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_UNSPECIFIED
-	}
-}
-
-// subscriptionStatusProtoToString converts proto enum to DB string
-func subscriptionStatusProtoToString(s pb.ClusterSubscriptionStatus) string {
-	switch s {
-	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL:
-		return "pending_approval"
-	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE:
-		return "active"
-	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_SUSPENDED:
-		return "suspended"
-	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_REJECTED:
-		return "rejected"
-	default:
-		return "active"
 	}
 }
 

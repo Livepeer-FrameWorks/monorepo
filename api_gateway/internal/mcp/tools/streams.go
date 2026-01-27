@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
-	"frameworks/pkg/globalid"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 

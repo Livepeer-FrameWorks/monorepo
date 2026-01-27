@@ -9,8 +9,8 @@ import (
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
-	x402 "frameworks/pkg/x402"
 	"frameworks/pkg/logging"
+	x402 "frameworks/pkg/x402"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -201,15 +201,15 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 	authTenantID, _ := ctx.Value("tenant_id").(string)
 	resource := strings.TrimSpace(args.Resource)
 	settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
-		Payload:               payload,
-		PaymentHeader:         args.Payment,
-		Resource:              resource,
-		AuthTenantID:          authTenantID,
-		ClientIP:              clientIP,
-		Purser:                clients.Purser,
-		Commodore:             clients.Commodore,
+		Payload:                payload,
+		PaymentHeader:          args.Payment,
+		Resource:               resource,
+		AuthTenantID:           authTenantID,
+		ClientIP:               clientIP,
+		Purser:                 clients.Purser,
+		Commodore:              clients.Commodore,
 		AllowUnresolvedCreator: false,
-		Logger:                logger,
+		Logger:                 logger,
 	})
 	if settleErr != nil {
 		return toolError(settleErr.Message)
@@ -237,7 +237,6 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 
 	return toolSuccessJSON(result)
 }
-
 
 // networkDisplayName returns a human-readable name for an x402 network.
 func networkDisplayName(network string) string {
