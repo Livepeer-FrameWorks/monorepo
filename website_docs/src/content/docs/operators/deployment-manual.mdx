@@ -1008,6 +1008,303 @@ systemctl start navigator
 
 ---
 
+## Phase 7: Web Applications
+
+Deploy the three frontend applications on the central server. All use Docker and have environment variables baked at build time.
+
+### Service Ports
+
+| Application | Port | Framework | Notes |
+|-------------|------|-----------|-------|
+| Web Console | 18030 | SvelteKit (SSR) | Main dashboard |
+| Marketing Site | 18031 | React (static) | Public landing page |
+| Documentation | 18033 | Astro (static) | Starlight docs |
+
+### Build Variables Reference
+
+<Tabs>
+<TabItem label="Web Console">
+```bash
+# website_application - SvelteKit SSR
+# VITE_* variables are baked at build time
+
+VITE_AUTH_URL=https://api.your-domain.com/auth
+VITE_GRAPHQL_HTTP_URL=https://api.your-domain.com/graphql
+VITE_GRAPHQL_WS_URL=wss://api.your-domain.com/graphql/ws
+VITE_STREAMING_INGEST_URL=https://ingest.your-domain.com
+VITE_STREAMING_PLAY_URL=https://play.your-domain.com
+VITE_STREAMING_EDGE_URL=https://edge.your-domain.com
+VITE_STREAMING_RTMP_PORT=1935
+VITE_STREAMING_SRT_PORT=8889
+VITE_STREAMING_RTMP_PATH=/live
+VITE_STREAMING_HLS_PATH=/hls
+VITE_STREAMING_WEBRTC_PATH=/webrtc
+VITE_STREAMING_EMBED_PATH=/
+VITE_MARKETING_SITE_URL=https://your-domain.com
+VITE_DOCS_SITE_URL=https://docs.your-domain.com
+VITE_TURNSTILE_AUTH_SITE_KEY=<your-turnstile-site-key>
+BASE_PATH=/app
+```
+</TabItem>
+<TabItem label="Marketing Site">
+```bash
+# website_marketing - React static site
+# VITE_* variables are baked at build time
+
+VITE_APP_URL=https://app.your-domain.com
+VITE_GATEWAY_URL=https://api.your-domain.com
+VITE_GITHUB_URL=https://github.com/your-org/your-repo
+VITE_LIVEPEER_URL=https://livepeer.org
+VITE_LIVEPEER_EXPLORER_URL=https://explorer.livepeer.org
+VITE_CONTACT_EMAIL=info@your-domain.com
+VITE_FORUM_URL=https://forum.your-domain.com
+VITE_DISCORD_URL=https://discord.gg/your-invite
+VITE_DEMO_STREAM_NAME=live+demo
+VITE_COMPANY_NAME=YourCompany
+VITE_DOMAIN=your-domain.com
+VITE_CONTACT_API_URL=https://api.your-domain.com/forms
+VITE_TURNSTILE_FORMS_SITE_KEY=<your-turnstile-forms-key>
+```
+</TabItem>
+<TabItem label="Documentation">
+```bash
+# website_docs - Astro Starlight
+# PUBLIC_* variables are baked at build time
+
+PUBLIC_DOCS_URL=https://docs.your-domain.com
+WEBAPP_PUBLIC_URL=https://app.your-domain.com
+MARKETING_PUBLIC_URL=https://your-domain.com
+GATEWAY_PUBLIC_URL=https://api.your-domain.com
+STREAMING_INGEST_URL=https://ingest.your-domain.com
+STREAMING_EDGE_URL=https://edge.your-domain.com
+STREAMING_HLS_PATH=/hls
+STREAMING_WEBRTC_PATH=/webrtc
+DISCORD_URL=https://discord.gg/your-invite
+GITHUB_URL=https://github.com/your-org/your-repo
+```
+</TabItem>
+</Tabs>
+
+### Build and Deploy
+
+#### Option A: Docker (Recommended)
+
+```bash
+cd /opt/frameworks/monorepo
+
+# Web Console
+docker build -f website_application/Dockerfile \
+  --build-arg BUILD_ENV=production \
+  --build-arg VITE_AUTH_URL=https://api.your-domain.com/auth \
+  --build-arg VITE_GRAPHQL_HTTP_URL=https://api.your-domain.com/graphql \
+  --build-arg VITE_GRAPHQL_WS_URL=wss://api.your-domain.com/graphql/ws \
+  # ... (all VITE_* args from reference above)
+  -t frameworks-webapp .
+
+docker run -d --name frameworks-webapp \
+  --restart unless-stopped \
+  -p 18030:18030 \
+  frameworks-webapp
+
+# Marketing Site
+docker build -f website_marketing/Dockerfile \
+  --build-arg BUILD_ENV=production \
+  --build-arg VITE_APP_URL=https://app.your-domain.com \
+  # ... (all VITE_* args)
+  -t frameworks-marketing .
+
+docker run -d --name frameworks-marketing \
+  --restart unless-stopped \
+  -p 18031:18031 \
+  frameworks-marketing
+
+# Documentation
+docker build -f website_docs/Dockerfile \
+  --build-arg BUILD_ENV=production \
+  --build-arg PUBLIC_DOCS_URL=https://docs.your-domain.com \
+  # ... (all PUBLIC_* args)
+  -t frameworks-docs .
+
+docker run -d --name frameworks-docs \
+  --restart unless-stopped \
+  -p 18033:18033 \
+  frameworks-docs
+```
+
+#### Option B: Native Node.js
+
+```bash
+cd /opt/frameworks/monorepo
+
+# Install pnpm
+npm install -g pnpm
+
+# Build Web Console
+cd website_application
+export VITE_AUTH_URL=https://api.your-domain.com/auth
+# ... set all VITE_* vars
+pnpm install --frozen-lockfile
+pnpm run build
+
+# Run with PM2 or systemd
+node build/index.js
+```
+
+### Systemd Units (Docker)
+
+```bash
+# /etc/systemd/system/frameworks-webapp.service
+[Unit]
+Description=FrameWorks Web Console
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+ExecStartPre=-/usr/bin/docker stop frameworks-webapp
+ExecStartPre=-/usr/bin/docker rm frameworks-webapp
+ExecStart=/usr/bin/docker run --rm --name frameworks-webapp -p 18030:18030 frameworks-webapp
+ExecStop=/usr/bin/docker stop frameworks-webapp
+
+[Install]
+WantedBy=multi-user.target
+```
+
+---
+
+## Phase 8: Reverse Proxy & TLS
+
+Configure Nginx or Caddy to terminate TLS and proxy to the applications.
+
+### TLS Certificates
+
+#### Using certbot (Let's Encrypt)
+
+```bash
+apt install certbot python3-certbot-nginx
+
+# Obtain certificates for each domain
+certbot certonly --nginx -d your-domain.com -d www.your-domain.com
+certbot certonly --nginx -d app.your-domain.com
+certbot certonly --nginx -d docs.your-domain.com
+certbot certonly --nginx -d api.your-domain.com
+```
+
+### Nginx Configuration
+
+```nginx
+# /etc/nginx/sites-available/frameworks
+
+# Marketing site (root domain)
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com www.your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:18031;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Web Console
+server {
+    listen 443 ssl http2;
+    server_name app.your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/app.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/app.your-domain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:18030;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Documentation
+server {
+    listen 443 ssl http2;
+    server_name docs.your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/docs.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/docs.your-domain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:18033;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# GraphQL API Gateway
+server {
+    listen 443 ssl http2;
+    server_name api.your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/api.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.your-domain.com/privkey.pem;
+
+    # GraphQL (with WebSocket upgrade for subscriptions)
+    location /graphql {
+        proxy_pass http://<regional-ip>:18000/graphql;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+    }
+
+    # Auth endpoints
+    location /auth/ {
+        proxy_pass http://<regional-ip>:18000/auth/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Forms API
+    location /forms/ {
+        proxy_pass http://127.0.0.1:18032/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# HTTP -> HTTPS redirect
+server {
+    listen 80;
+    server_name your-domain.com www.your-domain.com app.your-domain.com docs.your-domain.com api.your-domain.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+<Aside type="tip">
+For streaming endpoints (`edge.your-domain.com`, `ingest.your-domain.com`), use DNS-only mode without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
+</Aside>
+
+---
+
 ## Startup Order
 
 Services must start in dependency order:
@@ -1028,6 +1325,10 @@ Services must start in dependency order:
 14. **Forms**: Central, needs Listmonk, SMTP
 15. **Helmsman**: Per edge, needs Foghorn, Decklog
 16. **Navigator**: Optional, central, needs Quartermaster
+17. **Web Console**: Central, needs Bridge (GraphQL), all backend services
+18. **Marketing Site**: Central, standalone (static)
+19. **Documentation**: Central, standalone (static)
+20. **Nginx/Caddy**: After all applications
 
 ---
 
@@ -1055,6 +1356,11 @@ curl http://localhost:18026/health  # Decklog (metrics port)
 # Edge services
 curl http://localhost:18007/health  # Helmsman
 
+# Web applications
+curl http://localhost:18030/        # Web Console
+curl http://localhost:18031/health  # Marketing Site
+curl http://localhost:18033/        # Documentation
+
 # gRPC health (requires grpcurl)
 grpcurl -plaintext localhost:19002 grpc.health.v1.Health/Check
 ```
@@ -1063,7 +1369,8 @@ grpcurl -plaintext localhost:19002 grpc.health.v1.Health/Check
 
 ## Next Steps
 
-- Configure TLS certificates (Let's Encrypt via Caddy or certbot)
-- Set up Nginx/Caddy reverse proxy for API endpoints
 - Configure monitoring (Prometheus/VictoriaMetrics + Grafana)
+- Set up log aggregation (Loki, ELK, or similar)
+- Configure alerting for service health and resource usage
 - Review [Operations Reference](/operators/operations) for tuning and troubleshooting
+- Set up automated backups for PostgreSQL and ClickHouse
