@@ -162,6 +162,7 @@
     background: var(--fw-controls-bg);
     border-top: 1px solid var(--fw-seam);
     backdrop-filter: blur(8px);
+    pointer-events: auto;
   }
 
   /* Control group - seamed sections within bar */
@@ -544,7 +545,7 @@
   .fw-volume-group {
     display: flex;
     align-items: center;
-    border-radius: 0.25rem;
+    border-radius: 0;
     transition:
       background-color 0.2s,
       width 0.2s;
@@ -552,15 +553,15 @@
   }
 
   .fw-volume-group--expanded {
-    background: rgb(255 255 255 / 0.1);
+    background: hsl(var(--tn-bg-visual) / 0.5);
   }
 
   .fw-volume-group:hover {
-    background: rgb(255 255 255 / 0.05);
+    background: hsl(var(--tn-bg-visual) / 0.5);
   }
 
   .fw-volume-group--expanded:hover {
-    background: rgb(255 255 255 / 0.1);
+    background: hsl(var(--tn-bg-visual) / 0.5);
   }
 
   .fw-volume-group--disabled {
@@ -603,6 +604,105 @@
     width: 7rem;
     padding-right: 0.5rem;
     opacity: 1;
+  }
+
+  /* --- Slider Component (shared by React/Svelte) --- */
+  .fw-slider {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 1.25rem;
+    touch-action: none;
+    user-select: none;
+    align-items: center;
+    cursor: pointer;
+  }
+
+  .fw-slider--vertical {
+    flex-direction: column;
+    width: 1.25rem;
+    height: 100%;
+  }
+
+  .fw-slider-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 4px;
+    border-radius: 9999px;
+    background: hsl(var(--tn-fg-gutter) / 0.4);
+    overflow: hidden;
+    transition: height 0.15s ease;
+  }
+
+  .fw-slider:hover .fw-slider-track {
+    height: 6px;
+  }
+
+  .fw-slider--vertical .fw-slider-track {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    right: auto;
+    width: 4px;
+    height: auto;
+    transform: translateX(-50%);
+  }
+
+  .fw-slider--vertical:hover .fw-slider-track {
+    width: 6px;
+    height: auto;
+  }
+
+  .fw-slider-range {
+    position: absolute;
+    height: 100%;
+    border-radius: 9999px;
+    background: hsl(var(--tn-fg));
+  }
+
+  .fw-slider-range--accent {
+    background: hsl(var(--tn-cyan));
+  }
+
+  .fw-slider--vertical .fw-slider-range {
+    width: 100%;
+    height: auto;
+    bottom: 0;
+  }
+
+  .fw-slider-thumb {
+    display: block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: hsl(var(--tn-fg));
+    border: none;
+    box-shadow: 0 2px 4px rgb(0 0 0 / 0.3);
+    cursor: pointer;
+    transition: width 0.15s ease, height 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .fw-slider:hover .fw-slider-thumb {
+    width: 14px;
+    height: 14px;
+  }
+
+  .fw-slider-thumb:focus {
+    outline: none;
+  }
+
+  .fw-slider-thumb:focus-visible {
+    box-shadow: 0 0 0 2px hsl(var(--tn-fg) / 0.5);
+  }
+
+  .fw-slider-thumb--accent {
+    background: hsl(var(--tn-cyan));
+  }
+
+  .fw-slider-thumb[data-disabled] {
+    pointer-events: none;
+    opacity: 0.5;
   }
 
   /* --- Time Display --- */

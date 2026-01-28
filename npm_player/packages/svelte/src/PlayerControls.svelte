@@ -387,29 +387,33 @@
   function handleMute() {
     if (disabled) return;
     const player = globalPlayerManager.getCurrentPlayer();
-    const v = player?.getVideoElement?.() ?? video;
-    if (!v) return;
-    const nextMuted = !(player?.isMuted?.() ?? v.muted);
-    player?.setMuted?.(nextMuted);
-    v.muted = nextMuted;
-    isMuted = nextMuted;
-    if (nextMuted) {
-      volumeValue = 0;
+    if (player?.toggleMute) {
+      // Use core controller which handles volume restore
+      player.toggleMute();
     } else {
-      volumeValue = Math.round((Number.isFinite(v.volume) ? v.volume : 1) * 100);
+      // Fallback: direct video manipulation
+      const v = video;
+      if (!v) return;
+      v.muted = !v.muted;
     }
   }
 
   function handleVolumeChange(val: number) {
     if (disabled) return;
-    const player = globalPlayerManager.getCurrentPlayer();
-    const v = player?.getVideoElement?.() ?? video;
-    if (!v) return;
-    // Validate: clamp to 0-100, handle NaN/Infinity (matches React implementation)
     const next = Math.max(0, Math.min(100, val ?? 100));
     if (!Number.isFinite(next)) return;
-    v.volume = next / 100;
-    v.muted = next === 0;
+
+    const player = globalPlayerManager.getCurrentPlayer();
+    if (player?.setVolume) {
+      // Use core controller which handles mute/unmute logic
+      player.setVolume(next / 100);
+    } else {
+      // Fallback: direct video manipulation
+      const v = video;
+      if (!v) return;
+      v.volume = next / 100;
+      v.muted = next === 0;
+    }
     volumeValue = next;
     isMuted = next === 0;
   }

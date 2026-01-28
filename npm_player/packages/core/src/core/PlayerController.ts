@@ -610,6 +610,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _liveThresholds: LiveThresholds = { exitLive: 15, enterLive: 5 };
   private _buffered: TimeRanges | null = null;
   private _hasAudio: boolean = true;
+  private _lastVolume: number = 1;
   private _supportsPlaybackRate: boolean = true;
   private _isWebRTC: boolean = false;
 
@@ -1332,25 +1333,56 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
   }
 
-  /** Set volume (0-1) */
+  /** Set volume (0-1). Dragging to 0 mutes, dragging above 0 unmutes. */
   setVolume(volume: number): void {
-    if (this.videoElement) {
-      const newVolume = Math.max(0, Math.min(1, volume));
-      this.videoElement.volume = newVolume;
-      this.emit("volumeChange", { volume: newVolume, muted: this.videoElement.muted });
+    if (!this.videoElement) return;
+
+    const newVolume = Math.max(0, Math.min(1, volume));
+
+    // Remember non-zero volumes for restore on unmute
+    if (newVolume > 0) {
+      this._lastVolume = newVolume;
     }
+
+    // Dragging to 0 should mute, dragging above 0 should unmute
+    const shouldMute = newVolume === 0;
+    if (this.videoElement.muted !== shouldMute) {
+      this.videoElement.muted = shouldMute;
+      if (this.currentPlayer?.setMuted) {
+        this.currentPlayer.setMuted(shouldMute);
+      }
+    }
+
+    this.videoElement.volume = newVolume;
+    this.emit("volumeChange", { volume: newVolume, muted: shouldMute });
   }
 
-  /** Set muted state */
+  /** Set muted state. Unmuting restores the previous volume. */
   setMuted(muted: boolean): void {
+    if (!this.videoElement) return;
+
+    if (muted) {
+      // Save current volume before muting (if non-zero)
+      if (this.videoElement.volume > 0) {
+        this._lastVolume = this.videoElement.volume;
+      }
+    }
+
     if (this.currentPlayer?.setMuted) {
       this.currentPlayer.setMuted(muted);
-    } else if (this.videoElement) {
+    } else {
       this.videoElement.muted = muted;
     }
-    if (this.videoElement) {
-      this.emit("volumeChange", { volume: this.videoElement.volume, muted });
+
+    // Restore volume when unmuting
+    if (!muted && this.videoElement.volume === 0) {
+      this.videoElement.volume = this._lastVolume;
     }
+
+    this.emit("volumeChange", {
+      volume: muted ? 0 : this.videoElement.volume,
+      muted,
+    });
   }
 
   /** Set playback rate */
@@ -1611,7 +1643,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   /** Toggle mute */
   toggleMute(): void {
     if (this.videoElement) {
-      this.videoElement.muted = !this.videoElement.muted;
+      this.setMuted(!this.videoElement.muted);
     }
   }
 

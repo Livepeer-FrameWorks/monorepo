@@ -222,7 +222,9 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   const isPlaying = propIsPlaying ?? internalIsPlaying;
   const isMuted = propIsMuted ?? internalIsMuted;
   const isFullscreen = propIsFullscreen ?? internalIsFullscreen;
-  const volumeValue = propVolume !== undefined ? Math.round(propVolume * 100) : internalVolume;
+  const actualVolume = propVolume !== undefined ? Math.round(propVolume * 100) : internalVolume;
+  // Show 0 when muted, actual volume otherwise
+  const volumeValue = isMuted ? 0 : actualVolume;
   const [qualityValue, setQualityValue] = useState<string>("auto");
   const [captionValue, setCaptionValue] = useState<string>("none");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
