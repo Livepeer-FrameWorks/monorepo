@@ -161,6 +161,7 @@
   let isVolumeHovered = $state(false);
   let isVolumeFocused = $state(false);
   let isVolumeExpanded = $derived(isVolumeHovered || isVolumeFocused);
+  let volumeGroupRef: HTMLDivElement | null = $state(null);
 
   // Derived values - using centralized core utilities
   let isLive = $derived(isLiveContent(isContentLive, mistStreamInfo, duration));
@@ -467,6 +468,19 @@
     showSettingsMenu = false;
   }
 
+  // Non-passive wheel listener for volume control
+  $effect(() => {
+    if (!volumeGroupRef) return;
+    const handler = (e: WheelEvent) => {
+      if (disabled || !hasAudio) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 5 : -5;
+      handleVolumeChange(volumeValue + delta);
+    };
+    volumeGroupRef.addEventListener("wheel", handler, { passive: false });
+    return () => volumeGroupRef?.removeEventListener("wheel", handler);
+  });
+
   // Close menu when clicking outside - with debounce to prevent immediate close from same click
   $effect(() => {
     if (!showSettingsMenu) return;
@@ -563,6 +577,7 @@
 
         <!-- Volume -->
         <div
+          bind:this={volumeGroupRef}
           class={cn(
             "fw-volume-group",
             isVolumeExpanded && "fw-volume-group--expanded",

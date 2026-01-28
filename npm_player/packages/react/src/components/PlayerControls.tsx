@@ -90,7 +90,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   currentTime,
   duration,
   isVisible = true,
-  className,
+  className: _className,
   onSeek,
   mistStreamInfo,
   disabled = false,
@@ -509,22 +509,25 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
     else setInternalVolume(Math.round(v.volume * 100));
   };
 
-  const handleVolumeChange = (value: number[]) => {
-    if (disabled) return;
-    const next = Math.max(0, Math.min(100, value[0] ?? 0));
-    // Prefer prop callback from usePlayerController
-    if (onVolumeChange) {
-      onVolumeChange(next / 100);
-      return;
-    }
-    // Fallback: direct video manipulation
-    const v = video ?? (document.querySelector(".fw-player-video") as HTMLVideoElement | null);
-    if (!v) return;
-    v.volume = next / 100;
-    v.muted = next === 0;
-    setInternalVolume(next);
-    setInternalIsMuted(next === 0);
-  };
+  const handleVolumeChange = useCallback(
+    (value: number[]) => {
+      if (disabled) return;
+      const next = Math.max(0, Math.min(100, value[0] ?? 0));
+      // Prefer prop callback from usePlayerController
+      if (onVolumeChange) {
+        onVolumeChange(next / 100);
+        return;
+      }
+      // Fallback: direct video manipulation
+      const v = video ?? (document.querySelector(".fw-player-video") as HTMLVideoElement | null);
+      if (!v) return;
+      v.volume = next / 100;
+      v.muted = next === 0;
+      setInternalVolume(next);
+      setInternalIsMuted(next === 0);
+    },
+    [disabled, onVolumeChange, video]
+  );
 
   const handleFullscreen = () => {
     if (disabled) return;
@@ -601,6 +604,21 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   const [isVolumeHovered, setIsVolumeHovered] = useState(false);
   const [isVolumeFocused, setIsVolumeFocused] = useState(false);
   const isVolumeExpanded = isVolumeHovered || isVolumeFocused;
+  const volumeGroupRef = useRef<HTMLDivElement>(null);
+
+  // Non-passive wheel listener for volume control
+  useEffect(() => {
+    const el = volumeGroupRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      if (disabled || !hasAudio) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 5 : -5;
+      handleVolumeChange([actualVolume + delta]);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [disabled, hasAudio, actualVolume, handleVolumeChange]);
 
   return (
     <div
@@ -671,6 +689,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
 
             {/* Volume pill - cohesive hover element (slab style) */}
             <div
+              ref={volumeGroupRef}
               className={cn(
                 "fw-volume-group",
                 isVolumeExpanded && "fw-volume-group--expanded",

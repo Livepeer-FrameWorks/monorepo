@@ -11,7 +11,7 @@
 import { TypedEventEmitter } from "./EventEmitter";
 import { GatewayClient } from "./GatewayClient";
 import { StreamStateClient } from "./StreamStateClient";
-import { PlayerManager } from "./PlayerManager";
+import type { PlayerManager } from "./PlayerManager";
 import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
 import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";

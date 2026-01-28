@@ -25,11 +25,8 @@
  * ```
  */
 
-import {
-  PlayerController,
-  PlayerControllerConfig,
-  PlayerControllerEvents,
-} from "../core/PlayerController";
+import type { PlayerControllerConfig, PlayerControllerEvents } from "../core/PlayerController";
+import { PlayerController } from "../core/PlayerController";
 import type {
   PlayerState,
   PlayerStateContext,

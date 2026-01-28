@@ -1081,11 +1081,11 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private handleChunk(chunk: RawChunk): void {
     if (this.isDestroyed) return;
 
-    let pipeline = this.pipelines.get(chunk.trackIndex);
+    const pipeline = this.pipelines.get(chunk.trackIndex);
 
     // Create pipeline if missing - look up track from tracksByIndex (populated by info message)
     if (!pipeline) {
-      let track = this.tracksByIndex.get(chunk.trackIndex);
+      const track = this.tracksByIndex.get(chunk.trackIndex);
 
       // If track info not available, try to infer from chunk type
       // MistServer track indices: video typically 1, audio typically 2, meta typically 9

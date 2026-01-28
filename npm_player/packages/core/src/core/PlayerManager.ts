@@ -12,7 +12,7 @@
  */
 
 import { getBrowserInfo, getBrowserCompatibility } from "./detector";
-import { IPlayer, StreamSource, StreamInfo, PlayerOptions } from "./PlayerInterface";
+import type { IPlayer, StreamSource, StreamInfo, PlayerOptions } from "./PlayerInterface";
 import { scorePlayer, isProtocolBlacklisted } from "./scorer";
 import type { PlaybackMode } from "../types";
 

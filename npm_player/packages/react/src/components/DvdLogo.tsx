@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { DvdLogoProps } from "../types";
+import type { DvdLogoProps } from "../types";
 
 type Point = { top: number; left: number };
 type Velocity = { x: number; y: number };
