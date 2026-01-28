@@ -41,6 +41,17 @@
 - Unused variables: prefix with `_` (e.g., `_unused`)
 - CI enforces linting on new code via baseline
 
+## Building & Testing
+
+**Always use the Makefile** - never use manual `go build` commands. See `Makefile` for all targets.
+
+Common targets:
+
+- `make build` - all services
+- `make build-bin-<service>` - single service (e.g., `make build-bin-purser`)
+- `make test` - run all tests
+- `make verify` - full verification (tidy, fmt, vet, test, build)
+
 ## Code Generation
 
 - `make proto` - safe to run
