@@ -187,6 +187,7 @@ export default defineConfig({
   },
   server: {
     port: 4173,
+    host: true,
     open: true,
     fs: {
       allow: [path.resolve(__dirname, "..", ".."), path.resolve(__dirname, "../../npm_studio")],
