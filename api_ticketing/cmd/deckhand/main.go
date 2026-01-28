@@ -32,6 +32,7 @@ func main() {
 
 	// Required config
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	jwtSecret := config.GetEnv("JWT_SECRET", "")
 	chatwootAPIToken := config.RequireEnv("CHATWOOT_API_TOKEN")
 	chatwootHost := config.GetEnv("CHATWOOT_HOST", "chatwoot")
 	chatwootPort := config.GetEnv("CHATWOOT_PORT", "3000")
@@ -144,6 +145,7 @@ func main() {
 	// Create gRPC auth interceptor
 	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
 		ServiceToken: serviceToken,
+		JWTSecret:    []byte(jwtSecret),
 		Logger:       logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
