@@ -159,46 +159,44 @@
   {@const Icon = getIconComponent(currentHint.icon)}
   {@const XIcon = getIconComponent("X")}
   {@const ChevronRightIcon = getIconComponent("ChevronRight")}
+  {@const LightbulbIcon = getIconComponent("Lightbulb")}
 
-  <div class="bg-muted/30 border border-border/50 rounded-md p-3">
-    <div class="flex items-start gap-3">
-      <Icon class="w-5 h-5 {currentHint.iconColor} shrink-0 mt-0.5" />
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center justify-between gap-2">
-          <p class="text-foreground font-medium text-sm">{currentHint.title}</p>
-          <div class="flex items-center gap-1 shrink-0">
-            {#if visibleHints.length > 1}
-              <span class="text-[10px] text-muted-foreground">
-                {(currentIndex % visibleHints.length) + 1}/{visibleHints.length}
-              </span>
-              <button
-                type="button"
-                class="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
-                onclick={nextHint}
-                title="Next tip"
-              >
-                <ChevronRightIcon class="w-4 h-4" />
-              </button>
-            {/if}
-            <button
-              type="button"
-              class="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
-              onclick={dismissHint}
-              title="Dismiss"
-            >
-              <XIcon class="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-        <p class="text-muted-foreground text-sm mt-0.5">{currentHint.getDescription()}</p>
-        {#if currentHint.link}
-          <a
-            href={resolve(currentHint.link)}
-            class="text-primary hover:underline text-sm inline-block mt-1"
+  <div class="bg-muted/20 border-y border-border/30 px-4 py-2.5">
+    <div class="flex items-center gap-3">
+      <LightbulbIcon class="w-4 h-4 text-warning shrink-0" />
+      <Icon class="w-4 h-4 {currentHint.iconColor} shrink-0" />
+      <span class="text-foreground font-medium text-sm">{currentHint.title}</span>
+      <span class="text-muted-foreground text-sm hidden sm:inline">—</span>
+      <span class="text-muted-foreground text-sm hidden sm:inline flex-1 truncate"
+        >{currentHint.getDescription()}</span
+      >
+      {#if currentHint.link}
+        <a href={resolve(currentHint.link)} class="text-primary hover:underline text-sm shrink-0">
+          {currentHint.linkText} →
+        </a>
+      {/if}
+      <div class="flex items-center gap-1 shrink-0 ml-auto sm:ml-0">
+        {#if visibleHints.length > 1}
+          <span class="text-[10px] text-muted-foreground">
+            {(currentIndex % visibleHints.length) + 1}/{visibleHints.length}
+          </span>
+          <button
+            type="button"
+            class="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
+            onclick={nextHint}
+            title="Next tip"
           >
-            {currentHint.linkText} →
-          </a>
+            <ChevronRightIcon class="w-4 h-4" />
+          </button>
         {/if}
+        <button
+          type="button"
+          class="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
+          onclick={dismissHint}
+          title="Dismiss"
+        >
+          <XIcon class="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   </div>

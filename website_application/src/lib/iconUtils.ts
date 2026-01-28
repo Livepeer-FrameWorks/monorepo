@@ -5,7 +5,9 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
+  BarChart2,
   BarChart3,
   BarChart,
   Bell,
@@ -15,6 +17,7 @@ import {
   Building2,
   Calendar,
   Camera,
+  Check,
   CheckCircle,
   ChevronDown,
   ChevronLeft,
@@ -26,23 +29,34 @@ import {
   CircleSlash,
   Clapperboard,
   Clock,
+  Cloud,
+  CloudUpload,
+  Code,
   Code2,
+  Coins,
   Copy,
+  Cpu,
   CreditCard,
   Database,
   Edit,
   ExternalLink,
   Download,
   FileText,
+  FileVideo,
   Film,
   Filter,
   FolderOpen,
   Gauge,
+  Github,
   Globe,
   Globe2,
   HardDrive,
+  Headphones,
+  Heart,
   HelpCircle,
+  History,
   Home,
+  Inbox,
   Info,
   Key,
   LayoutDashboard,
@@ -53,13 +67,17 @@ import {
   Loader2,
   LogIn,
   Mail,
+  MapPin,
   Maximize2,
-  Mic,
+  MemoryStick,
   MessageCircle,
+  MessageSquare,
+  Mic,
   Minimize2,
   Monitor,
   Network,
   Package,
+  Pause,
   PauseCircle,
   Play,
   Plus,
@@ -70,15 +88,19 @@ import {
   Scissors,
   ScrollText,
   Search,
+  Send,
   Server,
   Settings,
+  Settings2,
   Share2,
-  Signal,
-  Square,
   Shield,
+  Signal,
+  Snowflake,
   Sparkles,
+  Square,
   StopCircle,
   Target,
+  Terminal,
   Ticket,
   Trash2,
   TrendingUp,
@@ -87,6 +109,8 @@ import {
   UserPlus,
   Users,
   Video,
+  Wallet,
+  Webhook,
   CircleOff,
   Wifi,
   WifiOff,
@@ -103,9 +127,11 @@ const iconMap = {
   AlertTriangle,
   ArrowDown,
   ArrowLeft,
+  ArrowRight,
   ArrowUp,
-  BarChart3,
   BarChart,
+  BarChart2,
+  BarChart3,
   Bell,
   Bot,
   BookOpen,
@@ -113,6 +139,7 @@ const iconMap = {
   Building2,
   Calendar,
   Camera,
+  Check,
   CheckCircle,
   ChevronDown,
   ChevronLeft,
@@ -121,26 +148,38 @@ const iconMap = {
   ChartLine,
   Circle,
   CircleDot,
+  CircleOff,
   CircleSlash,
   Clapperboard,
   Clock,
+  Cloud,
+  CloudUpload,
+  Code,
   Code2,
+  Coins,
   Copy,
+  Cpu,
   CreditCard,
   Database,
+  Download,
   Edit,
   ExternalLink,
-  Download,
   FileText,
+  FileVideo,
   Film,
   Filter,
   FolderOpen,
   Gauge,
+  Github,
   Globe,
   Globe2,
   HardDrive,
+  Headphones,
+  Heart,
   HelpCircle,
+  History,
   Home,
+  Inbox,
   Info,
   Key,
   LayoutDashboard,
@@ -151,13 +190,17 @@ const iconMap = {
   Loader2,
   LogIn,
   Mail,
+  MapPin,
   Maximize2,
-  Mic,
+  MemoryStick,
   MessageCircle,
+  MessageSquare,
+  Mic,
   Minimize2,
   Monitor,
   Network,
   Package,
+  Pause,
   PauseCircle,
   Play,
   Plus,
@@ -168,15 +211,19 @@ const iconMap = {
   Scissors,
   ScrollText,
   Search,
+  Send,
   Server,
   Settings,
+  Settings2,
   Share2,
-  Signal,
-  Square,
   Shield,
+  Signal,
+  Snowflake,
   Sparkles,
+  Square,
   StopCircle,
   Target,
+  Terminal,
   Ticket,
   Trash2,
   TrendingUp,
@@ -185,7 +232,8 @@ const iconMap = {
   UserPlus,
   Users,
   Video,
-  CircleOff,
+  Wallet,
+  Webhook,
   Wifi,
   WifiOff,
   Wrench,
@@ -194,101 +242,7 @@ const iconMap = {
   Zap,
 };
 
-export type IconName =
-  | "Activity"
-  | "AlertCircle"
-  | "AlertTriangle"
-  | "ArrowDown"
-  | "ArrowLeft"
-  | "ArrowUp"
-  | "BarChart3"
-  | "BarChart"
-  | "Bell"
-  | "Bot"
-  | "BookOpen"
-  | "Brain"
-  | "Building2"
-  | "Calendar"
-  | "Camera"
-  | "CheckCircle"
-  | "ChevronDown"
-  | "ChevronLeft"
-  | "ChevronRight"
-  | "ChevronUp"
-  | "ChartLine"
-  | "Circle"
-  | "CircleDot"
-  | "CircleSlash"
-  | "Clapperboard"
-  | "Clock"
-  | "Code2"
-  | "Copy"
-  | "CreditCard"
-  | "Database"
-  | "Edit"
-  | "ExternalLink"
-  | "Download"
-  | "FileText"
-  | "Film"
-  | "Filter"
-  | "FolderOpen"
-  | "Gauge"
-  | "Globe"
-  | "Globe2"
-  | "HardDrive"
-  | "HelpCircle"
-  | "Home"
-  | "Info"
-  | "Key"
-  | "LayoutDashboard"
-  | "LayoutGrid"
-  | "Lightbulb"
-  | "Link"
-  | "Loader"
-  | "Loader2"
-  | "LogIn"
-  | "Mail"
-  | "Maximize2"
-  | "Mic"
-  | "MessageCircle"
-  | "Minimize2"
-  | "Monitor"
-  | "Network"
-  | "Package"
-  | "PauseCircle"
-  | "Play"
-  | "Plus"
-  | "Radio"
-  | "Receipt"
-  | "RefreshCw"
-  | "Rocket"
-  | "Scissors"
-  | "ScrollText"
-  | "Search"
-  | "Server"
-  | "Settings"
-  | "Share2"
-  | "Signal"
-  | "Square"
-  | "Shield"
-  | "Sparkles"
-  | "StopCircle"
-  | "Target"
-  | "Ticket"
-  | "Trash2"
-  | "TrendingUp"
-  | "Upload"
-  | "User"
-  | "UserPlus"
-  | "Users"
-  | "Video"
-  | "CircleOff"
-  | "Wifi"
-  | "WifiOff"
-  | "Wrench"
-  | "X"
-  | "XCircle"
-  | "Zap";
+export type IconName = keyof typeof iconMap;
 
 export function getIconComponent(iconName?: string | null): ComponentType {
   if (!iconName) return HelpCircle;

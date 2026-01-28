@@ -21,13 +21,10 @@
   import StreamStatsGrid from "$lib/components/dashboard/StreamStatsGrid.svelte";
   import ConnectionStatusBanner from "$lib/components/dashboard/ConnectionStatusBanner.svelte";
   import PrimaryStreamCard from "$lib/components/dashboard/PrimaryStreamCard.svelte";
-  import ServiceStatusList from "$lib/components/dashboard/ServiceStatusList.svelte";
-  import LiveStreamHealthCards from "$lib/components/dashboard/LiveStreamHealthCards.svelte";
   import DynamicHints from "$lib/components/dashboard/DynamicHints.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { EventLog, type StreamEvent } from "$lib/components/stream-details";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
-  import PrepaidBalanceWidget from "$lib/components/PrepaidBalanceWidget.svelte";
   import {
     realtimeStreams,
     streamMetrics,
@@ -76,10 +73,6 @@
     status: "disconnected",
     message: "Disconnected",
   });
-
-  // Service status tracking
-  let controlPlaneStatus = $state<"connected" | "loading" | "error">("loading");
-  let dataPlaneStatus = $state<"connected" | "error">("error");
 
   // Platform events for event log
   let platformEvents = $state<StreamEvent[]>([]);
@@ -170,14 +163,6 @@
     isAuthenticated = authState.isAuthenticated;
     user = (authState.user as unknown as UserData) || null;
     loading = authState.loading;
-    // Update control plane status based on auth state
-    if (authState.loading) {
-      controlPlaneStatus = "loading";
-    } else if (authState.isAuthenticated) {
-      controlPlaneStatus = "connected";
-    } else {
-      controlPlaneStatus = "error";
-    }
   });
 
   // Track previous stream statuses to detect changes
@@ -250,10 +235,8 @@
         billingStatusStore.fetch(),
         streamsConnectionStore.fetch({ variables: { first: 50 } }),
       ]);
-      dataPlaneStatus = "connected";
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
-      dataPlaneStatus = "error";
     }
   }
 
@@ -473,6 +456,13 @@
 
         <SectionDivider class="my-8" />
 
+        <!-- Tips Banner -->
+        <DynamicHints
+          hasStreams={enhancedStreamStats.total > 0}
+          hasLiveStreams={enhancedStreamStats.live > 0}
+          streamKey={primaryStream?.streamKey}
+        />
+
         <!-- Main Content Grid (seamed layout, no outer padding) -->
         <div class="dashboard-grid">
           <!-- Streams Overview Slab -->
@@ -625,53 +615,6 @@
                 <GaugeIcon class="w-4 h-4" />
                 Usage Analytics
               </Button>
-            </div>
-          </div>
-
-          <!-- Prepaid Balance Widget -->
-          <PrepaidBalanceWidget />
-
-          <!-- System Health Slab -->
-          <div class="slab">
-            <div class="slab-header">
-              <h3>System Health</h3>
-            </div>
-            <div class="slab-body--padded space-y-4">
-              <ServiceStatusList
-                wsStatus={wsConnectionStatus}
-                controlPlane={controlPlaneStatus}
-                dataPlane={dataPlaneStatus}
-              />
-
-              <LiveStreamHealthCards {liveMetrics} {formatBytes} />
-            </div>
-            <div class="slab-actions slab-actions--row">
-              <Button href={resolve("/analytics")} variant="ghost" class="gap-2">
-                <ChartLineIcon class="w-4 h-4" />
-                Analytics
-              </Button>
-              <Button href={resolve("/analytics/audience")} variant="ghost" class="gap-2">
-                <GlobeIcon class="w-4 h-4" />
-                Audience
-              </Button>
-              <Button href={resolve("/infrastructure")} variant="ghost" class="gap-2">
-                <ServerIcon class="w-4 h-4" />
-                Infrastructure
-              </Button>
-            </div>
-          </div>
-
-          <!-- Tips & Hints Slab -->
-          <div class="slab">
-            <div class="slab-header">
-              <h3>Tips</h3>
-            </div>
-            <div class="slab-body--padded">
-              <DynamicHints
-                hasStreams={enhancedStreamStats.total > 0}
-                hasLiveStreams={enhancedStreamStats.live > 0}
-                streamKey={primaryStream?.streamKey}
-              />
             </div>
           </div>
 

@@ -16,6 +16,7 @@
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import PrepaidBalanceWidget from "$lib/components/PrepaidBalanceWidget.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { PaymentMethod, type PaymentMethod$options } from "$houdini";
 
@@ -370,6 +371,9 @@
               </div>
             </div>
           {/if}
+
+          <!-- Prepaid Balance -->
+          <PrepaidBalanceWidget />
 
           <!-- Usage Link Slab -->
           <div class="slab">

@@ -32,7 +32,7 @@
       react: "@livepeer-frameworks/player-react",
       svelte: "@livepeer-frameworks/player-svelte",
     },
-    version: "0.0.5",
+    version: "0.1.0",
     features: [
       "HLS.js, DASH.js, and native playback",
       "WebRTC for ultra-low latency",
@@ -87,7 +87,7 @@ player.destroy();`,
       react: "@livepeer-frameworks/streamcrafter-react",
       svelte: "@livepeer-frameworks/streamcrafter-svelte",
     },
-    version: "0.0.3",
+    version: "0.1.0",
     features: [
       "WebCodecs hardware encoding",
       "WHIP ingest protocol",
@@ -616,7 +616,7 @@ await controller.stopStreaming();`,
           <div class="slab-body--padded">
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <a
-                href={resolve(docsBaseUrl)}
+                href={docsBaseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
@@ -632,7 +632,7 @@ await controller.stopStreaming();`,
               </a>
 
               <a
-                href={resolve(githubBaseUrl)}
+                href={githubBaseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 class="flex items-center gap-3 p-4 border border-border/50 rounded-lg hover:border-primary/50 hover:bg-muted/30 transition-colors group"
