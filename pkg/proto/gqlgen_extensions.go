@@ -216,6 +216,8 @@ func (e MessageSender) MarshalGQL(w io.Writer) {
 		s = "USER"
 	case MessageSender_MESSAGE_SENDER_AGENT:
 		s = "AGENT"
+	case MessageSender_MESSAGE_SENDER_SYSTEM:
+		s = "SYSTEM"
 	default:
 		s = "USER"
 	}
@@ -233,6 +235,8 @@ func (e *MessageSender) UnmarshalGQL(v interface{}) error {
 		*e = MessageSender_MESSAGE_SENDER_USER
 	case "AGENT":
 		*e = MessageSender_MESSAGE_SENDER_AGENT
+	case "SYSTEM":
+		*e = MessageSender_MESSAGE_SENDER_SYSTEM
 	default:
 		return fmt.Errorf("%s is not a valid MessageSender", str)
 	}

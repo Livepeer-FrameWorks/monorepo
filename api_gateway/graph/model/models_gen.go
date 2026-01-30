@@ -841,18 +841,6 @@ type InvoicesConnection struct {
 	TotalCount int              `json:"totalCount"`
 }
 
-// A single line item on an invoice.
-type LineItem struct {
-	// Description of the charge.
-	Description string `json:"description"`
-	// Quantity of units.
-	Quantity int `json:"quantity"`
-	// Price per unit.
-	UnitPrice float64 `json:"unitPrice"`
-	// Total for this line item.
-	Total float64 `json:"total"`
-}
-
 // Input for linking email to a wallet-only account.
 type LinkEmailInput struct {
 	// Email address to link.

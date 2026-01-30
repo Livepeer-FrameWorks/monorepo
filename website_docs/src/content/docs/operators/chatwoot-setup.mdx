@@ -1,0 +1,90 @@
+---
+title: "Chatwoot Setup"
+description: "Configuration guide for Chatwoot support chat integration."
+sidebar:
+  order: 10
+---
+
+Chatwoot provides the support chat backend for FrameWorks. Deckhand integrates with Chatwoot to enable customer messaging from the webapp.
+
+## Initial Setup
+
+After starting Chatwoot for the first time:
+
+### 1. Create Admin Account
+
+Visit `http://localhost:3000` (or your Chatwoot URL) and complete the setup wizard to create your admin account.
+
+### 2. Get API Token
+
+1. Click the profile icon (bottom-left corner)
+2. Go to **Profile Settings**
+3. Copy the **Access Token** value
+4. Set it in your environment:
+   ```bash
+   CHATWOOT_API_TOKEN=your-token-here
+   ```
+
+### 3. Create API Inbox
+
+1. Go to **Settings → Inboxes**
+2. Click **Add Inbox**
+3. Select **API** as the channel type
+4. Name it `FrameWorks Support`
+5. Complete the wizard
+
+Note the inbox ID from the URL (e.g., `/app/accounts/1/settings/inboxes/1` → inbox ID is `1`).
+
+### 4. Add Custom Attributes
+
+Go to **Settings → Custom Attributes** and add each of these:
+
+| Applies to   | Display Name | Key         | Type | Description                     |
+| ------------ | ------------ | ----------- | ---- | ------------------------------- |
+| Conversation | Tenant ID    | `tenant_id` | Text | Customer tenant identifier      |
+| Conversation | Page URL     | `page_url`  | Link | Page where conversation started |
+| Conversation | Subject      | `subject`   | Text | Conversation subject line       |
+
+### 5. Configure Webhook
+
+1. Go to **Settings → Integrations → Webhooks**
+2. Click **Configure** then **Add new webhook**
+3. Set the URL: `http://deckhand:18015/webhooks/chatwoot`
+4. Check these events:
+   - `conversation_created`
+   - `conversation_updated`
+   - `message_created`
+   - `message_updated`
+5. Click **Create Webhook**
+
+## Environment Variables
+
+```bash
+# Required
+CHATWOOT_SECRET_KEY=   # Generate with: openssl rand -hex 64
+CHATWOOT_API_TOKEN=    # From step 2 above
+
+# Defaults (usually don't need to change for docker-compose)
+CHATWOOT_HOST=chatwoot
+CHATWOOT_PORT=3000
+CHATWOOT_ACCOUNT_ID=1
+CHATWOOT_INBOX_ID=1
+```
+
+## How It Works
+
+1. User opens support chat in webapp
+2. Webapp sends message to Bridge GraphQL API
+3. Bridge forwards to Deckhand gRPC service
+4. Deckhand creates/finds contact in Chatwoot (using `tenant_id` as `source_id`)
+5. Deckhand creates conversation with custom attributes
+6. Chatwoot webhook notifies Deckhand of agent replies
+7. Deckhand broadcasts to webapp via Signalman
+
+## Troubleshooting
+
+**Empty conversations list:** Contact's `source_id` doesn't match tenant ID. Edit the contact in Chatwoot and set `source_id` to the tenant's UUID.
+
+**Webhook not firing:** Verify the webhook URL is reachable from Chatwoot container (`http://deckhand:18015/webhooks/chatwoot`).
+
+**"Inbox not found" errors:** Ensure `CHATWOOT_INBOX_ID` matches the inbox you created.

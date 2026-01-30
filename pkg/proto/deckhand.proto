@@ -127,4 +127,5 @@ enum MessageSender {
   MESSAGE_SENDER_UNSPECIFIED = 0;
   MESSAGE_SENDER_USER = 1;
   MESSAGE_SENDER_AGENT = 2;
+  MESSAGE_SENDER_SYSTEM = 3;  // Activity messages (assigned, resolved, etc.)
 }

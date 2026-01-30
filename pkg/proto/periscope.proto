@@ -251,6 +251,8 @@ message CountryMetric {
   string country_code = 1;
   int32 viewer_count = 2;
   float percentage = 3;
+  double viewer_hours = 4;
+  double egress_gb = 5;
 }
 
 message CityMetric {
@@ -985,12 +987,68 @@ message LiveUsageSummary {
   string tenant_id = 1;
   google.protobuf.Timestamp period_start = 2;
   google.protobuf.Timestamp period_end = 3;
-  double viewer_hours = 4;
+
+  // Core metrics (matches UsageSummary)
+  double stream_hours = 4;
   double egress_gb = 5;
-  int32 unique_viewers = 6;
+  double peak_bandwidth_mbps = 6;
   double average_storage_gb = 7;
-  double livepeer_seconds = 8;
-  double native_av_seconds = 9;
+
+  // Per-codec breakdown: Livepeer
+  double livepeer_h264_seconds = 8;
+  double livepeer_vp9_seconds = 9;
+  double livepeer_av1_seconds = 10;
+  double livepeer_hevc_seconds = 11;
+
+  // Per-codec breakdown: Native AV
+  double native_av_h264_seconds = 12;
+  double native_av_vp9_seconds = 13;
+  double native_av_av1_seconds = 14;
+  double native_av_hevc_seconds = 15;
+  double native_av_aac_seconds = 16;
+  double native_av_opus_seconds = 17;
+
+  // Viewer metrics (matches UsageSummary)
+  int32 total_streams = 18;
+  int32 total_viewers = 19;
+  double viewer_hours = 20;
+  int32 max_viewers = 21;
+  int32 unique_users = 22;
+
+  // Segment/stream counts (from processing_daily)
+  uint64 livepeer_segment_count = 23;
+  uint32 livepeer_unique_streams = 24;
+  uint64 native_av_segment_count = 25;
+  uint32 native_av_unique_streams = 26;
+
+  // Geo enrichment (from viewer_connection_events)
+  int32 unique_countries = 27;
+  int32 unique_cities = 28;
+  repeated CountryMetric geo_breakdown = 29;
+
+  // Storage lifecycle - artifact counts (from artifact_events)
+  uint32 clips_created = 30;
+  uint32 clips_deleted = 31;
+  uint32 dvr_created = 32;
+  uint32 dvr_deleted = 33;
+  uint32 vod_created = 34;
+  uint32 vod_deleted = 35;
+
+  // Storage lifecycle - bytes by type (hot storage)
+  uint64 clip_bytes = 36;
+  uint64 dvr_bytes = 37;
+  uint64 vod_bytes = 38;
+
+  // Storage lifecycle - frozen bytes (cold storage)
+  uint64 frozen_clip_bytes = 39;
+  uint64 frozen_dvr_bytes = 40;
+  uint64 frozen_vod_bytes = 41;
+
+  // Freeze/defrost operations (from storage_events)
+  uint32 freeze_count = 42;
+  uint64 freeze_bytes = 43;
+  uint32 defrost_count = 44;
+  uint64 defrost_bytes = 45;
 }
 
 message GetLiveUsageSummaryResponse {
@@ -1035,6 +1093,8 @@ message StreamHealth5m {
   int32 avg_bitrate = 9;
   float avg_fps = 10;
   float avg_buffer_health = 11;
+  optional float avg_frame_jitter_ms = 14;
+  optional float max_frame_jitter_ms = 15;
   int32 buffer_dry_count = 12;
   string quality_tier = 13;
 }

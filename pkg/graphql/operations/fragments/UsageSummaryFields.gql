@@ -5,18 +5,12 @@ fragment UsageSummaryFields on UsageSummary {
   periodEnd
   timestamp
   granularity
+  # Flow metrics
   streamHours
   egressGb
-  recordingGb
   peakBandwidthMbps
-  storageGb
-  # Processing/transcoding usage (Livepeer Gateway and local AV)
-  livepeerSeconds
-  livepeerSegmentCount
-  livepeerUniqueStreams
-  nativeAvSeconds
-  nativeAvSegmentCount
-  nativeAvUniqueStreams
+  # Storage
+  averageStorageGb
   # Per-codec breakdown: Livepeer (external gateway)
   livepeerH264Seconds
   livepeerVp9Seconds
@@ -29,34 +23,18 @@ fragment UsageSummaryFields on UsageSummary {
   nativeAvHevcSeconds
   nativeAvAacSeconds
   nativeAvOpusSeconds
-  # Track type aggregates
-  audioSeconds
-  videoSeconds
-  averageStorageGb
-  # Clip storage lifecycle
-  clipsAdded
-  clipsDeleted
-  clipStorageAddedGb
-  clipStorageDeletedGb
-  # DVR storage lifecycle
-  dvrAdded
-  dvrDeleted
-  dvrStorageAddedGb
-  dvrStorageDeletedGb
-  # VOD storage lifecycle
-  vodAdded
-  vodDeleted
-  vodStorageAddedGb
-  vodStorageDeletedGb
   # Viewer metrics
   totalStreams
   totalViewers
   viewerHours
-  peakViewers
   maxViewers
   uniqueUsers
-  uniqueUsersPeriod
-  avgViewers
+  # Segment/stream counts
+  livepeerSegmentCount
+  livepeerUniqueStreams
+  nativeAvSegmentCount
+  nativeAvUniqueStreams
+  # Geo enrichment
   uniqueCountries
   uniqueCities
   geoBreakdown {
@@ -65,4 +43,24 @@ fragment UsageSummaryFields on UsageSummary {
     viewerHours
     egressGb
   }
+  # Storage lifecycle - artifact counts
+  clipsCreated
+  clipsDeleted
+  dvrCreated
+  dvrDeleted
+  vodCreated
+  vodDeleted
+  # Storage - hot (bytes)
+  clipBytes
+  dvrBytes
+  vodBytes
+  # Storage - cold/frozen (bytes)
+  frozenClipBytes
+  frozenDvrBytes
+  frozenVodBytes
+  # Freeze/defrost operations
+  freezeCount
+  freezeBytes
+  defrostCount
+  defrostBytes
 }

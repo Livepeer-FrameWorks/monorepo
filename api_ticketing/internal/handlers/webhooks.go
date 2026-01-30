@@ -17,10 +17,12 @@ import (
 )
 
 // ChatwootWebhookPayload represents the webhook payload from Chatwoot
+// NOTE: Chatwoot webhook structure varies by event type:
+// - conversation_created: conversation ID is in the "id" field at root level
+// - message_created: conversation ID is nested at "conversation.id"
 type ChatwootWebhookPayload struct {
 	Event            string                 `json:"event"`
 	ID               int64                  `json:"id"`
-	ConversationID   int64                  `json:"conversation_id,omitempty"`
 	InboxID          int64                  `json:"inbox_id,omitempty"`
 	AccountID        int64                  `json:"account_id,omitempty"`
 	Status           string                 `json:"status,omitempty"`
@@ -29,7 +31,18 @@ type ChatwootWebhookPayload struct {
 	Sender           *ChatwootSender        `json:"sender,omitempty"`
 	Content          string                 `json:"content,omitempty"`
 	ContentType      string                 `json:"content_type,omitempty"`
-	MessageType      string                 `json:"message_type,omitempty"`
+	MessageType      string                 `json:"message_type,omitempty"` // "incoming", "outgoing", "activity"
+	// Nested conversation object for message events
+	Conversation *ChatwootConversation `json:"conversation,omitempty"`
+}
+
+// ChatwootConversation represents the nested conversation in message events
+type ChatwootConversation struct {
+	ID               int64                  `json:"id"`
+	InboxID          int64                  `json:"inbox_id,omitempty"`
+	AccountID        int64                  `json:"account_id,omitempty"`
+	Status           string                 `json:"status,omitempty"`
+	CustomAttributes map[string]interface{} `json:"custom_attributes,omitempty"`
 }
 
 // ChatwootSender represents the sender in a Chatwoot webhook
@@ -38,6 +51,48 @@ type ChatwootSender struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
 	Type  string `json:"type"` // "user" or "contact"
+}
+
+// GetConversationID returns the conversation ID, handling different payload structures.
+// For conversation events, the ID is at the root level.
+// For message events, it's nested in the conversation object.
+func (p *ChatwootWebhookPayload) GetConversationID() int64 {
+	if p.Conversation != nil && p.Conversation.ID != 0 {
+		return p.Conversation.ID
+	}
+	// For conversation_* events, the root ID is the conversation ID
+	return p.ID
+}
+
+// GetCustomAttributes returns custom attributes, checking both root and nested conversation.
+func (p *ChatwootWebhookPayload) GetCustomAttributes() map[string]interface{} {
+	// For message events, custom_attributes may be on the nested conversation
+	if p.Conversation != nil && p.Conversation.CustomAttributes != nil {
+		return p.Conversation.CustomAttributes
+	}
+	return p.CustomAttributes
+}
+
+// GetAccountID returns the account ID from either root or nested conversation.
+func (p *ChatwootWebhookPayload) GetAccountID() int64 {
+	if p.AccountID != 0 {
+		return p.AccountID
+	}
+	if p.Conversation != nil {
+		return p.Conversation.AccountID
+	}
+	return 0
+}
+
+// GetInboxID returns the inbox ID from either root or nested conversation.
+func (p *ChatwootWebhookPayload) GetInboxID() int64 {
+	if p.InboxID != 0 {
+		return p.InboxID
+	}
+	if p.Conversation != nil {
+		return p.Conversation.InboxID
+	}
+	return 0
 }
 
 // HandleChatwootWebhook handles incoming webhooks from Chatwoot
@@ -67,7 +122,7 @@ func HandleChatwootWebhook(c *gin.Context) {
 
 	deps.Logger.WithFields(map[string]interface{}{
 		"event":           payload.Event,
-		"conversation_id": payload.ConversationID,
+		"conversation_id": payload.GetConversationID(),
 	}).Info("Received Chatwoot webhook")
 
 	switch payload.Event {
@@ -98,8 +153,10 @@ func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 		return
 	}
 
+	conversationID := payload.GetConversationID()
+
 	deps.Logger.WithFields(map[string]interface{}{
-		"conversation_id": payload.ConversationID,
+		"conversation_id": conversationID,
 		"tenant_id":       tenantID,
 	}).Info("Enriching conversation with tenant context")
 
@@ -154,7 +211,7 @@ func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 			InboxID:   int(payload.InboxID),
 		})
 
-		_, err := client.CreateNote(ctx, payload.ConversationID, note)
+		_, err := client.CreateNote(ctx, conversationID, note)
 		if err != nil {
 			deps.Logger.WithError(err).Warn("Failed to post enrichment note")
 			deps.Metrics.ChatwootAPICalls.WithLabelValues("create_note", "error").Inc()
@@ -167,7 +224,7 @@ func handleConversationCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 	if deps.Decklog != nil {
 		ml := &pb.MessageLifecycleData{
 			EventType:      pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_CREATED,
-			ConversationId: strconv.FormatInt(payload.ConversationID, 10),
+			ConversationId: strconv.FormatInt(conversationID, 10),
 			Timestamp:      time.Now().Unix(),
 		}
 		if tenantID != "" {
@@ -224,44 +281,63 @@ func formatEnrichmentNote(tenantID, tenantName string, createdAt time.Time, bill
 
 // handleMessageCreated broadcasts new messages for real-time updates
 func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
-	// Only broadcast agent replies to users (not user messages back to agent dashboard)
-	if payload.Sender == nil || payload.Sender.Type != "user" {
-		// This is an agent message - broadcast to webapp via Decklog → Signalman
-		tenantID, _ := payload.CustomAttributes["tenant_id"].(string)
-		if tenantID != "" && deps.Decklog != nil {
-			msgID := strconv.FormatInt(payload.ID, 10)
-			content := payload.Content
-			sender := "AGENT"
+	// Determine sender type based on message_type and sender
+	// message_type: "incoming" (customer), "outgoing" (agent), "activity" (system)
+	var sender string
+	switch payload.MessageType {
+	case "activity":
+		sender = "SYSTEM"
+	case "outgoing":
+		sender = "AGENT"
+	case "incoming":
+		// Customer message - don't broadcast back to webapp
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		return
+	default:
+		// Fallback to sender type check for backwards compatibility
+		if payload.Sender != nil && payload.Sender.Type == "contact" {
+			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+			return
+		}
+		sender = "AGENT"
+	}
 
-			ml := &pb.MessageLifecycleData{
-				EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
-				ConversationId: strconv.FormatInt(payload.ConversationID, 10),
-				MessageId:      &msgID,
-				Content:        &content,
-				Sender:         &sender,
-				Timestamp:      time.Now().Unix(),
-			}
-			ml.TenantId = &tenantID
+	// Broadcast agent/system messages to webapp via Decklog → Signalman
+	tenantID, _ := payload.GetCustomAttributes()["tenant_id"].(string)
+	if tenantID != "" && deps.Decklog != nil {
+		conversationID := payload.GetConversationID()
+		msgID := strconv.FormatInt(payload.ID, 10)
+		content := payload.Content
 
-			event := &pb.ServiceEvent{
-				EventType: "message_received",
-				Timestamp: timestamppb.Now(),
-				Source:    "deckhand",
-				TenantId:  tenantID,
-				Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
-			}
+		ml := &pb.MessageLifecycleData{
+			EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
+			ConversationId: strconv.FormatInt(conversationID, 10),
+			MessageId:      &msgID,
+			Content:        &content,
+			Sender:         &sender,
+			Timestamp:      time.Now().Unix(),
+		}
+		ml.TenantId = &tenantID
 
-			if err := deps.Decklog.SendServiceEvent(event); err != nil {
-				deps.Logger.WithError(err).Warn("Failed to broadcast message via Decklog")
-				deps.Metrics.MessagesSent.WithLabelValues("error").Inc()
-			} else {
-				deps.Logger.WithFields(map[string]interface{}{
-					"conversation_id": payload.ConversationID,
-					"tenant_id":       tenantID,
-					"message_id":      payload.ID,
-				}).Debug("Broadcasted agent message via Decklog")
-				deps.Metrics.MessagesSent.WithLabelValues("broadcast").Inc()
-			}
+		event := &pb.ServiceEvent{
+			EventType: "message_received",
+			Timestamp: timestamppb.Now(),
+			Source:    "deckhand",
+			TenantId:  tenantID,
+			Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
+		}
+
+		if err := deps.Decklog.SendServiceEvent(event); err != nil {
+			deps.Logger.WithError(err).Warn("Failed to broadcast message via Decklog")
+			deps.Metrics.MessagesSent.WithLabelValues("error").Inc()
+		} else {
+			deps.Logger.WithFields(map[string]interface{}{
+				"conversation_id": conversationID,
+				"tenant_id":       tenantID,
+				"message_id":      payload.ID,
+				"sender":          sender,
+			}).Debug("Broadcasted message via Decklog")
+			deps.Metrics.MessagesSent.WithLabelValues("broadcast").Inc()
 		}
 	}
 
@@ -269,17 +345,18 @@ func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 }
 
 func handleConversationUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
-	tenantID, _ := payload.CustomAttributes["tenant_id"].(string)
+	tenantID, _ := payload.GetCustomAttributes()["tenant_id"].(string)
 	if tenantID == "" || deps.Decklog == nil {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 		return
 	}
 
+	conversationID := payload.GetConversationID()
 	subject := payload.Subject
 	status := payload.Status
 	ml := &pb.MessageLifecycleData{
 		EventType:      pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED,
-		ConversationId: strconv.FormatInt(payload.ConversationID, 10),
+		ConversationId: strconv.FormatInt(conversationID, 10),
 		Status:         &status,
 		Subject:        &subject,
 		Timestamp:      time.Now().Unix(),
@@ -302,34 +379,51 @@ func handleConversationUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 }
 
 func handleMessageUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
-	if payload.Sender == nil || payload.Sender.Type != "user" {
-		tenantID, _ := payload.CustomAttributes["tenant_id"].(string)
-		if tenantID != "" && deps.Decklog != nil {
-			msgID := strconv.FormatInt(payload.ID, 10)
-			content := payload.Content
-			sender := "AGENT"
+	// Determine sender type based on message_type
+	var sender string
+	switch payload.MessageType {
+	case "activity":
+		sender = "SYSTEM"
+	case "outgoing":
+		sender = "AGENT"
+	case "incoming":
+		// Customer message - don't broadcast back to webapp
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		return
+	default:
+		if payload.Sender != nil && payload.Sender.Type == "contact" {
+			c.JSON(http.StatusOK, gin.H{"status": "ok"})
+			return
+		}
+		sender = "AGENT"
+	}
 
-			ml := &pb.MessageLifecycleData{
-				EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED,
-				ConversationId: strconv.FormatInt(payload.ConversationID, 10),
-				MessageId:      &msgID,
-				Content:        &content,
-				Sender:         &sender,
-				Timestamp:      time.Now().Unix(),
-			}
-			ml.TenantId = &tenantID
+	tenantID, _ := payload.GetCustomAttributes()["tenant_id"].(string)
+	if tenantID != "" && deps.Decklog != nil {
+		conversationID := payload.GetConversationID()
+		msgID := strconv.FormatInt(payload.ID, 10)
+		content := payload.Content
 
-			event := &pb.ServiceEvent{
-				EventType: "message_updated",
-				Timestamp: timestamppb.Now(),
-				Source:    "deckhand",
-				TenantId:  tenantID,
-				Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
-			}
+		ml := &pb.MessageLifecycleData{
+			EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED,
+			ConversationId: strconv.FormatInt(conversationID, 10),
+			MessageId:      &msgID,
+			Content:        &content,
+			Sender:         &sender,
+			Timestamp:      time.Now().Unix(),
+		}
+		ml.TenantId = &tenantID
 
-			if err := deps.Decklog.SendServiceEvent(event); err != nil {
-				deps.Logger.WithError(err).Warn("Failed to broadcast message_updated via Decklog")
-			}
+		event := &pb.ServiceEvent{
+			EventType: "message_updated",
+			Timestamp: timestamppb.Now(),
+			Source:    "deckhand",
+			TenantId:  tenantID,
+			Payload:   &pb.ServiceEvent_SupportEvent{SupportEvent: ml},
+		}
+
+		if err := deps.Decklog.SendServiceEvent(event); err != nil {
+			deps.Logger.WithError(err).Warn("Failed to broadcast message_updated via Decklog")
 		}
 	}
 

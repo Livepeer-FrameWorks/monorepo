@@ -409,15 +409,18 @@ func (s *Server) chatwootMsgToProto(msg *chatwoot.Message) *pb.DeckhandMessage {
 		Content:        msg.Content,
 	}
 
-	// Map sender type
-	if msg.Sender != nil {
+	// Map sender type based on message_type and sender info
+	// Chatwoot message types: 0=incoming (customer), 1=outgoing (agent), 2=activity (system)
+	if msg.MessageType == chatwoot.MessageTypeActivity {
+		result.Sender = pb.MessageSender_MESSAGE_SENDER_SYSTEM
+	} else if msg.Sender != nil {
 		switch msg.Sender.Type {
 		case "user":
 			result.Sender = pb.MessageSender_MESSAGE_SENDER_AGENT
 		case "contact":
 			result.Sender = pb.MessageSender_MESSAGE_SENDER_USER
 		}
-	} else if msg.MessageType == "outgoing" {
+	} else if msg.MessageType == chatwoot.MessageTypeOutgoing {
 		result.Sender = pb.MessageSender_MESSAGE_SENDER_AGENT
 	} else {
 		result.Sender = pb.MessageSender_MESSAGE_SENDER_USER
@@ -484,8 +487,8 @@ func (s *Server) verifyConversationTenant(ctx context.Context, conv *chatwoot.Co
 	}
 
 	if conv.Meta != nil && conv.Meta.Sender != nil {
-		if conv.Meta.Sender.SourceID != "" {
-			if conv.Meta.Sender.SourceID != tenantID {
+		if conv.Meta.Sender.Identifier != "" {
+			if conv.Meta.Sender.Identifier != tenantID {
 				return status.Error(codes.PermissionDenied, "conversation does not belong to tenant")
 			}
 			return nil

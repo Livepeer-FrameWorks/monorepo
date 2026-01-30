@@ -540,28 +540,6 @@ func (r *billingStatusResolver) InvoicePreview(ctx context.Context, obj *proto.B
 	return r.Resolver.DoGetInvoicePreview(ctx)
 }
 
-// UsageReconciled is the resolver for the usageReconciled field.
-func (r *billingStatusResolver) UsageReconciled(ctx context.Context, obj *proto.BillingStatusResponse) (bool, error) {
-	preview, _ := r.Resolver.DoGetInvoicePreview(ctx)
-	var startTime, endTime *time.Time
-	if preview != nil {
-		if preview.PeriodStart != nil {
-			start := preview.PeriodStart.AsTime()
-			startTime = &start
-		}
-		if preview.PeriodEnd != nil {
-			end := preview.PeriodEnd.AsTime()
-			endTime = &end
-		}
-	}
-
-	live, err := r.Resolver.DoGetLiveUsageSummary(ctx, startTime, endTime)
-	if err != nil {
-		return false, err
-	}
-	return usageWithinTolerance(live, preview), nil
-}
-
 // Metadata is the resolver for the metadata field.
 func (r *bootstrapTokenResolver) Metadata(ctx context.Context, obj *proto.BootstrapToken) (*string, error) {
 	if obj.Metadata == nil {
@@ -1567,132 +1545,6 @@ func (r *invoiceResolver) UsageDetails(ctx context.Context, obj *proto.Invoice) 
 	return &encoded, nil
 }
 
-// UsageSummary is the resolver for the usageSummary field.
-func (r *invoiceResolver) UsageSummary(ctx context.Context, obj *proto.Invoice) (*proto.UsageSummary, error) {
-	return usageSummaryFromInvoice(obj), nil
-}
-
-// LineItems is the resolver for the lineItems field.
-func (r *invoiceResolver) LineItems(ctx context.Context, obj *proto.Invoice) ([]*model.LineItem, error) {
-	var lineItems []*model.LineItem
-
-	// 1. Base tier line item (always present)
-	tierName := "Service"
-	basePrice := obj.BaseAmount
-	if basePrice == 0 {
-		basePrice = obj.Amount
-	}
-
-	// Try to extract tier info from usage_details
-	if obj.UsageDetails != nil && obj.UsageDetails.Fields != nil {
-		if tierInfo := obj.UsageDetails.Fields["tier_info"]; tierInfo != nil {
-			if ts := tierInfo.GetStructValue(); ts != nil && ts.Fields != nil {
-				if dn := ts.Fields["display_name"]; dn != nil {
-					tierName = dn.GetStringValue()
-				}
-				if bp := ts.Fields["base_price"]; bp != nil {
-					basePrice = bp.GetNumberValue()
-				}
-			}
-		}
-	}
-
-	lineItems = append(lineItems, &model.LineItem{
-		Description: tierName + " Tier",
-		Quantity:    1,
-		UnitPrice:   basePrice,
-		Total:       basePrice,
-	})
-
-	// 2. Usage metrics (from usage_data or flat keys)
-	usageData := make(map[string]float64)
-	if obj.UsageDetails != nil && obj.UsageDetails.Fields != nil {
-		if ud := obj.UsageDetails.Fields["usage_data"]; ud != nil {
-			if us := ud.GetStructValue(); us != nil && us.Fields != nil {
-				for k, v := range us.Fields {
-					usageData[k] = v.GetNumberValue()
-				}
-			}
-		} else {
-			// Legacy flat format - extract numeric fields
-			for k, v := range obj.UsageDetails.Fields {
-				if k != "tier" && k != "tier_info" {
-					if num := v.GetNumberValue(); num > 0 {
-						usageData[k] = num
-					}
-				}
-			}
-		}
-	}
-
-	// Add usage line items with €0.00 unit price (ordered for presentation)
-	orderedMetrics := []string{"viewer_hours", "average_storage_gb", "gpu_hours", "stream_hours", "egress_gb", "recording_gb"}
-	for _, metric := range orderedMetrics {
-		qty, exists := usageData[metric]
-		if !exists || qty == 0 {
-			continue
-		}
-		displayQty := qty
-		// Convert viewer_hours to delivered minutes for display
-		if metric == "viewer_hours" {
-			displayQty = qty * 60
-		}
-		lineItems = append(lineItems, &model.LineItem{
-			Description: formatMetricName(metric),
-			Quantity:    int(displayQty),
-			UnitPrice:   0.0,
-			Total:       0.0,
-		})
-	}
-
-	// Add processing/transcoding line items per-codec
-	type codecLineItem struct {
-		key         string
-		description string
-	}
-	processingItems := []codecLineItem{
-		{"livepeer_h264_seconds", "Livepeer H264 Transcoding"},
-		{"livepeer_vp9_seconds", "Livepeer VP9 Transcoding"},
-		{"livepeer_av1_seconds", "Livepeer AV1 Transcoding"},
-		{"livepeer_hevc_seconds", "Livepeer HEVC Transcoding"},
-		{"native_av_h264_seconds", "Native AV H264 Processing"},
-		{"native_av_vp9_seconds", "Native AV VP9 Processing"},
-		{"native_av_av1_seconds", "Native AV AV1 Processing"},
-		{"native_av_hevc_seconds", "Native AV HEVC Processing"},
-		{"native_av_aac_seconds", "Audio Transcoding (AAC)"},
-		{"native_av_opus_seconds", "Audio Transcoding (Opus)"},
-	}
-
-	for _, item := range processingItems {
-		seconds, exists := usageData[item.key]
-		if !exists || seconds == 0 {
-			continue
-		}
-		minutes := int(seconds / 60)
-		if minutes == 0 && seconds > 0 {
-			minutes = 1 // Show at least 1 minute if there's any usage
-		}
-		lineItems = append(lineItems, &model.LineItem{
-			Description: item.description,
-			Quantity:    minutes,
-			UnitPrice:   0.0, // Actual cost rolled into metered_amount
-			Total:       0.0,
-		})
-	}
-
-	// 3. Overage charges (if any)
-	if obj.MeteredAmount > 0 {
-		lineItems = append(lineItems, &model.LineItem{
-			Description: "Overage charges",
-			Quantity:    1,
-			UnitPrice:   obj.MeteredAmount,
-			Total:       obj.MeteredAmount,
-		})
-	}
-
-	return lineItems, nil
-}
-
 // CPUPercent is the resolver for the cpuPercent field.
 func (r *liveNodeResolver) CPUPercent(ctx context.Context, obj *proto.LiveNode) (float64, error) {
 	return float64(obj.CpuPercent), nil
@@ -1771,6 +1623,121 @@ func (r *liveUsageSummaryResolver) PeriodEnd(ctx context.Context, obj *proto.Liv
 	}
 	t := obj.PeriodEnd.AsTime()
 	return &t, nil
+}
+
+// LivepeerSegmentCount is the resolver for the livepeerSegmentCount field.
+func (r *liveUsageSummaryResolver) LivepeerSegmentCount(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetLivepeerSegmentCount()), nil
+}
+
+// LivepeerUniqueStreams is the resolver for the livepeerUniqueStreams field.
+func (r *liveUsageSummaryResolver) LivepeerUniqueStreams(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetLivepeerUniqueStreams()), nil
+}
+
+// NativeAvSegmentCount is the resolver for the nativeAvSegmentCount field.
+func (r *liveUsageSummaryResolver) NativeAvSegmentCount(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetNativeAvSegmentCount()), nil
+}
+
+// NativeAvUniqueStreams is the resolver for the nativeAvUniqueStreams field.
+func (r *liveUsageSummaryResolver) NativeAvUniqueStreams(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetNativeAvUniqueStreams()), nil
+}
+
+// GeoBreakdown is the resolver for the geoBreakdown field.
+func (r *liveUsageSummaryResolver) GeoBreakdown(ctx context.Context, obj *proto.LiveUsageSummary) ([]*proto.CountryMetrics, error) {
+	// Convert periscope.CountryMetric to purser.CountryMetrics
+	result := make([]*proto.CountryMetrics, 0, len(obj.GetGeoBreakdown()))
+	for _, cm := range obj.GetGeoBreakdown() {
+		result = append(result, &proto.CountryMetrics{
+			CountryCode: cm.GetCountryCode(),
+			ViewerCount: cm.GetViewerCount(),
+			ViewerHours: cm.GetViewerHours(),
+			EgressGb:    cm.GetEgressGb(),
+		})
+	}
+	return result, nil
+}
+
+// ClipsCreated is the resolver for the clipsCreated field.
+func (r *liveUsageSummaryResolver) ClipsCreated(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetClipsCreated()), nil
+}
+
+// ClipsDeleted is the resolver for the clipsDeleted field.
+func (r *liveUsageSummaryResolver) ClipsDeleted(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetClipsDeleted()), nil
+}
+
+// DvrCreated is the resolver for the dvrCreated field.
+func (r *liveUsageSummaryResolver) DvrCreated(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetDvrCreated()), nil
+}
+
+// DvrDeleted is the resolver for the dvrDeleted field.
+func (r *liveUsageSummaryResolver) DvrDeleted(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetDvrDeleted()), nil
+}
+
+// VodCreated is the resolver for the vodCreated field.
+func (r *liveUsageSummaryResolver) VodCreated(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetVodCreated()), nil
+}
+
+// VodDeleted is the resolver for the vodDeleted field.
+func (r *liveUsageSummaryResolver) VodDeleted(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetVodDeleted()), nil
+}
+
+// ClipBytes is the resolver for the clipBytes field.
+func (r *liveUsageSummaryResolver) ClipBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetClipBytes()), nil
+}
+
+// DvrBytes is the resolver for the dvrBytes field.
+func (r *liveUsageSummaryResolver) DvrBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetDvrBytes()), nil
+}
+
+// VodBytes is the resolver for the vodBytes field.
+func (r *liveUsageSummaryResolver) VodBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetVodBytes()), nil
+}
+
+// FrozenClipBytes is the resolver for the frozenClipBytes field.
+func (r *liveUsageSummaryResolver) FrozenClipBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetFrozenClipBytes()), nil
+}
+
+// FrozenDvrBytes is the resolver for the frozenDvrBytes field.
+func (r *liveUsageSummaryResolver) FrozenDvrBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetFrozenDvrBytes()), nil
+}
+
+// FrozenVodBytes is the resolver for the frozenVodBytes field.
+func (r *liveUsageSummaryResolver) FrozenVodBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetFrozenVodBytes()), nil
+}
+
+// FreezeCount is the resolver for the freezeCount field.
+func (r *liveUsageSummaryResolver) FreezeCount(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetFreezeCount()), nil
+}
+
+// FreezeBytes is the resolver for the freezeBytes field.
+func (r *liveUsageSummaryResolver) FreezeBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetFreezeBytes()), nil
+}
+
+// DefrostCount is the resolver for the defrostCount field.
+func (r *liveUsageSummaryResolver) DefrostCount(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetDefrostCount()), nil
+}
+
+// DefrostBytes is the resolver for the defrostBytes field.
+func (r *liveUsageSummaryResolver) DefrostBytes(ctx context.Context, obj *proto.LiveUsageSummary) (int, error) {
+	return int(obj.GetDefrostBytes()), nil
 }
 
 // MandateID is the resolver for the mandateId field.
@@ -4165,6 +4132,24 @@ func (r *streamHealth5mResolver) AvgBufferHealth(ctx context.Context, obj *proto
 	return float64(obj.AvgBufferHealth), nil
 }
 
+// AvgFrameJitterMs is the resolver for the avgFrameJitterMs field.
+func (r *streamHealth5mResolver) AvgFrameJitterMs(ctx context.Context, obj *proto.StreamHealth5M) (*float64, error) {
+	if obj.AvgFrameJitterMs == nil {
+		return nil, nil
+	}
+	v := float64(*obj.AvgFrameJitterMs)
+	return &v, nil
+}
+
+// MaxFrameJitterMs is the resolver for the maxFrameJitterMs field.
+func (r *streamHealth5mResolver) MaxFrameJitterMs(ctx context.Context, obj *proto.StreamHealth5M) (*float64, error) {
+	if obj.MaxFrameJitterMs == nil {
+		return nil, nil
+	}
+	v := float64(*obj.MaxFrameJitterMs)
+	return &v, nil
+}
+
 // ID is the resolver for the id field.
 func (r *streamHealthMetricResolver) ID(ctx context.Context, obj *proto.StreamHealthMetric) (string, error) {
 	tsPart := encodeProtoTimestampPart(obj.Timestamp)
@@ -4984,6 +4969,106 @@ func (r *usageSummaryResolver) Timestamp(ctx context.Context, obj *proto.UsageSu
 	}
 	t := obj.Timestamp.AsTime()
 	return &t, nil
+}
+
+// LivepeerSegmentCount is the resolver for the livepeerSegmentCount field.
+func (r *usageSummaryResolver) LivepeerSegmentCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetLivepeerSegmentCount()), nil
+}
+
+// LivepeerUniqueStreams is the resolver for the livepeerUniqueStreams field.
+func (r *usageSummaryResolver) LivepeerUniqueStreams(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetLivepeerUniqueStreams()), nil
+}
+
+// NativeAvSegmentCount is the resolver for the nativeAvSegmentCount field.
+func (r *usageSummaryResolver) NativeAvSegmentCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetNativeAvSegmentCount()), nil
+}
+
+// NativeAvUniqueStreams is the resolver for the nativeAvUniqueStreams field.
+func (r *usageSummaryResolver) NativeAvUniqueStreams(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetNativeAvUniqueStreams()), nil
+}
+
+// ClipsCreated is the resolver for the clipsCreated field.
+func (r *usageSummaryResolver) ClipsCreated(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetClipsCreated()), nil
+}
+
+// ClipsDeleted is the resolver for the clipsDeleted field.
+func (r *usageSummaryResolver) ClipsDeleted(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetClipsDeleted()), nil
+}
+
+// DvrCreated is the resolver for the dvrCreated field.
+func (r *usageSummaryResolver) DvrCreated(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetDvrCreated()), nil
+}
+
+// DvrDeleted is the resolver for the dvrDeleted field.
+func (r *usageSummaryResolver) DvrDeleted(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetDvrDeleted()), nil
+}
+
+// VodCreated is the resolver for the vodCreated field.
+func (r *usageSummaryResolver) VodCreated(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetVodCreated()), nil
+}
+
+// VodDeleted is the resolver for the vodDeleted field.
+func (r *usageSummaryResolver) VodDeleted(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetVodDeleted()), nil
+}
+
+// ClipBytes is the resolver for the clipBytes field.
+func (r *usageSummaryResolver) ClipBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetClipBytes()), nil
+}
+
+// DvrBytes is the resolver for the dvrBytes field.
+func (r *usageSummaryResolver) DvrBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetDvrBytes()), nil
+}
+
+// VodBytes is the resolver for the vodBytes field.
+func (r *usageSummaryResolver) VodBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetVodBytes()), nil
+}
+
+// FrozenClipBytes is the resolver for the frozenClipBytes field.
+func (r *usageSummaryResolver) FrozenClipBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetFrozenClipBytes()), nil
+}
+
+// FrozenDvrBytes is the resolver for the frozenDvrBytes field.
+func (r *usageSummaryResolver) FrozenDvrBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetFrozenDvrBytes()), nil
+}
+
+// FrozenVodBytes is the resolver for the frozenVodBytes field.
+func (r *usageSummaryResolver) FrozenVodBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetFrozenVodBytes()), nil
+}
+
+// FreezeCount is the resolver for the freezeCount field.
+func (r *usageSummaryResolver) FreezeCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetFreezeCount()), nil
+}
+
+// FreezeBytes is the resolver for the freezeBytes field.
+func (r *usageSummaryResolver) FreezeBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetFreezeBytes()), nil
+}
+
+// DefrostCount is the resolver for the defrostCount field.
+func (r *usageSummaryResolver) DefrostCount(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetDefrostCount()), nil
+}
+
+// DefrostBytes is the resolver for the defrostBytes field.
+func (r *usageSummaryResolver) DefrostBytes(ctx context.Context, obj *proto.UsageSummary) (int, error) {
+	return int(obj.GetDefrostBytes()), nil
 }
 
 // Name is the resolver for the name field.

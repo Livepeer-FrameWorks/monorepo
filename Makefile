@@ -1,5 +1,5 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge \
-	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge \
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand \
+	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
 	lint lint-fix lint-report lint-analyze \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
@@ -16,7 +16,7 @@ LDFLAGS = -ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
 					-X frameworks/pkg/version.BuildDate=$(BUILD_DATE)"
 
 # All microservices (only services with actual binaries)
-SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer
+SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer deckhand
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
@@ -160,6 +160,13 @@ build-image-navigator: proto
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_dns/Dockerfile .
 
+build-image-deckhand: proto
+	docker build -t frameworks-deckhand:$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f api_ticketing/Dockerfile .
+
 # Individual service bin builds (explicit)
 build-bin-commodore: proto
 	cd api_control && go build $(LDFLAGS) -o ../bin/commodore cmd/commodore/main.go
@@ -196,6 +203,9 @@ build-bin-navigator: proto
 
 build-bin-privateer: proto
 	cd api_mesh && go build $(LDFLAGS) -o ../bin/privateer cmd/privateer/main.go
+
+build-bin-deckhand: proto
+	cd api_ticketing && go build $(LDFLAGS) -o ../bin/deckhand cmd/deckhand/main.go
 
 # Clean build artifacts
 clean:

@@ -515,6 +515,22 @@ func (h *AuthHandlers) UpdateNewsletter() gin.HandlerFunc {
 	}
 }
 
+// GetNewsletterStatus returns the user's current newsletter subscription status
+func (h *AuthHandlers) GetNewsletterStatus() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		subscribed, err := h.commodore.GetNewsletterStatus(c.Request.Context())
+		if err != nil {
+			h.logger.WithError(err).Error("Get newsletter status failed")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get status"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"subscribed": subscribed,
+		})
+	}
+}
+
 // userToJSON converts a proto User to a JSON-friendly map
 func userToJSON(u *pb.User) map[string]interface{} {
 	if u == nil {

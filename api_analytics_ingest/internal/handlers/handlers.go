@@ -1611,7 +1611,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 			timestamp, tenant_id, stream_id, internal_name, node_id, buffer_state,
 			has_issues, issues_description, track_count, track_metadata,
 			bitrate, fps, width, height, codec, quality_tier,
-			frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min,
+			frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min, frame_jitter_ms,
 			frames_max, frames_min, gop_size, buffer_size, buffer_health,
 			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
 		)`)
@@ -1641,6 +1641,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		frameMsMin,
 		keyframeMsMax,
 		keyframeMsMin,
+		nilIfZeroFloat32(float32(streamBuffer.GetStreamJitterMs())),
 		framesMax,
 		framesMin,
 		gopSize,

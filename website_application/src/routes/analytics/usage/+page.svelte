@@ -104,10 +104,9 @@
       : null
   );
 
-  // Calculate total viewers for geo breakdown percentage
-  let geoTotalViewers = $derived(
-    usageSummary?.geoBreakdown?.reduce((sum, c) => sum + c.viewerCount, 0) ?? 0
-  );
+  // Calculate total viewers for geo breakdown percentage (geoBreakdown is on UsageSummary)
+  let geoBreakdown = $derived(usageSummary?.geoBreakdown ?? []);
+  let geoTotalViewers = $derived(geoBreakdown.reduce((sum, c) => sum + c.viewerCount, 0));
 
   // Unmask live usage summary
   let liveUsage = $derived(
@@ -645,6 +644,7 @@
   const CodeIcon = getIconComponent("Code");
   const KeyIcon = getIconComponent("Key");
   const WalletIcon = getIconComponent("Wallet");
+  const ArchiveIcon = getIconComponent("Archive");
 
   function formatViewerHours(hours: number | null | undefined): string {
     if (hours == null) return "0";
@@ -1037,7 +1037,7 @@
                     invoicePreview?.periodEnd ?? liveUsage?.periodEnd
                   )}
                 </span>
-                {#if billingData && billingData.usageReconciled === false}
+                {#if liveUsage && !invoicePreview}
                   <span class="text-xs text-warning">Live usage syncing…</span>
                 {/if}
               </div>
@@ -1060,30 +1060,13 @@
                   <div class="flex items-center justify-between">
                     <span class="text-muted-foreground">Peak Viewers</span>
                     <span class="font-medium text-accent-purple"
-                      >{formatNumber(usageSummary.peakViewers)}</span
-                    >
-                  </div>
-                  <div class="flex items-center justify-between">
-                    <span class="text-muted-foreground">Max Viewers</span>
-                    <span class="font-medium text-foreground"
                       >{formatNumber(usageSummary.maxViewers)}</span
                     >
                   </div>
                   <div class="flex items-center justify-between">
-                    <span class="text-muted-foreground">Avg Viewers</span>
-                    <span class="font-medium text-foreground"
-                      >{usageSummary.avgViewers?.toFixed(1) ?? "—"}</span
-                    >
-                  </div>
-                  <div class="flex items-center justify-between">
-                    <span class="text-muted-foreground">Unique Users (Period)</span>
+                    <span class="text-muted-foreground">Unique Users</span>
                     <span class="font-medium text-foreground">
-                      {formatNumber(
-                        liveUsage?.uniqueViewers ??
-                          usageSummary.uniqueUsersPeriod ??
-                          usageSummary.uniqueUsers ??
-                          0
-                      )}
+                      {formatNumber(liveUsage?.uniqueUsers ?? usageSummary.uniqueUsers ?? 0)}
                     </span>
                   </div>
                 </div>
@@ -1092,9 +1075,17 @@
 
             <!-- Processing Usage Slab -->
             {@const livepeerSeconds =
-              liveUsage?.livepeerSeconds ?? usageSummary.livepeerSeconds ?? 0}
+              (liveUsage?.livepeerH264Seconds ?? usageSummary.livepeerH264Seconds ?? 0) +
+              (liveUsage?.livepeerVp9Seconds ?? usageSummary.livepeerVp9Seconds ?? 0) +
+              (liveUsage?.livepeerAv1Seconds ?? usageSummary.livepeerAv1Seconds ?? 0) +
+              (liveUsage?.livepeerHevcSeconds ?? usageSummary.livepeerHevcSeconds ?? 0)}
             {@const nativeAvSeconds =
-              liveUsage?.nativeAvSeconds ?? usageSummary.nativeAvSeconds ?? 0}
+              (liveUsage?.nativeAvH264Seconds ?? usageSummary.nativeAvH264Seconds ?? 0) +
+              (liveUsage?.nativeAvVp9Seconds ?? usageSummary.nativeAvVp9Seconds ?? 0) +
+              (liveUsage?.nativeAvAv1Seconds ?? usageSummary.nativeAvAv1Seconds ?? 0) +
+              (liveUsage?.nativeAvHevcSeconds ?? usageSummary.nativeAvHevcSeconds ?? 0) +
+              (liveUsage?.nativeAvAacSeconds ?? usageSummary.nativeAvAacSeconds ?? 0) +
+              (liveUsage?.nativeAvOpusSeconds ?? usageSummary.nativeAvOpusSeconds ?? 0)}
             {@const hasProcessingUsage = livepeerSeconds > 0 || nativeAvSeconds > 0}
             {#if hasProcessingUsage}
               <div class="slab">
@@ -1117,24 +1108,10 @@
                             Livepeer Gateway
                           </span>
                         </div>
-                        <div class="grid grid-cols-3 gap-4">
-                          <div>
-                            <div class="text-muted-foreground text-xs">Time</div>
-                            <div class="font-medium text-tokyo-night-magenta">
-                              {formatProcessingTime(livepeerSeconds)}
-                            </div>
-                          </div>
-                          <div>
-                            <div class="text-muted-foreground text-xs">Segments</div>
-                            <div class="font-medium text-foreground">
-                              {formatNumber(usageSummary.livepeerSegmentCount ?? 0)}
-                            </div>
-                          </div>
-                          <div>
-                            <div class="text-muted-foreground text-xs">Streams</div>
-                            <div class="font-medium text-foreground">
-                              {usageSummary.livepeerUniqueStreams ?? 0}
-                            </div>
+                        <div>
+                          <div class="text-muted-foreground text-xs">Time</div>
+                          <div class="font-medium text-tokyo-night-magenta">
+                            {formatProcessingTime(livepeerSeconds)}
                           </div>
                         </div>
                       </div>
@@ -1151,24 +1128,10 @@
                             Local Processing
                           </span>
                         </div>
-                        <div class="grid grid-cols-3 gap-4">
-                          <div>
-                            <div class="text-muted-foreground text-xs">Time</div>
-                            <div class="font-medium text-info">
-                              {formatProcessingTime(nativeAvSeconds)}
-                            </div>
-                          </div>
-                          <div>
-                            <div class="text-muted-foreground text-xs">Segments</div>
-                            <div class="font-medium text-foreground">
-                              {formatNumber(usageSummary.nativeAvSegmentCount ?? 0)}
-                            </div>
-                          </div>
-                          <div>
-                            <div class="text-muted-foreground text-xs">Streams</div>
-                            <div class="font-medium text-foreground">
-                              {usageSummary.nativeAvUniqueStreams ?? 0}
-                            </div>
+                        <div>
+                          <div class="text-muted-foreground text-xs">Time</div>
+                          <div class="font-medium text-info">
+                            {formatProcessingTime(nativeAvSeconds)}
                           </div>
                         </div>
                       </div>
@@ -1577,143 +1540,7 @@
               {/if}
             {/if}
 
-            <!-- Storage Lifecycle Slab -->
-            {@const hasStorageActivity =
-              usageSummary.averageStorageGb ||
-              usageSummary.clipsAdded ||
-              usageSummary.clipsDeleted ||
-              usageSummary.dvrAdded ||
-              usageSummary.dvrDeleted ||
-              usageSummary.vodAdded ||
-              usageSummary.vodDeleted}
-            {#if hasStorageActivity}
-              <div class="slab">
-                <div class="slab-header">
-                  <div class="flex items-center gap-2">
-                    <HardDriveIcon class="w-4 h-4 text-warning" />
-                    <h3>Storage Activity</h3>
-                  </div>
-                </div>
-                <div class="slab-body--padded">
-                  <div class="space-y-4 text-sm">
-                    <!-- Average Storage -->
-                    {#if usageSummary.averageStorageGb}
-                      <div class="flex items-center justify-between">
-                        <span class="text-muted-foreground">Avg Storage</span>
-                        <span class="font-medium text-foreground">
-                          {usageSummary.averageStorageGb?.toFixed(2) ?? "0"} GB
-                        </span>
-                      </div>
-                    {/if}
-
-                    <!-- Clips Section -->
-                    {#if usageSummary.clipsAdded || usageSummary.clipsDeleted}
-                      <div class="border-t border-border/30 pt-3">
-                        <div
-                          class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2"
-                        >
-                          Clips
-                        </div>
-                        <div class="space-y-2">
-                          <div class="flex items-center justify-between">
-                            <span class="text-muted-foreground">Added</span>
-                            <span class="font-medium text-success">
-                              +{usageSummary.clipsAdded ?? 0}
-                              {#if usageSummary.clipStorageAddedGb}
-                                <span class="text-xs text-muted-foreground ml-1">
-                                  ({usageSummary.clipStorageAddedGb.toFixed(2)} GB)
-                                </span>
-                              {/if}
-                            </span>
-                          </div>
-                          <div class="flex items-center justify-between">
-                            <span class="text-muted-foreground">Deleted</span>
-                            <span class="font-medium text-destructive">
-                              −{usageSummary.clipsDeleted ?? 0}
-                              {#if usageSummary.clipStorageDeletedGb}
-                                <span class="text-xs text-muted-foreground ml-1">
-                                  ({usageSummary.clipStorageDeletedGb.toFixed(2)} GB)
-                                </span>
-                              {/if}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    {/if}
-
-                    <!-- DVR Section -->
-                    {#if usageSummary.dvrAdded || usageSummary.dvrDeleted}
-                      <div class="border-t border-border/30 pt-3">
-                        <div
-                          class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2"
-                        >
-                          DVR Recordings
-                        </div>
-                        <div class="space-y-2">
-                          <div class="flex items-center justify-between">
-                            <span class="text-muted-foreground">Added</span>
-                            <span class="font-medium text-success">
-                              +{usageSummary.dvrAdded ?? 0}
-                              {#if usageSummary.dvrStorageAddedGb}
-                                <span class="text-xs text-muted-foreground ml-1">
-                                  ({usageSummary.dvrStorageAddedGb.toFixed(2)} GB)
-                                </span>
-                              {/if}
-                            </span>
-                          </div>
-                          <div class="flex items-center justify-between">
-                            <span class="text-muted-foreground">Deleted</span>
-                            <span class="font-medium text-destructive">
-                              −{usageSummary.dvrDeleted ?? 0}
-                              {#if usageSummary.dvrStorageDeletedGb}
-                                <span class="text-xs text-muted-foreground ml-1">
-                                  ({usageSummary.dvrStorageDeletedGb.toFixed(2)} GB)
-                                </span>
-                              {/if}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    {/if}
-
-                    <!-- VOD Section -->
-                    {#if usageSummary.vodAdded || usageSummary.vodDeleted}
-                      <div class="border-t border-border/30 pt-3">
-                        <div
-                          class="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2"
-                        >
-                          VOD Assets
-                        </div>
-                        <div class="space-y-2">
-                          <div class="flex items-center justify-between">
-                            <span class="text-muted-foreground">Added</span>
-                            <span class="font-medium text-success">
-                              +{usageSummary.vodAdded ?? 0}
-                              {#if usageSummary.vodStorageAddedGb}
-                                <span class="text-xs text-muted-foreground ml-1">
-                                  ({usageSummary.vodStorageAddedGb.toFixed(2)} GB)
-                                </span>
-                              {/if}
-                            </span>
-                          </div>
-                          <div class="flex items-center justify-between">
-                            <span class="text-muted-foreground">Deleted</span>
-                            <span class="font-medium text-destructive">
-                              −{usageSummary.vodDeleted ?? 0}
-                              {#if usageSummary.vodStorageDeletedGb}
-                                <span class="text-xs text-muted-foreground ml-1">
-                                  ({usageSummary.vodStorageDeletedGb.toFixed(2)} GB)
-                                </span>
-                              {/if}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            {/if}
+            <!-- Storage Average (shown in Additional Metrics slab) -->
           {/if}
 
           <!-- Additional Metrics Slab -->
@@ -1785,6 +1612,134 @@
               {/if}
             </div>
           </div>
+
+          <!-- Storage Activity Slab -->
+          {#if usageSummary || liveUsage}
+            {@const storageSource = usageSummary ?? liveUsage}
+            {@const hasStorageActivity =
+              (storageSource?.clipsCreated ?? 0) > 0 ||
+              (storageSource?.dvrCreated ?? 0) > 0 ||
+              (storageSource?.vodCreated ?? 0) > 0 ||
+              (storageSource?.freezeCount ?? 0) > 0 ||
+              (storageSource?.defrostCount ?? 0) > 0}
+            {#if hasStorageActivity}
+              <div class="slab">
+                <div class="slab-header">
+                  <div class="flex items-center gap-2">
+                    <ArchiveIcon class="w-4 h-4 text-info" />
+                    <h3>Storage Activity</h3>
+                  </div>
+                </div>
+                <div class="slab-body--padded">
+                  <!-- Artifact Lifecycle -->
+                  <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div class="text-center">
+                      <div class="text-xs text-muted-foreground mb-1">Clips</div>
+                      <div class="font-mono text-sm">
+                        <span class="text-success">+{storageSource?.clipsCreated ?? 0}</span>
+                        <span class="text-muted-foreground mx-1">/</span>
+                        <span class="text-destructive">-{storageSource?.clipsDeleted ?? 0}</span>
+                      </div>
+                    </div>
+                    <div class="text-center">
+                      <div class="text-xs text-muted-foreground mb-1">DVR</div>
+                      <div class="font-mono text-sm">
+                        <span class="text-success">+{storageSource?.dvrCreated ?? 0}</span>
+                        <span class="text-muted-foreground mx-1">/</span>
+                        <span class="text-destructive">-{storageSource?.dvrDeleted ?? 0}</span>
+                      </div>
+                    </div>
+                    <div class="text-center">
+                      <div class="text-xs text-muted-foreground mb-1">VOD</div>
+                      <div class="font-mono text-sm">
+                        <span class="text-success">+{storageSource?.vodCreated ?? 0}</span>
+                        <span class="text-muted-foreground mx-1">/</span>
+                        <span class="text-destructive">-{storageSource?.vodDeleted ?? 0}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Hot vs Cold Storage -->
+                  <div class="border-t border-border/30 pt-4 mb-4">
+                    <div class="text-xs text-muted-foreground mb-2">Storage by Tier</div>
+                    <div class="grid grid-cols-2 gap-4">
+                      <div>
+                        <div class="text-xs text-warning mb-1">Hot (Active)</div>
+                        <div class="space-y-1 text-sm">
+                          <div class="flex justify-between">
+                            <span class="text-muted-foreground">Clips</span>
+                            <span class="font-mono"
+                              >{formatBytes(storageSource?.clipBytes ?? 0)}</span
+                            >
+                          </div>
+                          <div class="flex justify-between">
+                            <span class="text-muted-foreground">DVR</span>
+                            <span class="font-mono"
+                              >{formatBytes(storageSource?.dvrBytes ?? 0)}</span
+                            >
+                          </div>
+                          <div class="flex justify-between">
+                            <span class="text-muted-foreground">VOD</span>
+                            <span class="font-mono"
+                              >{formatBytes(storageSource?.vodBytes ?? 0)}</span
+                            >
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-info mb-1">Cold (Archived)</div>
+                        <div class="space-y-1 text-sm">
+                          <div class="flex justify-between">
+                            <span class="text-muted-foreground">Clips</span>
+                            <span class="font-mono"
+                              >{formatBytes(storageSource?.frozenClipBytes ?? 0)}</span
+                            >
+                          </div>
+                          <div class="flex justify-between">
+                            <span class="text-muted-foreground">DVR</span>
+                            <span class="font-mono"
+                              >{formatBytes(storageSource?.frozenDvrBytes ?? 0)}</span
+                            >
+                          </div>
+                          <div class="flex justify-between">
+                            <span class="text-muted-foreground">VOD</span>
+                            <span class="font-mono"
+                              >{formatBytes(storageSource?.frozenVodBytes ?? 0)}</span
+                            >
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Freeze/Defrost Operations -->
+                  {#if (storageSource?.freezeCount ?? 0) > 0 || (storageSource?.defrostCount ?? 0) > 0}
+                    <div class="border-t border-border/30 pt-4">
+                      <div class="text-xs text-muted-foreground mb-2">Tier Operations</div>
+                      <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div class="flex justify-between">
+                          <span class="text-info">Frozen</span>
+                          <span class="font-mono">
+                            {storageSource?.freezeCount ?? 0} ({formatBytes(
+                              storageSource?.freezeBytes ?? 0
+                            )})
+                          </span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span class="text-warning">Defrosted</span>
+                          <span class="font-mono">
+                            {storageSource?.defrostCount ?? 0} ({formatBytes(
+                              storageSource?.defrostBytes ?? 0
+                            )})
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          {/if}
 
           <!-- Latest Usage Records Slab -->
           {#if usageRecordPreview.length > 0}

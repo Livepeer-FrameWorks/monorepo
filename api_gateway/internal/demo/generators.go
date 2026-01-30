@@ -216,26 +216,21 @@ func GenerateInvoices() []*pb.Invoice {
 
 	// Build usage details for first invoice (within allocation, metered overage)
 	usageDetails1, _ := structpb.NewStruct(map[string]interface{}{
-		"usage_data": map[string]interface{}{
-			"viewer_hours":       708.33, // 42,500 delivered minutes / 60
-			"average_storage_gb": 15.2,
-			"gpu_hours":          5.0,
-			"stream_hours":       42.5,
-			"egress_gb":          125.0,
-			// Per-codec processing (matches ClickHouse columns)
-			"livepeer_h264_seconds":  2400.0,
-			"livepeer_vp9_seconds":   500.0,
-			"livepeer_av1_seconds":   245.7,
-			"livepeer_hevc_seconds":  100.0,
-			"native_av_h264_seconds": 1200.0,
-			"native_av_vp9_seconds":  300.0,
-			"native_av_av1_seconds":  120.5,
-			"native_av_hevc_seconds": 0.0,
-			"native_av_aac_seconds":  150.0, // Audio is FREE
-			"native_av_opus_seconds": 50.0,  // Audio is FREE
-			"audio_seconds":          200.0,
-			"video_seconds":          1620.5,
-		},
+		"viewer_hours":       708.33, // 42,500 delivered minutes / 60
+		"average_storage_gb": 15.2,
+		"stream_hours":       42.5,
+		"egress_gb":          125.0,
+		// Per-codec processing (matches ClickHouse columns)
+		"livepeer_h264_seconds":  2400.0,
+		"livepeer_vp9_seconds":   500.0,
+		"livepeer_av1_seconds":   245.7,
+		"livepeer_hevc_seconds":  100.0,
+		"native_av_h264_seconds": 1200.0,
+		"native_av_vp9_seconds":  300.0,
+		"native_av_av1_seconds":  120.5,
+		"native_av_hevc_seconds": 0.0,
+		"native_av_aac_seconds":  150.0,
+		"native_av_opus_seconds": 50.0,
 		"tier_info": map[string]interface{}{
 			"tier_name":        "professional",
 			"display_name":     "Professional",
@@ -246,26 +241,21 @@ func GenerateInvoices() []*pb.Invoice {
 
 	// Build usage details for second invoice
 	usageDetails2, _ := structpb.NewStruct(map[string]interface{}{
-		"usage_data": map[string]interface{}{
-			"viewer_hours":       583.33, // 35,000 delivered minutes / 60
-			"average_storage_gb": 19.0,
-			"gpu_hours":          3.5,
-			"stream_hours":       35.0,
-			"egress_gb":          98.0,
-			// Per-codec processing
-			"livepeer_h264_seconds":  1800.0,
-			"livepeer_vp9_seconds":   350.0,
-			"livepeer_av1_seconds":   180.0,
-			"livepeer_hevc_seconds":  75.0,
-			"native_av_h264_seconds": 900.0,
-			"native_av_vp9_seconds":  200.0,
-			"native_av_av1_seconds":  85.0,
-			"native_av_hevc_seconds": 0.0,
-			"native_av_aac_seconds":  120.0,
-			"native_av_opus_seconds": 40.0,
-			"audio_seconds":          160.0,
-			"video_seconds":          1185.0,
-		},
+		"viewer_hours":       583.33, // 35,000 delivered minutes / 60
+		"average_storage_gb": 19.0,
+		"stream_hours":       35.0,
+		"egress_gb":          98.0,
+		// Per-codec processing
+		"livepeer_h264_seconds":  1800.0,
+		"livepeer_vp9_seconds":   350.0,
+		"livepeer_av1_seconds":   180.0,
+		"livepeer_hevc_seconds":  75.0,
+		"native_av_h264_seconds": 900.0,
+		"native_av_vp9_seconds":  200.0,
+		"native_av_av1_seconds":  85.0,
+		"native_av_hevc_seconds": 0.0,
+		"native_av_aac_seconds":  120.0,
+		"native_av_opus_seconds": 40.0,
 		"tier_info": map[string]interface{}{
 			"tier_name":        "professional",
 			"display_name":     "Professional",
@@ -290,6 +280,65 @@ func GenerateInvoices() []*pb.Invoice {
 			UpdatedAt:            timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			PeriodStart:          timestamppb.New(periodStart),
 			PeriodEnd:            timestamppb.New(periodEnd),
+			UsageSummary: &pb.UsageSummary{
+				TenantId:              "00000000-0000-0000-0000-000000000001",
+				Period:                periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339),
+				Timestamp:             timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+				Granularity:           "monthly",
+				StreamHours:           42.5,
+				EgressGb:              125.0,
+				PeakBandwidthMbps:     98.2,
+				AverageStorageGb:      15.2,
+				LivepeerH264Seconds:   2400.0,
+				LivepeerVp9Seconds:    500.0,
+				LivepeerAv1Seconds:    245.7,
+				LivepeerHevcSeconds:   100.0,
+				NativeAvH264Seconds:   1200.0,
+				NativeAvVp9Seconds:    300.0,
+				NativeAvAv1Seconds:    120.5,
+				NativeAvHevcSeconds:   0.0,
+				NativeAvAacSeconds:    150.0,
+				NativeAvOpusSeconds:   50.0,
+				TotalStreams:          38,
+				TotalViewers:          1450,
+				ViewerHours:           750.0,
+				MaxViewers:            412,
+				UniqueUsers:           1120,
+				LivepeerSegmentCount:  5120,
+				LivepeerUniqueStreams: 35,
+				NativeAvSegmentCount:  1980,
+				NativeAvUniqueStreams: 18,
+				UniqueCountries:       9,
+				UniqueCities:          52,
+				GeoBreakdown: []*pb.CountryMetrics{
+					{CountryCode: "US", ViewerCount: 620, ViewerHours: 295.0, EgressGb: 52.5},
+					{CountryCode: "GB", ViewerCount: 210, ViewerHours: 98.5, EgressGb: 18.2},
+					{CountryCode: "DE", ViewerCount: 175, ViewerHours: 82.0, EgressGb: 15.1},
+				},
+				ClipsCreated:    28,
+				ClipsDeleted:    10,
+				DvrCreated:      18,
+				DvrDeleted:      5,
+				VodCreated:      9,
+				VodDeleted:      3,
+				ClipBytes:       2_684_354_560,
+				DvrBytes:        6_442_450_944,
+				VodBytes:        12_884_901_888,
+				FrozenClipBytes: 1_610_612_736,
+				FrozenDvrBytes:  4_294_967_296,
+				FrozenVodBytes:  10_737_418_240,
+				FreezeCount:     15,
+				FreezeBytes:     5_368_709_120,
+				DefrostCount:    6,
+				DefrostBytes:    2_684_354_560,
+			},
+			LineItems: []*pb.LineItem{
+				{Description: "Professional Tier", Quantity: 1, UnitPrice: 19.99, Total: 19.99},
+				{Description: "Delivered Minutes (45,000 min)", Quantity: 45000, UnitPrice: 0.00025, Total: 11.25},
+				{Description: "Storage (15.2 GB avg)", Quantity: 15, UnitPrice: 0.05, Total: 0.75},
+				{Description: "Egress (125.0 GB)", Quantity: 125, UnitPrice: 0.003, Total: 0.38},
+				{Description: "Prepaid Credit Applied", Quantity: 1, UnitPrice: -5.00, Total: -5.00},
+			},
 		},
 		{
 			Id:                   "inv_demo_previous_002",
@@ -307,6 +356,64 @@ func GenerateInvoices() []*pb.Invoice {
 			UpdatedAt:            timestamppb.New(now.Add(-28 * 24 * time.Hour)),
 			PeriodStart:          timestamppb.New(periodStart.AddDate(0, -1, 0)),
 			PeriodEnd:            timestamppb.New(periodStart),
+			UsageSummary: &pb.UsageSummary{
+				TenantId:              "00000000-0000-0000-0000-000000000001",
+				Period:                periodStart.AddDate(0, -1, 0).Format(time.RFC3339) + "/" + periodStart.Format(time.RFC3339),
+				Timestamp:             timestamppb.New(now.Add(-28 * 24 * time.Hour)),
+				Granularity:           "monthly",
+				StreamHours:           35.0,
+				EgressGb:              98.0,
+				PeakBandwidthMbps:     82.5,
+				AverageStorageGb:      19.0,
+				LivepeerH264Seconds:   1800.0,
+				LivepeerVp9Seconds:    350.0,
+				LivepeerAv1Seconds:    180.0,
+				LivepeerHevcSeconds:   75.0,
+				NativeAvH264Seconds:   900.0,
+				NativeAvVp9Seconds:    200.0,
+				NativeAvAv1Seconds:    85.0,
+				NativeAvHevcSeconds:   0.0,
+				NativeAvAacSeconds:    120.0,
+				NativeAvOpusSeconds:   40.0,
+				TotalStreams:          32,
+				TotalViewers:          1180,
+				ViewerHours:           583.33,
+				MaxViewers:            380,
+				UniqueUsers:           920,
+				LivepeerSegmentCount:  3850,
+				LivepeerUniqueStreams: 28,
+				NativeAvSegmentCount:  1420,
+				NativeAvUniqueStreams: 15,
+				UniqueCountries:       8,
+				UniqueCities:          45,
+				GeoBreakdown: []*pb.CountryMetrics{
+					{CountryCode: "US", ViewerCount: 490, ViewerHours: 225.0, EgressGb: 38.2},
+					{CountryCode: "GB", ViewerCount: 165, ViewerHours: 72.5, EgressGb: 14.8},
+					{CountryCode: "CA", ViewerCount: 120, ViewerHours: 55.0, EgressGb: 11.2},
+				},
+				ClipsCreated:    22,
+				ClipsDeleted:    12,
+				DvrCreated:      14,
+				DvrDeleted:      6,
+				VodCreated:      8,
+				VodDeleted:      4,
+				ClipBytes:       2_147_483_648,
+				DvrBytes:        5_368_709_120,
+				VodBytes:        10_737_418_240,
+				FrozenClipBytes: 1_073_741_824,
+				FrozenDvrBytes:  3_221_225_472,
+				FrozenVodBytes:  8_589_934_592,
+				FreezeCount:     10,
+				FreezeBytes:     4_294_967_296,
+				DefrostCount:    4,
+				DefrostBytes:    2_147_483_648,
+			},
+			LineItems: []*pb.LineItem{
+				{Description: "Professional Tier", Quantity: 1, UnitPrice: 19.99, Total: 19.99},
+				{Description: "Delivered Minutes (35,000 min)", Quantity: 35000, UnitPrice: 0.00025, Total: 8.75},
+				{Description: "Storage (19.0 GB avg)", Quantity: 19, UnitPrice: 0.05, Total: 0.95},
+				{Description: "Egress (98.0 GB)", Quantity: 98, UnitPrice: 0.003, Total: 0.29},
+			},
 		},
 	}
 }
@@ -321,10 +428,8 @@ func GenerateInvoicePreview() *pb.Invoice {
 		"usage_data": map[string]interface{}{
 			"viewer_hours":       412.5,
 			"average_storage_gb": 18.4,
-			"stream_hours":       46.2,
+			"stream_hours":       68.5,
 			"egress_gb":          140.3,
-			"livepeer_seconds":   3120.0,
-			"native_av_seconds":  1680.0,
 		},
 		"tier_info": map[string]interface{}{
 			"tier_name":        "professional",
@@ -340,7 +445,7 @@ func GenerateInvoicePreview() *pb.Invoice {
 		Amount:               27.50,
 		BaseAmount:           19.99,
 		MeteredAmount:        7.51,
-		PrepaidCreditApplied: 0, // draft invoice, no credit applied yet
+		PrepaidCreditApplied: 0,
 		Currency:             "USD",
 		Status:               "draft",
 		DueDate:              timestamppb.New(periodEnd.AddDate(0, 0, 14)),
@@ -349,24 +454,154 @@ func GenerateInvoicePreview() *pb.Invoice {
 		UpdatedAt:            timestamppb.New(now),
 		PeriodStart:          timestamppb.New(periodStart),
 		PeriodEnd:            timestamppb.New(periodEnd),
+		UsageSummary: &pb.UsageSummary{
+			TenantId:              "00000000-0000-0000-0000-000000000001",
+			Period:                periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339),
+			Timestamp:             timestamppb.New(now),
+			Granularity:           "monthly",
+			StreamHours:           68.5,
+			EgressGb:              140.3,
+			PeakBandwidthMbps:     125.4,
+			AverageStorageGb:      18.4,
+			LivepeerH264Seconds:   2340.0,
+			LivepeerVp9Seconds:    480.0,
+			LivepeerAv1Seconds:    180.0,
+			LivepeerHevcSeconds:   120.0,
+			NativeAvH264Seconds:   840.0,
+			NativeAvVp9Seconds:    420.0,
+			NativeAvAv1Seconds:    180.0,
+			NativeAvHevcSeconds:   120.0,
+			NativeAvAacSeconds:    60.0,
+			NativeAvOpusSeconds:   60.0,
+			TotalStreams:          42,
+			TotalViewers:          1250,
+			ViewerHours:           412.5,
+			MaxViewers:            347,
+			UniqueUsers:           980,
+			LivepeerSegmentCount:  4280,
+			LivepeerUniqueStreams: 38,
+			NativeAvSegmentCount:  1650,
+			NativeAvUniqueStreams: 22,
+			UniqueCountries:       7,
+			UniqueCities:          42,
+			GeoBreakdown: []*pb.CountryMetrics{
+				{CountryCode: "US", ViewerCount: 520, ViewerHours: 185.2, EgressGb: 62.4},
+				{CountryCode: "GB", ViewerCount: 180, ViewerHours: 68.5, EgressGb: 24.1},
+				{CountryCode: "DE", ViewerCount: 145, ViewerHours: 52.3, EgressGb: 18.7},
+				{CountryCode: "CA", ViewerCount: 95, ViewerHours: 38.2, EgressGb: 13.2},
+				{CountryCode: "AU", ViewerCount: 65, ViewerHours: 28.4, EgressGb: 9.8},
+				{CountryCode: "FR", ViewerCount: 55, ViewerHours: 22.1, EgressGb: 7.3},
+				{CountryCode: "JP", ViewerCount: 40, ViewerHours: 17.8, EgressGb: 4.8},
+			},
+			// Storage lifecycle - artifact counts
+			ClipsCreated: 24,
+			ClipsDeleted: 8,
+			DvrCreated:   15,
+			DvrDeleted:   3,
+			VodCreated:   7,
+			VodDeleted:   2,
+			// Storage - hot (bytes)
+			ClipBytes: 2_147_483_648,
+			DvrBytes:  5_368_709_120,
+			VodBytes:  10_737_418_240,
+			// Storage - cold/frozen (bytes)
+			FrozenClipBytes: 1_073_741_824,
+			FrozenDvrBytes:  3_221_225_472,
+			FrozenVodBytes:  8_589_934_592,
+			// Freeze/defrost operations
+			FreezeCount:  12,
+			FreezeBytes:  4_294_967_296,
+			DefrostCount: 5,
+			DefrostBytes: 2_147_483_648,
+		},
+		LineItems: []*pb.LineItem{
+			{Description: "Professional Tier", Quantity: 1, UnitPrice: 19.99, Total: 19.99},
+			{Description: "Delivered Minutes (24,750 min)", Quantity: 24750, UnitPrice: 0.00025, Total: 6.19},
+			{Description: "Storage (18.4 GB avg)", Quantity: 18, UnitPrice: 0.05, Total: 0.92},
+			{Description: "Egress (140.3 GB)", Quantity: 140, UnitPrice: 0.003, Total: 0.42},
+		},
 	}
 }
 
-// GenerateLiveUsageSummary creates demo live usage summary
+// GenerateLiveUsageSummary creates demo live usage summary with per-codec breakdown
 func GenerateLiveUsageSummary() *pb.LiveUsageSummary {
 	now := time.Now()
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 	return &pb.LiveUsageSummary{
-		TenantId:         "00000000-0000-0000-0000-000000000001",
-		PeriodStart:      timestamppb.New(periodStart),
-		PeriodEnd:        timestamppb.New(now),
-		ViewerHours:      412.5,
-		EgressGb:         140.3,
-		UniqueViewers:    980,
-		AverageStorageGb: 18.4,
-		LivepeerSeconds:  3120.0,
-		NativeAvSeconds:  1680.0,
+		TenantId:    "00000000-0000-0000-0000-000000000001",
+		PeriodStart: timestamppb.New(periodStart),
+		PeriodEnd:   timestamppb.New(now),
+
+		// Core metrics
+		StreamHours:       68.5,
+		EgressGb:          140.3,
+		PeakBandwidthMbps: 125.4,
+		AverageStorageGb:  18.4,
+
+		// Per-codec breakdown: Livepeer
+		LivepeerH264Seconds: 2340.0,
+		LivepeerVp9Seconds:  480.0,
+		LivepeerAv1Seconds:  180.0,
+		LivepeerHevcSeconds: 120.0,
+
+		// Per-codec breakdown: Native AV
+		NativeAvH264Seconds: 840.0,
+		NativeAvVp9Seconds:  420.0,
+		NativeAvAv1Seconds:  180.0,
+		NativeAvHevcSeconds: 120.0,
+		NativeAvAacSeconds:  60.0,
+		NativeAvOpusSeconds: 60.0,
+
+		// Viewer metrics
+		TotalStreams: 42,
+		TotalViewers: 1250,
+		ViewerHours:  412.5,
+		MaxViewers:   347,
+		UniqueUsers:  980,
+
+		// Segment/stream counts
+		LivepeerSegmentCount:  4280,
+		LivepeerUniqueStreams: 38,
+		NativeAvSegmentCount:  1650,
+		NativeAvUniqueStreams: 22,
+
+		// Geo enrichment
+		UniqueCountries: 7,
+		UniqueCities:    42,
+		GeoBreakdown: []*pb.CountryMetric{
+			{CountryCode: "US", ViewerCount: 520, ViewerHours: 185.2, EgressGb: 62.4},
+			{CountryCode: "GB", ViewerCount: 180, ViewerHours: 68.5, EgressGb: 24.1},
+			{CountryCode: "DE", ViewerCount: 145, ViewerHours: 52.3, EgressGb: 18.7},
+			{CountryCode: "CA", ViewerCount: 95, ViewerHours: 38.2, EgressGb: 13.2},
+			{CountryCode: "AU", ViewerCount: 65, ViewerHours: 28.4, EgressGb: 9.8},
+			{CountryCode: "FR", ViewerCount: 55, ViewerHours: 22.1, EgressGb: 7.3},
+			{CountryCode: "JP", ViewerCount: 40, ViewerHours: 17.8, EgressGb: 4.8},
+		},
+
+		// Storage lifecycle - artifact counts
+		ClipsCreated: 24,
+		ClipsDeleted: 8,
+		DvrCreated:   15,
+		DvrDeleted:   3,
+		VodCreated:   7,
+		VodDeleted:   2,
+
+		// Storage - hot (bytes)
+		ClipBytes: 2_147_483_648,  // 2 GB
+		DvrBytes:  5_368_709_120,  // 5 GB
+		VodBytes:  10_737_418_240, // 10 GB
+
+		// Storage - cold/frozen (bytes)
+		FrozenClipBytes: 1_073_741_824, // 1 GB
+		FrozenDvrBytes:  3_221_225_472, // 3 GB
+		FrozenVodBytes:  8_589_934_592, // 8 GB
+
+		// Freeze/defrost operations
+		FreezeCount:  12,
+		FreezeBytes:  4_294_967_296, // 4 GB
+		DefrostCount: 5,
+		DefrostBytes: 2_147_483_648, // 2 GB
 	}
 }
 
@@ -472,70 +707,48 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 		PendingInvoices:   []*pb.Invoice{}, // Empty slice
 		RecentPayments:    []*pb.Payment{}, // Empty slice
 		UsageSummary: &pb.UsageSummary{
-			Period:            "1d",
-			Timestamp:         timestamppb.Now(),
-			Granularity:       "daily",
-			StreamHours:       42.5,
-			EgressGb:          25.4,
-			RecordingGb:       8.2,
-			PeakBandwidthMbps: 156.8,
-			// Processing/transcoding usage (totals)
-			LivepeerSeconds:       3245.7, // ~54 minutes of Livepeer transcode
-			LivepeerSegmentCount:  542,
-			LivepeerUniqueStreams: 3,
-			NativeAvSeconds:       1820.5, // ~30 minutes of local AV processing
-			NativeAvSegmentCount:  364,
-			NativeAvUniqueStreams: 5,
-			// Per-codec breakdown: Livepeer (external gateway)
-			LivepeerH264Seconds: 2400.0, // H264 is most common
+			Period:              "1d",
+			Timestamp:           timestamppb.Now(),
+			Granularity:         "daily",
+			StreamHours:         42.5,
+			EgressGb:            25.4,
+			PeakBandwidthMbps:   156.8,
+			AverageStorageGb:    11.8,
+			LivepeerH264Seconds: 2400.0,
 			LivepeerVp9Seconds:  500.0,
 			LivepeerAv1Seconds:  245.7,
 			LivepeerHevcSeconds: 100.0,
-			// Per-codec breakdown: Native AV (local processing)
 			NativeAvH264Seconds: 1200.0,
 			NativeAvVp9Seconds:  300.0,
 			NativeAvAv1Seconds:  120.5,
 			NativeAvHevcSeconds: 0.0,
-			NativeAvAacSeconds:  150.0, // Audio is FREE but tracked
-			NativeAvOpusSeconds: 50.0,  // Audio is FREE but tracked
-			// Track type aggregates
-			AudioSeconds:     200.0,  // Total audio (aac + opus)
-			VideoSeconds:     1620.5, // Total video (h264+vp9+av1+hevc)
-			StorageGb:        12.5,
-			AverageStorageGb: 11.8,
-			// Clip storage lifecycle
-			ClipsAdded:           3,
-			ClipsDeleted:         1,
-			ClipStorageAddedGb:   0.5,
-			ClipStorageDeletedGb: 0.2,
-			// DVR storage lifecycle
-			DvrAdded:            2,
-			DvrDeleted:          0,
-			DvrStorageAddedGb:   1.2,
-			DvrStorageDeletedGb: 0.0,
-			// VOD storage lifecycle
-			VodAdded:            1,
-			VodDeleted:          0,
-			VodStorageAddedGb:   2.5,
-			VodStorageDeletedGb: 0.0,
-			// Viewer metrics
-			TotalStreams:      8,
-			TotalViewers:      1847,
-			ViewerHours:       156.3,
-			PeakViewers:       342,
-			MaxViewers:        342,
-			UniqueUsers:       1203,
-			UniqueUsersPeriod: 1188,
-			AvgViewers:        145.5,
-			UniqueCountries:   12,
-			UniqueCities:      58,
-			GeoBreakdown: []*pb.CountryMetrics{
-				{CountryCode: "US", ViewerCount: 245, ViewerHours: 82.5, EgressGb: 13.2},
-				{CountryCode: "GB", ViewerCount: 78, ViewerHours: 28.1, EgressGb: 4.2},
-				{CountryCode: "DE", ViewerCount: 52, ViewerHours: 18.4, EgressGb: 2.8},
-				{CountryCode: "FR", ViewerCount: 38, ViewerHours: 13.2, EgressGb: 2.1},
-				{CountryCode: "JP", ViewerCount: 25, ViewerHours: 8.7, EgressGb: 1.4},
-			},
+			NativeAvAacSeconds:  150.0,
+			NativeAvOpusSeconds: 50.0,
+			TotalStreams:        8,
+			TotalViewers:        1847,
+			ViewerHours:         156.3,
+			MaxViewers:          342,
+			UniqueUsers:         1203,
+			// Storage lifecycle - artifact counts
+			ClipsCreated: 12,
+			ClipsDeleted: 4,
+			DvrCreated:   8,
+			DvrDeleted:   2,
+			VodCreated:   3,
+			VodDeleted:   1,
+			// Storage - hot (bytes)
+			ClipBytes: 1_073_741_824,
+			DvrBytes:  2_684_354_560,
+			VodBytes:  5_368_709_120,
+			// Storage - cold/frozen (bytes)
+			FrozenClipBytes: 536_870_912,
+			FrozenDvrBytes:  1_610_612_736,
+			FrozenVodBytes:  4_294_967_296,
+			// Freeze/defrost operations
+			FreezeCount:  6,
+			FreezeBytes:  2_147_483_648,
+			DefrostCount: 2,
+			DefrostBytes: 1_073_741_824,
 		},
 	}
 }
@@ -560,7 +773,6 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 		{"total_viewers", 1847, "viewers"},
 		{"peak_viewers", 342, "viewers"},
 		{"unique_users", 1203, "users"},
-		{"unique_users_period", 1188, "users"},
 		// Per-codec processing: Livepeer (external gateway)
 		{"livepeer_h264_seconds", 2400.0, "seconds"},
 		{"livepeer_vp9_seconds", 500.0, "seconds"},
@@ -571,11 +783,8 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 		{"native_av_vp9_seconds", 300.0, "seconds"},
 		{"native_av_av1_seconds", 120.5, "seconds"},
 		{"native_av_hevc_seconds", 0.0, "seconds"},
-		{"native_av_aac_seconds", 150.0, "seconds"}, // Audio is FREE
-		{"native_av_opus_seconds", 50.0, "seconds"}, // Audio is FREE
-		// Track type aggregates
-		{"audio_seconds", 200.0, "seconds"},
-		{"video_seconds", 1620.5, "seconds"},
+		{"native_av_aac_seconds", 150.0, "seconds"},
+		{"native_av_opus_seconds", 50.0, "seconds"},
 	}
 
 	records := make([]*pb.UsageRecord, len(usageData))

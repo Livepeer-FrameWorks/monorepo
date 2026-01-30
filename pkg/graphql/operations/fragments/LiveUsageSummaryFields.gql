@@ -1,10 +1,61 @@
 fragment LiveUsageSummaryFields on LiveUsageSummary {
   periodStart
   periodEnd
-  viewerHours
+  # Core metrics
+  streamHours
   egressGb
-  uniqueViewers
+  peakBandwidthMbps
   averageStorageGb
-  livepeerSeconds
-  nativeAvSeconds
+  # Per-codec breakdown: Livepeer
+  livepeerH264Seconds
+  livepeerVp9Seconds
+  livepeerAv1Seconds
+  livepeerHevcSeconds
+  # Per-codec breakdown: Native AV
+  nativeAvH264Seconds
+  nativeAvVp9Seconds
+  nativeAvAv1Seconds
+  nativeAvHevcSeconds
+  nativeAvAacSeconds
+  nativeAvOpusSeconds
+  # Viewer metrics
+  totalStreams
+  totalViewers
+  viewerHours
+  maxViewers
+  uniqueUsers
+  # Segment/stream counts
+  livepeerSegmentCount
+  livepeerUniqueStreams
+  nativeAvSegmentCount
+  nativeAvUniqueStreams
+  # Geo enrichment
+  uniqueCountries
+  uniqueCities
+  geoBreakdown {
+    countryCode
+    viewerCount
+    viewerHours
+    egressGb
+  }
+  # Storage lifecycle - artifact counts
+  clipsCreated
+  clipsDeleted
+  dvrCreated
+  dvrDeleted
+  vodCreated
+  vodDeleted
+  # Storage - hot (bytes)
+  clipBytes
+  dvrBytes
+  vodBytes
+  # Storage - cold/frozen (bytes)
+  frozenClipBytes
+  frozenDvrBytes
+  frozenVodBytes
+  # Freeze/defrost operations
+  freezeCount
+  freezeBytes
+  defrostCount
+  defrostBytes
 }

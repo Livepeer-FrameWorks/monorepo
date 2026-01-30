@@ -47,7 +47,7 @@
     StreamKeyCard,
     StreamPlaybackCard,
     OverviewTabPanel,
-    RecordingsTabPanel,
+    ArtefactsTabPanel,
     PlaybackTabPanel,
     HealthSidebar,
     EventLog,
@@ -1130,11 +1130,11 @@
                   Ingest
                 </TabsTrigger>
                 <TabsTrigger
-                  value="recordings"
+                  value="artefacts"
                   class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                 >
                   <VideoIcon class="w-4 h-4" />
-                  Recordings ({recordings.length})
+                  Artefacts ({recordings.length + clips.length})
                 </TabsTrigger>
                 <TabsTrigger
                   value="playback"
@@ -1150,7 +1150,6 @@
                   {stream}
                   {streamKeys}
                   {recordings}
-                  {clips}
                   {analytics}
                   tracks={currentTracks ?? fallbackTracks}
                   {viewerMetrics}
@@ -1173,11 +1172,11 @@
                 />
               </TabsContent>
 
-              <TabsContent value="recordings" class="p-0 min-h-[20rem]">
-                <RecordingsTabPanel
+              <TabsContent value="artefacts" class="p-0 min-h-[20rem]">
+                <ArtefactsTabPanel
                   {recordings}
+                  {clips}
                   onEnableRecording={() => (showEditModal = true)}
-                  onCopyLink={copyToClipboard}
                 />
               </TabsContent>
 

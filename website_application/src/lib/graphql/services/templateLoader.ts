@@ -29,8 +29,9 @@ export interface TemplateGroups {
 
 // Use Vite's import.meta.glob to load all .gql files at build time
 // The ?raw query imports the file content as a string
-// Files are in ../pkg/graphql/operations/ (shared between frontend and Go gateway)
-const gqlModules = import.meta.glob("../../../../pkg/graphql/operations/**/*.gql", {
+// Files are in ../../pkg/graphql/operations/ (shared between frontend and Go gateway)
+// Path: 5 levels up from src/lib/graphql/services/ to reach monorepo root
+const gqlModules = import.meta.glob("../../../../../pkg/graphql/operations/**/*.gql", {
   query: "?raw",
   import: "default",
   eager: false, // Lazy load for better initial bundle size
@@ -212,7 +213,7 @@ function createTemplate(parsed: ParsedOperation, filePath: string): Template {
 
 /**
  * Clean the file path for display
- * ../../../../pkg/graphql/operations/queries/GetStream.gql -> operations/queries/GetStream.gql
+ * ../../../../../pkg/graphql/operations/queries/GetStream.gql -> operations/queries/GetStream.gql
  */
 function cleanFilePath(path: string): string {
   // Handle the new shared path format

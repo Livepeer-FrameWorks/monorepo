@@ -2959,6 +2959,8 @@ type StreamHealth5m implements Node {
   avgBitrate: Int!
   avgFps: Float!
   avgBufferHealth: Float!
+  avgFrameJitterMs: Float
+  maxFrameJitterMs: Float
   bufferDryCount: Int!
   qualityTier: String
 }
@@ -3906,7 +3908,6 @@ type BillingStatus {
   currency: String!
   liveUsage: LiveUsageSummary! # Near-real-time usage (Periscope)
   invoicePreview: Invoice # Authoritative draft invoice (Purser)
-  usageReconciled: Boolean! # True if liveUsage matches invoicePreview within tolerance
 }
 
 # Live usage summary from Periscope (near-real-time)
@@ -3914,18 +3915,74 @@ type LiveUsageSummary {
   tenantId: String
   periodStart: Time
   periodEnd: Time
-  viewerHours: Float!
+
+  # Core metrics (matches UsageSummary)
+  streamHours: Float!
   egressGb: Float!
-  uniqueViewers: Int!
+  peakBandwidthMbps: Float!
   averageStorageGb: Float!
-  livepeerSeconds: Float!
-  nativeAvSeconds: Float!
+
+  # Per-codec breakdown: Livepeer
+  livepeerH264Seconds: Float!
+  livepeerVp9Seconds: Float!
+  livepeerAv1Seconds: Float!
+  livepeerHevcSeconds: Float!
+
+  # Per-codec breakdown: Native AV
+  nativeAvH264Seconds: Float!
+  nativeAvVp9Seconds: Float!
+  nativeAvAv1Seconds: Float!
+  nativeAvHevcSeconds: Float!
+  nativeAvAacSeconds: Float!
+  nativeAvOpusSeconds: Float!
+
+  # Viewer metrics (matches UsageSummary)
+  totalStreams: Int!
+  totalViewers: Int!
+  viewerHours: Float!
+  maxViewers: Int!
+  uniqueUsers: Int!
+
+  # Segment/stream counts (from processing_daily)
+  livepeerSegmentCount: Int!
+  livepeerUniqueStreams: Int!
+  nativeAvSegmentCount: Int!
+  nativeAvUniqueStreams: Int!
+
+  # Geo enrichment
+  uniqueCountries: Int!
+  uniqueCities: Int!
+  geoBreakdown: [CountryMetrics!]!
+
+  # Storage lifecycle - artifact counts
+  clipsCreated: Int!
+  clipsDeleted: Int!
+  dvrCreated: Int!
+  dvrDeleted: Int!
+  vodCreated: Int!
+  vodDeleted: Int!
+
+  # Storage - hot (bytes)
+  clipBytes: Int!
+  dvrBytes: Int!
+  vodBytes: Int!
+
+  # Storage - cold/frozen (bytes)
+  frozenClipBytes: Int!
+  frozenDvrBytes: Int!
+  frozenVodBytes: Int!
+
+  # Freeze/defrost operations
+  freezeCount: Int!
+  freezeBytes: Int!
+  defrostCount: Int!
+  defrostBytes: Int!
 }
 
-# Bound to proto.UsageSummary - rich usage metrics from Purser
+# Bound to proto.UsageSummary - billing metrics from Purser
 type UsageSummary {
   clusterId: String
-  period: String! # "15m", "1h", "1d"
+  period: String!
   periodStart: Time
   periodEnd: Time
   timestamp: Time
@@ -3934,16 +3991,11 @@ type UsageSummary {
   # Core billing metrics
   streamHours: Float!
   egressGb: Float!
-  recordingGb: Float!
   peakBandwidthMbps: Float!
 
-  # Processing/transcoding usage (from Livepeer Gateway and local AV processing)
-  livepeerSeconds: Float! # Total Livepeer Gateway transcode seconds
-  livepeerSegmentCount: Int! # Number of segments transcoded via Livepeer
-  livepeerUniqueStreams: Int! # Unique streams using Livepeer
-  nativeAvSeconds: Float! # Total local audio/video transcode seconds
-  nativeAvSegmentCount: Int! # Number of segments processed locally
-  nativeAvUniqueStreams: Int! # Unique streams using local AV processing
+  # Storage
+  averageStorageGb: Float!
+
   # Per-codec breakdown: Livepeer (external gateway)
   livepeerH264Seconds: Float!
   livepeerVp9Seconds: Float!
@@ -3958,40 +4010,47 @@ type UsageSummary {
   nativeAvAacSeconds: Float!
   nativeAvOpusSeconds: Float!
 
-  # Track type aggregates (for billing: audio is free)
-  audioSeconds: Float!
-  videoSeconds: Float!
-
-  # Storage metrics
-  storageGb: Float!
-  averageStorageGb: Float!
-  clipsAdded: Int!
-  clipsDeleted: Int!
-  clipStorageAddedGb: Float!
-  clipStorageDeletedGb: Float!
-  dvrAdded: Int!
-  dvrDeleted: Int!
-  dvrStorageAddedGb: Float!
-  dvrStorageDeletedGb: Float!
-  vodAdded: Int!
-  vodDeleted: Int!
-  vodStorageAddedGb: Float!
-  vodStorageDeletedGb: Float!
-
   # Viewer metrics
   totalStreams: Int!
   totalViewers: Int!
   viewerHours: Float!
-  peakViewers: Int!
   maxViewers: Int!
   uniqueUsers: Int!
-  uniqueUsersPeriod: Int!
-  avgViewers: Float!
 
-  # Geographic
+  # Segment/stream counts (from processing_daily)
+  livepeerSegmentCount: Int!
+  livepeerUniqueStreams: Int!
+  nativeAvSegmentCount: Int!
+  nativeAvUniqueStreams: Int!
+
+  # Geo enrichment
   uniqueCountries: Int!
   uniqueCities: Int!
   geoBreakdown: [CountryMetrics!]!
+
+  # Storage lifecycle - artifact counts
+  clipsCreated: Int!
+  clipsDeleted: Int!
+  dvrCreated: Int!
+  dvrDeleted: Int!
+  vodCreated: Int!
+  vodDeleted: Int!
+
+  # Storage - hot (bytes)
+  clipBytes: Int!
+  dvrBytes: Int!
+  vodBytes: Int!
+
+  # Storage - cold/frozen (bytes)
+  frozenClipBytes: Int!
+  frozenDvrBytes: Int!
+  frozenVodBytes: Int!
+
+  # Freeze/defrost operations
+  freezeCount: Int!
+  freezeBytes: Int!
+  defrostCount: Int!
+  defrostBytes: Int!
 }
 
 type CountryMetrics {
@@ -4615,6 +4674,7 @@ type StreamHealthMetric implements Node {
   framesMin: Int
   keyframeMsMax: Float
   keyframeMsMin: Float
+  frameJitterMs: Float
   trackCount: Int
 
   # Buffer state
@@ -5242,6 +5302,10 @@ enum MessageSender {
   Message from a support agent.
   """
   AGENT
+  """
+  System activity message (assigned, resolved, etc.).
+  """
+  SYSTEM
 }
 
 """

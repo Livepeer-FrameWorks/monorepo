@@ -251,38 +251,55 @@
       <div class="space-y-4 max-w-3xl mx-auto">
         {#each localMessages as message (message.id)}
           {@const isUser = message.sender === "USER"}
-          <div class="flex gap-3 {isUser ? 'flex-row-reverse' : ''}">
-            <!-- Avatar -->
-            <div
-              class="w-8 h-8 rounded-full shrink-0 flex items-center justify-center {isUser
-                ? 'bg-primary/20'
-                : 'bg-accent/20'}"
-            >
-              {#if isUser}
-                <UserIcon class="w-4 h-4 text-primary" />
-              {:else}
-                <HeadphonesIcon class="w-4 h-4 text-accent" />
-              {/if}
-            </div>
-
-            <!-- Message bubble -->
-            <div class="max-w-[70%] {isUser ? 'text-right' : ''}">
-              <div
-                class="inline-block px-4 py-2 rounded-lg {isUser
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted text-foreground'}"
-              >
-                <p class="text-sm whitespace-pre-wrap break-words text-left">{message.content}</p>
-              </div>
-              <p
-                class="text-[10px] text-muted-foreground mt-1 {isUser ? 'text-right' : 'text-left'}"
-              >
+          {@const isSystem = message.sender === "SYSTEM"}
+          {#if isSystem}
+            <!-- System/Activity message (centered) -->
+            <div class="flex justify-center">
+              <p class="text-xs text-muted-foreground italic px-4 py-1">
+                {message.content}
                 {#if message.createdAt}
-                  {format(new Date(message.createdAt), "MMM d, h:mm a")}
+                  <span class="ml-2 opacity-70">
+                    {format(new Date(message.createdAt), "h:mm a")}
+                  </span>
                 {/if}
               </p>
             </div>
-          </div>
+          {:else}
+            <div class="flex gap-3 {isUser ? 'flex-row-reverse' : ''}">
+              <!-- Avatar -->
+              <div
+                class="w-8 h-8 rounded-full shrink-0 flex items-center justify-center {isUser
+                  ? 'bg-primary/20'
+                  : 'bg-accent/20'}"
+              >
+                {#if isUser}
+                  <UserIcon class="w-4 h-4 text-primary" />
+                {:else}
+                  <HeadphonesIcon class="w-4 h-4 text-accent" />
+                {/if}
+              </div>
+
+              <!-- Message bubble -->
+              <div class="max-w-[70%] {isUser ? 'text-right' : ''}">
+                <div
+                  class="inline-block px-4 py-2 rounded-lg {isUser
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-foreground'}"
+                >
+                  <p class="text-sm whitespace-pre-wrap break-words text-left">{message.content}</p>
+                </div>
+                <p
+                  class="text-[10px] text-muted-foreground mt-1 {isUser
+                    ? 'text-right'
+                    : 'text-left'}"
+                >
+                  {#if message.createdAt}
+                    {format(new Date(message.createdAt), "MMM d, h:mm a")}
+                  {/if}
+                </p>
+              </div>
+            </div>
+          {/if}
         {/each}
       </div>
     {/if}

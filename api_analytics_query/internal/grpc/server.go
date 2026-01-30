@@ -463,7 +463,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 
 	query := `
 		SELECT timestamp, tenant_id, stream_id, node_id,
-			bitrate, fps, gop_size, frame_ms_max, frame_ms_min, frames_max, frames_min, keyframe_ms_max, keyframe_ms_min, width, height,
+			bitrate, fps, gop_size, frame_ms_max, frame_ms_min, frames_max, frames_min, keyframe_ms_max, keyframe_ms_min, frame_jitter_ms, width, height,
 			buffer_size, buffer_health, buffer_state,
 			codec, quality_tier, track_metadata,
 			has_issues, issues_description, track_count,
@@ -505,12 +505,12 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		var audioChannels *uint8
 		var audioSampleRate, audioBitrate *uint32
 		var audioCodec *string
-		var frameMsMax, frameMsMin, keyframeMsMax, keyframeMsMin *float32
+		var frameMsMax, frameMsMin, keyframeMsMax, keyframeMsMin, frameJitterMs *float32
 		var framesMax, framesMin *uint32
 
 		err := rows.Scan(
 			&ts, &tenantID, &m.StreamId, &m.NodeId,
-			&m.Bitrate, &m.Fps, &m.GopSize, &frameMsMax, &frameMsMin, &framesMax, &framesMin, &keyframeMsMax, &keyframeMsMin, &m.Width, &m.Height,
+			&m.Bitrate, &m.Fps, &m.GopSize, &frameMsMax, &frameMsMin, &framesMax, &framesMin, &keyframeMsMax, &keyframeMsMin, &frameJitterMs, &m.Width, &m.Height,
 			&m.BufferSize, &m.BufferHealth, &m.BufferState,
 			&m.Codec, &m.QualityTier, &trackMetadata,
 			&hasIssues, &issuesDesc, &trackCount,
@@ -544,6 +544,10 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		}
 		if keyframeMsMin != nil {
 			m.KeyframeMsMin = keyframeMsMin
+		}
+		if frameJitterMs != nil {
+			v := float64(*frameJitterMs)
+			m.FrameJitterMs = &v
 		}
 
 		// Assign health issue fields (previously scanned but not assigned)
@@ -3358,7 +3362,7 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 
 	query := `
 		SELECT timestamp_5m, tenant_id, stream_id, node_id, rebuffer_count, issue_count,
-		       sample_issues, avg_bitrate, avg_fps, avg_buffer_health, buffer_dry_count, quality_tier
+		       sample_issues, avg_bitrate, avg_fps, avg_buffer_health, avg_frame_jitter_ms, max_frame_jitter_ms, buffer_dry_count, quality_tier
 		FROM stream_health_5m
 		WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`
@@ -3386,9 +3390,10 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 		var rebufferCount, issueCount, bufferDryCount int32
 		var sampleIssues sql.NullString
 		var avgBitrate, avgFps, avgBufferHealth float32
+		var avgFrameJitterMs, maxFrameJitterMs sql.NullFloat64
 
 		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &nodeID, &rebufferCount, &issueCount,
-			&sampleIssues, &avgBitrate, &avgFps, &avgBufferHealth, &bufferDryCount, &qualityTier)
+			&sampleIssues, &avgBitrate, &avgFps, &avgBufferHealth, &avgFrameJitterMs, &maxFrameJitterMs, &bufferDryCount, &qualityTier)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan stream_health_5m row")
 			continue
@@ -3410,6 +3415,14 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 		}
 		if sampleIssues.Valid {
 			record.SampleIssues = sampleIssues.String
+		}
+		if avgFrameJitterMs.Valid {
+			v := float32(avgFrameJitterMs.Float64)
+			record.AvgFrameJitterMs = &v
+		}
+		if maxFrameJitterMs.Valid {
+			v := float32(maxFrameJitterMs.Float64)
+			record.MaxFrameJitterMs = &v
 		}
 
 		records = append(records, record)
@@ -4131,6 +4144,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 }
 
 // GetLiveUsageSummary returns a near-real-time usage summary for billing dashboards.
+// Structure matches UsageSummary for consistency between live and finalized invoices.
 func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLiveUsageSummaryRequest) (*pb.GetLiveUsageSummaryResponse, error) {
 	tenantID := getTenantID(ctx, req.GetTenantId())
 	if tenantID == "" {
@@ -4142,7 +4156,33 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
 	}
 
-	// Viewer hours + egress + unique viewers (tenant_usage_5m)
+	summary := &pb.LiveUsageSummary{
+		TenantId:    tenantID,
+		PeriodStart: timestamppb.New(startTime),
+		PeriodEnd:   timestamppb.New(endTime),
+	}
+
+	// Stream metrics from stream_event_log (max_viewers, total_streams, stream_hours)
+	var maxViewers, totalStreams int32
+	var streamHours float64
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(max(total_viewers), 0) AS max_viewers,
+			COALESCE(uniq(internal_name), 0) AS total_streams,
+			COALESCE(countDistinct(concat(internal_name, toString(toStartOfHour(timestamp)))), 0) AS stream_hours
+		FROM stream_event_log
+		WHERE tenant_id = ?
+		  AND timestamp BETWEEN ? AND ?
+		  AND total_viewers IS NOT NULL
+	`, tenantID, startTime, endTime).Scan(&maxViewers, &totalStreams, &streamHours)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query stream_event_log for live usage")
+	}
+	summary.MaxViewers = maxViewers
+	summary.TotalStreams = totalStreams
+	summary.StreamHours = streamHours
+
+	// Viewer hours + egress + unique viewers (tenant_usage_5m for real-time data)
 	var totalSessionSeconds uint64
 	var totalBytes uint64
 	var uniqueViewers uint32
@@ -4157,18 +4197,30 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		  AND timestamp_5m <= ?
 	`, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &totalBytes, &uniqueViewers)
 	if err != nil && err != database.ErrNoRows {
-		s.logger.WithError(err).Error("Failed to query tenant_usage_5m")
-		return nil, status.Errorf(codes.Internal, "failed to query live usage")
+		s.logger.WithError(err).Warn("Failed to query tenant_usage_5m for live usage")
 	}
+	summary.ViewerHours = float64(totalSessionSeconds) / 3600.0
+	summary.EgressGb = float64(totalBytes) / (1024 * 1024 * 1024)
+	summary.UniqueUsers = int32(uniqueViewers)
+	summary.TotalViewers = int32(uniqueViewers) // total_viewers = unique viewers for live usage
 
-	viewerHours := float64(totalSessionSeconds) / 3600.0
-	egressGB := float64(totalBytes) / (1024 * 1024 * 1024)
+	// Peak bandwidth from client_qoe_5m (avg_bw_out is bytes/sec, convert to Mbps)
+	var peakBandwidthBytes float64
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT COALESCE(max(avg_bw_out), 0) AS peak_bandwidth
+		FROM client_qoe_5m
+		WHERE tenant_id = ?
+		  AND timestamp_5m BETWEEN ? AND ?
+	`, tenantID, startTime, endTime).Scan(&peakBandwidthBytes)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query client_qoe_5m for peak bandwidth")
+	}
+	summary.PeakBandwidthMbps = peakBandwidthBytes / (1024 * 1024) // bytes/sec to Mbps
 
 	// Average storage (storage_usage_hourly)
 	var avgTotalBytes uint64
 	err = s.clickhouse.QueryRowContext(ctx, `
-		SELECT
-			toUInt64(avgMerge(avg_total_bytes)) AS avg_total_bytes
+		SELECT COALESCE(toUInt64(avgMerge(avg_total_bytes)), 0) AS avg_total_bytes
 		FROM storage_usage_hourly
 		WHERE tenant_id = ?
 		  AND hour >= ?
@@ -4177,34 +4229,183 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	if err != nil && err != database.ErrNoRows {
 		s.logger.WithError(err).Warn("Failed to query storage_usage_hourly")
 	}
-	averageStorageGB := float64(avgTotalBytes) / (1024 * 1024 * 1024)
+	summary.AverageStorageGb = float64(avgTotalBytes) / (1024 * 1024 * 1024)
 
-	// Processing totals (processing_hourly)
-	var livepeerMs, nativeAvMs uint64
+	// Per-codec processing breakdown + segment counts (processing_daily)
+	var livepeerH264, livepeerVp9, livepeerAv1, livepeerHevc float64
+	var nativeAvH264, nativeAvVp9, nativeAvAv1, nativeAvHevc float64
+	var nativeAvAac, nativeAvOpus float64
+	var livepeerSegmentCount, nativeAvSegmentCount uint64
+	var livepeerUniqueStreams, nativeAvUniqueStreams uint32
 	err = s.clickhouse.QueryRowContext(ctx, `
 		SELECT
-			sumMergeIf(total_duration_ms, process_type = 'Livepeer') AS livepeer_ms,
-			sumMergeIf(total_duration_ms, process_type = 'AV') AS native_av_ms
-		FROM processing_hourly
+			COALESCE(sum(livepeer_h264_seconds), 0) AS livepeer_h264,
+			COALESCE(sum(livepeer_vp9_seconds), 0) AS livepeer_vp9,
+			COALESCE(sum(livepeer_av1_seconds), 0) AS livepeer_av1,
+			COALESCE(sum(livepeer_hevc_seconds), 0) AS livepeer_hevc,
+			COALESCE(sum(native_av_h264_seconds), 0) AS native_av_h264,
+			COALESCE(sum(native_av_vp9_seconds), 0) AS native_av_vp9,
+			COALESCE(sum(native_av_av1_seconds), 0) AS native_av_av1,
+			COALESCE(sum(native_av_hevc_seconds), 0) AS native_av_hevc,
+			COALESCE(sum(native_av_aac_seconds), 0) AS native_av_aac,
+			COALESCE(sum(native_av_opus_seconds), 0) AS native_av_opus,
+			COALESCE(sum(livepeer_segment_count), 0) AS livepeer_segment_count,
+			COALESCE(sum(native_av_segment_count), 0) AS native_av_segment_count,
+			COALESCE(max(livepeer_unique_streams), 0) AS livepeer_unique_streams,
+			COALESCE(max(native_av_unique_streams), 0) AS native_av_unique_streams
+		FROM processing_daily
+		WHERE tenant_id = ?
+		  AND day BETWEEN toDate(?) AND toDate(?)
+	`, tenantID, startTime, endTime).Scan(
+		&livepeerH264, &livepeerVp9, &livepeerAv1, &livepeerHevc,
+		&nativeAvH264, &nativeAvVp9, &nativeAvAv1, &nativeAvHevc,
+		&nativeAvAac, &nativeAvOpus,
+		&livepeerSegmentCount, &nativeAvSegmentCount,
+		&livepeerUniqueStreams, &nativeAvUniqueStreams,
+	)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query processing_daily for per-codec breakdown")
+	}
+	summary.LivepeerH264Seconds = livepeerH264
+	summary.LivepeerVp9Seconds = livepeerVp9
+	summary.LivepeerAv1Seconds = livepeerAv1
+	summary.LivepeerHevcSeconds = livepeerHevc
+	summary.NativeAvH264Seconds = nativeAvH264
+	summary.NativeAvVp9Seconds = nativeAvVp9
+	summary.NativeAvAv1Seconds = nativeAvAv1
+	summary.NativeAvHevcSeconds = nativeAvHevc
+	summary.NativeAvAacSeconds = nativeAvAac
+	summary.NativeAvOpusSeconds = nativeAvOpus
+	summary.LivepeerSegmentCount = livepeerSegmentCount
+	summary.NativeAvSegmentCount = nativeAvSegmentCount
+	summary.LivepeerUniqueStreams = livepeerUniqueStreams
+	summary.NativeAvUniqueStreams = nativeAvUniqueStreams
+
+	// Geographic breakdown (viewer_geo_hourly)
+	var uniqueCountries, uniqueCities int32
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(uniq(country_code), 0) AS unique_countries,
+			COALESCE(uniq(city), 0) AS unique_cities
+		FROM viewer_connection_events
+		WHERE tenant_id = ?
+		  AND timestamp BETWEEN ? AND ?
+	`, tenantID, startTime, endTime).Scan(&uniqueCountries, &uniqueCities)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query viewer_connection_events for geo stats")
+	}
+	summary.UniqueCountries = uniqueCountries
+	summary.UniqueCities = uniqueCities
+
+	// Geo breakdown by country (top 20)
+	rows, err := s.clickhouse.QueryContext(ctx, `
+		SELECT
+			country_code,
+			toInt32(sum(viewer_count)) AS viewer_count,
+			sum(viewer_hours) AS viewer_hours,
+			sum(egress_gb) AS egress_gb
+		FROM viewer_geo_hourly
 		WHERE tenant_id = ?
 		  AND hour >= ?
 		  AND hour <= ?
-	`, tenantID, startTime, endTime).Scan(&livepeerMs, &nativeAvMs)
+		GROUP BY country_code
+		ORDER BY viewer_hours DESC
+		LIMIT 20
+	`, tenantID, startTime, endTime)
 	if err != nil && err != database.ErrNoRows {
-		s.logger.WithError(err).Warn("Failed to query processing_hourly for live usage")
+		s.logger.WithError(err).Warn("Failed to query viewer_geo_hourly for geo breakdown")
+	} else if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var countryCode string
+			var viewerCount int32
+			var viewerHours, egressGb float64
+			if err := rows.Scan(&countryCode, &viewerCount, &viewerHours, &egressGb); err != nil {
+				s.logger.WithError(err).Warn("Failed to scan geo breakdown row")
+				continue
+			}
+			summary.GeoBreakdown = append(summary.GeoBreakdown, &pb.CountryMetric{
+				CountryCode: countryCode,
+				ViewerCount: viewerCount,
+				ViewerHours: viewerHours,
+				EgressGb:    egressGb,
+			})
+		}
 	}
 
-	summary := &pb.LiveUsageSummary{
-		TenantId:         tenantID,
-		PeriodStart:      timestamppb.New(startTime),
-		PeriodEnd:        timestamppb.New(endTime),
-		ViewerHours:      viewerHours,
-		EgressGb:         egressGB,
-		UniqueViewers:    int32(uniqueViewers),
-		AverageStorageGb: averageStorageGB,
-		LivepeerSeconds:  float64(livepeerMs) / 1000.0,
-		NativeAvSeconds:  float64(nativeAvMs) / 1000.0,
+	// Storage lifecycle - artifact counts (from artifact_events)
+	var clipsCreated, clipsDeleted, dvrCreated, dvrDeleted, vodCreated, vodDeleted uint32
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			countIf(content_type = 'clip' AND stage = 'completed') AS clips_created,
+			countIf(content_type = 'clip' AND stage = 'deleted') AS clips_deleted,
+			countIf(content_type = 'dvr' AND stage = 'completed') AS dvr_created,
+			countIf(content_type = 'dvr' AND stage = 'deleted') AS dvr_deleted,
+			countIf(content_type = 'vod' AND stage = 'completed') AS vod_created,
+			countIf(content_type = 'vod' AND stage = 'deleted') AS vod_deleted
+		FROM artifact_events
+		WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?
+	`, tenantID, startTime, endTime).Scan(
+		&clipsCreated, &clipsDeleted, &dvrCreated, &dvrDeleted, &vodCreated, &vodDeleted,
+	)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query artifact_events for storage lifecycle")
 	}
+	summary.ClipsCreated = clipsCreated
+	summary.ClipsDeleted = clipsDeleted
+	summary.DvrCreated = dvrCreated
+	summary.DvrDeleted = dvrDeleted
+	summary.VodCreated = vodCreated
+	summary.VodDeleted = vodDeleted
+
+	// Storage breakdown from latest snapshot (hot + cold)
+	var clipBytes, dvrBytes, vodBytes uint64
+	var frozenClipBytes, frozenDvrBytes, frozenVodBytes uint64
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(argMax(clip_bytes, timestamp), 0),
+			COALESCE(argMax(dvr_bytes, timestamp), 0),
+			COALESCE(argMax(vod_bytes, timestamp), 0),
+			COALESCE(argMax(frozen_clip_bytes, timestamp), 0),
+			COALESCE(argMax(frozen_dvr_bytes, timestamp), 0),
+			COALESCE(argMax(frozen_vod_bytes, timestamp), 0)
+		FROM storage_snapshots
+		WHERE tenant_id = ? AND timestamp <= ?
+	`, tenantID, endTime).Scan(
+		&clipBytes, &dvrBytes, &vodBytes,
+		&frozenClipBytes, &frozenDvrBytes, &frozenVodBytes,
+	)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query storage_snapshots for storage breakdown")
+	}
+	summary.ClipBytes = clipBytes
+	summary.DvrBytes = dvrBytes
+	summary.VodBytes = vodBytes
+	summary.FrozenClipBytes = frozenClipBytes
+	summary.FrozenDvrBytes = frozenDvrBytes
+	summary.FrozenVodBytes = frozenVodBytes
+
+	// Freeze/defrost operations (from storage_events)
+	var freezeCount, defrostCount uint32
+	var freezeBytes, defrostBytes uint64
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			countIf(action = 'frozen') AS freeze_count,
+			sumIf(size_bytes, action = 'frozen') AS freeze_bytes,
+			countIf(action = 'defrosted') AS defrost_count,
+			sumIf(size_bytes, action = 'defrosted') AS defrost_bytes
+		FROM storage_events
+		WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?
+	`, tenantID, startTime, endTime).Scan(
+		&freezeCount, &freezeBytes, &defrostCount, &defrostBytes,
+	)
+	if err != nil && err != database.ErrNoRows {
+		s.logger.WithError(err).Warn("Failed to query storage_events for freeze/defrost operations")
+	}
+	summary.FreezeCount = freezeCount
+	summary.FreezeBytes = freezeBytes
+	summary.DefrostCount = defrostCount
+	summary.DefrostBytes = defrostBytes
 
 	return &pb.GetLiveUsageSummaryResponse{Summary: summary}, nil
 }

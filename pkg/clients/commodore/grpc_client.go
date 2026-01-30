@@ -528,6 +528,15 @@ func (c *GRPCClient) UpdateNewsletter(ctx context.Context, subscribed bool) (*pb
 	return c.user.UpdateNewsletter(ctx, &pb.UpdateNewsletterRequest{Subscribed: subscribed})
 }
 
+// GetNewsletterStatus returns the user's current newsletter subscription status
+func (c *GRPCClient) GetNewsletterStatus(ctx context.Context) (bool, error) {
+	resp, err := c.user.GetNewsletterStatus(ctx, &pb.GetNewsletterStatusRequest{})
+	if err != nil {
+		return false, err
+	}
+	return resp.Subscribed, nil
+}
+
 // ============================================================================
 // WALLET AUTHENTICATION OPERATIONS
 // ============================================================================

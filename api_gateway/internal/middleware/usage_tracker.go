@@ -334,8 +334,8 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 			}
 		}
 
-		if opCtx := graphql.GetOperationContext(c.Request.Context()); opCtx != nil {
-			if opCtx.Operation != nil {
+		if graphql.HasOperationContext(c.Request.Context()) {
+			if opCtx := graphql.GetOperationContext(c.Request.Context()); opCtx.Operation != nil {
 				if opType == "unknown" {
 					opType = string(opCtx.Operation.Operation)
 				}

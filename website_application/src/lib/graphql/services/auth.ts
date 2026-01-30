@@ -170,7 +170,7 @@ export const authService = {
     }
   },
 
-  async updateNewsletter(subscribe: boolean): Promise<void> {
-    await authAPI.post("/me/newsletter", { subscribe });
+  async updateNewsletter(subscribed: boolean): Promise<void> {
+    await authAPI.post("/me/newsletter", { subscribed });
   },
 };

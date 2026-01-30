@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS stream_health_samples (
     frames_min Nullable(UInt32),
     keyframe_ms_max Nullable(Float32),
     keyframe_ms_min Nullable(Float32),
+    frame_jitter_ms Nullable(Float32),
 
     issues_description Nullable(String),
     has_issues Nullable(UInt8),
@@ -183,6 +184,8 @@ CREATE TABLE IF NOT EXISTS stream_health_5m (
     avg_bitrate Float32,
     avg_fps Float32,
     avg_buffer_health Float32,
+    avg_frame_jitter_ms Nullable(Float32),
+    max_frame_jitter_ms Nullable(Float32),
     buffer_dry_count UInt32,
     quality_tier LowCardinality(String)
 ) ENGINE = MergeTree()
@@ -203,6 +206,8 @@ SELECT
     ifNull(avg(bitrate), 0) AS avg_bitrate,
     ifNull(avg(fps), 0) AS avg_fps,
     ifNull(avg(buffer_health), 0) AS avg_buffer_health,
+    avg(frame_jitter_ms) AS avg_frame_jitter_ms,
+    max(frame_jitter_ms) AS max_frame_jitter_ms,
     countIf(buffer_state = 'DRY') AS buffer_dry_count,
     ifNull(argMax(
         if(height >= 2160, '2160p',

@@ -24,6 +24,8 @@
   interface Props {
     stream: Stream;
     streamKeys?: StreamKey[];
+    onRefreshKey?: () => void;
+    refreshingKey?: boolean;
     onCreateKey?: () => void;
     onCopyKey?: (key: string) => void;
     onDeleteKey?: (keyId: string) => void;
@@ -33,6 +35,8 @@
   let {
     stream,
     streamKeys = [],
+    onRefreshKey,
+    refreshingKey = false,
     onCreateKey,
     onCopyKey,
     onDeleteKey,

@@ -640,7 +640,102 @@ SELECT
 FROM numbers(0, 2016);
 
 -- =================================================================================================
--- 10. Materialized View Finalization (force rollups for demo)
+-- 10. Backfill Aggregation Tables (MVs may not process bulk-inserted historical data)
+-- =================================================================================================
+
+-- Backfill viewer_hours_hourly from viewer_connection_events
+INSERT INTO periscope.viewer_hours_hourly
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    stream_id,
+    internal_name,
+    country_code,
+    uniqState(session_id) AS unique_viewers,
+    sumState(toUInt64(session_duration)) AS total_session_seconds,
+    sumState(bytes_transferred) AS total_bytes
+FROM periscope.viewer_connection_events
+WHERE event_type = 'disconnect'
+GROUP BY hour, tenant_id, stream_id, internal_name, country_code;
+
+-- Backfill tenant_viewer_daily from viewer_hours_hourly
+INSERT INTO periscope.tenant_viewer_daily
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
+    toUInt32(uniqMerge(unique_viewers)) AS unique_viewers,
+    toUInt32(count()) AS total_sessions,
+    sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
+FROM periscope.viewer_hours_hourly
+GROUP BY day, tenant_id;
+
+-- Backfill viewer_geo_hourly from viewer_hours_hourly
+INSERT INTO periscope.viewer_geo_hourly
+SELECT
+    hour,
+    tenant_id,
+    country_code,
+    toUInt32(uniqMerge(unique_viewers)) AS viewer_count,
+    sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
+    sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
+FROM periscope.viewer_hours_hourly
+GROUP BY hour, tenant_id, country_code;
+
+-- Backfill stream_health_5m from stream_health_samples
+INSERT INTO periscope.stream_health_5m
+SELECT
+    toStartOfFiveMinutes(timestamp) AS timestamp_5m,
+    tenant_id,
+    stream_id,
+    internal_name,
+    node_id,
+    countIf(buffer_state = 'DRY') AS rebuffer_count,
+    countIf(has_issues = 1) AS issue_count,
+    NULL AS sample_issues,
+    ifNull(avg(bitrate), 0) AS avg_bitrate,
+    ifNull(avg(fps), 0) AS avg_fps,
+    ifNull(avg(buffer_health), 0) AS avg_buffer_health,
+    avg(frame_jitter_ms) AS avg_frame_jitter_ms,
+    max(frame_jitter_ms) AS max_frame_jitter_ms,
+    countIf(buffer_state = 'DRY') AS buffer_dry_count,
+    '720p' AS quality_tier
+FROM periscope.stream_health_samples
+GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
+
+-- Backfill node_performance_5m from node_metrics_samples
+INSERT INTO periscope.node_performance_5m
+SELECT
+    toStartOfFiveMinutes(timestamp) AS timestamp_5m,
+    tenant_id,
+    cluster_id,
+    node_id,
+    avg(cpu_usage) AS avg_cpu,
+    max(cpu_usage) AS max_cpu,
+    avg(toFloat32(ram_current) / ram_max * 100) AS avg_memory,
+    max(toFloat32(ram_current) / ram_max * 100) AS max_memory,
+    sum(bandwidth_in + bandwidth_out) AS total_bandwidth,
+    avg(toFloat32(connections_current)) AS avg_streams,
+    max(connections_current) AS max_streams
+FROM periscope.node_metrics_samples
+GROUP BY timestamp_5m, tenant_id, cluster_id, node_id;
+
+-- Backfill processing_hourly from processing_events
+INSERT INTO periscope.processing_hourly
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    process_type,
+    lower(coalesce(output_codec, 'unknown')) AS output_codec,
+    coalesce(track_type, 'video') AS track_type,
+    sumState(duration_ms) AS total_duration_ms,
+    countState() AS segment_count,
+    uniqState(stream_id) AS unique_streams
+FROM periscope.processing_events
+GROUP BY hour, tenant_id, process_type, output_codec, track_type;
+
+-- =================================================================================================
+-- 11. Materialized View Finalization (compact aggregated data)
 -- =================================================================================================
 OPTIMIZE TABLE periscope.stream_viewer_5m FINAL;
 OPTIMIZE TABLE periscope.stream_health_5m FINAL;
@@ -653,3 +748,4 @@ OPTIMIZE TABLE periscope.client_qoe_5m FINAL;
 OPTIMIZE TABLE periscope.stream_connection_hourly FINAL;
 OPTIMIZE TABLE periscope.processing_hourly FINAL;
 OPTIMIZE TABLE periscope.node_performance_5m FINAL;
+OPTIMIZE TABLE periscope.tenant_viewer_daily FINAL;

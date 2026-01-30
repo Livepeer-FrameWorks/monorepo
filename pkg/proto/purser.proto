@@ -399,6 +399,14 @@ message GetInvoiceResponse {
   BillingTier tier = 2;                 // json:"tier"
 }
 
+// LineItem represents a single line on an invoice
+message LineItem {
+  string description = 1;                 // Display text (e.g., "Professional Tier", "Delivered Minutes")
+  int32 quantity = 2;                     // Count or 1 for flat items
+  double unit_price = 3;                  // Price per unit
+  double total = 4;                       // quantity * unit_price
+}
+
 // Matches pkg/models/billing.go:Invoice (lines 253-266)
 message Invoice {
   string id = 1;                        // json:"id"
@@ -416,6 +424,8 @@ message Invoice {
   google.protobuf.Timestamp updated_at = 12; // json:"updated_at"
   google.protobuf.Timestamp period_start = 13; // json:"period_start"
   google.protobuf.Timestamp period_end = 14;   // json:"period_end"
+  UsageSummary usage_summary = 16;            // Typed usage data (replaces parsing usage_details)
+  repeated LineItem line_items = 17;          // Generated invoice line items
 }
 
 // Matches pkg/api/purser/types.go:GetInvoicesRequest (lines 124-128)
@@ -524,71 +534,71 @@ message CountryMetrics {
 message UsageSummary {
   string tenant_id = 1;
   string cluster_id = 2;
-  string period = 3;                    // e.g. "15m", "1h", "1d"
-  double stream_hours = 4;
-  double egress_gb = 5;
-  double recording_gb = 6;
-  double peak_bandwidth_mbps = 7;
-  reserved 8;
-  google.protobuf.Timestamp timestamp = 9;
+  string period = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  string granularity = 5;
 
-  // Processing/transcoding usage (from Livepeer Gateway and local AV processing)
-  double livepeer_seconds = 40;           // Total Livepeer Gateway transcode seconds
-  int32 livepeer_segment_count = 41;      // Number of segments transcoded via Livepeer
-  int32 livepeer_unique_streams = 42;     // Unique streams using Livepeer
-  double native_av_seconds = 43;          // Total local audio/video transcode seconds
-  int32 native_av_segment_count = 44;     // Number of segments processed locally
-  int32 native_av_unique_streams = 45;    // Unique streams using local AV processing
+  // Core billing metrics
+  double stream_hours = 6;
+  double egress_gb = 7;
+  double peak_bandwidth_mbps = 8;
+  double average_storage_gb = 9;
 
-  // Per-codec breakdown: Livepeer (external gateway)
-  double livepeer_h264_seconds = 50;
-  double livepeer_vp9_seconds = 51;
-  double livepeer_av1_seconds = 52;
-  double livepeer_hevc_seconds = 53;
+  // Per-codec breakdown: Livepeer
+  double livepeer_h264_seconds = 10;
+  double livepeer_vp9_seconds = 11;
+  double livepeer_av1_seconds = 12;
+  double livepeer_hevc_seconds = 13;
 
-  // Per-codec breakdown: Native AV (local processing)
-  double native_av_h264_seconds = 54;
-  double native_av_vp9_seconds = 55;
-  double native_av_av1_seconds = 56;
-  double native_av_hevc_seconds = 57;
-  double native_av_aac_seconds = 58;
-  double native_av_opus_seconds = 59;
+  // Per-codec breakdown: Native AV
+  double native_av_h264_seconds = 14;
+  double native_av_vp9_seconds = 15;
+  double native_av_av1_seconds = 16;
+  double native_av_hevc_seconds = 17;
+  double native_av_aac_seconds = 18;
+  double native_av_opus_seconds = 19;
 
-  // Track type aggregates (for billing: audio is free)
-  double audio_seconds = 60;
-  double video_seconds = 61;
+  // Viewer metrics
+  int32 total_streams = 20;
+  int32 total_viewers = 21;
+  double viewer_hours = 22;
+  int32 max_viewers = 23;
+  int32 unique_users = 24;
 
-  // Storage and clip lifecycle metrics
-  double storage_gb = 10;
-  double average_storage_gb = 11;
-  int32 clips_added = 12;
-  int32 clips_deleted = 13;
-  double clip_storage_added_gb = 14;
-  double clip_storage_deleted_gb = 15;
-  int32 dvr_added = 30;
-  int32 dvr_deleted = 31;
-  double dvr_storage_added_gb = 32;
-  double dvr_storage_deleted_gb = 33;
-  int32 vod_added = 34;
-  int32 vod_deleted = 35;
-  double vod_storage_added_gb = 36;
-  double vod_storage_deleted_gb = 37;
+  // Segment/stream counts (from processing_daily)
+  uint64 livepeer_segment_count = 25;
+  uint32 livepeer_unique_streams = 26;
+  uint64 native_av_segment_count = 27;
+  uint32 native_av_unique_streams = 28;
 
-  // Stream and viewer metrics
-  int32 total_streams = 16;
-  int32 total_viewers = 17;
-  double viewer_hours = 18;
-  int32 peak_viewers = 19;
-  int32 max_viewers = 20;
-  int32 unique_users = 21;
-  int32 unique_users_period = 27;
+  // Geo enrichment
+  int32 unique_countries = 29;
+  int32 unique_cities = 30;
+  repeated CountryMetrics geo_breakdown = 31;
 
-  // Additional ClickHouse metrics
-  double avg_viewers = 22;
-  int32 unique_countries = 23;
-  int32 unique_cities = 24;
-  repeated CountryMetrics geo_breakdown = 25;  // Rich geo breakdown with viewers, hours, percentage
-  string granularity = 26;                     // hourly, daily, monthly
+  // Storage lifecycle - artifact counts
+  uint32 clips_created = 32;
+  uint32 clips_deleted = 33;
+  uint32 dvr_created = 34;
+  uint32 dvr_deleted = 35;
+  uint32 vod_created = 36;
+  uint32 vod_deleted = 37;
+
+  // Storage lifecycle - bytes by type (hot storage)
+  uint64 clip_bytes = 38;
+  uint64 dvr_bytes = 39;
+  uint64 vod_bytes = 40;
+
+  // Storage lifecycle - frozen bytes (cold storage)
+  uint64 frozen_clip_bytes = 41;
+  uint64 frozen_dvr_bytes = 42;
+  uint64 frozen_vod_bytes = 43;
+
+  // Freeze/defrost operations
+  uint32 freeze_count = 44;
+  uint64 freeze_bytes = 45;
+  uint32 defrost_count = 46;
+  uint64 defrost_bytes = 47;
 }
 
 // Matches pkg/api/purser/types.go:UsageIngestResponse (lines 104-108)

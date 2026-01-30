@@ -36,6 +36,10 @@ export default defineConfig(({ mode }) => {
           ws: true,
         },
       },
+      fs: {
+        // Allow serving files from the monorepo root (for pkg/graphql/operations/)
+        allow: [".."],
+      },
     },
     ssr: {
       noExternal: ["graphql", "graphql-ws"],

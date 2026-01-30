@@ -229,7 +229,7 @@ func getLiveUsageMetrics(ctx context.Context, clients *clients.ServiceClients, t
 
 	summary := usageResp.Summary
 	metrics := &LiveMetrics{
-		TotalViewers: summary.UniqueViewers,
+		TotalViewers: summary.TotalViewers,
 		StorageGB:    summary.AverageStorageGb,
 	}
 

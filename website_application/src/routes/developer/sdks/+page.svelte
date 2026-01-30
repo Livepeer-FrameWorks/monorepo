@@ -43,7 +43,7 @@
     ],
     codeExamples: {
       react: `import { FrameworksPlayer } from '@livepeer-frameworks/player-react';
-import '@livepeer-frameworks/player-core/player.css';
+import '@livepeer-frameworks/player-react/player.css';
 
 function App() {
   return (
@@ -55,7 +55,7 @@ function App() {
 }`,
       svelte: `<script>
   import { FrameworksPlayer } from '@livepeer-frameworks/player-svelte';
-  import '@livepeer-frameworks/player-core/player.css';
+  import '@livepeer-frameworks/player-svelte/player.css';
 <\/script>
 
 <FrameworksPlayer
@@ -73,8 +73,8 @@ const player = new FrameWorksPlayer('#player-container', {
 // When done:
 player.destroy();`,
     },
-    docsUrl: `${docsBaseUrl}/player`,
-    githubUrl: `${githubBaseUrl}/tree/main/npm_player`,
+    docsUrl: `${docsBaseUrl}/streamers/playback`,
+    githubUrl: `${githubBaseUrl}/tree/master/npm_player`,
   };
 
   const studioSdk = {
@@ -98,7 +98,7 @@ player.destroy();`,
     ],
     codeExamples: {
       react: `import { StreamCrafter, Preview, Controls } from '@livepeer-frameworks/streamcrafter-react';
-import '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
+import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
 
 function Studio() {
   return (
@@ -113,7 +113,7 @@ function Studio() {
 }`,
       svelte: `<script>
   import { StreamCrafter, Preview, Controls } from '@livepeer-frameworks/streamcrafter-svelte';
-  import '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
+  import '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
 <\/script>
 
 <StreamCrafter
@@ -140,8 +140,8 @@ await controller.startStreaming();
 // Stop streaming
 await controller.stopStreaming();`,
     },
-    docsUrl: `${docsBaseUrl}/studio`,
-    githubUrl: `${githubBaseUrl}/tree/main/npm_studio`,
+    docsUrl: `${docsBaseUrl}/streamers/ingest`,
+    githubUrl: `${githubBaseUrl}/tree/master/npm_studio`,
   };
 
   const mcpServer = {
@@ -188,7 +188,8 @@ await controller.stopStreaming();`,
     if (framework === "vanilla") {
       return `npm install ${packages.core}`;
     }
-    return `npm install ${packages[framework]} ${packages.core}`;
+    // Wrapper packages include core as dependency, no need to install both
+    return `npm install ${packages[framework]}`;
   }
 
   function copyToClipboard(text: string) {

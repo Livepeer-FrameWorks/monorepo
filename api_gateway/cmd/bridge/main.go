@@ -112,7 +112,13 @@ func main() {
 	maxDepth := config.GetEnvInt("GRAPHQL_MAX_DEPTH", 10)
 	if maxDepth > 0 {
 		gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+			if !graphql.HasOperationContext(ctx) {
+				return next(ctx)
+			}
 			opCtx := graphql.GetOperationContext(ctx)
+			if opCtx.Doc == nil {
+				return next(ctx)
+			}
 			depth := calculateQueryDepth(opCtx.Doc.Operations)
 			if depth > maxDepth {
 				return func(ctx context.Context) *graphql.Response {
@@ -129,9 +135,11 @@ func main() {
 		if resp != nil {
 			if ginCtx, ok := ctx.Value("GinContext").(*gin.Context); ok && ginCtx != nil {
 				ginCtx.Set("graphql_error_count", len(resp.Errors))
-				if opCtx := graphql.GetOperationContext(ctx); opCtx != nil && opCtx.Operation != nil {
-					ginCtx.Set("graphql_operation_type", string(opCtx.Operation.Operation))
-					ginCtx.Set("graphql_operation_name", opCtx.Operation.Name)
+				if graphql.HasOperationContext(ctx) {
+					if opCtx := graphql.GetOperationContext(ctx); opCtx.Operation != nil {
+						ginCtx.Set("graphql_operation_type", string(opCtx.Operation.Operation))
+						ginCtx.Set("graphql_operation_name", opCtx.Operation.Name)
+					}
 				}
 				if stats := extension.GetComplexityStats(ctx); stats != nil {
 					ginCtx.Set("graphql_complexity", stats.Complexity)
@@ -142,8 +150,11 @@ func main() {
 	})
 
 	gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+		if !graphql.HasOperationContext(ctx) {
+			return next(ctx)
+		}
 		opCtx := graphql.GetOperationContext(ctx)
-		if opCtx != nil && opCtx.Operation != nil && opCtx.Operation.Operation == ast.Subscription {
+		if opCtx.Operation != nil && opCtx.Operation.Operation == ast.Subscription {
 			start := time.Now()
 			tenantID, authType, userID, tokenHash := extractUsageContext(ctx)
 			opName := opCtx.Operation.Name
@@ -300,6 +311,7 @@ func main() {
 		authProtected.POST("/logout", authHandlers.Logout())
 		authProtected.GET("/me", authHandlers.GetMe())
 		authProtected.PATCH("/me", authHandlers.UpdateMe())
+		authProtected.GET("/me/newsletter", authHandlers.GetNewsletterStatus())
 		authProtected.POST("/me/newsletter", authHandlers.UpdateNewsletter())
 	}
 

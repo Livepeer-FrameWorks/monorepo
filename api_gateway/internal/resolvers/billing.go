@@ -16,6 +16,8 @@ import (
 	x402 "frameworks/pkg/x402"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -1014,6 +1016,10 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*
 
 	resp, err := r.Clients.Purser.GetPrepaidBalance(ctx, tenantID, curr)
 	if err != nil {
+		// NotFound is expected for tenants without prepaid balance - return nil, not an error
+		if status.Code(err) == codes.NotFound {
+			return nil, nil
+		}
 		r.Logger.WithError(err).Error("Failed to get prepaid balance")
 		return nil, err
 	}

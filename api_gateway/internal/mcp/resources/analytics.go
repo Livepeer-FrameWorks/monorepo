@@ -106,10 +106,14 @@ func handleUsageAnalytics(ctx context.Context, clients *clients.ServiceClients, 
 	if err != nil {
 		logger.WithError(err).Debug("Failed to get usage summary")
 	} else if resp.Summary != nil {
-		usage.Streaming.ViewerHours = int64(resp.Summary.ViewerHours)
-		usage.Streaming.PeakConcurrent = int(resp.Summary.UniqueViewers)
-		usage.Storage.TotalBytes = int64(resp.Summary.AverageStorageGb * 1024 * 1024 * 1024)
-		usage.Processing.TranscodeMinutes = int64(resp.Summary.LivepeerSeconds / 60)
+		s := resp.Summary
+		usage.Streaming.ViewerHours = int64(s.ViewerHours)
+		usage.Streaming.PeakConcurrent = int(s.MaxViewers)
+		usage.Storage.TotalBytes = int64(s.AverageStorageGb * 1024 * 1024 * 1024)
+		// Sum all transcoding (Livepeer + Native AV) in minutes
+		totalTranscodeSeconds := s.LivepeerH264Seconds + s.LivepeerVp9Seconds + s.LivepeerAv1Seconds + s.LivepeerHevcSeconds +
+			s.NativeAvH264Seconds + s.NativeAvVp9Seconds + s.NativeAvAv1Seconds + s.NativeAvHevcSeconds
+		usage.Processing.TranscodeMinutes = int64(totalTranscodeSeconds / 60)
 	}
 
 	return marshalResourceResult("analytics://usage", usage)

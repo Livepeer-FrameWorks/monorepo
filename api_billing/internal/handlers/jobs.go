@@ -13,6 +13,7 @@ import (
 
 	"frameworks/pkg/billing"
 	decklog "frameworks/pkg/clients/decklog"
+	periscope "frameworks/pkg/clients/periscope"
 	"frameworks/pkg/config"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
@@ -62,11 +63,8 @@ func calculateCharges(usageData map[string]float64, basePrice float64, meteringE
 		}
 	}
 
-	// 2) Storage overage (average_storage_gb preferred)
+	// 2) Storage overage
 	storageUsage := usageData["average_storage_gb"]
-	if storageUsage == 0 {
-		storageUsage = usageData["recording_gb"]
-	}
 	if storageAllocation.Limit != nil && storageUsage > 0 && effectiveOverageRates.Storage.UnitPrice > 0 {
 		billable := storageUsage - *storageAllocation.Limit
 		if billable > 0 {
@@ -108,29 +106,6 @@ func calculateCharges(usageData map[string]float64, basePrice float64, meteringE
 	return baseAmount, meteredAmount
 }
 
-// loadUsageMeta fetches the latest usage_details JSON with geo breakdown for the period.
-func loadUsageMeta(db *sql.DB, tenantID string, periodStart, periodEnd time.Time) map[string]interface{} {
-	var raw []byte
-	err := db.QueryRow(`
-		SELECT usage_details
-		FROM purser.usage_records
-		WHERE tenant_id = $1
-		  AND period_start < $3
-		  AND period_end > $2
-		  AND usage_details ? 'geo_breakdown'
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, tenantID, periodStart, periodEnd).Scan(&raw)
-	if err != nil {
-		return nil
-	}
-	var meta map[string]interface{}
-	if json.Unmarshal(raw, &meta) != nil {
-		return nil
-	}
-	return meta
-}
-
 func loadSubscriptionPeriod(db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time) {
 	var start, end sql.NullTime
 	err := db.QueryRow(`
@@ -147,6 +122,80 @@ func loadSubscriptionPeriod(db *sql.DB, tenantID string, now time.Time) (time.Ti
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	periodEnd := periodStart.AddDate(0, 1, 0)
 	return periodStart, periodEnd
+}
+
+// enrichInvoiceFromPeriscope queries Periscope for accurate analytics data at invoice time.
+// This provides correct unique counts (via uniqMerge), geographic breakdown, and averages
+// that cannot be accurately rolled up through the Kafka pipeline.
+func (jm *JobManager) enrichInvoiceFromPeriscope(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) map[string]interface{} {
+	if jm.periscopeClient == nil {
+		return nil
+	}
+
+	timeRange := &periscope.TimeRangeOpts{
+		StartTime: periodStart,
+		EndTime:   periodEnd,
+	}
+
+	enrichment := make(map[string]interface{})
+
+	// 1. Platform overview - unique counts, peaks, averages (pre-aggregated, no pagination)
+	overview, err := jm.periscopeClient.GetPlatformOverview(ctx, tenantID, timeRange)
+	if err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get platform overview for invoice enrichment")
+	} else if overview != nil {
+		enrichment["unique_users"] = overview.UniqueViewers
+		enrichment["total_streams"] = overview.TotalStreams
+		enrichment["total_viewers"] = overview.TotalViewers
+		enrichment["avg_viewers"] = overview.AverageViewers
+		enrichment["peak_concurrent_viewers"] = overview.PeakConcurrentViewers
+	}
+
+	// 2. Geographic distribution - pre-aggregated (no pagination needed)
+	// Returns unique_countries, unique_cities, and top countries by viewer count with percentage
+	geo, err := jm.periscopeClient.GetGeographicDistribution(ctx, tenantID, nil, timeRange, 100)
+	if err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get geo data for invoice enrichment")
+	} else if geo != nil {
+		enrichment["unique_countries"] = geo.UniqueCountries
+		enrichment["unique_cities"] = geo.UniqueCities
+
+		// 3. Get hourly geo data for viewer_hours per country
+		viewerHoursByCountry := make(map[string]float64)
+		geoHourly, err := jm.periscopeClient.GetViewerGeoHourly(ctx, tenantID, nil, timeRange, nil)
+		if err != nil {
+			jm.logger.WithError(err).WithField("tenant_id", tenantID).Debug("Failed to get geo hourly data for invoice enrichment")
+		} else if geoHourly != nil {
+			for _, record := range geoHourly.Records {
+				viewerHoursByCountry[record.CountryCode] += record.ViewerHours
+			}
+		}
+
+		// Build geo breakdown with full data: count, percentage, viewer_hours
+		if len(geo.TopCountries) > 0 {
+			geoBreakdown := make([]models.CountryMetrics, 0, len(geo.TopCountries))
+			for _, c := range geo.TopCountries {
+				geoBreakdown = append(geoBreakdown, models.CountryMetrics{
+					CountryCode: c.CountryCode,
+					ViewerCount: int(c.ViewerCount),
+					Percentage:  float64(c.Percentage),
+					ViewerHours: viewerHoursByCountry[c.CountryCode],
+				})
+			}
+			enrichment["geo_breakdown"] = geoBreakdown
+		}
+	}
+
+	if len(enrichment) == 0 {
+		return nil
+	}
+
+	jm.logger.WithFields(logging.Fields{
+		"tenant_id":       tenantID,
+		"enrichment_keys": len(enrichment),
+	}).Debug("Invoice enriched from Periscope")
+
+	return enrichment
 }
 
 // CommodoreClient is the interface for Commodore gRPC client used by JobManager and PurserServer
@@ -169,10 +218,11 @@ type JobManager struct {
 	stopCh           chan struct{}
 	billingTopic     string
 	commodoreClient  CommodoreClient
+	periscopeClient  *periscope.GRPCClient
 }
 
 // NewJobManager creates a new job manager
-func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient) *JobManager {
+func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient CommodoreClient, decklogSvc *decklog.BatchedClient, periscopeSvc *periscope.GRPCClient) *JobManager {
 	// Initialize Kafka consumer
 	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "kafka:9092"), ",")
 	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "local")
@@ -202,6 +252,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		stopCh:           make(chan struct{}),
 		billingTopic:     billingTopic,
 		commodoreClient:  commodoreClient,
+		periscopeClient:  periscopeSvc,
 	}
 }
 
@@ -320,53 +371,29 @@ func (jm *JobManager) getTenantBillingModel(tenantID string) (string, error) {
 // suitable for charge calculation. Reused by both prepaid and postpaid flows.
 func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
 	return map[string]float64{
-		"stream_hours":             summary.StreamHours,
-		"viewer_hours":             summary.ViewerHours,
-		"egress_gb":                summary.EgressGB,
-		"recording_gb":             summary.RecordingGB,
-		"peak_bandwidth_mbps":      summary.PeakBandwidthMbps,
-		"storage_gb":               summary.StorageGB,
-		"average_storage_gb":       summary.AverageStorageGB,
-		"clips_added":              float64(summary.ClipsAdded),
-		"clips_deleted":            float64(summary.ClipsDeleted),
-		"clip_storage_added_gb":    summary.ClipStorageAddedGB,
-		"clip_storage_deleted_gb":  summary.ClipStorageDeletedGB,
-		"dvr_added":                float64(summary.DvrAdded),
-		"dvr_deleted":              float64(summary.DvrDeleted),
-		"dvr_storage_added_gb":     summary.DvrStorageAddedGB,
-		"dvr_storage_deleted_gb":   summary.DvrStorageDeletedGB,
-		"vod_added":                float64(summary.VodAdded),
-		"vod_deleted":              float64(summary.VodDeleted),
-		"vod_storage_added_gb":     summary.VodStorageAddedGB,
-		"vod_storage_deleted_gb":   summary.VodStorageDeletedGB,
-		"max_viewers":              float64(summary.MaxViewers),
-		"total_streams":            float64(summary.TotalStreams),
-		"total_viewers":            float64(summary.TotalViewers),
-		"peak_viewers":             float64(summary.PeakViewers),
-		"unique_users":             float64(summary.UniqueUsers),
-		"unique_users_period":      float64(summary.UniqueUsersPeriod),
-		"livepeer_seconds":         summary.LivepeerSeconds,
-		"livepeer_segment_count":   float64(summary.LivepeerSegmentCount),
-		"livepeer_unique_streams":  float64(summary.LivepeerUniqueStreams),
-		"native_av_seconds":        summary.NativeAvSeconds,
-		"native_av_segment_count":  float64(summary.NativeAvSegmentCount),
-		"native_av_unique_streams": float64(summary.NativeAvUniqueStreams),
-		"livepeer_h264_seconds":    summary.LivepeerH264Seconds,
-		"livepeer_vp9_seconds":     summary.LivepeerVP9Seconds,
-		"livepeer_av1_seconds":     summary.LivepeerAV1Seconds,
-		"livepeer_hevc_seconds":    summary.LivepeerHEVCSeconds,
-		"native_av_h264_seconds":   summary.NativeAvH264Seconds,
-		"native_av_vp9_seconds":    summary.NativeAvVP9Seconds,
-		"native_av_av1_seconds":    summary.NativeAvAV1Seconds,
-		"native_av_hevc_seconds":   summary.NativeAvHEVCSeconds,
-		"native_av_aac_seconds":    summary.NativeAvAACSeconds,
-		"native_av_opus_seconds":   summary.NativeAvOpusSeconds,
-		"audio_seconds":            summary.AudioSeconds,
-		"video_seconds":            summary.VideoSeconds,
-		"api_requests":             summary.APIRequests,
-		"api_errors":               summary.APIErrors,
-		"api_duration_ms":          summary.APIDurationMs,
-		"api_complexity":           summary.APIComplexity,
+		"stream_hours":           summary.StreamHours,
+		"viewer_hours":           summary.ViewerHours,
+		"egress_gb":              summary.EgressGB,
+		"peak_bandwidth_mbps":    summary.PeakBandwidthMbps,
+		"average_storage_gb":     summary.AverageStorageGB,
+		"max_viewers":            float64(summary.MaxViewers),
+		"total_streams":          float64(summary.TotalStreams),
+		"total_viewers":          float64(summary.TotalViewers),
+		"unique_users":           float64(summary.UniqueUsers),
+		"livepeer_h264_seconds":  summary.LivepeerH264Seconds,
+		"livepeer_vp9_seconds":   summary.LivepeerVP9Seconds,
+		"livepeer_av1_seconds":   summary.LivepeerAV1Seconds,
+		"livepeer_hevc_seconds":  summary.LivepeerHEVCSeconds,
+		"native_av_h264_seconds": summary.NativeAvH264Seconds,
+		"native_av_vp9_seconds":  summary.NativeAvVP9Seconds,
+		"native_av_av1_seconds":  summary.NativeAvAV1Seconds,
+		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
+		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
+		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
+		"api_requests":           summary.APIRequests,
+		"api_errors":             summary.APIErrors,
+		"api_duration_ms":        summary.APIDurationMs,
+		"api_complexity":         summary.APIComplexity,
 	}
 }
 
@@ -750,39 +777,37 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			LIMIT 1
 		`, tenantID, periodStart).Scan(&draftInvoiceID)
 
-		// Get usage data from the new usage_records table
-		// Use precise timestamp boundaries for the billing period
+		// Aggregate rollup-able usage metrics for billing period
+		// - SUM: flow metrics (viewer_hours, egress_gb, *_seconds)
+		// - AVG: average_storage_gb
+		// - MAX: peak_bandwidth_mbps, max_viewers
+		// - SKIP: unique counts (from Periscope enrichment only - cannot roll up 5-min windows)
 		usageData := map[string]float64{}
 
-		// Fetch raw records to aggregate correctly (SUM vs MAX)
 		usageRows, err := jm.db.Query(`
-			SELECT usage_type, usage_value
+			SELECT usage_type,
+				CASE
+					WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
+					WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
+					ELSE SUM(usage_value)
+				END as aggregated_value
 			FROM purser.usage_records
 			WHERE tenant_id = $1
 			  AND period_start < $3
 			  AND period_end > $2
+			  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
+			GROUP BY usage_type
 		`, tenantID, periodStart, periodEnd)
 
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch usage data")
-			// Continue with zero usage
 		} else {
 			defer usageRows.Close()
 			for usageRows.Next() {
 				var usageType string
 				var val float64
 				if err := usageRows.Scan(&usageType, &val); err == nil {
-					// Apply correct aggregation per type
-					switch usageType {
-					case "average_storage_gb", "peak_bandwidth_mbps", "max_viewers", "total_streams", "unique_users", "unique_users_period":
-						// State/Peak metrics: Take MAX
-						if val > usageData[usageType] {
-							usageData[usageType] = val
-						}
-					default:
-						// Flow metrics (hours, gb transfer): SUM
-						usageData[usageType] += val
-					}
+					usageData[usageType] = val
 				}
 			}
 		}
@@ -800,9 +825,8 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			status = "paid"
 		}
 
-		// Build usage details map with tier info and meta (geo, unique, avg viewers)
+		// Build flat usage_details - all metrics at top level for email and API
 		usageDetails := map[string]interface{}{
-			"usage_data":   usageData,
 			"period_start": periodStart,
 			"period_end":   periodEnd,
 			"tier_info": map[string]interface{}{
@@ -814,13 +838,19 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			},
 		}
 
-		if meta := loadUsageMeta(jm.db, tenantID, periodStart, periodEnd); meta != nil {
-			for _, key := range []string{"geo_breakdown", "unique_countries", "unique_cities", "avg_viewers"} {
-				if v, ok := meta[key]; ok {
-					usageDetails[key] = v
-				}
+		// Add rollup-able billing metrics
+		for k, v := range usageData {
+			usageDetails[k] = v
+		}
+
+		// Add accurate unique counts and geo from Periscope (cannot be rolled up from 5-min windows)
+		enrichCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if enrichment := jm.enrichInvoiceFromPeriscope(enrichCtx, tenantID, periodStart, periodEnd); enrichment != nil {
+			for k, v := range enrichment {
+				usageDetails[k] = v
 			}
 		}
+		cancel()
 
 		// Marshal usage details
 		usageJSON, err := json.Marshal(usageDetails)
@@ -907,22 +937,8 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		// Send invoice created email notification
 		if billingEmail != "" {
-			// Convert usage data for email template
-			emailUsageDetails := make(map[string]interface{})
-			for k, v := range usageData {
-				emailUsageDetails[k] = v
-			}
-			if meta := loadUsageMeta(jm.db, tenantID, periodStart, periodEnd); meta != nil {
-				for _, key := range []string{"geo_breakdown", "unique_countries", "unique_cities", "avg_viewers"} {
-					if v, ok := meta[key]; ok {
-						emailUsageDetails[key] = v
-					}
-				}
-			}
-			// Add unique users from usage details if available (need to fetch from records or summary)
-			// For now, usageData has the aggregates
-
-			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, totalAmount, currency, dueDate, emailUsageDetails)
+			// usageDetails already has usage_data and enrichment from Periscope
+			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, totalAmount, currency, dueDate, usageDetails)
 			if err != nil {
 				jm.logger.WithError(err).WithFields(logging.Fields{
 					"billing_email": billingEmail,
@@ -983,7 +999,7 @@ func (jm *JobManager) rollupAndPurgeUsage(ctx context.Context) error {
 }
 
 func (jm *JobManager) rollupUsageRecords(ctx context.Context, fromGranularity, toGranularity, truncUnit, interval string, cutoff time.Time) error {
-	maxTypes := "'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users', 'unique_users_period', 'peak_viewers', 'livepeer_unique_streams', 'native_av_unique_streams'"
+	maxTypes := "'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users', 'unique_users_period', 'livepeer_unique_streams', 'native_av_unique_streams'"
 	avgTypes := "'average_storage_gb'"
 	query := fmt.Sprintf(`
 		WITH base AS (
@@ -1315,37 +1331,11 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 
 	// Build usage details JSONB
 	usageDetails := models.JSONB{
-		"max_viewers":             summary.MaxViewers,
-		"total_viewers":           summary.TotalViewers,
-		"peak_viewers":            summary.PeakViewers,
-		"total_streams":           summary.TotalStreams,
-		"unique_users":            summary.UniqueUsers,
-		"unique_users_period":     summary.UniqueUsersPeriod,
-		"avg_viewers":             summary.AvgViewers,
-		"unique_countries":        summary.UniqueCountries,
-		"unique_cities":           summary.UniqueCities,
-		"geo_breakdown":           summary.GeoBreakdown,
-		"source":                  source,
-		"clips_added":             summary.ClipsAdded,
-		"clips_deleted":           summary.ClipsDeleted,
-		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
-		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
-		"dvr_added":               summary.DvrAdded,
-		"dvr_deleted":             summary.DvrDeleted,
-		"dvr_storage_added_gb":    summary.DvrStorageAddedGB,
-		"dvr_storage_deleted_gb":  summary.DvrStorageDeletedGB,
-		"vod_added":               summary.VodAdded,
-		"vod_deleted":             summary.VodDeleted,
-		"vod_storage_added_gb":    summary.VodStorageAddedGB,
-		"vod_storage_deleted_gb":  summary.VodStorageDeletedGB,
-		"storage_gb":              summary.StorageGB,
-		// Processing/transcoding usage details (legacy totals)
-		"livepeer_seconds":         summary.LivepeerSeconds,
-		"livepeer_segment_count":   summary.LivepeerSegmentCount,
-		"livepeer_unique_streams":  summary.LivepeerUniqueStreams,
-		"native_av_seconds":        summary.NativeAvSeconds,
-		"native_av_segment_count":  summary.NativeAvSegmentCount,
-		"native_av_unique_streams": summary.NativeAvUniqueStreams,
+		"max_viewers":   summary.MaxViewers,
+		"total_viewers": summary.TotalViewers,
+		"total_streams": summary.TotalStreams,
+		"unique_users":  summary.UniqueUsers,
+		"source":        source,
 		// Per-codec breakdown: Livepeer
 		"livepeer_h264_seconds": summary.LivepeerH264Seconds,
 		"livepeer_vp9_seconds":  summary.LivepeerVP9Seconds,
@@ -1358,9 +1348,6 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
 		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
 		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
-		// Track type aggregates
-		"audio_seconds": summary.AudioSeconds,
-		"video_seconds": summary.VideoSeconds,
 		// API usage aggregates
 		"api_requests":    summary.APIRequests,
 		"api_errors":      summary.APIErrors,
@@ -1380,7 +1367,7 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 			ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
 				usage_value = CASE
-					WHEN EXCLUDED.usage_type IN ('average_storage_gb', 'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'unique_users', 'unique_users_period', 'peak_viewers')
+					WHEN EXCLUDED.usage_type IN ('average_storage_gb', 'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'unique_users', 'unique_users_period')
 						THEN GREATEST(purser.usage_records.usage_value, EXCLUDED.usage_value)
 					ELSE purser.usage_records.usage_value + EXCLUDED.usage_value
 				END,
@@ -1435,18 +1422,20 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 	now := time.Now()
 	periodStart, periodEnd := loadSubscriptionPeriod(jm.db, tenantID, now)
 
-	// Aggregate usage for current billing period using precise timestamps
+	// Aggregate usage for current billing period
+	// Only aggregate rollup-able metrics - uniques come from Periscope enrichment
 	rows, err := jm.db.Query(`
 		SELECT usage_type,
 		       CASE
-			       WHEN usage_type IN ('average_storage_gb', 'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'unique_users', 'unique_users_period', 'peak_viewers')
-				       THEN MAX(usage_value)
+			       WHEN usage_type = 'average_storage_gb' THEN AVG(usage_value)
+			       WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers') THEN MAX(usage_value)
 			       ELSE SUM(usage_value)
 		       END as total
 		FROM purser.usage_records
 		WHERE tenant_id = $1
 		  AND period_start < $3
 		  AND period_end > $2
+		  AND usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
 		GROUP BY usage_type
 	`, tenantID, periodStart, periodEnd)
 	if err != nil {
@@ -1455,7 +1444,6 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 	defer rows.Close()
 
 	usageTotals := make(map[string]float64)
-	allUsageDetails := make(map[string]interface{})
 
 	for rows.Next() {
 		var usageType string
@@ -1464,7 +1452,6 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 			continue
 		}
 		usageTotals[usageType] = total
-		allUsageDetails[usageType] = total
 	}
 
 	// Calculate charges (base + metered)
@@ -1501,9 +1488,8 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 	// Net amount is gross minus credit applied
 	totalAmount := grossAmount - prepaidCreditApplied
 
-	// Build usage details map with tier info and meta (geo, unique, avg viewers)
+	// Build flat usage_details - all metrics at top level for email and API
 	usageDetails := map[string]interface{}{
-		"usage_data":   allUsageDetails,
 		"period_start": periodStart,
 		"period_end":   periodEnd,
 		"tier_info": map[string]interface{}{
@@ -1514,12 +1500,10 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 			"metering_enabled": meteringEnabled,
 		},
 	}
-	if meta := loadUsageMeta(jm.db, tenantID, periodStart, periodEnd); meta != nil {
-		for _, key := range []string{"geo_breakdown", "unique_countries", "unique_cities", "avg_viewers"} {
-			if v, ok := meta[key]; ok {
-				usageDetails[key] = v
-			}
-		}
+
+	// Add rollup-able billing metrics
+	for k, v := range usageTotals {
+		usageDetails[k] = v
 	}
 
 	usageJSON, _ := json.Marshal(usageDetails)

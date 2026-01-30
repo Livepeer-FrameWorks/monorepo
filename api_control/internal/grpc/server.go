@@ -2233,19 +2233,58 @@ func (s *CommodoreServer) UpdateMe(ctx context.Context, req *pb.UpdateMeRequest)
 	return s.GetMe(ctx, &pb.GetMeRequest{})
 }
 
-// UpdateNewsletter updates the user's newsletter subscription preference
+// UpdateNewsletter updates the user's newsletter subscription in Listmonk (source of truth)
 func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *pb.UpdateNewsletterRequest) (*pb.UpdateNewsletterResponse, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE commodore.users
-		SET newsletter_subscribed = $1, updated_at = NOW()
-		WHERE id = $2 AND tenant_id = $3
-	`, req.GetSubscribed(), userID, tenantID)
+	// Get user email and name from DB
+	var email sql.NullString
+	var firstName, lastName sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+		SELECT email, first_name, last_name FROM commodore.users WHERE id = $1 AND tenant_id = $2
+	`, userID, tenantID).Scan(&email, &firstName, &lastName)
 	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
+	}
+
+	if !email.Valid || email.String == "" {
+		return nil, status.Error(codes.FailedPrecondition, "email required for newsletter subscription")
+	}
+
+	name := strings.TrimSpace(firstName.String + " " + lastName.String)
+	if name == "" {
+		name = email.String
+	}
+
+	if s.listmonkClient == nil {
+		return nil, status.Error(codes.Unavailable, "newsletter service not configured")
+	}
+
+	if req.GetSubscribed() {
+		// Subscribe to the newsletter list
+		err = s.listmonkClient.Subscribe(ctx, email.String, name, s.defaultMailingListID, true)
+	} else {
+		// Unsubscribe from the newsletter list (not global blocklist)
+		// First get the subscriber ID
+		info, exists, lookupErr := s.listmonkClient.GetSubscriber(ctx, email.String)
+		if lookupErr != nil {
+			s.logger.WithError(lookupErr).WithField("email", email.String).Error("Failed to lookup subscriber in Listmonk")
+			return nil, status.Errorf(codes.Internal, "failed to lookup subscriber: %v", lookupErr)
+		}
+		if !exists {
+			// Not subscribed anyway, nothing to do
+			return &pb.UpdateNewsletterResponse{
+				Success: true,
+				Message: "newsletter preference updated",
+			}, nil
+		}
+		err = s.listmonkClient.Unsubscribe(ctx, info.ID, s.defaultMailingListID)
+	}
+	if err != nil {
+		s.logger.WithError(err).WithField("email", email.String).Error("Failed to update newsletter in Listmonk")
 		return nil, status.Errorf(codes.Internal, "failed to update newsletter preference: %v", err)
 	}
 
@@ -2253,6 +2292,47 @@ func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *pb.UpdateNe
 		Success: true,
 		Message: "newsletter preference updated",
 	}, nil
+}
+
+// GetNewsletterStatus returns the user's current newsletter subscription status from Listmonk
+func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *pb.GetNewsletterStatusRequest) (*pb.GetNewsletterStatusResponse, error) {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get user email from DB
+	var email sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+		SELECT email FROM commodore.users WHERE id = $1 AND tenant_id = $2
+	`, userID, tenantID).Scan(&email)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
+	}
+
+	if !email.Valid || email.String == "" {
+		// Wallet-only users can't have newsletter subscription
+		return &pb.GetNewsletterStatusResponse{Subscribed: false}, nil
+	}
+
+	if s.listmonkClient == nil {
+		return nil, status.Error(codes.Unavailable, "newsletter service not configured")
+	}
+
+	// Query Listmonk for subscriber info
+	info, exists, err := s.listmonkClient.GetSubscriber(ctx, email.String)
+	if err != nil {
+		s.logger.WithError(err).WithField("email", email.String).Error("Failed to get subscriber from Listmonk")
+		return nil, status.Errorf(codes.Internal, "failed to get newsletter status: %v", err)
+	}
+
+	// If subscriber doesn't exist in Listmonk, return unsubscribed
+	if !exists {
+		return &pb.GetNewsletterStatusResponse{Subscribed: false}, nil
+	}
+
+	// Check if subscribed to the newsletter list specifically
+	return &pb.GetNewsletterStatusResponse{Subscribed: info.IsSubscribedToList(s.defaultMailingListID)}, nil
 }
 
 // ============================================================================

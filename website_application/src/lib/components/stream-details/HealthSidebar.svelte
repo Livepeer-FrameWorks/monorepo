@@ -38,6 +38,7 @@
 
   interface Props {
     streamId: string;
+    streamName?: string;
     isLive: boolean;
     health: StreamHealth | null;
     analytics?: StreamSummaryMetrics | null;
@@ -45,7 +46,15 @@
     onToggle?: () => void;
   }
 
-  let { streamId, isLive, health, analytics = null, collapsed = false, onToggle }: Props = $props();
+  let {
+    streamId,
+    streamName,
+    isLive,
+    health,
+    analytics = null,
+    collapsed = false,
+    onToggle,
+  }: Props = $props();
 
   // Derive global health state
   let globalHealth = $derived.by((): HealthState => {

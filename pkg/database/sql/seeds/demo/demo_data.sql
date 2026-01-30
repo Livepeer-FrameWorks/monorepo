@@ -162,6 +162,15 @@ INSERT INTO purser.mollie_mandates (
     details = EXCLUDED.details,
     updated_at = NOW();
 
+-- Demo prepaid balance for the demo tenant (starts at $50)
+INSERT INTO purser.prepaid_balances (
+    tenant_id, balance_cents, currency, low_balance_threshold_cents, created_at, updated_at
+) VALUES (
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 5000, 'USD', 500, NOW() - INTERVAL '7 days', NOW()
+) ON CONFLICT (tenant_id, currency) DO UPDATE SET
+    balance_cents = EXCLUDED.balance_cents,
+    updated_at = NOW();
+
 -- Demo cluster subscription tracking (paid cluster flow uses this table)
 INSERT INTO purser.cluster_subscriptions (
     tenant_id, cluster_id, status, created_at, updated_at
@@ -240,10 +249,41 @@ INSERT INTO quartermaster.bootstrap_tokens (
 ) ON CONFLICT (token) DO UPDATE SET
     expires_at = NOW() + INTERVAL '30 days';
 
+-- ============================================================================
+-- PURSER: 5-Minute Usage Records (raw data, like Periscope produces)
+-- ============================================================================
+-- Generate 7 days of 5-minute granularity usage records
+-- 7 days * 24 hours * 12 intervals/hour = 2016 records per usage type
+-- These feed the rollup job which creates daily aggregates
+
+INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity)
+SELECT
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    'central-primary',
+    usage_type,
+    base_value / 288.0 * (0.7 + 0.6 * random()),  -- Daily value / 288 5-min periods, with variance
+    '{}',
+    NOW() - ((n * 5) || ' minutes')::interval,
+    NOW() - ((n * 5) || ' minutes')::interval + INTERVAL '5 minutes',
+    'hourly'  -- 5-min records are classified as 'hourly' granularity (< 24h)
+FROM generate_series(0, 2015) AS n  -- 2016 intervals (0-2015)
+CROSS JOIN (VALUES
+    ('stream_hours', 18.0),
+    ('egress_gb', 65.0),
+    ('recording_gb', 12.0),
+    ('viewer_hours', 85.0)
+) AS usage_types(usage_type, base_value)
+ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
+    usage_value = EXCLUDED.usage_value,
+    granularity = EXCLUDED.granularity;
+
+-- ============================================================================
+-- PURSER: Monthly Usage Records (for billing summaries)
+-- ============================================================================
 -- Demo usage records for billing page
 -- Current month usage (ongoing)
 -- NOTE: usage_details must include all fields expected by UsageSummary GraphQL type
-INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end)
+INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity)
 VALUES
     -- Stream hours - current month (includes rich usage_details for UsageSummary)
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'stream_hours', 127.5,
@@ -266,38 +306,39 @@ VALUES
          {"country_code": "JP", "viewer_count": 510, "viewer_hours": 82.1, "egress_gb": 48.2}
        ]
      }',
-     DATE_TRUNC('month', NOW()), NOW()),
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Egress GB - current month
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'egress_gb', 456.78,
      '{"viewer_sessions": 12500, "avg_quality": "1080p"}',
-     DATE_TRUNC('month', NOW()), NOW()),
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Storage GB - current month
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'storage_gb', 89.3,
      '{"dvr_gb": 45.2, "clips_gb": 12.8, "recordings_gb": 31.3}',
-     DATE_TRUNC('month', NOW()), NOW()),
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Total Streams - current month
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'total_streams', 3,
      '{"live_streams": 2, "vod_streams": 1}',
-     DATE_TRUNC('month', NOW()), NOW()),
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Peak Viewers - current month
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'peak_viewers', 89,
      '{"stream_id": "demo_live_stream_001", "timestamp": "2023-10-15T14:30:00Z"}',
-     DATE_TRUNC('month', NOW()), NOW()),
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Total Viewers - current month (REQUIRED for UsageSummary.totalViewers)
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'total_viewers', 4936,
      '{"sessions": 4936, "returning": 1247}',
-     DATE_TRUNC('month', NOW()), NOW()),
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Viewer Hours - current month (REQUIRED for UsageSummary.viewerHours)
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'viewer_hours', 6543,
      '{"avg_session_minutes": 79.5}',
-     DATE_TRUNC('month', NOW()), NOW()),
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Unique Viewers - current month (REQUIRED for UsageSummary.uniqueViewers)
     ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'unique_viewers', 5000,
      '{"by_country": {"US": 1500, "NL": 1000, "GB": 500, "DE": 500, "JP": 500, "other": 1000}}',
-     DATE_TRUNC('month', NOW()), NOW())
+     DATE_TRUNC('month', NOW()), NOW(), 'monthly')
 ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
     usage_value = EXCLUDED.usage_value,
-    usage_details = EXCLUDED.usage_details;
+    usage_details = EXCLUDED.usage_details,
+    granularity = EXCLUDED.granularity;
 
 -- Previous month usage (finalized)
 INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end)
@@ -378,7 +419,7 @@ INSERT INTO purser.billing_invoices (
     NULL,
     249.00,  -- Developer tier base
     0.00,    -- No metered charges yet
-    '{"usage_data": {"viewer_hours": 4166.67, "average_storage_gb": 23.5, "gpu_hours": 8.2, "stream_hours": 127.5, "egress_gb": 456.78}, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    '{"viewer_hours": 4166.67, "average_storage_gb": 23.5, "stream_hours": 127.5, "egress_gb": 456.78, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW())
 ),
 -- Previous month (paid invoice)
@@ -394,7 +435,7 @@ INSERT INTO purser.billing_invoices (
     DATE_TRUNC('month', NOW()) + INTERVAL '5 days',
     249.00,
     0.00,
-    '{"usage_data": {"viewer_hours": 7500.0, "average_storage_gb": 45.2, "gpu_hours": 15.5, "stream_hours": 342.0, "egress_gb": 1245.6}, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    '{"viewer_hours": 7500.0, "average_storage_gb": 45.2, "stream_hours": 342.0, "egress_gb": 1245.6, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW() - INTERVAL '1 month')
 ),
 -- Two months ago (paid invoice)
@@ -410,7 +451,7 @@ INSERT INTO purser.billing_invoices (
     DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days',
     249.00,
     0.00,
-    '{"usage_data": {"viewer_hours": 5833.33, "average_storage_gb": 32.1, "gpu_hours": 12.0, "stream_hours": 215.25, "egress_gb": 890.2}, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    '{"viewer_hours": 5833.33, "average_storage_gb": 32.1, "stream_hours": 215.25, "egress_gb": 890.2, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW() - INTERVAL '2 months')
 )
 ON CONFLICT (id) DO UPDATE SET
@@ -845,3 +886,57 @@ INSERT INTO periscope.billing_cursors (
 ) ON CONFLICT (tenant_id) DO UPDATE SET
     last_processed_at = NOW() - INTERVAL '1 hour',
     updated_at = NOW();
+
+-- ============================================================================
+-- PURSER: Usage Rollups (create daily/monthly aggregates from hourly data)
+-- ============================================================================
+-- This mimics what Purser's rollupUsageRecords job does in production
+-- Aggregates hourly → daily → monthly
+
+-- Rollup hourly → daily (matches Purser's rollupUsageRecords logic)
+INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity)
+SELECT
+    tenant_id,
+    cluster_id,
+    usage_type,
+    CASE
+        WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers',
+                            'unique_users', 'unique_users_period', 'peak_viewers',
+                            'livepeer_unique_streams', 'native_av_unique_streams') THEN MAX(usage_value)
+        WHEN usage_type IN ('average_storage_gb') THEN AVG(usage_value)
+        ELSE SUM(usage_value)
+    END,
+    '{}',
+    DATE_TRUNC('day', period_start),
+    DATE_TRUNC('day', period_start) + INTERVAL '1 day',
+    'daily'
+FROM purser.usage_records
+WHERE granularity = 'hourly'
+GROUP BY tenant_id, cluster_id, usage_type, DATE_TRUNC('day', period_start)
+ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
+    usage_value = EXCLUDED.usage_value,
+    granularity = EXCLUDED.granularity;
+
+-- Rollup daily → monthly (matches Purser's rollupUsageRecords logic)
+INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity)
+SELECT
+    tenant_id,
+    cluster_id,
+    usage_type,
+    CASE
+        WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers',
+                            'unique_users', 'unique_users_period', 'peak_viewers',
+                            'livepeer_unique_streams', 'native_av_unique_streams') THEN MAX(usage_value)
+        WHEN usage_type IN ('average_storage_gb') THEN AVG(usage_value)
+        ELSE SUM(usage_value)
+    END,
+    '{}',
+    DATE_TRUNC('month', period_start),
+    DATE_TRUNC('month', period_start) + INTERVAL '1 month',
+    'monthly'
+FROM purser.usage_records
+WHERE granularity = 'daily'
+GROUP BY tenant_id, cluster_id, usage_type, DATE_TRUNC('month', period_start)
+ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
+    usage_value = EXCLUDED.usage_value,
+    granularity = EXCLUDED.granularity;

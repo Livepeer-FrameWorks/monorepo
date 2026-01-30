@@ -51,6 +51,7 @@ type CountryMetrics struct {
 	ViewerCount int     `json:"viewer_count"`
 	ViewerHours float64 `json:"viewer_hours"`
 	EgressGB    float64 `json:"egress_gb"`
+	Percentage  float64 `json:"percentage"`
 }
 
 // APIUsageBreakdown represents API usage aggregates by auth and operation type.
@@ -73,30 +74,8 @@ type UsageSummary struct {
 	Period            string  `json:"period"`
 	StreamHours       float64 `json:"stream_hours"`
 	EgressGB          float64 `json:"egress_gb"`
-	RecordingGB       float64 `json:"recording_gb"`
 	PeakBandwidthMbps float64 `json:"peak_bandwidth_mbps"`
-	// Storage and clip lifecycle metrics for billing
-	StorageGB            float64 `json:"storage_gb"`
-	AverageStorageGB     float64 `json:"average_storage_gb"`
-	ClipsAdded           int     `json:"clips_added"`
-	ClipsDeleted         int     `json:"clips_deleted"`
-	ClipStorageAddedGB   float64 `json:"clip_storage_added_gb"`
-	ClipStorageDeletedGB float64 `json:"clip_storage_deleted_gb"`
-	DvrAdded             int     `json:"dvr_added"`
-	DvrDeleted           int     `json:"dvr_deleted"`
-	DvrStorageAddedGB    float64 `json:"dvr_storage_added_gb"`
-	DvrStorageDeletedGB  float64 `json:"dvr_storage_deleted_gb"`
-	VodAdded             int     `json:"vod_added"`
-	VodDeleted           int     `json:"vod_deleted"`
-	VodStorageAddedGB    float64 `json:"vod_storage_added_gb"`
-	VodStorageDeletedGB  float64 `json:"vod_storage_deleted_gb"`
-	// Processing/transcoding usage metrics for billing
-	LivepeerSeconds       float64 `json:"livepeer_seconds"`         // Total Livepeer Gateway transcode seconds
-	LivepeerSegmentCount  int     `json:"livepeer_segment_count"`   // Number of segments transcoded via Livepeer
-	LivepeerUniqueStreams int     `json:"livepeer_unique_streams"`  // Unique streams using Livepeer
-	NativeAvSeconds       float64 `json:"native_av_seconds"`        // Total local audio/video transcode seconds
-	NativeAvSegmentCount  int     `json:"native_av_segment_count"`  // Number of segments processed locally
-	NativeAvUniqueStreams int     `json:"native_av_unique_streams"` // Unique streams using local AV processing
+	AverageStorageGB  float64 `json:"average_storage_gb"`
 
 	// Per-codec breakdown: Livepeer (external gateway)
 	LivepeerH264Seconds float64 `json:"livepeer_h264_seconds"`
@@ -112,26 +91,15 @@ type UsageSummary struct {
 	NativeAvAACSeconds  float64 `json:"native_av_aac_seconds"`
 	NativeAvOpusSeconds float64 `json:"native_av_opus_seconds"`
 
-	// Track type aggregates (for billing: audio is free)
-	AudioSeconds float64 `json:"audio_seconds"`
-	VideoSeconds float64 `json:"video_seconds"`
+	// Viewer metrics
+	TotalStreams int       `json:"total_streams"`
+	TotalViewers int       `json:"total_viewers"`
+	ViewerHours  float64   `json:"viewer_hours"`
+	MaxViewers   int       `json:"max_viewers"`
+	UniqueUsers  int       `json:"unique_users"`
+	Timestamp    time.Time `json:"timestamp"`
 
-	TotalStreams      int       `json:"total_streams"`
-	TotalViewers      int       `json:"total_viewers"`
-	ViewerHours       float64   `json:"viewer_hours"`
-	PeakViewers       int       `json:"peak_viewers"`
-	MaxViewers        int       `json:"max_viewers"`
-	UniqueUsers       int       `json:"unique_users"`
-	UniqueUsersPeriod int       `json:"unique_users_period"`
-	Timestamp         time.Time `json:"timestamp"`
-
-	// Additional metrics from ClickHouse
-	AvgViewers      float64          `json:"avg_viewers"`
-	UniqueCountries int              `json:"unique_countries"`
-	UniqueCities    int              `json:"unique_cities"`
-	GeoBreakdown    []CountryMetrics `json:"geo_breakdown"`
-
-	// API usage aggregates (from Gateway summaries)
+	// API usage aggregates (for future API billing)
 	APIRequests   float64             `json:"api_requests"`
 	APIErrors     float64             `json:"api_errors"`
 	APIDurationMs float64             `json:"api_duration_ms"`

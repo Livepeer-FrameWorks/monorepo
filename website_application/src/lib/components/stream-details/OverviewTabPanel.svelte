@@ -77,30 +77,15 @@
     keyValue?: string;
   }
 
-  interface RecordingData {
-    sizeBytes?: number | null;
-    isFrozen?: boolean;
-  }
-
-  interface ClipData {
-    sizeBytes?: number | null;
-    isFrozen?: boolean;
-  }
-
   interface AnalyticsData {
     peakViewers?: number | null;
     totalSessionDuration?: number | null;
-    packetsSent?: number | null;
-    packetsLost?: number | null;
-    packetsRetrans?: number | null;
-    packetLossRate?: number | null;
   }
 
   let {
     stream,
     streamKeys,
     recordings,
-    clips = [],
     analytics,
     tracks = null,
     viewerMetrics = [],
@@ -110,8 +95,7 @@
   }: {
     stream: StreamData;
     streamKeys: StreamKeyData[];
-    recordings: RecordingData[];
-    clips?: ClipData[];
+    recordings: unknown[];
     analytics: AnalyticsData | null;
     tracks?: TrackInfo | null;
     viewerMetrics?: ViewerMetric[];
@@ -128,33 +112,6 @@
     tracks?.tracks?.filter((t: StreamTrack) => t.trackType === "audio") || []
   );
 
-  // Storage calculations
-  const storageStats = $derived.by(() => {
-    const loadedRecordings = recordings || [];
-    const loadedClips = clips || [];
-
-    const recordingBytes = loadedRecordings.reduce((sum, r) => sum + (r.sizeBytes || 0), 0);
-    const clipBytes = loadedClips.reduce((sum, c) => sum + (c.sizeBytes || 0), 0);
-    const frozenRecordings = loadedRecordings.filter((r) => r.isFrozen).length;
-    const frozenClips = loadedClips.filter((c) => c.isFrozen).length;
-
-    return {
-      totalBytes: recordingBytes + clipBytes,
-      recordingBytes,
-      clipBytes,
-      frozenAssets: frozenRecordings + frozenClips,
-      totalAssets: loadedRecordings.length + loadedClips.length,
-    };
-  });
-
-  function formatBytes(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-  }
-
   // Map viewer metrics for the chart
   const chartData = $derived(
     viewerMetrics.map((m) => ({ timestamp: m.timestamp, viewers: m.viewerCount }))
@@ -164,33 +121,13 @@
   const MicIcon = $derived(getIconComponent("Mic"));
   const ActivityIcon = $derived(getIconComponent("Activity"));
   const TrendingUpIcon = $derived(getIconComponent("TrendingUp"));
-  const NetworkIcon = $derived(getIconComponent("Wifi"));
-  const HardDriveIcon = $derived(getIconComponent("HardDrive"));
-  const SnowflakeIcon = $derived(getIconComponent("Snowflake"));
-  const ScissorsIcon = $derived(getIconComponent("Scissors"));
-  const FilmIcon = $derived(getIconComponent("Film"));
-  const InfoIcon = $derived(getIconComponent("Info"));
   const CalendarIcon = $derived(getIconComponent("Calendar"));
   const GlobeIcon = $derived(getIconComponent("Globe"));
-
-  // Format large numbers with commas
-  function formatNumber(n: number | null | undefined): string {
-    if (n === null || n === undefined) return "0";
-    return n.toLocaleString();
-  }
 
   function formatMinutes(minutes: number | null | undefined): string {
     if (minutes === null || minutes === undefined) return "0m";
     if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h`;
     return `${Math.round(minutes)}m`;
-  }
-
-  // Packet loss status color
-  function getPacketLossColor(rate: number | null | undefined): string {
-    if (rate === null || rate === undefined) return "text-muted-foreground";
-    if (rate > 0.05) return "text-error";
-    if (rate > 0.01) return "text-warning";
-    return "text-success";
   }
 </script>
 
@@ -374,108 +311,6 @@
       {/if}
     </div>
   </div>
-
-  <!-- Storage Summary -->
-  <div class="slab">
-    <div class="slab-header flex items-center gap-2">
-      <HardDriveIcon class="w-5 h-5 text-accent-purple" />
-      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-        Storage Summary
-      </h3>
-    </div>
-    <div class="slab-body--padded space-y-4">
-      <div class="flex justify-between items-center">
-        <span class="text-muted-foreground">Total Usage (Visible):</span>
-        <span class="font-mono text-accent-purple font-medium text-lg">
-          {formatBytes(storageStats.totalBytes)}
-        </span>
-      </div>
-
-      <div class="grid grid-cols-2 gap-4 pt-2 border-t border-border/30">
-        <div>
-          <div class="flex items-center gap-1.5 mb-1">
-            <FilmIcon class="w-3.5 h-3.5 text-blue-500" />
-            <span class="text-xs text-muted-foreground">DVR Usage</span>
-          </div>
-          <p class="font-mono text-sm">{formatBytes(storageStats.recordingBytes)}</p>
-        </div>
-        <div>
-          <div class="flex items-center gap-1.5 mb-1">
-            <ScissorsIcon class="w-3.5 h-3.5 text-purple-500" />
-            <span class="text-xs text-muted-foreground">Clips Usage</span>
-          </div>
-          <p class="font-mono text-sm">{formatBytes(storageStats.clipBytes)}</p>
-        </div>
-      </div>
-
-      {#if storageStats.frozenAssets > 0}
-        <div
-          class="flex items-center justify-between pt-2 border-t border-border/30 bg-blue-500/5 -mx-4 px-4 py-2 mt-2"
-        >
-          <div class="flex items-center gap-2 text-blue-400">
-            <SnowflakeIcon class="w-4 h-4" />
-            <span class="text-sm font-medium">Archived to Cold Storage</span>
-          </div>
-          <span class="font-mono text-blue-400 font-medium">{storageStats.frozenAssets} items</span>
-        </div>
-      {/if}
-    </div>
-  </div>
-
-  <!-- Network Stats (from stream analytics) -->
-  {#if analytics && (analytics.packetsSent || analytics.packetsLost || analytics.packetLossRate !== undefined)}
-    <div class="slab col-span-full">
-      <div class="slab-header flex items-center gap-2">
-        <NetworkIcon class="w-5 h-5 text-info" />
-        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-          Network Stats
-        </h3>
-      </div>
-      <div class="slab-body--padded">
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <span class="text-sm text-muted-foreground">Packets Sent</span>
-            <p class="font-mono text-lg text-foreground">{formatNumber(analytics.packetsSent)}</p>
-          </div>
-          <div>
-            <span class="text-sm text-muted-foreground">Packets Lost</span>
-            <p
-              class="font-mono text-lg {analytics.packetsLost > 0
-                ? 'text-warning'
-                : 'text-foreground'}"
-            >
-              {formatNumber(analytics.packetsLost)}
-            </p>
-          </div>
-          <div>
-            <span class="text-sm text-muted-foreground">Retransmitted</span>
-            <p class="font-mono text-lg text-foreground">
-              {formatNumber(analytics.packetsRetrans)}
-            </p>
-          </div>
-          <div>
-            <span class="text-sm text-muted-foreground">Packet Loss Rate</span>
-            <p
-              class="font-mono text-lg {getPacketLossColor(
-                analytics.packetLossRate
-              )} flex items-center gap-1"
-            >
-              {analytics.packetLossRate !== null && analytics.packetLossRate !== undefined
-                ? `${(analytics.packetLossRate * 100).toFixed(3)}%`
-                : "N/A"}
-              {#if analytics.packetLossRate === null || analytics.packetLossRate === undefined}
-                <span
-                  title="Packet statistics are available for UDP-based protocols (SRT, WebRTC) which prioritize low latency. HTTP-based protocols (HLS, DASH) use TCP which guarantees delivery but adds latency through retransmission."
-                >
-                  <InfoIcon class="w-3.5 h-3.5 text-muted-foreground cursor-help" />
-                </span>
-              {/if}
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
 
   <!-- Quality + Codec Distribution -->
   {#if qualityTierSummary}

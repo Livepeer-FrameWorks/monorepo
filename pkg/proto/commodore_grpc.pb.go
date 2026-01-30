@@ -929,6 +929,7 @@ const (
 	UserService_GetMe_FullMethodName               = "/commodore.UserService/GetMe"
 	UserService_UpdateMe_FullMethodName            = "/commodore.UserService/UpdateMe"
 	UserService_UpdateNewsletter_FullMethodName    = "/commodore.UserService/UpdateNewsletter"
+	UserService_GetNewsletterStatus_FullMethodName = "/commodore.UserService/GetNewsletterStatus"
 	UserService_WalletLogin_FullMethodName         = "/commodore.UserService/WalletLogin"
 	UserService_WalletLoginWithX402_FullMethodName = "/commodore.UserService/WalletLoginWithX402"
 	UserService_LinkWallet_FullMethodName          = "/commodore.UserService/LinkWallet"
@@ -956,6 +957,7 @@ type UserServiceClient interface {
 	GetMe(ctx context.Context, in *GetMeRequest, opts ...grpc.CallOption) (*User, error)
 	UpdateMe(ctx context.Context, in *UpdateMeRequest, opts ...grpc.CallOption) (*User, error)
 	UpdateNewsletter(ctx context.Context, in *UpdateNewsletterRequest, opts ...grpc.CallOption) (*UpdateNewsletterResponse, error)
+	GetNewsletterStatus(ctx context.Context, in *GetNewsletterStatusRequest, opts ...grpc.CallOption) (*GetNewsletterStatusResponse, error)
 	// Wallet authentication (x402 / agent access)
 	WalletLogin(ctx context.Context, in *WalletLoginRequest, opts ...grpc.CallOption) (*AuthResponse, error)
 	WalletLoginWithX402(ctx context.Context, in *WalletLoginWithX402Request, opts ...grpc.CallOption) (*WalletLoginWithX402Response, error)
@@ -1084,6 +1086,16 @@ func (c *userServiceClient) UpdateNewsletter(ctx context.Context, in *UpdateNews
 	return out, nil
 }
 
+func (c *userServiceClient) GetNewsletterStatus(ctx context.Context, in *GetNewsletterStatusRequest, opts ...grpc.CallOption) (*GetNewsletterStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNewsletterStatusResponse)
+	err := c.cc.Invoke(ctx, UserService_GetNewsletterStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *userServiceClient) WalletLogin(ctx context.Context, in *WalletLoginRequest, opts ...grpc.CallOption) (*AuthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthResponse)
@@ -1163,6 +1175,7 @@ type UserServiceServer interface {
 	GetMe(context.Context, *GetMeRequest) (*User, error)
 	UpdateMe(context.Context, *UpdateMeRequest) (*User, error)
 	UpdateNewsletter(context.Context, *UpdateNewsletterRequest) (*UpdateNewsletterResponse, error)
+	GetNewsletterStatus(context.Context, *GetNewsletterStatusRequest) (*GetNewsletterStatusResponse, error)
 	// Wallet authentication (x402 / agent access)
 	WalletLogin(context.Context, *WalletLoginRequest) (*AuthResponse, error)
 	WalletLoginWithX402(context.Context, *WalletLoginWithX402Request) (*WalletLoginWithX402Response, error)
@@ -1213,6 +1226,9 @@ func (UnimplementedUserServiceServer) UpdateMe(context.Context, *UpdateMeRequest
 }
 func (UnimplementedUserServiceServer) UpdateNewsletter(context.Context, *UpdateNewsletterRequest) (*UpdateNewsletterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateNewsletter not implemented")
+}
+func (UnimplementedUserServiceServer) GetNewsletterStatus(context.Context, *GetNewsletterStatusRequest) (*GetNewsletterStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNewsletterStatus not implemented")
 }
 func (UnimplementedUserServiceServer) WalletLogin(context.Context, *WalletLoginRequest) (*AuthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WalletLogin not implemented")
@@ -1451,6 +1467,24 @@ func _UserService_UpdateNewsletter_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_GetNewsletterStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNewsletterStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).GetNewsletterStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_GetNewsletterStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).GetNewsletterStatus(ctx, req.(*GetNewsletterStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _UserService_WalletLogin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(WalletLoginRequest)
 	if err := dec(in); err != nil {
@@ -1609,6 +1643,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateNewsletter",
 			Handler:    _UserService_UpdateNewsletter_Handler,
+		},
+		{
+			MethodName: "GetNewsletterStatus",
+			Handler:    _UserService_GetNewsletterStatus_Handler,
 		},
 		{
 			MethodName: "WalletLogin",

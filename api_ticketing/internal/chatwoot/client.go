@@ -44,7 +44,7 @@ func NewClient(cfg Config) *Client {
 // Contact represents a Chatwoot contact
 type Contact struct {
 	ID               int64             `json:"id"`
-	SourceID         string            `json:"source_id,omitempty"`
+	Identifier       string            `json:"identifier,omitempty"` // External identifier (tenant_id)
 	Name             string            `json:"name"`
 	Email            string            `json:"email,omitempty"`
 	CustomAttributes map[string]string `json:"custom_attributes,omitempty"`
@@ -75,7 +75,7 @@ type Message struct {
 	ConversationID int64  `json:"conversation_id"`
 	Content        string `json:"content"`
 	ContentType    string `json:"content_type"` // text, input_select, cards, form
-	MessageType    string `json:"message_type"` // incoming, outgoing
+	MessageType    int    `json:"message_type"` // 0=incoming, 1=outgoing, 2=activity
 	Private        bool   `json:"private"`
 	CreatedAt      int64  `json:"created_at"`
 	Sender         *struct {
@@ -85,7 +85,15 @@ type Message struct {
 	} `json:"sender,omitempty"`
 }
 
-// FindOrCreateContact finds a contact by source_id or creates one
+// MessageType constants matching Chatwoot's enum
+const (
+	MessageTypeIncoming = 0 // From contact (customer)
+	MessageTypeOutgoing = 1 // From agent
+	MessageTypeActivity = 2 // System activity message
+)
+
+// FindOrCreateContact finds a contact by source_id or creates one.
+// If a contact exists with the same email but different source_id, updates it.
 func (c *Client) FindOrCreateContact(ctx context.Context, sourceID, name, email string) (*Contact, error) {
 	// First try to find by source_id
 	contact, err := c.GetContactBySourceID(ctx, sourceID)
@@ -93,8 +101,22 @@ func (c *Client) FindOrCreateContact(ctx context.Context, sourceID, name, email 
 		return contact, nil
 	}
 
-	// Create new contact
-	return c.CreateContact(ctx, sourceID, name, email)
+	// Try to create new contact
+	contact, err = c.CreateContact(ctx, sourceID, name, email)
+	if err == nil {
+		return contact, nil
+	}
+
+	// If creation failed due to duplicate email, find by email and update source_id
+	if email != "" {
+		contact, err = c.GetContactByEmail(ctx, email)
+		if err == nil && contact != nil {
+			// Update the contact's source_id
+			return c.UpdateContactSourceID(ctx, contact.ID, sourceID)
+		}
+	}
+
+	return nil, fmt.Errorf("failed to find or create contact: %w", err)
 }
 
 // GetContactBySourceID finds a contact by their source identifier (tenant_id)
@@ -118,9 +140,9 @@ func (c *Client) GetContactBySourceID(ctx context.Context, sourceID string) (*Co
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Find exact match by source_id
+	// Find exact match by identifier
 	for _, contact := range result.Payload {
-		if contact.SourceID == sourceID {
+		if contact.Identifier == sourceID {
 			return &contact, nil
 		}
 	}
@@ -128,15 +150,75 @@ func (c *Client) GetContactBySourceID(ctx context.Context, sourceID string) (*Co
 	return nil, nil // Not found
 }
 
+// GetContactByEmail finds a contact by email address
+func (c *Client) GetContactByEmail(ctx context.Context, email string) (*Contact, error) {
+	url := fmt.Sprintf("%s/api/v1/accounts/%d/contacts/search?q=%s", c.baseURL, c.accountID, email)
+
+	resp, err := c.doRequest(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("search contacts: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search contacts: status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Payload []Contact `json:"payload"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	// Find exact match by email
+	for _, contact := range result.Payload {
+		if contact.Email == email {
+			return &contact, nil
+		}
+	}
+
+	return nil, nil // Not found
+}
+
+// UpdateContactSourceID updates a contact's source_id field
+func (c *Client) UpdateContactSourceID(ctx context.Context, contactID int64, sourceID string) (*Contact, error) {
+	url := fmt.Sprintf("%s/api/v1/accounts/%d/contacts/%d", c.baseURL, c.accountID, contactID)
+
+	body := map[string]interface{}{
+		"identifier": sourceID,
+	}
+
+	resp, err := c.doRequest(ctx, "PUT", url, body)
+	if err != nil {
+		return nil, fmt.Errorf("update contact: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("update contact: status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result struct {
+		Payload Contact `json:"payload"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return &result.Payload, nil
+}
+
 // CreateContact creates a new contact in Chatwoot
 func (c *Client) CreateContact(ctx context.Context, sourceID, name, email string) (*Contact, error) {
 	url := fmt.Sprintf("%s/api/v1/accounts/%d/contacts", c.baseURL, c.accountID)
 
 	body := map[string]interface{}{
-		"inbox_id":  c.inboxID,
-		"source_id": sourceID,
-		"name":      name,
-		"email":     email,
+		"inbox_id":   c.inboxID,
+		"identifier": sourceID,
+		"name":       name,
+		"email":      email,
 	}
 
 	resp, err := c.doRequest(ctx, "POST", url, body)
@@ -300,12 +382,15 @@ func (c *Client) ListMessages(ctx context.Context, conversationID int64) ([]Mess
 		return nil, fmt.Errorf("list messages: status %d", resp.StatusCode)
 	}
 
-	var result []Message
+	// Chatwoot returns {"payload": [...messages...], "meta": {...}}
+	var result struct {
+		Payload []Message `json:"payload"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return result, nil
+	return result.Payload, nil
 }
 
 // SendMessage sends a message in a conversation

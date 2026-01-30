@@ -79,7 +79,8 @@
     .sort((a, b) => a.name.localeCompare(b.name));
 
   let lastName = $state("");
-  let newsletter = $state(true);
+  let newsletter = $state(false);
+  let newsletterLoading = $state(true);
   let loading = $state(false);
   let pageLoading = $state(true);
 
@@ -160,6 +161,17 @@
         // Billing details optional
       } finally {
         billingDetailsLoading = false;
+      }
+
+      // Load newsletter status from Listmonk (source of truth)
+      try {
+        const newsletterResp = await authAPI.get("/me/newsletter");
+        newsletter = newsletterResp.data?.subscribed ?? false;
+      } catch {
+        // Default to false if fetch fails
+        newsletter = false;
+      } finally {
+        newsletterLoading = false;
       }
     }
     pageLoading = false;
@@ -249,23 +261,31 @@
   async function handleSaveBillingDetails() {
     billingDetailsSaving = true;
     try {
+      // Only include address if we have the required fields (street + country)
+      const hasAddress = billingDetails.street && billingDetails.country;
+
       const mutation = new UpdateBillingDetailsStore();
       const result = await mutation.mutate({
         input: {
           email: billingDetails.email || null,
           company: billingDetails.company || null,
           vatNumber: billingDetails.vatNumber || null,
-          address: billingDetails.street
+          address: hasAddress
             ? {
                 street: billingDetails.street,
-                city: billingDetails.city,
+                city: billingDetails.city || null,
                 state: billingDetails.state || null,
-                postalCode: billingDetails.postalCode,
+                postalCode: billingDetails.postalCode || null,
                 country: billingDetails.country,
               }
             : null,
         },
       });
+
+      // Check for GraphQL errors
+      if (result.errors?.length) {
+        throw new Error(result.errors[0].message);
+      }
 
       if (result.data?.updateBillingDetails) {
         const d = result.data.updateBillingDetails;
@@ -373,7 +393,7 @@
 
   async function toggleNewsletter() {
     try {
-      await authAPI.post("/me/newsletter", { subscribe: newsletter });
+      await authAPI.post("/me/newsletter", { subscribed: newsletter });
       toast.success("Notification preference updated");
     } catch {
       newsletter = !newsletter;
@@ -468,7 +488,8 @@
                   type="checkbox"
                   bind:checked={newsletter}
                   onchange={toggleNewsletter}
-                  class="h-4 w-4 text-primary border-input rounded focus:ring-ring bg-background"
+                  disabled={newsletterLoading}
+                  class="h-4 w-4 text-primary border-input rounded focus:ring-ring bg-background disabled:opacity-50"
                 />
               </div>
               <div class="flex-1">
@@ -723,9 +744,13 @@
                     onValueChange={(v) => (billingDetails.country = v ?? "")}
                   >
                     <SelectTrigger id="billingCountry" class="w-full">
-                      {billingDetails.country
-                        ? countryNames[billingDetails.country] || billingDetails.country
-                        : "Select country..."}
+                      <span
+                        class={!billingDetails.country ? "text-muted-foreground opacity-60" : ""}
+                      >
+                        {billingDetails.country
+                          ? countryNames[billingDetails.country] || billingDetails.country
+                          : "Select country..."}
+                      </span>
                     </SelectTrigger>
                     <SelectContent class="max-h-[300px]">
                       {#each countryOptions as { code, name } (code)}

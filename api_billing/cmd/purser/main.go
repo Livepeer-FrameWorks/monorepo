@@ -13,6 +13,7 @@ import (
 	"frameworks/api_billing/internal/stripe"
 	commodoreclnt "frameworks/pkg/clients/commodore"
 	decklogclient "frameworks/pkg/clients/decklog"
+	periscopeclient "frameworks/pkg/clients/periscope"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
@@ -37,6 +38,7 @@ func main() {
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
+	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope:19004")
 
 	// Payment provider credentials (optional - service works without them)
 	stripeSecretKey := config.GetEnv("STRIPE_SECRET_KEY", "")
@@ -121,6 +123,21 @@ func main() {
 		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
 	}
 
+	// Create Periscope gRPC client for invoice enrichment (accurate unique counts, geo breakdown)
+	periscopeClient, err := periscopeclient.NewGRPCClient(periscopeclient.GRPCConfig{
+		GRPCAddr:     periscopeGRPCAddr,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Periscope gRPC client - invoice enrichment will be disabled")
+		periscopeClient = nil
+	} else {
+		defer periscopeClient.Close()
+		logger.WithField("addr", periscopeGRPCAddr).Info("Connected to Periscope gRPC")
+	}
+
 	// Create Stripe client (optional - service works without it)
 	var stripeClient *stripe.Client
 	if stripeSecretKey != "" {
@@ -152,10 +169,10 @@ func main() {
 	}
 
 	// Initialize handlers
-	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, decklogClient)
+	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, decklogClient, periscopeClient)
 
 	// Initialize and start JobManager for background billing tasks
-	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient)
+	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

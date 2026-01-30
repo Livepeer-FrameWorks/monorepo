@@ -80,6 +80,7 @@ const (
 	MessageSender_MESSAGE_SENDER_UNSPECIFIED MessageSender = 0
 	MessageSender_MESSAGE_SENDER_USER        MessageSender = 1
 	MessageSender_MESSAGE_SENDER_AGENT       MessageSender = 2
+	MessageSender_MESSAGE_SENDER_SYSTEM      MessageSender = 3 // Activity messages (assigned, resolved, etc.)
 )
 
 // Enum value maps for MessageSender.
@@ -88,11 +89,13 @@ var (
 		0: "MESSAGE_SENDER_UNSPECIFIED",
 		1: "MESSAGE_SENDER_USER",
 		2: "MESSAGE_SENDER_AGENT",
+		3: "MESSAGE_SENDER_SYSTEM",
 	}
 	MessageSender_value = map[string]int32{
 		"MESSAGE_SENDER_UNSPECIFIED": 0,
 		"MESSAGE_SENDER_USER":        1,
 		"MESSAGE_SENDER_AGENT":       2,
+		"MESSAGE_SENDER_SYSTEM":      3,
 	}
 )
 
@@ -854,11 +857,12 @@ const file_deckhand_proto_rawDesc = "" +
 	"\x1fCONVERSATION_STATUS_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18CONVERSATION_STATUS_OPEN\x10\x01\x12 \n" +
 	"\x1cCONVERSATION_STATUS_RESOLVED\x10\x02\x12\x1f\n" +
-	"\x1bCONVERSATION_STATUS_PENDING\x10\x03*b\n" +
+	"\x1bCONVERSATION_STATUS_PENDING\x10\x03*}\n" +
 	"\rMessageSender\x12\x1e\n" +
 	"\x1aMESSAGE_SENDER_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13MESSAGE_SENDER_USER\x10\x01\x12\x18\n" +
-	"\x14MESSAGE_SENDER_AGENT\x10\x022\x9a\x04\n" +
+	"\x14MESSAGE_SENDER_AGENT\x10\x02\x12\x19\n" +
+	"\x15MESSAGE_SENDER_SYSTEM\x10\x032\x9a\x04\n" +
 	"\x0fDeckhandService\x12\\\n" +
 	"\x11ListConversations\x12\".deckhand.ListConversationsRequest\x1a#.deckhand.ListConversationsResponse\x12b\n" +
 	"\x13SearchConversations\x12$.deckhand.SearchConversationsRequest\x1a%.deckhand.SearchConversationsResponse\x12S\n" +

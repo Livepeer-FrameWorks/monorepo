@@ -464,6 +464,7 @@ service UserService {
   rpc GetMe(GetMeRequest) returns (User);
   rpc UpdateMe(UpdateMeRequest) returns (User);
   rpc UpdateNewsletter(UpdateNewsletterRequest) returns (UpdateNewsletterResponse);
+  rpc GetNewsletterStatus(GetNewsletterStatusRequest) returns (GetNewsletterStatusResponse);
 
   // Wallet authentication (x402 / agent access)
   rpc WalletLogin(WalletLoginRequest) returns (AuthResponse);
@@ -590,6 +591,12 @@ message UpdateNewsletterRequest {
 message UpdateNewsletterResponse {
   bool success = 1;
   string message = 2;
+}
+
+message GetNewsletterStatusRequest {}
+
+message GetNewsletterStatusResponse {
+  bool subscribed = 1;
 }
 
 // ============================================================================

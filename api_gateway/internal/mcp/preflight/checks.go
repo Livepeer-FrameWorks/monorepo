@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/billing"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 )
 
 // Blocker represents something preventing an operation.
@@ -123,12 +124,17 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 	// Get prepaid balance from Purser
 	balance, err := c.clients.Purser.GetPrepaidBalance(ctx, tenantID, billing.DefaultCurrency())
 	if err != nil {
-		// If no balance record, it might be a postpaid account - check billing model
-		status, statusErr := c.clients.Purser.GetTenantBillingStatus(ctx, tenantID)
-		if statusErr == nil && status.BillingModel == "postpaid" {
+		// Check billing model to determine how to handle the error
+		billingStatus, statusErr := c.clients.Purser.GetTenantBillingStatus(ctx, tenantID)
+		if statusErr == nil && billingStatus.BillingModel == "postpaid" {
 			return nil, nil // Postpaid accounts don't need balance check
 		}
-		return nil, fmt.Errorf("failed to get balance: %w", err)
+		// For prepaid accounts, treat missing balance as 0 (will be created on first top-up)
+		if statusErr == nil && billingStatus.BillingModel == "prepaid" {
+			balance = &pb.PrepaidBalance{BalanceCents: 0}
+		} else {
+			return nil, fmt.Errorf("failed to get balance: %w", err)
+		}
 	}
 
 	// Check if balance is sufficient (must be > 0 for new operations)

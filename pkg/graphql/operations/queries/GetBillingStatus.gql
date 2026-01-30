@@ -6,7 +6,6 @@ query GetBillingStatus {
     nextBillingDate
     trialEndsAt
     outstandingAmount
-    usageReconciled
     currentTier {
       ...BillingTierFields
     }
@@ -65,6 +64,12 @@ query GetBillingStatus {
       periodEnd
       usageSummary {
         ...UsageSummaryFields
+      }
+      lineItems {
+        description
+        quantity
+        unitPrice
+        total
       }
     }
   }

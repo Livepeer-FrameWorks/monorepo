@@ -2106,6 +2106,8 @@ type CountryMetric struct {
 	CountryCode   string                 `protobuf:"bytes,1,opt,name=country_code,json=countryCode,proto3" json:"country_code,omitempty"`
 	ViewerCount   int32                  `protobuf:"varint,2,opt,name=viewer_count,json=viewerCount,proto3" json:"viewer_count,omitempty"`
 	Percentage    float32                `protobuf:"fixed32,3,opt,name=percentage,proto3" json:"percentage,omitempty"`
+	ViewerHours   float64                `protobuf:"fixed64,4,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"`
+	EgressGb      float64                `protobuf:"fixed64,5,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2157,6 +2159,20 @@ func (x *CountryMetric) GetViewerCount() int32 {
 func (x *CountryMetric) GetPercentage() float32 {
 	if x != nil {
 		return x.Percentage
+	}
+	return 0
+}
+
+func (x *CountryMetric) GetViewerHours() float64 {
+	if x != nil {
+		return x.ViewerHours
+	}
+	return 0
+}
+
+func (x *CountryMetric) GetEgressGb() float64 {
+	if x != nil {
+		return x.EgressGb
 	}
 	return 0
 }
@@ -7687,18 +7703,64 @@ func (x *GetLiveUsageSummaryRequest) GetTimeRange() *TimeRange {
 }
 
 type LiveUsageSummary struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	TenantId         string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	PeriodStart      *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=period_start,json=periodStart,proto3" json:"period_start,omitempty"`
-	PeriodEnd        *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=period_end,json=periodEnd,proto3" json:"period_end,omitempty"`
-	ViewerHours      float64                `protobuf:"fixed64,4,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"`
-	EgressGb         float64                `protobuf:"fixed64,5,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`
-	UniqueViewers    int32                  `protobuf:"varint,6,opt,name=unique_viewers,json=uniqueViewers,proto3" json:"unique_viewers,omitempty"`
-	AverageStorageGb float64                `protobuf:"fixed64,7,opt,name=average_storage_gb,json=averageStorageGb,proto3" json:"average_storage_gb,omitempty"`
-	LivepeerSeconds  float64                `protobuf:"fixed64,8,opt,name=livepeer_seconds,json=livepeerSeconds,proto3" json:"livepeer_seconds,omitempty"`
-	NativeAvSeconds  float64                `protobuf:"fixed64,9,opt,name=native_av_seconds,json=nativeAvSeconds,proto3" json:"native_av_seconds,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	TenantId    string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	PeriodStart *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=period_start,json=periodStart,proto3" json:"period_start,omitempty"`
+	PeriodEnd   *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=period_end,json=periodEnd,proto3" json:"period_end,omitempty"`
+	// Core metrics (matches UsageSummary)
+	StreamHours       float64 `protobuf:"fixed64,4,opt,name=stream_hours,json=streamHours,proto3" json:"stream_hours,omitempty"`
+	EgressGb          float64 `protobuf:"fixed64,5,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`
+	PeakBandwidthMbps float64 `protobuf:"fixed64,6,opt,name=peak_bandwidth_mbps,json=peakBandwidthMbps,proto3" json:"peak_bandwidth_mbps,omitempty"`
+	AverageStorageGb  float64 `protobuf:"fixed64,7,opt,name=average_storage_gb,json=averageStorageGb,proto3" json:"average_storage_gb,omitempty"`
+	// Per-codec breakdown: Livepeer
+	LivepeerH264Seconds float64 `protobuf:"fixed64,8,opt,name=livepeer_h264_seconds,json=livepeerH264Seconds,proto3" json:"livepeer_h264_seconds,omitempty"`
+	LivepeerVp9Seconds  float64 `protobuf:"fixed64,9,opt,name=livepeer_vp9_seconds,json=livepeerVp9Seconds,proto3" json:"livepeer_vp9_seconds,omitempty"`
+	LivepeerAv1Seconds  float64 `protobuf:"fixed64,10,opt,name=livepeer_av1_seconds,json=livepeerAv1Seconds,proto3" json:"livepeer_av1_seconds,omitempty"`
+	LivepeerHevcSeconds float64 `protobuf:"fixed64,11,opt,name=livepeer_hevc_seconds,json=livepeerHevcSeconds,proto3" json:"livepeer_hevc_seconds,omitempty"`
+	// Per-codec breakdown: Native AV
+	NativeAvH264Seconds float64 `protobuf:"fixed64,12,opt,name=native_av_h264_seconds,json=nativeAvH264Seconds,proto3" json:"native_av_h264_seconds,omitempty"`
+	NativeAvVp9Seconds  float64 `protobuf:"fixed64,13,opt,name=native_av_vp9_seconds,json=nativeAvVp9Seconds,proto3" json:"native_av_vp9_seconds,omitempty"`
+	NativeAvAv1Seconds  float64 `protobuf:"fixed64,14,opt,name=native_av_av1_seconds,json=nativeAvAv1Seconds,proto3" json:"native_av_av1_seconds,omitempty"`
+	NativeAvHevcSeconds float64 `protobuf:"fixed64,15,opt,name=native_av_hevc_seconds,json=nativeAvHevcSeconds,proto3" json:"native_av_hevc_seconds,omitempty"`
+	NativeAvAacSeconds  float64 `protobuf:"fixed64,16,opt,name=native_av_aac_seconds,json=nativeAvAacSeconds,proto3" json:"native_av_aac_seconds,omitempty"`
+	NativeAvOpusSeconds float64 `protobuf:"fixed64,17,opt,name=native_av_opus_seconds,json=nativeAvOpusSeconds,proto3" json:"native_av_opus_seconds,omitempty"`
+	// Viewer metrics (matches UsageSummary)
+	TotalStreams int32   `protobuf:"varint,18,opt,name=total_streams,json=totalStreams,proto3" json:"total_streams,omitempty"`
+	TotalViewers int32   `protobuf:"varint,19,opt,name=total_viewers,json=totalViewers,proto3" json:"total_viewers,omitempty"`
+	ViewerHours  float64 `protobuf:"fixed64,20,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"`
+	MaxViewers   int32   `protobuf:"varint,21,opt,name=max_viewers,json=maxViewers,proto3" json:"max_viewers,omitempty"`
+	UniqueUsers  int32   `protobuf:"varint,22,opt,name=unique_users,json=uniqueUsers,proto3" json:"unique_users,omitempty"`
+	// Segment/stream counts (from processing_daily)
+	LivepeerSegmentCount  uint64 `protobuf:"varint,23,opt,name=livepeer_segment_count,json=livepeerSegmentCount,proto3" json:"livepeer_segment_count,omitempty"`
+	LivepeerUniqueStreams uint32 `protobuf:"varint,24,opt,name=livepeer_unique_streams,json=livepeerUniqueStreams,proto3" json:"livepeer_unique_streams,omitempty"`
+	NativeAvSegmentCount  uint64 `protobuf:"varint,25,opt,name=native_av_segment_count,json=nativeAvSegmentCount,proto3" json:"native_av_segment_count,omitempty"`
+	NativeAvUniqueStreams uint32 `protobuf:"varint,26,opt,name=native_av_unique_streams,json=nativeAvUniqueStreams,proto3" json:"native_av_unique_streams,omitempty"`
+	// Geo enrichment (from viewer_connection_events)
+	UniqueCountries int32            `protobuf:"varint,27,opt,name=unique_countries,json=uniqueCountries,proto3" json:"unique_countries,omitempty"`
+	UniqueCities    int32            `protobuf:"varint,28,opt,name=unique_cities,json=uniqueCities,proto3" json:"unique_cities,omitempty"`
+	GeoBreakdown    []*CountryMetric `protobuf:"bytes,29,rep,name=geo_breakdown,json=geoBreakdown,proto3" json:"geo_breakdown,omitempty"`
+	// Storage lifecycle - artifact counts (from artifact_events)
+	ClipsCreated uint32 `protobuf:"varint,30,opt,name=clips_created,json=clipsCreated,proto3" json:"clips_created,omitempty"`
+	ClipsDeleted uint32 `protobuf:"varint,31,opt,name=clips_deleted,json=clipsDeleted,proto3" json:"clips_deleted,omitempty"`
+	DvrCreated   uint32 `protobuf:"varint,32,opt,name=dvr_created,json=dvrCreated,proto3" json:"dvr_created,omitempty"`
+	DvrDeleted   uint32 `protobuf:"varint,33,opt,name=dvr_deleted,json=dvrDeleted,proto3" json:"dvr_deleted,omitempty"`
+	VodCreated   uint32 `protobuf:"varint,34,opt,name=vod_created,json=vodCreated,proto3" json:"vod_created,omitempty"`
+	VodDeleted   uint32 `protobuf:"varint,35,opt,name=vod_deleted,json=vodDeleted,proto3" json:"vod_deleted,omitempty"`
+	// Storage lifecycle - bytes by type (hot storage)
+	ClipBytes uint64 `protobuf:"varint,36,opt,name=clip_bytes,json=clipBytes,proto3" json:"clip_bytes,omitempty"`
+	DvrBytes  uint64 `protobuf:"varint,37,opt,name=dvr_bytes,json=dvrBytes,proto3" json:"dvr_bytes,omitempty"`
+	VodBytes  uint64 `protobuf:"varint,38,opt,name=vod_bytes,json=vodBytes,proto3" json:"vod_bytes,omitempty"`
+	// Storage lifecycle - frozen bytes (cold storage)
+	FrozenClipBytes uint64 `protobuf:"varint,39,opt,name=frozen_clip_bytes,json=frozenClipBytes,proto3" json:"frozen_clip_bytes,omitempty"`
+	FrozenDvrBytes  uint64 `protobuf:"varint,40,opt,name=frozen_dvr_bytes,json=frozenDvrBytes,proto3" json:"frozen_dvr_bytes,omitempty"`
+	FrozenVodBytes  uint64 `protobuf:"varint,41,opt,name=frozen_vod_bytes,json=frozenVodBytes,proto3" json:"frozen_vod_bytes,omitempty"`
+	// Freeze/defrost operations (from storage_events)
+	FreezeCount   uint32 `protobuf:"varint,42,opt,name=freeze_count,json=freezeCount,proto3" json:"freeze_count,omitempty"`
+	FreezeBytes   uint64 `protobuf:"varint,43,opt,name=freeze_bytes,json=freezeBytes,proto3" json:"freeze_bytes,omitempty"`
+	DefrostCount  uint32 `protobuf:"varint,44,opt,name=defrost_count,json=defrostCount,proto3" json:"defrost_count,omitempty"`
+	DefrostBytes  uint64 `protobuf:"varint,45,opt,name=defrost_bytes,json=defrostBytes,proto3" json:"defrost_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *LiveUsageSummary) Reset() {
@@ -7752,9 +7814,9 @@ func (x *LiveUsageSummary) GetPeriodEnd() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *LiveUsageSummary) GetViewerHours() float64 {
+func (x *LiveUsageSummary) GetStreamHours() float64 {
 	if x != nil {
-		return x.ViewerHours
+		return x.StreamHours
 	}
 	return 0
 }
@@ -7766,9 +7828,9 @@ func (x *LiveUsageSummary) GetEgressGb() float64 {
 	return 0
 }
 
-func (x *LiveUsageSummary) GetUniqueViewers() int32 {
+func (x *LiveUsageSummary) GetPeakBandwidthMbps() float64 {
 	if x != nil {
-		return x.UniqueViewers
+		return x.PeakBandwidthMbps
 	}
 	return 0
 }
@@ -7780,16 +7842,268 @@ func (x *LiveUsageSummary) GetAverageStorageGb() float64 {
 	return 0
 }
 
-func (x *LiveUsageSummary) GetLivepeerSeconds() float64 {
+func (x *LiveUsageSummary) GetLivepeerH264Seconds() float64 {
 	if x != nil {
-		return x.LivepeerSeconds
+		return x.LivepeerH264Seconds
 	}
 	return 0
 }
 
-func (x *LiveUsageSummary) GetNativeAvSeconds() float64 {
+func (x *LiveUsageSummary) GetLivepeerVp9Seconds() float64 {
 	if x != nil {
-		return x.NativeAvSeconds
+		return x.LivepeerVp9Seconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetLivepeerAv1Seconds() float64 {
+	if x != nil {
+		return x.LivepeerAv1Seconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetLivepeerHevcSeconds() float64 {
+	if x != nil {
+		return x.LivepeerHevcSeconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvH264Seconds() float64 {
+	if x != nil {
+		return x.NativeAvH264Seconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvVp9Seconds() float64 {
+	if x != nil {
+		return x.NativeAvVp9Seconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvAv1Seconds() float64 {
+	if x != nil {
+		return x.NativeAvAv1Seconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvHevcSeconds() float64 {
+	if x != nil {
+		return x.NativeAvHevcSeconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvAacSeconds() float64 {
+	if x != nil {
+		return x.NativeAvAacSeconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvOpusSeconds() float64 {
+	if x != nil {
+		return x.NativeAvOpusSeconds
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetTotalStreams() int32 {
+	if x != nil {
+		return x.TotalStreams
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetTotalViewers() int32 {
+	if x != nil {
+		return x.TotalViewers
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetViewerHours() float64 {
+	if x != nil {
+		return x.ViewerHours
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetMaxViewers() int32 {
+	if x != nil {
+		return x.MaxViewers
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetUniqueUsers() int32 {
+	if x != nil {
+		return x.UniqueUsers
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetLivepeerSegmentCount() uint64 {
+	if x != nil {
+		return x.LivepeerSegmentCount
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetLivepeerUniqueStreams() uint32 {
+	if x != nil {
+		return x.LivepeerUniqueStreams
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvSegmentCount() uint64 {
+	if x != nil {
+		return x.NativeAvSegmentCount
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetNativeAvUniqueStreams() uint32 {
+	if x != nil {
+		return x.NativeAvUniqueStreams
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetUniqueCountries() int32 {
+	if x != nil {
+		return x.UniqueCountries
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetUniqueCities() int32 {
+	if x != nil {
+		return x.UniqueCities
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetGeoBreakdown() []*CountryMetric {
+	if x != nil {
+		return x.GeoBreakdown
+	}
+	return nil
+}
+
+func (x *LiveUsageSummary) GetClipsCreated() uint32 {
+	if x != nil {
+		return x.ClipsCreated
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetClipsDeleted() uint32 {
+	if x != nil {
+		return x.ClipsDeleted
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetDvrCreated() uint32 {
+	if x != nil {
+		return x.DvrCreated
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetDvrDeleted() uint32 {
+	if x != nil {
+		return x.DvrDeleted
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetVodCreated() uint32 {
+	if x != nil {
+		return x.VodCreated
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetVodDeleted() uint32 {
+	if x != nil {
+		return x.VodDeleted
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetClipBytes() uint64 {
+	if x != nil {
+		return x.ClipBytes
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetDvrBytes() uint64 {
+	if x != nil {
+		return x.DvrBytes
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetVodBytes() uint64 {
+	if x != nil {
+		return x.VodBytes
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetFrozenClipBytes() uint64 {
+	if x != nil {
+		return x.FrozenClipBytes
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetFrozenDvrBytes() uint64 {
+	if x != nil {
+		return x.FrozenDvrBytes
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetFrozenVodBytes() uint64 {
+	if x != nil {
+		return x.FrozenVodBytes
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetFreezeCount() uint32 {
+	if x != nil {
+		return x.FreezeCount
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetFreezeBytes() uint64 {
+	if x != nil {
+		return x.FreezeBytes
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetDefrostCount() uint32 {
+	if x != nil {
+		return x.DefrostCount
+	}
+	return 0
+}
+
+func (x *LiveUsageSummary) GetDefrostBytes() uint64 {
+	if x != nil {
+		return x.DefrostBytes
 	}
 	return 0
 }
@@ -7839,22 +8153,24 @@ func (x *GetLiveUsageSummaryResponse) GetSummary() *LiveUsageSummary {
 }
 
 type StreamHealth5M struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Timestamp       *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	TenantId        string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	StreamId        string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	NodeId          string                 `protobuf:"bytes,5,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	RebufferCount   int32                  `protobuf:"varint,6,opt,name=rebuffer_count,json=rebufferCount,proto3" json:"rebuffer_count,omitempty"`
-	IssueCount      int32                  `protobuf:"varint,7,opt,name=issue_count,json=issueCount,proto3" json:"issue_count,omitempty"`
-	SampleIssues    string                 `protobuf:"bytes,8,opt,name=sample_issues,json=sampleIssues,proto3" json:"sample_issues,omitempty"`
-	AvgBitrate      int32                  `protobuf:"varint,9,opt,name=avg_bitrate,json=avgBitrate,proto3" json:"avg_bitrate,omitempty"`
-	AvgFps          float32                `protobuf:"fixed32,10,opt,name=avg_fps,json=avgFps,proto3" json:"avg_fps,omitempty"`
-	AvgBufferHealth float32                `protobuf:"fixed32,11,opt,name=avg_buffer_health,json=avgBufferHealth,proto3" json:"avg_buffer_health,omitempty"`
-	BufferDryCount  int32                  `protobuf:"varint,12,opt,name=buffer_dry_count,json=bufferDryCount,proto3" json:"buffer_dry_count,omitempty"`
-	QualityTier     string                 `protobuf:"bytes,13,opt,name=quality_tier,json=qualityTier,proto3" json:"quality_tier,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Timestamp        *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	TenantId         string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	StreamId         string                 `protobuf:"bytes,4,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	NodeId           string                 `protobuf:"bytes,5,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	RebufferCount    int32                  `protobuf:"varint,6,opt,name=rebuffer_count,json=rebufferCount,proto3" json:"rebuffer_count,omitempty"`
+	IssueCount       int32                  `protobuf:"varint,7,opt,name=issue_count,json=issueCount,proto3" json:"issue_count,omitempty"`
+	SampleIssues     string                 `protobuf:"bytes,8,opt,name=sample_issues,json=sampleIssues,proto3" json:"sample_issues,omitempty"`
+	AvgBitrate       int32                  `protobuf:"varint,9,opt,name=avg_bitrate,json=avgBitrate,proto3" json:"avg_bitrate,omitempty"`
+	AvgFps           float32                `protobuf:"fixed32,10,opt,name=avg_fps,json=avgFps,proto3" json:"avg_fps,omitempty"`
+	AvgBufferHealth  float32                `protobuf:"fixed32,11,opt,name=avg_buffer_health,json=avgBufferHealth,proto3" json:"avg_buffer_health,omitempty"`
+	AvgFrameJitterMs *float32               `protobuf:"fixed32,14,opt,name=avg_frame_jitter_ms,json=avgFrameJitterMs,proto3,oneof" json:"avg_frame_jitter_ms,omitempty"`
+	MaxFrameJitterMs *float32               `protobuf:"fixed32,15,opt,name=max_frame_jitter_ms,json=maxFrameJitterMs,proto3,oneof" json:"max_frame_jitter_ms,omitempty"`
+	BufferDryCount   int32                  `protobuf:"varint,12,opt,name=buffer_dry_count,json=bufferDryCount,proto3" json:"buffer_dry_count,omitempty"`
+	QualityTier      string                 `protobuf:"bytes,13,opt,name=quality_tier,json=qualityTier,proto3" json:"quality_tier,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *StreamHealth5M) Reset() {
@@ -7960,6 +8276,20 @@ func (x *StreamHealth5M) GetAvgFps() float32 {
 func (x *StreamHealth5M) GetAvgBufferHealth() float32 {
 	if x != nil {
 		return x.AvgBufferHealth
+	}
+	return 0
+}
+
+func (x *StreamHealth5M) GetAvgFrameJitterMs() float32 {
+	if x != nil && x.AvgFrameJitterMs != nil {
+		return *x.AvgFrameJitterMs
+	}
+	return 0
+}
+
+func (x *StreamHealth5M) GetMaxFrameJitterMs() float32 {
+	if x != nil && x.MaxFrameJitterMs != nil {
+		return *x.MaxFrameJitterMs
 	}
 	return 0
 }
@@ -11629,13 +11959,15 @@ const file_periscope_proto_rawDesc = "" +
 	"\n" +
 	"_stream_id\"Z\n" +
 	" GetViewerCountTimeSeriesResponse\x126\n" +
-	"\abuckets\x18\x01 \x03(\v2\x1c.periscope.ViewerCountBucketR\abuckets\"u\n" +
+	"\abuckets\x18\x01 \x03(\v2\x1c.periscope.ViewerCountBucketR\abuckets\"\xb5\x01\n" +
 	"\rCountryMetric\x12!\n" +
 	"\fcountry_code\x18\x01 \x01(\tR\vcountryCode\x12!\n" +
 	"\fviewer_count\x18\x02 \x01(\x05R\vviewerCount\x12\x1e\n" +
 	"\n" +
 	"percentage\x18\x03 \x01(\x02R\n" +
-	"percentage\"\xc0\x01\n" +
+	"percentage\x12!\n" +
+	"\fviewer_hours\x18\x04 \x01(\x01R\vviewerHours\x12\x1b\n" +
+	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\"\xc0\x01\n" +
 	"\n" +
 	"CityMetric\x12\x12\n" +
 	"\x04city\x18\x01 \x01(\tR\x04city\x12!\n" +
@@ -12361,20 +12693,63 @@ const file_periscope_proto_rawDesc = "" +
 	"\x1aGetLiveUsageSummaryRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x120\n" +
 	"\n" +
-	"time_range\x18\x02 \x01(\v2\x11.common.TimeRangeR\ttimeRange\"\x95\x03\n" +
+	"time_range\x18\x02 \x01(\v2\x11.common.TimeRangeR\ttimeRange\"\xa0\x0f\n" +
 	"\x10LiveUsageSummary\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12=\n" +
 	"\fperiod_start\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\vperiodStart\x129\n" +
 	"\n" +
 	"period_end\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tperiodEnd\x12!\n" +
-	"\fviewer_hours\x18\x04 \x01(\x01R\vviewerHours\x12\x1b\n" +
-	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\x12%\n" +
-	"\x0eunique_viewers\x18\x06 \x01(\x05R\runiqueViewers\x12,\n" +
-	"\x12average_storage_gb\x18\a \x01(\x01R\x10averageStorageGb\x12)\n" +
-	"\x10livepeer_seconds\x18\b \x01(\x01R\x0flivepeerSeconds\x12*\n" +
-	"\x11native_av_seconds\x18\t \x01(\x01R\x0fnativeAvSeconds\"T\n" +
+	"\fstream_hours\x18\x04 \x01(\x01R\vstreamHours\x12\x1b\n" +
+	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\x12.\n" +
+	"\x13peak_bandwidth_mbps\x18\x06 \x01(\x01R\x11peakBandwidthMbps\x12,\n" +
+	"\x12average_storage_gb\x18\a \x01(\x01R\x10averageStorageGb\x122\n" +
+	"\x15livepeer_h264_seconds\x18\b \x01(\x01R\x13livepeerH264Seconds\x120\n" +
+	"\x14livepeer_vp9_seconds\x18\t \x01(\x01R\x12livepeerVp9Seconds\x120\n" +
+	"\x14livepeer_av1_seconds\x18\n" +
+	" \x01(\x01R\x12livepeerAv1Seconds\x122\n" +
+	"\x15livepeer_hevc_seconds\x18\v \x01(\x01R\x13livepeerHevcSeconds\x123\n" +
+	"\x16native_av_h264_seconds\x18\f \x01(\x01R\x13nativeAvH264Seconds\x121\n" +
+	"\x15native_av_vp9_seconds\x18\r \x01(\x01R\x12nativeAvVp9Seconds\x121\n" +
+	"\x15native_av_av1_seconds\x18\x0e \x01(\x01R\x12nativeAvAv1Seconds\x123\n" +
+	"\x16native_av_hevc_seconds\x18\x0f \x01(\x01R\x13nativeAvHevcSeconds\x121\n" +
+	"\x15native_av_aac_seconds\x18\x10 \x01(\x01R\x12nativeAvAacSeconds\x123\n" +
+	"\x16native_av_opus_seconds\x18\x11 \x01(\x01R\x13nativeAvOpusSeconds\x12#\n" +
+	"\rtotal_streams\x18\x12 \x01(\x05R\ftotalStreams\x12#\n" +
+	"\rtotal_viewers\x18\x13 \x01(\x05R\ftotalViewers\x12!\n" +
+	"\fviewer_hours\x18\x14 \x01(\x01R\vviewerHours\x12\x1f\n" +
+	"\vmax_viewers\x18\x15 \x01(\x05R\n" +
+	"maxViewers\x12!\n" +
+	"\funique_users\x18\x16 \x01(\x05R\vuniqueUsers\x124\n" +
+	"\x16livepeer_segment_count\x18\x17 \x01(\x04R\x14livepeerSegmentCount\x126\n" +
+	"\x17livepeer_unique_streams\x18\x18 \x01(\rR\x15livepeerUniqueStreams\x125\n" +
+	"\x17native_av_segment_count\x18\x19 \x01(\x04R\x14nativeAvSegmentCount\x127\n" +
+	"\x18native_av_unique_streams\x18\x1a \x01(\rR\x15nativeAvUniqueStreams\x12)\n" +
+	"\x10unique_countries\x18\x1b \x01(\x05R\x0funiqueCountries\x12#\n" +
+	"\runique_cities\x18\x1c \x01(\x05R\funiqueCities\x12=\n" +
+	"\rgeo_breakdown\x18\x1d \x03(\v2\x18.periscope.CountryMetricR\fgeoBreakdown\x12#\n" +
+	"\rclips_created\x18\x1e \x01(\rR\fclipsCreated\x12#\n" +
+	"\rclips_deleted\x18\x1f \x01(\rR\fclipsDeleted\x12\x1f\n" +
+	"\vdvr_created\x18  \x01(\rR\n" +
+	"dvrCreated\x12\x1f\n" +
+	"\vdvr_deleted\x18! \x01(\rR\n" +
+	"dvrDeleted\x12\x1f\n" +
+	"\vvod_created\x18\" \x01(\rR\n" +
+	"vodCreated\x12\x1f\n" +
+	"\vvod_deleted\x18# \x01(\rR\n" +
+	"vodDeleted\x12\x1d\n" +
+	"\n" +
+	"clip_bytes\x18$ \x01(\x04R\tclipBytes\x12\x1b\n" +
+	"\tdvr_bytes\x18% \x01(\x04R\bdvrBytes\x12\x1b\n" +
+	"\tvod_bytes\x18& \x01(\x04R\bvodBytes\x12*\n" +
+	"\x11frozen_clip_bytes\x18' \x01(\x04R\x0ffrozenClipBytes\x12(\n" +
+	"\x10frozen_dvr_bytes\x18( \x01(\x04R\x0efrozenDvrBytes\x12(\n" +
+	"\x10frozen_vod_bytes\x18) \x01(\x04R\x0efrozenVodBytes\x12!\n" +
+	"\ffreeze_count\x18* \x01(\rR\vfreezeCount\x12!\n" +
+	"\ffreeze_bytes\x18+ \x01(\x04R\vfreezeBytes\x12#\n" +
+	"\rdefrost_count\x18, \x01(\rR\fdefrostCount\x12#\n" +
+	"\rdefrost_bytes\x18- \x01(\x04R\fdefrostBytes\"T\n" +
 	"\x1bGetLiveUsageSummaryResponse\x125\n" +
-	"\asummary\x18\x01 \x01(\v2\x1b.periscope.LiveUsageSummaryR\asummary\"\xcd\x03\n" +
+	"\asummary\x18\x01 \x01(\v2\x1b.periscope.LiveUsageSummaryR\asummary\"\xe5\x04\n" +
 	"\x0eStreamHealth5m\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1b\n" +
@@ -12389,9 +12764,13 @@ const file_periscope_proto_rawDesc = "" +
 	"avgBitrate\x12\x17\n" +
 	"\aavg_fps\x18\n" +
 	" \x01(\x02R\x06avgFps\x12*\n" +
-	"\x11avg_buffer_health\x18\v \x01(\x02R\x0favgBufferHealth\x12(\n" +
+	"\x11avg_buffer_health\x18\v \x01(\x02R\x0favgBufferHealth\x122\n" +
+	"\x13avg_frame_jitter_ms\x18\x0e \x01(\x02H\x00R\x10avgFrameJitterMs\x88\x01\x01\x122\n" +
+	"\x13max_frame_jitter_ms\x18\x0f \x01(\x02H\x01R\x10maxFrameJitterMs\x88\x01\x01\x12(\n" +
 	"\x10buffer_dry_count\x18\f \x01(\x05R\x0ebufferDryCount\x12!\n" +
-	"\fquality_tier\x18\r \x01(\tR\vqualityTier\"\xc7\x01\n" +
+	"\fquality_tier\x18\r \x01(\tR\vqualityTierB\x16\n" +
+	"\x14_avg_frame_jitter_msB\x16\n" +
+	"\x14_max_frame_jitter_ms\"\xc7\x01\n" +
 	"\x18GetStreamHealth5mRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tstream_id\x18\x02 \x01(\tR\bstreamId\x120\n" +
@@ -13150,143 +13529,144 @@ var file_periscope_proto_depIdxs = []int32{
 	129, // 133: periscope.GetLiveUsageSummaryRequest.time_range:type_name -> common.TimeRange
 	127, // 134: periscope.LiveUsageSummary.period_start:type_name -> google.protobuf.Timestamp
 	127, // 135: periscope.LiveUsageSummary.period_end:type_name -> google.protobuf.Timestamp
-	86,  // 136: periscope.GetLiveUsageSummaryResponse.summary:type_name -> periscope.LiveUsageSummary
-	127, // 137: periscope.StreamHealth5m.timestamp:type_name -> google.protobuf.Timestamp
-	129, // 138: periscope.GetStreamHealth5mRequest.time_range:type_name -> common.TimeRange
-	130, // 139: periscope.GetStreamHealth5mRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 140: periscope.GetStreamHealth5mResponse.pagination:type_name -> common.CursorPaginationResponse
-	88,  // 141: periscope.GetStreamHealth5mResponse.records:type_name -> periscope.StreamHealth5m
-	127, // 142: periscope.NodePerformance5m.timestamp:type_name -> google.protobuf.Timestamp
-	129, // 143: periscope.GetNodePerformance5mRequest.time_range:type_name -> common.TimeRange
-	130, // 144: periscope.GetNodePerformance5mRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 145: periscope.GetNodePerformance5mResponse.pagination:type_name -> common.CursorPaginationResponse
-	91,  // 146: periscope.GetNodePerformance5mResponse.records:type_name -> periscope.NodePerformance5m
-	127, // 147: periscope.ViewerHoursHourly.hour:type_name -> google.protobuf.Timestamp
-	129, // 148: periscope.GetViewerHoursHourlyRequest.time_range:type_name -> common.TimeRange
-	130, // 149: periscope.GetViewerHoursHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 150: periscope.GetViewerHoursHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
-	94,  // 151: periscope.GetViewerHoursHourlyResponse.records:type_name -> periscope.ViewerHoursHourly
-	127, // 152: periscope.ViewerGeoHourly.hour:type_name -> google.protobuf.Timestamp
-	129, // 153: periscope.GetViewerGeoHourlyRequest.time_range:type_name -> common.TimeRange
-	130, // 154: periscope.GetViewerGeoHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 155: periscope.GetViewerGeoHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
-	97,  // 156: periscope.GetViewerGeoHourlyResponse.records:type_name -> periscope.ViewerGeoHourly
-	127, // 157: periscope.TenantDailyStat.date:type_name -> google.protobuf.Timestamp
-	100, // 158: periscope.GetTenantDailyStatsResponse.stats:type_name -> periscope.TenantDailyStat
-	127, // 159: periscope.ProcessingUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
-	127, // 160: periscope.ProcessingUsageSummary.date:type_name -> google.protobuf.Timestamp
-	129, // 161: periscope.GetProcessingUsageRequest.time_range:type_name -> common.TimeRange
-	130, // 162: periscope.GetProcessingUsageRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 163: periscope.GetProcessingUsageResponse.pagination:type_name -> common.CursorPaginationResponse
-	103, // 164: periscope.GetProcessingUsageResponse.records:type_name -> periscope.ProcessingUsageRecord
-	104, // 165: periscope.GetProcessingUsageResponse.summaries:type_name -> periscope.ProcessingUsageSummary
-	127, // 166: periscope.RebufferingEvent.timestamp:type_name -> google.protobuf.Timestamp
-	127, // 167: periscope.RebufferingEvent.rebuffer_start:type_name -> google.protobuf.Timestamp
-	127, // 168: periscope.RebufferingEvent.rebuffer_end:type_name -> google.protobuf.Timestamp
-	129, // 169: periscope.GetRebufferingEventsRequest.time_range:type_name -> common.TimeRange
-	130, // 170: periscope.GetRebufferingEventsRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 171: periscope.GetRebufferingEventsResponse.pagination:type_name -> common.CursorPaginationResponse
-	107, // 172: periscope.GetRebufferingEventsResponse.events:type_name -> periscope.RebufferingEvent
-	127, // 173: periscope.TenantAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
-	129, // 174: periscope.GetTenantAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
-	130, // 175: periscope.GetTenantAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 176: periscope.GetTenantAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
-	110, // 177: periscope.GetTenantAnalyticsDailyResponse.records:type_name -> periscope.TenantAnalyticsDaily
-	127, // 178: periscope.StreamAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
-	129, // 179: periscope.GetStreamAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
-	130, // 180: periscope.GetStreamAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 181: periscope.GetStreamAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
-	113, // 182: periscope.GetStreamAnalyticsDailyResponse.records:type_name -> periscope.StreamAnalyticsDaily
-	129, // 183: periscope.StreamAnalyticsSummary.time_range:type_name -> common.TimeRange
-	116, // 184: periscope.StreamAnalyticsSummary.range_quality:type_name -> periscope.QualityTierSummary
-	129, // 185: periscope.GetStreamAnalyticsSummaryRequest.time_range:type_name -> common.TimeRange
-	117, // 186: periscope.GetStreamAnalyticsSummaryResponse.summary:type_name -> periscope.StreamAnalyticsSummary
-	127, // 187: periscope.APIUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
-	127, // 188: periscope.APIUsageSummary.date:type_name -> google.protobuf.Timestamp
-	129, // 189: periscope.GetAPIUsageRequest.time_range:type_name -> common.TimeRange
-	130, // 190: periscope.GetAPIUsageRequest.pagination:type_name -> common.CursorPaginationRequest
-	131, // 191: periscope.GetAPIUsageResponse.pagination:type_name -> common.CursorPaginationResponse
-	120, // 192: periscope.GetAPIUsageResponse.records:type_name -> periscope.APIUsageRecord
-	121, // 193: periscope.GetAPIUsageResponse.summaries:type_name -> periscope.APIUsageSummary
-	122, // 194: periscope.GetAPIUsageResponse.operation_summaries:type_name -> periscope.APIUsageOperationSummary
-	67,  // 195: periscope.StreamsStatusResponse.StatusesEntry.value:type_name -> periscope.StreamStatusResponse
-	1,   // 196: periscope.StreamAnalyticsService.GetStreamEvents:input_type -> periscope.GetStreamEventsRequest
-	4,   // 197: periscope.StreamAnalyticsService.GetBufferEvents:input_type -> periscope.GetBufferEventsRequest
-	10,  // 198: periscope.StreamAnalyticsService.GetStreamHealthMetrics:input_type -> periscope.GetStreamHealthMetricsRequest
-	66,  // 199: periscope.StreamAnalyticsService.GetStreamStatus:input_type -> periscope.GetStreamStatusRequest
-	68,  // 200: periscope.StreamAnalyticsService.GetStreamsStatus:input_type -> periscope.GetStreamsStatusRequest
-	17,  // 201: periscope.ViewerAnalyticsService.GetViewerMetrics:input_type -> periscope.GetViewerMetricsRequest
-	20,  // 202: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:input_type -> periscope.GetViewerCountTimeSeriesRequest
-	24,  // 203: periscope.ViewerAnalyticsService.GetGeographicDistribution:input_type -> periscope.GetGeographicDistributionRequest
-	27,  // 204: periscope.TrackAnalyticsService.GetTrackListEvents:input_type -> periscope.GetTrackListEventsRequest
-	30,  // 205: periscope.ConnectionAnalyticsService.GetConnectionEvents:input_type -> periscope.GetConnectionEventsRequest
-	33,  // 206: periscope.NodeAnalyticsService.GetNodeMetrics:input_type -> periscope.GetNodeMetricsRequest
-	37,  // 207: periscope.NodeAnalyticsService.GetNodeMetrics1h:input_type -> periscope.GetNodeMetrics1hRequest
-	39,  // 208: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:input_type -> periscope.GetNodeMetricsAggregatedRequest
-	42,  // 209: periscope.NodeAnalyticsService.GetLiveNodes:input_type -> periscope.GetLiveNodesRequest
-	45,  // 210: periscope.RoutingAnalyticsService.GetRoutingEvents:input_type -> periscope.GetRoutingEventsRequest
-	56,  // 211: periscope.PlatformAnalyticsService.GetPlatformOverview:input_type -> periscope.GetPlatformOverviewRequest
-	59,  // 212: periscope.ClipAnalyticsService.GetClipEvents:input_type -> periscope.GetClipEventsRequest
-	62,  // 213: periscope.ClipAnalyticsService.GetArtifactState:input_type -> periscope.GetArtifactStateRequest
-	64,  // 214: periscope.ClipAnalyticsService.GetArtifactStates:input_type -> periscope.GetArtifactStatesRequest
-	71,  // 215: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:input_type -> periscope.GetStreamConnectionHourlyRequest
-	74,  // 216: periscope.AggregatedAnalyticsService.GetClientMetrics5m:input_type -> periscope.GetClientMetrics5mRequest
-	77,  // 217: periscope.AggregatedAnalyticsService.GetQualityTierDaily:input_type -> periscope.GetQualityTierDailyRequest
-	118, // 218: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:input_type -> periscope.GetStreamAnalyticsSummaryRequest
-	83,  // 219: periscope.AggregatedAnalyticsService.GetStorageUsage:input_type -> periscope.GetStorageUsageRequest
-	81,  // 220: periscope.AggregatedAnalyticsService.GetStorageEvents:input_type -> periscope.GetStorageEventsRequest
-	89,  // 221: periscope.AggregatedAnalyticsService.GetStreamHealth5m:input_type -> periscope.GetStreamHealth5mRequest
-	92,  // 222: periscope.AggregatedAnalyticsService.GetNodePerformance5m:input_type -> periscope.GetNodePerformance5mRequest
-	95,  // 223: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:input_type -> periscope.GetViewerHoursHourlyRequest
-	98,  // 224: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:input_type -> periscope.GetViewerGeoHourlyRequest
-	101, // 225: periscope.AggregatedAnalyticsService.GetTenantDailyStats:input_type -> periscope.GetTenantDailyStatsRequest
-	105, // 226: periscope.AggregatedAnalyticsService.GetProcessingUsage:input_type -> periscope.GetProcessingUsageRequest
-	85,  // 227: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:input_type -> periscope.GetLiveUsageSummaryRequest
-	108, // 228: periscope.AggregatedAnalyticsService.GetRebufferingEvents:input_type -> periscope.GetRebufferingEventsRequest
-	111, // 229: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:input_type -> periscope.GetTenantAnalyticsDailyRequest
-	114, // 230: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:input_type -> periscope.GetStreamAnalyticsDailyRequest
-	123, // 231: periscope.AggregatedAnalyticsService.GetAPIUsage:input_type -> periscope.GetAPIUsageRequest
-	2,   // 232: periscope.StreamAnalyticsService.GetStreamEvents:output_type -> periscope.GetStreamEventsResponse
-	5,   // 233: periscope.StreamAnalyticsService.GetBufferEvents:output_type -> periscope.GetBufferEventsResponse
-	11,  // 234: periscope.StreamAnalyticsService.GetStreamHealthMetrics:output_type -> periscope.GetStreamHealthMetricsResponse
-	67,  // 235: periscope.StreamAnalyticsService.GetStreamStatus:output_type -> periscope.StreamStatusResponse
-	69,  // 236: periscope.StreamAnalyticsService.GetStreamsStatus:output_type -> periscope.StreamsStatusResponse
-	18,  // 237: periscope.ViewerAnalyticsService.GetViewerMetrics:output_type -> periscope.GetViewerMetricsResponse
-	21,  // 238: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:output_type -> periscope.GetViewerCountTimeSeriesResponse
-	25,  // 239: periscope.ViewerAnalyticsService.GetGeographicDistribution:output_type -> periscope.GetGeographicDistributionResponse
-	28,  // 240: periscope.TrackAnalyticsService.GetTrackListEvents:output_type -> periscope.GetTrackListEventsResponse
-	31,  // 241: periscope.ConnectionAnalyticsService.GetConnectionEvents:output_type -> periscope.GetConnectionEventsResponse
-	34,  // 242: periscope.NodeAnalyticsService.GetNodeMetrics:output_type -> periscope.GetNodeMetricsResponse
-	38,  // 243: periscope.NodeAnalyticsService.GetNodeMetrics1h:output_type -> periscope.GetNodeMetrics1hResponse
-	40,  // 244: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:output_type -> periscope.GetNodeMetricsAggregatedResponse
-	43,  // 245: periscope.NodeAnalyticsService.GetLiveNodes:output_type -> periscope.GetLiveNodesResponse
-	46,  // 246: periscope.RoutingAnalyticsService.GetRoutingEvents:output_type -> periscope.GetRoutingEventsResponse
-	57,  // 247: periscope.PlatformAnalyticsService.GetPlatformOverview:output_type -> periscope.GetPlatformOverviewResponse
-	60,  // 248: periscope.ClipAnalyticsService.GetClipEvents:output_type -> periscope.GetClipEventsResponse
-	63,  // 249: periscope.ClipAnalyticsService.GetArtifactState:output_type -> periscope.GetArtifactStateResponse
-	65,  // 250: periscope.ClipAnalyticsService.GetArtifactStates:output_type -> periscope.GetArtifactStatesResponse
-	72,  // 251: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:output_type -> periscope.GetStreamConnectionHourlyResponse
-	75,  // 252: periscope.AggregatedAnalyticsService.GetClientMetrics5m:output_type -> periscope.GetClientMetrics5mResponse
-	78,  // 253: periscope.AggregatedAnalyticsService.GetQualityTierDaily:output_type -> periscope.GetQualityTierDailyResponse
-	119, // 254: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:output_type -> periscope.GetStreamAnalyticsSummaryResponse
-	84,  // 255: periscope.AggregatedAnalyticsService.GetStorageUsage:output_type -> periscope.GetStorageUsageResponse
-	82,  // 256: periscope.AggregatedAnalyticsService.GetStorageEvents:output_type -> periscope.GetStorageEventsResponse
-	90,  // 257: periscope.AggregatedAnalyticsService.GetStreamHealth5m:output_type -> periscope.GetStreamHealth5mResponse
-	93,  // 258: periscope.AggregatedAnalyticsService.GetNodePerformance5m:output_type -> periscope.GetNodePerformance5mResponse
-	96,  // 259: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:output_type -> periscope.GetViewerHoursHourlyResponse
-	99,  // 260: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:output_type -> periscope.GetViewerGeoHourlyResponse
-	102, // 261: periscope.AggregatedAnalyticsService.GetTenantDailyStats:output_type -> periscope.GetTenantDailyStatsResponse
-	106, // 262: periscope.AggregatedAnalyticsService.GetProcessingUsage:output_type -> periscope.GetProcessingUsageResponse
-	87,  // 263: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:output_type -> periscope.GetLiveUsageSummaryResponse
-	109, // 264: periscope.AggregatedAnalyticsService.GetRebufferingEvents:output_type -> periscope.GetRebufferingEventsResponse
-	112, // 265: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:output_type -> periscope.GetTenantAnalyticsDailyResponse
-	115, // 266: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:output_type -> periscope.GetStreamAnalyticsDailyResponse
-	124, // 267: periscope.AggregatedAnalyticsService.GetAPIUsage:output_type -> periscope.GetAPIUsageResponse
-	232, // [232:268] is the sub-list for method output_type
-	196, // [196:232] is the sub-list for method input_type
-	196, // [196:196] is the sub-list for extension type_name
-	196, // [196:196] is the sub-list for extension extendee
-	0,   // [0:196] is the sub-list for field type_name
+	22,  // 136: periscope.LiveUsageSummary.geo_breakdown:type_name -> periscope.CountryMetric
+	86,  // 137: periscope.GetLiveUsageSummaryResponse.summary:type_name -> periscope.LiveUsageSummary
+	127, // 138: periscope.StreamHealth5m.timestamp:type_name -> google.protobuf.Timestamp
+	129, // 139: periscope.GetStreamHealth5mRequest.time_range:type_name -> common.TimeRange
+	130, // 140: periscope.GetStreamHealth5mRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 141: periscope.GetStreamHealth5mResponse.pagination:type_name -> common.CursorPaginationResponse
+	88,  // 142: periscope.GetStreamHealth5mResponse.records:type_name -> periscope.StreamHealth5m
+	127, // 143: periscope.NodePerformance5m.timestamp:type_name -> google.protobuf.Timestamp
+	129, // 144: periscope.GetNodePerformance5mRequest.time_range:type_name -> common.TimeRange
+	130, // 145: periscope.GetNodePerformance5mRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 146: periscope.GetNodePerformance5mResponse.pagination:type_name -> common.CursorPaginationResponse
+	91,  // 147: periscope.GetNodePerformance5mResponse.records:type_name -> periscope.NodePerformance5m
+	127, // 148: periscope.ViewerHoursHourly.hour:type_name -> google.protobuf.Timestamp
+	129, // 149: periscope.GetViewerHoursHourlyRequest.time_range:type_name -> common.TimeRange
+	130, // 150: periscope.GetViewerHoursHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 151: periscope.GetViewerHoursHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
+	94,  // 152: periscope.GetViewerHoursHourlyResponse.records:type_name -> periscope.ViewerHoursHourly
+	127, // 153: periscope.ViewerGeoHourly.hour:type_name -> google.protobuf.Timestamp
+	129, // 154: periscope.GetViewerGeoHourlyRequest.time_range:type_name -> common.TimeRange
+	130, // 155: periscope.GetViewerGeoHourlyRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 156: periscope.GetViewerGeoHourlyResponse.pagination:type_name -> common.CursorPaginationResponse
+	97,  // 157: periscope.GetViewerGeoHourlyResponse.records:type_name -> periscope.ViewerGeoHourly
+	127, // 158: periscope.TenantDailyStat.date:type_name -> google.protobuf.Timestamp
+	100, // 159: periscope.GetTenantDailyStatsResponse.stats:type_name -> periscope.TenantDailyStat
+	127, // 160: periscope.ProcessingUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
+	127, // 161: periscope.ProcessingUsageSummary.date:type_name -> google.protobuf.Timestamp
+	129, // 162: periscope.GetProcessingUsageRequest.time_range:type_name -> common.TimeRange
+	130, // 163: periscope.GetProcessingUsageRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 164: periscope.GetProcessingUsageResponse.pagination:type_name -> common.CursorPaginationResponse
+	103, // 165: periscope.GetProcessingUsageResponse.records:type_name -> periscope.ProcessingUsageRecord
+	104, // 166: periscope.GetProcessingUsageResponse.summaries:type_name -> periscope.ProcessingUsageSummary
+	127, // 167: periscope.RebufferingEvent.timestamp:type_name -> google.protobuf.Timestamp
+	127, // 168: periscope.RebufferingEvent.rebuffer_start:type_name -> google.protobuf.Timestamp
+	127, // 169: periscope.RebufferingEvent.rebuffer_end:type_name -> google.protobuf.Timestamp
+	129, // 170: periscope.GetRebufferingEventsRequest.time_range:type_name -> common.TimeRange
+	130, // 171: periscope.GetRebufferingEventsRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 172: periscope.GetRebufferingEventsResponse.pagination:type_name -> common.CursorPaginationResponse
+	107, // 173: periscope.GetRebufferingEventsResponse.events:type_name -> periscope.RebufferingEvent
+	127, // 174: periscope.TenantAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
+	129, // 175: periscope.GetTenantAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
+	130, // 176: periscope.GetTenantAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 177: periscope.GetTenantAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
+	110, // 178: periscope.GetTenantAnalyticsDailyResponse.records:type_name -> periscope.TenantAnalyticsDaily
+	127, // 179: periscope.StreamAnalyticsDaily.day:type_name -> google.protobuf.Timestamp
+	129, // 180: periscope.GetStreamAnalyticsDailyRequest.time_range:type_name -> common.TimeRange
+	130, // 181: periscope.GetStreamAnalyticsDailyRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 182: periscope.GetStreamAnalyticsDailyResponse.pagination:type_name -> common.CursorPaginationResponse
+	113, // 183: periscope.GetStreamAnalyticsDailyResponse.records:type_name -> periscope.StreamAnalyticsDaily
+	129, // 184: periscope.StreamAnalyticsSummary.time_range:type_name -> common.TimeRange
+	116, // 185: periscope.StreamAnalyticsSummary.range_quality:type_name -> periscope.QualityTierSummary
+	129, // 186: periscope.GetStreamAnalyticsSummaryRequest.time_range:type_name -> common.TimeRange
+	117, // 187: periscope.GetStreamAnalyticsSummaryResponse.summary:type_name -> periscope.StreamAnalyticsSummary
+	127, // 188: periscope.APIUsageRecord.timestamp:type_name -> google.protobuf.Timestamp
+	127, // 189: periscope.APIUsageSummary.date:type_name -> google.protobuf.Timestamp
+	129, // 190: periscope.GetAPIUsageRequest.time_range:type_name -> common.TimeRange
+	130, // 191: periscope.GetAPIUsageRequest.pagination:type_name -> common.CursorPaginationRequest
+	131, // 192: periscope.GetAPIUsageResponse.pagination:type_name -> common.CursorPaginationResponse
+	120, // 193: periscope.GetAPIUsageResponse.records:type_name -> periscope.APIUsageRecord
+	121, // 194: periscope.GetAPIUsageResponse.summaries:type_name -> periscope.APIUsageSummary
+	122, // 195: periscope.GetAPIUsageResponse.operation_summaries:type_name -> periscope.APIUsageOperationSummary
+	67,  // 196: periscope.StreamsStatusResponse.StatusesEntry.value:type_name -> periscope.StreamStatusResponse
+	1,   // 197: periscope.StreamAnalyticsService.GetStreamEvents:input_type -> periscope.GetStreamEventsRequest
+	4,   // 198: periscope.StreamAnalyticsService.GetBufferEvents:input_type -> periscope.GetBufferEventsRequest
+	10,  // 199: periscope.StreamAnalyticsService.GetStreamHealthMetrics:input_type -> periscope.GetStreamHealthMetricsRequest
+	66,  // 200: periscope.StreamAnalyticsService.GetStreamStatus:input_type -> periscope.GetStreamStatusRequest
+	68,  // 201: periscope.StreamAnalyticsService.GetStreamsStatus:input_type -> periscope.GetStreamsStatusRequest
+	17,  // 202: periscope.ViewerAnalyticsService.GetViewerMetrics:input_type -> periscope.GetViewerMetricsRequest
+	20,  // 203: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:input_type -> periscope.GetViewerCountTimeSeriesRequest
+	24,  // 204: periscope.ViewerAnalyticsService.GetGeographicDistribution:input_type -> periscope.GetGeographicDistributionRequest
+	27,  // 205: periscope.TrackAnalyticsService.GetTrackListEvents:input_type -> periscope.GetTrackListEventsRequest
+	30,  // 206: periscope.ConnectionAnalyticsService.GetConnectionEvents:input_type -> periscope.GetConnectionEventsRequest
+	33,  // 207: periscope.NodeAnalyticsService.GetNodeMetrics:input_type -> periscope.GetNodeMetricsRequest
+	37,  // 208: periscope.NodeAnalyticsService.GetNodeMetrics1h:input_type -> periscope.GetNodeMetrics1hRequest
+	39,  // 209: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:input_type -> periscope.GetNodeMetricsAggregatedRequest
+	42,  // 210: periscope.NodeAnalyticsService.GetLiveNodes:input_type -> periscope.GetLiveNodesRequest
+	45,  // 211: periscope.RoutingAnalyticsService.GetRoutingEvents:input_type -> periscope.GetRoutingEventsRequest
+	56,  // 212: periscope.PlatformAnalyticsService.GetPlatformOverview:input_type -> periscope.GetPlatformOverviewRequest
+	59,  // 213: periscope.ClipAnalyticsService.GetClipEvents:input_type -> periscope.GetClipEventsRequest
+	62,  // 214: periscope.ClipAnalyticsService.GetArtifactState:input_type -> periscope.GetArtifactStateRequest
+	64,  // 215: periscope.ClipAnalyticsService.GetArtifactStates:input_type -> periscope.GetArtifactStatesRequest
+	71,  // 216: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:input_type -> periscope.GetStreamConnectionHourlyRequest
+	74,  // 217: periscope.AggregatedAnalyticsService.GetClientMetrics5m:input_type -> periscope.GetClientMetrics5mRequest
+	77,  // 218: periscope.AggregatedAnalyticsService.GetQualityTierDaily:input_type -> periscope.GetQualityTierDailyRequest
+	118, // 219: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:input_type -> periscope.GetStreamAnalyticsSummaryRequest
+	83,  // 220: periscope.AggregatedAnalyticsService.GetStorageUsage:input_type -> periscope.GetStorageUsageRequest
+	81,  // 221: periscope.AggregatedAnalyticsService.GetStorageEvents:input_type -> periscope.GetStorageEventsRequest
+	89,  // 222: periscope.AggregatedAnalyticsService.GetStreamHealth5m:input_type -> periscope.GetStreamHealth5mRequest
+	92,  // 223: periscope.AggregatedAnalyticsService.GetNodePerformance5m:input_type -> periscope.GetNodePerformance5mRequest
+	95,  // 224: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:input_type -> periscope.GetViewerHoursHourlyRequest
+	98,  // 225: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:input_type -> periscope.GetViewerGeoHourlyRequest
+	101, // 226: periscope.AggregatedAnalyticsService.GetTenantDailyStats:input_type -> periscope.GetTenantDailyStatsRequest
+	105, // 227: periscope.AggregatedAnalyticsService.GetProcessingUsage:input_type -> periscope.GetProcessingUsageRequest
+	85,  // 228: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:input_type -> periscope.GetLiveUsageSummaryRequest
+	108, // 229: periscope.AggregatedAnalyticsService.GetRebufferingEvents:input_type -> periscope.GetRebufferingEventsRequest
+	111, // 230: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:input_type -> periscope.GetTenantAnalyticsDailyRequest
+	114, // 231: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:input_type -> periscope.GetStreamAnalyticsDailyRequest
+	123, // 232: periscope.AggregatedAnalyticsService.GetAPIUsage:input_type -> periscope.GetAPIUsageRequest
+	2,   // 233: periscope.StreamAnalyticsService.GetStreamEvents:output_type -> periscope.GetStreamEventsResponse
+	5,   // 234: periscope.StreamAnalyticsService.GetBufferEvents:output_type -> periscope.GetBufferEventsResponse
+	11,  // 235: periscope.StreamAnalyticsService.GetStreamHealthMetrics:output_type -> periscope.GetStreamHealthMetricsResponse
+	67,  // 236: periscope.StreamAnalyticsService.GetStreamStatus:output_type -> periscope.StreamStatusResponse
+	69,  // 237: periscope.StreamAnalyticsService.GetStreamsStatus:output_type -> periscope.StreamsStatusResponse
+	18,  // 238: periscope.ViewerAnalyticsService.GetViewerMetrics:output_type -> periscope.GetViewerMetricsResponse
+	21,  // 239: periscope.ViewerAnalyticsService.GetViewerCountTimeSeries:output_type -> periscope.GetViewerCountTimeSeriesResponse
+	25,  // 240: periscope.ViewerAnalyticsService.GetGeographicDistribution:output_type -> periscope.GetGeographicDistributionResponse
+	28,  // 241: periscope.TrackAnalyticsService.GetTrackListEvents:output_type -> periscope.GetTrackListEventsResponse
+	31,  // 242: periscope.ConnectionAnalyticsService.GetConnectionEvents:output_type -> periscope.GetConnectionEventsResponse
+	34,  // 243: periscope.NodeAnalyticsService.GetNodeMetrics:output_type -> periscope.GetNodeMetricsResponse
+	38,  // 244: periscope.NodeAnalyticsService.GetNodeMetrics1h:output_type -> periscope.GetNodeMetrics1hResponse
+	40,  // 245: periscope.NodeAnalyticsService.GetNodeMetricsAggregated:output_type -> periscope.GetNodeMetricsAggregatedResponse
+	43,  // 246: periscope.NodeAnalyticsService.GetLiveNodes:output_type -> periscope.GetLiveNodesResponse
+	46,  // 247: periscope.RoutingAnalyticsService.GetRoutingEvents:output_type -> periscope.GetRoutingEventsResponse
+	57,  // 248: periscope.PlatformAnalyticsService.GetPlatformOverview:output_type -> periscope.GetPlatformOverviewResponse
+	60,  // 249: periscope.ClipAnalyticsService.GetClipEvents:output_type -> periscope.GetClipEventsResponse
+	63,  // 250: periscope.ClipAnalyticsService.GetArtifactState:output_type -> periscope.GetArtifactStateResponse
+	65,  // 251: periscope.ClipAnalyticsService.GetArtifactStates:output_type -> periscope.GetArtifactStatesResponse
+	72,  // 252: periscope.AggregatedAnalyticsService.GetStreamConnectionHourly:output_type -> periscope.GetStreamConnectionHourlyResponse
+	75,  // 253: periscope.AggregatedAnalyticsService.GetClientMetrics5m:output_type -> periscope.GetClientMetrics5mResponse
+	78,  // 254: periscope.AggregatedAnalyticsService.GetQualityTierDaily:output_type -> periscope.GetQualityTierDailyResponse
+	119, // 255: periscope.AggregatedAnalyticsService.GetStreamAnalyticsSummary:output_type -> periscope.GetStreamAnalyticsSummaryResponse
+	84,  // 256: periscope.AggregatedAnalyticsService.GetStorageUsage:output_type -> periscope.GetStorageUsageResponse
+	82,  // 257: periscope.AggregatedAnalyticsService.GetStorageEvents:output_type -> periscope.GetStorageEventsResponse
+	90,  // 258: periscope.AggregatedAnalyticsService.GetStreamHealth5m:output_type -> periscope.GetStreamHealth5mResponse
+	93,  // 259: periscope.AggregatedAnalyticsService.GetNodePerformance5m:output_type -> periscope.GetNodePerformance5mResponse
+	96,  // 260: periscope.AggregatedAnalyticsService.GetViewerHoursHourly:output_type -> periscope.GetViewerHoursHourlyResponse
+	99,  // 261: periscope.AggregatedAnalyticsService.GetViewerGeoHourly:output_type -> periscope.GetViewerGeoHourlyResponse
+	102, // 262: periscope.AggregatedAnalyticsService.GetTenantDailyStats:output_type -> periscope.GetTenantDailyStatsResponse
+	106, // 263: periscope.AggregatedAnalyticsService.GetProcessingUsage:output_type -> periscope.GetProcessingUsageResponse
+	87,  // 264: periscope.AggregatedAnalyticsService.GetLiveUsageSummary:output_type -> periscope.GetLiveUsageSummaryResponse
+	109, // 265: periscope.AggregatedAnalyticsService.GetRebufferingEvents:output_type -> periscope.GetRebufferingEventsResponse
+	112, // 266: periscope.AggregatedAnalyticsService.GetTenantAnalyticsDaily:output_type -> periscope.GetTenantAnalyticsDailyResponse
+	115, // 267: periscope.AggregatedAnalyticsService.GetStreamAnalyticsDaily:output_type -> periscope.GetStreamAnalyticsDailyResponse
+	124, // 268: periscope.AggregatedAnalyticsService.GetAPIUsage:output_type -> periscope.GetAPIUsageResponse
+	233, // [233:269] is the sub-list for method output_type
+	197, // [197:233] is the sub-list for method input_type
+	197, // [197:197] is the sub-list for extension type_name
+	197, // [197:197] is the sub-list for extension extendee
+	0,   // [0:197] is the sub-list for field type_name
 }
 
 func init() { file_periscope_proto_init() }
@@ -13324,6 +13704,7 @@ func file_periscope_proto_init() {
 	file_periscope_proto_msgTypes[80].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[81].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[83].OneofWrappers = []any{}
+	file_periscope_proto_msgTypes[88].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[92].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[95].OneofWrappers = []any{}
 	file_periscope_proto_msgTypes[98].OneofWrappers = []any{}

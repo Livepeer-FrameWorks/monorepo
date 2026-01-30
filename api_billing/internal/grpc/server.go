@@ -1272,11 +1272,19 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		invoice.PeriodEnd = timestamppb.New(periodEnd.Time)
 	}
 
-	// Convert usage_details JSONB to protobuf Struct
+	// Always initialize to empty slice for GraphQL non-null list compliance
+	invoice.LineItems = []*pb.LineItem{}
+
+	// Convert usage_details JSONB to protobuf Struct and typed fields
 	if len(usageDetailsBytes) > 0 {
 		var detailsMap map[string]interface{}
 		if json.Unmarshal(usageDetailsBytes, &detailsMap) == nil {
 			invoice.UsageDetails = mapToProtoStruct(detailsMap)
+			invoice.UsageSummary = parseUsageDetailsToSummary(detailsMap, invoice.TenantId, invoice.PeriodStart, invoice.PeriodEnd)
+			invoice.LineItems = generateInvoiceLineItems(detailsMap, invoice.BaseAmount, invoice.MeteredAmount)
+			if invoice.UsageSummary != nil {
+				invoice.UsageSummary.GeoBreakdown = parseGeoBreakdown(detailsMap)
+			}
 		}
 	}
 
@@ -1379,11 +1387,19 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 		if periodEnd.Valid {
 			inv.PeriodEnd = timestamppb.New(periodEnd.Time)
 		}
-		// Convert usage_details JSONB to protobuf Struct
+		// Always initialize to empty slice for GraphQL non-null list compliance
+		inv.LineItems = []*pb.LineItem{}
+
+		// Convert usage_details JSONB to protobuf Struct and typed fields
 		if len(usageDetails) > 0 {
 			var details map[string]interface{}
 			if json.Unmarshal(usageDetails, &details) == nil {
 				inv.UsageDetails = mapToProtoStruct(details)
+				inv.UsageSummary = parseUsageDetailsToSummary(details, inv.TenantId, inv.PeriodStart, inv.PeriodEnd)
+				inv.LineItems = generateInvoiceLineItems(details, inv.BaseAmount, inv.MeteredAmount)
+				if inv.UsageSummary != nil {
+					inv.UsageSummary.GeoBreakdown = parseGeoBreakdown(details)
+				}
 			}
 		}
 		invoices = append(invoices, &inv)
@@ -2168,218 +2184,42 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 	now := time.Now()
 	periodStart, periodEnd := s.getSubscriptionPeriod(ctx, tenantID, now)
 
-	var streamHours, viewerHours, egressGb, recordingGb, storageGb, peakBandwidthMbps float64
-	var averageStorageGb, clipStorageAddedGb, clipStorageDeletedGb float64
-	var dvrStorageAddedGb, dvrStorageDeletedGb, vodStorageAddedGb, vodStorageDeletedGb float64
-	var totalStreams, totalViewers, peakViewers, maxViewers int32
-	var clipsAdded, clipsDeleted int32
-	var dvrAdded, dvrDeleted, vodAdded, vodDeleted int32
-	var usageDetailsJSON []byte
-	var livepeerSeconds, nativeAvSeconds float64
-	var livepeerSegmentCount, nativeAvSegmentCount int32
-	var livepeerUniqueStreams, nativeAvUniqueStreams int32
+	var streamHours, viewerHours, egressGb, peakBandwidthMbps, averageStorageGb float64
 	var livepeerH264, livepeerVp9, livepeerAv1, livepeerHevc float64
-	var nativeAvH264, nativeAvVp9, nativeAvAv1, nativeAvHevc float64
-	var nativeAvAac, nativeAvOpus float64
-	var audioSeconds, videoSeconds float64
-	var uniqueUsers, uniqueUsersPeriod int32
+	var nativeAvH264, nativeAvVp9, nativeAvAv1, nativeAvHevc, nativeAvAac, nativeAvOpus float64
+	var totalStreams, totalViewers, maxViewers, uniqueUsers int32
 
-	// Query aggregated metrics + most recent usage_details JSONB (for geo breakdown etc.)
 	err := s.db.QueryRowContext(ctx, `
-		WITH aggregated AS (
-			SELECT
-				COALESCE(SUM(CASE WHEN usage_type = 'stream_hours' THEN usage_value ELSE 0 END), 0) as stream_hours,
-				COALESCE(SUM(CASE WHEN usage_type = 'viewer_hours' THEN usage_value ELSE 0 END), 0) as viewer_hours,
-				COALESCE(SUM(CASE WHEN usage_type = 'egress_gb' THEN usage_value ELSE 0 END), 0) as egress_gb,
-				COALESCE(SUM(CASE WHEN usage_type = 'recording_gb' THEN usage_value ELSE 0 END), 0) as recording_gb,
-				COALESCE(SUM(CASE WHEN usage_type = 'storage_gb' THEN usage_value ELSE 0 END), 0) as storage_gb,
-				COALESCE(MAX(CASE WHEN usage_type = 'peak_bandwidth_mbps' THEN usage_value ELSE 0 END), 0) as peak_bandwidth_mbps,
-				COALESCE(MAX(CASE WHEN usage_type = 'total_streams' THEN usage_value ELSE 0 END), 0)::int as total_streams,
-				COALESCE(MAX(CASE WHEN usage_type = 'total_viewers' THEN usage_value ELSE 0 END), 0)::int as total_viewers,
-				COALESCE(MAX(CASE WHEN usage_type = 'peak_viewers' THEN usage_value ELSE 0 END), 0)::int as peak_viewers,
-				COALESCE(MAX(CASE WHEN usage_type = 'max_viewers' THEN usage_value ELSE 0 END), 0)::int as max_viewers,
-				COALESCE(MAX(CASE WHEN usage_type = 'unique_users' THEN usage_value ELSE 0 END), 0)::int as unique_users,
-				COALESCE(MAX(CASE WHEN usage_type = 'unique_users_period' THEN usage_value ELSE 0 END), 0)::int as unique_users_period,
-				-- Storage lifecycle metrics
-				COALESCE(AVG(CASE WHEN usage_type = 'average_storage_gb' THEN usage_value END), 0) as average_storage_gb,
-				COALESCE(SUM(CASE WHEN usage_type = 'clips_added' THEN usage_value ELSE 0 END), 0)::int as clips_added,
-				COALESCE(SUM(CASE WHEN usage_type = 'clips_deleted' THEN usage_value ELSE 0 END), 0)::int as clips_deleted,
-				COALESCE(SUM(CASE WHEN usage_type = 'clip_storage_added_gb' THEN usage_value ELSE 0 END), 0) as clip_storage_added_gb,
-				COALESCE(SUM(CASE WHEN usage_type = 'clip_storage_deleted_gb' THEN usage_value ELSE 0 END), 0) as clip_storage_deleted_gb,
-				-- DVR lifecycle metrics
-				COALESCE(SUM(CASE WHEN usage_type = 'dvr_added' THEN usage_value ELSE 0 END), 0)::int as dvr_added,
-				COALESCE(SUM(CASE WHEN usage_type = 'dvr_deleted' THEN usage_value ELSE 0 END), 0)::int as dvr_deleted,
-				COALESCE(SUM(CASE WHEN usage_type = 'dvr_storage_added_gb' THEN usage_value ELSE 0 END), 0) as dvr_storage_added_gb,
-				COALESCE(SUM(CASE WHEN usage_type = 'dvr_storage_deleted_gb' THEN usage_value ELSE 0 END), 0) as dvr_storage_deleted_gb,
-				-- VOD lifecycle metrics
-				COALESCE(SUM(CASE WHEN usage_type = 'vod_added' THEN usage_value ELSE 0 END), 0)::int as vod_added,
-				COALESCE(SUM(CASE WHEN usage_type = 'vod_deleted' THEN usage_value ELSE 0 END), 0)::int as vod_deleted,
-				COALESCE(SUM(CASE WHEN usage_type = 'vod_storage_added_gb' THEN usage_value ELSE 0 END), 0) as vod_storage_added_gb,
-				COALESCE(SUM(CASE WHEN usage_type = 'vod_storage_deleted_gb' THEN usage_value ELSE 0 END), 0) as vod_storage_deleted_gb,
-				-- Processing/transcoding totals
-				COALESCE(SUM(CASE WHEN usage_type = 'livepeer_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_seconds' THEN usage_value ELSE 0 END), 0) as native_av_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'livepeer_segment_count' THEN usage_value ELSE 0 END), 0)::int as livepeer_segment_count,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_segment_count' THEN usage_value ELSE 0 END), 0)::int as native_av_segment_count,
-				COALESCE(MAX(CASE WHEN usage_type = 'livepeer_unique_streams' THEN usage_value ELSE 0 END), 0)::int as livepeer_unique_streams,
-				COALESCE(MAX(CASE WHEN usage_type = 'native_av_unique_streams' THEN usage_value ELSE 0 END), 0)::int as native_av_unique_streams,
-				COALESCE(SUM(CASE WHEN usage_type = 'livepeer_h264_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_h264_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'livepeer_vp9_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_vp9_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'livepeer_av1_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_av1_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'livepeer_hevc_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_hevc_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_h264_seconds' THEN usage_value ELSE 0 END), 0) as native_av_h264_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_vp9_seconds' THEN usage_value ELSE 0 END), 0) as native_av_vp9_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_av1_seconds' THEN usage_value ELSE 0 END), 0) as native_av_av1_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_hevc_seconds' THEN usage_value ELSE 0 END), 0) as native_av_hevc_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_aac_seconds' THEN usage_value ELSE 0 END), 0) as native_av_aac_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'native_av_opus_seconds' THEN usage_value ELSE 0 END), 0) as native_av_opus_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'audio_seconds' THEN usage_value ELSE 0 END), 0) as audio_seconds,
-				COALESCE(SUM(CASE WHEN usage_type = 'video_seconds' THEN usage_value ELSE 0 END), 0) as video_seconds
-			FROM purser.usage_records
-			WHERE tenant_id = $1 AND period_start < $3 AND period_end > $2
-		),
-		latest_details AS (
-			SELECT usage_details
-			FROM purser.usage_records
-			WHERE tenant_id = $1 AND period_start >= $2 AND period_end < $3
-			  AND usage_details IS NOT NULL
-			  AND usage_details ? 'geo_breakdown'
-			ORDER BY created_at DESC
-			LIMIT 1
-		)
-		SELECT a.*, COALESCE(d.usage_details, '{}'::jsonb)
-		FROM aggregated a
-		LEFT JOIN latest_details d ON true
+		SELECT
+			COALESCE(SUM(CASE WHEN usage_type = 'stream_hours' THEN usage_value ELSE 0 END), 0) as stream_hours,
+			COALESCE(SUM(CASE WHEN usage_type = 'viewer_hours' THEN usage_value ELSE 0 END), 0) as viewer_hours,
+			COALESCE(SUM(CASE WHEN usage_type = 'egress_gb' THEN usage_value ELSE 0 END), 0) as egress_gb,
+			COALESCE(MAX(CASE WHEN usage_type = 'peak_bandwidth_mbps' THEN usage_value ELSE 0 END), 0) as peak_bandwidth_mbps,
+			COALESCE(AVG(CASE WHEN usage_type = 'average_storage_gb' THEN usage_value END), 0) as average_storage_gb,
+			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_h264_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_h264_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_vp9_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_vp9_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_av1_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_av1_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'livepeer_hevc_seconds' THEN usage_value ELSE 0 END), 0) as livepeer_hevc_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'native_av_h264_seconds' THEN usage_value ELSE 0 END), 0) as native_av_h264_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'native_av_vp9_seconds' THEN usage_value ELSE 0 END), 0) as native_av_vp9_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'native_av_av1_seconds' THEN usage_value ELSE 0 END), 0) as native_av_av1_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'native_av_hevc_seconds' THEN usage_value ELSE 0 END), 0) as native_av_hevc_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'native_av_aac_seconds' THEN usage_value ELSE 0 END), 0) as native_av_aac_seconds,
+			COALESCE(SUM(CASE WHEN usage_type = 'native_av_opus_seconds' THEN usage_value ELSE 0 END), 0) as native_av_opus_seconds,
+			COALESCE(MAX(CASE WHEN usage_type = 'total_streams' THEN usage_value ELSE 0 END), 0)::int as total_streams,
+			COALESCE(MAX(CASE WHEN usage_type = 'total_viewers' THEN usage_value ELSE 0 END), 0)::int as total_viewers,
+			COALESCE(MAX(CASE WHEN usage_type = 'max_viewers' THEN usage_value ELSE 0 END), 0)::int as max_viewers,
+			COALESCE(MAX(CASE WHEN usage_type = 'unique_users' THEN usage_value ELSE 0 END), 0)::int as unique_users
+		FROM purser.usage_records
+		WHERE tenant_id = $1 AND period_start < $3 AND period_end > $2
 	`, tenantID, periodStart, periodEnd).Scan(
-		&streamHours, &viewerHours, &egressGb, &recordingGb,
-		&storageGb, &peakBandwidthMbps, &totalStreams, &totalViewers, &peakViewers, &maxViewers, &uniqueUsers, &uniqueUsersPeriod,
-		&averageStorageGb, &clipsAdded, &clipsDeleted, &clipStorageAddedGb, &clipStorageDeletedGb,
-		&dvrAdded, &dvrDeleted, &dvrStorageAddedGb, &dvrStorageDeletedGb,
-		&vodAdded, &vodDeleted, &vodStorageAddedGb, &vodStorageDeletedGb,
-		&livepeerSeconds, &nativeAvSeconds, &livepeerSegmentCount, &nativeAvSegmentCount,
-		&livepeerUniqueStreams, &nativeAvUniqueStreams,
+		&streamHours, &viewerHours, &egressGb, &peakBandwidthMbps, &averageStorageGb,
 		&livepeerH264, &livepeerVp9, &livepeerAv1, &livepeerHevc,
-		&nativeAvH264, &nativeAvVp9, &nativeAvAv1, &nativeAvHevc,
-		&nativeAvAac, &nativeAvOpus,
-		&audioSeconds, &videoSeconds,
-		&usageDetailsJSON,
+		&nativeAvH264, &nativeAvVp9, &nativeAvAv1, &nativeAvHevc, &nativeAvAac, &nativeAvOpus,
+		&totalStreams, &totalViewers, &maxViewers, &uniqueUsers,
 	)
-
 	if err != nil {
 		return nil, err
-	}
-
-	// Parse usage_details for rich metrics (geo_breakdown, unique_countries, etc.)
-	var details struct {
-		MaxViewers        int                      `json:"max_viewers"`
-		UniqueUsers       int                      `json:"unique_users"`
-		UniqueUsersPeriod int                      `json:"unique_users_period"`
-		AvgViewers        float64                  `json:"avg_viewers"`
-		UniqueCountries   int                      `json:"unique_countries"`
-		UniqueCities      int                      `json:"unique_cities"`
-		GeoBreakdown      []map[string]interface{} `json:"geo_breakdown"`
-		// Storage lifecycle metrics (fallback from usage_details if not in usage_records)
-		AverageStorageGb     float64 `json:"average_storage_gb"`
-		ClipsAdded           int     `json:"clips_added"`
-		ClipsDeleted         int     `json:"clips_deleted"`
-		ClipStorageAddedGb   float64 `json:"clip_storage_added_gb"`
-		ClipStorageDeletedGb float64 `json:"clip_storage_deleted_gb"`
-		DvrAdded             int     `json:"dvr_added"`
-		DvrDeleted           int     `json:"dvr_deleted"`
-		DvrStorageAddedGb    float64 `json:"dvr_storage_added_gb"`
-		DvrStorageDeletedGb  float64 `json:"dvr_storage_deleted_gb"`
-		VodAdded             int     `json:"vod_added"`
-		VodDeleted           int     `json:"vod_deleted"`
-		VodStorageAddedGb    float64 `json:"vod_storage_added_gb"`
-		VodStorageDeletedGb  float64 `json:"vod_storage_deleted_gb"`
-	}
-	if len(usageDetailsJSON) > 0 {
-		_ = json.Unmarshal(usageDetailsJSON, &details)
-	}
-
-	// Convert geo breakdown to proto format
-	var geoBreakdown []*pb.CountryMetrics
-	for _, g := range details.GeoBreakdown {
-		cm := &pb.CountryMetrics{}
-		if code, ok := g["country_code"].(string); ok {
-			cm.CountryCode = code
-		}
-		if count, ok := g["viewer_count"].(float64); ok {
-			cm.ViewerCount = int32(count)
-		}
-		if hours, ok := g["viewer_hours"].(float64); ok {
-			cm.ViewerHours = hours
-		}
-		if egress, ok := g["egress_gb"].(float64); ok {
-			cm.EgressGb = egress
-		}
-		geoBreakdown = append(geoBreakdown, cm)
-	}
-
-	// Use SQL values, fall back to usage_details if SQL returns zero
-	finalAvgStorageGb := averageStorageGb
-	if finalAvgStorageGb == 0 {
-		finalAvgStorageGb = details.AverageStorageGb
-	}
-	finalClipsAdded := clipsAdded
-	if finalClipsAdded == 0 {
-		finalClipsAdded = int32(details.ClipsAdded)
-	}
-	finalClipsDeleted := clipsDeleted
-	if finalClipsDeleted == 0 {
-		finalClipsDeleted = int32(details.ClipsDeleted)
-	}
-	finalClipStorageAdded := clipStorageAddedGb
-	if finalClipStorageAdded == 0 {
-		finalClipStorageAdded = details.ClipStorageAddedGb
-	}
-	finalClipStorageDeleted := clipStorageDeletedGb
-	if finalClipStorageDeleted == 0 {
-		finalClipStorageDeleted = details.ClipStorageDeletedGb
-	}
-	finalDvrAdded := dvrAdded
-	if finalDvrAdded == 0 {
-		finalDvrAdded = int32(details.DvrAdded)
-	}
-	finalDvrDeleted := dvrDeleted
-	if finalDvrDeleted == 0 {
-		finalDvrDeleted = int32(details.DvrDeleted)
-	}
-	finalDvrStorageAdded := dvrStorageAddedGb
-	if finalDvrStorageAdded == 0 {
-		finalDvrStorageAdded = details.DvrStorageAddedGb
-	}
-	finalDvrStorageDeleted := dvrStorageDeletedGb
-	if finalDvrStorageDeleted == 0 {
-		finalDvrStorageDeleted = details.DvrStorageDeletedGb
-	}
-	finalVodAdded := vodAdded
-	if finalVodAdded == 0 {
-		finalVodAdded = int32(details.VodAdded)
-	}
-	finalVodDeleted := vodDeleted
-	if finalVodDeleted == 0 {
-		finalVodDeleted = int32(details.VodDeleted)
-	}
-	finalVodStorageAdded := vodStorageAddedGb
-	if finalVodStorageAdded == 0 {
-		finalVodStorageAdded = details.VodStorageAddedGb
-	}
-	finalVodStorageDeleted := vodStorageDeletedGb
-	if finalVodStorageDeleted == 0 {
-		finalVodStorageDeleted = details.VodStorageDeletedGb
-	}
-	finalUniqueUsers := uniqueUsers
-	if finalUniqueUsers == 0 {
-		finalUniqueUsers = int32(details.UniqueUsers)
-	}
-	finalUniqueUsersPeriod := uniqueUsersPeriod
-	if finalUniqueUsersPeriod == 0 {
-		finalUniqueUsersPeriod = int32(details.UniqueUsersPeriod)
-	}
-	finalMaxViewers := maxViewers
-	if finalMaxViewers == 0 {
-		finalMaxViewers = int32(details.MaxViewers)
 	}
 
 	period := periodStart.Format(time.RFC3339) + "/" + periodEnd.Format(time.RFC3339)
@@ -2391,63 +2231,28 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 	}
 
 	return &pb.UsageSummary{
-		TenantId:          tenantID,
-		Period:            period,
-		StreamHours:       streamHours,
-		ViewerHours:       viewerHours,
-		EgressGb:          egressGb,
-		RecordingGb:       recordingGb,
-		StorageGb:         storageGb,
-		PeakBandwidthMbps: peakBandwidthMbps,
-		TotalStreams:      totalStreams,
-		TotalViewers:      totalViewers,
-		PeakViewers:       peakViewers,
-		MaxViewers:        finalMaxViewers,
-		UniqueUsers:       finalUniqueUsers,
-		UniqueUsersPeriod: finalUniqueUsersPeriod,
-		AvgViewers:        details.AvgViewers,
-		UniqueCountries:   int32(details.UniqueCountries),
-		UniqueCities:      int32(details.UniqueCities),
-		GeoBreakdown:      geoBreakdown,
-		Granularity:       granularity,
-		// Storage lifecycle metrics
-		AverageStorageGb:     finalAvgStorageGb,
-		ClipsAdded:           finalClipsAdded,
-		ClipsDeleted:         finalClipsDeleted,
-		ClipStorageAddedGb:   finalClipStorageAdded,
-		ClipStorageDeletedGb: finalClipStorageDeleted,
-		// DVR lifecycle metrics
-		DvrAdded:            finalDvrAdded,
-		DvrDeleted:          finalDvrDeleted,
-		DvrStorageAddedGb:   finalDvrStorageAdded,
-		DvrStorageDeletedGb: finalDvrStorageDeleted,
-		// VOD lifecycle metrics
-		VodAdded:            finalVodAdded,
-		VodDeleted:          finalVodDeleted,
-		VodStorageAddedGb:   finalVodStorageAdded,
-		VodStorageDeletedGb: finalVodStorageDeleted,
-		// Processing/transcoding totals
-		LivepeerSeconds:       livepeerSeconds,
-		LivepeerSegmentCount:  livepeerSegmentCount,
-		LivepeerUniqueStreams: livepeerUniqueStreams,
-		NativeAvSeconds:       nativeAvSeconds,
-		NativeAvSegmentCount:  nativeAvSegmentCount,
-		NativeAvUniqueStreams: nativeAvUniqueStreams,
-		// Per-codec breakdown: Livepeer
+		TenantId:            tenantID,
+		Period:              period,
+		Granularity:         granularity,
+		StreamHours:         streamHours,
+		EgressGb:            egressGb,
+		PeakBandwidthMbps:   peakBandwidthMbps,
+		AverageStorageGb:    averageStorageGb,
 		LivepeerH264Seconds: livepeerH264,
 		LivepeerVp9Seconds:  livepeerVp9,
 		LivepeerAv1Seconds:  livepeerAv1,
 		LivepeerHevcSeconds: livepeerHevc,
-		// Per-codec breakdown: Native AV
 		NativeAvH264Seconds: nativeAvH264,
 		NativeAvVp9Seconds:  nativeAvVp9,
 		NativeAvAv1Seconds:  nativeAvAv1,
 		NativeAvHevcSeconds: nativeAvHevc,
 		NativeAvAacSeconds:  nativeAvAac,
 		NativeAvOpusSeconds: nativeAvOpus,
-		// Track type aggregates
-		AudioSeconds: audioSeconds,
-		VideoSeconds: videoSeconds,
+		TotalStreams:        totalStreams,
+		TotalViewers:        totalViewers,
+		ViewerHours:         viewerHours,
+		MaxViewers:          maxViewers,
+		UniqueUsers:         uniqueUsers,
 	}, nil
 }
 
@@ -5512,4 +5317,214 @@ func (s *PurserServer) GetTenantX402Address(ctx context.Context, req *pb.GetTena
 		DerivationIndex: derivationIndex,
 		NewlyCreated:    newlyCreated,
 	}, nil
+}
+
+// ============================================================================
+// INVOICE HELPERS - Parse usage_details and generate typed fields
+// ============================================================================
+
+// parseUsageDetailsToSummary extracts typed UsageSummary from usage_details JSON
+func parseUsageDetailsToSummary(usageDetails map[string]interface{}, tenantID string, periodStart, periodEnd *timestamppb.Timestamp) *pb.UsageSummary {
+	if usageDetails == nil {
+		return nil
+	}
+
+	summary := &pb.UsageSummary{
+		TenantId:            tenantID,
+		StreamHours:         floatFromUsage(usageDetails, "stream_hours"),
+		EgressGb:            floatFromUsage(usageDetails, "egress_gb"),
+		PeakBandwidthMbps:   floatFromUsage(usageDetails, "peak_bandwidth_mbps"),
+		AverageStorageGb:    floatFromUsage(usageDetails, "average_storage_gb"),
+		LivepeerH264Seconds: floatFromUsage(usageDetails, "livepeer_h264_seconds"),
+		LivepeerVp9Seconds:  floatFromUsage(usageDetails, "livepeer_vp9_seconds"),
+		LivepeerAv1Seconds:  floatFromUsage(usageDetails, "livepeer_av1_seconds"),
+		LivepeerHevcSeconds: floatFromUsage(usageDetails, "livepeer_hevc_seconds"),
+		NativeAvH264Seconds: floatFromUsage(usageDetails, "native_av_h264_seconds"),
+		NativeAvVp9Seconds:  floatFromUsage(usageDetails, "native_av_vp9_seconds"),
+		NativeAvAv1Seconds:  floatFromUsage(usageDetails, "native_av_av1_seconds"),
+		NativeAvHevcSeconds: floatFromUsage(usageDetails, "native_av_hevc_seconds"),
+		NativeAvAacSeconds:  floatFromUsage(usageDetails, "native_av_aac_seconds"),
+		NativeAvOpusSeconds: floatFromUsage(usageDetails, "native_av_opus_seconds"),
+		TotalStreams:        int32(floatFromUsage(usageDetails, "total_streams")),
+		TotalViewers:        int32(floatFromUsage(usageDetails, "total_viewers")),
+		ViewerHours:         floatFromUsage(usageDetails, "viewer_hours"),
+		MaxViewers:          int32(floatFromUsage(usageDetails, "max_viewers")),
+		UniqueUsers:         int32(floatFromUsage(usageDetails, "unique_users")),
+	}
+
+	if periodStart != nil && periodEnd != nil {
+		start := periodStart.AsTime()
+		end := periodEnd.AsTime()
+		summary.Period = start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339)
+		summary.Granularity = deriveGranularity(start, end)
+	}
+
+	return summary
+}
+
+// generateInvoiceLineItems creates typed line items from usage and tier info
+func generateInvoiceLineItems(usageDetails map[string]interface{}, baseAmount, meteredAmount float64) []*pb.LineItem {
+	var items []*pb.LineItem
+
+	// 1. Base tier line item
+	tierName := "Service"
+	if tierInfo, ok := usageDetails["tier_info"].(map[string]interface{}); ok {
+		if dn, ok := tierInfo["display_name"].(string); ok && dn != "" {
+			tierName = dn
+		}
+	}
+	items = append(items, &pb.LineItem{
+		Description: tierName + " Tier",
+		Quantity:    1,
+		UnitPrice:   baseAmount,
+		Total:       baseAmount,
+	})
+
+	// 2. Usage metrics (informational, zero price)
+	usageMetrics := []struct {
+		key         string
+		displayName string
+		multiplier  float64
+	}{
+		{"viewer_hours", "Delivered Minutes", 60},
+		{"average_storage_gb", "Storage (GB)", 1},
+		{"stream_hours", "Stream Hours", 1},
+		{"egress_gb", "Egress (GB)", 1},
+	}
+
+	for _, m := range usageMetrics {
+		val := floatFromUsage(usageDetails, m.key)
+		if val > 0 {
+			displayVal := val * m.multiplier
+			items = append(items, &pb.LineItem{
+				Description: m.displayName,
+				Quantity:    int32(displayVal),
+				UnitPrice:   0,
+				Total:       0,
+			})
+		}
+	}
+
+	// 3. Processing/transcoding line items (informational)
+	codecMetrics := []struct {
+		key         string
+		displayName string
+	}{
+		{"livepeer_h264_seconds", "H264 Transcoding"},
+		{"livepeer_vp9_seconds", "VP9 Transcoding"},
+		{"livepeer_av1_seconds", "AV1 Transcoding"},
+		{"livepeer_hevc_seconds", "HEVC Transcoding"},
+		{"native_av_h264_seconds", "H264 Processing"},
+		{"native_av_vp9_seconds", "VP9 Processing"},
+		{"native_av_av1_seconds", "AV1 Processing"},
+		{"native_av_hevc_seconds", "HEVC Processing"},
+		{"native_av_aac_seconds", "AAC Transcoding"},
+		{"native_av_opus_seconds", "Opus Transcoding"},
+	}
+
+	for _, m := range codecMetrics {
+		seconds := floatFromUsage(usageDetails, m.key)
+		if seconds > 0 {
+			minutes := int32(seconds / 60)
+			if minutes < 1 {
+				minutes = 1
+			}
+			items = append(items, &pb.LineItem{
+				Description: m.displayName,
+				Quantity:    minutes,
+				UnitPrice:   0,
+				Total:       0,
+			})
+		}
+	}
+
+	// 4. Overage charges (if any)
+	if meteredAmount > 0 {
+		items = append(items, &pb.LineItem{
+			Description: "Overage charges",
+			Quantity:    1,
+			UnitPrice:   meteredAmount,
+			Total:       meteredAmount,
+		})
+	}
+
+	return items
+}
+
+// parseGeoBreakdown extracts CountryMetrics from usage_details
+func parseGeoBreakdown(usageDetails map[string]interface{}) []*pb.CountryMetrics {
+	geoRaw, ok := usageDetails["geo_breakdown"]
+	if !ok {
+		return nil
+	}
+
+	geoList, ok := geoRaw.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	var result []*pb.CountryMetrics
+	for _, item := range geoList {
+		geoMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		result = append(result, &pb.CountryMetrics{
+			CountryCode: stringFromUsage(geoMap, "country_code"),
+			ViewerCount: int32(floatFromUsage(geoMap, "viewer_count")),
+			ViewerHours: floatFromUsage(geoMap, "viewer_hours"),
+			EgressGb:    floatFromUsage(geoMap, "egress_gb"),
+		})
+	}
+	return result
+}
+
+func floatFromUsage(m map[string]interface{}, key string) float64 {
+	if m == nil {
+		return 0
+	}
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch val := v.(type) {
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	case int:
+		return float64(val)
+	case int32:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case json.Number:
+		f, _ := val.Float64()
+		return f
+	default:
+		return 0
+	}
+}
+
+func stringFromUsage(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func deriveGranularity(start, end time.Time) string {
+	duration := end.Sub(start)
+	if duration >= 28*24*time.Hour {
+		return "monthly"
+	}
+	if duration >= 24*time.Hour {
+		return "daily"
+	}
+	return "hourly"
 }
