@@ -112,7 +112,7 @@ jobs:
           }
           JSON
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: image-digest-${{ matrix.service.name }}
           path: dist/image-${{ matrix.service.name }}.json
@@ -238,13 +238,13 @@ jobs:
           JSON
 
       - name: Upload digest artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: image-digest-${{ matrix.webapp.name }}
           path: dist/image-${{ matrix.webapp.name }}.json
 
       - name: Upload static bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.webapp.name }}-bundle
           path: ${{ matrix.webapp.name }}-build.tar.gz
@@ -292,7 +292,7 @@ jobs:
           mkdir -p dist/cli
           mv "cli/$out" "dist/cli/$out"
       - name: Upload CLI artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/cli/*
@@ -370,7 +370,7 @@ jobs:
           tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binary-${{ matrix.service.name }}-${{ matrix.arch.goos }}-${{ matrix.arch.goarch }}
           path: dist/binaries/${{ matrix.service.name }}/*.tar.gz
@@ -519,7 +519,7 @@ jobs:
           echo "" >> dist/manifest.yaml
           cat config/infrastructure.yaml >> dist/manifest.yaml
       - name: Upload manifest artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-manifest
           path: dist/manifest.yaml
