@@ -175,7 +175,7 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - name: Generate SvelteKit types
-        run: cd website_application && npx svelte-kit sync
+        run: pnpm --filter frameworks-frontend exec svelte-kit sync
       - run: pnpm test:coverage
       - name: Upload frontend coverage
         if: always()
