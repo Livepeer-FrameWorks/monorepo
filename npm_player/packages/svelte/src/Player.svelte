@@ -119,6 +119,7 @@
     currentSourceInfo: null as { url: string; type: string } | null,
     playbackQuality: null as any,
     subtitlesEnabled: false,
+    toast: null as { message: string; timestamp: number } | null,
   });
 
   // Track if we've already attached to prevent double-attach race
@@ -195,6 +196,15 @@
           console.error("[Player.svelte] attach failed:", err);
         });
     }
+  });
+
+  // Auto-dismiss toast after 3 seconds
+  $effect(() => {
+    if (!storeState.toast) return;
+    const timer = setTimeout(() => {
+      playerStore?.dismissToast();
+    }, 3000);
+    return () => clearTimeout(timer);
   });
 
   // ============================================================================
@@ -457,6 +467,36 @@
                     Retry
                   </button>
                 </div>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Toast notification -->
+          {#if storeState.toast}
+            <div
+              class="absolute bottom-20 left-1/2 -translate-x-1/2 z-30 animate-in fade-in slide-in-from-bottom-2 duration-200"
+              role="status"
+              aria-live="polite"
+            >
+              <div
+                class="flex items-center gap-2 rounded-lg border border-white/10 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm"
+              >
+                <span>{storeState.toast.message}</span>
+                <button
+                  type="button"
+                  onclick={() => playerStore?.dismissToast()}
+                  class="ml-2 text-white/60 hover:text-white"
+                  aria-label="Dismiss"
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path
+                      d="M9 3L3 9M3 3L9 9"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
               </div>
             </div>
           {/if}

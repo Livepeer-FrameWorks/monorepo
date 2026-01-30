@@ -11,7 +11,7 @@
 import { TypedEventEmitter } from "./EventEmitter";
 import { GatewayClient } from "./GatewayClient";
 import { StreamStateClient } from "./StreamStateClient";
-import type { PlayerManager } from "./PlayerManager";
+import type { PlayerManager, PlayerManagerEvents } from "./PlayerManager";
 import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
 import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";
@@ -186,6 +186,15 @@ export interface PlayerControllerEvents {
     volume: number;
     muted: boolean;
   };
+
+  // ============================================================================
+  // Error Handling Events (from PlayerManager)
+  // ============================================================================
+
+  /** Protocol/player swap occurred - show toast */
+  protocolSwapped: PlayerManagerEvents["protocolSwapped"];
+  /** Playback failed after all recovery attempts - show error modal */
+  playbackFailed: PlayerManagerEvents["playbackFailed"];
 }
 
 // ============================================================================
@@ -641,6 +650,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     super();
     this.config = config;
     this.playerManager = config.playerManager || globalPlayerManager;
+
+    // Forward error handling events from PlayerManager
+    this.playerManager.on("protocolSwapped", (data) => this.emit("protocolSwapped", data));
+    this.playerManager.on("playbackFailed", (data) => this.emit("playbackFailed", data));
 
     // Load loop state from localStorage
     try {

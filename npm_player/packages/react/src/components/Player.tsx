@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import IdleScreen from "./IdleScreen";
 import TitleOverlay from "./TitleOverlay";
 import StatsPanel from "./StatsPanel";
@@ -58,6 +58,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
     setVolume,
     selectQuality,
     clearError,
+    dismissToast,
     retry,
     reload,
     jumpToLive,
@@ -122,6 +123,15 @@ const PlayerInner: React.FC<PlayerProps> = ({
   const handleSkipIndicatorHide = useCallback(() => {
     setSkipDirection(null);
   }, []);
+
+  // Auto-dismiss toast after 3 seconds
+  useEffect(() => {
+    if (!state.toast) return;
+    const timer = setTimeout(() => {
+      dismissToast();
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [state.toast, dismissToast]);
 
   // ============================================================================
   // Derived Values
@@ -313,6 +323,34 @@ const PlayerInner: React.FC<PlayerProps> = ({
                       Retry
                     </button>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* Toast notification */}
+            {state.toast && (
+              <div
+                className="absolute bottom-20 left-1/2 -translate-x-1/2 z-30 animate-in fade-in slide-in-from-bottom-2 duration-200"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/80 px-4 py-2 text-sm text-white shadow-lg backdrop-blur-sm">
+                  <span>{state.toast.message}</span>
+                  <button
+                    type="button"
+                    onClick={dismissToast}
+                    className="ml-2 text-white/60 hover:text-white"
+                    aria-label="Dismiss"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path
+                        d="M9 3L3 9M3 3L9 9"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
                 </div>
               </div>
             )}

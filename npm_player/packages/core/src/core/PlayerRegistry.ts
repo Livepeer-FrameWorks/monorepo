@@ -111,13 +111,10 @@ PlayerManager.prototype.initializePlayer = async function (
 const isDev = (() => {
   try {
     // In browser builds, process may be undefined; guard access
-    // @ts-ignore
-    return (
-      typeof process !== "undefined" &&
-      process &&
-      process.env &&
-      process.env.NODE_ENV === "development"
-    );
+    const g = globalThis as Record<string, unknown>;
+    const p = g.process as Record<string, unknown> | undefined;
+    const env = p?.env as Record<string, unknown> | undefined;
+    return env?.NODE_ENV === "development";
   } catch {
     return false;
   }

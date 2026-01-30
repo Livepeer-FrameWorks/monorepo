@@ -80,6 +80,8 @@ export interface PlayerControllerState {
   playbackQuality: PlaybackQuality | null;
   /** Subtitles enabled */
   subtitlesEnabled: boolean;
+  /** Toast message to display (auto-dismisses) */
+  toast: { message: string; timestamp: number } | null;
 }
 
 export interface PlayerControllerStore extends Readable<PlayerControllerState> {
@@ -115,6 +117,8 @@ export interface PlayerControllerStore extends Readable<PlayerControllerState> {
   toggleSubtitles: () => void;
   /** Clear error */
   clearError: () => void;
+  /** Dismiss toast notification */
+  dismissToast: () => void;
   /** Retry playback */
   retry: () => Promise<void>;
   /** Reload player */
@@ -173,6 +177,7 @@ const initialState: PlayerControllerState = {
   currentSourceInfo: null,
   playbackQuality: null,
   subtitlesEnabled: false,
+  toast: null,
 };
 
 // ============================================================================
@@ -401,6 +406,24 @@ export function createPlayerControllerStore(
       })
     );
 
+    // Error handling events - show toasts/modals
+    unsubscribers.push(
+      controller.on("protocolSwapped", (data) => {
+        const message = `Switched to ${data.toProtocol}`;
+        store.update((prev) => ({ ...prev, toast: { message, timestamp: Date.now() } }));
+      })
+    );
+
+    unsubscribers.push(
+      controller.on("playbackFailed", (data) => {
+        store.update((prev) => ({
+          ...prev,
+          error: data.message,
+          isPassiveError: false,
+        }));
+      })
+    );
+
     // Set initial loop state
     store.update((prev) => ({
       ...prev,
@@ -486,6 +509,10 @@ export function createPlayerControllerStore(
     store.update((prev) => ({ ...prev, error: null, isPassiveError: false }));
   }
 
+  function dismissToast(): void {
+    store.update((prev) => ({ ...prev, toast: null }));
+  }
+
   async function retry(): Promise<void> {
     await controller?.retry();
   }
@@ -549,6 +576,7 @@ export function createPlayerControllerStore(
     togglePiP,
     toggleSubtitles,
     clearError,
+    dismissToast,
     retry,
     reload,
     getQualities,

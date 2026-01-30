@@ -32,6 +32,16 @@ export interface UsePlayerControllerConfig extends Omit<PlayerControllerConfig, 
   onError?: (error: string) => void;
   /** Callback when ready */
   onReady?: (videoElement: HTMLVideoElement) => void;
+  /** Callback when protocol is swapped (for toast notification) */
+  onProtocolSwapped?: (data: {
+    fromPlayer: string;
+    toPlayer: string;
+    fromProtocol: string;
+    toProtocol: string;
+    reason: string;
+  }) => void;
+  /** Callback when playback fails after all recovery attempts (for error modal) */
+  onPlaybackFailed?: (error: { code: string; message: string }) => void;
 }
 
 export interface PlayerControllerState {
@@ -105,6 +115,8 @@ export interface PlayerControllerState {
   textTracks: Array<{ id: string; label: string; language?: string; active: boolean }>;
   /** Stream info for player selection (sources + tracks) */
   streamInfo: StreamInfo | null;
+  /** Toast message to display (auto-dismisses) */
+  toast: { message: string; timestamp: number } | null;
 }
 
 export interface UsePlayerControllerReturn {
@@ -140,6 +152,8 @@ export interface UsePlayerControllerReturn {
   toggleSubtitles: () => void;
   /** Clear error */
   clearError: () => void;
+  /** Dismiss toast notification */
+  dismissToast: () => void;
   /** Retry playback */
   retry: () => Promise<void>;
   /** Reload player */
@@ -201,6 +215,7 @@ const initialState: PlayerControllerState = {
   qualities: [],
   textTracks: [],
   streamInfo: null,
+  toast: null,
 };
 
 // ============================================================================
@@ -214,6 +229,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
     onStreamStateChange,
     onError,
     onReady,
+    onProtocolSwapped,
+    onPlaybackFailed,
     ...controllerConfig
   } = config;
 
@@ -421,6 +438,26 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       })
     );
 
+    // Error handling events - show toasts/modals
+    unsubs.push(
+      controller.on("protocolSwapped", (data) => {
+        const message = `Switched to ${data.toProtocol}`;
+        setState((prev) => ({ ...prev, toast: { message, timestamp: Date.now() } }));
+        onProtocolSwapped?.(data);
+      })
+    );
+
+    unsubs.push(
+      controller.on("playbackFailed", (data) => {
+        setState((prev) => ({
+          ...prev,
+          error: data.message,
+          isPassiveError: false,
+        }));
+        onPlaybackFailed?.({ code: data.code, message: data.message });
+      })
+    );
+
     // Attach controller to container
     // Note: Video event listeners are set up in the 'ready' handler above
     controller.attach(container).catch((err) => {
@@ -491,6 +528,10 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
     setState((prev) => ({ ...prev, error: null, isPassiveError: false }));
   }, []);
 
+  const dismissToast = useCallback(() => {
+    setState((prev) => ({ ...prev, toast: null }));
+  }, []);
+
   const jumpToLive = useCallback(() => {
     controllerRef.current?.jumpToLive();
   }, []);
@@ -556,6 +597,7 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
     togglePiP,
     toggleSubtitles,
     clearError,
+    dismissToast,
     retry,
     reload,
     getQualities,

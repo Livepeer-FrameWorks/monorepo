@@ -12,7 +12,15 @@
  */
 
 import { getBrowserInfo, getBrowserCompatibility } from "./detector";
-import type { IPlayer, StreamSource, StreamInfo, PlayerOptions } from "./PlayerInterface";
+import type {
+  IPlayer,
+  StreamSource,
+  StreamInfo,
+  PlayerOptions,
+  ErrorHandlingEvents,
+} from "./PlayerInterface";
+import { ErrorCode } from "./PlayerInterface";
+import { ErrorClassifier, type RecoveryAction } from "./ErrorClassifier";
 import { scorePlayer, isProtocolBlacklisted } from "./scorer";
 import type { PlaybackMode } from "../types";
 
@@ -47,12 +55,19 @@ export interface PlayerManagerOptions {
 export interface PlayerManagerEvents {
   playerSelected: { player: string; source: StreamSource; score: number };
   playerInitialized: { player: IPlayer; videoElement: HTMLVideoElement };
-  playerFailed: { player: string; error: string };
   fallbackAttempted: { fromPlayer: string; toPlayer: string };
   /** Fires when selection changes (different player+source than before) */
   "selection-changed": PlayerSelection | null;
   /** Fires when combinations are recomputed (cache miss) */
   "combinations-updated": PlayerCombination[];
+  /** Tier 1: Silent recovery attempted (for telemetry) */
+  recoveryAttempted: ErrorHandlingEvents["recoveryAttempted"];
+  /** Tier 2: Protocol swapped - UI should show toast */
+  protocolSwapped: ErrorHandlingEvents["protocolSwapped"];
+  /** Tier 3: Quality changed - UI should show toast */
+  qualityChanged: ErrorHandlingEvents["qualityChanged"];
+  /** Tier 4: All options exhausted - UI should show modal */
+  playbackFailed: ErrorHandlingEvents["playbackFailed"];
 }
 
 /** Full combination info including scoring breakdown */
@@ -97,6 +112,9 @@ export class PlayerManager {
   private fallbackAttempts = 0;
   private options: PlayerManagerOptions;
 
+  // Error handling
+  private errorClassifier: ErrorClassifier;
+
   // Caching: prevents recalculation on every render
   private cachedCombinations: PlayerCombination[] | null = null;
   private cachedSelection: PlayerSelection | null = null;
@@ -120,6 +138,17 @@ export class PlayerManager {
       maxFallbackAttempts: 3,
       ...options,
     };
+
+    this.errorClassifier = new ErrorClassifier({
+      alternativesCount: 0,
+      debug: this.options.debug,
+    });
+
+    // Forward error classifier events to manager events
+    this.errorClassifier.on("recoveryAttempted", (data) => this.emit("recoveryAttempted", data));
+    this.errorClassifier.on("protocolSwapped", (data) => this.emit("protocolSwapped", data));
+    this.errorClassifier.on("qualityChanged", (data) => this.emit("qualityChanged", data));
+    this.errorClassifier.on("playbackFailed", (data) => this.emit("playbackFailed", data));
   }
 
   // ==========================================================================
@@ -593,11 +622,12 @@ export class PlayerManager {
     playerOptions: PlayerOptions = {},
     managerOptions?: PlayerManagerOptions
   ): Promise<HTMLVideoElement> {
-    console.log("[PlayerManager] initializePlayer() called");
+    this.log("initializePlayer() called");
     return this.enqueueOp(async () => {
-      console.log("[PlayerManager] Inside enqueueOp - starting");
+      this.log("Inside enqueueOp - starting");
       this.fallbackAttempts = 0;
       this.excludedPlayers.clear();
+      this.errorClassifier.reset();
 
       // Save for fallback (strip force settings - they're one-shot, not for fallback)
       this.lastContainer = container;
@@ -624,15 +654,22 @@ export class PlayerManager {
     managerOptions?: PlayerManagerOptions,
     excludePlayers: Set<string> = new Set()
   ): Promise<HTMLVideoElement> {
-    console.log("[PlayerManager] tryInitializePlayer() starting");
+    this.log("tryInitializePlayer() starting");
 
     // Clean up previous player
     if (this.currentPlayer) {
-      console.log("[PlayerManager] Cleaning up previous player...");
+      this.log("Cleaning up previous player...");
       await Promise.resolve(this.currentPlayer.destroy());
       this.currentPlayer = null;
     }
     container.innerHTML = "";
+
+    // Update classifier with current alternatives count
+    const compatibleCombos = this.getAllCombinations(
+      streamInfo,
+      managerOptions?.playbackMode
+    ).filter((c) => c.compatible && !excludePlayers.has(c.player));
+    this.errorClassifier.setAlternativesRemaining(Math.max(0, compatibleCombos.length - 1));
 
     // Filter excluded players
     const availableSources = streamInfo.source.filter((_, index) => {
@@ -645,27 +682,32 @@ export class PlayerManager {
     });
 
     if (availableSources.length === 0) {
-      console.log("[PlayerManager] No available sources after filtering");
+      this.log("No available sources after filtering");
+      const action = this.errorClassifier.classify(ErrorCode.ALL_PROTOCOLS_EXHAUSTED);
+      if (action.type === "fatal") {
+        throw new Error("No available players after fallback attempts");
+      }
       throw new Error("No available players after fallback attempts");
     }
 
-    console.log(`[PlayerManager] Available sources: ${availableSources.length}`);
+    this.log(`Available sources: ${availableSources.length}`);
     const modifiedStreamInfo = { ...streamInfo, source: availableSources };
     const selection = this.selectBestPlayer(modifiedStreamInfo, managerOptions);
 
     if (!selection) {
-      console.log("[PlayerManager] No suitable player selected");
+      this.log("No suitable player selected");
+      this.errorClassifier.classify(ErrorCode.ALL_PROTOCOLS_EXHAUSTED);
       throw new Error("No suitable player found for stream");
     }
 
-    console.log(`[PlayerManager] Selected: ${selection.player} for ${selection.source.type}`);
+    this.log(`Selected: ${selection.player} for ${selection.source.type}`);
     const player = this.players.get(selection.player);
     if (!player) {
-      console.log(`[PlayerManager] Player ${selection.player} not registered`);
+      this.log(`Player ${selection.player} not registered`);
       throw new Error(`Player ${selection.player} not found`);
     }
 
-    console.log(`[PlayerManager] Calling ${selection.player}.initialize()...`);
+    this.log(`Calling ${selection.player}.initialize()...`);
     try {
       const videoElement = await player.initialize(
         container,
@@ -673,28 +715,50 @@ export class PlayerManager {
         playerOptions,
         streamInfo
       );
-      console.log(`[PlayerManager] ${selection.player}.initialize() completed successfully`);
+      this.log(`${selection.player}.initialize() completed successfully`);
       this.currentPlayer = player;
+      this.errorClassifier.reset();
       this.emit("playerInitialized", { player, videoElement });
       return videoElement;
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.log(`Player ${selection.player} failed: ${errorMessage}`);
-      this.emit("playerFailed", { player: selection.player, error: errorMessage });
+      return this.handleInitError(
+        error,
+        selection,
+        container,
+        streamInfo,
+        playerOptions,
+        managerOptions,
+        excludePlayers
+      );
+    }
+  }
 
-      // Attempt fallback
-      if (
-        this.options.autoFallback &&
-        this.fallbackAttempts < (this.options.maxFallbackAttempts || 3)
-      ) {
-        this.fallbackAttempts++;
-        excludePlayers.add(selection.player);
-        this.log(`Attempting fallback (attempt ${this.fallbackAttempts})`);
-        this.emit("fallbackAttempted", {
-          fromPlayer: selection.player,
-          toPlayer: "auto",
-        });
+  /**
+   * Handle initialization error using ErrorClassifier to determine recovery action.
+   */
+  private async handleInitError(
+    error: unknown,
+    selection: PlayerSelection,
+    container: HTMLElement,
+    streamInfo: StreamInfo,
+    playerOptions: PlayerOptions,
+    managerOptions: PlayerManagerOptions | undefined,
+    excludePlayers: Set<string>
+  ): Promise<HTMLVideoElement> {
+    const errorCode = ErrorClassifier.mapErrorToCode(
+      error instanceof Error ? error : new Error(String(error))
+    );
+    const action = this.errorClassifier.classify(
+      errorCode,
+      error instanceof Error ? error : String(error)
+    );
 
+    this.log(`Error classified: ${errorCode}, action: ${action.type}`);
+
+    switch (action.type) {
+      case "retry": {
+        this.log(`Retrying in ${action.delayMs}ms...`);
+        await this.delay(action.delayMs);
         return this.tryInitializePlayer(
           container,
           streamInfo,
@@ -704,8 +768,61 @@ export class PlayerManager {
         );
       }
 
-      throw error;
+      case "swap": {
+        const maxAttempts = this.options.maxFallbackAttempts || 3;
+        if (!this.options.autoFallback || this.fallbackAttempts >= maxAttempts) {
+          this.errorClassifier.classify(ErrorCode.ALL_PROTOCOLS_EXHAUSTED);
+          throw error;
+        }
+
+        this.fallbackAttempts++;
+        const previousPlayer = selection.player;
+        const previousProtocol = selection.source.type;
+        excludePlayers.add(selection.player);
+
+        this.log(
+          `Swapping from ${previousPlayer} (attempt ${this.fallbackAttempts}/${maxAttempts})`
+        );
+
+        try {
+          const result = await this.tryInitializePlayer(
+            container,
+            streamInfo,
+            playerOptions,
+            managerOptions,
+            excludePlayers
+          );
+
+          // Notify classifier and emit toast event for successful swap
+          const newPlayer = this.currentPlayer?.capability.shortname || "unknown";
+          const newProtocol = this.cachedSelection?.source.type || "unknown";
+          this.errorClassifier.notifyProtocolSwap(
+            previousPlayer,
+            newPlayer,
+            previousProtocol,
+            newProtocol,
+            action.reason
+          );
+
+          this.emit("fallbackAttempted", {
+            fromPlayer: previousPlayer,
+            toPlayer: newPlayer,
+          });
+
+          return result;
+        } catch (swapError) {
+          throw swapError;
+        }
+      }
+
+      case "fatal":
+      default:
+        throw error;
     }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // ==========================================================================
@@ -722,8 +839,12 @@ export class PlayerManager {
       const maxAttempts = this.options.maxFallbackAttempts || 3;
       if (this.fallbackAttempts >= maxAttempts) {
         this.log(`Fallback exhausted (${this.fallbackAttempts}/${maxAttempts})`);
+        this.errorClassifier.classify(ErrorCode.ALL_PROTOCOLS_EXHAUSTED);
         return false;
       }
+
+      const previousPlayer = this.currentPlayer?.capability.shortname || "unknown";
+      const previousProtocol = this.cachedSelection?.source.type || "unknown";
 
       if (this.currentPlayer) {
         this.excludedPlayers.add(this.currentPlayer.capability.shortname);
@@ -744,9 +865,20 @@ export class PlayerManager {
         );
 
         const current = this.getCurrentPlayer();
+        const newPlayer = current?.capability.shortname || "unknown";
+        const newProtocol = this.cachedSelection?.source.type || "unknown";
+
+        this.errorClassifier.notifyProtocolSwap(
+          previousPlayer,
+          newPlayer,
+          previousProtocol,
+          newProtocol,
+          "Playback fallback"
+        );
+
         this.emit("fallbackAttempted", {
-          fromPlayer: Array.from(this.excludedPlayers).pop() || "unknown",
-          toPlayer: current?.capability.shortname || "unknown",
+          fromPlayer: previousPlayer,
+          toPlayer: newPlayer,
         });
 
         return true;
@@ -755,6 +887,30 @@ export class PlayerManager {
         return false;
       }
     });
+  }
+
+  /**
+   * Report an error from a player for classification and potential recovery.
+   * Players should call this instead of emitting errors directly.
+   */
+  reportError(error: Error | string): RecoveryAction {
+    const errorCode = ErrorClassifier.mapErrorToCode(error);
+    return this.errorClassifier.classify(errorCode, error);
+  }
+
+  /**
+   * Report a quality change (for ABR quality drops).
+   * UI layer can call this to trigger toast notification.
+   */
+  reportQualityChange(direction: "up" | "down", reason: string): void {
+    this.emit("qualityChanged", { direction, reason });
+  }
+
+  /**
+   * Get the error classifier for direct access (advanced use).
+   */
+  getErrorClassifier(): ErrorClassifier {
+    return this.errorClassifier;
   }
 
   getRemainingFallbackAttempts(): number {

@@ -94,6 +94,107 @@ export interface PlayerEvents {
 }
 
 /**
+ * Error severity levels for the tiered error handling system.
+ *
+ * Tier 1 (TRANSIENT): Silent retry, no UI - network timeouts, brief stalls
+ * Tier 2 (RECOVERABLE): Protocol swap with toast - alternatives exist
+ * Tier 3 (DEGRADED): Quality drop with toast - playback continues at lower quality
+ * Tier 4 (FATAL): Blocking modal - all options exhausted
+ */
+export enum ErrorSeverity {
+  /** Transient issues that self-resolve. User never sees UI. */
+  TRANSIENT = 1,
+  /** Current protocol failed but alternatives exist. Shows toast on swap. */
+  RECOVERABLE = 2,
+  /** Quality degraded but playback continues. Shows informational toast. */
+  DEGRADED = 3,
+  /** Cannot continue playback. Shows blocking error modal. */
+  FATAL = 4,
+}
+
+/**
+ * Error codes for classification. Maps to specific recovery strategies.
+ */
+export enum ErrorCode {
+  // Tier 1: Silent recovery
+  NETWORK_TIMEOUT = "NETWORK_TIMEOUT",
+  WEBSOCKET_DISCONNECT = "WEBSOCKET_DISCONNECT",
+  SEGMENT_LOAD_ERROR = "SEGMENT_LOAD_ERROR",
+  ICE_DISCONNECTED = "ICE_DISCONNECTED",
+  BUFFER_UNDERRUN = "BUFFER_UNDERRUN",
+  CODEC_DECODE_ERROR = "CODEC_DECODE_ERROR",
+
+  // Tier 2: Protocol swap
+  PROTOCOL_UNSUPPORTED = "PROTOCOL_UNSUPPORTED",
+  CODEC_INCOMPATIBLE = "CODEC_INCOMPATIBLE",
+  ICE_FAILED = "ICE_FAILED",
+  MANIFEST_STALE = "MANIFEST_STALE",
+  PLAYER_INIT_FAILED = "PLAYER_INIT_FAILED",
+
+  // Tier 3: Quality degraded
+  QUALITY_DROPPED = "QUALITY_DROPPED",
+  BANDWIDTH_LIMITED = "BANDWIDTH_LIMITED",
+
+  // Tier 4: Fatal
+  ALL_PROTOCOLS_EXHAUSTED = "ALL_PROTOCOLS_EXHAUSTED",
+  STREAM_OFFLINE = "STREAM_OFFLINE",
+  AUTH_REQUIRED = "AUTH_REQUIRED",
+  GEO_BLOCKED = "GEO_BLOCKED",
+  DRM_ERROR = "DRM_ERROR",
+  CONTENT_UNAVAILABLE = "CONTENT_UNAVAILABLE",
+  UNKNOWN = "UNKNOWN",
+}
+
+/**
+ * Classified error with severity and recovery metadata.
+ * Used by ErrorClassifier to track retry state and decide next action.
+ */
+export interface ClassifiedError {
+  /** Severity tier determining UI behavior */
+  severity: ErrorSeverity;
+  /** Specific error code for recovery strategy lookup */
+  code: ErrorCode;
+  /** Human-readable error message */
+  message: string;
+  /** Number of retries remaining for this error type */
+  retriesRemaining: number;
+  /** Number of alternative protocols/players remaining */
+  alternativesRemaining: number;
+  /** Original error if available */
+  originalError?: Error | string;
+  /** Timestamp when error occurred */
+  timestamp: number;
+}
+
+/**
+ * Events emitted by the error handling system.
+ * UI layers listen to these for toast/modal display.
+ */
+export interface ErrorHandlingEvents {
+  /** Silent recovery attempted (Tier 1) - for telemetry only */
+  recoveryAttempted: {
+    code: ErrorCode;
+    attempt: number;
+    maxAttempts: number;
+  };
+  /** Protocol or player swapped (Tier 2) - shows toast */
+  protocolSwapped: {
+    fromPlayer: string;
+    toPlayer: string;
+    fromProtocol: string;
+    toProtocol: string;
+    reason: string;
+  };
+  /** Quality changed (Tier 3) - shows toast */
+  qualityChanged: {
+    direction: "up" | "down";
+    reason: string;
+  };
+  /** All recovery options exhausted (Tier 4) - shows modal */
+  playbackFailed: ClassifiedError;
+}
+
+/**
  * Base interface all players must implement
  */
 export interface IPlayer {

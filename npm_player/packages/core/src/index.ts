@@ -46,14 +46,24 @@ export { TypedEventEmitter, TypedEventEmitter as EventEmitter } from "./core/Eve
 export { TelemetryReporter } from "./core/TelemetryReporter";
 
 // Player interface and base class
-export type { IPlayer, PlayerCapability, PlayerEvents } from "./core/PlayerInterface";
-export { BasePlayer } from "./core/PlayerInterface";
+export type {
+  IPlayer,
+  PlayerCapability,
+  PlayerEvents,
+  ErrorHandlingEvents,
+  ClassifiedError,
+} from "./core/PlayerInterface";
+export { BasePlayer, ErrorSeverity, ErrorCode } from "./core/PlayerInterface";
 export type {
   StreamSource,
   StreamTrack,
   StreamInfo,
   PlayerOptions as CorePlayerOptions,
 } from "./core/PlayerInterface";
+
+// Error classification and recovery
+export { ErrorClassifier } from "./core/ErrorClassifier";
+export type { RecoveryAction, ErrorClassifierOptions } from "./core/ErrorClassifier";
 
 // Utilities
 export * from "./core/scorer";
