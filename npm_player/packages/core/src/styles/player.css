@@ -680,7 +680,10 @@
     border: none;
     box-shadow: 0 2px 4px rgb(0 0 0 / 0.3);
     cursor: pointer;
-    transition: width 0.15s ease, height 0.15s ease, box-shadow 0.15s ease;
+    transition:
+      width 0.15s ease,
+      height 0.15s ease,
+      box-shadow 0.15s ease;
   }
 
   .fw-slider:hover .fw-slider-thumb {

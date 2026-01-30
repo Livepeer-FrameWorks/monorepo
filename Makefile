@@ -245,8 +245,8 @@ test: proto graphql
 # Generate a single combined coverage report at ./coverage
 coverage: proto graphql
 	@echo "Generating combined coverage for all Go modules..."
-	@rm -rf coverage && mkdir -p coverage
-	@echo "mode: atomic" > coverage/coverage.out
+	@rm -rf $(CURDIR)/coverage && mkdir -p $(CURDIR)/coverage
+	@echo "mode: atomic" > $(CURDIR)/coverage/coverage.out
 	@for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
 		echo "==> $$service_name"; \
@@ -255,7 +255,7 @@ coverage: proto graphql
 			tmpfile=$$(mktemp); \
 			if go test ./... -coverpkg=./... -coverprofile="$$tmpfile" -covermode=atomic -count=1 >/dev/null 2>&1; then \
 				if [ -s "$$tmpfile" ]; then \
-					tail -n +2 "$$tmpfile" >> "../coverage/coverage.out"; \
+					tail -n +2 "$$tmpfile" >> "$(CURDIR)/coverage/coverage.out"; \
 					cov=$$(go tool cover -func="$$tmpfile" | awk '/total:/ {print $$3}'); \
 					echo "   coverage: $$cov"; \
 				else \
@@ -266,7 +266,7 @@ coverage: proto graphql
 			fi; \
 		rm -f "$$tmpfile" ); \
 	done;
-	@echo "Combined coverage saved to coverage/coverage.out"
+	@echo "Combined coverage saved to $(CURDIR)/coverage/coverage.out"
 
 env:
 	@echo "Generating .env from config/env/*.env..."
