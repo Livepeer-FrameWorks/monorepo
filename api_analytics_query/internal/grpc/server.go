@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -4175,7 +4176,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		  AND timestamp BETWEEN ? AND ?
 		  AND total_viewers IS NOT NULL
 	`, tenantID, startTime, endTime).Scan(&maxViewers, &totalStreams, &streamHours)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query stream_event_log for live usage")
 	}
 	summary.MaxViewers = maxViewers
@@ -4212,7 +4213,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		WHERE tenant_id = ?
 		  AND timestamp_5m BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&peakBandwidthBytes)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query client_qoe_5m for peak bandwidth")
 	}
 	summary.PeakBandwidthMbps = peakBandwidthBytes / (1024 * 1024) // bytes/sec to Mbps
@@ -4263,7 +4264,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		&livepeerSegmentCount, &nativeAvSegmentCount,
 		&livepeerUniqueStreams, &nativeAvUniqueStreams,
 	)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query processing_daily for per-codec breakdown")
 	}
 	summary.LivepeerH264Seconds = livepeerH264
@@ -4291,7 +4292,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		WHERE tenant_id = ?
 		  AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&uniqueCountries, &uniqueCities)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query viewer_connection_events for geo stats")
 	}
 	summary.UniqueCountries = uniqueCountries
@@ -4320,7 +4321,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 			var countryCode string
 			var viewerCount int32
 			var viewerHours, egressGb float64
-			if err := rows.Scan(&countryCode, &viewerCount, &viewerHours, &egressGb); err != nil {
+			if scanErr := rows.Scan(&countryCode, &viewerCount, &viewerHours, &egressGb); scanErr != nil {
 				s.logger.WithError(err).Warn("Failed to scan geo breakdown row")
 				continue
 			}
@@ -4348,7 +4349,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	`, tenantID, startTime, endTime).Scan(
 		&clipsCreated, &clipsDeleted, &dvrCreated, &dvrDeleted, &vodCreated, &vodDeleted,
 	)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query artifact_events for storage lifecycle")
 	}
 	summary.ClipsCreated = clipsCreated
@@ -4375,7 +4376,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		&clipBytes, &dvrBytes, &vodBytes,
 		&frozenClipBytes, &frozenDvrBytes, &frozenVodBytes,
 	)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query storage_snapshots for storage breakdown")
 	}
 	summary.ClipBytes = clipBytes
@@ -4399,7 +4400,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	`, tenantID, startTime, endTime).Scan(
 		&freezeCount, &freezeBytes, &defrostCount, &defrostBytes,
 	)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query storage_events for freeze/defrost operations")
 	}
 	summary.FreezeCount = freezeCount

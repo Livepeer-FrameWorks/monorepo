@@ -271,7 +271,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			Enabled:        true,
 			SteeringPolicy: "geo",
 		}
-		_, err := m.cfClient.CreateLoadBalancer(lb)
+		_, err = m.cfClient.CreateLoadBalancer(lb)
 		if err != nil {
 			return fmt.Errorf("failed to create LB: %w", err)
 		}

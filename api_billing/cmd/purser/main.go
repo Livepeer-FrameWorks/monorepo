@@ -169,7 +169,7 @@ func main() {
 	}
 
 	// Initialize handlers
-	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, decklogClient, periscopeClient)
+	handlers.Init(db, logger, handlerMetrics, qmGRPCClient, mollieClient, decklogClient)
 
 	// Initialize and start JobManager for background billing tasks
 	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient)
