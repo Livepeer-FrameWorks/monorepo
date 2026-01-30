@@ -90,6 +90,13 @@ jobs:
           name: go-coverage
           path: coverage/
           if-no-files-found: warn
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/coverage.out
+          flags: go
+          name: go-coverage
+          fail_ci_if_error: false
 
   go-lint:
     name: Go lint
@@ -186,6 +193,13 @@ jobs:
             **/coverage/**
             **/lcov.info
           if-no-files-found: warn
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./**/lcov.info
+          flags: frontend
+          name: frontend-coverage
+          fail_ci_if_error: false
 
   frontend-build:
     name: Frontend build

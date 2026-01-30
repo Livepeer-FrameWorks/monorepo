@@ -1,0 +1,31 @@
+# Codecov configuration
+# Docs: https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto # don't drop overall coverage
+        threshold: 5% # allow 5% wiggle room
+        informational: true # don't block PRs yet (remove once coverage is established)
+    patch:
+      default:
+        target: 50% # new code should have some coverage
+        informational: true # don't block PRs yet
+
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"
+  behavior: default
+  require_changes: true # only comment if coverage changed
+
+flags:
+  go:
+    paths:
+      - "**/*.go"
+    carryforward: true
+  frontend:
+    paths:
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.svelte"
+    carryforward: true

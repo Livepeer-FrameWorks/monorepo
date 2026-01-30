@@ -1,5 +1,7 @@
 # FrameWorks
 
+[![codecov](https://img.shields.io/codecov/c/github/Livepeer-FrameWorks/monorepo)](https://codecov.io/gh/Livepeer-FrameWorks/monorepo)
+
 > Warning: This stack is pre‑release and experimental. Do not deploy to production. Interfaces and schemas change frequently. Use for local development and evaluation only.
 
 **Sovereign SaaS for live video.** Run on your infrastructure, ours, or both—no vendor lock-in.
