@@ -43,7 +43,7 @@ jobs:
           - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -129,7 +129,7 @@ jobs:
           - { name: docs, context: website_docs, env_prefix: VITE, build_dir: dist }
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v2
@@ -268,7 +268,7 @@ jobs:
             goarch: arm64
             ext: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Sanitize platform tag to component version
         id: compver
         run: |
@@ -323,7 +323,7 @@ jobs:
           - { goos: linux, goarch: arm64 }
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -380,7 +380,7 @@ jobs:
     needs: [build-images, build-webapps, build-cli, build-service-binaries]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download image digest artifacts
         uses: actions/download-artifact@v4
         with:
@@ -573,7 +573,7 @@ jobs:
       RELEASE_BRANCH: release/${{ github.ref_name }}
     steps:
       - name: Checkout env repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ env.ENV_REPO }}
           token: ${{ secrets.GITOPS_REPO_TOKEN }}
