@@ -21,7 +21,10 @@
   "scripts": {
     "build": "NODE_ENV=production rollup -c",
     "build:watch": "NODE_ENV=development rollup -c --watch",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@livepeer-frameworks/streamcrafter-core": "workspace:*",
@@ -33,6 +36,8 @@
     "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@vitest/coverage-v8": "^3.2.4",
     "@babel/preset-env": "^7.26.0",
     "@babel/preset-react": "^7.26.3",
     "@babel/preset-typescript": "^7.27.1",
@@ -48,7 +53,9 @@
     "rollup": "^4.48.1",
     "rollup-plugin-peer-deps-external": "^2.2.4",
     "tslib": "^2.8.1",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "jsdom": "^26.1.0",
+    "vitest": "^3.2.4"
   },
   "keywords": [
     "react",

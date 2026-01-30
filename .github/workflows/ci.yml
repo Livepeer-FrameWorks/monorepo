@@ -7,8 +7,36 @@ on:
     branches: [development]
 
 jobs:
-  go:
-    name: Go tests
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - '**/go.mod'
+              - '**/go.sum'
+              - 'Makefile'
+              - 'pkg/proto/**'
+            frontend:
+              - '**/*.ts'
+              - '**/*.tsx'
+              - '**/*.svelte'
+              - '**/*.js'
+              - '**/*.json'
+              - 'pnpm-lock.yaml'
+
+  go-build:
+    name: Go build
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -17,22 +45,61 @@ jobs:
           go-version: "1.24"
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install protoc Go plugins
+      - name: Install Go protoc plugins
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0
       - name: Install gqlgen
         run: go install github.com/99designs/gqlgen@v0.17.78
       - run: make build
-      - run: make test
+
+  go-test:
+    name: Go test + coverage
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Go protoc plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0
+      - name: Install gqlgen
+        run: go install github.com/99designs/gqlgen@v0.17.78
+      - name: Run tests
+        run: make test
+      - name: Generate coverage
+        run: make coverage
+      - name: Print coverage summary
+        run: |
+          echo "=== Go Coverage Summary ==="
+          if [ -f coverage/coverage.out ]; then
+            go tool cover -func=coverage/coverage.out | tail -1
+          else
+            echo "No coverage data found"
+          fi
+      - name: Upload Go coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage/
+          if-no-files-found: warn
 
   go-lint:
     name: Go lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0 # Full history needed for --new-from-rev
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
@@ -43,32 +110,41 @@ jobs:
         run: |
           if [ -f .golangci-baseline ]; then
             echo "rev=$(cat .golangci-baseline)" >> $GITHUB_OUTPUT
-            echo "Using baseline: $(cat .golangci-baseline)"
           else
             echo "rev=" >> $GITHUB_OUTPUT
-            echo "No baseline file found, checking all code"
           fi
-      - name: Run golangci-lint on all modules
+      - name: Run golangci-lint
         run: |
           BASELINE="${{ steps.baseline.outputs.rev }}"
           BASELINE_ARG=""
           if [ -n "$BASELINE" ]; then
             BASELINE_ARG="--new-from-rev=$BASELINE"
           fi
-
           failed=0
           for dir in $(find . -name "go.mod" -exec dirname {} \;); do
             echo "==> Linting $dir"
             (cd "$dir" && golangci-lint run --timeout=5m $BASELINE_ARG ./...) || failed=1
           done
-
           if [ $failed -eq 1 ]; then
-            echo "Linting failed in one or more modules"
             exit 1
           fi
+      - name: Generate lint report
+        if: always()
+        run: |
+          mkdir -p reports
+          ./scripts/lint-report.sh || true
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-lint-report
+          path: reports/
+          if-no-files-found: ignore
 
-  frontend:
-    name: Frontend tests
+  frontend-lint:
+    name: Frontend lint
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -81,14 +157,47 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - run: pnpm lint
+      - run: pnpm format:check
+
+  frontend-test:
+    name: Frontend test + coverage
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install
       - run: pnpm test:coverage
-      - name: Upload coverage artifacts
+      - name: Upload frontend coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage
+          name: frontend-coverage
           path: |
             **/coverage/**
             **/lcov.info
           if-no-files-found: warn
+
+  frontend-build:
+    name: Frontend build
+    needs: [changes, frontend-lint, frontend-test]
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install
       - run: pnpm build
