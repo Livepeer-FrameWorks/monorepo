@@ -9,12 +9,7 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov"],
       reportsDirectory: "./coverage",
-      exclude: [
-        "**/dist/**",
-        "**/*.d.ts",
-        "**/workers/**",
-        "**/src/styles/**",
-      ],
+      exclude: ["**/dist/**", "**/*.d.ts", "**/workers/**", "**/src/styles/**"],
     },
   },
 });
