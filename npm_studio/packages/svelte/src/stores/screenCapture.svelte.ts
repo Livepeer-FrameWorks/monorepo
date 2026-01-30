@@ -20,7 +20,7 @@ export interface ScreenCaptureStore {
 }
 
 export function createScreenCaptureStore(): ScreenCaptureStore {
-  let state = $state<ScreenCaptureState>({
+  const state = $state<ScreenCaptureState>({
     stream: null,
     isActive: false,
     hasAudio: false,

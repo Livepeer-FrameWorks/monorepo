@@ -51,7 +51,7 @@ void WebGPURenderer;
 let canvas: OffscreenCanvas | null = null;
 let renderer: CompositorRenderer | null = null;
 let config: CompositorConfig | null = null;
-let transitionEngine: TransitionEngine = new TransitionEngine();
+const transitionEngine: TransitionEngine = new TransitionEngine();
 
 // Current scene state
 let currentScene: Scene | null = null;

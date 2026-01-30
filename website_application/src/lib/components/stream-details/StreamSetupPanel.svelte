@@ -35,8 +35,8 @@
   let {
     stream,
     streamKeys = [],
-    onRefreshKey,
-    refreshingKey = false,
+    onRefreshKey: _onRefreshKey,
+    refreshingKey: _refreshingKey = false,
     onCreateKey,
     onCopyKey,
     onDeleteKey,

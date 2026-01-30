@@ -615,6 +615,7 @@ await controller.stopStreaming();`,
             </div>
           </div>
           <div class="slab-body--padded">
+            <!-- eslint-disable svelte/no-navigation-without-resolve -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               <a
                 href={docsBaseUrl}

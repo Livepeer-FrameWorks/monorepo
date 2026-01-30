@@ -178,7 +178,7 @@
     isWebCodecsActive = false,
     encoderStats = null,
     onUseWebCodecsChange,
-    isWebCodecsAvailable = true,
+    isWebCodecsAvailable: _isWebCodecsAvailable = true,
     encoderOverrides = {},
     onEncoderOverridesChange,
   }: Props = $props();

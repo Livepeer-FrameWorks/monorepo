@@ -151,7 +151,7 @@ export function createEndpointResolver(options: ViewerEndpointsOptions): ViewerE
         } catch {}
       }
       if (fallbacks) {
-        fallbacks.forEach((fb: any) => {
+        fallbacks.forEach((fb: typeof primary) => {
           if (fb.outputs && typeof fb.outputs === "string") {
             try {
               fb.outputs = JSON.parse(fb.outputs);

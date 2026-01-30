@@ -23,7 +23,7 @@ export interface DevicesStore {
 }
 
 export function createDevicesStore(): DevicesStore {
-  let state = $state<DevicesState>({
+  const state = $state<DevicesState>({
     devices: [],
     videoInputs: [],
     audioInputs: [],

@@ -88,6 +88,7 @@
   }
 
   function playContent(playbackId: string) {
+    // eslint-disable-next-line svelte/no-navigation-without-resolve
     goto(`/view?id=${playbackId}`);
   }
 

@@ -448,7 +448,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       const profile = options.profile || this.currentProfile;
 
       // If encoder overrides are set, use them for capture constraints
-      let captureOptions: CaptureOptions = { ...options, profile };
+      const captureOptions: CaptureOptions = { ...options, profile };
 
       if (this.encoderOverrides?.video) {
         const videoOverrides = this.encoderOverrides.video;
@@ -511,7 +511,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       await this.ensureAudioMixer();
 
       // If encoder overrides are set, use them for capture constraints
-      let captureOptions: ScreenCaptureOptions = { ...options };
+      const captureOptions: ScreenCaptureOptions = { ...options };
 
       if (this.encoderOverrides?.video) {
         const videoOverrides = this.encoderOverrides.video;

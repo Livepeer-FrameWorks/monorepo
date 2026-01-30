@@ -385,6 +385,7 @@
               {#if shouldShow}
                 <div
                   class="fw-dev-combo"
+                  role="listitem"
                   onmouseenter={(e) => handleComboHover(index, e)}
                   onmouseleave={() => (hoveredComboIndex = null)}
                 >

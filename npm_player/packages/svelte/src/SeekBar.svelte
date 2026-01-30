@@ -214,6 +214,38 @@
   let ariaValueText = $derived(
     isLive ? formatLiveTime(displayTime, effectiveLiveEdge) : formatTime(displayTime)
   );
+
+  // Handle keyboard navigation for accessibility
+  function handleKeyDown(e: KeyboardEvent) {
+    if (disabled) return;
+    const step = e.shiftKey ? 10 : 5; // 5s default, 10s with shift
+    const rangeEnd = isLive ? effectiveLiveEdge : duration;
+    const rangeStart = isLive ? seekableStart : 0;
+
+    let newTime: number | null = null;
+    switch (e.key) {
+      case "ArrowLeft":
+      case "ArrowDown":
+        newTime = Math.max(rangeStart, currentTime - step);
+        break;
+      case "ArrowRight":
+      case "ArrowUp":
+        newTime = Math.min(rangeEnd, currentTime + step);
+        break;
+      case "Home":
+        newTime = rangeStart;
+        break;
+      case "End":
+        newTime = rangeEnd;
+        break;
+      default:
+        return;
+    }
+    if (newTime !== null) {
+      e.preventDefault();
+      onseek?.(newTime);
+    }
+  }
 </script>
 
 <div
@@ -231,6 +263,7 @@
   onmousemove={handleMouseMove}
   onclick={handleClick}
   onmousedown={handleMouseDown}
+  onkeydown={handleKeyDown}
   role="slider"
   aria-label="Seek"
   aria-valuemin={isLive ? seekableStart : 0}

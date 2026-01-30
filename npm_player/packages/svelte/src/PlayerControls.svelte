@@ -208,12 +208,13 @@
     return null;
   }
 
-  const allowMediaStreamDvr =
+  let allowMediaStreamDvr = $derived(
     isMediaStreamSource(video) &&
-    bufferWindowMs !== undefined &&
-    bufferWindowMs > 0 &&
-    sourceType !== "whep" &&
-    sourceType !== "webrtc";
+      bufferWindowMs !== undefined &&
+      bufferWindowMs > 0 &&
+      sourceType !== "whep" &&
+      sourceType !== "webrtc"
+  );
 
   // Seekable range using core calculation (allow player override)
   let seekableRange = $derived.by(
@@ -388,9 +389,9 @@
   function handleMute() {
     if (disabled) return;
     const player = globalPlayerManager.getCurrentPlayer();
-    if (player?.toggleMute) {
-      // Use core controller which handles volume restore
-      player.toggleMute();
+    if (player?.setMuted) {
+      const currentlyMuted = player.isMuted?.() ?? video?.muted ?? false;
+      player.setMuted(!currentlyMuted);
     } else {
       // Fallback: direct video manipulation
       const v = video;
@@ -511,7 +512,14 @@
   )}
 >
   <!-- Control bar -->
-  <div class="fw-control-bar pointer-events-auto" onclick={(e) => e.stopPropagation()}>
+  <div
+    class="fw-control-bar pointer-events-auto"
+    role="toolbar"
+    aria-label="Media controls"
+    tabindex="-1"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.stopPropagation()}
+  >
     <!-- Seek bar -->
     {#if canSeek}
       <div class="fw-seek-wrapper">
@@ -583,20 +591,16 @@
             isVolumeExpanded && "fw-volume-group--expanded",
             !hasAudio && "fw-volume-group--disabled"
           )}
+          role="group"
+          aria-label="Volume controls"
           onmouseenter={() => hasAudio && (isVolumeHovered = true)}
           onmouseleave={() => {
             isVolumeHovered = false;
             isVolumeFocused = false;
           }}
-          onfocuscapture={() => hasAudio && (isVolumeFocused = true)}
-          onblurcapture={(e) => {
+          onfocusin={() => hasAudio && (isVolumeFocused = true)}
+          onfocusout={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) isVolumeFocused = false;
-          }}
-          onclick={(e) => {
-            if (disabled) return;
-            if (hasAudio && e.target === e.currentTarget) {
-              handleMute();
-            }
           }}
         >
           <button

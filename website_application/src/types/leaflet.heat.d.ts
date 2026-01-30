@@ -1,5 +1,5 @@
 declare module "leaflet.heat" {
-  import * as L from "leaflet";
+  import type * as L from "leaflet";
 
   // Minimal typings for leaflet.heat plugin
   function heatLayer(

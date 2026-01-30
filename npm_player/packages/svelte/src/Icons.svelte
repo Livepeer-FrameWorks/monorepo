@@ -10,7 +10,7 @@
   <PlayIcon size={24} />
   <VolumeIcon isMuted={false} />
 -->
-<script context="module" lang="ts">
+<script module lang="ts">
   export interface IconProps {
     size?: number;
     color?: string;
@@ -19,9 +19,11 @@
 </script>
 
 <script lang="ts">
-  // This file exports components via context="module" script
+  import type { Snippet } from "svelte";
+  // This file exports components via module script
   // The default export is a placeholder - use the named exports
+  let { children }: { children?: Snippet } = $props();
 </script>
 
 <!-- This component itself is not rendered - use the exported icon components below -->
-<slot />
+{@render children?.()}

@@ -39,7 +39,7 @@ export function createAudioLevelsStore(
 ): AudioLevelsStore {
   const { autoStart = true } = options;
 
-  let state = $state<AudioLevelsState>({
+  const state = $state<AudioLevelsState>({
     level: 0,
     peakLevel: 0,
     isMonitoring: false,

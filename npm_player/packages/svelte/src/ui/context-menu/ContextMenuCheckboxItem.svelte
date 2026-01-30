@@ -1,12 +1,14 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import { ContextMenu } from "bits-ui";
   import { cn } from "@livepeer-frameworks/player-core";
 
   let {
     class: className,
     checked = false,
+    children,
     ...rest
-  }: { class?: string; checked?: boolean } & Record<string, any> = $props();
+  }: { class?: string; checked?: boolean; children?: Snippet; [key: string]: unknown } = $props();
 </script>
 
 <ContextMenu.CheckboxItem class={cn("fw-context-menu-checkbox", className)} {checked} {...rest}>
@@ -26,5 +28,5 @@
       </svg>
     {/if}
   </div>
-  <slot />
+  {@render children?.()}
 </ContextMenu.CheckboxItem>

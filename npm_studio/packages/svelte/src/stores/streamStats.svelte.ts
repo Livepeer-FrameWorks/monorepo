@@ -24,7 +24,7 @@ export function createStreamStatsStore(
 ): StreamStatsStore {
   const { interval = 1000, autoStart = false } = options;
 
-  let state = $state<StreamStatsState>({
+  const state = $state<StreamStatsState>({
     stats: null,
     isPolling: false,
   });

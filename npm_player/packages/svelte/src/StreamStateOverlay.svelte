@@ -129,7 +129,7 @@
         {#if showProgress && percentage !== undefined}
           <div style="margin-top: 0.75rem;">
             <div class="progress-bar">
-              <div class="progress-fill" style="width: {Math.min(100, percentage)}%;" />
+              <div class="progress-fill" style="width: {Math.min(100, percentage)};"></div>
             </div>
             <p
               style="margin-top: 0.375rem; font-size: 0.75rem; font-family: monospace; color: hsl(var(--tn-fg-dark, 233 23% 60%));"
@@ -158,7 +158,7 @@
         <!-- Polling indicator for non-error states -->
         {#if !showRetry}
           <div class="polling-indicator">
-            <span class="polling-dot" />
+            <span class="polling-dot"></span>
             <span>Checking stream status...</span>
           </div>
         {/if}

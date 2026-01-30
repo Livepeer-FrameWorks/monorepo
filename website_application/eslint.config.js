@@ -53,6 +53,12 @@ export default tseslint.config(
         },
       },
     },
+    rules: {
+      // Svelte 5 $props() uses `let` by convention, not `const`
+      "prefer-const": "off",
+      // Dynamic imports with import() type annotations are common in Svelte
+      "@typescript-eslint/consistent-type-imports": "off",
+    },
   },
   {
     files: ["src/lib/graphql/generated/**"],

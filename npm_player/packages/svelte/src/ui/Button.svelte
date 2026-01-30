@@ -1,15 +1,18 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import { cn } from "@livepeer-frameworks/player-core";
   import { buttonVariants, type ButtonSize, type ButtonVariant } from "./button";
-  import { getContext, setContext } from "svelte";
+  import { getContext } from "svelte";
 
-  type $$Props = {
+  type Props = {
     variant?: ButtonVariant;
     size?: ButtonSize;
     class?: string;
     asChild?: boolean;
     type?: "button" | "submit" | "reset";
-  } & Record<string, any>;
+    children?: Snippet;
+    [key: string]: unknown;
+  };
 
   let {
     variant = "default",
@@ -17,26 +20,23 @@
     class: className = "",
     asChild = false,
     type = "button",
+    children,
     ...rest
-  }: $$Props = $props();
+  }: Props = $props();
 
-  let Comp: string = "button";
-  if (asChild) {
-    Comp = getContext("__svelte_slot_element") || "div";
-  }
-
-  // Set context for potential nested slots (though less common for Button)
-  setContext("__svelte_slot_element", Comp);
+  let Comp = $derived(
+    asChild ? (getContext("__svelte_slot_element") as string) || "div" : "button"
+  );
 
   let mergedClasses = $derived(cn(buttonVariants(variant, size, className)));
 </script>
 
 {#if asChild}
   <svelte:element this={Comp} class={mergedClasses} {...rest}>
-    <slot />
+    {@render children?.()}
   </svelte:element>
 {:else}
   <button class={mergedClasses} {type} {...rest}>
-    <slot />
+    {@render children?.()}
   </button>
 {/if}

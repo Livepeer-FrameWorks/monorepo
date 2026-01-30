@@ -80,7 +80,12 @@
   let skipDirection: SkipDirection = $state(null);
 
   // Playback mode preference (persistent)
-  let devPlaybackMode: PlaybackMode = $state(options?.playbackMode || "auto");
+  let devPlaybackMode: PlaybackMode = $state("auto");
+  $effect(() => {
+    if (options?.playbackMode) {
+      devPlaybackMode = options.playbackMode;
+    }
+  });
 
   // Container ref
   let containerRef: HTMLElement | undefined = $state();
@@ -287,7 +292,8 @@
           options?.devMode && "flex"
         )}
         data-player-container="true"
-        tabindex="0"
+        role="region"
+        aria-label="Video player"
         onmouseenter={() => playerStore?.handleMouseEnter()}
         onmouseleave={() => playerStore?.handleMouseLeave()}
         onmousemove={() => playerStore?.handleMouseMove()}

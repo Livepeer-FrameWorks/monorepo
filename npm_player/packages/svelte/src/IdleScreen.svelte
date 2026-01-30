@@ -387,7 +387,7 @@
         animation-duration: {particle.duration}s;
         animation-delay: {particle.delay}s;
       "
-    />
+    ></div>
   {/each}
 
   <!-- Animated bubbles -->
@@ -402,7 +402,7 @@
         background: {bubble.color};
         opacity: {bubble.opacity};
       "
-    />
+    ></div>
   {/each}
 
   <!-- Center logo with push-away effect -->
@@ -415,18 +415,19 @@
       class="logo-pulse"
       class:hovered={isHovered}
       style="width: {logoSize * 1.4}px; height: {logoSize * 1.4}px;"
-    />
+    ></div>
 
     <!-- Logo image -->
-    <img
-      src={logomarkAsset}
-      alt="Logo"
-      class="logo-image"
-      class:hovered={isHovered}
-      style="width: {logoSize}px; height: {logoSize}px;"
-      onclick={handleLogoClick}
-      draggable="false"
-    />
+    <button type="button" class="logo-button" onclick={handleLogoClick} aria-label="Logo">
+      <img
+        src={logomarkAsset}
+        alt=""
+        class="logo-image"
+        class:hovered={isHovered}
+        style="width: {logoSize}px; height: {logoSize}px;"
+        draggable="false"
+      />
+    </button>
   </div>
 
   <!-- Bouncing DVD Logo -->
@@ -515,7 +516,7 @@
     <!-- Progress bar -->
     {#if showProgress}
       <div class="progress-bar">
-        <div class="progress-fill" style="width: {Math.min(100, percentage ?? 0)}%;" />
+        <div class="progress-fill" style="width: {Math.min(100, percentage ?? 0)};"></div>
       </div>
     {/if}
 
@@ -526,7 +527,7 @@
   </div>
 
   <!-- Subtle overlay texture -->
-  <div class="overlay-texture" />
+  <div class="overlay-texture"></div>
 </div>
 
 <style>
@@ -684,6 +685,12 @@
   .logo-pulse.hovered {
     animation: logoPulse 1s ease-in-out infinite;
     transform: scale(1.2);
+  }
+
+  .logo-button {
+    all: unset;
+    cursor: pointer;
+    display: block;
   }
 
   .logo-image {

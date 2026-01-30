@@ -307,9 +307,9 @@
     {@const VideoIcon = getIconComponent("Video")}
     {@const ChartLineIcon = getIconComponent("ChartLine")}
     {@const CreditCardIcon = getIconComponent("CreditCard")}
-    {@const GlobeIcon = getIconComponent("Globe")}
+    {@const _GlobeIcon = getIconComponent("Globe")}
     {@const GaugeIcon = getIconComponent("Gauge")}
-    {@const ServerIcon = getIconComponent("Server")}
+    {@const _ServerIcon = getIconComponent("Server")}
     {@const LayoutDashboardIcon = getIconComponent("LayoutDashboard")}
     <!-- Fixed Page Header -->
     <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">

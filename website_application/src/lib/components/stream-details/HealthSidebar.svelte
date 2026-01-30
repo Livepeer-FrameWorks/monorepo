@@ -48,7 +48,7 @@
 
   let {
     streamId,
-    streamName,
+    streamName: _streamName,
     isLive,
     health,
     analytics = null,
