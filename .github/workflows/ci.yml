@@ -81,4 +81,14 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - run: pnpm lint
+      - run: pnpm test:coverage
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            **/coverage/**
+            **/lcov.info
+          if-no-files-found: warn
       - run: pnpm build
