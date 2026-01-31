@@ -1,56 +1,69 @@
 import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
 import typescript from "@rollup/plugin-typescript";
-import { codecovRollupPlugin } from "@codecov/rollup-plugin";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
+const commonPlugins = [
+  commonjs({
+    preferBuiltins: false,
+    include: /node_modules/,
+    requireReturnsDefault: "auto",
+    defaultIsModuleExports: "auto",
+  }),
+  resolve(),
+];
+
 export default [
-  // Main library bundle
+  // Main library - ESM (unbundled for better tree-shaking)
   {
     input: {
       index: "src/index.ts",
       vanilla: "src/vanilla/index.ts",
     },
-    output: [
-      {
-        dir: "dist",
-        format: "cjs",
-        sourcemap: !isDevelopment,
-        exports: "named",
-        entryFileNames: "cjs/[name].cjs",
-        chunkFileNames: "cjs/[name]-[hash].cjs",
-      },
-      {
-        dir: "dist",
-        format: "esm",
-        sourcemap: !isDevelopment,
-        entryFileNames: "esm/[name].js",
-        chunkFileNames: "esm/[name]-[hash].js",
-      },
-    ],
+    output: {
+      dir: "dist/esm",
+      format: "esm",
+      sourcemap: !isDevelopment,
+      preserveModules: true,
+      preserveModulesRoot: "src",
+    },
     plugins: [
-      commonjs({
-        preferBuiltins: false,
-        include: /node_modules/,
-        requireReturnsDefault: "auto",
-        defaultIsModuleExports: "auto",
-      }),
-      resolve(),
+      ...commonPlugins,
       typescript({
         tsconfig: "./tsconfig.json",
-        declaration: true,
-        declarationDir: "dist/types",
-        rootDir: "src",
+        declaration: false,
+        declarationDir: undefined,
+        outDir: "dist/esm",
       }),
-      codecovRollupPlugin({
-        enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
-        bundleName: "streamcrafter-core",
-        uploadToken: process.env.CODECOV_TOKEN,
-      }),
-    ].filter(Boolean),
+    ],
   },
-  // Encoder Worker bundle (separate entry for proper bundling)
+  // Main library - CJS (unbundled for better tree-shaking)
+  {
+    input: {
+      index: "src/index.ts",
+      vanilla: "src/vanilla/index.ts",
+    },
+    output: {
+      dir: "dist/cjs",
+      format: "cjs",
+      sourcemap: !isDevelopment,
+      exports: "named",
+      preserveModules: true,
+      preserveModulesRoot: "src",
+      entryFileNames: "[name].cjs",
+    },
+    plugins: [
+      ...commonPlugins,
+      typescript({
+        tsconfig: "./tsconfig.json",
+        declaration: false,
+        declarationDir: undefined,
+        outDir: "dist/cjs",
+      }),
+    ],
+  },
+  // Encoder Worker bundle (must be bundled - self-contained IIFE)
   {
     input: "src/workers/encoder.worker.ts",
     output: {
@@ -71,10 +84,9 @@ export default [
         declarationDir: undefined,
         outDir: "dist/workers",
       }),
-    ].filter(Boolean),
+    ],
   },
-  // Compositor Worker bundle (separate entry for proper bundling)
-  // Uses inlineDynamicImports because the worker imports from other modules
+  // Compositor Worker bundle (must be bundled - self-contained IIFE)
   {
     input: "src/workers/compositor.worker.ts",
     output: {
@@ -96,9 +108,9 @@ export default [
         declarationDir: undefined,
         outDir: "dist/workers",
       }),
-    ].filter(Boolean),
+    ],
   },
-  // RTC Transform Worker bundle (for RTCRtpScriptTransform / WebCodecs encoding)
+  // RTC Transform Worker bundle (must be bundled - self-contained IIFE)
   {
     input: "src/workers/rtcTransform.worker.ts",
     output: {
@@ -119,6 +131,6 @@ export default [
         declarationDir: undefined,
         outDir: "dist/workers",
       }),
-    ].filter(Boolean),
+    ],
   },
 ];

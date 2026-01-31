@@ -1,7 +1,6 @@
 import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
 import typescript from "@rollup/plugin-typescript";
-import { codecovRollupPlugin } from "@codecov/rollup-plugin";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
@@ -15,50 +14,67 @@ const externalDependencies = [
   "global/window",
 ];
 
+const commonPlugins = [
+  commonjs({
+    preferBuiltins: false,
+    include: /node_modules/,
+    requireReturnsDefault: "auto",
+    defaultIsModuleExports: "auto",
+  }),
+  resolve(),
+];
+
 export default [
-  // Main bundle
+  // Main library - ESM (unbundled for better tree-shaking)
   {
-    input: "src/index.ts",
+    input: {
+      index: "src/index.ts",
+      vanilla: "src/vanilla/index.ts",
+    },
     external: externalDependencies,
-    output: [
-      {
-        dir: "dist",
-        format: "cjs",
-        sourcemap: !isDevelopment,
-        entryFileNames: "cjs/index.js",
-        exports: "named",
-        inlineDynamicImports: true,
-      },
-      {
-        dir: "dist",
-        format: "esm",
-        sourcemap: !isDevelopment,
-        entryFileNames: "esm/index.js",
-        inlineDynamicImports: true,
-      },
-    ],
+    output: {
+      dir: "dist/esm",
+      format: "esm",
+      sourcemap: !isDevelopment,
+      preserveModules: true,
+      preserveModulesRoot: "src",
+    },
     plugins: [
-      commonjs({
-        preferBuiltins: false,
-        include: /node_modules/,
-        requireReturnsDefault: "auto",
-        defaultIsModuleExports: "auto",
-      }),
-      resolve(),
+      ...commonPlugins,
       typescript({
         tsconfig: "./tsconfig.json",
-        declaration: true,
-        declarationDir: "dist/types",
-        rootDir: "src",
+        declaration: false,
+        declarationDir: undefined,
+        outDir: "dist/esm",
       }),
-      codecovRollupPlugin({
-        enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
-        bundleName: "player-core",
-        uploadToken: process.env.CODECOV_TOKEN,
-      }),
-    ].filter(Boolean),
+    ],
   },
-  // WebCodecs Worker bundle (separate entry for proper bundling)
+  // Main library - CJS (unbundled for better tree-shaking)
+  {
+    input: {
+      index: "src/index.ts",
+      vanilla: "src/vanilla/index.ts",
+    },
+    external: externalDependencies,
+    output: {
+      dir: "dist/cjs",
+      format: "cjs",
+      sourcemap: !isDevelopment,
+      exports: "named",
+      preserveModules: true,
+      preserveModulesRoot: "src",
+    },
+    plugins: [
+      ...commonPlugins,
+      typescript({
+        tsconfig: "./tsconfig.json",
+        declaration: false,
+        declarationDir: undefined,
+        outDir: "dist/cjs",
+      }),
+    ],
+  },
+  // WebCodecs Worker bundle (must be bundled - self-contained IIFE)
   {
     input: "src/players/WebCodecsPlayer/worker/decoder.worker.ts",
     output: {
@@ -75,6 +91,6 @@ export default [
         declarationDir: undefined,
         outDir: "dist/workers",
       }),
-    ].filter(Boolean),
+    ],
   },
 ];

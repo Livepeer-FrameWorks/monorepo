@@ -26,9 +26,10 @@
     "./styles.css": "./dist/player.css"
   },
   "scripts": {
-    "build": "pnpm run build:css && NODE_ENV=production rollup -c",
+    "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
     "build:watch": "NODE_ENV=development rollup -c --watch",
     "build:css": "mkdir -p ./dist && cp ./src/styles/player.css ./dist/player.css",
+    "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",
     "type-check": "tsc --noEmit",
     "test": "vitest run -c vitest.config.ts",
     "test:watch": "vitest -c vitest.config.ts",
@@ -57,7 +58,6 @@
   "devDependencies": {
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^12.1.4",
     "@rollup/plugin-url": "^8.0.2",
     "@tailwindcss/postcss": "^4.1.14",

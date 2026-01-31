@@ -19,8 +19,9 @@
     "./player.css": "./src/player.css"
   },
   "scripts": {
-    "build": "NODE_ENV=production rollup -c",
+    "build": "pnpm run build:types && NODE_ENV=production rollup -c",
     "build:watch": "NODE_ENV=development rollup -c --watch",
+    "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -52,7 +53,6 @@
     "@rollup/plugin-babel": "^6.0.4",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^12.1.4",
     "@rollup/plugin-url": "^8.0.2",
     "@types/react": "^19.1.11",

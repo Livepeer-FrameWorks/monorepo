@@ -27,9 +27,10 @@
     "./styles/streamcrafter.css": "./dist/streamcrafter.css"
   },
   "scripts": {
-    "build": "pnpm run build:css && NODE_ENV=production rollup -c",
+    "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",
     "build:css": "mkdir -p ./dist && cp ./src/styles/streamcrafter.css ./dist/streamcrafter.css",
     "build:watch": "NODE_ENV=development rollup -c --watch",
+    "build:types": "tsc --noEmit false --emitDeclarationOnly --outDir dist/types",
     "type-check": "tsc --noEmit",
     "test": "vitest run -c vitest.config.ts",
     "test:watch": "vitest -c vitest.config.ts",
