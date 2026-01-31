@@ -78,11 +78,12 @@ jobs:
         run: make coverage
       - name: Upload Go test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/junit.xml
           flags: go
+          report_type: test_results
       - name: Print coverage summary
         run: |
           echo "=== Go Coverage Summary ==="
@@ -212,7 +213,7 @@ jobs:
           fail_ci_if_error: false
       - name: Upload frontend test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: |
@@ -224,6 +225,7 @@ jobs:
             ./npm_studio/packages/svelte/test-results/junit.xml
             ./website_application/test-results/junit.xml
           flags: frontend
+          report_type: test_results
 
   frontend-build:
     name: Frontend build
