@@ -1,6 +1,7 @@
 import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
 import typescript from "@rollup/plugin-typescript";
+import { codecovRollupPlugin } from "@codecov/rollup-plugin";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
@@ -49,6 +50,11 @@ export default [
         declaration: true,
         declarationDir: "dist/types",
         rootDir: "src",
+      }),
+      codecovRollupPlugin({
+        enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
+        bundleName: "player-core",
+        uploadToken: process.env.CODECOV_TOKEN,
       }),
     ].filter(Boolean),
   },

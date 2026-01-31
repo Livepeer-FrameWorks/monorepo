@@ -3,6 +3,7 @@ import commonjs from "@rollup/plugin-commonjs";
 import babel from "@rollup/plugin-babel";
 import typescript from "@rollup/plugin-typescript";
 import peerDepsExternal from "rollup-plugin-peer-deps-external";
+import { codecovRollupPlugin } from "@codecov/rollup-plugin";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
@@ -47,6 +48,10 @@ export default {
       extensions: [".js", ".jsx", ".ts", ".tsx"],
       presets: ["@babel/preset-env", "@babel/preset-react", "@babel/preset-typescript"],
     }),
-    // Library builds are typically left unminified; consumers handle minification.
+    codecovRollupPlugin({
+      enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
+      bundleName: "streamcrafter-react",
+      uploadToken: process.env.CODECOV_TOKEN,
+    }),
   ].filter(Boolean),
 };

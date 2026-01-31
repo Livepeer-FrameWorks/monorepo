@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="6" failures="0" errors="0" time="0.001681583">
+    <testsuite name="test/scorer.test.ts" timestamp="2026-01-31T09:04:57.460Z" hostname="stronk-osx-5.local" tests="6" failures="0" errors="0" skipped="0" time="0.001681583">
+        <testcase classname="test/scorer.test.ts" name="scorer &gt; calculateTrackScore returns 1.9 for boolean true" time="0.000660625">
+        </testcase>
+        <testcase classname="test/scorer.test.ts" name="scorer &gt; calculateTrackScore returns 0 for false or empty array" time="0.000092875">
+        </testcase>
+        <testcase classname="test/scorer.test.ts" name="scorer &gt; calculateTrackScore sums default track scores" time="0.000106958">
+        </testcase>
+        <testcase classname="test/scorer.test.ts" name="scorer &gt; calculateMaxScore delegates to calculateTrackScore" time="0.00005525">
+        </testcase>
+        <testcase classname="test/scorer.test.ts" name="scorer &gt; calculatePriorityScore favors lower priority numbers" time="0.000109917">
+        </testcase>
+        <testcase classname="test/scorer.test.ts" name="scorer &gt; calculateSourceScore favors earlier sources" time="0.000080416">
+        </testcase>
+    </testsuite>
+</testsuites>

@@ -242,6 +242,28 @@ test: proto graphql
 		exit 1; \
 	fi
 
+# Run unit tests with JUnit XML output for Codecov Test Analytics
+test-junit: proto graphql
+	@echo "Running unit tests with JUnit output for all Go modules..."
+	@mkdir -p $(CURDIR)/coverage
+	@rm -f $(CURDIR)/coverage/junit.xml
+	go install github.com/jstemmer/go-junit-report/v2@latest
+	@failed=0; \
+	for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		(cd $$service_dir && \
+			go mod tidy && \
+			go test ./... -race -count=1 -v 2>&1) | go-junit-report -set-exit-code >> $(CURDIR)/coverage/junit.xml || failed=1; \
+	done; \
+	if [ $$failed -eq 0 ]; then \
+		echo "✓ Unit tests passed"; \
+	else \
+		echo "✗ Unit tests failed"; \
+		exit 1; \
+	fi
+	@echo "JUnit report saved to $(CURDIR)/coverage/junit.xml"
+
 # Generate a single combined coverage report at ./coverage
 coverage: proto graphql
 	@echo "Generating combined coverage for all Go modules..."

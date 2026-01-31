@@ -5,6 +5,7 @@ import starlightBlog from "starlight-blog";
 import mermaid from "astro-mermaid";
 import { visit } from "unist-util-visit";
 import { loadEnv } from "vite";
+import { codecovVitePlugin } from "@codecov/vite-plugin";
 
 // Load .env files manually - Astro doesn't auto-load them in config
 // See: https://docs.astro.build/en/guides/environment-variables/
@@ -132,6 +133,15 @@ export default defineConfig({
   markdown: {
     remarkPlugins: [remarkEnvReplace],
     rehypePlugins: [rehypeBaseLinks],
+  },
+  vite: {
+    plugins: [
+      codecovVitePlugin({
+        enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
+        bundleName: "website-docs",
+        uploadToken: process.env.CODECOV_TOKEN,
+      }),
+    ],
   },
   integrations: [
     mermaid({

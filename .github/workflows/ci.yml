@@ -72,10 +72,17 @@ jobs:
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0
       - name: Install gqlgen
         run: go install github.com/99designs/gqlgen@v0.17.78
-      - name: Run tests
-        run: make test
+      - name: Run tests with JUnit output
+        run: make test-junit
       - name: Generate coverage
         run: make coverage
+      - name: Upload Go test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/junit.xml
+          flags: go
       - name: Print coverage summary
         run: |
           echo "=== Go Coverage Summary ==="
@@ -203,6 +210,20 @@ jobs:
           flags: frontend
           name: frontend-coverage
           fail_ci_if_error: false
+      - name: Upload frontend test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: |
+            ./npm_player/packages/core/test-results/junit.xml
+            ./npm_player/packages/react/test-results/junit.xml
+            ./npm_player/packages/svelte/test-results/junit.xml
+            ./npm_studio/packages/core/test-results/junit.xml
+            ./npm_studio/packages/react/test-results/junit.xml
+            ./npm_studio/packages/svelte/test-results/junit.xml
+            ./website_application/test-results/junit.xml
+          flags: frontend
 
   frontend-build:
     name: Frontend build
@@ -219,4 +240,7 @@ jobs:
           node-version: "24"
           cache: pnpm
       - run: pnpm install
-      - run: pnpm build
+      - name: Build with bundle analysis
+        run: pnpm build
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

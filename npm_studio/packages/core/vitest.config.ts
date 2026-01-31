@@ -5,6 +5,10 @@ export default defineConfig({
     include: ["test/**/*.test.ts"],
     environment: "node",
     restoreMocks: true,
+    reporters: ["default", "junit"],
+    outputFile: {
+      junit: "./test-results/junit.xml",
+    },
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

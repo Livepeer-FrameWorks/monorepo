@@ -8,6 +8,10 @@ export default defineConfig({
     environment: "node",
     globals: true,
     restoreMocks: true,
+    reporters: ["default", "junit"],
+    outputFile: {
+      junit: "./test-results/junit.xml",
+    },
     alias: {
       $lib: resolve(__dirname, "./src/lib"),
     },

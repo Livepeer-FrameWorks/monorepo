@@ -1,6 +1,7 @@
 import { sveltekit } from "@sveltejs/kit/vite";
 import houdini from "houdini/vite";
 import { defineConfig, loadEnv } from "vite";
+import { codecovVitePlugin } from "@codecov/vite-plugin";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -20,7 +21,15 @@ export default defineConfig(({ mode }) => {
 
   return {
     // IMPORTANT: houdini() must come before sveltekit()
-    plugins: [houdini(), sveltekit()],
+    plugins: [
+      houdini(),
+      sveltekit(),
+      codecovVitePlugin({
+        enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
+        bundleName: "website-application",
+        uploadToken: process.env.CODECOV_TOKEN,
+      }),
+    ],
     server: {
       host,
       port,

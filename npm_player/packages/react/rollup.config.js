@@ -5,6 +5,7 @@ import babel from "@rollup/plugin-babel";
 import typescript from "@rollup/plugin-typescript";
 import peerDepsExternal from "rollup-plugin-peer-deps-external";
 import url from "@rollup/plugin-url";
+import { codecovRollupPlugin } from "@codecov/rollup-plugin";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
@@ -69,5 +70,10 @@ export default {
         // worker pool can keep unresolved promises on process shutdown.
         maxWorkers: 1,
       }),
+    codecovRollupPlugin({
+      enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
+      bundleName: "player-react",
+      uploadToken: process.env.CODECOV_TOKEN,
+    }),
   ].filter(Boolean),
 };
