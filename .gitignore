@@ -35,6 +35,7 @@ build/
 .output/
 .vite/
 coverage/
+test-results/
 *.log
 .env*
 !.env.example

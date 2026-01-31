@@ -81,7 +81,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/junit.xml
+          files: ./test-results/go-junit.xml
           flags: go
           report_type: test_results
       - name: Print coverage summary
@@ -216,14 +216,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: |
-            ./npm_player/packages/core/test-results/junit.xml
-            ./npm_player/packages/react/test-results/junit.xml
-            ./npm_player/packages/svelte/test-results/junit.xml
-            ./npm_studio/packages/core/test-results/junit.xml
-            ./npm_studio/packages/react/test-results/junit.xml
-            ./npm_studio/packages/svelte/test-results/junit.xml
-            ./website_application/test-results/junit.xml
+          files: ./npm_player/packages/core/test-results/junit.xml,./npm_player/packages/svelte/test-results/junit.xml,./npm_studio/packages/core/test-results/junit.xml,./npm_studio/packages/svelte/test-results/junit.xml,./website_application/test-results/junit.xml
           flags: frontend
           report_type: test_results
 
