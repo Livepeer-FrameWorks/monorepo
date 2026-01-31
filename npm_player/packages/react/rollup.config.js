@@ -1,6 +1,5 @@
 import resolve from "@rollup/plugin-node-resolve";
 import commonjs from "@rollup/plugin-commonjs";
-import terser from "@rollup/plugin-terser";
 import babel from "@rollup/plugin-babel";
 import typescript from "@rollup/plugin-typescript";
 import peerDepsExternal from "rollup-plugin-peer-deps-external";
@@ -61,15 +60,6 @@ export default {
       extensions: [".js", ".jsx", ".ts", ".tsx"],
       presets: ["@babel/preset-env", "@babel/preset-react", "@babel/preset-typescript"],
     }),
-    !isDevelopment &&
-      terser({
-        format: { comments: false },
-        compress: { passes: 2 },
-        module: true,
-        // Work around occasional Rollup "Unexpected early exit" where the terser
-        // worker pool can keep unresolved promises on process shutdown.
-        maxWorkers: 1,
-      }),
     codecovRollupPlugin({
       enableBundleAnalysis: process.env.CODECOV_TOKEN !== undefined,
       bundleName: "player-react",
