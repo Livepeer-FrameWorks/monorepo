@@ -15,7 +15,7 @@ import (
 	pb "frameworks/pkg/proto"
 )
 
-// ClipCleanupInfo holds information about a clip candidate for cleanup
+// ClipCleanupInfo holds information about an artifact candidate for cleanup
 type ClipCleanupInfo struct {
 	ClipHash     string
 	FilePath     string
@@ -24,6 +24,7 @@ type ClipCleanupInfo struct {
 	AccessCount  int
 	LastAccessed time.Time
 	Priority     float64 // Lower = higher priority for deletion
+	AssetType    string  // "clip", "dvr", or "vod"
 }
 
 // CleanupMonitor manages storage cleanup operations
@@ -108,15 +109,8 @@ func (cm *CleanupMonitor) start() {
 
 // checkAndCleanup checks storage usage and performs cleanup if needed
 func (cm *CleanupMonitor) checkAndCleanup() error {
-	clipsDir := filepath.Join(cm.basePath, "clips")
-
-	// Check if clips directory exists
-	if _, err := os.Stat(clipsDir); os.IsNotExist(err) {
-		return nil // No clips directory, nothing to clean
-	}
-
-	// Get current storage usage
-	usagePercent, usedBytes, totalBytes, err := cm.getStorageUsage(clipsDir)
+	// Get current storage usage (check base path - filesystem level)
+	usagePercent, usedBytes, totalBytes, err := cm.getStorageUsage(cm.basePath)
 	if err != nil {
 		return fmt.Errorf("failed to get storage usage: %w", err)
 	}
@@ -141,10 +135,22 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 	targetBytes := uint64(float64(totalBytes) * cm.targetThreshold)
 	bytesToFree := usedBytes - targetBytes
 
-	// Get cleanup candidates
-	candidates, err := cm.getCleanupCandidates(clipsDir)
-	if err != nil {
-		return fmt.Errorf("failed to get cleanup candidates: %w", err)
+	// Get cleanup candidates from all artifact directories
+	var candidates []ClipCleanupInfo
+
+	clipsDir := filepath.Join(cm.basePath, "clips")
+	if clipCandidates, err := cm.getCleanupCandidates(clipsDir, "clip"); err == nil {
+		candidates = append(candidates, clipCandidates...)
+	}
+
+	dvrDir := filepath.Join(cm.basePath, "dvr")
+	if dvrCandidates, err := cm.getCleanupCandidates(dvrDir, "dvr"); err == nil {
+		candidates = append(candidates, dvrCandidates...)
+	}
+
+	vodDir := filepath.Join(cm.basePath, "vod")
+	if vodCandidates, err := cm.getCleanupCandidates(vodDir, "vod"); err == nil {
+		candidates = append(candidates, vodCandidates...)
 	}
 
 	if len(candidates) == 0 {
@@ -170,7 +176,10 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 			if errors.Is(err, errCleanupSkip) {
 				continue
 			}
-			cm.logger.WithError(err).WithField("clip_hash", candidate.ClipHash).Error("Failed to cleanup clip")
+			cm.logger.WithError(err).WithFields(logging.Fields{
+				"artifact_hash": candidate.ClipHash,
+				"asset_type":    candidate.AssetType,
+			}).Error("Failed to cleanup artifact")
 			continue
 		}
 
@@ -178,10 +187,11 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 		cleanedCount++
 
 		cm.logger.WithFields(logging.Fields{
-			"clip_hash":      candidate.ClipHash,
+			"artifact_hash":  candidate.ClipHash,
+			"asset_type":     candidate.AssetType,
 			"size_mb":        float64(candidate.SizeBytes) / (1024 * 1024),
 			"total_freed_mb": float64(totalFreed) / (1024 * 1024),
-		}).Info("Cleaned up clip")
+		}).Info("Cleaned up artifact")
 	}
 
 	// Final usage check
@@ -217,25 +227,29 @@ func (cm *CleanupMonitor) getStorageUsage(path string) (float64, uint64, uint64,
 	return usagePercent, usedBytes, totalBytes, nil
 }
 
-// getCleanupCandidates returns clips that are candidates for cleanup
-func (cm *CleanupMonitor) getCleanupCandidates(clipsDir string) ([]ClipCleanupInfo, error) {
+// getCleanupCandidates returns artifacts that are candidates for cleanup
+func (cm *CleanupMonitor) getCleanupCandidates(dir string, assetType string) ([]ClipCleanupInfo, error) {
+	// Check if directory exists
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil // Directory doesn't exist, no candidates
+	}
+
 	var candidates []ClipCleanupInfo
 	minAge := time.Now().Add(-time.Duration(cm.minRetentionHours) * time.Hour)
 
 	// Get current artifact index for access information
-	if prometheusMonitor == nil {
-		return nil, fmt.Errorf("prometheus monitor not initialized")
+	var artifactIndex map[string]*ClipInfo
+	if prometheusMonitor != nil {
+		prometheusMonitor.mutex.RLock()
+		artifactIndex = make(map[string]*ClipInfo)
+		for k, v := range prometheusMonitor.artifactIndex {
+			artifactIndex[k] = v
+		}
+		prometheusMonitor.mutex.RUnlock()
 	}
 
-	prometheusMonitor.mutex.RLock()
-	artifactIndex := make(map[string]*ClipInfo)
-	for k, v := range prometheusMonitor.artifactIndex {
-		artifactIndex[k] = v
-	}
-	prometheusMonitor.mutex.RUnlock()
-
-	// Walk through clips and build candidate list
-	err := filepath.Walk(clipsDir, func(path string, info os.FileInfo, err error) error {
+	// Walk through directory and build candidate list
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			//nolint:nilerr // skip errors, continue walking
 			return nil
@@ -245,14 +259,14 @@ func (cm *CleanupMonitor) getCleanupCandidates(clipsDir string) ([]ClipCleanupIn
 			return nil // Skip directories
 		}
 
-		// Check if this is a clip file
-		if !cm.isClipFile(path) {
+		// Check if this is a valid artifact file for the asset type
+		if !cm.isArtifactFile(path, assetType) {
 			return nil
 		}
 
-		// Extract clip hash from path
-		clipHash := cm.extractClipHashFromPath(path)
-		if clipHash == "" {
+		// Extract artifact hash from path
+		artifactHash := cm.extractArtifactHashFromPath(path, assetType)
+		if artifactHash == "" {
 			return nil // Couldn't extract hash, skip
 		}
 
@@ -263,21 +277,23 @@ func (cm *CleanupMonitor) getCleanupCandidates(clipsDir string) ([]ClipCleanupIn
 
 		// Build candidate info
 		candidate := ClipCleanupInfo{
-			ClipHash:     clipHash,
+			ClipHash:     artifactHash,
 			FilePath:     path,
 			SizeBytes:    uint64(info.Size()),
 			CreatedAt:    info.ModTime(),
 			AccessCount:  0,
 			LastAccessed: info.ModTime(), // Default to creation time
+			AssetType:    assetType,
 		}
 
 		// Get additional info from artifact index if available
-		if clipInfo, exists := artifactIndex[clipHash]; exists {
-			// Use creation time from file system as it's more reliable
-			candidate.CreatedAt = clipInfo.CreatedAt
-			candidate.AccessCount = clipInfo.AccessCount
-			if !clipInfo.LastAccessed.IsZero() {
-				candidate.LastAccessed = clipInfo.LastAccessed
+		if artifactIndex != nil {
+			if clipInfo, exists := artifactIndex[artifactHash]; exists {
+				candidate.CreatedAt = clipInfo.CreatedAt
+				candidate.AccessCount = clipInfo.AccessCount
+				if !clipInfo.LastAccessed.IsZero() {
+					candidate.LastAccessed = clipInfo.LastAccessed
+				}
 			}
 		}
 
@@ -289,34 +305,39 @@ func (cm *CleanupMonitor) getCleanupCandidates(clipsDir string) ([]ClipCleanupIn
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk clips directory: %w", err)
+		return nil, fmt.Errorf("failed to walk %s directory: %w", assetType, err)
 	}
 
-	cm.logger.WithField("candidate_count", len(candidates)).Debug("Found cleanup candidates")
+	cm.logger.WithFields(logging.Fields{
+		"asset_type":      assetType,
+		"candidate_count": len(candidates),
+	}).Debug("Found cleanup candidates")
 	return candidates, nil
 }
 
-// isClipFile checks if a file path represents a clip file
-func (cm *CleanupMonitor) isClipFile(path string) bool {
+// isArtifactFile checks if a file path represents a valid artifact file for the given type
+func (cm *CleanupMonitor) isArtifactFile(path string, assetType string) bool {
 	ext := filepath.Ext(path)
-	switch ext {
-	case ".mp4", ".webm", ".mkv", ".avi":
-		return true
-	default:
-		return false
+	switch assetType {
+	case "clip", "vod":
+		return IsVideoFile(ext)
+	case "dvr":
+		return ext == ".m3u8"
 	}
+	return false
 }
 
-// extractClipHashFromPath extracts clip hash from file path
-func (cm *CleanupMonitor) extractClipHashFromPath(path string) string {
+// extractArtifactHashFromPath extracts artifact hash from file path based on asset type
+func (cm *CleanupMonitor) extractArtifactHashFromPath(path string, assetType string) string {
 	filename := filepath.Base(path)
 	ext := filepath.Ext(filename)
 
 	// Remove extension
 	name := filename[:len(filename)-len(ext)]
 
-	// Check if this looks like a clip hash (32 characters)
-	if len(name) == 32 {
+	// All artifact hashes are timestamp(14) + hex(8-16) = 22-30 chars
+	// Use minimum of 18 to handle any format variations
+	if len(name) >= 18 {
 		return name
 	}
 
@@ -355,28 +376,27 @@ func (cm *CleanupMonitor) calculateCleanupPriority(clip ClipCleanupInfo) float64
 	return priority
 }
 
-// cleanupClip removes a clip file from storage
-func (cm *CleanupMonitor) cleanupClip(clip ClipCleanupInfo) error {
-	// In dual-storage mode, clips are expected to have an authoritative S3 copy.
+// cleanupClip removes an artifact from storage (clip, dvr, or vod)
+func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
+	// In dual-storage mode, artifacts are expected to have an authoritative S3 copy.
 	// Before evicting from local disk, ask Foghorn if it's safe (synced).
-	// If it's not safe, trigger a storage check (which will sync via presigned URLs)
-	// and skip local deletion for now.
 	isEviction := false
 	var warmDurationMs int64
 	if control.IsConnected() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		safeToDelete, reason, wd, err := control.RequestCanDelete(ctx, clip.ClipHash)
+		safeToDelete, reason, wd, err := control.RequestCanDelete(ctx, artifact.ClipHash)
 		cancel()
 
 		if err != nil {
-			cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to check if clip is safe to evict")
+			cm.logger.WithError(err).WithField("artifact_hash", artifact.ClipHash).Warn("Failed to check if artifact is safe to evict")
 			return errCleanupSkip
 		}
 		if !safeToDelete {
 			cm.logger.WithFields(logging.Fields{
-				"clip_hash": clip.ClipHash,
-				"reason":    reason,
-			}).Info("Clip not safe to evict yet; triggering sync")
+				"artifact_hash": artifact.ClipHash,
+				"asset_type":    artifact.AssetType,
+				"reason":        reason,
+			}).Info("Artifact not safe to evict yet; triggering sync")
 			TriggerStorageCheck()
 			return errCleanupSkip
 		}
@@ -385,46 +405,51 @@ func (cm *CleanupMonitor) cleanupClip(clip ClipCleanupInfo) error {
 		warmDurationMs = wd
 	}
 
-	// Remove the file
-	if err := os.Remove(clip.FilePath); err != nil {
-		return fmt.Errorf("failed to remove clip file: %w", err)
-	}
-
-	// Try to remove any VOD symlink if it exists
-	clipsDir := filepath.Join(cm.basePath, "clips")
-	vodLinkPath := filepath.Join(clipsDir, clip.ClipHash+filepath.Ext(clip.FilePath))
-	if _, err := os.Lstat(vodLinkPath); err == nil {
-		if err := os.Remove(vodLinkPath); err != nil {
-			cm.logger.WithError(err).WithField("vod_path", vodLinkPath).Warn("Failed to remove VOD symlink")
+	// Remove based on asset type
+	switch artifact.AssetType {
+	case "dvr":
+		// DVR is a directory - remove the entire directory
+		dvrDir := filepath.Dir(artifact.FilePath)
+		if err := os.RemoveAll(dvrDir); err != nil {
+			return fmt.Errorf("failed to remove dvr directory: %w", err)
 		}
+	default:
+		// Clip and VOD are single files
+		if err := os.Remove(artifact.FilePath); err != nil {
+			return fmt.Errorf("failed to remove artifact file: %w", err)
+		}
+		// Remove auxiliary files (.dtsh, .gop)
+		os.Remove(artifact.FilePath + ".dtsh")
+		os.Remove(artifact.FilePath + ".gop")
 	}
-
-	// Remove auxiliary files (.dtsh, .gop)
-	os.Remove(clip.FilePath + ".dtsh")
-	os.Remove(clip.FilePath + ".gop")
 
 	// Remove from artifact index
 	if prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()
-		delete(prometheusMonitor.artifactIndex, clip.ClipHash)
+		delete(prometheusMonitor.artifactIndex, artifact.ClipHash)
 		prometheusMonitor.mutex.Unlock()
 	}
 
 	// Notify Foghorn about the deletion
+	assetType := artifact.AssetType
+	if assetType == "" {
+		assetType = "clip"
+	}
+
 	if isEviction {
 		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:         pb.StorageLifecycleData_ACTION_EVICTED,
-			AssetType:      string(AssetTypeClip),
-			AssetHash:      clip.ClipHash,
-			SizeBytes:      clip.SizeBytes,
+			AssetType:      assetType,
+			AssetHash:      artifact.ClipHash,
+			SizeBytes:      artifact.SizeBytes,
 			WarmDurationMs: &warmDurationMs,
 		})
-		if err := control.SendArtifactDeleted(clip.ClipHash, clip.FilePath, "eviction", clip.SizeBytes); err != nil {
-			cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to notify Foghorn of clip eviction")
+		if err := control.SendArtifactDeleted(artifact.ClipHash, artifact.FilePath, "eviction", artifact.AssetType, artifact.SizeBytes); err != nil {
+			cm.logger.WithError(err).WithField("artifact_hash", artifact.ClipHash).Warn("Failed to notify Foghorn of eviction")
 		}
 	} else {
-		if err := control.SendArtifactDeleted(clip.ClipHash, clip.FilePath, "cleanup", clip.SizeBytes); err != nil {
-			cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to notify Foghorn of artifact deletion")
+		if err := control.SendArtifactDeleted(artifact.ClipHash, artifact.FilePath, "cleanup", artifact.AssetType, artifact.SizeBytes); err != nil {
+			cm.logger.WithError(err).WithField("artifact_hash", artifact.ClipHash).Warn("Failed to notify Foghorn of deletion")
 		}
 	}
 

@@ -34,6 +34,9 @@ type DeleteClipFunc func(clipHash string) (uint64, error)
 // DeleteDVRFunc is the function type for DVR deletion
 type DeleteDVRFunc func(dvrHash string) (uint64, error)
 
+// DeleteVodFunc is the function type for VOD deletion
+type DeleteVodFunc func(vodHash string) (uint64, error)
+
 // Global state for metrics streaming
 var (
 	currentStream pb.HelmsmanControl_ConnectClient
@@ -42,6 +45,7 @@ var (
 	onSeed        func()
 	deleteClipFn  DeleteClipFunc
 	deleteDVRFn   DeleteDVRFunc
+	deleteVodFn   DeleteVodFunc
 )
 
 // SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
@@ -57,6 +61,11 @@ func SetDeleteClipHandler(fn DeleteClipFunc) {
 // SetDeleteDVRHandler sets the callback for DVR deletion
 func SetDeleteDVRHandler(fn DeleteDVRFunc) {
 	deleteDVRFn = fn
+}
+
+// SetDeleteVodHandler sets the callback for VOD deletion
+func SetDeleteVodHandler(fn DeleteVodFunc) {
+	deleteVodFn = fn
 }
 
 // Start launches the Helmsman control client and maintains the stream to Foghorn
@@ -188,18 +197,20 @@ func SendDVRStartRequest(tenantID, internalName, userID string, retentionDays in
 }
 
 // SendArtifactDeleted notifies Foghorn that an artifact has been deleted
-func SendArtifactDeleted(clipHash, filePath, reason string, sizeBytes uint64) error {
+func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, sizeBytes uint64) error {
 	stream := currentStream
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
 
 	artifactDeleted := &pb.ArtifactDeleted{
-		ClipHash:  clipHash,
-		FilePath:  filePath,
-		Reason:    reason,
-		NodeId:    currentNodeID,
-		SizeBytes: sizeBytes,
+		ClipHash:     artifactHash, // Deprecated, kept for compatibility
+		ArtifactHash: artifactHash,
+		ArtifactType: artifactType,
+		FilePath:     filePath,
+		Reason:       reason,
+		NodeId:       currentNodeID,
+		SizeBytes:    sizeBytes,
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: artifactDeleted}}
@@ -309,6 +320,8 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleClipDelete(logger, x.ClipDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_DvrDelete:
 				go handleDVRDelete(logger, x.DvrDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
+			case *pb.ControlMessage_VodDelete:
+				go handleVodDelete(logger, x.VodDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_MistTriggerResponse:
 				// Handle response from Foghorn for blocking triggers
 				go handleMistTriggerResponse(x.MistTriggerResponse)
@@ -561,6 +574,7 @@ func urlEscape(s string) string {
 // handleDVRStart handles DVR start requests from Foghorn (for storage nodes)
 func handleDVRStart(logger logging.Logger, req *pb.DVRStartRequest, send func(*pb.ControlMessage)) {
 	dvrHash := req.GetDvrHash()
+	streamID := req.GetStreamId()
 	internalName := req.GetInternalName()
 	sourceURL := req.GetSourceBaseUrl()
 	requestID := req.GetRequestId()
@@ -568,6 +582,7 @@ func handleDVRStart(logger logging.Logger, req *pb.DVRStartRequest, send func(*p
 
 	logger.WithFields(logging.Fields{
 		"dvr_hash":      dvrHash,
+		"stream_id":     streamID,
 		"internal_name": internalName,
 		"source_url":    sourceURL,
 		"request_id":    requestID,
@@ -579,7 +594,7 @@ func handleDVRStart(logger logging.Logger, req *pb.DVRStartRequest, send func(*p
 	initDVRManager()
 
 	// Start the DVR recording job
-	if err := dvrManager.StartRecording(dvrHash, internalName, sourceURL, config, send); err != nil {
+	if err := dvrManager.StartRecording(dvrHash, streamID, internalName, sourceURL, config, send); err != nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
 			"error":    err,
@@ -669,10 +684,12 @@ func handleClipDelete(logger logging.Logger, req *pb.ClipDeleteRequest, send fun
 	// Send artifact deleted notification back to Foghorn
 	if send != nil {
 		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &pb.ArtifactDeleted{
-			ClipHash:  clipHash,
-			Reason:    "manual",
-			NodeId:    currentNodeID,
-			SizeBytes: sizeBytes,
+			ClipHash:     clipHash, // Deprecated, kept for compatibility
+			ArtifactHash: clipHash,
+			ArtifactType: "clip",
+			Reason:       "manual",
+			NodeId:       currentNodeID,
+			SizeBytes:    sizeBytes,
 		}}})
 	}
 
@@ -726,6 +743,49 @@ func handleDVRDelete(logger logging.Logger, req *pb.DVRDeleteRequest, send func(
 		"dvr_hash":   dvrHash,
 		"size_bytes": sizeBytes,
 	}).Info("DVR recording deleted successfully")
+}
+
+// handleVodDelete handles a VOD delete request from Foghorn
+func handleVodDelete(logger logging.Logger, req *pb.VodDeleteRequest, send func(*pb.ControlMessage)) {
+	vodHash := req.GetVodHash()
+	requestID := req.GetRequestId()
+
+	logger.WithFields(logging.Fields{
+		"vod_hash":   vodHash,
+		"request_id": requestID,
+	}).Info("Deleting VOD asset files")
+
+	// Use the registered delete handler
+	if deleteVodFn == nil {
+		logger.Error("VOD delete handler not registered, cannot delete VOD")
+		return
+	}
+
+	sizeBytes, err := deleteVodFn(vodHash)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"vod_hash": vodHash,
+			"error":    err,
+		}).Error("Failed to delete VOD files")
+		return
+	}
+
+	// Send artifact deleted notification back to Foghorn
+	if send != nil {
+		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &pb.ArtifactDeleted{
+			ClipHash:     vodHash, // Deprecated, kept for compatibility
+			ArtifactHash: vodHash,
+			ArtifactType: "vod",
+			Reason:       "manual",
+			NodeId:       currentNodeID,
+			SizeBytes:    sizeBytes,
+		}}})
+	}
+
+	logger.WithFields(logging.Fields{
+		"vod_hash":   vodHash,
+		"size_bytes": sizeBytes,
+	}).Info("VOD asset deleted successfully")
 }
 
 // SendDVRStreamEndNotification notifies Foghorn that a stream has ended and DVR recording should stop

@@ -490,7 +490,12 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 		"clip_id":   clipID,
 	}).Info("Registered clip in business registry")
 
-	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", nil)
+	var expiresAt *int64
+	if req.GetRetentionUntil() != nil {
+		ts := req.GetRetentionUntil().AsTime().Unix()
+		expiresAt = &ts
+	}
+	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", expiresAt)
 
 	return &pb.RegisterClipResponse{
 		ClipHash:             clipHash,
@@ -524,11 +529,21 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		return nil, status.Errorf(codes.Internal, "failed to generate DVR identifiers: %v", err)
 	}
 
-	// stream_id is optional (legacy DVRs may not have it)
-	var streamID *string
-	if req.GetStreamId() != "" {
-		sid := req.GetStreamId()
-		streamID = &sid
+	// Look up stream_id from internal_name
+	var streamID string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
+	`, internalName, tenantID).Scan(&streamID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Failed to find stream for DVR")
+		if err == sql.ErrNoRows {
+			return nil, status.Errorf(codes.NotFound, "stream not found for internal_name: %s", internalName)
+		}
+		return nil, status.Errorf(codes.Internal, "database error looking up stream: %v", err)
 	}
 
 	// Insert into business registry
@@ -536,7 +551,7 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		INSERT INTO commodore.dvr_recordings (
 			id, tenant_id, user_id, stream_id, dvr_hash, artifact_internal_name, playback_id, internal_name,
 			created_at, updated_at
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, NOW(), NOW())
 	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName)
 
 	if err != nil {
@@ -555,13 +570,19 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		"internal_name": internalName,
 	}).Info("Registered DVR in business registry")
 
-	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, req.GetStreamId(), "registered", nil)
+	var expiresAt *int64
+	if req.GetRetentionUntil() != nil {
+		ts := req.GetRetentionUntil().AsTime().Unix()
+		expiresAt = &ts
+	}
+	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt)
 
 	return &pb.RegisterDVRResponse{
 		DvrHash:              dvrHash,
 		DvrId:                dvrID,
 		PlaybackId:           playbackID,
 		ArtifactInternalName: artifactInternalName,
+		StreamId:             streamID,
 	}, nil
 }
 
@@ -3694,6 +3715,7 @@ const (
 	eventStreamKeyCreated   = "stream_key_created"
 	eventStreamKeyDeleted   = "stream_key_deleted"
 	eventArtifactRegistered = "artifact_registered"
+	eventArtifactDeleted    = "artifact_deleted"
 )
 
 func (s *CommodoreServer) emitServiceEvent(event *pb.ServiceEvent) {
@@ -3881,7 +3903,7 @@ func (s *CommodoreServer) isTenantSuspended(ctx context.Context, tenantID string
 }
 
 func generateDVRHash() string {
-	return time.Now().Format("20060102150405") + generateSecureToken(4)
+	return time.Now().Format("20060102150405") + generateSecureToken(8)
 }
 
 func generateClipHash() string {
@@ -4369,15 +4391,35 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	// Look up clip info for deletion event
+	var streamID string
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT stream_id::text FROM commodore.clips
+		WHERE clip_hash = $1 AND tenant_id = $2
+	`, req.ClipHash, tenantID).Scan(&streamID)
 
 	resp, err := s.foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip via Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to delete clip: %v", err)
+	}
+
+	// Delete from business registry (matches VOD pattern)
+	if resp.Success {
+		_, delErr := s.db.ExecContext(ctx, `
+			DELETE FROM commodore.clips
+			WHERE clip_hash = $1 AND tenant_id = $2
+		`, req.ClipHash, tenantID)
+		if delErr != nil {
+			s.logger.WithError(delErr).WithField("clip_hash", req.ClipHash).Warn("Failed to delete clip from business registry")
+		}
+
+		s.emitArtifactEvent(eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, streamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -4423,15 +4465,35 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRReques
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	// Look up DVR info for deletion event
+	var streamID string
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT stream_id::text FROM commodore.dvr_recordings
+		WHERE dvr_hash = $1 AND tenant_id = $2
+	`, req.DvrHash, tenantID).Scan(&streamID)
 
 	resp, err := s.foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete DVR via Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to delete DVR: %v", err)
+	}
+
+	// Delete from business registry (matches VOD pattern)
+	if resp.Success {
+		_, delErr := s.db.ExecContext(ctx, `
+			DELETE FROM commodore.dvr_recordings
+			WHERE dvr_hash = $1 AND tenant_id = $2
+		`, req.DvrHash, tenantID)
+		if delErr != nil {
+			s.logger.WithError(delErr).WithField("dvr_hash", req.DvrHash).Warn("Failed to delete DVR from business registry")
+		}
+
+		s.emitArtifactEvent(eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, streamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -5241,7 +5303,7 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 	}
 
 	// Get tenant context from metadata
-	_, tenantID, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -5260,6 +5322,11 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 	`, req.ArtifactHash, tenantID)
 	if delErr != nil {
 		s.logger.WithError(delErr).WithField("artifact_hash", req.ArtifactHash).Warn("Failed to delete VOD from business registry (will be cleaned up by retention job)")
+	}
+
+	// Emit deletion event
+	if resp.Success {
+		s.emitArtifactEvent(eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "", "deleted", nil)
 	}
 
 	s.logger.WithFields(logging.Fields{

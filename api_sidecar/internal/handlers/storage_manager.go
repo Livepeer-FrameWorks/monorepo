@@ -39,7 +39,7 @@ type FreezeCandidate struct {
 	AssetType    AssetType
 	AssetHash    string
 	TenantID     string
-	InternalName string
+	StreamID     string // Stream UUID (from directory structure)
 	FilePath     string // For clips: file path; for DVR: directory path
 	SizeBytes    uint64
 	CreatedAt    time.Time
@@ -165,7 +165,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 			_, _ = storageManager.DefrostClip(ctx, req)
 		} else if req.GetAssetType() == "dvr" {
 			_, _ = storageManager.DefrostDVR(ctx, req)
-		} else if req.GetAssetType() == "vod" || req.GetAssetType() == "upload" {
+		} else if req.GetAssetType() == "vod" {
 			_, _ = storageManager.DefrostVOD(ctx, req)
 		}
 	})
@@ -249,6 +249,7 @@ func (sm *StorageManager) checkAndManageStorage() error {
 	// Check clips directory
 	clipsDir := filepath.Join(sm.basePath, "clips")
 	dvrDir := filepath.Join(sm.basePath, "dvr")
+	vodDir := filepath.Join(sm.basePath, "vod")
 
 	// Get current storage usage
 	usagePercent, usedBytes, totalBytes, err := sm.getStorageUsage(sm.basePath)
@@ -297,6 +298,13 @@ func (sm *StorageManager) checkAndManageStorage() error {
 		sm.logger.WithError(err).Warn("Failed to get DVR freeze candidates")
 	} else {
 		candidates = append(candidates, dvrCandidates...)
+	}
+
+	vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
+	if err != nil {
+		sm.logger.WithError(err).Warn("Failed to get VOD freeze candidates")
+	} else {
+		candidates = append(candidates, vodCandidates...)
 	}
 
 	if len(candidates) == 0 {
@@ -421,7 +429,7 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 				candidate := FreezeCandidate{
 					AssetType:    AssetTypeDVR,
 					AssetHash:    dvrDir.Name(),
-					InternalName: streamDir.Name(),
+					StreamID:     streamDir.Name(),
 					FilePath:     dvrPath,
 					SizeBytes:    dvrSize,
 					CreatedAt:    info.ModTime(),
@@ -430,6 +438,46 @@ func (sm *StorageManager) getFreezeCandidates(dir string, assetType AssetType) (
 				candidate.Priority = sm.calculateFreezePriority(candidate)
 				candidates = append(candidates, candidate)
 			}
+		}
+	} else if assetType == AssetTypeVOD {
+		// VOD files are stored as vod/{assetHash}.{format}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, nil //nolint:nilerr // directory missing = no candidates
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			filename := entry.Name()
+			ext := filepath.Ext(filename)
+			if ext == "" {
+				continue
+			}
+
+			// Extract hash from filename (remove extension)
+			vodHash := strings.TrimSuffix(filename, ext)
+			if len(vodHash) < 18 {
+				continue // Not a valid artifact hash
+			}
+
+			info, err := entry.Info()
+			if err != nil || info.ModTime().After(minAge) {
+				continue
+			}
+
+			candidate := FreezeCandidate{
+				AssetType:    AssetTypeVOD,
+				AssetHash:    vodHash,
+				FilePath:     filepath.Join(dir, filename),
+				SizeBytes:    uint64(info.Size()),
+				CreatedAt:    info.ModTime(),
+				LastAccessed: info.ModTime(),
+			}
+			candidate.Priority = sm.calculateFreezePriority(candidate)
+			candidates = append(candidates, candidate)
 		}
 	}
 
@@ -450,7 +498,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		sm.freezeTracker.mu.Unlock()
 	}()
 
-	// Collect filenames for DVR (needed for presigned URL generation)
+	// Collect filenames (needed for presigned URL generation)
 	var filenames []string
 	if asset.AssetType == AssetTypeDVR {
 		manifestName := asset.AssetHash + ".m3u8"
@@ -479,8 +527,8 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				filenames = append(filenames, entry.Name())
 			}
 		}
-	} else if asset.AssetType == AssetTypeClip {
-		// Include main clip file
+	} else if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
+		// Clip and VOD are single-file uploads
 		filenames = append(filenames, filepath.Base(asset.FilePath))
 		// Include .dtsh if it exists
 		if _, err := os.Stat(asset.FilePath + ".dtsh"); err == nil {
@@ -507,20 +555,21 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 
 	// Notify sync started
 	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:       pb.StorageLifecycleData_ACTION_SYNC_STARTED,
-		AssetType:    string(asset.AssetType),
-		AssetHash:    asset.AssetHash,
-		TenantId:     &asset.TenantID,
-		InternalName: &asset.InternalName,
-		SizeBytes:    asset.SizeBytes,
+		Action:    pb.StorageLifecycleData_ACTION_SYNC_STARTED,
+		AssetType: string(asset.AssetType),
+		AssetHash: asset.AssetHash,
+		TenantId:  &asset.TenantID,
+		StreamId:  &asset.StreamID,
+		SizeBytes: asset.SizeBytes,
 	})
 
 	startTime := time.Now()
 	var uploadErr error
 	dtshIncluded := false // Track whether .dtsh was successfully uploaded
 
-	if asset.AssetType == AssetTypeClip {
-		// Check for SegmentUrls first (multi-file support for clip + dtsh)
+	if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
+		// Clip and VOD are single-file uploads
+		// Check for SegmentUrls first (multi-file support for clip/vod + dtsh)
 		if len(permResp.SegmentUrls) > 0 {
 			baseName := filepath.Base(asset.FilePath)
 
@@ -532,10 +581,10 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 					_ = control.SendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
 				})
 				if err != nil {
-					uploadErr = fmt.Errorf("failed to upload clip: %w", err)
+					uploadErr = fmt.Errorf("failed to upload %s: %w", asset.AssetType, err)
 				}
 			} else {
-				uploadErr = fmt.Errorf("no URL provided for main clip file")
+				uploadErr = fmt.Errorf("no URL provided for main %s file", asset.AssetType)
 			}
 
 			// Upload .dtsh if exists and URL provided
@@ -553,7 +602,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			// Legacy/Single file fallback using presigned PUT URL
 			presignedURL := permResp.PresignedPutUrl
 			if presignedURL == "" {
-				return fmt.Errorf("no presigned URL provided for clip freeze")
+				return fmt.Errorf("no presigned URL provided for %s freeze", asset.AssetType)
 			}
 
 			uploadErr = sm.presignedClient.UploadFileToPresignedURL(ctx, presignedURL, asset.FilePath, func(uploaded int64) {
@@ -561,7 +610,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				_ = control.SendFreezeProgress(requestID, asset.AssetHash, percent, uint64(uploaded))
 			})
 		}
-	} else {
+	} else if asset.AssetType == AssetTypeDVR {
 		// DVR: Stream upload with progressive manifest updates
 		// This allows playback to begin from S3 before freeze completes
 		segmentURLs := permResp.SegmentUrls
@@ -660,6 +709,8 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 			bytes.NewReader(finalManifest), int64(len(finalManifest)), nil); err != nil {
 			sm.logger.WithError(err).Warn("Failed to finalize manifest")
 		}
+	} else {
+		return fmt.Errorf("unsupported asset type for freeze: %s", asset.AssetType)
 	}
 
 	duration := time.Since(startTime)
@@ -686,13 +737,13 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	// Notify completion via lifecycle event (synced, not frozen - local copy retained)
 	durationMs := duration.Milliseconds()
 	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-		Action:       pb.StorageLifecycleData_ACTION_SYNCED,
-		AssetType:    string(asset.AssetType),
-		AssetHash:    asset.AssetHash,
-		TenantId:     &asset.TenantID,
-		InternalName: &asset.InternalName,
-		SizeBytes:    asset.SizeBytes,
-		DurationMs:   &durationMs,
+		Action:     pb.StorageLifecycleData_ACTION_SYNCED,
+		AssetType:  string(asset.AssetType),
+		AssetHash:  asset.AssetHash,
+		TenantId:   &asset.TenantID,
+		StreamId:   &asset.StreamID,
+		SizeBytes:  asset.SizeBytes,
+		DurationMs: &durationMs,
 	})
 
 	// Send SyncComplete to Foghorn (it will mark asset as synced and track this node as cached)
@@ -1265,20 +1316,14 @@ func (sm *StorageManager) calculateDirSize(path string) uint64 {
 }
 
 func (sm *StorageManager) isClipFile(path string) bool {
-	ext := filepath.Ext(path)
-	switch ext {
-	case ".mp4", ".webm", ".mkv", ".avi", ".ts":
-		return true
-	default:
-		return false
-	}
+	return IsVideoFile(filepath.Ext(path))
 }
 
 func (sm *StorageManager) extractHashFromPath(path string) string {
 	filename := filepath.Base(path)
 	ext := filepath.Ext(filename)
 	name := filename[:len(filename)-len(ext)]
-	if len(name) == 32 {
+	if len(name) >= 18 {
 		return name
 	}
 	return ""
@@ -1325,6 +1370,13 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 		candidates = append(candidates, dvrCandidates...)
 	}
 
+	// Also get VOD candidates
+	vodDir := filepath.Join(sm.basePath, "vod")
+	vodCandidates, err := sm.getFreezeCandidates(vodDir, AssetTypeVOD)
+	if err == nil {
+		candidates = append(candidates, vodCandidates...)
+	}
+
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].Priority < candidates[j].Priority
 	})
@@ -1351,13 +1403,13 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 		if safeToDelete {
 			// Asset is synced to S3, safe to delete local copy
 			var deleteErr error
-			if candidate.AssetType == AssetTypeClip {
+			if candidate.AssetType == AssetTypeClip || candidate.AssetType == AssetTypeVOD {
 				deleteErr = os.Remove(candidate.FilePath)
 				// Clean up auxiliary files if main file deletion succeeded or if they are orphaned
-				// Note: os.Remove returns error if file doesn't exist, which is fine
 				os.Remove(candidate.FilePath + ".dtsh")
 				os.Remove(candidate.FilePath + ".gop")
 			} else {
+				// DVR: remove entire directory
 				deleteErr = os.RemoveAll(candidate.FilePath)
 			}
 
@@ -1374,7 +1426,7 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 				SizeBytes:      candidate.SizeBytes,
 				WarmDurationMs: &warmDurationMs,
 			})
-			_ = control.SendArtifactDeleted(candidate.AssetHash, candidate.FilePath, "eviction", candidate.SizeBytes)
+			_ = control.SendArtifactDeleted(candidate.AssetHash, candidate.FilePath, "eviction", string(candidate.AssetType), candidate.SizeBytes)
 
 			totalFreed += candidate.SizeBytes
 			sm.logger.WithFields(logging.Fields{

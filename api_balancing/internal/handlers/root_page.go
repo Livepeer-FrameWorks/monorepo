@@ -675,7 +675,7 @@ func HandleRootPage(c *gin.Context) {
                             <td>
                                 {{if eq .ArtifactType "clip"}}<span class="tag">clip</span>
                                 {{else if eq .ArtifactType "dvr"}}<span class="tag purple">dvr</span>
-                                {{else if eq .ArtifactType "upload"}}<span class="tag warning">upload</span>
+                                {{else if eq .ArtifactType "vod"}}<span class="tag warning">vod</span>
                                 {{else}}<span class="tag">{{.ArtifactType}}</span>{{end}}
                             </td>
                             <td>

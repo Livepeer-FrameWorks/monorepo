@@ -24,7 +24,6 @@ import (
 	"frameworks/pkg/clients/decklog"
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/clips"
-	"frameworks/pkg/dvr"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/pagination"
@@ -698,13 +697,19 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	var dvrHash string
 	var artifactInternalName string
 	var playbackID string
+	var streamID string
 	if control.CommodoreClient != nil {
-		regResp, err := control.CommodoreClient.RegisterDVR(ctx, &pb.RegisterDVRRequest{
+		regReq := &pb.RegisterDVRRequest{
 			TenantId:     req.TenantId,
 			UserId:       req.GetUserId(),
 			StreamId:     req.GetStreamId(),
 			InternalName: req.InternalName,
-		})
+		}
+		// Pass retention from request if provided
+		if req.GetExpiresAt() > 0 {
+			regReq.RetentionUntil = timestamppb.New(time.Unix(req.GetExpiresAt(), 0))
+		}
+		regResp, err := control.CommodoreClient.RegisterDVR(ctx, regReq)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to register DVR with Commodore")
 			return nil, status.Errorf(codes.Internal, "failed to register DVR: %v", err)
@@ -712,14 +717,9 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		dvrHash = regResp.DvrHash
 		artifactInternalName = regResp.GetArtifactInternalName()
 		playbackID = regResp.GetPlaybackId()
+		streamID = regResp.GetStreamId()
 	} else {
-		// Fallback: generate locally (legacy, should not happen in production)
-		var err error
-		dvrHash, err = dvr.GenerateDVRHash()
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to generate DVR hash")
-			return nil, status.Error(codes.Internal, "failed to generate DVR hash")
-		}
+		return nil, status.Error(codes.Unavailable, "Commodore not available")
 	}
 
 	// Generate request_id for tracing (distinct from artifact hash)
@@ -732,13 +732,13 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, internal_name, artifact_internal_name,
-			tenant_id, user_id,
+			stream_id, tenant_id, user_id,
 			status, request_id, format,
 			retention_until, created_at, updated_at
 		)
-		VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid,
-		        'requested', $6, 'm3u8', $7, NOW(), NOW())
-	`, dvrHash, req.InternalName, artifactInternalName, req.TenantId, req.GetUserId(), requestID, retentionUntil)
+		VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
+		        'requested', $7, 'm3u8', $8, NOW(), NOW())
+	`, dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, retentionUntil)
 
 	if err != nil {
 		// Commodore registration succeeded but Foghorn insert failed
@@ -784,6 +784,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		SourceBaseUrl: fullDTSC,
 		RequestId:     dvrHash,
 		Config:        config,
+		StreamId:      streamID,
 	}
 
 	if err := control.SendDVRStart(storageNodeID, dvrReq); err != nil {
@@ -1494,7 +1495,7 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 			tenant_id, user_id, status,
 			sync_status, size_bytes, s3_url, format, retention_until, created_at, updated_at
 		)
-		VALUES ($1, $2, 'upload', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
+		VALUES ($1, $2, 'vod', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
 		        'in_progress', $6, $7, $8, NOW() + INTERVAL '30 days', NOW(), NOW())
 	`, artifactID, artifactHash, req.GetArtifactInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat)
 
@@ -1817,7 +1818,7 @@ func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAs
 	}
 
 	// Build base WHERE clause - no tenant_id filter (matches clips pattern)
-	baseWhere := "a.artifact_type = 'upload' AND a.status != 'deleted'"
+	baseWhere := "a.artifact_type = 'vod' AND a.status != 'deleted'"
 	args := []interface{}{}
 	argIdx := 1
 
@@ -1935,7 +1936,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		SELECT a.status, COALESCE(v.s3_key, ''), a.size_bytes, a.retention_until, a.user_id
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-		WHERE a.artifact_hash = $1 AND a.artifact_type = 'upload'
+		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod'
 	`, req.ArtifactHash).Scan(&currentStatus, &s3Key, &sizeBytes, &retentionUntil, &userID)
 
 	if err == sql.ErrNoRows {
@@ -1964,6 +1965,39 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		}
 	}
 
+	// Send delete request to nodes that have this VOD cached
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT node_id FROM foghorn.artifact_nodes
+		WHERE artifact_hash = $1 AND NOT is_orphaned
+	`, req.ArtifactHash)
+	if err == nil {
+		defer rows.Close()
+		requestID := uuid.NewString()
+		for rows.Next() {
+			var nodeID string
+			if err := rows.Scan(&nodeID); err != nil {
+				continue
+			}
+			deleteReq := &pb.VodDeleteRequest{
+				VodHash:   req.ArtifactHash,
+				RequestId: requestID,
+			}
+			if err := control.SendVodDelete(nodeID, deleteReq); err != nil {
+				s.logger.WithFields(logging.Fields{
+					"artifact_hash": req.ArtifactHash,
+					"node_id":       nodeID,
+					"error":         err,
+				}).Warn("Failed to send VOD delete to storage node, will be cleaned up later")
+			} else {
+				s.logger.WithFields(logging.Fields{
+					"artifact_hash": req.ArtifactHash,
+					"node_id":       nodeID,
+					"request_id":    requestID,
+				}).Debug("Sent VOD delete request to storage node")
+			}
+		}
+	}
+
 	// Delete from S3 if we have a key and client
 	if s3Key != "" && s.s3Client != nil && currentStatus != "uploading" {
 		if err := s.s3Client.Delete(ctx, s3Key); err != nil {
@@ -1978,7 +2012,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 	// Soft delete in foghorn.artifacts
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'upload'
+		WHERE artifact_hash = $1 AND artifact_type = 'vod'
 	`, req.ArtifactHash)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete VOD asset")
@@ -2030,7 +2064,7 @@ func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash st
 		       COALESCE(v.s3_upload_id, ''), COALESCE(v.s3_key, '')
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-		WHERE a.artifact_hash = $1 AND a.artifact_type = 'upload' AND a.status != 'deleted'
+		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.status != 'deleted'
 	`
 	row := s.db.QueryRowContext(ctx, query, artifactHash)
 	return s.scanVodAssetRow(row)

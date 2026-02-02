@@ -598,15 +598,16 @@ func (x *ValidateAPITokenResponse) GetTokenId() string {
 // Called by Foghorn during CreateClip flow
 type RegisterClipRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	TenantId        string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                      // Tenant context (from stream lookup)
-	UserId          string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                            // User who created the clip
-	StreamId        string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                      // Source stream UUID
-	Title           string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`                                            // Optional clip title
-	Description     string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`                                // Optional clip description
-	StartTime       int64                  `protobuf:"varint,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`                  // Start timestamp (unix ms)
-	Duration        int64                  `protobuf:"varint,7,opt,name=duration,proto3" json:"duration,omitempty"`                                     // Duration (ms)
-	ClipMode        string                 `protobuf:"bytes,8,opt,name=clip_mode,json=clipMode,proto3" json:"clip_mode,omitempty"`                      // absolute, relative, duration, clip_now
-	RequestedParams string                 `protobuf:"bytes,9,opt,name=requested_params,json=requestedParams,proto3" json:"requested_params,omitempty"` // Original request JSON for audit
+	TenantId        string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                          // Tenant context (from stream lookup)
+	UserId          string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                // User who created the clip
+	StreamId        string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                          // Source stream UUID
+	Title           string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`                                                // Optional clip title
+	Description     string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`                                    // Optional clip description
+	StartTime       int64                  `protobuf:"varint,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`                      // Start timestamp (unix ms)
+	Duration        int64                  `protobuf:"varint,7,opt,name=duration,proto3" json:"duration,omitempty"`                                         // Duration (ms)
+	ClipMode        string                 `protobuf:"bytes,8,opt,name=clip_mode,json=clipMode,proto3" json:"clip_mode,omitempty"`                          // absolute, relative, duration, clip_now
+	RequestedParams string                 `protobuf:"bytes,9,opt,name=requested_params,json=requestedParams,proto3" json:"requested_params,omitempty"`     // Original request JSON for audit
+	RetentionUntil  *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"` // Artifact expiration
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -704,6 +705,13 @@ func (x *RegisterClipRequest) GetRequestedParams() string {
 	return ""
 }
 
+func (x *RegisterClipRequest) GetRetentionUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RetentionUntil
+	}
+	return nil
+}
+
 type RegisterClipResponse struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	ClipHash             string                 `protobuf:"bytes,1,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`                                       // Generated hash (use as artifact_hash in Foghorn)
@@ -775,13 +783,14 @@ func (x *RegisterClipResponse) GetArtifactInternalName() string {
 // Register a new DVR recording in the business registry
 // Called by Foghorn during StartDVR flow
 type RegisterDVRRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`             // Tenant context
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                   // User who owns the recording
-	StreamId      string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`             // Source stream UUID (optional for legacy)
-	InternalName  string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"` // MistServer stream name
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                         // Tenant context
+	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                               // User who owns the recording
+	StreamId       string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                         // Source stream UUID (optional for legacy)
+	InternalName   string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`             // MistServer stream name
+	RetentionUntil *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"` // Recording expiration
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RegisterDVRRequest) Reset() {
@@ -842,12 +851,20 @@ func (x *RegisterDVRRequest) GetInternalName() string {
 	return ""
 }
 
+func (x *RegisterDVRRequest) GetRetentionUntil() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RetentionUntil
+	}
+	return nil
+}
+
 type RegisterDVRResponse struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	DvrHash              string                 `protobuf:"bytes,1,opt,name=dvr_hash,json=dvrHash,proto3" json:"dvr_hash,omitempty"`                                          // Generated hash (use as artifact_hash in Foghorn)
 	DvrId                string                 `protobuf:"bytes,2,opt,name=dvr_id,json=dvrId,proto3" json:"dvr_id,omitempty"`                                                // Commodore dvr_recordings table UUID
 	PlaybackId           string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
 	ArtifactInternalName string                 `protobuf:"bytes,4,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
+	StreamId             string                 `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                       // Source stream UUID for storage path
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -906,6 +923,13 @@ func (x *RegisterDVRResponse) GetPlaybackId() string {
 func (x *RegisterDVRResponse) GetArtifactInternalName() string {
 	if x != nil {
 		return x.ArtifactInternalName
+	}
+	return ""
+}
+
+func (x *RegisterDVRResponse) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
 	}
 	return ""
 }
@@ -6081,7 +6105,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x05email\x18\x04 \x01(\tR\x05email\x12\x12\n" +
 	"\x04role\x18\x05 \x01(\tR\x04role\x12 \n" +
 	"\vpermissions\x18\x06 \x03(\tR\vpermissions\x12\x19\n" +
-	"\btoken_id\x18\a \x01(\tR\atokenId\"\xa3\x02\n" +
+	"\btoken_id\x18\a \x01(\tR\atokenId\"\x81\x03\n" +
 	"\x13RegisterClipRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -6092,24 +6116,30 @@ const file_commodore_proto_rawDesc = "" +
 	"start_time\x18\x06 \x01(\x03R\tstartTime\x12\x1a\n" +
 	"\bduration\x18\a \x01(\x03R\bduration\x12\x1b\n" +
 	"\tclip_mode\x18\b \x01(\tR\bclipMode\x12)\n" +
-	"\x10requested_params\x18\t \x01(\tR\x0frequestedParams\"\xa3\x01\n" +
+	"\x10requested_params\x18\t \x01(\tR\x0frequestedParams\x12H\n" +
+	"\x0fretention_until\x18\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01B\x12\n" +
+	"\x10_retention_until\"\xa3\x01\n" +
 	"\x14RegisterClipResponse\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x17\n" +
 	"\aclip_id\x18\x02 \x01(\tR\x06clipId\x12\x1f\n" +
 	"\vplayback_id\x18\x03 \x01(\tR\n" +
 	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"\x8c\x01\n" +
+	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"\xea\x01\n" +
 	"\x12RegisterDVRRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x03 \x01(\tR\bstreamId\x12#\n" +
-	"\rinternal_name\x18\x04 \x01(\tR\finternalName\"\x9e\x01\n" +
+	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12H\n" +
+	"\x0fretention_until\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01B\x12\n" +
+	"\x10_retention_until\"\xbb\x01\n" +
 	"\x13RegisterDVRResponse\x12\x19\n" +
 	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12\x15\n" +
 	"\x06dvr_id\x18\x02 \x01(\tR\x05dvrId\x12\x1f\n" +
 	"\vplayback_id\x18\x03 \x01(\tR\n" +
 	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"5\n" +
+	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\x12\x1b\n" +
+	"\tstream_id\x18\x05 \x01(\tR\bstreamId\"5\n" +
 	"\x16ResolveClipHashRequest\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\"\x8e\x03\n" +
 	"\x17ResolveClipHashResponse\x12\x14\n" +
@@ -6789,179 +6819,181 @@ var file_commodore_proto_goTypes = []any{
 	(*DeleteVodAssetResponse)(nil),              // 132: shared.DeleteVodAssetResponse
 }
 var file_commodore_proto_depIdxs = []int32{
-	35,  // 0: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
-	35,  // 1: commodore.RegisterRequest.behavior:type_name -> commodore.BehaviorData
-	67,  // 2: commodore.AuthResponse.user:type_name -> commodore.User
-	92,  // 3: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
-	93,  // 4: commodore.WalletLoginWithX402Request.payment:type_name -> purser.X402PaymentPayload
-	37,  // 5: commodore.WalletLoginWithX402Response.auth:type_name -> commodore.AuthResponse
-	64,  // 6: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
-	92,  // 7: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
-	92,  // 8: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
-	92,  // 9: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
-	92,  // 10: commodore.User.created_at:type_name -> google.protobuf.Timestamp
-	92,  // 11: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
-	64,  // 12: commodore.User.wallets:type_name -> commodore.WalletIdentity
-	92,  // 13: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
-	92,  // 14: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
-	92,  // 15: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
-	92,  // 16: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
-	94,  // 17: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
-	71,  // 18: commodore.ListStreamsResponse.streams:type_name -> commodore.Stream
-	95,  // 19: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
-	92,  // 20: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
-	92,  // 21: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
-	92,  // 22: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
-	92,  // 23: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
-	78,  // 24: commodore.StreamKeyResponse.stream_key:type_name -> commodore.StreamKey
-	94,  // 25: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
-	78,  // 26: commodore.ListStreamKeysResponse.stream_keys:type_name -> commodore.StreamKey
-	95,  // 27: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
-	92,  // 28: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
-	92,  // 29: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	92,  // 30: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
-	94,  // 31: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
-	92,  // 32: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	92,  // 33: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	92,  // 34: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
-	86,  // 35: commodore.ListAPITokensResponse.tokens:type_name -> commodore.APITokenInfo
-	95,  // 36: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
-	92,  // 37: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
-	0,   // 38: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
-	2,   // 39: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
-	4,   // 40: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
-	6,   // 41: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
-	96,  // 42: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
-	8,   // 43: commodore.InternalService.RegisterClip:input_type -> commodore.RegisterClipRequest
-	10,  // 44: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
-	12,  // 45: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
-	14,  // 46: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
-	24,  // 47: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
-	26,  // 48: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
-	16,  // 49: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
-	18,  // 50: commodore.InternalService.RegisterVod:input_type -> commodore.RegisterVodRequest
-	20,  // 51: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
-	22,  // 52: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
-	28,  // 53: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
-	97,  // 54: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
-	98,  // 55: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
-	30,  // 56: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
-	32,  // 57: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
-	34,  // 58: commodore.UserService.Login:input_type -> commodore.LoginRequest
-	36,  // 59: commodore.UserService.Register:input_type -> commodore.RegisterRequest
-	40,  // 60: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
-	42,  // 61: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
-	43,  // 62: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
-	45,  // 63: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
-	47,  // 64: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
-	49,  // 65: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
-	39,  // 66: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
-	51,  // 67: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
-	52,  // 68: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
-	54,  // 69: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
-	56,  // 70: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
-	57,  // 71: commodore.UserService.WalletLoginWithX402:input_type -> commodore.WalletLoginWithX402Request
-	59,  // 72: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
-	60,  // 73: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
-	62,  // 74: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
-	65,  // 75: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
-	68,  // 76: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
-	70,  // 77: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
-	72,  // 78: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
-	74,  // 79: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
-	75,  // 80: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
-	90,  // 81: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
-	77,  // 82: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
-	80,  // 83: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
-	82,  // 84: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
-	83,  // 85: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
-	85,  // 86: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
-	88,  // 87: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
-	99,  // 88: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
-	100, // 89: commodore.ClipService.GetClips:input_type -> shared.GetClipsRequest
-	101, // 90: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
-	102, // 91: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
-	103, // 92: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
-	104, // 93: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	105, // 94: commodore.DVRService.ListDVRRequests:input_type -> shared.ListDVRRecordingsRequest
-	106, // 95: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	107, // 96: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	108, // 97: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	109, // 98: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	110, // 99: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	111, // 100: commodore.VodService.GetVodAsset:input_type -> shared.GetVodAssetRequest
-	112, // 101: commodore.VodService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
-	113, // 102: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	1,   // 103: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
-	3,   // 104: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
-	5,   // 105: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
-	7,   // 106: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
-	114, // 107: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
-	9,   // 108: commodore.InternalService.RegisterClip:output_type -> commodore.RegisterClipResponse
-	11,  // 109: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
-	13,  // 110: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
-	15,  // 111: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
-	25,  // 112: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
-	27,  // 113: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
-	17,  // 114: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
-	19,  // 115: commodore.InternalService.RegisterVod:output_type -> commodore.RegisterVodResponse
-	21,  // 116: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
-	23,  // 117: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
-	29,  // 118: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
-	115, // 119: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
-	116, // 120: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
-	31,  // 121: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
-	33,  // 122: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
-	37,  // 123: commodore.UserService.Login:output_type -> commodore.AuthResponse
-	38,  // 124: commodore.UserService.Register:output_type -> commodore.RegisterResponse
-	41,  // 125: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
-	37,  // 126: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
-	44,  // 127: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
-	46,  // 128: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
-	48,  // 129: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
-	50,  // 130: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
-	67,  // 131: commodore.UserService.GetMe:output_type -> commodore.User
-	67,  // 132: commodore.UserService.UpdateMe:output_type -> commodore.User
-	53,  // 133: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
-	55,  // 134: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
-	37,  // 135: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
-	58,  // 136: commodore.UserService.WalletLoginWithX402:output_type -> commodore.WalletLoginWithX402Response
-	64,  // 137: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
-	61,  // 138: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
-	63,  // 139: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
-	66,  // 140: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
-	69,  // 141: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
-	71,  // 142: commodore.StreamService.GetStream:output_type -> commodore.Stream
-	73,  // 143: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
-	71,  // 144: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
-	76,  // 145: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
-	91,  // 146: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
-	79,  // 147: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
-	81,  // 148: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
-	117, // 149: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
-	84,  // 150: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
-	87,  // 151: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
-	89,  // 152: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
-	118, // 153: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
-	119, // 154: commodore.ClipService.GetClips:output_type -> shared.GetClipsResponse
-	120, // 155: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
-	121, // 156: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
-	122, // 157: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
-	123, // 158: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	124, // 159: commodore.DVRService.ListDVRRequests:output_type -> shared.ListDVRRecordingsResponse
-	125, // 160: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	126, // 161: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	127, // 162: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	128, // 163: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	129, // 164: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	130, // 165: commodore.VodService.GetVodAsset:output_type -> shared.VodAssetInfo
-	131, // 166: commodore.VodService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
-	132, // 167: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	103, // [103:168] is the sub-list for method output_type
-	38,  // [38:103] is the sub-list for method input_type
-	38,  // [38:38] is the sub-list for extension type_name
-	38,  // [38:38] is the sub-list for extension extendee
-	0,   // [0:38] is the sub-list for field type_name
+	92,  // 0: commodore.RegisterClipRequest.retention_until:type_name -> google.protobuf.Timestamp
+	92,  // 1: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
+	35,  // 2: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
+	35,  // 3: commodore.RegisterRequest.behavior:type_name -> commodore.BehaviorData
+	67,  // 4: commodore.AuthResponse.user:type_name -> commodore.User
+	92,  // 5: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
+	93,  // 6: commodore.WalletLoginWithX402Request.payment:type_name -> purser.X402PaymentPayload
+	37,  // 7: commodore.WalletLoginWithX402Response.auth:type_name -> commodore.AuthResponse
+	64,  // 8: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
+	92,  // 9: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
+	92,  // 10: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
+	92,  // 11: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
+	92,  // 12: commodore.User.created_at:type_name -> google.protobuf.Timestamp
+	92,  // 13: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
+	64,  // 14: commodore.User.wallets:type_name -> commodore.WalletIdentity
+	92,  // 15: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
+	92,  // 16: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
+	92,  // 17: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
+	92,  // 18: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
+	94,  // 19: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
+	71,  // 20: commodore.ListStreamsResponse.streams:type_name -> commodore.Stream
+	95,  // 21: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
+	92,  // 22: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
+	92,  // 23: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
+	92,  // 24: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
+	92,  // 25: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
+	78,  // 26: commodore.StreamKeyResponse.stream_key:type_name -> commodore.StreamKey
+	94,  // 27: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
+	78,  // 28: commodore.ListStreamKeysResponse.stream_keys:type_name -> commodore.StreamKey
+	95,  // 29: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
+	92,  // 30: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
+	92,  // 31: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	92,  // 32: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
+	94,  // 33: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
+	92,  // 34: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	92,  // 35: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	92,  // 36: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
+	86,  // 37: commodore.ListAPITokensResponse.tokens:type_name -> commodore.APITokenInfo
+	95,  // 38: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
+	92,  // 39: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
+	0,   // 40: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
+	2,   // 41: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
+	4,   // 42: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
+	6,   // 43: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
+	96,  // 44: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
+	8,   // 45: commodore.InternalService.RegisterClip:input_type -> commodore.RegisterClipRequest
+	10,  // 46: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
+	12,  // 47: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
+	14,  // 48: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
+	24,  // 49: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
+	26,  // 50: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
+	16,  // 51: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
+	18,  // 52: commodore.InternalService.RegisterVod:input_type -> commodore.RegisterVodRequest
+	20,  // 53: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
+	22,  // 54: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
+	28,  // 55: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
+	97,  // 56: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
+	98,  // 57: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
+	30,  // 58: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
+	32,  // 59: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
+	34,  // 60: commodore.UserService.Login:input_type -> commodore.LoginRequest
+	36,  // 61: commodore.UserService.Register:input_type -> commodore.RegisterRequest
+	40,  // 62: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
+	42,  // 63: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
+	43,  // 64: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
+	45,  // 65: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
+	47,  // 66: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
+	49,  // 67: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
+	39,  // 68: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
+	51,  // 69: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
+	52,  // 70: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
+	54,  // 71: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
+	56,  // 72: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
+	57,  // 73: commodore.UserService.WalletLoginWithX402:input_type -> commodore.WalletLoginWithX402Request
+	59,  // 74: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
+	60,  // 75: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
+	62,  // 76: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
+	65,  // 77: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
+	68,  // 78: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
+	70,  // 79: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
+	72,  // 80: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
+	74,  // 81: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
+	75,  // 82: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
+	90,  // 83: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
+	77,  // 84: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
+	80,  // 85: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
+	82,  // 86: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
+	83,  // 87: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
+	85,  // 88: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
+	88,  // 89: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
+	99,  // 90: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
+	100, // 91: commodore.ClipService.GetClips:input_type -> shared.GetClipsRequest
+	101, // 92: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
+	102, // 93: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
+	103, // 94: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
+	104, // 95: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	105, // 96: commodore.DVRService.ListDVRRequests:input_type -> shared.ListDVRRecordingsRequest
+	106, // 97: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	107, // 98: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	108, // 99: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	109, // 100: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	110, // 101: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	111, // 102: commodore.VodService.GetVodAsset:input_type -> shared.GetVodAssetRequest
+	112, // 103: commodore.VodService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
+	113, // 104: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	1,   // 105: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
+	3,   // 106: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
+	5,   // 107: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
+	7,   // 108: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
+	114, // 109: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
+	9,   // 110: commodore.InternalService.RegisterClip:output_type -> commodore.RegisterClipResponse
+	11,  // 111: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
+	13,  // 112: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
+	15,  // 113: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
+	25,  // 114: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
+	27,  // 115: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
+	17,  // 116: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
+	19,  // 117: commodore.InternalService.RegisterVod:output_type -> commodore.RegisterVodResponse
+	21,  // 118: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
+	23,  // 119: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
+	29,  // 120: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
+	115, // 121: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
+	116, // 122: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
+	31,  // 123: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
+	33,  // 124: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
+	37,  // 125: commodore.UserService.Login:output_type -> commodore.AuthResponse
+	38,  // 126: commodore.UserService.Register:output_type -> commodore.RegisterResponse
+	41,  // 127: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
+	37,  // 128: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
+	44,  // 129: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
+	46,  // 130: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
+	48,  // 131: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
+	50,  // 132: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
+	67,  // 133: commodore.UserService.GetMe:output_type -> commodore.User
+	67,  // 134: commodore.UserService.UpdateMe:output_type -> commodore.User
+	53,  // 135: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
+	55,  // 136: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
+	37,  // 137: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
+	58,  // 138: commodore.UserService.WalletLoginWithX402:output_type -> commodore.WalletLoginWithX402Response
+	64,  // 139: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
+	61,  // 140: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
+	63,  // 141: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
+	66,  // 142: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
+	69,  // 143: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
+	71,  // 144: commodore.StreamService.GetStream:output_type -> commodore.Stream
+	73,  // 145: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
+	71,  // 146: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
+	76,  // 147: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
+	91,  // 148: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
+	79,  // 149: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
+	81,  // 150: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
+	117, // 151: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
+	84,  // 152: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
+	87,  // 153: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
+	89,  // 154: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
+	118, // 155: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
+	119, // 156: commodore.ClipService.GetClips:output_type -> shared.GetClipsResponse
+	120, // 157: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
+	121, // 158: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
+	122, // 159: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
+	123, // 160: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	124, // 161: commodore.DVRService.ListDVRRequests:output_type -> shared.ListDVRRecordingsResponse
+	125, // 162: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	126, // 163: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	127, // 164: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	128, // 165: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	129, // 166: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	130, // 167: commodore.VodService.GetVodAsset:output_type -> shared.VodAssetInfo
+	131, // 168: commodore.VodService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
+	132, // 169: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	105, // [105:170] is the sub-list for method output_type
+	40,  // [40:105] is the sub-list for method input_type
+	40,  // [40:40] is the sub-list for extension type_name
+	40,  // [40:40] is the sub-list for extension extendee
+	0,   // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_commodore_proto_init() }
@@ -6973,6 +7005,8 @@ func file_commodore_proto_init() {
 	file_shared_proto_init()
 	file_foghorn_proto_init()
 	file_purser_proto_init()
+	file_commodore_proto_msgTypes[8].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[10].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[18].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[51].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[57].OneofWrappers = []any{}

@@ -15,7 +15,6 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/clients/commodore"
 	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/dvr"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -468,6 +467,21 @@ func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
 	return c.stream.Send(msg)
 }
 
+// SendVodDelete sends a VodDeleteRequest to the given node to delete VOD asset files
+func SendVodDelete(nodeID string, req *pb.VodDeleteRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_VodDelete{VodDelete: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
 // StopDVRByInternalName finds an active DVR for a stream and sends a stop to its storage node
 func StopDVRByInternalName(internalName string, logger logging.Logger) {
 	if db == nil || internalName == "" {
@@ -632,33 +646,33 @@ func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger lo
 
 // processDVRStartRequest handles DVR start requests from ingest Helmsman
 func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger logging.Logger) {
-	// Get DVR hash - should be provided from Commodore registration
-	// If not provided, register with Commodore to get one
+	// Get DVR hash and stream_id from Commodore registration
 	dvrHash := req.GetDvrHash()
-	if dvrHash == "" {
-		if CommodoreClient != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			resp, err := CommodoreClient.RegisterDVR(ctx, &pb.RegisterDVRRequest{
-				TenantId:     req.GetTenantId(),
-				UserId:       req.GetUserId(),
-				StreamId:     "", // DVRStartRequest doesn't have stream_id; Commodore resolves via internal_name
-				InternalName: req.GetInternalName(),
-			})
-			if err != nil {
-				logger.WithError(err).Error("Failed to register DVR with Commodore")
-				return
-			}
-			dvrHash = resp.DvrHash
-		} else {
-			// Fallback: generate locally (legacy behavior, should not happen in production)
-			var err error
-			dvrHash, err = dvr.GenerateDVRHash()
-			if err != nil {
-				logger.WithError(err).Error("Failed to generate DVR hash")
-				return
-			}
+	streamID := req.GetStreamId()
+	if dvrHash == "" || streamID == "" {
+		if CommodoreClient == nil {
+			logger.Error("Commodore not available for DVR registration")
+			return
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		regReq := &pb.RegisterDVRRequest{
+			TenantId:     req.GetTenantId(),
+			UserId:       req.GetUserId(),
+			InternalName: req.GetInternalName(),
+		}
+		// Pass retention from DVR config if available
+		if cfg := req.GetConfig(); cfg != nil && cfg.RetentionDays > 0 {
+			retentionTime := time.Now().AddDate(0, 0, int(cfg.RetentionDays))
+			regReq.RetentionUntil = timestamppb.New(retentionTime)
+		}
+		resp, err := CommodoreClient.RegisterDVR(ctx, regReq)
+		if err != nil {
+			logger.WithError(err).Error("Failed to register DVR with Commodore")
+			return
+		}
+		dvrHash = resp.DvrHash
+		streamID = resp.GetStreamId()
 	}
 
 	logger.WithFields(logging.Fields{
@@ -676,15 +690,16 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	// Store artifact lifecycle state in foghorn.artifacts with context for Decklog events
 	_, err := db.Exec(`
 		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, internal_name, tenant_id, user_id, status, request_id, format, created_at, updated_at
-		) VALUES ($1, 'dvr', $2, NULLIF($3,'')::uuid, NULLIF($4,'')::uuid, 'requested', $5, 'm3u8', NOW(), NOW())
+			artifact_hash, artifact_type, internal_name, stream_id, tenant_id, user_id, status, request_id, format, created_at, updated_at
+		) VALUES ($1, 'dvr', $2, NULLIF($3,'')::uuid, NULLIF($4,'')::uuid, NULLIF($5,'')::uuid, 'requested', $6, 'm3u8', NOW(), NOW())
 		ON CONFLICT (artifact_hash) DO UPDATE SET
 			status = 'requested',
+			stream_id = COALESCE(foghorn.artifacts.stream_id, EXCLUDED.stream_id),
 			tenant_id = COALESCE(foghorn.artifacts.tenant_id, EXCLUDED.tenant_id),
 			user_id = COALESCE(foghorn.artifacts.user_id, EXCLUDED.user_id),
 			format = COALESCE(foghorn.artifacts.format, EXCLUDED.format),
 			updated_at = NOW()`,
-		dvrHash, req.GetInternalName(), req.GetTenantId(), req.GetUserId(), dvrHash)
+		dvrHash, req.GetInternalName(), streamID, req.GetTenantId(), req.GetUserId(), dvrHash)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -722,6 +737,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		Config:        req.GetConfig(),
 		TenantId:      req.GetTenantId(),
 		UserId:        req.GetUserId(),
+		StreamId:      streamID,
 	}
 
 	// Store node assignment in foghorn.artifact_nodes
@@ -1444,6 +1460,13 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	// Get tenant_id from Commodore (business registry owner)
 	var tenantID string
+	// For DVR segment/manifest incremental sync, assetHash is "{dvr_hash}/{filename}"
+	dvrHash := assetHash
+	if assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		if idx := strings.Index(assetHash, "/"); idx != -1 {
+			dvrHash = assetHash[:idx]
+		}
+	}
 	if CommodoreClient != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -1451,8 +1474,12 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
-		} else if assetType == "dvr" {
-			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+		} else if assetType == "dvr" || assetType == "dvr_segment" || assetType == "dvr_manifest" {
+			if resp, err := CommodoreClient.ResolveDVRHash(ctx, dvrHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+			}
+		} else if assetType == "vod" {
+			if resp, err := CommodoreClient.ResolveVodHash(ctx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
 		}
@@ -1525,10 +1552,70 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 			"s3_prefix":  s3Prefix,
 			"file_count": len(response.SegmentUrls),
 		}).Info("Generated presigned URLs for DVR freeze")
+	} else if assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		// Incremental DVR sync - single segment or manifest file
+		// assetHash is "{dvr_hash}/{filename}", extract filename
+		filename := ""
+		if idx := strings.Index(assetHash, "/"); idx != -1 {
+			filename = assetHash[idx+1:]
+		}
+		if filename == "" && len(req.GetFilenames()) > 0 {
+			filename = req.GetFilenames()[0]
+		}
+		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, dvrHash)
+		s3Key := s3Prefix + "/" + filename
+
+		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			logger.WithError(err).Error("Failed to generate presigned PUT URL for DVR segment")
+			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+				RequestId: requestID,
+				AssetHash: assetHash,
+				Approved:  false,
+				Reason:    "presign_failed",
+			}, logger)
+			return
+		}
+		response.PresignedPutUrl = presignedURL
+		response.SegmentUrls = map[string]string{filename: presignedURL}
+
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"dvr_hash":   dvrHash,
+			"filename":   filename,
+			"s3_key":     s3Key,
+		}).Info("Generated presigned URL for DVR incremental sync")
+	} else if assetType == "vod" {
+		// VOD single file - extract format from path
+		format := "mp4"
+		if idx := strings.LastIndex(localPath, "."); idx != -1 {
+			format = localPath[idx+1:]
+		}
+		// VOD uses artifact_hash as filename base, with tenant context
+		s3Key := s3Client.BuildVodS3Key(tenantID, assetHash, fmt.Sprintf("%s.%s", assetHash, format))
+		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			logger.WithError(err).Error("Failed to generate presigned PUT URL for VOD")
+			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+				RequestId: requestID,
+				AssetHash: assetHash,
+				Approved:  false,
+				Reason:    "presign_failed",
+			}, logger)
+			return
+		}
+		response.PresignedPutUrl = presignedURL
+
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"s3_key":     s3Key,
+		}).Info("Generated presigned URL for VOD freeze")
 	}
 
-	// Update artifact to mark as freezing
-	_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 'freezing', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+	// Update artifact to mark as freezing (skip for incremental segment sync)
+	if assetType != "dvr_segment" && assetType != "dvr_manifest" {
+		_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 'freezing', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+	}
 
 	sendFreezePermissionResponse(stream, response, logger)
 
@@ -1666,6 +1753,17 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 				}).Warn("Failed to add cached node after defrost")
 			}
 		}
+	} else {
+		// Revert storage_location on failure so future defrosts can retry
+		_, _ = db.Exec(`
+			UPDATE foghorn.artifacts
+			SET storage_location = 's3', updated_at = NOW()
+			WHERE artifact_hash = $1 AND storage_location = 'defrosting'`,
+			assetHash)
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"error":      errorMsg,
+		}).Warn("Defrost failed, reverted to s3")
 	}
 
 	// Notify any waiting defrost requests
@@ -1885,13 +1983,6 @@ func storageBasePathForNode(nodeID string) string {
 	return "/data"
 }
 
-func normalizeDefrostAssetType(assetType string) string {
-	if assetType == "vod" {
-		return "upload"
-	}
-	return assetType
-}
-
 // StartDefrost initiates a defrost operation but does not wait for completion.
 // Returns local path if a defrost was started, or empty if already local.
 func StartDefrost(ctx context.Context, assetType, assetHash, nodeID string, timeout time.Duration, logger logging.Logger) (string, error) {
@@ -1906,22 +1997,23 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		return "", fmt.Errorf("database not available")
 	}
 
-	artifactType := normalizeDefrostAssetType(assetType)
+	artifactType := assetType
 
 	// Look up asset info from foghorn.artifacts
 	var streamName, storageLocation, format, tenantID string
-	var s3Key, filename sql.NullString
+	var s3Key, filename, streamID sql.NullString
 	err := db.QueryRow(`
 		SELECT a.internal_name,
 		       COALESCE(a.storage_location, 'local'),
 		       COALESCE(a.format, ''),
 		       COALESCE(a.tenant_id::text, ''),
 		       COALESCE(v.s3_key, ''),
-		       COALESCE(v.filename, '')
+		       COALESCE(v.filename, ''),
+		       a.stream_id::text
 		FROM foghorn.artifacts a
 		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 		WHERE a.artifact_hash = $1 AND a.artifact_type = $2`,
-		assetHash, artifactType).Scan(&streamName, &storageLocation, &format, &tenantID, &s3Key, &filename)
+		assetHash, artifactType).Scan(&streamName, &storageLocation, &format, &tenantID, &s3Key, &filename, &streamID)
 	if err != nil {
 		return "", fmt.Errorf("asset not found: %w", err)
 	}
@@ -1937,7 +2029,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 				if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
-			} else if artifactType == "upload" {
+			} else if artifactType == "vod" {
 				if resp, err := CommodoreClient.ResolveVodHash(ctx, assetHash); err == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
@@ -2000,6 +2092,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		req.LocalPath = filepath.Join(storageBase, "clips", streamName, fmt.Sprintf("%s.%s", assetHash, clipFormat))
 	} else if artifactType == "dvr" {
 		// DVR defrost - get segment list from S3 and generate URLs
+		// S3 key uses internal_name (stored in foghorn.artifacts)
 		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
 		segments, err := s3Client.ListPrefix(ctx, s3Prefix)
 		if err != nil {
@@ -2023,8 +2116,22 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 			req.SegmentUrls[segName] = presignedURL
 		}
 
-		req.LocalPath = filepath.Join(storageBase, "dvr", streamName, assetHash)
-	} else if artifactType == "upload" {
+		// Local path uses stream_id (not internal_name) to match DVR recording structure
+		dvrStreamID := ""
+		if CommodoreClient != nil {
+			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+				dvrStreamID = resp.StreamId
+			}
+		}
+		// Fallback to cached stream_id in foghorn.artifacts when Commodore unavailable
+		if dvrStreamID == "" && streamID.Valid && streamID.String != "" {
+			dvrStreamID = streamID.String
+		}
+		if dvrStreamID == "" {
+			return "", fmt.Errorf("could not resolve stream_id for DVR asset")
+		}
+		req.LocalPath = filepath.Join(storageBase, "dvr", dvrStreamID, assetHash)
+	} else if artifactType == "vod" {
 		// VOD defrost - single file
 		if !s3Key.Valid || s3Key.String == "" {
 			if filename.Valid && filename.String != "" {

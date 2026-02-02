@@ -29,12 +29,13 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     -- ===== IDENTITY =====
     artifact_hash VARCHAR(32) PRIMARY KEY,
-    artifact_type VARCHAR(10) NOT NULL,     -- 'clip', 'dvr', 'upload' (future)
+    artifact_type VARCHAR(10) NOT NULL,     -- 'clip', 'dvr', 'vod'
 
     -- ===== DENORMALIZED FIELDS (authoritative source: Commodore) =====
     -- Cached here for operational efficiency (stream routing, rehydration, Decklog events)
     internal_name VARCHAR(255),             -- Stream identifier for routing
     artifact_internal_name VARCHAR(64),     -- Artifact routing name (vod+<artifact_internal_name>)
+    stream_id UUID,                         -- Public stream ID (for DVR local path reconstruction)
     tenant_id UUID,                         -- Fallback when Commodore unavailable
     user_id UUID,                           -- User who created the artifact (for Decklog events)
 

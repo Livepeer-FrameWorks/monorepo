@@ -96,9 +96,6 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 
 	contentType := strings.ToLower(artifactResp.ContentType)
 	artifactType := contentType
-	if contentType == "vod" {
-		artifactType = "upload"
-	}
 
 	// Query foghorn.artifacts for lifecycle state
 	var internalName string

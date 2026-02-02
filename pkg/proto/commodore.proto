@@ -229,6 +229,7 @@ message RegisterClipRequest {
   int64 duration = 7;                   // Duration (ms)
   string clip_mode = 8;                 // absolute, relative, duration, clip_now
   string requested_params = 9;          // Original request JSON for audit
+  optional google.protobuf.Timestamp retention_until = 10; // Artifact expiration
 }
 
 message RegisterClipResponse {
@@ -245,6 +246,7 @@ message RegisterDVRRequest {
   string user_id = 2;                   // User who owns the recording
   string stream_id = 3;                 // Source stream UUID (optional for legacy)
   string internal_name = 4;             // MistServer stream name
+  optional google.protobuf.Timestamp retention_until = 5; // Recording expiration
 }
 
 message RegisterDVRResponse {
@@ -252,6 +254,7 @@ message RegisterDVRResponse {
   string dvr_id = 2;                    // Commodore dvr_recordings table UUID
   string playback_id = 3;              // Public playback key
   string artifact_internal_name = 4;   // Artifact routing name (internal)
+  string stream_id = 5;                // Source stream UUID for storage path
 }
 
 // Resolve clip hash to tenant context

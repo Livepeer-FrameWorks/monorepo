@@ -219,7 +219,7 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string) {
 }
 
 // StartRecording starts a new DVR recording job
-func (dm *DVRManager) StartRecording(dvrHash, internalName, sourceURL string, config *pb.DVRConfig, sendFunc func(*pb.ControlMessage)) error {
+func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL string, config *pb.DVRConfig, sendFunc func(*pb.ControlMessage)) error {
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 
@@ -228,8 +228,8 @@ func (dm *DVRManager) StartRecording(dvrHash, internalName, sourceURL string, co
 		return fmt.Errorf("DVR recording already active for hash %s", dvrHash)
 	}
 
-	// Create output directory
-	outputDir := filepath.Join(dm.storagePath, "dvr", internalName)
+	// Create output directory: /storage/dvr/{stream_id}/{dvr_hash}/
+	outputDir := filepath.Join(dm.storagePath, "dvr", streamID, dvrHash)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create DVR output directory: %w", err)
 	}
@@ -314,8 +314,9 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	}
 
 	// Build DVR target path
-	// Format: /path/segments/$minute_$segmentCounter.ts?m3u8=../../dvrhash.m3u8&split=6&targetAge=7200&append=1&noendlist=1
-	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../../%s.m3u8&split=%d&targetAge=%d&append=1&noendlist=1",
+	// Segments go to {outputDir}/segments/, manifest at {outputDir}/{hash}.m3u8
+	// From segments/, ../ goes to outputDir where manifest lives
+	targetURI := fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&split=%d&targetAge=%d&append=1&noendlist=1",
 		job.OutputDir,
 		"segments",
 		job.DVRHash,

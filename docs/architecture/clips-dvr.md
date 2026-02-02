@@ -218,7 +218,7 @@ commodore.dvr_recordings (
 -- Unified artifact lifecycle table (cold storage = S3 is authoritative)
 foghorn.artifacts (
   artifact_hash VARCHAR(32) PRIMARY KEY,
-  artifact_type VARCHAR(10) NOT NULL,     -- 'clip', 'dvr', 'upload'
+  artifact_type VARCHAR(10) NOT NULL,     -- 'clip', 'dvr', 'vod'
 
   -- Denormalized fields (authoritative source: Commodore)
   internal_name VARCHAR(255),             -- Stream identifier for routing
@@ -515,14 +515,14 @@ When Decklog send fails:
 The unified artifact model also covers VOD uploads (direct file uploads, not derived from live streams):
 
 ```sql
-artifact_type = 'upload'
+artifact_type = 'vod'
 ```
 
 **Flow (current):**
 
 1. `createVodUpload` → Gateway → Commodore registers in `commodore.vod_assets` and calls Foghorn to create an S3 multipart upload.
 2. Client uploads parts to S3 using presigned URLs.
-3. `completeVodUpload` → Gateway → Commodore → Foghorn finalizes upload and updates `foghorn.artifacts` (`artifact_type='upload'`).
+3. `completeVodUpload` → Gateway → Commodore → Foghorn finalizes upload and updates `foghorn.artifacts` (`artifact_type='vod'`).
 4. Same freeze/defrost/distribution model applies.
 
 ## Critical Files

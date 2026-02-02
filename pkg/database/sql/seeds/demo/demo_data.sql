@@ -635,14 +635,14 @@ INSERT INTO foghorn.artifacts (
 ) VALUES
 -- Demo clip (ready)
 (
-    'a1b2c3d4e5f6789012345678901234ab',      -- 32-char hex (must match filename)
+    '20240101120000a1b2c3d4e5f67890',        -- 30-char: timestamp(14) + hex(16)
     'clip',
     'demo_live_stream_001',
     'clip_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant (denormalized for fallback)
     'ready',
     140795,         -- Actual file size: ~137KB
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/20240101120000a1b2c3d4e5f67890.mp4',
     'mp4',
     'local',
     'pending',
@@ -652,14 +652,14 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo clip (deleted, for testing cleanup flows)
 (
-    'b2c3d4e5f6789012345678901234bcde',      -- fake hash
+    '20240101120100b2c3d4e5f6789012',        -- 30-char: timestamp(14) + hex(16)
     'clip',
     'demo_live_stream_001',
     'clip_int_002',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'deleted',
     140795,
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/b2c3d4e5f6789012345678901234bcde.mp4',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/20240101120100b2c3d4e5f6789012.mp4',
     'mp4',
     'local',
     'pending',
@@ -669,14 +669,14 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo DVR recording (completed)
 (
-    'fedcba98765432109876543210fedcba',      -- 32-char hex (must match filename)
+    '20240101120200fedcba9876543210',        -- 30-char: timestamp(14) + hex(16)
     'dvr',
     'demo_live_stream_001',
     'dvr_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'completed',
     513176,         -- Actual total size: ~501KB (2 segments + manifest)
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120200fedcba9876543210/20240101120200fedcba9876543210.m3u8',
     'm3u8',
     'local',
     'pending',
@@ -686,14 +686,14 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo DVR recording (deleted, for testing cleanup flows)
 (
-    'gedcba98765432109876543210fedcbb',
+    '20240101120300fedcba9876543211',        -- 30-char: timestamp(14) + hex(16)
     'dvr',
     'demo_live_stream_001',
     'dvr_int_002',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     'deleted',
     1024000,
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/gedcba98765432109876543210fedcbb.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120300fedcba9876543211/20240101120300fedcba9876543211.m3u8',
     'm3u8',
     'local',
     'pending',
@@ -703,8 +703,8 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo VOD asset (ready, warmed to edge)
 (
-    'c3d4e5f678901234567890123456abcd',      -- 32-char hex
-    'upload',
+    '20240101120400c3d4e5f678901234',        -- 30-char: timestamp(14) + hex(16)
+    'vod',
     NULL,                                     -- No stream association
     'vod_int_001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
@@ -720,8 +720,8 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo VOD asset (processing, just uploaded)
 (
-    'd4e5f6789012345678901234567abcde',
-    'upload',
+    '20240101120500d4e5f6789012345a',        -- 30-char: timestamp(14) + hex(16)
+    'vod',
     NULL,
     'vod_int_002',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
@@ -737,8 +737,8 @@ INSERT INTO foghorn.artifacts (
 ),
 -- Demo VOD asset (failed validation)
 (
-    'e5f678901234567890123456789abcdf',
-    'upload',
+    '20240101120600e5f6789012345678',        -- 30-char: timestamp(14) + hex(16)
+    'vod',
     NULL,
     'vod_int_003',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
@@ -836,9 +836,9 @@ INSERT INTO foghorn.artifact_nodes (
 ) VALUES
 -- Demo clip on edge-node-1
 (
-    'a1b2c3d4e5f6789012345678901234ab',
+    '20240101120000a1b2c3d4e5f67890',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/20240101120000a1b2c3d4e5f67890.mp4',
     140795,
     42,
     NOW() - INTERVAL '3 hours',
@@ -847,9 +847,9 @@ INSERT INTO foghorn.artifact_nodes (
 ),
 -- Demo DVR on edge-node-1
 (
-    'fedcba98765432109876543210fedcba',
+    '20240101120200fedcba9876543210',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    '/var/lib/mistserver/recordings/dvr/5eedfeed-11fe-ca57-feed-11feca570001/20240101120200fedcba9876543210/20240101120200fedcba9876543210.m3u8',
     513176,
     7,
     NOW() - INTERVAL '1 day',
@@ -858,9 +858,9 @@ INSERT INTO foghorn.artifact_nodes (
 ),
 -- Demo VOD on edge-node-1 (warmed from S3)
 (
-    'c3d4e5f678901234567890123456abcd',
+    '20240101120400c3d4e5f678901234',
     'edge-node-1',
-    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.webm',
+    '/var/lib/mistserver/recordings/vod/20240101120400c3d4e5f678901234.webm',
     149099,
     128,
     NOW() - INTERVAL '2 hours',

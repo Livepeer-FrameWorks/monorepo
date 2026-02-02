@@ -1130,7 +1130,7 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 			continue
 		}
 		hash := strings.TrimSuffix(name, ext)
-		if len(hash) != 32 || !isHex(hash) {
+		if len(hash) < 18 || !isHex(hash) {
 			continue
 		}
 
@@ -1182,54 +1182,50 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 		return 0, 0
 	}
 
-	formats := []string{"mp4", "webm", "mkv"}
-
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			// Check if this is a direct VOD link (clips/abc123def456.mp4)
-			if len(entry.Name()) > 4 {
-				for _, format := range formats {
-					if strings.HasSuffix(entry.Name(), "."+format) {
-						clipHash := strings.TrimSuffix(entry.Name(), "."+format)
-						if len(clipHash) == 32 { // Valid clip hash length
-							filePath := fmt.Sprintf("%s/%s", clipsDir, entry.Name())
+			ext := filepath.Ext(entry.Name())
+			if IsVideoFile(ext) {
+				clipHash := strings.TrimSuffix(entry.Name(), ext)
+				if len(clipHash) >= 18 { // Artifact hash: timestamp(14) + hex(4+)
+					format := strings.TrimPrefix(ext, ".")
+					filePath := fmt.Sprintf("%s/%s", clipsDir, entry.Name())
 
-							// Get file info
-							if fileInfo, err := os.Stat(filePath); err == nil {
-								// Try to determine stream name from symlink target
-								streamName := "unknown"
-								if target, err := os.Readlink(filePath); err == nil {
-									parts := strings.Split(target, "/")
-									for i, part := range parts {
-										if part == "clips" && i+1 < len(parts) {
-											streamName = parts[i+1]
-											break
-										}
-									}
+					// Get file info
+					if fileInfo, err := os.Stat(filePath); err == nil {
+						// Try to determine stream name from symlink target
+						streamName := "unknown"
+						if target, err := os.Readlink(filePath); err == nil {
+							parts := strings.Split(target, "/")
+							for i, part := range parts {
+								if part == "clips" && i+1 < len(parts) {
+									streamName = parts[i+1]
+									break
 								}
-
-								// Check if .dtsh index file exists
-								hasDtsh := false
-								if _, err := os.Stat(filePath + ".dtsh"); err == nil {
-									hasDtsh = true
-								}
-
-								clipInfo := &ClipInfo{
-									FilePath:     filePath,
-									StreamName:   streamName,
-									Format:       format,
-									SizeBytes:    uint64(fileInfo.Size()),
-									CreatedAt:    fileInfo.ModTime(),
-									HasDtsh:      hasDtsh,
-									AccessCount:  0,
-									LastAccessed: fileInfo.ModTime(),
-								}
-
-								artifactIndex[clipHash] = clipInfo
-								totalSize += uint64(fileInfo.Size())
-								artifactCount++
 							}
 						}
+
+						// Check if .dtsh index file exists
+						hasDtsh := false
+						if _, err := os.Stat(filePath + ".dtsh"); err == nil {
+							hasDtsh = true
+						}
+
+						clipInfo := &ClipInfo{
+							FilePath:     filePath,
+							StreamName:   streamName,
+							Format:       format,
+							SizeBytes:    uint64(fileInfo.Size()),
+							CreatedAt:    fileInfo.ModTime(),
+							HasDtsh:      hasDtsh,
+							AccessCount:  0,
+							LastAccessed: fileInfo.ModTime(),
+						}
+
+						artifactIndex[clipHash] = clipInfo
+						totalSize += uint64(fileInfo.Size())
+						artifactCount++
 					}
 				}
 			}
@@ -1251,38 +1247,39 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 			}
 
 			// Check if this looks like a clip file
-			for _, format := range formats {
-				if strings.HasSuffix(clipFile.Name(), "."+format) {
-					clipHash := strings.TrimSuffix(clipFile.Name(), "."+format)
-					if len(clipHash) == 32 { // Valid clip hash length
-						filePath := fmt.Sprintf("%s/%s", streamDir, clipFile.Name())
+			ext := filepath.Ext(clipFile.Name())
+			if !IsVideoFile(ext) {
+				continue
+			}
+			clipHash := strings.TrimSuffix(clipFile.Name(), ext)
+			if len(clipHash) < 18 { // Artifact hash: timestamp(14) + hex(4+)
+				continue
+			}
+			format := strings.TrimPrefix(ext, ".")
+			filePath := fmt.Sprintf("%s/%s", streamDir, clipFile.Name())
 
-						// Get file info
-						if fileInfo, err := os.Stat(filePath); err == nil {
-							// Check if .dtsh index file exists
-							hasDtsh := false
-							if _, err := os.Stat(filePath + ".dtsh"); err == nil {
-								hasDtsh = true
-							}
-
-							clipInfo := &ClipInfo{
-								FilePath:     filePath,
-								StreamName:   streamName,
-								Format:       format,
-								SizeBytes:    uint64(fileInfo.Size()),
-								CreatedAt:    fileInfo.ModTime(),
-								HasDtsh:      hasDtsh,
-								AccessCount:  0,
-								LastAccessed: fileInfo.ModTime(),
-							}
-
-							artifactIndex[clipHash] = clipInfo
-							totalSize += uint64(fileInfo.Size())
-							artifactCount++
-						}
-					}
-					break
+			// Get file info
+			if fileInfo, err := os.Stat(filePath); err == nil {
+				// Check if .dtsh index file exists
+				hasDtsh := false
+				if _, err := os.Stat(filePath + ".dtsh"); err == nil {
+					hasDtsh = true
 				}
+
+				clipInfo := &ClipInfo{
+					FilePath:     filePath,
+					StreamName:   streamName,
+					Format:       format,
+					SizeBytes:    uint64(fileInfo.Size()),
+					CreatedAt:    fileInfo.ModTime(),
+					HasDtsh:      hasDtsh,
+					AccessCount:  0,
+					LastAccessed: fileInfo.ModTime(),
+				}
+
+				artifactIndex[clipHash] = clipInfo
+				totalSize += uint64(fileInfo.Size())
+				artifactCount++
 			}
 		}
 	}
@@ -1328,7 +1325,7 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 	var totalSize uint64
 	artifactCount := 0
 
-	// Walk the DVR directory structure: /dvr/{internal_name}/{dvr_hash}.m3u8
+	// Walk the DVR directory structure: /dvr/{stream_id}/{dvr_hash}/{dvr_hash}.m3u8
 	entries, err := os.ReadDir(dvrDir)
 	if err != nil {
 		monitorLogger.WithError(err).Error("Failed to read DVR directory")
@@ -1340,64 +1337,67 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 			continue // Skip files in the DVR root directory
 		}
 
-		// This is a stream directory - scan for DVR manifests
-		internalName := entry.Name()
-		streamDVRDir := fmt.Sprintf("%s/%s", dvrDir, internalName)
+		// This is a stream directory (stream_id) - scan for DVR hash subdirectories
+		streamID := entry.Name()
+		streamDVRDir := filepath.Join(dvrDir, streamID)
 
 		streamEntries, err := os.ReadDir(streamDVRDir)
 		if err != nil {
 			continue
 		}
 
-		for _, dvrFile := range streamEntries {
-			if dvrFile.IsDir() {
-				continue // Skip subdirectories (like segments/)
+		for _, dvrHashDir := range streamEntries {
+			if !dvrHashDir.IsDir() {
+				continue // Skip non-directories
 			}
 
-			// Check if this looks like a DVR manifest file (hash.m3u8)
-			if strings.HasSuffix(dvrFile.Name(), ".m3u8") {
-				dvrHash := strings.TrimSuffix(dvrFile.Name(), ".m3u8")
-				if len(dvrHash) == 32 { // Valid DVR hash length (32-char hex)
-					filePath := fmt.Sprintf("%s/%s", streamDVRDir, dvrFile.Name())
+			dvrHash := dvrHashDir.Name()
+			if len(dvrHash) < 18 {
+				continue // Not a valid DVR hash
+			}
 
-					// Get file info
-					if fileInfo, err := os.Stat(filePath); err == nil {
-						// Calculate total size including segments referenced by manifest
-						manifestSize := uint64(fileInfo.Size())
-						segmentSize, segmentCount := calculateDVRSegmentSize(filePath, streamDVRDir)
-						dvrTotalSize := manifestSize + segmentSize
+			// DVR directory: /dvr/{stream_id}/{dvr_hash}/
+			dvrPath := filepath.Join(streamDVRDir, dvrHash)
+			manifestPath := filepath.Join(dvrPath, dvrHash+".m3u8")
 
-						// Check if any .dtsh index files exist in the DVR directory
-						hasDtsh := false
-						if dirEntries, err := os.ReadDir(streamDVRDir); err == nil {
-							for _, de := range dirEntries {
-								if !de.IsDir() && strings.HasSuffix(de.Name(), ".dtsh") {
-									hasDtsh = true
-									break
-								}
-							}
-						}
+			// Check if manifest exists
+			fileInfo, err := os.Stat(manifestPath)
+			if err != nil {
+				continue // No manifest in this directory
+			}
 
-						// Add DVR manifest to artifact index using same ClipInfo structure
-						// (DVR manifests can be served as VOD just like clips)
-						dvrInfo := &ClipInfo{
-							FilePath:     filePath,
-							StreamName:   internalName,
-							Format:       "m3u8", // HLS manifest format
-							SizeBytes:    dvrTotalSize,
-							CreatedAt:    fileInfo.ModTime(),
-							SegmentCount: segmentCount,
-							HasDtsh:      hasDtsh,
-							AccessCount:  0,
-							LastAccessed: fileInfo.ModTime(),
-						}
+			// Calculate total size including segments referenced by manifest
+			manifestSize := uint64(fileInfo.Size())
+			segmentSize, segmentCount := calculateDVRSegmentSize(manifestPath, dvrPath)
+			dvrTotalSize := manifestSize + segmentSize
 
-						artifactIndex[dvrHash] = dvrInfo
-						totalSize += dvrTotalSize
-						artifactCount++
+			// Check if any .dtsh index files exist in the DVR directory
+			hasDtsh := false
+			if dirEntries, err := os.ReadDir(dvrPath); err == nil {
+				for _, de := range dirEntries {
+					if !de.IsDir() && strings.HasSuffix(de.Name(), ".dtsh") {
+						hasDtsh = true
+						break
 					}
 				}
 			}
+
+			// Add DVR manifest to artifact index using same ClipInfo structure
+			dvrInfo := &ClipInfo{
+				FilePath:     manifestPath,
+				StreamName:   streamID,
+				Format:       "m3u8",
+				SizeBytes:    dvrTotalSize,
+				CreatedAt:    fileInfo.ModTime(),
+				SegmentCount: segmentCount,
+				HasDtsh:      hasDtsh,
+				AccessCount:  0,
+				LastAccessed: fileInfo.ModTime(),
+			}
+
+			artifactIndex[dvrHash] = dvrInfo
+			totalSize += dvrTotalSize
+			artifactCount++
 		}
 	}
 

@@ -106,6 +106,16 @@ func (j *OrphanCleanupJob) reconcile() {
 		}
 	}
 
+	// Reconcile orphaned VODs (uploads)
+	vodOrphans, err := j.findOrphanedVODs(ctx)
+	if err != nil {
+		j.logger.WithError(err).Error("Failed to find orphaned VODs")
+	} else {
+		for _, orphan := range vodOrphans {
+			j.retryVODDeletion(ctx, orphan)
+		}
+	}
+
 	// Clean up stale orphaned registry entries (storage confirmed gone)
 	j.cleanupStaleRegistryEntries(ctx)
 }
@@ -117,6 +127,11 @@ type orphanedClip struct {
 
 type orphanedDVR struct {
 	DVRHash string
+	NodeID  string
+}
+
+type orphanedVOD struct {
+	VODHash string
 	NodeID  string
 }
 
@@ -180,6 +195,36 @@ func (j *OrphanCleanupJob) findOrphanedDVRs(ctx context.Context) ([]orphanedDVR,
 	return orphans, rows.Err()
 }
 
+// findOrphanedVODs finds soft-deleted VODs (uploads) that still have storage artifacts
+func (j *OrphanCleanupJob) findOrphanedVODs(ctx context.Context) ([]orphanedVOD, error) {
+	// Find VODs marked 'deleted' that still have non-orphaned node copies
+	rows, err := j.db.QueryContext(ctx, `
+		SELECT a.artifact_hash, an.node_id
+		FROM foghorn.artifacts a
+		INNER JOIN foghorn.artifact_nodes an
+			ON an.artifact_hash = a.artifact_hash
+			AND an.is_orphaned = false
+		WHERE a.artifact_type = 'vod'
+		  AND a.status = 'deleted'
+		  AND a.updated_at < NOW() - $1::interval
+		LIMIT 100
+	`, j.maxAge.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orphans []orphanedVOD
+	for rows.Next() {
+		var o orphanedVOD
+		if err := rows.Scan(&o.VODHash, &o.NodeID); err != nil {
+			return nil, err
+		}
+		orphans = append(orphans, o)
+	}
+	return orphans, rows.Err()
+}
+
 func (j *OrphanCleanupJob) retryClipDeletion(ctx context.Context, orphan orphanedClip) {
 	requestID := uuid.NewString()
 	deleteReq := &pb.ClipDeleteRequest{
@@ -226,6 +271,30 @@ func (j *OrphanCleanupJob) retryDVRDeletion(ctx context.Context, orphan orphaned
 		"node_id":    orphan.NodeID,
 		"request_id": requestID,
 	}).Info("Orphan cleanup: retried DVR deletion")
+}
+
+func (j *OrphanCleanupJob) retryVODDeletion(ctx context.Context, orphan orphanedVOD) {
+	requestID := uuid.NewString()
+	deleteReq := &pb.VodDeleteRequest{
+		VodHash:   orphan.VODHash,
+		RequestId: requestID,
+	}
+
+	if err := control.SendVodDelete(orphan.NodeID, deleteReq); err != nil {
+		j.logger.WithFields(logging.Fields{
+			"vod_hash":   orphan.VODHash,
+			"node_id":    orphan.NodeID,
+			"request_id": requestID,
+			"error":      err,
+		}).Warn("Orphan cleanup: failed to retry VOD deletion")
+		return
+	}
+
+	j.logger.WithFields(logging.Fields{
+		"vod_hash":   orphan.VODHash,
+		"node_id":    orphan.NodeID,
+		"request_id": requestID,
+	}).Info("Orphan cleanup: retried VOD deletion")
 }
 
 // cleanupStaleRegistryEntries removes orphaned artifact_nodes entries that haven't been seen for a long time

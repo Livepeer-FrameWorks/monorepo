@@ -187,7 +187,7 @@ func (j *RetentionJob) emitDeletionLifecycle(
 		j.emitClipDeleted(ctx, artifactHash, internalName, tenantID, userID, sizeBytes, retentionUntil)
 	case "dvr":
 		j.emitDVRDeleted(ctx, artifactHash, internalName, tenantID, userID, sizeBytes, retentionUntil, startedAt, endedAt, manifestPath)
-	case "upload":
+	case "vod":
 		j.emitVodDeleted(ctx, artifactHash, tenantID, userID, sizeBytes, retentionUntil)
 	}
 }

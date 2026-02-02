@@ -58,7 +58,7 @@ func GetColdStorageUsage(ctx context.Context) (map[string]*ColdStorageUsage, err
 		case "dvr":
 			usage.DvrBytes += totalBytes
 			usage.FileCount += fileCount
-		case "upload":
+		case "vod":
 			usage.VodBytes += totalBytes
 			usage.FileCount += fileCount
 		default:

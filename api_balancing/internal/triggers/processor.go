@@ -419,6 +419,9 @@ func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string,
 	}
 	if sld.InternalName != nil && *sld.InternalName != "" {
 		p.applyStreamContext(trigger, *sld.InternalName)
+	} else if sld.StreamId != nil && *sld.StreamId != "" {
+		// Fallback: resolve tenant/user context from stream_id (UUID)
+		p.applyStreamContext(trigger, *sld.StreamId)
 	}
 	if sld.StreamId == nil || *sld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {
@@ -445,6 +448,9 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 	}
 	if dld.InternalName != nil && *dld.InternalName != "" {
 		p.applyStreamContext(trigger, *dld.InternalName)
+	} else if dld.StreamId != nil && *dld.StreamId != "" {
+		// Fallback: resolve tenant/user context from stream_id (UUID)
+		p.applyStreamContext(trigger, *dld.StreamId)
 	}
 	if dld.StreamId == nil || *dld.StreamId == "" {
 		if streamID := trigger.GetStreamId(); streamID != "" {

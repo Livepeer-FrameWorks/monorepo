@@ -1155,7 +1155,7 @@ func inferArtifactType(filePath string) string {
 		return "dvr"
 	}
 	if strings.Contains(filePath, "/vod/") {
-		return "upload"
+		return "vod"
 	}
 	return "clip"
 }

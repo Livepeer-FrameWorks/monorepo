@@ -36,6 +36,18 @@ var (
 	nodeName string
 )
 
+// VideoExtensions lists file extensions recognized as video container formats.
+var VideoExtensions = []string{".mp4", ".webm", ".mkv", ".avi", ".ts", ".mov", ".m4v", ".flv"}
+
+// IsVideoFile returns true if the extension is a recognized video container format.
+func IsVideoFile(ext string) bool {
+	switch ext {
+	case ".mp4", ".webm", ".mkv", ".avi", ".ts", ".mov", ".m4v", ".flv":
+		return true
+	}
+	return false
+}
+
 func incMistWebhook(triggerType, status string) {
 	if metrics == nil || metrics.MistWebhookRequests == nil {
 		return
@@ -77,6 +89,9 @@ func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 	})
 	control.SetDeleteDVRHandler(func(dvrHash string) (uint64, error) {
 		return Current().DeleteDVR(dvrHash)
+	})
+	control.SetDeleteVodHandler(func(vodHash string) (uint64, error) {
+		return Current().DeleteVOD(vodHash)
 	})
 
 	logger.WithField("node_name", nodeName).Info("Handlers initialized")
@@ -151,8 +166,7 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 
 	// Also remove any VOD symlinks (like cleanup.go does)
 	// VOD symlinks may exist at clips/{clipHash}.{ext}
-	vodExtensions := []string{".mp4", ".webm", ".mkv", ".avi"}
-	for _, ext := range vodExtensions {
+	for _, ext := range VideoExtensions {
 		vodLinkPath := filepath.Join(clipsDir, clipHash+ext)
 		if info, err := os.Lstat(vodLinkPath); err == nil {
 			// Check if it's a symlink
@@ -190,65 +204,97 @@ func (h *Handlers) DeleteDVR(dvrHash string) (uint64, error) {
 	}
 
 	dvrDir := filepath.Join(h.storagePath, "dvr")
-	var totalSize uint64
-	var deletedFiles int
 
-	// Find the manifest file: /dvr/{internal_name}/{dvr_hash}.m3u8
-	manifestPattern := filepath.Join(dvrDir, "*", dvrHash+".m3u8")
+	// Find the manifest file: /dvr/{stream_id}/{dvr_hash}/{dvr_hash}.m3u8
+	manifestPattern := filepath.Join(dvrDir, "*", dvrHash, dvrHash+".m3u8")
 	manifestMatches, _ := filepath.Glob(manifestPattern)
 
 	if len(manifestMatches) == 0 {
-		// Fallback: try old-style /dvr/{dvr_hash} directory
-		recordingDir := filepath.Join(dvrDir, dvrHash)
-		if info, err := os.Stat(recordingDir); err == nil && info.IsDir() {
-			size, err := h.deletePathRecursive(recordingDir)
-			if err != nil {
-				return 0, fmt.Errorf("failed to delete DVR directory: %w", err)
-			}
-			return size, nil
-		}
-
 		logger.WithField("dvr_hash", dvrHash).Debug("No DVR files found to delete")
 		return 0, nil
 	}
 
+	var totalSize uint64
+
 	for _, manifestPath := range manifestMatches {
-		manifestDir := filepath.Dir(manifestPath)
+		// The recording directory is the parent of the manifest (the dvr_hash directory)
+		recordingDir := filepath.Dir(manifestPath)
 
-		// Delete the manifest file
-		if info, err := os.Stat(manifestPath); err == nil {
-			totalSize += uint64(info.Size())
-			if err := os.Remove(manifestPath); err != nil {
-				logger.WithError(err).WithField("path", manifestPath).Warn("Failed to delete manifest")
-			} else {
-				deletedFiles++
-			}
+		// Delete the entire recording directory recursively
+		size, err := h.deletePathRecursive(recordingDir)
+		if err != nil {
+			return totalSize, fmt.Errorf("failed to delete DVR directory: %w", err)
 		}
+		totalSize += size
 
-		// Parse manifest to find segment files
-		segmentFiles := h.parseManifestSegments(manifestPath, manifestDir)
-		for _, segPath := range segmentFiles {
-			if info, err := os.Stat(segPath); err == nil {
-				totalSize += uint64(info.Size())
-				if err := os.Remove(segPath); err != nil {
-					logger.WithError(err).WithField("path", segPath).Warn("Failed to delete segment")
-				} else {
-					deletedFiles++
-				}
-			}
-		}
-
-		// Clean up empty directories
-		segmentsDir := filepath.Join(manifestDir, "segments")
-		h.removeEmptyDir(segmentsDir)
-		h.removeEmptyDir(manifestDir)
+		// Clean up empty stream_id directory if it's now empty
+		streamDir := filepath.Dir(recordingDir)
+		h.removeEmptyDir(streamDir)
 	}
 
 	logger.WithFields(logging.Fields{
-		"dvr_hash":      dvrHash,
-		"total_size":    totalSize,
-		"deleted_files": deletedFiles,
+		"dvr_hash":   dvrHash,
+		"total_size": totalSize,
 	}).Info("DVR recording deleted")
+
+	return totalSize, nil
+}
+
+// DeleteVOD deletes VOD (uploaded) asset files from local storage
+// Returns the total size of deleted files in bytes
+func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
+	if vodHash == "" {
+		return 0, fmt.Errorf("VOD hash is required")
+	}
+
+	vodDir := filepath.Join(h.storagePath, "vod")
+	var totalSize uint64
+
+	// VOD files are stored as: vod/{vodHash}.{ext}
+	pattern := filepath.Join(vodDir, vodHash+"*")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0, fmt.Errorf("failed to glob VOD files: %w", err)
+	}
+
+	if len(matches) == 0 {
+		logger.WithField("vod_hash", vodHash).Debug("No VOD files found to delete")
+		return 0, nil
+	}
+
+	for _, filePath := range matches {
+		info, err := os.Stat(filePath)
+		if err != nil {
+			logger.WithError(err).WithField("file", filePath).Warn("Failed to stat VOD file")
+			continue
+		}
+
+		fileSize := uint64(info.Size())
+		if err := os.Remove(filePath); err != nil {
+			logger.WithError(err).WithField("file", filePath).Warn("Failed to remove VOD file")
+			continue
+		}
+
+		totalSize += fileSize
+		logger.WithFields(logging.Fields{
+			"vod_hash": vodHash,
+			"file":     filePath,
+			"size":     fileSize,
+		}).Debug("Deleted VOD file")
+	}
+
+	// Remove from artifact index if prometheus monitor is available
+	if prometheusMonitor != nil {
+		prometheusMonitor.mutex.Lock()
+		delete(prometheusMonitor.artifactIndex, vodHash)
+		prometheusMonitor.mutex.Unlock()
+	}
+
+	logger.WithFields(logging.Fields{
+		"vod_hash":    vodHash,
+		"total_size":  totalSize,
+		"files_count": len(matches),
+	}).Info("VOD asset deleted")
 
 	return totalSize, nil
 }
@@ -1107,7 +1153,7 @@ func triggerClipSync(filePath string, sizeBytes uint64) {
 	ext := filepath.Ext(filename)
 	clipHash := filename[:len(filename)-len(ext)]
 
-	if clipHash == "" || len(clipHash) != 32 {
+	if clipHash == "" || len(clipHash) < 18 {
 		logger.WithField("file_path", filePath).Debug("Invalid clip hash, skipping sync")
 		return
 	}
