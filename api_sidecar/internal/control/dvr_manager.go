@@ -227,6 +227,9 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL 
 		return fmt.Errorf("DVR recording already active for hash %s", dvrHash)
 	}
 
+	if err := os.MkdirAll(dm.storagePath, 0755); err != nil {
+		return err
+	}
 	if err := storage.HasSpaceFor(dm.storagePath, 0); err != nil {
 		return fmt.Errorf("insufficient disk space for DVR recording: %w", err)
 	}

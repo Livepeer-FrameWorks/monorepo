@@ -497,6 +497,9 @@ func downloadToFile(url, dst string) error {
 	}
 
 	parentDir := filepath.Dir(dst)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return err
+	}
 	requiredBytes := uint64(0)
 	if resp.ContentLength > 0 {
 		requiredBytes = uint64(resp.ContentLength)

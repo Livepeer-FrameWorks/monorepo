@@ -2,6 +2,9 @@ package storage
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -24,15 +27,40 @@ func GetDiskSpace(path string) (*DiskSpace, error) {
 	return &DiskSpace{TotalBytes: totalBytes, AvailableBytes: availableBytes}, nil
 }
 
+func statfsExistingPath(path string) (*DiskSpace, error) {
+	p := path
+	for {
+		space, err := GetDiskSpace(p)
+		if err == nil {
+			return space, nil
+		}
+		// If the path doesn't exist, try its parent.
+		if errors.Is(err, syscall.ENOENT) {
+			parent := filepath.Dir(p)
+			if parent == p {
+				return nil, err
+			}
+			p = parent
+			continue
+		}
+		return nil, err
+	}
+}
+
 func HasSpaceFor(path string, requiredBytes uint64) error {
-	space, err := GetDiskSpace(path)
+	// Ensure the target directory exists so Statfs has a stable path.
+	// This is a no-op if it already exists.
+	_ = os.MkdirAll(path, 0755)
+
+	space, err := statfsExistingPath(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("statfs failed for %s: %w", path, err)
 	}
 
-	headroom := uint64(float64(space.TotalBytes) * 0.05)
+	// Keep 5% of total disk free as headroom.
+	headroom := space.TotalBytes / 20
 	if requiredBytes+headroom > space.AvailableBytes {
-		return ErrInsufficientSpace
+		return fmt.Errorf("%w: need=%dB headroom=%dB available=%dB path=%s", ErrInsufficientSpace, requiredBytes, headroom, space.AvailableBytes, path)
 	}
 
 	return nil
