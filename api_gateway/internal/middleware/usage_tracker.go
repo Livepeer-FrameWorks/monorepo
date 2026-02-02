@@ -266,6 +266,11 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 		// Process request
 		c.Next()
 
+		// Skip tracking for demo mode requests (no useful observability data)
+		if IsDemoMode(c.Request.Context()) {
+			return
+		}
+
 		// Extract metrics after request completes
 		duration := time.Since(start).Milliseconds()
 
