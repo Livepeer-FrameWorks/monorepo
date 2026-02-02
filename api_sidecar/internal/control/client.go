@@ -17,6 +17,7 @@ import (
 	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
+	"frameworks/api_sidecar/internal/storage"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
@@ -39,18 +40,24 @@ type DeleteVodFunc func(vodHash string) (uint64, error)
 
 // Global state for metrics streaming
 var (
-	currentStream pb.HelmsmanControl_ConnectClient
-	currentNodeID string
-	currentConfig *sidecarcfg.HelmsmanConfig
-	onSeed        func()
-	deleteClipFn  DeleteClipFunc
-	deleteDVRFn   DeleteDVRFunc
-	deleteVodFn   DeleteVodFunc
+	currentStream  pb.HelmsmanControl_ConnectClient
+	currentNodeID  string
+	currentConfig  *sidecarcfg.HelmsmanConfig
+	onSeed         func()
+	onStorageWrite func()
+	deleteClipFn   DeleteClipFunc
+	deleteDVRFn    DeleteDVRFunc
+	deleteVodFn    DeleteVodFunc
 )
 
 // SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
 func SetOnSeed(cb func()) {
 	onSeed = cb
+}
+
+// SetOnStorageWrite sets a callback for successful local storage writes.
+func SetOnStorageWrite(cb func()) {
+	onStorageWrite = cb
 }
 
 // SetDeleteClipHandler sets the callback for clip deletion
@@ -451,6 +458,9 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipProgress{ClipProgress: &pb.ClipProgress{RequestId: requestID, Percent: 100, Message: "downloaded"}}})
 		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipDone{ClipDone: &pb.ClipDone{RequestId: requestID, FilePath: dst, SizeBytes: size, Status: "success"}}})
 	}
+	if onStorageWrite != nil {
+		onStorageWrite()
+	}
 }
 
 func buildClipParams(req *pb.ClipPullRequest) string {
@@ -485,13 +495,36 @@ func downloadToFile(url, dst string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("mist returned %d", resp.StatusCode)
 	}
-	f, err := os.Create(dst)
+
+	parentDir := filepath.Dir(dst)
+	requiredBytes := uint64(0)
+	if resp.ContentLength > 0 {
+		requiredBytes = uint64(resp.ContentLength)
+	}
+	if err := storage.HasSpaceFor(parentDir, requiredBytes); err != nil {
+		return err
+	}
+
+	tmpPath := dst + ".downloading"
+	_ = os.Remove(tmpPath)
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 func deriveRolesFromConfig(cfg *sidecarcfg.HelmsmanConfig) []string {

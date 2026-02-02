@@ -82,6 +82,7 @@ func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 	control.SetOnSeed(func() {
 		TriggerImmediatePoll()
 	})
+	control.SetOnStorageWrite(TriggerStorageCheck)
 
 	// Register delete handlers with control package (avoids import cycle)
 	control.SetDeleteClipHandler(func(clipHash string) (uint64, error) {
@@ -107,11 +108,7 @@ var currentHandlers *Handlers
 // Current returns the current handlers instance
 func Current() *Handlers {
 	if currentHandlers == nil {
-		storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
-		if storagePath == "" {
-			storagePath = "/data/storage"
-		}
-		currentHandlers = &Handlers{storagePath: storagePath}
+		currentHandlers = &Handlers{storagePath: config.GetStoragePath()}
 	}
 	return currentHandlers
 }
@@ -1094,6 +1091,7 @@ func HandleRecordingEnd(c *gin.Context) {
 	if rec := mistTrigger.GetRecordingComplete(); rec != nil && rec.FilePath != "" {
 		go triggerClipSync(rec.FilePath, uint64(rec.BytesWritten))
 	}
+	TriggerStorageCheck()
 
 	c.String(http.StatusOK, "OK")
 }
@@ -1136,6 +1134,7 @@ func HandleRecordingSegment(c *gin.Context) {
 			dvrMgr.HandleNewSegment(seg.StreamName, seg.FilePath)
 		}
 	}
+	TriggerStorageCheck()
 
 	c.String(http.StatusOK, "OK")
 }
