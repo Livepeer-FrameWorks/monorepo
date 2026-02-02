@@ -94,7 +94,7 @@ jobs:
           fi
       - name: Upload Go coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: go-coverage
           path: coverage/
@@ -152,7 +152,7 @@ jobs:
           ./scripts/lint-report.sh || true
       - name: Upload lint report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: go-lint-report
           path: reports/
@@ -196,7 +196,7 @@ jobs:
       - run: pnpm test:coverage
       - name: Upload frontend coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: frontend-coverage
           path: |
