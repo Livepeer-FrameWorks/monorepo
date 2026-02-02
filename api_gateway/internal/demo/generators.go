@@ -767,7 +767,7 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 		// Core streaming metrics
 		{"stream_hours", 25, "hours"},
 		{"egress_gb", 1628, "GB"},
-		{"recording_gb", 37.25, "GB"},
+		{"average_storage_gb", 37.25, "GB"},
 		{"peak_bandwidth_mbps", 850.5, "Mbps"},
 		{"total_streams", 1, "streams"},
 		{"total_viewers", 1847, "viewers"},

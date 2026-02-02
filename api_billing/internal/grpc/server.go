@@ -2344,7 +2344,7 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 	costs := make(map[string]float64)
 	var totalCost float64
 
-	var viewerHours, recordingGb, averageStorageGb, gpuHours float64
+	var viewerHours, averageStorageGb, gpuHours float64
 
 	for rows.Next() {
 		var usageType string
@@ -2356,8 +2356,6 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 		switch usageType {
 		case "viewer_hours":
 			viewerHours = total
-		case "recording_gb":
-			recordingGb = total
 		case "average_storage_gb":
 			averageStorageGb = total
 		case "gpu_hours":
@@ -2401,17 +2399,13 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 			}
 		}
 
-		// Storage: use average_storage_gb if present, else recording_gb
 		storageUsage := averageStorageGb
-		if storageUsage == 0 {
-			storageUsage = recordingGb
-		}
 		if effectiveStorageAllocation != nil && effectiveOverageRates != nil && effectiveOverageRates.Storage != nil {
 			if effectiveStorageAllocation.Limit != nil && effectiveOverageRates.Storage.UnitPrice > 0 {
 				billableStorage := storageUsage - *effectiveStorageAllocation.Limit
 				if billableStorage > 0 {
 					cost := billableStorage * effectiveOverageRates.Storage.UnitPrice
-					costs["recording_gb"] = cost
+					costs["average_storage_gb"] = cost
 					totalCost += cost
 				}
 			}

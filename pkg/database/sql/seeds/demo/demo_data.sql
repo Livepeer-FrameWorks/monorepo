@@ -270,7 +270,7 @@ FROM generate_series(0, 2015) AS n  -- 2016 intervals (0-2015)
 CROSS JOIN (VALUES
     ('stream_hours', 18.0),
     ('egress_gb', 65.0),
-    ('recording_gb', 12.0),
+    ('average_storage_gb', 12.0),
     ('viewer_hours', 85.0)
 ) AS usage_types(usage_type, base_value)
 ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
@@ -312,7 +312,7 @@ VALUES
      '{"viewer_sessions": 12500, "avg_quality": "1080p"}',
      DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Storage GB - current month
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'storage_gb', 89.3,
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'average_storage_gb', 89.3,
      '{"dvr_gb": 45.2, "clips_gb": 12.8, "recordings_gb": 31.3}',
      DATE_TRUNC('month', NOW()), NOW(), 'monthly'),
     -- Total Streams - current month
@@ -351,7 +351,7 @@ VALUES
      '{"viewer_sessions": 35000, "avg_quality": "1080p"}',
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
      DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'storage_gb', 72.5,
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'average_storage_gb', 72.5,
      '{"dvr_gb": 38.1, "clips_gb": 10.2, "recordings_gb": 24.2}',
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
      DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
@@ -378,7 +378,7 @@ VALUES
      '{"viewer_sessions": 24000, "avg_quality": "720p"}',
      DATE_TRUNC('month', NOW() - INTERVAL '2 months'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'storage_gb', 58.9,
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'average_storage_gb', 58.9,
      '{"dvr_gb": 30.5, "clips_gb": 8.4, "recordings_gb": 20.0}',
      DATE_TRUNC('month', NOW() - INTERVAL '2 months'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),

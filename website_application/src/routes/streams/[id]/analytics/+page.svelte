@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
@@ -9,6 +9,7 @@
     GetStreamOverviewStore,
     GetStreamAnalyticsDailyConnectionStore,
     GetStreamEventsStore,
+    ViewerMetricsStreamStore,
     StreamCoreFieldsStore,
     StreamMetricsFieldsStore,
   } from "$houdini";
@@ -16,6 +17,7 @@
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
+  import { Badge } from "$lib/components/ui/badge";
   import { GridSeam } from "$lib/components/layout";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
   import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
@@ -30,6 +32,7 @@
   const streamOverviewStore = new GetStreamOverviewStore();
   const streamDailyStore = new GetStreamAnalyticsDailyConnectionStore();
   const streamEventsStore = new GetStreamEventsStore();
+  const viewerMetricsSub = new ViewerMetricsStreamStore();
 
   // Fragment stores
   const streamCoreStore = new StreamCoreFieldsStore();
@@ -57,6 +60,18 @@
   // Loading state
   let loading = $state(true);
 
+  // Live viewer activity (recent connect/disconnect events)
+  interface LiveViewerEvent {
+    action: string;
+    clientCity?: string | null;
+    clientCountry?: string | null;
+    protocol: string;
+    timestamp: number;
+    nodeId: string;
+  }
+  let liveViewerActivity = $state<LiveViewerEvent[]>([]);
+  let liveActivityPulse = $state(false);
+
   // Stream data
   let maskedStream = $derived($streamStore.data?.stream ?? null);
   let streamCoreStoreResult = $derived(
@@ -83,6 +98,32 @@
       .map((e) => e.node)
       .sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
   });
+
+  // Quality tier daily edges from overview store
+  let qualityTierDailyEdges = $derived(
+    $streamOverviewStore.data?.analytics?.usage?.streaming?.qualityTierDailyConnection?.edges ?? []
+  );
+
+  // Transform quality tier daily data for trend visualization
+  let qualityTierTrendData = $derived.by(() => {
+    if (!qualityTierDailyEdges.length) return [];
+    return qualityTierDailyEdges
+      .map((e) => ({
+        date: e.node.day,
+        tier2160p: e.node.tier2160pMinutes ?? 0,
+        tier1440p: e.node.tier1440pMinutes ?? 0,
+        tier1080p: e.node.tier1080pMinutes ?? 0,
+        tier720p: e.node.tier720pMinutes ?? 0,
+        tier480p: e.node.tier480pMinutes ?? 0,
+        tierSd: e.node.tierSdMinutes ?? 0,
+      }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  });
+
+  // Current range label for display
+  let currentRangeLabel = $derived(
+    timeRangeOptions.find((o) => o.value === timeRange)?.label ?? "7 Days"
+  );
 
   // Quality tier data
   let qualityData = $derived.by(() => {
@@ -248,14 +289,55 @@
     }
   });
 
+  // Effect to handle viewer metrics subscription updates
+  $effect(() => {
+    const event = $viewerMetricsSub.data?.liveViewerMetrics;
+    if (event) {
+      untrack(() => {
+        const newEvent: LiveViewerEvent = {
+          action: event.action,
+          clientCity: event.clientCity ?? null,
+          clientCountry: event.clientCountry ?? null,
+          protocol: event.protocol,
+          timestamp: Date.now(),
+          nodeId: event.nodeId,
+        };
+        liveViewerActivity = [newEvent, ...liveViewerActivity.slice(0, 9)];
+
+        liveActivityPulse = true;
+        setTimeout(() => {
+          liveActivityPulse = false;
+        }, 500);
+      });
+    }
+  });
+
+  function startRealTimeSubscriptions() {
+    if (!streamId) return;
+    viewerMetricsSub.unlisten();
+    liveViewerActivity = [];
+    viewerMetricsSub.listen({ streamId: streamId });
+  }
+
+  // Restart subscription when streamId changes
+  $effect(() => {
+    if (streamId) {
+      startRealTimeSubscriptions();
+    }
+  });
+
   onMount(() => {
     loadData();
   });
+
+  onDestroy(() => {
+    viewerMetricsSub.unlisten();
+  });
 </script>
 
-<div class="min-h-screen bg-background">
+<div class="h-full flex flex-col">
   <!-- Header -->
-  <div class="border-b border-border/50 bg-muted/20">
+  <div class="border-b border-border/50 bg-muted/20 shrink-0">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-4">
@@ -297,131 +379,262 @@
     </div>
   </div>
 
-  {#if loading && !stream}
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <LoadingCard />
-    </div>
-  {:else if !stream}
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div class="text-center py-12">
-        <p class="text-muted-foreground">Stream not found</p>
-        <Button class="mt-4" onclick={() => goto(resolve("/streams"))}>Back to Streams</Button>
+  <!-- Scrollable Content -->
+  <div class="flex-1 overflow-y-auto">
+    {#if loading && !stream}
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <LoadingCard />
       </div>
-    </div>
-  {:else}
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      <!-- Metric Cards -->
-      <GridSeam cols={3} stack="2x2" surface="panel" flush={true}>
-        {#each metricCards as card (card.key)}
-          <div class="p-4 border-r border-b border-border/30 last:border-r-0">
-            <div class="flex items-center gap-2 mb-2">
-              <svelte:component this={card.icon} class="w-4 h-4 text-muted-foreground" />
-              <span class="text-xs text-muted-foreground uppercase tracking-wide">{card.label}</span
-              >
-              {#if card.live}
-                <span class="text-[10px] px-1 py-0.5 rounded bg-success/20 text-success">LIVE</span>
+    {:else if !stream}
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div class="text-center py-12">
+          <p class="text-muted-foreground">Stream not found</p>
+          <Button class="mt-4" onclick={() => goto(resolve("/streams"))}>Back to Streams</Button>
+        </div>
+      </div>
+    {:else}
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        <!-- Metric Cards -->
+        <GridSeam cols={3} stack="2x2" surface="panel" flush={true}>
+          {#each metricCards as card (card.key)}
+            <div class="p-4 border-r border-b border-border/30 last:border-r-0">
+              <div class="flex items-center gap-2 mb-2">
+                <svelte:component this={card.icon} class="w-4 h-4 text-muted-foreground" />
+                <span class="text-xs text-muted-foreground uppercase tracking-wide"
+                  >{card.label}</span
+                >
+                {#if card.live}
+                  <span class="text-[10px] px-1 py-0.5 rounded bg-success/20 text-success"
+                    >LIVE</span
+                  >
+                {/if}
+              </div>
+              <p class="text-2xl font-bold {card.tone}">{card.value}</p>
+            </div>
+          {/each}
+        </GridSeam>
+
+        <!-- Viewer Trend Chart -->
+        {#if viewerTrendData.length > 1}
+          <div class="slab">
+            <div class="slab-header">
+              <h3>Viewer Trend</h3>
+            </div>
+            <div class="slab-body--padded">
+              <ViewerTrendChart data={viewerTrendData} height={250} seriesLabel="Unique Viewers" />
+            </div>
+          </div>
+        {/if}
+
+        <!-- Quality & Codec Row -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Quality Tier Distribution -->
+          {#if qualityData}
+            <div class="slab">
+              <div class="slab-header">
+                <h3>Quality Distribution</h3>
+              </div>
+              <div class="slab-body--padded">
+                <QualityTierChart data={qualityData} />
+              </div>
+            </div>
+          {/if}
+
+          <!-- Codec Distribution -->
+          {#if codecDistribution.length > 0}
+            <div class="slab">
+              <div class="slab-header">
+                <h3>Codec Usage</h3>
+              </div>
+              <div class="slab-body--padded">
+                <CodecDistributionChart data={codecDistribution} />
+              </div>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Quality Tier Trend & Live Activity Row -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <!-- Quality Tier Daily Trend -->
+          {#if qualityTierTrendData.length > 1}
+            <div class="slab">
+              <div class="slab-header">
+                <h3>Quality Trend ({currentRangeLabel})</h3>
+              </div>
+              <div class="slab-body--padded">
+                <div class="space-y-3">
+                  {#each ["tier1080p", "tier720p", "tier480p"] as tier (tier)}
+                    {@const tierLabel =
+                      tier === "tier1080p" ? "1080p" : tier === "tier720p" ? "720p" : "480p"}
+                    {@const tierColor =
+                      tier === "tier1080p"
+                        ? "text-success"
+                        : tier === "tier720p"
+                          ? "text-info"
+                          : "text-warning"}
+                    {@const totalMinutes = qualityTierTrendData.reduce(
+                      (sum, d) => sum + ((d[tier as keyof typeof d] as number) || 0),
+                      0
+                    )}
+                    {#if totalMinutes > 0}
+                      <div class="flex items-center gap-3">
+                        <span class="text-xs font-medium {tierColor} w-12">{tierLabel}</span>
+                        <div class="flex-1 h-6 flex items-end gap-px">
+                          {#each qualityTierTrendData as day (day.date)}
+                            {@const value = (day[tier as keyof typeof day] as number) || 0}
+                            {@const maxValue = Math.max(
+                              ...qualityTierTrendData.map(
+                                (d) => (d[tier as keyof typeof d] as number) || 0
+                              )
+                            )}
+                            {@const heightPercent = maxValue > 0 ? (value / maxValue) * 100 : 0}
+                            <div
+                              class="flex-1 bg-current opacity-60 hover:opacity-100 transition-opacity"
+                              style="height: {Math.max(heightPercent, 4)}%"
+                              title="{new Date(day.date).toLocaleDateString()}: {value} min"
+                            ></div>
+                          {/each}
+                        </div>
+                        <span class="text-xs text-muted-foreground w-16 text-right"
+                          >{formatNumber(totalMinutes)}m</span
+                        >
+                      </div>
+                    {/if}
+                  {/each}
+                </div>
+                <div
+                  class="flex justify-between text-[10px] text-muted-foreground mt-2 pt-2 border-t border-border/30"
+                >
+                  <span>{new Date(qualityTierTrendData[0]?.date).toLocaleDateString()}</span>
+                  <span
+                    >{new Date(
+                      qualityTierTrendData[qualityTierTrendData.length - 1]?.date
+                    ).toLocaleDateString()}</span
+                  >
+                </div>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Live Activity -->
+          <div class="slab">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <h3>Live Activity</h3>
+                <Badge
+                  variant="outline"
+                  class="bg-success/10 text-success border-success/30 text-[10px] px-1.5 py-0"
+                >
+                  LIVE
+                </Badge>
+                <div
+                  class="w-2 h-2 rounded-full {liveActivityPulse
+                    ? 'bg-success animate-ping'
+                    : 'bg-muted-foreground/50'}"
+                ></div>
+              </div>
+            </div>
+            <div class="slab-body--padded">
+              {#if liveViewerActivity.length > 0}
+                <div class="space-y-2 max-h-[280px] overflow-y-auto">
+                  {#each liveViewerActivity as event, i (event.timestamp + "-" + i)}
+                    <div
+                      class="flex items-center justify-between p-2 border border-border/30 bg-muted/20 {i ===
+                        0 && liveActivityPulse
+                        ? 'ring-1 ring-success/50'
+                        : ''}"
+                    >
+                      <div class="flex items-center gap-2">
+                        <div
+                          class="w-1.5 h-1.5 rounded-full {event.action === 'connect'
+                            ? 'bg-success'
+                            : 'bg-destructive'}"
+                        ></div>
+                        <div>
+                          <p class="text-xs font-medium text-foreground">
+                            {event.action === "connect" ? "Connected" : "Disconnected"}
+                          </p>
+                          <p class="text-[10px] text-muted-foreground">
+                            {event.clientCity || "Unknown"}{event.clientCountry
+                              ? `, ${event.clientCountry}`
+                              : ""} • {event.protocol.toUpperCase()}
+                          </p>
+                        </div>
+                      </div>
+                      <span class="text-[10px] text-muted-foreground font-mono">
+                        {new Date(event.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div
+                  class="flex items-center justify-center h-[120px] border border-border/30 bg-muted/20"
+                >
+                  <p class="text-muted-foreground text-sm">Waiting for viewer activity...</p>
+                </div>
               {/if}
             </div>
-            <p class="text-2xl font-bold {card.tone}">{card.value}</p>
-          </div>
-        {/each}
-      </GridSeam>
-
-      <!-- Viewer Trend Chart -->
-      {#if viewerTrendData.length > 1}
-        <div class="slab">
-          <div class="slab-header">
-            <h3>Viewer Trend</h3>
-          </div>
-          <div class="slab-body--padded">
-            <ViewerTrendChart data={viewerTrendData} height={250} seriesLabel="Unique Viewers" />
           </div>
         </div>
-      {/if}
 
-      <!-- Quality & Codec Row -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- Quality Tier Distribution -->
-        {#if qualityData}
+        <!-- Daily Stats Table -->
+        {#if streamDailyAnalytics.length > 0}
           <div class="slab">
             <div class="slab-header">
-              <h3>Quality Distribution</h3>
+              <h3>Daily Breakdown</h3>
             </div>
-            <div class="slab-body--padded">
-              <QualityTierChart data={qualityData} />
+            <div class="slab-body--flush overflow-x-auto max-h-80">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-background">
+                  <tr
+                    class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
+                  >
+                    <th class="text-left py-3 px-4">Date</th>
+                    <th class="text-right py-3 px-4">Viewers</th>
+                    <th class="text-right py-3 px-4">Views</th>
+                    <th class="text-right py-3 px-4">Egress</th>
+                    <th class="text-right py-3 px-4">Countries</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each streamDailyAnalytics.slice().reverse() as day (day.day)}
+                    <tr class="border-b border-border/30 hover:bg-muted/10">
+                      <td class="py-3 px-4 font-mono text-xs"
+                        >{new Date(day.day).toLocaleDateString()}</td
+                      >
+                      <td class="py-3 px-4 text-right font-mono"
+                        >{formatNumber(day.uniqueViewers ?? 0)}</td
+                      >
+                      <td class="py-3 px-4 text-right font-mono"
+                        >{formatNumber(day.totalViews ?? 0)}</td
+                      >
+                      <td class="py-3 px-4 text-right font-mono text-info"
+                        >{((day.egressBytes ?? 0) / 1e9).toFixed(2)} GB</td
+                      >
+                      <td class="py-3 px-4 text-right font-mono text-primary"
+                        >{day.uniqueCountries ?? 0}</td
+                      >
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
             </div>
           </div>
         {/if}
 
-        <!-- Codec Distribution -->
-        {#if codecDistribution.length > 0}
+        <!-- Event Log -->
+        {#if streamEvents.length > 0}
           <div class="slab">
             <div class="slab-header">
-              <h3>Codec Usage</h3>
+              <h3>Recent Events</h3>
             </div>
-            <div class="slab-body--padded">
-              <CodecDistributionChart data={codecDistribution} />
+            <div class="slab-body--flush">
+              <EventLog events={streamEvents} maxItems={20} />
             </div>
           </div>
         {/if}
       </div>
-
-      <!-- Daily Stats Table -->
-      {#if streamDailyAnalytics.length > 0}
-        <div class="slab">
-          <div class="slab-header">
-            <h3>Daily Breakdown</h3>
-          </div>
-          <div class="slab-body--flush overflow-x-auto max-h-80">
-            <table class="w-full text-sm">
-              <thead class="sticky top-0 bg-background">
-                <tr
-                  class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
-                >
-                  <th class="text-left py-3 px-4">Date</th>
-                  <th class="text-right py-3 px-4">Viewers</th>
-                  <th class="text-right py-3 px-4">Views</th>
-                  <th class="text-right py-3 px-4">Egress</th>
-                  <th class="text-right py-3 px-4">Countries</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each streamDailyAnalytics.slice().reverse() as day (day.day)}
-                  <tr class="border-b border-border/30 hover:bg-muted/10">
-                    <td class="py-3 px-4 font-mono text-xs"
-                      >{new Date(day.day).toLocaleDateString()}</td
-                    >
-                    <td class="py-3 px-4 text-right font-mono"
-                      >{formatNumber(day.uniqueViewers ?? 0)}</td
-                    >
-                    <td class="py-3 px-4 text-right font-mono"
-                      >{formatNumber(day.totalViews ?? 0)}</td
-                    >
-                    <td class="py-3 px-4 text-right font-mono text-info"
-                      >{((day.egressBytes ?? 0) / 1e9).toFixed(2)} GB</td
-                    >
-                    <td class="py-3 px-4 text-right font-mono text-primary"
-                      >{day.uniqueCountries ?? 0}</td
-                    >
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Event Log -->
-      {#if streamEvents.length > 0}
-        <div class="slab">
-          <div class="slab-header">
-            <h3>Recent Events</h3>
-          </div>
-          <div class="slab-body--flush">
-            <EventLog events={streamEvents} maxItems={20} />
-          </div>
-        </div>
-      {/if}
-    </div>
-  {/if}
+    {/if}
+  </div>
 </div>

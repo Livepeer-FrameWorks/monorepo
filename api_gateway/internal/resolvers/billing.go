@@ -479,12 +479,12 @@ func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRa
 			Usage: []*model.UsageEntry{
 				{ResourceType: "stream_hours", Amount: 42.5},
 				{ResourceType: "egress_gb", Amount: 15.2},
-				{ResourceType: "storage_gb", Amount: 5.0},
+				{ResourceType: "average_storage_gb", Amount: 5.0},
 			},
 			Costs: []*model.CostEntry{
 				{ResourceType: "stream_hours", Cost: 4.25},
 				{ResourceType: "egress_gb", Cost: 0.76},
-				{ResourceType: "storage_gb", Cost: 0.10},
+				{ResourceType: "average_storage_gb", Cost: 0.10},
 			},
 			TotalCost: 5.11,
 			Currency:  "EUR",

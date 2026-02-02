@@ -64,7 +64,6 @@
   interface AggregatedUsage {
     stream_hours: number;
     egress_gb: number;
-    recording_gb: number;
     peak_bandwidth_mbps: number;
     total_streams: number;
     total_viewers: number;
@@ -80,7 +79,6 @@
   let usageData = $state<AggregatedUsage>({
     stream_hours: 0,
     egress_gb: 0,
-    recording_gb: 0,
     peak_bandwidth_mbps: 0,
     total_streams: 0,
     total_viewers: 0,
@@ -366,7 +364,6 @@
     return {
       streamHours: buildSeries("stream_hours"),
       egressGb: buildSeries("egress_gb"),
-      recordingGb: buildSeries("recording_gb"),
     };
   });
 
@@ -402,7 +399,6 @@
             usageTypes: [
               "stream_hours",
               "egress_gb",
-              "recording_gb",
               "peak_bandwidth_mbps",
               "total_streams",
               "total_viewers",
@@ -454,9 +450,6 @@
               case "egress_gb":
                 acc.egress_gb += entry.usageValue;
                 break;
-              case "recording_gb":
-                acc.recording_gb += entry.usageValue;
-                break;
               case "peak_bandwidth_mbps":
                 acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, entry.usageValue);
                 break;
@@ -475,7 +468,6 @@
           {
             stream_hours: 0,
             egress_gb: 0,
-            recording_gb: 0,
             peak_bandwidth_mbps: 0,
             total_streams: 0,
             total_viewers: 0,
@@ -494,9 +486,6 @@
               case "egress_gb":
                 acc.egress_gb += record.usageValue;
                 break;
-              case "recording_gb":
-                acc.recording_gb += record.usageValue;
-                break;
               case "peak_bandwidth_mbps":
                 acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, record.usageValue);
                 break;
@@ -512,7 +501,6 @@
           {
             stream_hours: 0,
             egress_gb: 0,
-            recording_gb: 0,
             peak_bandwidth_mbps: 0,
             total_streams: 0,
             total_viewers: 0,
@@ -559,7 +547,7 @@
     const baseCost = currentTier.basePrice;
     const bandwidthCost = usageData.egress_gb * bandwidthRate;
     const streamingCost = usageData.stream_hours * streamingRate;
-    const storageCost = usageData.recording_gb * storageRate;
+    const storageCost = (usageSummary?.averageStorageGb ?? 0) * storageRate;
 
     return {
       total: baseCost + bandwidthCost + streamingCost + storageCost,
@@ -1002,7 +990,7 @@
                 {#if estimatedCosts.breakdown.storage > 0}
                   <div class="flex items-center justify-between text-sm">
                     <span class="text-muted-foreground"
-                      >Storage ({formatNumber(usageData.recording_gb)} GB)</span
+                      >Storage ({formatNumber(usageSummary?.averageStorageGb ?? 0)} GB)</span
                     >
                     <span class="text-foreground"
                       >{formatCurrency(estimatedCosts.breakdown.storage)}</span
@@ -1213,112 +1201,6 @@
               </div>
             {/if}
 
-            <!-- Processing Events Detail (Collapsed by default) -->
-            {#if processingEvents.length > 0}
-              <div class="slab col-span-full">
-                <div class="slab-header">
-                  <button
-                    class="flex items-center gap-2 w-full text-left"
-                    onclick={() => (processingEventsExpanded = !processingEventsExpanded)}
-                  >
-                    <CpuIcon class="w-4 h-4 text-muted-foreground" />
-                    <h3>Processing Events Detail</h3>
-                    <span class="text-xs text-muted-foreground ml-2">
-                      ({processingEventsTotalCount} records)
-                    </span>
-                    <span class="ml-auto text-xs text-muted-foreground">
-                      {processingEventsExpanded ? "▼" : "▶"}
-                    </span>
-                  </button>
-                </div>
-                {#if processingEventsExpanded}
-                  <div class="slab-body--flush overflow-x-auto max-h-96">
-                    <table class="w-full text-sm">
-                      <thead class="sticky top-0 bg-background">
-                        <tr
-                          class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
-                        >
-                          <th class="text-left py-2 px-4">Time</th>
-                          <th class="text-left py-2 px-4">Type</th>
-                          <th class="text-left py-2 px-4">Stream</th>
-                          <th class="text-left py-2 px-4">Input</th>
-                          <th class="text-left py-2 px-4">Output</th>
-                          <th class="text-right py-2 px-4">Duration</th>
-                          <th class="text-right py-2 px-4">RTF</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {#each processingEvents as evt (evt.id)}
-                          {@const displayStreamId = evt.stream?.streamId ?? evt.streamId}
-                          <tr class="border-b border-border/30 hover:bg-muted/10">
-                            <td class="py-2 px-4 text-xs text-muted-foreground">
-                              {new Date(evt.timestamp).toLocaleTimeString()}
-                            </td>
-                            <td class="py-2 px-4">
-                              <span
-                                class="px-1.5 py-0.5 rounded text-[10px] font-mono {evt.processType ===
-                                'livepeer_gateway'
-                                  ? 'bg-tokyo-night-magenta/20 text-tokyo-night-magenta'
-                                  : 'bg-info/20 text-info'}"
-                              >
-                                {evt.processType === "livepeer_gateway" ? "LP" : "Local"}
-                              </span>
-                            </td>
-                            <td class="py-2 px-4">
-                              <a
-                                href={resolve(`/streams/${evt.streamId}`)}
-                                class="font-mono text-xs text-primary hover:underline"
-                              >
-                                {displayStreamId?.slice(0, 8)}...
-                              </a>
-                            </td>
-                            <td class="py-2 px-4 text-xs">
-                              <span class="text-muted-foreground">{evt.inputCodec || "-"}</span>
-                              {#if evt.width && evt.height}
-                                <span class="text-muted-foreground ml-1"
-                                  >({evt.width}×{evt.height})</span
-                                >
-                              {/if}
-                            </td>
-                            <td class="py-2 px-4 text-xs">
-                              <span class="text-foreground">{evt.outputCodec || "-"}</span>
-                              {#if evt.outputWidth && evt.outputHeight}
-                                <span class="text-muted-foreground ml-1"
-                                  >({evt.outputWidth}×{evt.outputHeight})</span
-                                >
-                              {/if}
-                            </td>
-                            <td class="py-2 px-4 text-right font-mono text-xs">
-                              {evt.durationMs ? `${(evt.durationMs / 1000).toFixed(1)}s` : "-"}
-                            </td>
-                            <td class="py-2 px-4 text-right">
-                              {#if evt.rtfOut}
-                                <span
-                                  class="font-mono text-xs {evt.rtfOut < 1
-                                    ? 'text-success'
-                                    : evt.rtfOut < 2
-                                      ? 'text-warning'
-                                      : 'text-destructive'}"
-                                >
-                                  {evt.rtfOut.toFixed(2)}x
-                                </span>
-                              {:else}
-                                <span class="text-muted-foreground text-xs">-</span>
-                              {/if}
-                            </td>
-                          </tr>
-                        {/each}
-                      </tbody>
-                    </table>
-                  </div>
-                {:else}
-                  <div class="slab-body--padded text-sm text-muted-foreground">
-                    Click to expand detailed processing event log
-                  </div>
-                {/if}
-              </div>
-            {/if}
-
             <!-- API Usage Slab -->
             {#if apiTotalRequests > 0 || apiUsageRecords.length > 0}
               <div class="slab">
@@ -1445,21 +1327,21 @@
               <!-- API Usage Details (Expandable) -->
               {#if apiUsageRecords.length > 0}
                 <div class="slab col-span-full">
-                  <div class="slab-header">
-                    <button
-                      class="flex items-center gap-2 w-full text-left"
-                      onclick={() => (apiUsageExpanded = !apiUsageExpanded)}
-                    >
+                  <button
+                    class="slab-header flex items-center justify-between w-full cursor-pointer select-none hover:bg-muted/30 transition-colors"
+                    onclick={() => (apiUsageExpanded = !apiUsageExpanded)}
+                  >
+                    <div class="flex items-center gap-2 text-left">
                       <CodeIcon class="w-4 h-4 text-muted-foreground" />
                       <h3>API Request Details</h3>
                       <span class="text-xs text-muted-foreground ml-2">
                         ({apiUsageTotalCount} records)
                       </span>
-                      <span class="ml-auto text-xs text-muted-foreground">
-                        {apiUsageExpanded ? "▼" : "▶"}
-                      </span>
-                    </button>
-                  </div>
+                    </div>
+                    <span class="text-xs text-muted-foreground">
+                      {apiUsageExpanded ? "▼" : "▶"}
+                    </span>
+                  </button>
                   {#if apiUsageExpanded}
                     <div class="slab-body--flush overflow-x-auto max-h-96">
                       <table class="w-full text-sm">
@@ -1538,45 +1420,136 @@
                   {/if}
                 </div>
               {/if}
+
+              <!-- Processing Events Detail (Collapsed by default) -->
+              {#if processingEvents.length > 0}
+                <div class="slab col-span-full">
+                  <button
+                    class="slab-header flex items-center justify-between w-full cursor-pointer select-none hover:bg-muted/30 transition-colors"
+                    onclick={() => (processingEventsExpanded = !processingEventsExpanded)}
+                  >
+                    <div class="flex items-center gap-2 text-left">
+                      <CpuIcon class="w-4 h-4 text-muted-foreground" />
+                      <h3>Processing Events Detail</h3>
+                      <span class="text-xs text-muted-foreground ml-2">
+                        ({processingEventsTotalCount} records)
+                      </span>
+                    </div>
+                    <span class="text-xs text-muted-foreground">
+                      {processingEventsExpanded ? "▼" : "▶"}
+                    </span>
+                  </button>
+                  {#if processingEventsExpanded}
+                    <div class="slab-body--flush overflow-x-auto max-h-96">
+                      <table class="w-full text-sm">
+                        <thead class="sticky top-0 bg-background">
+                          <tr
+                            class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide"
+                          >
+                            <th class="text-left py-2 px-4">Time</th>
+                            <th class="text-left py-2 px-4">Type</th>
+                            <th class="text-left py-2 px-4">Stream</th>
+                            <th class="text-left py-2 px-4">Input</th>
+                            <th class="text-left py-2 px-4">Output</th>
+                            <th class="text-right py-2 px-4">Duration</th>
+                            <th class="text-right py-2 px-4">RTF</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {#each processingEvents as evt (evt.id)}
+                            {@const displayStreamId = evt.stream?.streamId ?? evt.streamId}
+                            <tr class="border-b border-border/30 hover:bg-muted/10">
+                              <td class="py-2 px-4 text-xs text-muted-foreground">
+                                {new Date(evt.timestamp).toLocaleTimeString()}
+                              </td>
+                              <td class="py-2 px-4">
+                                <span
+                                  class="px-1.5 py-0.5 rounded text-[10px] font-mono {evt.processType ===
+                                  'livepeer_gateway'
+                                    ? 'bg-tokyo-night-magenta/20 text-tokyo-night-magenta'
+                                    : 'bg-info/20 text-info'}"
+                                >
+                                  {evt.processType === "livepeer_gateway" ? "LP" : "Local"}
+                                </span>
+                              </td>
+                              <td class="py-2 px-4">
+                                <a
+                                  href={resolve(`/streams/${evt.streamId}`)}
+                                  class="font-mono text-xs text-primary hover:underline"
+                                >
+                                  {displayStreamId?.slice(0, 8)}...
+                                </a>
+                              </td>
+                              <td class="py-2 px-4 text-xs">
+                                <span class="text-muted-foreground">{evt.inputCodec || "-"}</span>
+                                {#if evt.width && evt.height}
+                                  <span class="text-muted-foreground ml-1"
+                                    >({evt.width}×{evt.height})</span
+                                  >
+                                {/if}
+                              </td>
+                              <td class="py-2 px-4 text-xs">
+                                <span class="text-foreground">{evt.outputCodec || "-"}</span>
+                                {#if evt.outputWidth && evt.outputHeight}
+                                  <span class="text-muted-foreground ml-1"
+                                    >({evt.outputWidth}×{evt.outputHeight})</span
+                                  >
+                                {/if}
+                              </td>
+                              <td class="py-2 px-4 text-right font-mono text-xs">
+                                {evt.durationMs ? `${(evt.durationMs / 1000).toFixed(1)}s` : "-"}
+                              </td>
+                              <td class="py-2 px-4 text-right">
+                                {#if evt.rtfOut}
+                                  <span
+                                    class="font-mono text-xs {evt.rtfOut < 1
+                                      ? 'text-success'
+                                      : evt.rtfOut < 2
+                                        ? 'text-warning'
+                                        : 'text-destructive'}"
+                                  >
+                                    {evt.rtfOut.toFixed(2)}x
+                                  </span>
+                                {:else}
+                                  <span class="text-muted-foreground text-xs">-</span>
+                                {/if}
+                              </td>
+                            </tr>
+                          {/each}
+                        </tbody>
+                      </table>
+                    </div>
+                  {:else}
+                    <div class="slab-body--padded text-sm text-muted-foreground">
+                      Click to expand detailed processing event log
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             {/if}
 
             <!-- Storage Average (shown in Additional Metrics slab) -->
           {/if}
 
           <!-- Additional Metrics Slab -->
-          {#if usageData.recording_gb > 0 || usageData.peak_bandwidth_mbps > 0}
+          {#if usageData.peak_bandwidth_mbps > 0}
             <div class="slab">
               <div class="slab-header">
                 <h3>Additional Metrics</h3>
               </div>
               <div class="slab-body--padded">
                 <div class="space-y-4">
-                  {#if usageData.recording_gb > 0}
-                    <div
-                      class="flex items-center justify-between p-3 border border-border/30 bg-muted/20"
-                    >
-                      <div class="flex items-center gap-3">
-                        <HardDriveIcon class="w-5 h-5 text-warning" />
-                        <span class="text-muted-foreground">Recording Storage</span>
-                      </div>
-                      <span class="font-bold text-warning"
-                        >{formatNumber(usageData.recording_gb)} GB</span
-                      >
+                  <div
+                    class="flex items-center justify-between p-3 border border-border/30 bg-muted/20"
+                  >
+                    <div class="flex items-center gap-3">
+                      <TrendingUpIcon class="w-5 h-5 text-destructive" />
+                      <span class="text-muted-foreground">Peak Bandwidth</span>
                     </div>
-                  {/if}
-                  {#if usageData.peak_bandwidth_mbps > 0}
-                    <div
-                      class="flex items-center justify-between p-3 border border-border/30 bg-muted/20"
+                    <span class="font-bold text-destructive"
+                      >{formatNumber(usageData.peak_bandwidth_mbps)} Mbps</span
                     >
-                      <div class="flex items-center gap-3">
-                        <TrendingUpIcon class="w-5 h-5 text-destructive" />
-                        <span class="text-muted-foreground">Peak Bandwidth</span>
-                      </div>
-                      <span class="font-bold text-destructive"
-                        >{formatNumber(usageData.peak_bandwidth_mbps)} Mbps</span
-                      >
-                    </div>
-                  {/if}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1605,9 +1578,9 @@
                 <EmptyState
                   iconName="HardDrive"
                   title="No storage data"
-                  description="Storage breakdown will appear when you have data."
-                  actionText="Manage Storage"
-                  onAction={() => goto(resolve("/analytics/storage"))}
+                  description="Storage breakdown will appear when you have recordings, clips, or VOD content."
+                  actionText="View Streams"
+                  onAction={() => goto(resolve("/streams"))}
                 />
               {/if}
             </div>
