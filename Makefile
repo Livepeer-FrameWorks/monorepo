@@ -1,4 +1,4 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand \
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-forms \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
 	lint lint-all lint-fix lint-report lint-analyze \
@@ -206,6 +206,9 @@ build-bin-privateer: proto
 
 build-bin-deckhand: proto
 	cd api_ticketing && go build $(LDFLAGS) -o ../bin/deckhand cmd/deckhand/main.go
+
+build-bin-forms: proto
+	cd api_forms && go build $(LDFLAGS) -o ../bin/forms cmd/forms/main.go
 
 # Clean build artifacts
 clean:
