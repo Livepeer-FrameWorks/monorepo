@@ -382,7 +382,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Download image digest artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: image-digest-*
           path: dist/digests
@@ -524,29 +524,29 @@ jobs:
           name: release-manifest
           path: dist/manifest.yaml
       - name: Download CLI artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: cli-*
           path: dist/cli
           merge-multiple: true
       - name: Download service binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: binary-*
           path: dist/binaries
           merge-multiple: true
       - name: Download webapp bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: webapp-bundle
           path: dist/
       - name: Download website bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: website-bundle
           path: dist/
       - name: Download docs bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: docs-bundle
           path: dist/
@@ -579,7 +579,7 @@ jobs:
           token: ${{ secrets.GITOPS_REPO_TOKEN }}
           path: env-repo
       - name: Download manifest artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-manifest
           path: dist
