@@ -859,13 +859,16 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 		args = append(args, streamID)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "session_start", "session_id")
+	// NOTE: session_start is a SELECT alias; ClickHouse doesn't allow SELECT aliases in WHERE.
+	// Inline the expression for keyset pagination.
+	sessionStartExpr := "ifNull(connected_at, disconnected_at)"
+	keysetCond, keysetArgs := buildKeysetCondition(params, sessionStartExpr, "session_id")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "session_start", "session_id")
+	query += buildOrderBy(params, sessionStartExpr, "session_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
