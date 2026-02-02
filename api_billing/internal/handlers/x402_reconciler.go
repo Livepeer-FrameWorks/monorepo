@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -412,7 +413,7 @@ func (r *X402Reconciler) creditBalance(ctx context.Context, tenantID string, amo
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, tenantID, currency).Scan(&balance)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 

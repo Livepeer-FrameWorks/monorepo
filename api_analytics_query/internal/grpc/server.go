@@ -3100,7 +3100,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 
 	// Map sort field to raw integer column for keyset precision
 	// Display values (egress_gb, viewer_hours) are derived but we sort/cursor by raw integers
-	sortField := "egress_bytes"
+	var sortField string
 	switch req.GetSortBy() {
 	case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
 		sortField = "unique_viewers"
@@ -3288,7 +3288,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 		FROM periscope.stream_analytics_daily
 		WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
 	`, tenantID, startTime, endTime)
-	countRow.Scan(&totalCount)
+	_ = countRow.Scan(&totalCount)
 
 	// Build keyset cursors using raw integer sort keys from proto fields
 	var startCursor, endCursor string

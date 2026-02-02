@@ -811,6 +811,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch usage data")
 		} else {
+			defer usageRows.Close()
 			for usageRows.Next() {
 				var usageType string
 				var val float64
@@ -818,7 +819,6 @@ func (jm *JobManager) generateMonthlyInvoices() {
 					usageData[usageType] = val
 				}
 			}
-			usageRows.Close()
 		}
 
 		baseAmount, meteredAmount := calculateCharges(usageData, basePrice, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
@@ -1495,7 +1495,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 			creditToApplyCents = grossAmountCents
 		}
 		// Deduct from prepaid balance
-		_, err := jm.deductPrepaidBalance(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
+		_, err = jm.deductPrepaidBalance(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to deduct prepaid balance for invoice credit")
 		} else {
