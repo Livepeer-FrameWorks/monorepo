@@ -274,7 +274,7 @@ jobs:
         run: |
           ver="${GITHUB_REF_NAME#v}"
           echo "value=${ver}" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.22"
           cache-dependency-path: cli/go.sum
@@ -326,7 +326,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.22"
           cache-dependency-path: ${{ matrix.service.context }}/go.sum
