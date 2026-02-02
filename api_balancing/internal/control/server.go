@@ -1733,19 +1733,42 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 
 	if status == "success" {
 		// Update storage location back to local in database
-		_, _ = db.Exec(`
-			UPDATE foghorn.artifacts
-			SET storage_location = 'local', updated_at = NOW()
-			WHERE artifact_hash = $1`,
-			assetHash)
-
-		// Record that this node now has a warm/local cached copy.
-		// This is intentionally independent from sync_status (S3 remains authoritative once synced).
 		reportingNodeID := complete.GetNodeId()
 		if reportingNodeID == "" {
 			reportingNodeID = nodeID
 		}
-		if artifactRepo != nil && reportingNodeID != "" {
+		result, err := db.Exec(`
+			UPDATE foghorn.artifacts
+			SET storage_location = 'local',
+			    defrost_node_id = NULL,
+			    defrost_started_at = NULL,
+			    updated_at = NOW()
+			WHERE artifact_hash = $1
+			  AND storage_location = 'defrosting'
+			  AND (defrost_node_id = $2 OR defrost_node_id IS NULL)
+		`, assetHash, reportingNodeID)
+		if err != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"asset_hash": assetHash,
+				"node_id":    reportingNodeID,
+			}).Warn("Failed to update storage location after defrost")
+		}
+		updatedRows := int64(0)
+		if result != nil {
+			if rows, err := result.RowsAffected(); err == nil {
+				updatedRows = rows
+			}
+		}
+		if updatedRows == 0 {
+			logger.WithFields(logging.Fields{
+				"asset_hash": assetHash,
+				"node_id":    reportingNodeID,
+			}).Warn("Defrost completion skipped; state already updated")
+		}
+
+		// Record that this node now has a warm/local cached copy.
+		// This is intentionally independent from sync_status (S3 remains authoritative once synced).
+		if updatedRows > 0 && artifactRepo != nil && reportingNodeID != "" {
 			if err := artifactRepo.AddCachedNode(context.Background(), assetHash, reportingNodeID); err != nil {
 				logger.WithError(err).WithFields(logging.Fields{
 					"asset_hash": assetHash,
@@ -1755,11 +1778,20 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		}
 	} else {
 		// Revert storage_location on failure so future defrosts can retry
+		reportingNodeID := complete.GetNodeId()
+		if reportingNodeID == "" {
+			reportingNodeID = nodeID
+		}
 		_, _ = db.Exec(`
 			UPDATE foghorn.artifacts
-			SET storage_location = 's3', updated_at = NOW()
-			WHERE artifact_hash = $1 AND storage_location = 'defrosting'`,
-			assetHash)
+			SET storage_location = 's3',
+			    defrost_node_id = NULL,
+			    defrost_started_at = NULL,
+			    updated_at = NOW()
+			WHERE artifact_hash = $1
+			  AND storage_location = 'defrosting'
+			  AND (defrost_node_id = $2 OR defrost_node_id IS NULL)
+		`, assetHash, reportingNodeID)
 		logger.WithFields(logging.Fields{
 			"asset_hash": assetHash,
 			"error":      errorMsg,
@@ -2058,8 +2090,53 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		return "", NewDefrostingError(10, "defrost already in progress")
 	}
 
-	// Mark as defrosting
-	_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 'defrosting', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+	result, err := db.Exec(`
+		UPDATE foghorn.artifacts
+		SET storage_location = 'defrosting',
+		    defrost_node_id = $2,
+		    defrost_started_at = NOW(),
+		    tenant_id = COALESCE(tenant_id, $3::uuid),
+		    updated_at = NOW()
+		WHERE artifact_hash = $1
+		  AND artifact_type = $4
+		  AND storage_location = 's3'
+		  AND (tenant_id::text = $3 OR tenant_id IS NULL)
+	`, assetHash, nodeID, tenantID, artifactType)
+	if err != nil {
+		return "", fmt.Errorf("failed to mark defrosting: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return "", fmt.Errorf("failed to read defrost update status: %w", err)
+	}
+	if affected == 0 {
+		var currentLocation string
+		err := db.QueryRow(`
+			SELECT COALESCE(storage_location, '')
+			FROM foghorn.artifacts
+			WHERE artifact_hash = $1
+			  AND artifact_type = $2
+			  AND (tenant_id::text = $3 OR tenant_id IS NULL)
+		`, assetHash, artifactType, tenantID).Scan(&currentLocation)
+		if err != nil {
+			return "", fmt.Errorf("asset not found: %w", err)
+		}
+		currentLocation = strings.ToLower(strings.TrimSpace(currentLocation))
+		if currentLocation == "local" {
+			return "", nil
+		}
+		if currentLocation == "defrosting" {
+			if wait {
+				path, ok := WaitForDefrost(assetHash, timeout)
+				if !ok {
+					return "", fmt.Errorf("defrost timeout")
+				}
+				return path, nil
+			}
+			return "", NewDefrostingError(10, "defrost already in progress")
+		}
+		return "", fmt.Errorf("asset not in defrostable state: %s", currentLocation)
+	}
 
 	// Generate presigned GET URLs
 	expiry := 30 * time.Minute
@@ -2161,7 +2238,16 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	// Send defrost request to node
 	if err := SendDefrostRequest(nodeID, req); err != nil {
 		// Revert storage location
-		_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 's3', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+		_, _ = db.Exec(`
+			UPDATE foghorn.artifacts
+			SET storage_location = 's3',
+			    defrost_node_id = NULL,
+			    defrost_started_at = NULL,
+			    updated_at = NOW()
+			WHERE artifact_hash = $1
+			  AND storage_location = 'defrosting'
+			  AND defrost_node_id = $2
+		`, assetHash, nodeID)
 		return "", fmt.Errorf("failed to send defrost request: %w", err)
 	}
 
