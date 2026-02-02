@@ -54,9 +54,11 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
         -- pending: not yet stored anywhere
         -- local: only on node(s), not synced to S3
         -- freezing: being uploaded to S3
-        -- s3: frozen to S3, may have warm copies
-        -- defrosting: being downloaded from S3
+    -- s3: frozen to S3, may have warm copies
+    -- defrosting: being downloaded from S3
     s3_url VARCHAR(500),
+    defrost_node_id VARCHAR(100),
+    defrost_started_at TIMESTAMP,
     sync_status VARCHAR(20) DEFAULT 'pending',
         -- pending: not synced
         -- in_progress: syncing
@@ -95,6 +97,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_sync ON foghorn.artifacts(sync_
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_created ON foghorn.artifacts(created_at);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_request_id ON foghorn.artifacts(request_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_frozen ON foghorn.artifacts(frozen_at) WHERE frozen_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_defrosting ON foghorn.artifacts(defrost_started_at) WHERE storage_location = 'defrosting';
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_internal_name ON foghorn.artifacts(internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_artifact_internal ON foghorn.artifacts(artifact_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;

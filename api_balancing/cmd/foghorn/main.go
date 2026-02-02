@@ -380,6 +380,16 @@ func main() {
 	retentionJob.Start()
 	defer retentionJob.Stop()
 
+	// Start stale defrost cleanup job (resets stuck defrosting artifacts)
+	staleDefrostJob := jobs.NewStaleDefrostCleanupJob(jobs.StaleDefrostCleanupConfig{
+		DB:         db,
+		Logger:     logger,
+		Interval:   1 * time.Minute,
+		StaleAfter: 10 * time.Minute,
+	})
+	staleDefrostJob.Start()
+	defer staleDefrostJob.Stop()
+
 	// Start orphan reconciliation job (retries failed deletions)
 	orphanCleanupJob := jobs.NewOrphanCleanupJob(jobs.OrphanCleanupConfig{
 		DB:       db,
