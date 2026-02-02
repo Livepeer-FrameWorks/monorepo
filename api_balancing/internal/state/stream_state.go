@@ -2286,6 +2286,37 @@ func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, client
 	if matchedViewer != nil {
 		matchedViewer.State = VirtualViewerDisconnected
 		matchedViewer.DisconnectTime = time.Now()
+	} else {
+		var pendingViewer *VirtualViewer
+		var pendingTime time.Time
+		for _, viewerID := range sm.viewersByNode[nodeID] {
+			viewer := sm.virtualViewers[viewerID]
+			if viewer == nil || viewer.State != VirtualViewerPending {
+				continue
+			}
+			if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
+				if pendingViewer == nil || viewer.RedirectTime.Before(pendingTime) {
+					pendingViewer = viewer
+					pendingTime = viewer.RedirectTime
+				}
+			}
+		}
+		if pendingViewer != nil {
+			pendingViewer.State = VirtualViewerAbandoned
+			pendingViewer.DisconnectTime = time.Now()
+			if node := sm.nodes[nodeID]; node != nil {
+				node.PendingRedirects--
+				if node.PendingRedirects < 0 {
+					node.PendingRedirects = 0
+				}
+				if node.AddBandwidth >= pendingViewer.EstBandwidth {
+					node.AddBandwidth -= pendingViewer.EstBandwidth
+				} else {
+					node.AddBandwidth = 0
+				}
+				sm.recomputeNodeScoresLocked(node)
+			}
+		}
 	}
 
 	// Cleanup old DISCONNECTED viewers (keep for a short retention period)

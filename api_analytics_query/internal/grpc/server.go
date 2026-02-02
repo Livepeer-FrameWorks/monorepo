@@ -836,8 +836,8 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 
 	// Start count query in parallel
 	streamID := req.GetStreamId()
-	countQuery := `SELECT count(*) FROM periscope.viewer_sessions_current FINAL WHERE tenant_id = ? AND connected_at >= ? AND connected_at <= ?`
-	countArgs := []interface{}{tenantID, startTime, endTime}
+	countQuery := `SELECT count(*) FROM periscope.viewer_sessions_current FINAL WHERE tenant_id = ? AND ((connected_at >= ? AND connected_at <= ?) OR (connected_at IS NULL AND disconnected_at >= ? AND disconnected_at <= ?))`
+	countArgs := []interface{}{tenantID, startTime, endTime, startTime, endTime}
 	if streamID != "" {
 		countQuery += " AND stream_id = ?"
 		countArgs = append(countArgs, streamID)
@@ -846,26 +846,29 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 
 	// Query viewer_sessions_current with correct column names
 	query := `
-		SELECT session_id, connected_at, disconnected_at, stream_id, node_id,
+		SELECT session_id, ifNull(connected_at, disconnected_at) AS session_start, connected_at, disconnected_at, stream_id, node_id,
 			connector, country_code, city,
 			latitude, longitude, session_duration, bytes_transferred
 		FROM periscope.viewer_sessions_current FINAL
-		WHERE tenant_id = ? AND connected_at >= ? AND connected_at <= ?
+		WHERE tenant_id = ? AND ((connected_at >= ? AND connected_at <= ?) OR (connected_at IS NULL AND disconnected_at >= ? AND disconnected_at <= ?))
 	`
-	args := []interface{}{tenantID, startTime, endTime}
+	args := []interface{}{tenantID, startTime, endTime, startTime, endTime}
 
 	if streamID != "" {
 		query += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "connected_at", "session_id")
+	// NOTE: session_start is a SELECT alias; ClickHouse doesn't allow SELECT aliases in WHERE.
+	// Inline the expression for keyset pagination.
+	sessionStartExpr := "ifNull(connected_at, disconnected_at)"
+	keysetCond, keysetArgs := buildKeysetCondition(params, sessionStartExpr, "session_id")
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "connected_at", "session_id")
+	query += buildOrderBy(params, sessionStartExpr, "session_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -877,13 +880,14 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 	var sessions []*pb.ViewerSession
 	for rows.Next() {
 		var session pb.ViewerSession
-		var connectedAt time.Time
+		var sessionStart time.Time
+		var connectedAt *time.Time
 		var disconnectedAt *time.Time
 		var sessionDuration uint32
 		var bytesTransferred uint64
 
 		err := rows.Scan(
-			&session.SessionId, &connectedAt, &disconnectedAt, &session.StreamId, &session.NodeId,
+			&session.SessionId, &sessionStart, &connectedAt, &disconnectedAt, &session.StreamId, &session.NodeId,
 			&session.Connector, &session.CountryCode, &session.City,
 			&session.Latitude, &session.Longitude, &sessionDuration, &bytesTransferred,
 		)
@@ -893,8 +897,10 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 		}
 
 		session.TenantId = tenantID
-		session.Timestamp = timestamppb.New(connectedAt)
-		session.ConnectedAt = timestamppb.New(connectedAt)
+		session.Timestamp = timestamppb.New(sessionStart)
+		if connectedAt != nil && !connectedAt.IsZero() {
+			session.ConnectedAt = timestamppb.New(*connectedAt)
+		}
 		if disconnectedAt != nil && !disconnectedAt.IsZero() {
 			session.DisconnectedAt = timestamppb.New(*disconnectedAt)
 		}
