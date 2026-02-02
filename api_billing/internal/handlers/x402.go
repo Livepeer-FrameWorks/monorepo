@@ -19,6 +19,7 @@ import (
 	"frameworks/pkg/countries"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -440,28 +441,16 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 		}, nil
 	}
 
-	// Record nonce as used (before crediting, to prevent double-spend on retry)
-	// Status starts as 'pending' - reconciler will confirm or fail based on tx receipt
-	_, err = h.db.Exec(`
-		INSERT INTO purser.x402_nonces (
-			network, payer_address, nonce, tx_hash, tenant_id, amount_cents, status, settled_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
-	`, payload.Network, strings.ToLower(auth.From), auth.Nonce, txHash, tenantID, verifyResult.AmountCents)
+	newBalance, storedAmount, inserted, nonceStatus, storedTxHash, err := h.recordNonceAndCredit(ctx, payload.Network, auth.From, auth.Nonce, txHash, tenantID, verifyResult.AmountCents)
 	if err != nil {
-		// Non-fatal - transaction is already on-chain
-		h.logger.WithFields(logging.Fields{"error": err}).Error("Failed to record nonce")
+		return &SettleResult{
+			Success: false,
+			Error:   fmt.Sprintf("failed to record settlement: %v", err),
+		}, nil
 	}
 
-	// Credit prepaid balance
-	newBalance, err := h.creditPrepaidBalance(ctx, tenantID, verifyResult.AmountCents, txHash)
-	if err != nil {
-		// Log but don't fail - payment is on-chain, manual reconciliation needed
-		h.logger.WithFields(logging.Fields{
-			"error":     err,
-			"tenant_id": tenantID,
-			"tx_hash":   txHash,
-			"amount":    verifyResult.AmountCents,
-		}).Error("Failed to credit prepaid balance after settlement - manual reconciliation needed")
+	if !inserted {
+		return h.buildIdempotentSettleResult(ctx, tenantID, storedAmount, storedTxHash, nonceStatus)
 	}
 
 	// Generate simplified invoice
@@ -488,6 +477,12 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 		}
 	}
 
+	emitBillingEvent(eventX402SettlementPending, tenantID, "x402_nonce", txHash, &pb.BillingEvent{
+		Amount:   float64(verifyResult.AmountCents) / 100,
+		Currency: "EUR",
+		Status:   "pending",
+	})
+
 	h.logger.WithFields(logging.Fields{
 		"tenant_id":    tenantID,
 		"amount_cents": verifyResult.AmountCents,
@@ -504,6 +499,82 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 		Currency:        billing.DefaultCurrency(),
 		NewBalanceCents: newBalance,
 		InvoiceNumber:   invoiceNumber,
+	}, nil
+}
+
+func (h *X402Handler) recordNonceAndCredit(ctx context.Context, network, payerAddress, nonce, txHash, tenantID string, amountCents int64) (int64, int64, bool, string, string, error) {
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, false, "", "", err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	var (
+		inserted     bool
+		nonceStatus  string
+		storedTxHash string
+		storedTenant string
+		storedAmount int64
+		newBalance   int64
+	)
+
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO purser.x402_nonces (
+			network, payer_address, nonce, tx_hash, tenant_id, amount_cents, status, settled_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
+		ON CONFLICT (network, payer_address, nonce) DO UPDATE
+		SET tx_hash = purser.x402_nonces.tx_hash
+		RETURNING tx_hash, tenant_id, amount_cents, status, (xmax = 0) AS inserted
+	`, network, strings.ToLower(payerAddress), nonce, txHash, tenantID, amountCents).Scan(&storedTxHash, &storedTenant, &storedAmount, &nonceStatus, &inserted)
+	if err != nil {
+		return 0, 0, false, "", "", err
+	}
+
+	if storedTenant != tenantID {
+		return 0, 0, false, "", "", fmt.Errorf("nonce already used by another tenant")
+	}
+	if storedAmount != amountCents {
+		return 0, 0, false, "", "", fmt.Errorf("nonce already used for a different amount")
+	}
+
+	if !inserted {
+		if err := tx.Commit(); err != nil {
+			return 0, 0, false, "", "", err
+		}
+		return 0, storedAmount, false, nonceStatus, storedTxHash, nil
+	}
+
+	newBalance, err = h.creditPrepaidBalanceTx(ctx, tx, tenantID, amountCents, txHash, "x402 USDC payment")
+	if err != nil {
+		return 0, 0, false, "", "", err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, 0, false, "", "", err
+	}
+
+	return newBalance, amountCents, true, "pending", txHash, nil
+}
+
+func (h *X402Handler) buildIdempotentSettleResult(ctx context.Context, tenantID string, amountCents int64, txHash, status string) (*SettleResult, error) {
+	if status == "failed" {
+		return &SettleResult{
+			Success: false,
+			Error:   "nonce already used",
+		}, nil
+	}
+
+	currentBalance, err := h.getCurrentBalance(ctx, tenantID, billing.DefaultCurrency())
+	if err != nil {
+		return nil, err
+	}
+
+	return &SettleResult{
+		Success:         true,
+		TxHash:          txHash,
+		CreditedCents:   amountCents,
+		Currency:        billing.DefaultCurrency(),
+		NewBalanceCents: currentBalance,
 	}, nil
 }
 
@@ -722,9 +793,24 @@ func (h *X402Handler) creditPrepaidBalance(ctx context.Context, tenantID string,
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
+	newBalance, err := h.creditPrepaidBalanceTx(ctx, tx, tenantID, amountCents, txHash, "x402 USDC payment")
+	if err != nil {
+		return 0, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return newBalance, nil
+}
+
+func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, tenantID string, amountCents int64, txHash string, description string) (int64, error) {
+	currency := billing.DefaultCurrency()
+
 	// Get current balance
 	var currentBalance int64
-	err = tx.QueryRow(`
+	err := tx.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, tenantID, currency).Scan(&currentBalance)
@@ -737,7 +823,7 @@ func (h *X402Handler) creditPrepaidBalance(ctx context.Context, tenantID string,
 	newBalance := currentBalance + amountCents
 
 	// Upsert balance
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
 		VALUES ($1, $2, $3, NOW())
 		ON CONFLICT (tenant_id, currency)
@@ -748,7 +834,7 @@ func (h *X402Handler) creditPrepaidBalance(ctx context.Context, tenantID string,
 	}
 
 	// Record transaction
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			id, tenant_id, amount_cents, balance_after_cents,
 			transaction_type, description, reference_id, reference_type, created_at
@@ -758,18 +844,29 @@ func (h *X402Handler) creditPrepaidBalance(ctx context.Context, tenantID string,
 		tenantID,
 		amountCents,
 		newBalance,
-		fmt.Sprintf("x402 USDC payment (%s...)", txHash[:16]),
+		fmt.Sprintf("%s (%s...)", description, txHash[:16]),
 		txHash,
 	)
 	if err != nil {
 		return 0, err
 	}
 
-	if err = tx.Commit(); err != nil {
+	return newBalance, nil
+}
+
+func (h *X402Handler) getCurrentBalance(ctx context.Context, tenantID, currency string) (int64, error) {
+	var balance int64
+	err := h.db.QueryRowContext(ctx, `
+		SELECT balance_cents FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2
+	`, tenantID, currency).Scan(&balance)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
 		return 0, err
 	}
-
-	return newBalance, nil
+	return balance, nil
 }
 
 // generateSimplifiedInvoice creates an EU-compliant simplified invoice

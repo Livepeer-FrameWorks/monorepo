@@ -13,6 +13,7 @@ const (
 	eventInvoicePaid           = "invoice_paid"
 	eventInvoicePaymentFailed  = "invoice_payment_failed"
 	eventTopupCredited         = "topup_credited"
+	eventX402SettlementPending = "x402_settlement_pending"
 	eventX402SettlementFailed  = "x402_settlement_failed"
 	eventX402SettlementConfirm = "x402_settlement_confirmed"
 )

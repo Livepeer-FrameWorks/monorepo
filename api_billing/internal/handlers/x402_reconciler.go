@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"frameworks/pkg/billing"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )
@@ -70,6 +71,8 @@ func (r *X402Reconciler) Start(ctx context.Context) {
 			return
 		case <-ticker.C:
 			r.reconcilePendingSettlements(ctx)
+			r.reconcileFailedTimeouts(ctx)
+			r.reconcileConfirmedSettlements(ctx)
 		}
 	}
 }
@@ -166,9 +169,21 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 
 	// Check receipt status
 	if receipt.Status == "0x1" {
-		// Success
 		blockNum := parseHexInt64(receipt.BlockNumber)
 		gasUsed := parseHexInt64(receipt.GasUsed)
+		confirmed, err := r.hasRequiredConfirmations(ctx, network, blockNum)
+		if err != nil {
+			r.logger.WithError(err).WithFields(logging.Fields{
+				"tx_hash": s.TxHash,
+				"network": s.Network,
+			}).Warn("Failed to determine confirmation depth")
+			return
+		}
+
+		if !confirmed {
+			r.updatePendingReceipt(ctx, s.ID, blockNum, gasUsed)
+			return
+		}
 
 		r.markConfirmed(ctx, s.ID, blockNum, gasUsed)
 		r.logger.WithFields(logging.Fields{
@@ -193,6 +208,238 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 		r.markFailed(ctx, s.ID, "transaction reverted on-chain")
 		r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
 	}
+}
+
+func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at
+		FROM purser.x402_nonces
+		WHERE status = 'failed'
+		AND failure_reason LIKE 'timeout%'
+		AND settled_at > NOW() - INTERVAL '1 hour'
+		ORDER BY settled_at ASC
+		LIMIT 50
+	`)
+	if err != nil {
+		r.logger.WithError(err).Error("Failed to query failed x402 settlements")
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var s PendingSettlement
+		if err := rows.Scan(&s.ID, &s.Network, &s.TxHash, &s.TenantID, &s.AmountCents, &s.SettledAt); err != nil {
+			r.logger.WithError(err).Error("Failed to scan failed settlement")
+			continue
+		}
+
+		network, ok := Networks[s.Network]
+		if !ok {
+			r.logger.WithField("network", s.Network).Error("Unknown network for settlement")
+			continue
+		}
+
+		receipt, err := r.getTransactionReceipt(ctx, network, s.TxHash)
+		if err != nil || receipt == nil || receipt.Status != "0x1" {
+			continue
+		}
+
+		blockNum := parseHexInt64(receipt.BlockNumber)
+		gasUsed := parseHexInt64(receipt.GasUsed)
+		confirmed, err := r.hasRequiredConfirmations(ctx, network, blockNum)
+		if err != nil || !confirmed {
+			continue
+		}
+
+		// Only re-credit if we previously debited the tenant due to timeout.
+		// Otherwise a transient debit failure would result in double-credit.
+		var reversalExists bool
+		err = r.db.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM purser.balance_transactions
+				WHERE tenant_id = $1
+				  AND reference_id = $2
+				  AND reference_type = 'x402_failed'
+				  AND transaction_type = 'reversal'
+			)
+		`, s.TenantID, s.TxHash).Scan(&reversalExists)
+		if err != nil {
+			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to check timeout reversal before re-credit")
+			continue
+		}
+		if !reversalExists {
+			r.logger.WithFields(logging.Fields{
+				"tenant_id": s.TenantID,
+				"tx_hash":   s.TxHash,
+			}).Warn("Skipping late-settlement re-credit: no prior reversal recorded")
+		} else if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.TxHash); err != nil {
+			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to re-credit balance after late settlement")
+			continue
+		}
+
+		r.markConfirmed(ctx, s.ID, blockNum, gasUsed)
+		emitBillingEvent(eventX402SettlementConfirm, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
+			Amount:   float64(s.AmountCents) / 100,
+			Currency: "EUR",
+			Status:   "confirmed",
+		})
+	}
+}
+
+func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at
+		FROM purser.x402_nonces
+		WHERE status = 'confirmed'
+		AND confirmed_at > NOW() - INTERVAL '1 hour'
+		ORDER BY confirmed_at ASC
+		LIMIT 50
+	`)
+	if err != nil {
+		r.logger.WithError(err).Error("Failed to query confirmed x402 settlements")
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var s PendingSettlement
+		if err := rows.Scan(&s.ID, &s.Network, &s.TxHash, &s.TenantID, &s.AmountCents, &s.SettledAt); err != nil {
+			r.logger.WithError(err).Error("Failed to scan confirmed settlement")
+			continue
+		}
+
+		network, ok := Networks[s.Network]
+		if !ok {
+			continue
+		}
+
+		receipt, err := r.getTransactionReceipt(ctx, network, s.TxHash)
+		if err != nil || receipt == nil || receipt.Status != "0x1" {
+			r.markFailed(ctx, s.ID, "transaction reorged or missing")
+			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+		}
+	}
+}
+
+func (r *X402Reconciler) hasRequiredConfirmations(ctx context.Context, network NetworkConfig, blockNum int64) (bool, error) {
+	if blockNum == 0 {
+		return false, nil
+	}
+
+	latest, err := r.getLatestBlockNumber(ctx, network)
+	if err != nil {
+		return false, err
+	}
+
+	if latest < blockNum {
+		return false, nil
+	}
+
+	return (latest - blockNum) >= int64(network.Confirmations), nil
+}
+
+func (r *X402Reconciler) getLatestBlockNumber(ctx context.Context, network NetworkConfig) (int64, error) {
+	rpcEndpoint := network.GetRPCEndpointWithDefault()
+	if rpcEndpoint == "" {
+		return 0, fmt.Errorf("no RPC endpoint for network %s", network.Name)
+	}
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "eth_blockNumber",
+		"params":  []interface{}{},
+		"id":      1,
+	}
+
+	reqJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", rpcEndpoint, strings.NewReader(string(reqJSON)))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	var rpcResp struct {
+		Result string           `json:"result"`
+		Error  *json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		return 0, err
+	}
+	if rpcResp.Error != nil {
+		return 0, fmt.Errorf("RPC error: %s", string(*rpcResp.Error))
+	}
+
+	return parseHexInt64(rpcResp.Result), nil
+}
+
+func (r *X402Reconciler) updatePendingReceipt(ctx context.Context, id string, blockNumber, gasUsed int64) {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE purser.x402_nonces
+		SET block_number = $2, gas_used = $3
+		WHERE id = $1
+	`, id, blockNumber, gasUsed)
+	if err != nil {
+		r.logger.WithError(err).WithField("id", id).Error("Failed to update pending receipt metadata")
+	}
+}
+
+func (r *X402Reconciler) creditBalance(ctx context.Context, tenantID string, amountCents int64, txHash string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	var balance int64
+	currency := billing.DefaultCurrency()
+	err = tx.QueryRowContext(ctx, `
+		SELECT balance_cents FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2
+	`, tenantID, currency).Scan(&balance)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	newBalance := balance + amountCents
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (tenant_id, currency)
+		DO UPDATE SET balance_cents = $2, updated_at = NOW()
+	`, tenantID, newBalance, currency)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.balance_transactions (
+			id, tenant_id, amount_cents, balance_after_cents,
+			transaction_type, description, reference_id, reference_type, created_at
+		) VALUES ($1, $2, $3, $4, 'topup', $5, $6, 'x402_payment', NOW())
+	`, uuid.New().String(), tenantID, amountCents, newBalance,
+		fmt.Sprintf("x402 settlement recovered (%s)", truncateTxHash(txHash)), txHash)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // getTransactionReceipt fetches the transaction receipt from the network RPC
