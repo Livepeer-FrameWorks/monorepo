@@ -265,6 +265,9 @@ kafka-topics.sh --bootstrap-server $BROKER --create \
 ```bash
 cd /path/to/monorepo
 
+# Ensure output dir exists for build-bin-* targets
+mkdir -p bin
+
 make build-bin-quartermaster
 make build-bin-commodore
 make build-bin-purser
