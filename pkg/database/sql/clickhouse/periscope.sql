@@ -367,7 +367,7 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_current (
     internal_name LowCardinality(String),
     session_id String,
 
-    connected_at SimpleAggregateFunction(max, DateTime),
+    connected_at SimpleAggregateFunction(min, Nullable(DateTime)),
     disconnected_at SimpleAggregateFunction(max, Nullable(DateTime)),
 
     node_id SimpleAggregateFunction(any, LowCardinality(String)),
@@ -411,7 +411,7 @@ SELECT
     stream_id,
     internal_name,
     session_id,
-    toDateTime(0) AS connected_at,
+    CAST(NULL AS Nullable(DateTime)) AS connected_at,
     timestamp AS disconnected_at,
     node_id,
     connector,
