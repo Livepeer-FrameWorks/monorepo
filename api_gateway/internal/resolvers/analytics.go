@@ -192,6 +192,11 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 		return demo.GenerateStreamHealthMetrics(), nil
 	}
 
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	// Convert time range for Periscope client
 	tr := toTimeRangeOpts(timeRange)
 	var streamID *string
@@ -200,15 +205,15 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 	}
 
 	// Get health metrics from Periscope Query
-	cacheKey := "all"
+	cacheKey := tenantID + ":all"
 	if streamId != "" {
-		cacheKey = streamId
+		cacheKey = tenantID + ":" + streamId
 	}
 	if timeRange != nil {
 		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
 	}
 	val, err := r.fetchPeriscope(ctx, "stream_health", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, streamID, tr, nil)
+		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, tenantID, streamID, tr, nil)
 	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get stream health metrics")
@@ -257,6 +262,11 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 		return demo.GenerateViewerGeographics(), nil
 	}
 
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	normalizedStream, err := normalizeStreamIDPtr(stream)
 	if err != nil {
 		return nil, err
@@ -265,15 +275,15 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 
 	// Get geographic data from Periscope Query
 	tr := toTimeRangeOpts(timeRange)
-	cacheKey := "all"
+	cacheKey := tenantID + ":all"
 	if stream != nil && *stream != "" {
-		cacheKey = *stream
+		cacheKey = tenantID + ":" + *stream
 	}
 	if timeRange != nil {
 		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
 	}
 	val, err := r.fetchPeriscope(ctx, "connection_events", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetConnectionEvents(ctx, stream, tr, nil)
+		return r.Clients.Periscope.GetConnectionEvents(ctx, tenantID, stream, tr, nil)
 	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get connection events for geographics")
@@ -402,6 +412,11 @@ func timeKey(t *time.Time) string {
 }
 
 func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	streamKey := ""
 	if stream != nil {
 		streamKey = *stream
@@ -409,7 +424,7 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 
 	// Build cache key including pagination parameters and related tenants
 	relatedKey := strings.Join(relatedTenantIDs, ",")
-	keyParts := []string{streamKey, timeKey(startTime), timeKey(endTime), relatedKey}
+	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime), relatedKey}
 	if subjectTenantID != nil {
 		keyParts = append(keyParts, "st:"+*subjectTenantID)
 	}
@@ -436,7 +451,7 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "routing_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetRoutingEvents(ctx, stream, tr, opts, relatedTenantIDs, subjectTenantID, clusterID)
+		return r.Clients.Periscope.GetRoutingEvents(ctx, tenantID, stream, tr, opts, relatedTenantIDs, subjectTenantID, clusterID)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -449,13 +464,18 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 }
 
 func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetConnectionEventsResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	streamKey := ""
 	if stream != nil {
 		streamKey = *stream
 	}
 
 	// Build cache key including pagination parameters
-	keyParts := []string{streamKey, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -470,7 +490,7 @@ func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, sta
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "connection_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetConnectionEvents(ctx, stream, tr, opts)
+		return r.Clients.Periscope.GetConnectionEvents(ctx, tenantID, stream, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -483,13 +503,18 @@ func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, sta
 }
 
 func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetricsResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	nodeKey := ""
 	if nodeID != nil {
 		nodeKey = *nodeID
 	}
 
 	// Build cache key including pagination parameters
-	keyParts := []string{nodeKey, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, nodeKey, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -504,7 +529,7 @@ func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTim
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "node_metrics", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetNodeMetrics(ctx, nodeID, tr, opts)
+		return r.Clients.Periscope.GetNodeMetrics(ctx, tenantID, nodeID, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -517,13 +542,18 @@ func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTim
 }
 
 func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetrics1HResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	nodeKey := ""
 	if nodeID != nil {
 		nodeKey = *nodeID
 	}
 
 	// Build cache key including pagination parameters
-	keyParts := []string{nodeKey, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, nodeKey, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -538,7 +568,7 @@ func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startT
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "node_metrics_1h", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetNodeMetrics1H(ctx, nodeID, tr, opts)
+		return r.Clients.Periscope.GetNodeMetrics1H(ctx, tenantID, nodeID, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -551,6 +581,11 @@ func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startT
 }
 
 func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentType *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetClipEventsResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	streamIDKey := ""
 	if streamID != nil {
 		streamIDKey = *streamID
@@ -565,7 +600,7 @@ func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentT
 	}
 
 	// Build cache key including pagination parameters
-	keyParts := []string{streamIDKey, stageKey, contentTypeKey, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, streamIDKey, stageKey, contentTypeKey, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -580,7 +615,7 @@ func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentT
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "clip_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetClipEvents(ctx, streamID, stage, contentType, tr, opts)
+		return r.Clients.Periscope.GetClipEvents(ctx, tenantID, streamID, stage, contentType, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -593,8 +628,13 @@ func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentT
 }
 
 func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamEventsResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	// Build cache key including pagination parameters
-	keyParts := []string{streamID, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, streamID, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -609,7 +649,7 @@ func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startT
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetStreamEvents(ctx, streamID, tr, opts)
+		return r.Clients.Periscope.GetStreamEvents(ctx, tenantID, streamID, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -622,8 +662,13 @@ func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startT
 }
 
 func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetTrackListEventsResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	// Build cache key including pagination parameters
-	keyParts := []string{streamID, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, streamID, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -638,7 +683,7 @@ func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, sta
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "track_list_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetTrackListEvents(ctx, streamID, tr, opts)
+		return r.Clients.Periscope.GetTrackListEvents(ctx, tenantID, streamID, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -651,12 +696,17 @@ func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, sta
 }
 
 func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamHealthMetricsResponse, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	// Build cache key including stream and pagination parameters
 	streamKey := ""
 	if stream != nil {
 		streamKey = *stream
 	}
-	keyParts := []string{streamKey, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -671,7 +721,7 @@ func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, 
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_health_metrics", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, stream, tr, opts)
+		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, tenantID, stream, tr, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err

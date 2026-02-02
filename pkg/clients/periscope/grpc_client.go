@@ -190,8 +190,9 @@ func (c *GRPCClient) GetLiveUsageSummary(ctx context.Context, tenantID string, t
 }
 
 // GetStreamEvents returns events for a specific stream with cursor pagination
-func (c *GRPCClient) GetStreamEvents(ctx context.Context, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamEventsResponse, error) {
+func (c *GRPCClient) GetStreamEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamEventsResponse, error) {
 	return c.stream.GetStreamEvents(ctx, &pb.GetStreamEventsRequest{
+		TenantId:   tenantID,
 		StreamId:   streamID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
@@ -199,8 +200,9 @@ func (c *GRPCClient) GetStreamEvents(ctx context.Context, streamID string, timeR
 }
 
 // GetBufferEvents returns buffer events for a specific stream
-func (c *GRPCClient) GetBufferEvents(ctx context.Context, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetBufferEventsResponse, error) {
+func (c *GRPCClient) GetBufferEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetBufferEventsResponse, error) {
 	return c.stream.GetBufferEvents(ctx, &pb.GetBufferEventsRequest{
+		TenantId:   tenantID,
 		StreamId:   streamID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
@@ -208,8 +210,9 @@ func (c *GRPCClient) GetBufferEvents(ctx context.Context, streamID string, timeR
 }
 
 // GetStreamHealthMetrics returns stream health metrics
-func (c *GRPCClient) GetStreamHealthMetrics(ctx context.Context, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error) {
+func (c *GRPCClient) GetStreamHealthMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error) {
 	req := &pb.GetStreamHealthMetricsRequest{
+		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
@@ -287,8 +290,9 @@ func (c *GRPCClient) GetGeographicDistribution(ctx context.Context, tenantID str
 // ============================================================================
 
 // GetTrackListEvents returns track list updates for a specific stream
-func (c *GRPCClient) GetTrackListEvents(ctx context.Context, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetTrackListEventsResponse, error) {
+func (c *GRPCClient) GetTrackListEvents(ctx context.Context, tenantID string, streamID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetTrackListEventsResponse, error) {
 	return c.track.GetTrackListEvents(ctx, &pb.GetTrackListEventsRequest{
+		TenantId:   tenantID,
 		StreamId:   streamID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
@@ -300,8 +304,9 @@ func (c *GRPCClient) GetTrackListEvents(ctx context.Context, streamID string, ti
 // ============================================================================
 
 // GetConnectionEvents returns connection events
-func (c *GRPCClient) GetConnectionEvents(ctx context.Context, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetConnectionEventsResponse, error) {
+func (c *GRPCClient) GetConnectionEvents(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetConnectionEventsResponse, error) {
 	req := &pb.GetConnectionEventsRequest{
+		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
@@ -316,8 +321,9 @@ func (c *GRPCClient) GetConnectionEvents(ctx context.Context, streamID *string, 
 // ============================================================================
 
 // GetNodeMetrics returns node performance metrics
-func (c *GRPCClient) GetNodeMetrics(ctx context.Context, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetNodeMetricsResponse, error) {
+func (c *GRPCClient) GetNodeMetrics(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetNodeMetricsResponse, error) {
 	req := &pb.GetNodeMetricsRequest{
+		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
@@ -328,8 +334,9 @@ func (c *GRPCClient) GetNodeMetrics(ctx context.Context, nodeID *string, timeRan
 }
 
 // GetNodeMetrics1H returns hourly aggregated node metrics
-func (c *GRPCClient) GetNodeMetrics1H(ctx context.Context, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetNodeMetrics1HResponse, error) {
+func (c *GRPCClient) GetNodeMetrics1H(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetNodeMetrics1HResponse, error) {
 	req := &pb.GetNodeMetrics1HRequest{
+		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
@@ -340,8 +347,9 @@ func (c *GRPCClient) GetNodeMetrics1H(ctx context.Context, nodeID *string, timeR
 }
 
 // GetNodeMetricsAggregated returns per-node aggregates for the requested time range.
-func (c *GRPCClient) GetNodeMetricsAggregated(ctx context.Context, nodeID *string, timeRange *TimeRangeOpts) (*pb.GetNodeMetricsAggregatedResponse, error) {
+func (c *GRPCClient) GetNodeMetricsAggregated(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts) (*pb.GetNodeMetricsAggregatedResponse, error) {
 	req := &pb.GetNodeMetricsAggregatedRequest{
+		TenantId:  tenantID,
 		TimeRange: buildTimeRange(timeRange),
 	}
 	if nodeID != nil {
@@ -352,8 +360,9 @@ func (c *GRPCClient) GetNodeMetricsAggregated(ctx context.Context, nodeID *strin
 
 // GetLiveNodes returns current state of nodes from live_nodes (ReplacingMergeTree)
 // Supports multi-tenant access for subscribed clusters via relatedTenantIDs
-func (c *GRPCClient) GetLiveNodes(ctx context.Context, nodeID *string, relatedTenantIDs []string) (*pb.GetLiveNodesResponse, error) {
+func (c *GRPCClient) GetLiveNodes(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*pb.GetLiveNodesResponse, error) {
 	req := &pb.GetLiveNodesRequest{
+		TenantId:         tenantID,
 		RelatedTenantIds: relatedTenantIDs,
 	}
 	if nodeID != nil {
@@ -367,8 +376,9 @@ func (c *GRPCClient) GetLiveNodes(ctx context.Context, nodeID *string, relatedTe
 // ============================================================================
 
 // GetRoutingEvents returns routing decision events
-func (c *GRPCClient) GetRoutingEvents(ctx context.Context, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
+func (c *GRPCClient) GetRoutingEvents(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
 	req := &pb.GetRoutingEventsRequest{
+		TenantId:         tenantID,
 		TimeRange:        buildTimeRange(timeRange),
 		Pagination:       buildCursorPagination(opts),
 		RelatedTenantIds: relatedTenantIDs,
@@ -403,8 +413,9 @@ func (c *GRPCClient) GetPlatformOverview(ctx context.Context, tenantID string, t
 // ============================================================================
 
 // GetClipEvents returns artifact lifecycle events (clip/dvr/vod)
-func (c *GRPCClient) GetClipEvents(ctx context.Context, streamID *string, stage *string, contentType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetClipEventsResponse, error) {
+func (c *GRPCClient) GetClipEvents(ctx context.Context, tenantID string, streamID *string, stage *string, contentType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetClipEventsResponse, error) {
 	req := &pb.GetClipEventsRequest{
+		TenantId:   tenantID,
 		TimeRange:  buildTimeRange(timeRange),
 		Pagination: buildCursorPagination(opts),
 	}
