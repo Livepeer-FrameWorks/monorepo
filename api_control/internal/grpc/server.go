@@ -4967,7 +4967,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 			id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
 			retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
 	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), req.Filename, req.GetContentType(), req.SizeBytes,
 		retentionUntil)

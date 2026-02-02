@@ -1591,8 +1591,8 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		SELECT v.artifact_hash, v.s3_key, a.size_bytes, a.user_id
 		FROM foghorn.vod_metadata v
 		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
-		WHERE v.s3_upload_id = $1 AND a.status = 'uploading'
-	`, req.UploadId).Scan(&artifactHash, &s3Key, &sizeBytes, &userID)
+		WHERE v.s3_upload_id = $1 AND a.status = 'uploading' AND a.tenant_id = $2
+	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &sizeBytes, &userID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
@@ -1728,8 +1728,8 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 		SELECT v.artifact_hash, v.s3_key, a.user_id
 		FROM foghorn.vod_metadata v
 		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
-		WHERE v.s3_upload_id = $1 AND a.status = 'uploading'
-	`, req.UploadId).Scan(&artifactHash, &s3Key, &userID)
+		WHERE v.s3_upload_id = $1 AND a.status = 'uploading' AND a.tenant_id = $2
+	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &userID)
 
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")

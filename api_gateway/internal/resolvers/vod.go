@@ -6,6 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
@@ -61,11 +64,32 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	resp, err := r.Clients.Commodore.CreateVodUpload(ctx, req)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to create VOD upload")
+
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.FailedPrecondition:
+				if strings.Contains(st.Message(), "S3 storage not configured") {
+					return &model.ValidationError{
+						Message: "VOD uploads are not available - S3 storage not configured",
+						Field:   strPtr("storage"),
+					}, nil
+				}
+			case codes.PermissionDenied:
+				if strings.Contains(st.Message(), "account suspended") {
+					return &model.AuthError{Message: "Account suspended - please top up your balance to upload videos"}, nil
+				}
+			}
+		}
+
+		// Fallback string matching (in case upstream changes don't propagate gRPC status cleanly)
 		if strings.Contains(err.Error(), "S3 storage not configured") {
 			return &model.ValidationError{
 				Message: "VOD uploads are not available - S3 storage not configured",
 				Field:   strPtr("storage"),
 			}, nil
+		}
+		if strings.Contains(err.Error(), "account suspended") {
+			return &model.AuthError{Message: "Account suspended - please top up your balance to upload videos"}, nil
 		}
 		return nil, fmt.Errorf("failed to create VOD upload: %w", err)
 	}
@@ -118,6 +142,24 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	resp, err := r.Clients.Commodore.CompleteVodUpload(ctx, req)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to complete VOD upload")
+
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.NotFound:
+				return &model.NotFoundError{
+					Message:      "Upload not found or already completed",
+					Code:         strPtr("NOT_FOUND"),
+					ResourceType: "VodUpload",
+					ResourceID:   input.UploadID,
+				}, nil
+			case codes.PermissionDenied:
+				if strings.Contains(st.Message(), "account suspended") {
+					return &model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"}, nil
+				}
+			}
+		}
+
+		// Fallback string matching
 		if strings.Contains(err.Error(), "not found") {
 			return &model.NotFoundError{
 				Message:      "Upload not found or already completed",
@@ -125,6 +167,9 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 				ResourceType: "VodUpload",
 				ResourceID:   input.UploadID,
 			}, nil
+		}
+		if strings.Contains(err.Error(), "account suspended") {
+			return &model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"}, nil
 		}
 		return nil, fmt.Errorf("failed to complete VOD upload: %w", err)
 	}
@@ -153,6 +198,24 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 	_, err := r.Clients.Commodore.AbortVodUpload(ctx, tenantID, uploadID)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to abort VOD upload")
+
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.NotFound:
+				return &model.NotFoundError{
+					Message:      "Upload not found or already completed",
+					Code:         strPtr("NOT_FOUND"),
+					ResourceType: "VodUpload",
+					ResourceID:   uploadID,
+				}, nil
+			case codes.PermissionDenied:
+				if strings.Contains(st.Message(), "account suspended") {
+					return &model.AuthError{Message: "Account suspended - please top up your balance to manage uploads"}, nil
+				}
+			}
+		}
+
+		// Fallback string matching
 		if strings.Contains(err.Error(), "not found") {
 			return &model.NotFoundError{
 				Message:      "Upload not found or already completed",
@@ -160,6 +223,9 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 				ResourceType: "VodUpload",
 				ResourceID:   uploadID,
 			}, nil
+		}
+		if strings.Contains(err.Error(), "account suspended") {
+			return &model.AuthError{Message: "Account suspended - please top up your balance to manage uploads"}, nil
 		}
 		return nil, fmt.Errorf("failed to abort VOD upload: %w", err)
 	}

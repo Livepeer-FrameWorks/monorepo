@@ -703,7 +703,8 @@
       });
 
       if (completeResult.data?.completeVodUpload?.__typename !== "VodAsset") {
-        throw new Error("Failed to complete upload");
+        const error = completeResult.data?.completeVodUpload as unknown as { message?: string };
+        throw new Error(error?.message || "Failed to complete upload");
       }
 
       uploadStage = "done";
