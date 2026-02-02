@@ -1,8 +1,8 @@
 module frameworks/scripts/env
 
-go 1.24.0
+go 1.24.1
 
-toolchain go1.24.11
+toolchain go1.24.12
 
 require frameworks/pkg v0.0.0
 

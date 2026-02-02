@@ -1,12 +1,46 @@
 version: 2
 updates:
-  # Go modules - shared pkg
+  # Go modules - shared pkg (root dependency for all services)
   - package-ecosystem: gomod
     directory: /pkg
     schedule:
       interval: weekly
     groups:
       go-deps:
+        patterns: ["*"]
+
+  # Go modules - all API services
+  - package-ecosystem: gomod
+    directories:
+      - /api_analytics_ingest
+      - /api_analytics_query
+      - /api_balancing
+      - /api_billing
+      - /api_control
+      - /api_dns
+      - /api_firehose
+      - /api_forms
+      - /api_gateway
+      - /api_mesh
+      - /api_realtime
+      - /api_sidecar
+      - /api_tenants
+      - /api_ticketing
+    schedule:
+      interval: weekly
+    groups:
+      go-service-deps:
+        patterns: ["*"]
+
+  # Go modules - CLI and scripts
+  - package-ecosystem: gomod
+    directories:
+      - /cli
+      - /scripts/env
+    schedule:
+      interval: weekly
+    groups:
+      go-tooling-deps:
         patterns: ["*"]
 
   # Node/pnpm - root workspace
@@ -17,9 +51,33 @@ updates:
     groups:
       npm-deps:
         patterns: ["*"]
+        exclude-patterns: ["@types/*"]
+      npm-types:
+        patterns: ["@types/*"]
+
+  # Node/pnpm - player packages
+  - package-ecosystem: npm
+    directory: /npm_player
+    schedule:
+      interval: weekly
+    groups:
+      player-deps:
+        patterns: ["*"]
+
+  # Node/pnpm - studio packages
+  - package-ecosystem: npm
+    directory: /npm_studio
+    schedule:
+      interval: weekly
+    groups:
+      studio-deps:
+        patterns: ["*"]
 
   # GitHub Actions
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
