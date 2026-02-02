@@ -3893,6 +3893,7 @@ type TenantSubscription {
   customAllocations: AllocationDetails
   # Payment
   paymentMethod: String
+  billingModel: String!
   createdAt: Time!
   updatedAt: Time!
 }

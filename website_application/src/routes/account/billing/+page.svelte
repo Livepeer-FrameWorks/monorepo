@@ -9,6 +9,7 @@
     GetBillingTiersStore,
     GetInvoicesStore,
     CreatePaymentStore,
+    PromoteToPaidStore,
     BillingTierFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -25,12 +26,15 @@
   const billingTiersStore = new GetBillingTiersStore();
   const invoicesStore = new GetInvoicesStore();
   const createPaymentMutation = new CreatePaymentStore();
+  const promoteMutation = new PromoteToPaidStore();
 
   // Fragment stores for unmasking nested data
   const tierFragmentStore = new BillingTierFieldsStore();
 
   let isAuthenticated = false;
   let error = $state<string | null>(null);
+  let selectedTierId = $state("");
+  let promoteLoading = $state(false);
 
   // Derived state from Houdini stores
   let loading = $derived(
@@ -100,6 +104,30 @@
     }
   }
 
+  async function handlePromoteToPaid() {
+    if (!selectedTierId) {
+      toast.error("Please select a billing tier");
+      return;
+    }
+
+    promoteLoading = true;
+    try {
+      const result = await promoteMutation.mutate({ tierId: selectedTierId });
+
+      const data = result.data?.promoteToPaid;
+      if (data && "success" in data && data.success) {
+        toast.success(data.message || "Successfully upgraded to postpaid billing");
+        window.location.reload();
+      } else if (data && "message" in data) {
+        throw new Error(data.message);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to upgrade billing");
+    } finally {
+      promoteLoading = false;
+    }
+  }
+
   function formatCurrency(amount: number, currency = "USD") {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
@@ -150,6 +178,10 @@
   const ReceiptIcon = getIconComponent("Receipt");
   const SparklesIcon = getIconComponent("Sparkles");
   const GaugeIcon = getIconComponent("Gauge");
+  const ArrowUpIcon = getIconComponent("ArrowUp");
+
+  // Derived: is this a prepaid account that can upgrade?
+  const isPrepaid = $derived(billingStatus?.subscription?.billingModel === "prepaid");
 </script>
 
 <svelte:head>
@@ -374,6 +406,50 @@
 
           <!-- Prepaid Balance -->
           <PrepaidBalanceWidget />
+
+          <!-- Upgrade to Postpaid (for prepaid accounts with verified email) -->
+          {#if isPrepaid && $auth.user?.email}
+            <div class="slab">
+              <div class="slab-header">
+                <div class="flex items-center gap-2">
+                  <ArrowUpIcon class="w-4 h-4 text-success" />
+                  <h3>Upgrade to Postpaid</h3>
+                </div>
+              </div>
+              <div class="slab-body--padded">
+                <p class="text-sm text-muted-foreground mb-4">
+                  You're currently on prepaid billing. Upgrade to postpaid for monthly invoicing
+                  with higher limits.
+                </p>
+                {#if availableTiers.length > 0}
+                  <div class="space-y-2">
+                    <label for="tierSelect" class="text-sm font-medium text-muted-foreground"
+                      >Select a tier:</label
+                    >
+                    <select
+                      id="tierSelect"
+                      bind:value={selectedTierId}
+                      class="w-full p-2 border border-input rounded-md bg-background text-foreground"
+                    >
+                      <option value="">Choose a tier...</option>
+                      {#each availableTiers.filter((t) => !t.isEnterprise) as tier (tier.id)}
+                        <option value={tier.id}>
+                          {tier.displayName} - {formatCurrency(tier.basePrice, tier.currency)}/month
+                        </option>
+                      {/each}
+                    </select>
+                  </div>
+                {:else}
+                  <p class="text-sm text-muted-foreground">Loading billing tiers...</p>
+                {/if}
+              </div>
+              <div class="slab-actions">
+                <Button onclick={handlePromoteToPaid} disabled={promoteLoading || !selectedTierId}>
+                  {promoteLoading ? "Upgrading..." : "Upgrade to Postpaid"}
+                </Button>
+              </div>
+            </div>
+          {/if}
 
           <!-- Usage Link Slab -->
           <div class="slab">

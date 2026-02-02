@@ -15,6 +15,7 @@ query GetBillingStatus {
       tierId
       status
       billingEmail
+      billingModel
       startedAt
       trialEndsAt
       nextBillingDate

@@ -21,9 +21,6 @@
     LinkWalletStore,
     UnlinkWalletStore,
     LinkEmailStore,
-    PromoteToPaidStore,
-    GetPrepaidBalanceStore,
-    GetBillingTiersStore,
     GetBillingDetailsStore,
     UpdateBillingDetailsStore,
   } from "$houdini";
@@ -35,17 +32,6 @@
   let linkEmailPassword = $state("");
   let linkEmailConfirm = $state("");
   let linkEmailLoading = $state(false);
-
-  // Billing/PromoteToPaid state
-  interface BillingInfo {
-    model: string;
-    balanceCents: number;
-    isLowBalance: boolean;
-  }
-  let billingInfo = $state<BillingInfo | null>(null);
-  let billingTiers = $state<Array<{ id: string; displayName: string; basePrice: number }>>([]);
-  let selectedTierId = $state("");
-  let promoteLoading = $state(false);
 
   // Billing Details state
   interface BillingDetailsState {
@@ -101,42 +87,10 @@
         first_name?: string;
         last_name?: string;
         wallets?: LinkedWallet[];
-        billing_model?: string;
       };
       firstName = user.first_name || "";
       lastName = user.last_name || "";
       linkedWallets = user.wallets || [];
-
-      // Load billing info for prepaid users
-      if (user.billing_model === "prepaid" || !user.billing_model) {
-        try {
-          const balanceQuery = new GetPrepaidBalanceStore();
-          const balanceResult = await balanceQuery.fetch();
-          if (balanceResult.data?.prepaidBalance) {
-            billingInfo = {
-              model: "prepaid",
-              balanceCents: balanceResult.data.prepaidBalance.balanceCents,
-              isLowBalance: balanceResult.data.prepaidBalance.isLowBalance,
-            };
-          }
-
-          // Load tiers for upgrade
-          const tiersQuery = new GetBillingTiersStore();
-          const tiersResult = await tiersQuery.fetch();
-          if (tiersResult.data?.billingTiers) {
-            billingTiers = tiersResult.data.billingTiers.map((t) => ({
-              id: t.id,
-              displayName: t.displayName,
-              basePrice: t.basePrice,
-            }));
-            if (billingTiers.length > 0) {
-              selectedTierId = billingTiers[0].id;
-            }
-          }
-        } catch {
-          // Billing info optional
-        }
-      }
 
       // Load billing details for all users
       try {
@@ -222,40 +176,6 @@
     } finally {
       linkEmailLoading = false;
     }
-  }
-
-  async function handlePromoteToPaid() {
-    if (!selectedTierId) {
-      toast.error("Please select a billing tier");
-      return;
-    }
-
-    promoteLoading = true;
-    try {
-      const promoteMutation = new PromoteToPaidStore();
-      const result = await promoteMutation.mutate({ tierId: selectedTierId });
-
-      const data = result.data?.promoteToPaid;
-      if (data && "success" in data && data.success) {
-        toast.success(data.message || "Successfully upgraded to postpaid billing");
-        billingInfo = null; // Clear prepaid info
-        // Refresh page to update user state
-        window.location.reload();
-      } else if (data && "message" in data) {
-        throw new Error(data.message);
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to upgrade billing");
-    } finally {
-      promoteLoading = false;
-    }
-  }
-
-  function formatCurrency(cents: number): string {
-    return new Intl.NumberFormat("en-IE", {
-      style: "currency",
-      currency: "EUR",
-    }).format(cents / 100);
   }
 
   async function handleSaveBillingDetails() {
@@ -409,7 +329,6 @@
   const WalletIcon = getIconComponent("Wallet");
   const TrashIcon = getIconComponent("Trash2");
   const MailIcon = getIconComponent("Mail");
-  const ArrowUpIcon = getIconComponent("ArrowUp");
 </script>
 
 <svelte:head>
@@ -624,54 +543,6 @@
             <div class="slab-actions">
               <Button onclick={handleLinkEmail} disabled={linkEmailLoading}>
                 {linkEmailLoading ? "Linking..." : "Link Email"}
-              </Button>
-            </div>
-          </div>
-        {/if}
-
-        <!-- Billing Upgrade Section (for prepaid users with verified email) -->
-        {#if billingInfo?.model === "prepaid" && $auth.user?.email}
-          <div class="slab">
-            <div class="slab-header">
-              <div class="flex items-center gap-2">
-                <ArrowUpIcon class="w-4 h-4 text-success" />
-                <h3>Upgrade to Postpaid</h3>
-              </div>
-            </div>
-            <div class="slab-body--padded">
-              <p class="text-sm text-muted-foreground mb-4">
-                You're currently on prepaid billing. Upgrade to postpaid for monthly invoicing with
-                higher limits. Your current balance of <strong
-                  >{formatCurrency(billingInfo.balanceCents)}</strong
-                > will be applied as credit.
-              </p>
-              {#if billingTiers.length > 0}
-                <div class="space-y-2">
-                  <label for="tierSelect" class="text-sm font-medium text-muted-foreground"
-                    >Select a tier:</label
-                  >
-                  <select
-                    id="tierSelect"
-                    bind:value={selectedTierId}
-                    class="w-full p-2 border border-input rounded-md bg-background text-foreground"
-                  >
-                    {#each billingTiers as tier (tier.id)}
-                      <option value={tier.id}>
-                        {tier.displayName} - {formatCurrency(tier.basePrice * 100)}/month
-                      </option>
-                    {/each}
-                  </select>
-                </div>
-              {:else}
-                <p class="text-sm text-muted-foreground">Loading billing tiers...</p>
-              {/if}
-            </div>
-            <div class="slab-actions">
-              <Button
-                onclick={handlePromoteToPaid}
-                disabled={promoteLoading || billingTiers.length === 0}
-              >
-                {promoteLoading ? "Upgrading..." : "Upgrade to Postpaid"}
               </Button>
             </div>
           </div>

@@ -4299,16 +4299,20 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 		return nil, status.Error(codes.FailedPrecondition, "already on postpaid billing")
 	}
 
-	// Verify the tier exists
+	// Verify the tier exists and is not enterprise
 	var tierName string
+	var isEnterprise bool
 	err = s.db.QueryRowContext(ctx, `
-		SELECT name FROM purser.billing_tiers WHERE id = $1
-	`, tierID).Scan(&tierName)
+		SELECT name, is_enterprise FROM purser.billing_tiers WHERE id = $1
+	`, tierID).Scan(&tierName, &isEnterprise)
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "billing tier not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to get tier: %v", err)
+	}
+	if isEnterprise {
+		return nil, status.Error(codes.FailedPrecondition, "enterprise tiers require manual assignment")
 	}
 
 	// Get current prepaid balance (to carry forward as credit)
