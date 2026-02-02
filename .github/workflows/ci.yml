@@ -252,8 +252,7 @@ jobs:
       - name: Fail if any required job failed/cancelled
         run: |
           results='${{ toJSON(needs) }}'
-          echo "$results" | jq -e 'to_entries | any(.value.result == "failure" or .value.result == "cancelled")' >/dev/null
-          if [ $? -eq 0 ]; then
+          if echo "$results" | jq -e 'to_entries | any(.value.result == "failure" or .value.result == "cancelled")' >/dev/null; then
             echo "One or more jobs failed/cancelled"
             exit 1
           fi
