@@ -254,23 +254,26 @@ kafka-topics.sh --bootstrap-server $BROKER --create \
 
 **Support Services (External):**
 
-| Service  | Port | Notes                     |
-| -------- | ---- | ------------------------- |
-| Listmonk | 9000 | Newsletter backend (HTTP) |
-| Chatwoot | 3000 | Support dashboard + API   |
-| Redis    | 6379 | Chatwoot dependency       |
+| Service  | Port                                            | Notes                     |
+| -------- | ----------------------------------------------- | ------------------------- |
+| Listmonk | 9000 (service), 9001 (repo docker-compose host) | Newsletter backend (HTTP) |
+| Chatwoot | 3000                                            | Support dashboard + API   |
+| Redis    | 6379                                            | Chatwoot dependency       |
 
 ### Build Binaries
 
 ```bash
 cd /path/to/monorepo
 
-go build -o /opt/frameworks/bin/quartermaster ./api_tenants/cmd/quartermaster/
-go build -o /opt/frameworks/bin/commodore ./api_control/cmd/commodore/
-go build -o /opt/frameworks/bin/purser ./api_billing/cmd/purser/
-go build -o /opt/frameworks/bin/periscope-query ./api_analytics_query/cmd/periscope/
-go build -o /opt/frameworks/bin/deckhand ./api_ticketing/cmd/deckhand/
-go build -o /opt/frameworks/bin/forms ./api_forms/cmd/forms/
+make build-bin-quartermaster
+make build-bin-commodore
+make build-bin-purser
+make build-bin-periscope-query
+make build-bin-deckhand
+make build-bin-forms
+
+install -d /opt/frameworks/bin
+cp bin/quartermaster bin/commodore bin/purser bin/periscope-query bin/deckhand bin/forms /opt/frameworks/bin/
 ```
 
 ### Environment Configuration
@@ -437,7 +440,7 @@ FROM_EMAIL=info@your-domain.com
 TO_EMAIL=contact@your-domain.com
 
 # Listmonk
-LISTMONK_URL=http://127.0.0.1:9000
+LISTMONK_URL=http://<listmonk-host>:9000 # Use :9001 if you rely on the repo docker-compose port mapping
 LISTMONK_USERNAME=admin
 LISTMONK_PASSWORD=<listmonk-password>
 DEFAULT_MAILING_LIST_ID=1
@@ -496,12 +499,16 @@ Ensure it can reach the Postgres/Yugabyte instance and the `listmonk` database/u
 # Docker example
 docker run -d --name listmonk \
   -p 9000:9000 \
-  -e LISTMONK_DB_HOST=<db-host> \
-  -e LISTMONK_DB_PORT=<db-port> \
-  -e LISTMONK_DB_USER=listmonk \
-  -e LISTMONK_DB_PASSWORD=<listmonk-db-password> \
-  -e LISTMONK_DB_DATABASE=listmonk \
-  listmonk/listmonk:latest
+  -e LISTMONK_app__address="0.0.0.0:9000" \
+  -e LISTMONK_app__admin_username=admin \
+  -e LISTMONK_app__admin_password=<listmonk-admin-password> \
+  -e LISTMONK_db__host=<db-host> \
+  -e LISTMONK_db__port=<db-port> \
+  -e LISTMONK_db__user=listmonk \
+  -e LISTMONK_db__password=<listmonk-db-password> \
+  -e LISTMONK_db__database=listmonk \
+  -e LISTMONK_db__ssl_mode=disable \
+  listmonk/listmonk:v4.0.1
 ```
 
 ---

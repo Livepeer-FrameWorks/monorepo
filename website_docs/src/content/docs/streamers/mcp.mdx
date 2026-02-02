@@ -83,32 +83,32 @@ X-PAYMENT: <base64-encoded payload>
 (`PAYMENT-SIGNATURE` is also accepted.)
 
 Get API tokens from **Developer → API** in the dashboard.
-Some resources and tools are public (e.g., `account://status`, `billing://pricing`, `resolve_playback_endpoint`, `get_payment_options`).
+Some resources and tools are public (e.g., `account://status`, `billing://pricing`, `resolve_playback_endpoint`, `get_payment_options`, `submit_payment`).
 
 ## Resources
 
 Read-only data sources.
 
-| URI                            | Description                                       |
-| ------------------------------ | ------------------------------------------------- |
-| `account://status`             | Account status, blockers, and capabilities        |
-| `billing://balance`            | Prepaid balance, drain rate, estimated hours left |
-| `billing://pricing`            | Current pricing rates                             |
-| `billing://transactions`       | Recent balance transactions                       |
-| `streams://list`               | List all streams                                  |
-| `streams://{id}`               | Stream details (relay ID or stream_id)            |
-| `streams://{id}/health`        | Stream health metrics                             |
-| `vod://list`                   | List all VOD assets                               |
-| `vod://{artifact_hash}`        | VOD asset details (relay ID or artifact hash)     |
-| `analytics://usage`            | Current billing period usage                      |
-| `analytics://viewers`          | Viewer metrics (last 24h)                         |
-| `analytics://geographic`       | Geographic viewer distribution                    |
-| `nodes://list`                 | Infrastructure nodes                              |
-| `nodes://{id}`                 | Node details                                      |
-| `support://conversations`      | Support conversation list                         |
-| `support://conversations/{id}` | Support conversation details                      |
-| `knowledge://sources`          | Curated documentation sources for video streaming |
-| `schema://catalog`             | Curated GraphQL catalog (schema + templates)      |
+| URI                                         | Description                                       |
+| ------------------------------------------- | ------------------------------------------------- |
+| `account://status`                          | Account status, blockers, and capabilities        |
+| `billing://balance`                         | Prepaid balance, drain rate, estimated hours left |
+| `billing://pricing`                         | Current pricing rates                             |
+| `billing://transactions`                    | Recent balance transactions                       |
+| `streams://list`                            | List all streams                                  |
+| `streams://{id}`                            | Stream details (relay ID or stream_id)            |
+| `streams://{id}/health`                     | Stream health metrics                             |
+| `vod://list`                                | List all VOD assets                               |
+| `vod://{artifact_hash}`                     | VOD asset details (relay ID or artifact hash)     |
+| `analytics://usage`                         | Current billing period usage                      |
+| `analytics://viewers`                       | Viewer metrics (last 24h)                         |
+| `analytics://geographic`                    | Geographic viewer distribution                    |
+| `nodes://list`                              | Infrastructure nodes                              |
+| `nodes://{id}`                              | Node details                                      |
+| `support://conversations`                   | Support conversation list                         |
+| `support://conversations/{conversation_id}` | Support conversation details                      |
+| `knowledge://sources`                       | Curated documentation sources for video streaming |
+| `schema://catalog`                          | Curated GraphQL catalog (schema + templates)      |
 
 ### account://status
 
