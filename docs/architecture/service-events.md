@@ -133,7 +133,7 @@ Event types are string constants emitted by services. The list below reflects cu
 
 **Notes**
 
-- Demo mode skips ServiceEvent emission in the Gateway.
+- Demo mode still emits ServiceEvents if the Decklog client is configured, using the demo tenant/user context.
 - Only **metadata** is stored for support events; message content is excluded.
 - API usage aggregates include **hashed** user/token identifiers for unique counts (no raw IDs stored).
 - Foghorn emits `artifact_lifecycle` service events via the Decklog client when sending clip/DVR/VOD lifecycle analytics.
