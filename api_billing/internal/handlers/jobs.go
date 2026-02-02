@@ -311,8 +311,12 @@ func (jm *JobManager) Stop() {
 func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) error {
 	var summary models.UsageSummary
 	if err := json.Unmarshal(msg.Value, &summary); err != nil {
-		jm.logger.WithError(err).Error("Failed to unmarshal usage summary from Kafka")
-		return nil // Skip bad message
+		jm.logger.WithError(err).WithFields(logging.Fields{
+			"topic":     msg.Topic,
+			"partition": msg.Partition,
+			"offset":    msg.Offset,
+		}).Error("Failed to unmarshal usage summary from Kafka (skipping poison message)")
+		return nil
 	}
 
 	if err := jm.processUsageSummary(summary, "kafka"); err != nil {
@@ -1366,11 +1370,7 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, period_start, period_end, granularity, created_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 			ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
-				usage_value = CASE
-					WHEN EXCLUDED.usage_type IN ('average_storage_gb', 'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'unique_users', 'unique_users_period')
-						THEN GREATEST(purser.usage_records.usage_value, EXCLUDED.usage_value)
-					ELSE purser.usage_records.usage_value + EXCLUDED.usage_value
-				END,
+				usage_value = EXCLUDED.usage_value,
 				usage_details = EXCLUDED.usage_details,
 				granularity = EXCLUDED.granularity,
 				updated_at = NOW()
