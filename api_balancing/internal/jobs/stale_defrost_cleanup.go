@@ -81,6 +81,13 @@ func (j *StaleDefrostCleanupJob) cleanup() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// NOTE: Postgres interval parsing does not accept Go duration strings like "10m0s".
+	// Pass seconds as an integer and multiply by INTERVAL '1 second'.
+	staleAfterSeconds := int64(j.staleAfter.Seconds())
+	if staleAfterSeconds <= 0 {
+		staleAfterSeconds = 1
+	}
+
 	result, err := j.db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET storage_location = 's3',
@@ -89,8 +96,8 @@ func (j *StaleDefrostCleanupJob) cleanup() {
 		    updated_at = NOW()
 		WHERE storage_location = 'defrosting'
 		  AND defrost_started_at IS NOT NULL
-		  AND defrost_started_at < NOW() - $1::interval
-	`, j.staleAfter.String())
+		  AND defrost_started_at < NOW() - ($1 * INTERVAL '1 second')
+	`, staleAfterSeconds)
 	if err != nil {
 		j.logger.WithError(err).Warn("Failed to reset stale defrosting artifacts")
 		return
