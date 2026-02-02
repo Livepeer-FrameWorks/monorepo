@@ -2900,3 +2900,126 @@ func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string
 		OperationSummaries: operationSummaries,
 	}, nil
 }
+
+// DoGetStreamAnalyticsSummariesConnection returns pre-aggregated summaries for multiple streams.
+func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, page *model.ConnectionInput, timeRange *model.TimeRangeInput, sortBy *pb.StreamSummarySortField, sortOrder *pb.SortOrder) (*model.StreamAnalyticsSummaryConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateStreamAnalyticsSummariesConnection(), nil
+	}
+
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant_id required")
+	}
+
+	opts := &periscopeclient.CursorPaginationOpts{
+		First: int32(pagination.DefaultLimit),
+	}
+	if page != nil {
+		if page.First != nil {
+			opts.First = int32(pagination.ClampLimit(*page.First))
+		}
+		if page.After != nil && *page.After != "" {
+			opts.After = page.After
+		}
+		if page.Last != nil {
+			opts.Last = int32(pagination.ClampLimit(*page.Last))
+		}
+		if page.Before != nil && *page.Before != "" {
+			opts.Before = page.Before
+		}
+	}
+
+	var timeOpts *periscopeclient.TimeRangeOpts
+	if timeRange != nil {
+		timeOpts = &periscopeclient.TimeRangeOpts{
+			StartTime: timeRange.Start,
+			EndTime:   timeRange.End,
+		}
+	}
+
+	// Map proto enums to client types
+	clientSortBy := periscopeclient.StreamSummarySortFieldEgressGB
+	if sortBy != nil {
+		switch *sortBy {
+		case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
+			clientSortBy = periscopeclient.StreamSummarySortFieldUniqueViewers
+		case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS:
+			clientSortBy = periscopeclient.StreamSummarySortFieldTotalViews
+		case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS:
+			clientSortBy = periscopeclient.StreamSummarySortFieldViewerHours
+		}
+	}
+
+	clientSortOrder := periscopeclient.SortOrderDesc
+	if sortOrder != nil && *sortOrder == pb.SortOrder_SORT_ORDER_ASC {
+		clientSortOrder = periscopeclient.SortOrderAsc
+	}
+
+	response, err := r.Clients.Periscope.GetStreamAnalyticsSummaries(ctx, tenantID, timeOpts, clientSortBy, clientSortOrder, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build keyset cursor for each edge using sort field value + stream_id
+	edges := make([]*model.StreamAnalyticsSummaryEdge, len(response.Summaries))
+	for i, summary := range response.Summaries {
+		cursor := buildStreamSummaryCursor(summary, clientSortBy)
+		edges[i] = &model.StreamAnalyticsSummaryEdge{
+			Cursor: cursor,
+			Node:   summary,
+		}
+	}
+
+	totalCount := 0
+	hasMore := false
+	if response.Pagination != nil {
+		totalCount = int(response.Pagination.TotalCount)
+		hasMore = response.Pagination.HasNextPage
+	}
+
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: response.Pagination != nil && response.Pagination.HasPreviousPage,
+		HasNextPage:     hasMore,
+	}
+	if response.Pagination != nil {
+		pageInfo.StartCursor = response.Pagination.StartCursor
+		pageInfo.EndCursor = response.Pagination.EndCursor
+	}
+
+	edgeNodes := make([]*pb.StreamAnalyticsSummary, 0, len(edges))
+	for _, edge := range edges {
+		if edge != nil {
+			edgeNodes = append(edgeNodes, edge.Node)
+		}
+	}
+
+	return &model.StreamAnalyticsSummaryConnection{
+		Edges:      edges,
+		Nodes:      edgeNodes,
+		PageInfo:   pageInfo,
+		TotalCount: totalCount,
+	}, nil
+}
+
+// buildStreamSummaryCursor creates a keyset cursor for a stream summary.
+// Uses raw integer fields (RangeEgressBytes, RangeViewerSeconds) for precision.
+func buildStreamSummaryCursor(summary *pb.StreamAnalyticsSummary, sortBy periscopeclient.StreamSummarySortField) string {
+	var sortKey int64
+	switch sortBy {
+	case periscopeclient.StreamSummarySortFieldEgressGB:
+		sortKey = summary.RangeEgressBytes
+	case periscopeclient.StreamSummarySortFieldViewerHours:
+		sortKey = summary.RangeViewerSeconds
+	case periscopeclient.StreamSummarySortFieldUniqueViewers:
+		sortKey = summary.RangeUniqueViewers
+	case periscopeclient.StreamSummarySortFieldTotalViews:
+		sortKey = summary.RangeTotalViews
+	default:
+		sortKey = summary.RangeEgressBytes
+	}
+	return pagination.EncodeCursorWithSortKey(sortKey, summary.StreamId)
+}

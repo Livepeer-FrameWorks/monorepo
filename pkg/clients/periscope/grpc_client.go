@@ -782,6 +782,57 @@ func (c *GRPCClient) GetStreamAnalyticsDaily(ctx context.Context, tenantID strin
 	return c.aggregated.GetStreamAnalyticsDaily(ctx, req)
 }
 
+// StreamSummarySortField represents the field to sort stream summaries by
+type StreamSummarySortField string
+
+const (
+	StreamSummarySortFieldEgressGB      StreamSummarySortField = "EGRESS_GB"
+	StreamSummarySortFieldUniqueViewers StreamSummarySortField = "UNIQUE_VIEWERS"
+	StreamSummarySortFieldTotalViews    StreamSummarySortField = "TOTAL_VIEWS"
+	StreamSummarySortFieldViewerHours   StreamSummarySortField = "VIEWER_HOURS"
+)
+
+// SortOrder represents ascending or descending sort
+type SortOrder string
+
+const (
+	SortOrderAsc  SortOrder = "ASC"
+	SortOrderDesc SortOrder = "DESC"
+)
+
+// GetStreamAnalyticsSummaries returns bulk stream summaries with server-side aggregation
+func (c *GRPCClient) GetStreamAnalyticsSummaries(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, sortBy StreamSummarySortField, sortOrder SortOrder, opts *CursorPaginationOpts) (*pb.GetStreamAnalyticsSummariesResponse, error) {
+	// Map sort field to proto enum
+	var pbSortBy pb.StreamSummarySortField
+	switch sortBy {
+	case StreamSummarySortFieldUniqueViewers:
+		pbSortBy = pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS
+	case StreamSummarySortFieldTotalViews:
+		pbSortBy = pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS
+	case StreamSummarySortFieldViewerHours:
+		pbSortBy = pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS
+	default:
+		pbSortBy = pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_EGRESS_GB
+	}
+
+	// Map sort order to proto enum
+	var pbSortOrder pb.SortOrder
+	if sortOrder == SortOrderAsc {
+		pbSortOrder = pb.SortOrder_SORT_ORDER_ASC
+	} else {
+		pbSortOrder = pb.SortOrder_SORT_ORDER_DESC
+	}
+
+	req := &pb.GetStreamAnalyticsSummariesRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+		SortBy:     pbSortBy,
+		SortOrder:  pbSortOrder,
+	}
+	return c.aggregated.GetStreamAnalyticsSummaries(ctx, req)
+}
+
 // GetAPIUsage returns API usage records and daily summaries
 func (c *GRPCClient) GetAPIUsage(ctx context.Context, tenantID string, authType *string, operationType *string, operationName *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, summaryOnly bool) (*pb.GetAPIUsageResponse, error) {
 	if err := requireTenantID(tenantID); err != nil {

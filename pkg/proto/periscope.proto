@@ -1061,6 +1061,7 @@ service AggregatedAnalyticsService {
   rpc GetClientMetrics5m(GetClientMetrics5mRequest) returns (GetClientMetrics5mResponse);
   rpc GetQualityTierDaily(GetQualityTierDailyRequest) returns (GetQualityTierDailyResponse);
   rpc GetStreamAnalyticsSummary(GetStreamAnalyticsSummaryRequest) returns (GetStreamAnalyticsSummaryResponse);
+  rpc GetStreamAnalyticsSummaries(GetStreamAnalyticsSummariesRequest) returns (GetStreamAnalyticsSummariesResponse);
   rpc GetStorageUsage(GetStorageUsageRequest) returns (GetStorageUsageResponse);
   rpc GetStorageEvents(GetStorageEventsRequest) returns (GetStorageEventsResponse);
   rpc GetStreamHealth5m(GetStreamHealth5mRequest) returns (GetStreamHealth5mResponse);
@@ -1458,6 +1459,13 @@ message StreamAnalyticsSummary {
   QualityTierSummary range_quality = 20;
   float range_avg_session_seconds = 21;
   float range_avg_bytes_per_session = 22;
+  // Share percentages (only set in bulk queries)
+  optional float range_egress_share_percent = 23;
+  optional float range_viewer_share_percent = 24;
+  optional float range_viewer_hours_share_percent = 25;
+  // Raw integer values for keyset pagination (avoids float precision loss)
+  int64 range_egress_bytes = 26;
+  int64 range_viewer_seconds = 27;
 }
 
 message GetStreamAnalyticsSummaryRequest {
@@ -1468,6 +1476,31 @@ message GetStreamAnalyticsSummaryRequest {
 
 message GetStreamAnalyticsSummaryResponse {
   StreamAnalyticsSummary summary = 1;
+}
+
+// Sort field for bulk stream analytics summaries
+enum StreamSummarySortField {
+  STREAM_SUMMARY_SORT_FIELD_UNSPECIFIED = 0;
+  STREAM_SUMMARY_SORT_FIELD_EGRESS_GB = 1;
+  STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS = 2;
+  STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS = 3;
+  STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS = 4;
+}
+
+// Request for bulk stream analytics summaries
+message GetStreamAnalyticsSummariesRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+  common.CursorPaginationRequest pagination = 3;
+  StreamSummarySortField sort_by = 4;
+  common.SortOrder sort_order = 5;
+}
+
+// Response for bulk stream analytics summaries
+message GetStreamAnalyticsSummariesResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated StreamAnalyticsSummary summaries = 2;
+  int64 total_count = 3;
 }
 
 // ============================================================================

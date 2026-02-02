@@ -10,7 +10,7 @@
     GetStorageUsageStore,
     GetViewerHoursHourlyStore,
     GetTenantAnalyticsDailyConnectionStore,
-    GetStreamAnalyticsDailyConnectionStore,
+    GetStreamAnalyticsSummariesConnectionStore,
     GetProcessingUsageStore,
     GetAPIUsageConnectionStore,
     BillingTierFieldsStore,
@@ -38,7 +38,7 @@
   const storageUsageStore = new GetStorageUsageStore();
   const viewerHoursHourlyStore = new GetViewerHoursHourlyStore();
   const tenantDailyStore = new GetTenantAnalyticsDailyConnectionStore();
-  const streamAnalyticsStore = new GetStreamAnalyticsDailyConnectionStore();
+  const streamSummariesStore = new GetStreamAnalyticsSummariesConnectionStore();
   const processingUsageStore = new GetProcessingUsageStore();
   const apiUsageStore = new GetAPIUsageConnectionStore();
 
@@ -286,65 +286,25 @@
     );
   });
 
-  // Top streams by usage (cost attribution)
+  // Top streams by usage (cost attribution) - server-side aggregation
   let topStreamsByUsage = $derived.by(() => {
     const edges =
-      $streamAnalyticsStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection
+      $streamSummariesStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummariesConnection
         ?.edges ?? [];
     if (edges.length === 0) return [];
 
-    // Aggregate by stream
-    const streamMap: Record<
-      string,
-      {
-        streamId: string;
-        displayStreamId: string;
-        totalViews: number;
-        uniqueViewers: number;
-        egressBytes: number;
-        uniqueCountries: number;
-        uniqueCities: number;
-      }
-    > = {};
-
-    for (const edge of edges) {
+    return edges.map((edge) => {
       const node = edge.node;
-      if (!node?.streamId) continue;
-
-      const displayStreamId = node.stream?.streamId ?? node.streamId;
-      const existing = streamMap[node.streamId];
-      if (existing) {
-        existing.totalViews += node.totalViews ?? 0;
-        existing.uniqueViewers = Math.max(existing.uniqueViewers, node.uniqueViewers ?? 0);
-        existing.egressBytes += node.egressBytes ?? 0;
-        existing.uniqueCountries = Math.max(existing.uniqueCountries, node.uniqueCountries ?? 0);
-        existing.uniqueCities = Math.max(existing.uniqueCities, node.uniqueCities ?? 0);
-        if (!existing.displayStreamId) {
-          existing.displayStreamId = displayStreamId;
-        }
-      } else {
-        streamMap[node.streamId] = {
-          streamId: node.streamId,
-          displayStreamId,
-          totalViews: node.totalViews ?? 0,
-          uniqueViewers: node.uniqueViewers ?? 0,
-          egressBytes: node.egressBytes ?? 0,
-          uniqueCountries: node.uniqueCountries ?? 0,
-          uniqueCities: node.uniqueCities ?? 0,
-        };
-      }
-    }
-
-    // Sort by egress (cost driver) and take top 10
-    const totalEgress = Object.values(streamMap).reduce((sum, s) => sum + s.egressBytes, 0);
-    return Object.values(streamMap)
-      .map((s) => ({
-        ...s,
-        egressGb: s.egressBytes / (1024 * 1024 * 1024),
-        percentage: totalEgress > 0 ? (s.egressBytes / totalEgress) * 100 : 0,
-      }))
-      .sort((a, b) => b.egressBytes - a.egressBytes)
-      .slice(0, 10);
+      return {
+        streamId: node.streamId,
+        displayStreamId: node.stream?.streamId ?? node.streamId,
+        displayName: node.stream?.name ?? node.streamId,
+        totalViews: node.rangeTotalViews ?? 0,
+        uniqueViewers: node.rangeUniqueViewers ?? 0,
+        egressGb: node.rangeEgressGb ?? 0,
+        percentage: node.rangeEgressSharePercent ?? 0,
+      };
+    });
   });
 
   let usageAggregateSeries = $derived.by(() => {
@@ -425,8 +385,15 @@
             },
           })
           .catch(() => null),
-        streamAnalyticsStore
-          .fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 500 } })
+        streamSummariesStore
+          .fetch({
+            variables: {
+              timeRange: { start: range.start, end: range.end },
+              sortBy: "EGRESS_GB",
+              sortOrder: "DESC",
+              first: 10,
+            },
+          })
           .catch(() => null),
         processingUsageStore
           .fetch({ variables: { timeRange: { start: range.start, end: range.end }, first: 50 } })

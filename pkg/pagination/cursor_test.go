@@ -74,7 +74,7 @@ func TestCursorEncodeDecodeSortKey(t *testing.T) {
 		t.Fatalf("failed to decode cursor: %v", err)
 	}
 
-	if got := cursor.Timestamp.UnixMilli(); got != sortKey {
+	if got := cursor.GetSortKey(); got != sortKey {
 		t.Errorf("sort key mismatch: got %d, want %d", got, sortKey)
 	}
 	if cursor.ID != id {

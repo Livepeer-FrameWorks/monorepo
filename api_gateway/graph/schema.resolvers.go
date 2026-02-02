@@ -4040,6 +4040,33 @@ func (r *streamAnalyticsSummaryResolver) RangeAvgBytesPerSession(ctx context.Con
 	return float64(obj.RangeAvgBytesPerSession), nil
 }
 
+// RangeEgressSharePercent is the resolver for the rangeEgressSharePercent field.
+func (r *streamAnalyticsSummaryResolver) RangeEgressSharePercent(ctx context.Context, obj *proto.StreamAnalyticsSummary) (*float64, error) {
+	if obj.RangeEgressSharePercent == nil {
+		return nil, nil
+	}
+	val := float64(*obj.RangeEgressSharePercent)
+	return &val, nil
+}
+
+// RangeViewerSharePercent is the resolver for the rangeViewerSharePercent field.
+func (r *streamAnalyticsSummaryResolver) RangeViewerSharePercent(ctx context.Context, obj *proto.StreamAnalyticsSummary) (*float64, error) {
+	if obj.RangeViewerSharePercent == nil {
+		return nil, nil
+	}
+	val := float64(*obj.RangeViewerSharePercent)
+	return &val, nil
+}
+
+// RangeViewerHoursSharePercent is the resolver for the rangeViewerHoursSharePercent field.
+func (r *streamAnalyticsSummaryResolver) RangeViewerHoursSharePercent(ctx context.Context, obj *proto.StreamAnalyticsSummary) (*float64, error) {
+	if obj.RangeViewerHoursSharePercent == nil {
+		return nil, nil
+	}
+	val := float64(*obj.RangeViewerHoursSharePercent)
+	return &val, nil
+}
+
 // ID is the resolver for the id field.
 func (r *streamConnectionHourlyResolver) ID(ctx context.Context, obj *proto.StreamConnectionHourly) (string, error) {
 	hourPart := encodeProtoTimestampPart(obj.Hour)
@@ -4423,6 +4450,11 @@ func (r *streamingUsageResolver) GeographicDistribution(ctx context.Context, obj
 // StreamAnalyticsSummary is the resolver for the streamAnalyticsSummary field.
 func (r *streamingUsageResolver) StreamAnalyticsSummary(ctx context.Context, obj *markers.StreamingUsage, streamID string, timeRange *model.TimeRangeInput) (*proto.StreamAnalyticsSummary, error) {
 	return r.Resolver.DoGetStreamAnalyticsSummary(ctx, streamID, timeRange)
+}
+
+// StreamAnalyticsSummariesConnection is the resolver for the streamAnalyticsSummariesConnection field.
+func (r *streamingUsageResolver) StreamAnalyticsSummariesConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, timeRange model.TimeRangeInput, sortBy *proto.StreamSummarySortField, sortOrder *proto.SortOrder) (*model.StreamAnalyticsSummaryConnection, error) {
+	return r.Resolver.DoGetStreamAnalyticsSummariesConnection(ctx, page, &timeRange, sortBy, sortOrder)
 }
 
 // ViewerHoursHourlyConnection is the resolver for the viewerHoursHourlyConnection field.

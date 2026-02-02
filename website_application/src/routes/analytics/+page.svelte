@@ -8,7 +8,7 @@
     fragment,
     GetStreamsConnectionStore,
     GetPlatformOverviewStore,
-    GetStreamAnalyticsDailyConnectionStore,
+    GetStreamAnalyticsSummariesConnectionStore,
     StreamStatus,
     StreamCoreFieldsStore,
     StreamMetricsFieldsStore,
@@ -26,7 +26,7 @@
   // Houdini stores
   const streamsStore = new GetStreamsConnectionStore();
   const platformOverviewStore = new GetPlatformOverviewStore();
-  const streamDailyStore = new GetStreamAnalyticsDailyConnectionStore();
+  const summariesStore = new GetStreamAnalyticsSummariesConnectionStore();
 
   // Fragment stores for unmasking nested data
   const streamCoreStore = new StreamCoreFieldsStore();
@@ -41,7 +41,7 @@
 
   // Derived state from Houdini stores
   let loading = $derived(
-    $streamsStore.fetching || $platformOverviewStore.fetching || $streamDailyStore.fetching
+    $streamsStore.fetching || $platformOverviewStore.fetching || $summariesStore.fetching
   );
 
   // Get masked data
@@ -63,55 +63,24 @@
   // Build a map of stream IDs to stream data for lookups
   let streamLookup = $derived(new Map(streams.map((s) => [s.id, s])));
 
-  // Top streams by usage from daily analytics
+  // Top streams from pre-aggregated summaries (server-side aggregation)
   let topStreamsByUsage = $derived.by(() => {
     const edges =
-      $streamDailyStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ??
-      [];
+      $summariesStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummariesConnection
+        ?.edges ?? [];
     if (edges.length === 0) return [];
 
-    // Aggregate by stream
-    const streamMap: Record<
-      string,
-      {
-        streamId: string;
-        totalViews: number;
-        uniqueViewers: number;
-        egressBytes: number;
-      }
-    > = {};
-
-    for (const edge of edges) {
+    return edges.map((edge) => {
       const node = edge.node;
-      if (!node?.streamId) continue;
-
-      const existing = streamMap[node.streamId];
-      if (existing) {
-        existing.totalViews += node.totalViews ?? 0;
-        existing.uniqueViewers = Math.max(existing.uniqueViewers, node.uniqueViewers ?? 0);
-        existing.egressBytes += node.egressBytes ?? 0;
-      } else {
-        streamMap[node.streamId] = {
-          streamId: node.streamId,
-          totalViews: node.totalViews ?? 0,
-          uniqueViewers: node.uniqueViewers ?? 0,
-          egressBytes: node.egressBytes ?? 0,
-        };
-      }
-    }
-
-    // Sort by egress (bandwidth) and take top 10
-    const sorted = Object.values(streamMap).sort((a, b) => b.egressBytes - a.egressBytes);
-    const totalEgress = sorted.reduce((sum, s) => sum + s.egressBytes, 0);
-
-    return sorted.slice(0, 10).map((s) => {
-      const streamData = streamLookup.get(s.streamId);
+      const streamData = node.stream ?? streamLookup.get(node.streamId);
       return {
-        ...s,
-        displayName: streamData?.name ?? s.streamId,
+        streamId: node.streamId,
+        displayName: streamData?.name ?? node.streamId,
         status: streamData?.metrics?.status ?? null,
-        egressGb: s.egressBytes / 1e9,
-        percentage: totalEgress > 0 ? (s.egressBytes / totalEgress) * 100 : 0,
+        totalViews: node.rangeTotalViews ?? 0,
+        uniqueViewers: node.rangeUniqueViewers ?? 0,
+        egressGb: node.rangeEgressGb ?? 0,
+        percentage: node.rangeEgressSharePercent ?? 0,
       };
     });
   });
@@ -132,7 +101,7 @@
     try {
       const range = resolveTimeRange(timeRange);
 
-      // Load streams, platform overview, and daily analytics in parallel
+      // Load streams, platform overview, and stream summaries in parallel
       await Promise.all([
         streamsStore.fetch(),
         platformOverviewStore
@@ -140,11 +109,13 @@
             variables: { timeRange: { start: range.start, end: range.end }, days: range.days },
           })
           .catch(() => null),
-        streamDailyStore
+        summariesStore
           .fetch({
             variables: {
               timeRange: { start: range.start, end: range.end },
-              first: 500,
+              sortBy: "EGRESS_GB",
+              sortOrder: "DESC",
+              first: 10,
             },
           })
           .catch(() => null),
@@ -309,7 +280,7 @@
                       <th class="text-left py-3 px-4">Stream</th>
                       <th class="text-center py-3 px-4">Status</th>
                       <th class="text-right py-3 px-4">Views</th>
-                      <th class="text-right py-3 px-4">Peak Viewers</th>
+                      <th class="text-right py-3 px-4">Unique Viewers</th>
                       <th class="text-right py-3 px-4">Bandwidth</th>
                       <th class="text-right py-3 px-4">Share</th>
                       <th class="text-right py-3 px-4"></th>

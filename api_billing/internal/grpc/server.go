@@ -265,7 +265,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 	// Build keyset query - for billing tiers we use (tier_level, id) for stable ordering
 	if params.Cursor != nil {
 		// Use cursor sort key as tier_level (encoded via EncodeCursorWithSortKey)
-		tierLevelKey := params.Cursor.Timestamp.UnixMilli()
+		tierLevelKey := params.Cursor.GetSortKey()
 		if whereClause != "" {
 			whereClause += " AND"
 		} else {

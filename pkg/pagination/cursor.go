@@ -25,6 +25,18 @@ const (
 type Cursor struct {
 	Timestamp time.Time
 	ID        string
+	// SortKey holds raw int64 for sk: prefixed cursors (avoids time.UnixMilli overflow)
+	SortKey   int64
+	IsSortKey bool
+}
+
+// GetSortKey returns the sort key value. For sk: cursors, returns the raw int64.
+// For ts: cursors, returns the timestamp as milliseconds (legacy behavior).
+func (c *Cursor) GetSortKey() int64 {
+	if c.IsSortKey {
+		return c.SortKey
+	}
+	return c.Timestamp.UnixMilli()
 }
 
 // Encode serializes the cursor to an opaque string for clients.
@@ -49,12 +61,14 @@ func DecodeCursor(encoded string) (*Cursor, error) {
 	raw := string(data)
 
 	// Parse "ts:{timestamp_ms}:id:{id}" or "sk:{sort_key}:id:{id}"
+	isSortKey := false
 	var prefix string
 	switch {
 	case strings.HasPrefix(raw, "ts:"):
 		prefix = "ts:"
 	case strings.HasPrefix(raw, "sk:"):
 		prefix = "sk:"
+		isSortKey = true
 	default:
 		return nil, fmt.Errorf("invalid cursor format: missing ts/sk prefix")
 	}
@@ -64,15 +78,24 @@ func DecodeCursor(encoded string) (*Cursor, error) {
 		return nil, fmt.Errorf("invalid cursor format: missing id segment")
 	}
 
-	tsMs, err := strconv.ParseInt(parts[0], 10, 64)
+	keyValue, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cursor timestamp: %w", err)
+		return nil, fmt.Errorf("invalid cursor key: %w", err)
 	}
 
-	return &Cursor{
-		Timestamp: time.UnixMilli(tsMs),
+	cursor := &Cursor{
 		ID:        parts[1],
-	}, nil
+		IsSortKey: isSortKey,
+	}
+
+	if isSortKey {
+		// Store raw int64 directly to avoid time.UnixMilli overflow for large values
+		cursor.SortKey = keyValue
+	} else {
+		cursor.Timestamp = time.UnixMilli(keyValue)
+	}
+
+	return cursor, nil
 }
 
 // EncodeCursor is a convenience function to create and encode a cursor.

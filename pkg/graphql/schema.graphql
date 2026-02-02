@@ -645,6 +645,18 @@ type StreamingUsage {
     topN: Int = 10
   ): GeographicDistribution
   streamAnalyticsSummary(streamId: ID!, timeRange: TimeRangeInput): StreamAnalyticsSummary!
+  """
+  Pre-aggregated analytics summaries for multiple streams.
+  Returns sorted, paginated results with tenant-wide share percentages.
+  """
+  streamAnalyticsSummariesConnection(
+    page: ConnectionInput
+    timeRange: TimeRangeInput!
+    "Sort field (default: EGRESS_GB for cost attribution)."
+    sortBy: StreamSummarySortField = EGRESS_GB
+    "Sort direction (default: DESC for top results first)."
+    sortOrder: SortOrder = DESC
+  ): StreamAnalyticsSummaryConnection!
   viewerHoursHourlyConnection(
     page: ConnectionInput
     streamId: ID
@@ -2241,6 +2253,20 @@ enum SortOrder {
 }
 
 """
+Sort field for stream analytics summaries.
+"""
+enum StreamSummarySortField {
+  "Sort by egress bandwidth (cost attribution)."
+  EGRESS_GB
+  "Sort by unique viewers (engagement)."
+  UNIQUE_VIEWERS
+  "Sort by total views (popularity)."
+  TOTAL_VIEWS
+  "Sort by viewer hours (watch time)."
+  VIEWER_HOURS
+}
+
+"""
 Time range returned in query results.
 """
 type TimeRange {
@@ -2805,6 +2831,12 @@ type StreamAnalyticsSummary {
   rangeIssueCount: Int!
   rangeBufferDryCount: Int!
   rangeQuality: QualityTierSummary!
+  "This stream's percentage of tenant total egress (only set in bulk queries)."
+  rangeEgressSharePercent: Float
+  "This stream's percentage of tenant total unique viewers (only set in bulk queries)."
+  rangeViewerSharePercent: Float
+  "This stream's percentage of tenant total viewer hours (only set in bulk queries)."
+  rangeViewerHoursSharePercent: Float
 }
 
 type QualityTierSummary {
@@ -2818,6 +2850,25 @@ type QualityTierSummary {
   codecH265Minutes: Int!
   codecVp9Minutes: Int!
   codecAv1Minutes: Int!
+}
+
+"""
+Edge for StreamAnalyticsSummary connection.
+"""
+type StreamAnalyticsSummaryEdge {
+  cursor: String!
+  node: StreamAnalyticsSummary!
+}
+
+"""
+Connection for paginated stream analytics summaries.
+Returns pre-aggregated summaries for multiple streams with share percentages.
+"""
+type StreamAnalyticsSummaryConnection {
+  edges: [StreamAnalyticsSummaryEdge!]!
+  nodes: [StreamAnalyticsSummary!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
 }
 
 # Time-bucketed viewer count for charts (from ClickHouse aggregation)

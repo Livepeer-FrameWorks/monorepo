@@ -1219,6 +1219,21 @@ type StreamAnalyticsDailyEdge struct {
 	Node   *proto.StreamAnalyticsDaily `json:"node"`
 }
 
+// Connection for paginated stream analytics summaries.
+// Returns pre-aggregated summaries for multiple streams with share percentages.
+type StreamAnalyticsSummaryConnection struct {
+	Edges      []*StreamAnalyticsSummaryEdge   `json:"edges"`
+	Nodes      []*proto.StreamAnalyticsSummary `json:"nodes"`
+	PageInfo   *PageInfo                       `json:"pageInfo"`
+	TotalCount int                             `json:"totalCount"`
+}
+
+// Edge for StreamAnalyticsSummary connection.
+type StreamAnalyticsSummaryEdge struct {
+	Cursor string                        `json:"cursor"`
+	Node   *proto.StreamAnalyticsSummary `json:"node"`
+}
+
 type StreamConnectionHourlyConnection struct {
 	Edges      []*StreamConnectionHourlyEdge   `json:"edges"`
 	Nodes      []*proto.StreamConnectionHourly `json:"nodes"`
@@ -2225,64 +2240,6 @@ func (e *PaymentStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e PaymentStatus) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-// Sort direction for ordered results.
-type SortOrder string
-
-const (
-	// Ascending order (oldest first, A-Z).
-	SortOrderAsc SortOrder = "ASC"
-	// Descending order (newest first, Z-A).
-	SortOrderDesc SortOrder = "DESC"
-)
-
-var AllSortOrder = []SortOrder{
-	SortOrderAsc,
-	SortOrderDesc,
-}
-
-func (e SortOrder) IsValid() bool {
-	switch e {
-	case SortOrderAsc, SortOrderDesc:
-		return true
-	}
-	return false
-}
-
-func (e SortOrder) String() string {
-	return string(e)
-}
-
-func (e *SortOrder) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = SortOrder(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid SortOrder", str)
-	}
-	return nil
-}
-
-func (e SortOrder) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *SortOrder) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e SortOrder) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

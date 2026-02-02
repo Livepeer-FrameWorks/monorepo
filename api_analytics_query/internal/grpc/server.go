@@ -3073,6 +3073,267 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 	return &pb.GetStreamAnalyticsSummaryResponse{Summary: summary}, nil
 }
 
+// GetStreamAnalyticsSummaries returns bulk stream analytics summaries with share percentages.
+// This aggregates data from multiple MVs for all streams in a tenant, sorted by the requested field.
+// Uses keyset pagination with raw integer sort keys (egress_bytes, viewer_seconds) for precision.
+func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *pb.GetStreamAnalyticsSummariesRequest) (*pb.GetStreamAnalyticsSummariesResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	params, err := getCursorPagination(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	// Map sort field to raw integer column for keyset precision
+	// Display values (egress_gb, viewer_hours) are derived but we sort/cursor by raw integers
+	sortField := "egress_bytes"
+	switch req.GetSortBy() {
+	case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
+		sortField = "unique_viewers"
+	case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS:
+		sortField = "total_views"
+	case pb.StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS:
+		sortField = "viewer_seconds"
+	default:
+		sortField = "egress_bytes"
+	}
+
+	sortDesc := req.GetSortOrder() != pb.SortOrder_SORT_ORDER_ASC
+	sortOrder := "DESC"
+	if !sortDesc {
+		sortOrder = "ASC"
+	}
+
+	// Build keyset WHERE clause if cursor provided
+	// Cursor stores raw int64 sort_key + stream_id
+	keysetWhere := ""
+	var keysetArgs []interface{}
+	if params.Cursor != nil {
+		cursorSortKey := params.Cursor.GetSortKey() // raw int64 from sk: cursor
+		cursorStreamID := params.Cursor.ID
+
+		if params.Direction == pagination.Backward {
+			if sortDesc {
+				keysetWhere = fmt.Sprintf("AND (%s, stream_id) > (?, ?)", sortField)
+			} else {
+				keysetWhere = fmt.Sprintf("AND (%s, stream_id) < (?, ?)", sortField)
+			}
+		} else {
+			if sortDesc {
+				keysetWhere = fmt.Sprintf("AND (%s, stream_id) < (?, ?)", sortField)
+			} else {
+				keysetWhere = fmt.Sprintf("AND (%s, stream_id) > (?, ?)", sortField)
+			}
+		}
+		keysetArgs = []interface{}{cursorSortKey, cursorStreamID}
+	}
+
+	// For backward pagination, reverse the sort order in query, then reverse results
+	querySortOrder := sortOrder
+	if params.Direction == pagination.Backward {
+		if sortDesc {
+			querySortOrder = "ASC"
+		} else {
+			querySortOrder = "DESC"
+		}
+	}
+
+	// Query aggregates from stream_analytics_daily + viewer_hours_hourly
+	// Raw integer columns (egress_bytes, viewer_seconds) used for sort/keyset
+	// Derived columns (egress_gb, viewer_hours) for display only
+	query := fmt.Sprintf(`
+		WITH daily_totals AS (
+			SELECT
+				stream_id,
+				sum(total_views) as total_views,
+				max(unique_viewers) as unique_viewers,
+				sum(egress_bytes) as egress_bytes
+			FROM periscope.stream_analytics_daily
+			WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
+			GROUP BY stream_id
+		),
+		hourly_totals AS (
+			SELECT
+				stream_id,
+				sumMerge(total_session_seconds) as viewer_seconds,
+				sumMerge(total_bytes) as viewer_bytes
+			FROM periscope.viewer_hours_hourly
+			WHERE tenant_id = ? AND hour >= ? AND hour <= ?
+			GROUP BY stream_id
+		),
+		combined AS (
+			SELECT
+				d.stream_id,
+				d.total_views,
+				d.unique_viewers,
+				d.egress_bytes,
+				coalesce(h.viewer_seconds, 0) as viewer_seconds
+			FROM daily_totals d
+			LEFT JOIN hourly_totals h ON d.stream_id = h.stream_id
+		),
+		with_shares AS (
+			SELECT
+				stream_id,
+				total_views,
+				unique_viewers,
+				egress_bytes,
+				viewer_seconds,
+				egress_bytes / (1024.0 * 1024.0 * 1024.0) as egress_gb,
+				viewer_seconds / 3600.0 as viewer_hours,
+				total_views * 100.0 / nullIf(sum(total_views) OVER (), 0) as views_share_pct,
+				unique_viewers * 100.0 / nullIf(sum(unique_viewers) OVER (), 0) as viewers_share_pct,
+				egress_bytes * 100.0 / nullIf(sum(egress_bytes) OVER (), 0) as egress_share_pct,
+				viewer_seconds * 100.0 / nullIf(sum(viewer_seconds) OVER (), 0) as viewer_hours_share_pct
+			FROM combined
+		)
+		SELECT stream_id, total_views, unique_viewers, egress_bytes, viewer_seconds,
+		       egress_gb, viewer_hours,
+		       views_share_pct, viewers_share_pct, egress_share_pct, viewer_hours_share_pct
+		FROM with_shares
+		WHERE 1=1 %s
+		ORDER BY %s %s, stream_id %s
+		LIMIT ?
+	`, keysetWhere, sortField, querySortOrder, querySortOrder)
+
+	// Build query args
+	args := []interface{}{
+		tenantID, startTime, endTime, // daily_totals
+		tenantID, startTime, endTime, // hourly_totals
+	}
+	args = append(args, keysetArgs...)
+	args = append(args, params.Limit+1)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var summaries []*pb.StreamAnalyticsSummary
+
+	for rows.Next() {
+		var streamID string
+		var totalViews, uniqueViewers, egressBytes, viewerSeconds int64
+		var egressGb, viewerHours, viewsSharePct, viewersSharePct, egressSharePct, viewerHoursSharePct sql.NullFloat64
+
+		if err := rows.Scan(&streamID, &totalViews, &uniqueViewers, &egressBytes, &viewerSeconds,
+			&egressGb, &viewerHours,
+			&viewsSharePct, &viewersSharePct, &egressSharePct, &viewerHoursSharePct); err != nil {
+			s.logger.WithError(err).Error("Failed to scan stream summary row")
+			continue
+		}
+
+		summary := &pb.StreamAnalyticsSummary{
+			TenantId:           tenantID,
+			StreamId:           streamID,
+			TimeRange:          req.GetTimeRange(),
+			RangeTotalViews:    totalViews,
+			RangeUniqueViewers: uniqueViewers,
+			RangeEgressBytes:   egressBytes,
+			RangeViewerSeconds: viewerSeconds,
+			RangeQuality:       &pb.QualityTierSummary{},
+		}
+
+		if egressGb.Valid {
+			summary.RangeEgressGb = float32(egressGb.Float64)
+		}
+		if viewerHours.Valid {
+			summary.RangeViewerHours = float32(viewerHours.Float64)
+		}
+		if egressSharePct.Valid {
+			val := float32(egressSharePct.Float64)
+			summary.RangeEgressSharePercent = &val
+		}
+		if viewersSharePct.Valid {
+			val := float32(viewersSharePct.Float64)
+			summary.RangeViewerSharePercent = &val
+		}
+		if viewerHoursSharePct.Valid {
+			val := float32(viewerHoursSharePct.Float64)
+			summary.RangeViewerHoursSharePercent = &val
+		}
+
+		summaries = append(summaries, summary)
+	}
+
+	// Check if there are more results
+	hasMore := len(summaries) > params.Limit
+	if hasMore {
+		summaries = summaries[:params.Limit]
+	}
+
+	// Reverse results for backward pagination
+	if params.Direction == pagination.Backward {
+		slices.Reverse(summaries)
+	}
+
+	// Get total count
+	var totalCount int64
+	countRow := s.clickhouse.QueryRowContext(ctx, `
+		SELECT count(DISTINCT stream_id)
+		FROM periscope.stream_analytics_daily
+		WHERE tenant_id = ? AND day >= toDate(?) AND day <= toDate(?)
+	`, tenantID, startTime, endTime)
+	countRow.Scan(&totalCount)
+
+	// Build keyset cursors using raw integer sort keys from proto fields
+	var startCursor, endCursor string
+	if len(summaries) > 0 {
+		first := summaries[0]
+		last := summaries[len(summaries)-1]
+
+		startCursor = buildStreamSummaryCursor(first, sortField)
+		endCursor = buildStreamSummaryCursor(last, sortField)
+	}
+
+	hasPrevious := params.Cursor != nil
+	if params.Direction == pagination.Backward {
+		hasPrevious, hasMore = hasMore, hasPrevious
+	}
+
+	resp := &pb.GetStreamAnalyticsSummariesResponse{
+		Pagination: &pb.CursorPaginationResponse{
+			TotalCount:      int32(totalCount),
+			HasNextPage:     hasMore,
+			HasPreviousPage: hasPrevious,
+		},
+		Summaries:  summaries,
+		TotalCount: totalCount,
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+
+	return resp, nil
+}
+
+// buildStreamSummaryCursor creates a keyset cursor using raw integer sort keys from proto fields.
+func buildStreamSummaryCursor(summary *pb.StreamAnalyticsSummary, sortField string) string {
+	var sortKey int64
+	switch sortField {
+	case "egress_bytes":
+		sortKey = summary.RangeEgressBytes
+	case "viewer_seconds":
+		sortKey = summary.RangeViewerSeconds
+	case "unique_viewers":
+		sortKey = summary.RangeUniqueViewers
+	case "total_views":
+		sortKey = summary.RangeTotalViews
+	}
+	return pagination.EncodeCursorWithSortKey(sortKey, summary.StreamId)
+}
+
 // GetStorageUsage returns storage usage records from storage_snapshots table
 func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorageUsageRequest) (*pb.GetStorageUsageResponse, error) {
 	tenantID := getTenantID(ctx, req.GetTenantId())

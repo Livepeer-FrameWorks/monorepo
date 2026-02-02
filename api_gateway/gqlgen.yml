@@ -692,6 +692,14 @@ models:
     model:
       - github.com/99designs/gqlgen/graphql.String
 
+  # Analytics sort enums - bound to proto types
+  SortOrder:
+    model:
+      - frameworks/pkg/proto.SortOrder
+  StreamSummarySortField:
+    model:
+      - frameworks/pkg/proto.StreamSummarySortField
+
   # Cluster marketplace enums - bound to proto types
   ClusterVisibility:
     model:

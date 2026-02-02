@@ -281,3 +281,73 @@ func (e *CryptoAsset) UnmarshalGQL(v interface{}) error {
 	}
 	return nil
 }
+
+// MarshalGQL implements the graphql.Marshaler interface for SortOrder
+func (e SortOrder) MarshalGQL(w io.Writer) {
+	var s string
+	switch e {
+	case SortOrder_SORT_ORDER_ASC:
+		s = "ASC"
+	case SortOrder_SORT_ORDER_DESC:
+		s = "DESC"
+	default:
+		s = "DESC"
+	}
+	io.WriteString(w, strconv.Quote(s))
+}
+
+// UnmarshalGQL implements the graphql.Unmarshaler interface for SortOrder
+func (e *SortOrder) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+	switch str {
+	case "ASC":
+		*e = SortOrder_SORT_ORDER_ASC
+	case "DESC":
+		*e = SortOrder_SORT_ORDER_DESC
+	default:
+		return fmt.Errorf("%s is not a valid SortOrder", str)
+	}
+	return nil
+}
+
+// MarshalGQL implements the graphql.Marshaler interface for StreamSummarySortField
+func (e StreamSummarySortField) MarshalGQL(w io.Writer) {
+	var s string
+	switch e {
+	case StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_EGRESS_GB:
+		s = "EGRESS_GB"
+	case StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS:
+		s = "UNIQUE_VIEWERS"
+	case StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS:
+		s = "TOTAL_VIEWS"
+	case StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS:
+		s = "VIEWER_HOURS"
+	default:
+		s = "EGRESS_GB"
+	}
+	io.WriteString(w, strconv.Quote(s))
+}
+
+// UnmarshalGQL implements the graphql.Unmarshaler interface for StreamSummarySortField
+func (e *StreamSummarySortField) UnmarshalGQL(v interface{}) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+	switch str {
+	case "EGRESS_GB":
+		*e = StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_EGRESS_GB
+	case "UNIQUE_VIEWERS":
+		*e = StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_UNIQUE_VIEWERS
+	case "TOTAL_VIEWS":
+		*e = StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_TOTAL_VIEWS
+	case "VIEWER_HOURS":
+		*e = StreamSummarySortField_STREAM_SUMMARY_SORT_FIELD_VIEWER_HOURS
+	default:
+		return fmt.Errorf("%s is not a valid StreamSummarySortField", str)
+	}
+	return nil
+}

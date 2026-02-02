@@ -140,6 +140,40 @@ func GenerateStreamAnalyticsSummary(streamID string) *pb.StreamAnalyticsSummary 
 	}
 }
 
+// GenerateStreamAnalyticsSummariesConnection creates demo stream summaries for bulk queries
+func GenerateStreamAnalyticsSummariesConnection() *model.StreamAnalyticsSummaryConnection {
+	streamIDs := []string{"demo_stream_001", "demo_stream_002", "demo_stream_003", "demo_stream_004", "demo_stream_005"}
+	summaries := make([]*pb.StreamAnalyticsSummary, len(streamIDs))
+	edges := make([]*model.StreamAnalyticsSummaryEdge, len(streamIDs))
+
+	for i, id := range streamIDs {
+		summary := GenerateStreamAnalyticsSummary(id)
+		// Vary metrics to make demo data more realistic
+		summary.RangeEgressGb = float32(100+i*80) + float32(i)*12.5
+		summary.RangeUniqueViewers = int64(500 + i*200)
+		summary.RangeTotalViews = int64(1000 + i*500)
+
+		// Add share percentages
+		egressShare := float32(20.0 - float64(i)*3)
+		viewerShare := float32(18.0 - float64(i)*2.5)
+		summary.RangeEgressSharePercent = &egressShare
+		summary.RangeViewerSharePercent = &viewerShare
+
+		summaries[i] = summary
+		edges[i] = &model.StreamAnalyticsSummaryEdge{
+			Cursor: fmt.Sprintf("cursor_%d", i),
+			Node:   summary,
+		}
+	}
+
+	return &model.StreamAnalyticsSummaryConnection{
+		Edges:      edges,
+		Nodes:      summaries,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(summaries),
+	}
+}
+
 // GenerateViewerCountTimeSeries creates demo time-bucketed viewer counts for charts
 func GenerateViewerCountTimeSeries() []*pb.ViewerCountBucket {
 	now := time.Now()

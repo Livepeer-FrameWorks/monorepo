@@ -1264,23 +1264,24 @@ var ClipAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AggregatedAnalyticsService_GetStreamConnectionHourly_FullMethodName = "/periscope.AggregatedAnalyticsService/GetStreamConnectionHourly"
-	AggregatedAnalyticsService_GetClientMetrics5M_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetClientMetrics5m"
-	AggregatedAnalyticsService_GetQualityTierDaily_FullMethodName       = "/periscope.AggregatedAnalyticsService/GetQualityTierDaily"
-	AggregatedAnalyticsService_GetStreamAnalyticsSummary_FullMethodName = "/periscope.AggregatedAnalyticsService/GetStreamAnalyticsSummary"
-	AggregatedAnalyticsService_GetStorageUsage_FullMethodName           = "/periscope.AggregatedAnalyticsService/GetStorageUsage"
-	AggregatedAnalyticsService_GetStorageEvents_FullMethodName          = "/periscope.AggregatedAnalyticsService/GetStorageEvents"
-	AggregatedAnalyticsService_GetStreamHealth5M_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetStreamHealth5m"
-	AggregatedAnalyticsService_GetNodePerformance5M_FullMethodName      = "/periscope.AggregatedAnalyticsService/GetNodePerformance5m"
-	AggregatedAnalyticsService_GetViewerHoursHourly_FullMethodName      = "/periscope.AggregatedAnalyticsService/GetViewerHoursHourly"
-	AggregatedAnalyticsService_GetViewerGeoHourly_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetViewerGeoHourly"
-	AggregatedAnalyticsService_GetTenantDailyStats_FullMethodName       = "/periscope.AggregatedAnalyticsService/GetTenantDailyStats"
-	AggregatedAnalyticsService_GetProcessingUsage_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetProcessingUsage"
-	AggregatedAnalyticsService_GetLiveUsageSummary_FullMethodName       = "/periscope.AggregatedAnalyticsService/GetLiveUsageSummary"
-	AggregatedAnalyticsService_GetRebufferingEvents_FullMethodName      = "/periscope.AggregatedAnalyticsService/GetRebufferingEvents"
-	AggregatedAnalyticsService_GetTenantAnalyticsDaily_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetTenantAnalyticsDaily"
-	AggregatedAnalyticsService_GetStreamAnalyticsDaily_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetStreamAnalyticsDaily"
-	AggregatedAnalyticsService_GetAPIUsage_FullMethodName               = "/periscope.AggregatedAnalyticsService/GetAPIUsage"
+	AggregatedAnalyticsService_GetStreamConnectionHourly_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetStreamConnectionHourly"
+	AggregatedAnalyticsService_GetClientMetrics5M_FullMethodName          = "/periscope.AggregatedAnalyticsService/GetClientMetrics5m"
+	AggregatedAnalyticsService_GetQualityTierDaily_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetQualityTierDaily"
+	AggregatedAnalyticsService_GetStreamAnalyticsSummary_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetStreamAnalyticsSummary"
+	AggregatedAnalyticsService_GetStreamAnalyticsSummaries_FullMethodName = "/periscope.AggregatedAnalyticsService/GetStreamAnalyticsSummaries"
+	AggregatedAnalyticsService_GetStorageUsage_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetStorageUsage"
+	AggregatedAnalyticsService_GetStorageEvents_FullMethodName            = "/periscope.AggregatedAnalyticsService/GetStorageEvents"
+	AggregatedAnalyticsService_GetStreamHealth5M_FullMethodName           = "/periscope.AggregatedAnalyticsService/GetStreamHealth5m"
+	AggregatedAnalyticsService_GetNodePerformance5M_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetNodePerformance5m"
+	AggregatedAnalyticsService_GetViewerHoursHourly_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetViewerHoursHourly"
+	AggregatedAnalyticsService_GetViewerGeoHourly_FullMethodName          = "/periscope.AggregatedAnalyticsService/GetViewerGeoHourly"
+	AggregatedAnalyticsService_GetTenantDailyStats_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetTenantDailyStats"
+	AggregatedAnalyticsService_GetProcessingUsage_FullMethodName          = "/periscope.AggregatedAnalyticsService/GetProcessingUsage"
+	AggregatedAnalyticsService_GetLiveUsageSummary_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetLiveUsageSummary"
+	AggregatedAnalyticsService_GetRebufferingEvents_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetRebufferingEvents"
+	AggregatedAnalyticsService_GetTenantAnalyticsDaily_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetTenantAnalyticsDaily"
+	AggregatedAnalyticsService_GetStreamAnalyticsDaily_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetStreamAnalyticsDaily"
+	AggregatedAnalyticsService_GetAPIUsage_FullMethodName                 = "/periscope.AggregatedAnalyticsService/GetAPIUsage"
 )
 
 // AggregatedAnalyticsServiceClient is the client API for AggregatedAnalyticsService service.
@@ -1293,6 +1294,7 @@ type AggregatedAnalyticsServiceClient interface {
 	GetClientMetrics5M(ctx context.Context, in *GetClientMetrics5MRequest, opts ...grpc.CallOption) (*GetClientMetrics5MResponse, error)
 	GetQualityTierDaily(ctx context.Context, in *GetQualityTierDailyRequest, opts ...grpc.CallOption) (*GetQualityTierDailyResponse, error)
 	GetStreamAnalyticsSummary(ctx context.Context, in *GetStreamAnalyticsSummaryRequest, opts ...grpc.CallOption) (*GetStreamAnalyticsSummaryResponse, error)
+	GetStreamAnalyticsSummaries(ctx context.Context, in *GetStreamAnalyticsSummariesRequest, opts ...grpc.CallOption) (*GetStreamAnalyticsSummariesResponse, error)
 	GetStorageUsage(ctx context.Context, in *GetStorageUsageRequest, opts ...grpc.CallOption) (*GetStorageUsageResponse, error)
 	GetStorageEvents(ctx context.Context, in *GetStorageEventsRequest, opts ...grpc.CallOption) (*GetStorageEventsResponse, error)
 	GetStreamHealth5M(ctx context.Context, in *GetStreamHealth5MRequest, opts ...grpc.CallOption) (*GetStreamHealth5MResponse, error)
@@ -1351,6 +1353,16 @@ func (c *aggregatedAnalyticsServiceClient) GetStreamAnalyticsSummary(ctx context
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetStreamAnalyticsSummaryResponse)
 	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetStreamAnalyticsSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetStreamAnalyticsSummaries(ctx context.Context, in *GetStreamAnalyticsSummariesRequest, opts ...grpc.CallOption) (*GetStreamAnalyticsSummariesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStreamAnalyticsSummariesResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetStreamAnalyticsSummaries_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1497,6 +1509,7 @@ type AggregatedAnalyticsServiceServer interface {
 	GetClientMetrics5M(context.Context, *GetClientMetrics5MRequest) (*GetClientMetrics5MResponse, error)
 	GetQualityTierDaily(context.Context, *GetQualityTierDailyRequest) (*GetQualityTierDailyResponse, error)
 	GetStreamAnalyticsSummary(context.Context, *GetStreamAnalyticsSummaryRequest) (*GetStreamAnalyticsSummaryResponse, error)
+	GetStreamAnalyticsSummaries(context.Context, *GetStreamAnalyticsSummariesRequest) (*GetStreamAnalyticsSummariesResponse, error)
 	GetStorageUsage(context.Context, *GetStorageUsageRequest) (*GetStorageUsageResponse, error)
 	GetStorageEvents(context.Context, *GetStorageEventsRequest) (*GetStorageEventsResponse, error)
 	GetStreamHealth5M(context.Context, *GetStreamHealth5MRequest) (*GetStreamHealth5MResponse, error)
@@ -1532,6 +1545,9 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetQualityTierDaily(context
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetStreamAnalyticsSummary(context.Context, *GetStreamAnalyticsSummaryRequest) (*GetStreamAnalyticsSummaryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStreamAnalyticsSummary not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetStreamAnalyticsSummaries(context.Context, *GetStreamAnalyticsSummariesRequest) (*GetStreamAnalyticsSummariesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStreamAnalyticsSummaries not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetStorageUsage(context.Context, *GetStorageUsageRequest) (*GetStorageUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStorageUsage not implemented")
@@ -1662,6 +1678,24 @@ func _AggregatedAnalyticsService_GetStreamAnalyticsSummary_Handler(srv interface
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AggregatedAnalyticsServiceServer).GetStreamAnalyticsSummary(ctx, req.(*GetStreamAnalyticsSummaryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetStreamAnalyticsSummaries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStreamAnalyticsSummariesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetStreamAnalyticsSummaries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetStreamAnalyticsSummaries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetStreamAnalyticsSummaries(ctx, req.(*GetStreamAnalyticsSummariesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1922,6 +1956,10 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStreamAnalyticsSummary",
 			Handler:    _AggregatedAnalyticsService_GetStreamAnalyticsSummary_Handler,
+		},
+		{
+			MethodName: "GetStreamAnalyticsSummaries",
+			Handler:    _AggregatedAnalyticsService_GetStreamAnalyticsSummaries_Handler,
 		},
 		{
 			MethodName: "GetStorageUsage",

@@ -1,0 +1,49 @@
+query GetStreamAnalyticsSummariesConnection(
+  $timeRange: TimeRangeInput!
+  $sortBy: StreamSummarySortField = EGRESS_GB
+  $sortOrder: SortOrder = DESC
+  $first: Int = 10
+  $after: String
+  $last: Int
+  $before: String
+) {
+  analytics {
+    usage {
+      streaming {
+        streamAnalyticsSummariesConnection(
+          timeRange: $timeRange
+          sortBy: $sortBy
+          sortOrder: $sortOrder
+          page: { first: $first, after: $after, last: $last, before: $before }
+        ) {
+          edges {
+            cursor
+            node {
+              streamId
+              stream {
+                streamId
+                name
+                metrics {
+                  status
+                }
+              }
+              rangeEgressGb
+              rangeUniqueViewers
+              rangeTotalViews
+              rangeViewerHours
+              rangeEgressSharePercent
+              rangeViewerSharePercent
+            }
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
+          totalCount
+        }
+      }
+    }
+  }
+}

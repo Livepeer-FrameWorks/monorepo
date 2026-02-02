@@ -643,6 +643,21 @@ FROM numbers(0, 2016);
 -- 10. Backfill Aggregation Tables (MVs may not process bulk-inserted historical data)
 -- =================================================================================================
 
+-- Backfill stream_analytics_daily from viewer_connection_events
+INSERT INTO periscope.stream_analytics_daily
+SELECT
+    toDate(timestamp) AS day,
+    tenant_id,
+    stream_id,
+    internal_name,
+    countIf(event_type = 'connect') AS total_views,
+    uniq(session_id) AS unique_viewers,
+    uniq(country_code) AS unique_countries,
+    uniq(city) AS unique_cities,
+    sum(bytes_transferred) AS egress_bytes
+FROM periscope.viewer_connection_events
+GROUP BY day, tenant_id, stream_id, internal_name;
+
 -- Backfill viewer_hours_hourly from viewer_connection_events
 INSERT INTO periscope.viewer_hours_hourly
 SELECT

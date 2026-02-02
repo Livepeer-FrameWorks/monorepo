@@ -22,6 +22,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type SortOrder int32
+
+const (
+	SortOrder_SORT_ORDER_UNSPECIFIED SortOrder = 0
+	SortOrder_SORT_ORDER_ASC         SortOrder = 1
+	SortOrder_SORT_ORDER_DESC        SortOrder = 2
+)
+
+// Enum value maps for SortOrder.
+var (
+	SortOrder_name = map[int32]string{
+		0: "SORT_ORDER_UNSPECIFIED",
+		1: "SORT_ORDER_ASC",
+		2: "SORT_ORDER_DESC",
+	}
+	SortOrder_value = map[string]int32{
+		"SORT_ORDER_UNSPECIFIED": 0,
+		"SORT_ORDER_ASC":         1,
+		"SORT_ORDER_DESC":        2,
+	}
+)
+
+func (x SortOrder) Enum() *SortOrder {
+	p := new(SortOrder)
+	*p = x
+	return p
+}
+
+func (x SortOrder) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SortOrder) Descriptor() protoreflect.EnumDescriptor {
+	return file_common_proto_enumTypes[0].Descriptor()
+}
+
+func (SortOrder) Type() protoreflect.EnumType {
+	return &file_common_proto_enumTypes[0]
+}
+
+func (x SortOrder) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SortOrder.Descriptor instead.
+func (SortOrder) EnumDescriptor() ([]byte, []int) {
+	return file_common_proto_rawDescGZIP(), []int{0}
+}
+
 type CursorPaginationRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Forward pagination (most common - newest first)
@@ -244,7 +293,11 @@ const file_common_proto_rawDesc = "" +
 	"\v_end_cursor\"k\n" +
 	"\tTimeRange\x120\n" +
 	"\x05start\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x05start\x12,\n" +
-	"\x03end\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x03endB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x03end\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x03end*P\n" +
+	"\tSortOrder\x12\x1a\n" +
+	"\x16SORT_ORDER_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eSORT_ORDER_ASC\x10\x01\x12\x13\n" +
+	"\x0fSORT_ORDER_DESC\x10\x02B\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_common_proto_rawDescOnce sync.Once
@@ -258,16 +311,18 @@ func file_common_proto_rawDescGZIP() []byte {
 	return file_common_proto_rawDescData
 }
 
+var file_common_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_common_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_common_proto_goTypes = []any{
-	(*CursorPaginationRequest)(nil),  // 0: common.CursorPaginationRequest
-	(*CursorPaginationResponse)(nil), // 1: common.CursorPaginationResponse
-	(*TimeRange)(nil),                // 2: common.TimeRange
-	(*timestamppb.Timestamp)(nil),    // 3: google.protobuf.Timestamp
+	(SortOrder)(0),                   // 0: common.SortOrder
+	(*CursorPaginationRequest)(nil),  // 1: common.CursorPaginationRequest
+	(*CursorPaginationResponse)(nil), // 2: common.CursorPaginationResponse
+	(*TimeRange)(nil),                // 3: common.TimeRange
+	(*timestamppb.Timestamp)(nil),    // 4: google.protobuf.Timestamp
 }
 var file_common_proto_depIdxs = []int32{
-	3, // 0: common.TimeRange.start:type_name -> google.protobuf.Timestamp
-	3, // 1: common.TimeRange.end:type_name -> google.protobuf.Timestamp
+	4, // 0: common.TimeRange.start:type_name -> google.protobuf.Timestamp
+	4, // 1: common.TimeRange.end:type_name -> google.protobuf.Timestamp
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
@@ -287,13 +342,14 @@ func file_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_common_proto_rawDesc), len(file_common_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_common_proto_goTypes,
 		DependencyIndexes: file_common_proto_depIdxs,
+		EnumInfos:         file_common_proto_enumTypes,
 		MessageInfos:      file_common_proto_msgTypes,
 	}.Build()
 	File_common_proto = out.File
