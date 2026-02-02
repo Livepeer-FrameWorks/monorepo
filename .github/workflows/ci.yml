@@ -239,3 +239,22 @@ jobs:
         run: pnpm build
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  ci-passed:
+    name: CI passed
+    needs: [changes, go-build, go-test, go-lint, frontend-lint, frontend-test, frontend-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize results
+        run: |
+          echo '${{ toJSON(needs) }}' | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+      - name: Fail if any required job failed/cancelled
+        run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results" | jq -e 'to_entries | any(.value.result == "failure" or .value.result == "cancelled")' >/dev/null
+          if [ $? -eq 0 ]; then
+            echo "One or more jobs failed/cancelled"
+            exit 1
+          fi
+          echo "All required jobs succeeded or were skipped"
