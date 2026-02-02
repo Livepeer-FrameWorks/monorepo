@@ -67,6 +67,9 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 				Field:   strPtr("storage"),
 			}, nil
 		}
+		if strings.Contains(err.Error(), "account suspended") {
+			return &model.AuthError{Message: "Account suspended - please top up your balance to upload videos"}, nil
+		}
 		return nil, fmt.Errorf("failed to create VOD upload: %w", err)
 	}
 
@@ -126,6 +129,9 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 				ResourceID:   input.UploadID,
 			}, nil
 		}
+		if strings.Contains(err.Error(), "account suspended") {
+			return &model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"}, nil
+		}
 		return nil, fmt.Errorf("failed to complete VOD upload: %w", err)
 	}
 
@@ -160,6 +166,9 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 				ResourceType: "VodUpload",
 				ResourceID:   uploadID,
 			}, nil
+		}
+		if strings.Contains(err.Error(), "account suspended") {
+			return &model.AuthError{Message: "Account suspended - please top up your balance to manage uploads"}, nil
 		}
 		return nil, fmt.Errorf("failed to abort VOD upload: %w", err)
 	}
