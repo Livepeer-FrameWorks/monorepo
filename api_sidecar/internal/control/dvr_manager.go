@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	sidecarcfg "frameworks/api_sidecar/internal/config"
+	"frameworks/api_sidecar/internal/storage"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
@@ -88,10 +90,7 @@ var dvrManagerOnce sync.Once
 func initDVRManager() {
 	dvrManagerOnce.Do(func() {
 		logger := logging.NewLoggerWithService("dvr-manager")
-		storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
-		if storagePath == "" {
-			storagePath = "/tmp/helmsman_storage"
-		}
+		storagePath := sidecarcfg.GetStoragePath()
 
 		dvrManager = &DVRManager{
 			logger:      logger,
@@ -226,6 +225,13 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceURL 
 	// Check if already recording
 	if _, exists := dm.jobs[dvrHash]; exists {
 		return fmt.Errorf("DVR recording already active for hash %s", dvrHash)
+	}
+
+	if err := os.MkdirAll(dm.storagePath, 0755); err != nil {
+		return err
+	}
+	if err := storage.HasSpaceFor(dm.storagePath, 0); err != nil {
+		return fmt.Errorf("insufficient disk space for DVR recording: %w", err)
 	}
 
 	// Create output directory: /storage/dvr/{stream_id}/{dvr_hash}/

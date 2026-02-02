@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"runtime"
 	"strconv"
 
@@ -132,6 +133,15 @@ func parseFloat64(s string) float64 {
 	}
 	v, _ := strconv.ParseFloat(s, 64)
 	return v
+}
+
+// GetStoragePath returns the canonical local storage path for Helmsman artifacts.
+func GetStoragePath() string {
+	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
+	if storagePath == "" {
+		storagePath = "/data/storage"
+	}
+	return storagePath
 }
 
 // HardwareSpecs holds detected hardware information

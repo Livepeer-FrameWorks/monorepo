@@ -380,30 +380,35 @@ func (cm *CleanupMonitor) calculateCleanupPriority(clip ClipCleanupInfo) float64
 func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 	// In dual-storage mode, artifacts are expected to have an authoritative S3 copy.
 	// Before evicting from local disk, ask Foghorn if it's safe (synced).
+	if !control.IsConnected() {
+		cm.logger.WithFields(logging.Fields{
+			"artifact_hash": artifact.ClipHash,
+			"asset_type":    artifact.AssetType,
+		}).Warn("Cleanup skipped: Foghorn disconnected, cannot verify sync status")
+		return errCleanupSkip
+	}
 	isEviction := false
 	var warmDurationMs int64
-	if control.IsConnected() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		safeToDelete, reason, wd, err := control.RequestCanDelete(ctx, artifact.ClipHash)
-		cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	safeToDelete, reason, wd, err := control.RequestCanDelete(ctx, artifact.ClipHash)
+	cancel()
 
-		if err != nil {
-			cm.logger.WithError(err).WithField("artifact_hash", artifact.ClipHash).Warn("Failed to check if artifact is safe to evict")
-			return errCleanupSkip
-		}
-		if !safeToDelete {
-			cm.logger.WithFields(logging.Fields{
-				"artifact_hash": artifact.ClipHash,
-				"asset_type":    artifact.AssetType,
-				"reason":        reason,
-			}).Info("Artifact not safe to evict yet; triggering sync")
-			TriggerStorageCheck()
-			return errCleanupSkip
-		}
-
-		isEviction = true
-		warmDurationMs = wd
+	if err != nil {
+		cm.logger.WithError(err).WithField("artifact_hash", artifact.ClipHash).Warn("Failed to check if artifact is safe to evict")
+		return errCleanupSkip
 	}
+	if !safeToDelete {
+		cm.logger.WithFields(logging.Fields{
+			"artifact_hash": artifact.ClipHash,
+			"asset_type":    artifact.AssetType,
+			"reason":        reason,
+		}).Info("Artifact not safe to evict yet; triggering sync")
+		TriggerStorageCheck()
+		return errCleanupSkip
+	}
+
+	isEviction = true
+	warmDurationMs = wd
 
 	// Remove based on asset type
 	switch artifact.AssetType {
