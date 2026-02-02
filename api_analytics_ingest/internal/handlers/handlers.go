@@ -466,14 +466,13 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 			has_issues, issues_description, track_count,
 			track_metadata,
 			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
-		)`)
+	)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
 		}
-		// Don't fail the whole event if health insert fails - live_streams and stream_events are more important
-		return nil
+		return err
 	}
 
 	// Calculate buffer_health ratio (0.0-1.0): buffer_ms / max_keepaway_ms.
@@ -529,7 +528,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
 		}
-		return nil
+		return err
 	}
 
 	if err := healthBatch.Send(); err != nil {
@@ -537,7 +536,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
 		}
-		return nil
+		return err
 	}
 
 	if h.metrics != nil {
