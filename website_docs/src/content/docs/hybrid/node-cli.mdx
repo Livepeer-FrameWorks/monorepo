@@ -11,7 +11,7 @@ Managing edge nodes shouldn't be a chore. The FrameWorks CLI provides a focused 
 ## Status
 
 ```bash
-frameworks edge status
+frameworks edge status --dir /opt/frameworks-edge
 ```
 
 Shows:
@@ -23,13 +23,13 @@ Shows:
 
 ```bash
 # All containers, follow mode
-frameworks edge logs --follow
+frameworks edge logs --follow --dir /opt/frameworks-edge
 
 # Specific container (positional argument)
-frameworks edge logs helmsman --tail 100
+frameworks edge logs helmsman --tail 100 --dir /opt/frameworks-edge
 
 # Multiple options
-frameworks edge logs --follow --tail 50
+frameworks edge logs --follow --tail 50 --dir /opt/frameworks-edge
 ```
 
 Service names: `mistserver`, `helmsman`, `caddy` (the proxy service)
@@ -39,7 +39,7 @@ Service names: `mistserver`, `helmsman`, `caddy` (the proxy service)
 Pull the latest images and restart:
 
 ```bash
-frameworks edge update
+frameworks edge update --dir /opt/frameworks-edge
 ```
 
 This:
@@ -61,14 +61,14 @@ frameworks version
 Check TLS status:
 
 ```bash
-frameworks edge cert
+frameworks edge cert --dir /opt/frameworks-edge
 ```
 
 Shows certificate expiration and issuer. Caddy handles renewal automatically, but if something goes wrong:
 
 ```bash
 # Reload Caddy to pick up new certificates
-frameworks edge cert --reload
+frameworks edge cert --reload --dir /opt/frameworks-edge
 ```
 
 ## Restarting Services
@@ -108,7 +108,7 @@ docker compose -f docker-compose.edge.yml up -d
 Full health check:
 
 ```bash
-frameworks edge doctor
+frameworks edge doctor --dir /opt/frameworks-edge
 ```
 
 Runs:
