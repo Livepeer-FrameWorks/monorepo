@@ -251,7 +251,29 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 			continue
 		}
 
-		if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.TxHash); err != nil {
+		// Only re-credit if we previously debited the tenant due to timeout.
+		// Otherwise a transient debit failure would result in double-credit.
+		var reversalExists bool
+		err = r.db.QueryRowContext(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM purser.balance_transactions
+				WHERE tenant_id = $1
+				  AND reference_id = $2
+				  AND reference_type = 'x402_failed'
+				  AND transaction_type = 'reversal'
+			)
+		`, s.TenantID, s.TxHash).Scan(&reversalExists)
+		if err != nil {
+			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to check timeout reversal before re-credit")
+			continue
+		}
+		if !reversalExists {
+			r.logger.WithFields(logging.Fields{
+				"tenant_id": s.TenantID,
+				"tx_hash":   s.TxHash,
+			}).Warn("Skipping late-settlement re-credit: no prior reversal recorded")
+		} else if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.TxHash); err != nil {
 			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to re-credit balance after late settlement")
 			continue
 		}
