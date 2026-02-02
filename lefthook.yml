@@ -7,13 +7,21 @@ pre-commit:
   commands:
     go-fmt:
       glob: "**/*.go"
-      exclude: ".*\\.pb\\.go$|.*_grpc\\.pb\\.go$|graph/generated/.*|graph/model/models_gen\\.go$"
+      exclude:
+        - "**/*.pb.go"
+        - "**/*_grpc.pb.go"
+        - "**/graph/generated/**"
+        - "**/graph/model/models_gen.go"
       run: gofmt -l -w {staged_files}
       stage_fixed: true
 
     go-lint:
       glob: "**/*.go"
-      exclude: ".*\\.pb\\.go$|.*_grpc\\.pb\\.go$|graph/generated/.*|graph/model/models_gen\\.go$"
+      exclude:
+        - "**/*.pb.go"
+        - "**/*_grpc.pb.go"
+        - "**/graph/generated/**"
+        - "**/graph/model/models_gen.go"
       run: golangci-lint run --new --fix {staged_files} || true
       stage_fixed: true
 
