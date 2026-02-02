@@ -1083,8 +1083,8 @@ services:
     entrypoint: ["sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk"]
     environment:
       LISTMONK_app__address: "0.0.0.0:9000"
-      LISTMONK_app__admin_username: ${LISTMONK_ADMIN_USER:-admin}
-      LISTMONK_app__admin_password: ${LISTMONK_ADMIN_PASSWORD:-admin}
+      LISTMONK_app__admin_username: ${LISTMONK_USERNAME:-admin}
+      LISTMONK_app__admin_password: ${LISTMONK_PASSWORD:-admin}
       LISTMONK_db__host: postgres
       LISTMONK_db__port: 5432
       LISTMONK_db__user: listmonk
