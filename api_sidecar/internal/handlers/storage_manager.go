@@ -263,6 +263,14 @@ func (sm *StorageManager) checkAndManageStorage() error {
 		"total_gb":      float64(totalBytes) / (1024 * 1024 * 1024),
 	}).Info("Storage usage check")
 
+	if usagePercent >= sm.deleteThreshold {
+		sm.logger.WithFields(logging.Fields{
+			"usage_percent":    usagePercent,
+			"delete_threshold": sm.deleteThreshold,
+		}).Warn("Storage above delete threshold, starting emergency cleanup")
+		return sm.fallbackCleanup(clipsDir, usedBytes, totalBytes)
+	}
+
 	// Check if freeze is needed
 	if usagePercent < sm.freezeThreshold {
 		return nil // No action needed
