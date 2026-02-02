@@ -95,14 +95,22 @@ func main() {
 	// Initialize GraphQL resolver and server
 	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, serviceToken)
 
+	// Setup complexity functions for pagination-aware query cost calculation
+	var complexity generated.ComplexityRoot
+	graph.SetupComplexity(&complexity)
+
 	// Create GraphQL server with WebSocket support for subscriptions
-	gqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))
+	gqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{
+		Resolvers:  resolver,
+		Complexity: complexity,
+	}))
 
 	// Enable introspection for developer API explorer
 	gqlHandler.Use(extension.Introspection{})
 
 	// Add query complexity limit to prevent expensive queries
-	complexityLimit := config.GetEnvInt("GRAPHQL_COMPLEXITY_LIMIT", 200)
+	// Default 1000 matches Shopify's per-query limit with pagination-aware complexity
+	complexityLimit := config.GetEnvInt("GRAPHQL_COMPLEXITY_LIMIT", 1000)
 	if complexityLimit > 0 {
 		gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 		logger.WithField("limit", complexityLimit).Info("GraphQL complexity limit enabled")

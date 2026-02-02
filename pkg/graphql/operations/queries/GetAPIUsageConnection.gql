@@ -29,11 +29,6 @@ query GetAPIUsageConnection(
               uniqueTokens
             }
           }
-          nodes {
-            id
-            operationName
-            requestCount
-          }
           pageInfo {
             hasNextPage
             hasPreviousPage
