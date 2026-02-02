@@ -315,8 +315,8 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 			"topic":     msg.Topic,
 			"partition": msg.Partition,
 			"offset":    msg.Offset,
-		}).Error("Failed to unmarshal usage summary from Kafka")
-		return fmt.Errorf("unmarshal usage summary: %w", err)
+		}).Error("Failed to unmarshal usage summary from Kafka (skipping poison message)")
+		return nil
 	}
 
 	if err := jm.processUsageSummary(summary, "kafka"); err != nil {
