@@ -1,5 +1,6 @@
 <script lang="ts">
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
+  import { formatNumber } from "$lib/utils/formatters";
   import { getIconComponent } from "$lib/iconUtils";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
   import QualityTierChart from "$lib/components/charts/QualityTierChart.svelte";
