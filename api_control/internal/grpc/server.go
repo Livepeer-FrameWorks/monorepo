@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/smtp"
 	"net/url"
@@ -540,7 +541,7 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 			"internal_name": internalName,
 			"error":         err,
 		}).Error("Failed to find stream for DVR")
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Errorf(codes.NotFound, "stream not found for internal_name: %s", internalName)
 		}
 		return nil, status.Errorf(codes.Internal, "database error looking up stream: %v", err)

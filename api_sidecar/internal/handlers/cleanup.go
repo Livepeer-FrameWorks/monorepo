@@ -139,17 +139,17 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 	var candidates []ClipCleanupInfo
 
 	clipsDir := filepath.Join(cm.basePath, "clips")
-	if clipCandidates, err := cm.getCleanupCandidates(clipsDir, "clip"); err == nil {
+	if clipCandidates, clipErr := cm.getCleanupCandidates(clipsDir, "clip"); clipErr == nil {
 		candidates = append(candidates, clipCandidates...)
 	}
 
 	dvrDir := filepath.Join(cm.basePath, "dvr")
-	if dvrCandidates, err := cm.getCleanupCandidates(dvrDir, "dvr"); err == nil {
+	if dvrCandidates, dvrErr := cm.getCleanupCandidates(dvrDir, "dvr"); dvrErr == nil {
 		candidates = append(candidates, dvrCandidates...)
 	}
 
 	vodDir := filepath.Join(cm.basePath, "vod")
-	if vodCandidates, err := cm.getCleanupCandidates(vodDir, "vod"); err == nil {
+	if vodCandidates, vodErr := cm.getCleanupCandidates(vodDir, "vod"); vodErr == nil {
 		candidates = append(candidates, vodCandidates...)
 	}
 

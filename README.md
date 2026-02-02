@@ -1,6 +1,8 @@
 # FrameWorks
 
+[![CI](https://github.com/Livepeer-FrameWorks/monorepo/actions/workflows/ci.yml/badge.svg)](https://github.com/Livepeer-FrameWorks/monorepo/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/Livepeer-FrameWorks/monorepo)](https://codecov.io/gh/Livepeer-FrameWorks/monorepo)
+[![license](https://img.shields.io/github/license/Livepeer-FrameWorks/monorepo)](LICENSE.md)
 
 > Warning: This stack is pre‑release and experimental. Do not deploy to production. Interfaces and schemas change frequently. Use for local development and evaluation only.
 
@@ -8,21 +10,22 @@
 
 An open streaming stack for live video: apps, real‑time APIs, and analytics. Services are narrowly scoped. Frontend uses GraphQL; service-to-service uses HTTP/gRPC APIs; analytics and realtime use Kafka events. Each service owns its data (no cross‑DB access).
 
-## NPM packages
+## Packages & Bundles
 
-FrameWorks ships official player and browser-ingest packages:
+| Package                                                                                                              | Version                                                                                                                                                       |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [@livepeer-frameworks/player-react](https://www.npmjs.com/package/@livepeer-frameworks/player-react)                 | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-react)](https://www.npmjs.com/package/@livepeer-frameworks/player-react)                 |
+| [@livepeer-frameworks/player-svelte](https://www.npmjs.com/package/@livepeer-frameworks/player-svelte)               | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/player-svelte)               |
+| [@livepeer-frameworks/player-core](https://www.npmjs.com/package/@livepeer-frameworks/player-core)                   | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-core)](https://www.npmjs.com/package/@livepeer-frameworks/player-core)                   |
+| [@livepeer-frameworks/streamcrafter-react](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-react)   | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-react)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-react)   |
+| [@livepeer-frameworks/streamcrafter-svelte](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) |
+| [@livepeer-frameworks/streamcrafter-core](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)     | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-core)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)     |
 
-**FrameWorks Player**
-
-[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-react?label=@livepeer-frameworks%2Fplayer-react)](https://www.npmjs.com/package/@livepeer-frameworks/player-react)
-[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-svelte?label=@livepeer-frameworks%2Fplayer-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/player-svelte)
-[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-core?label=@livepeer-frameworks%2Fplayer-core)](https://www.npmjs.com/package/@livepeer-frameworks/player-core)
-
-**StreamCrafter (browser ingest)**
-
-[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-react?label=@livepeer-frameworks%2Fstreamcrafter-react)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-react)
-[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-svelte?label=@livepeer-frameworks%2Fstreamcrafter-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte)
-[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-core?label=@livepeer-frameworks%2Fstreamcrafter-core)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)
+| Bundle    | Size                                                                                                                                                                                                        |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| app       | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-application-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-application-esm) |
+| marketing | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-marketing-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-marketing-esm)     |
+| docs      | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-docs-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-docs-esm)               |
 
 ## Architecture at a glance
 

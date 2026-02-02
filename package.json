@@ -23,6 +23,7 @@
     "prepare": "lefthook install"
   },
   "devDependencies": {
+    "@codecov/sveltekit-plugin": "^1.9.1",
     "@codecov/vite-plugin": "^1.9.1",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",

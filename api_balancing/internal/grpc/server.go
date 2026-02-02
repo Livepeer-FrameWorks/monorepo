@@ -709,7 +709,8 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		if req.GetExpiresAt() > 0 {
 			regReq.RetentionUntil = timestamppb.New(time.Unix(req.GetExpiresAt(), 0))
 		}
-		regResp, err := control.CommodoreClient.RegisterDVR(ctx, regReq)
+		var regResp *pb.RegisterDVRResponse
+		regResp, err = control.CommodoreClient.RegisterDVR(ctx, regReq)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to register DVR with Commodore")
 			return nil, status.Errorf(codes.Internal, "failed to register DVR: %v", err)
@@ -1939,7 +1940,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod'
 	`, req.ArtifactHash).Scan(&currentStatus, &s3Key, &sizeBytes, &retentionUntil, &userID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "VOD asset not found")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to check VOD asset")
@@ -1975,18 +1976,18 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		requestID := uuid.NewString()
 		for rows.Next() {
 			var nodeID string
-			if err := rows.Scan(&nodeID); err != nil {
+			if scanErr := rows.Scan(&nodeID); scanErr != nil {
 				continue
 			}
 			deleteReq := &pb.VodDeleteRequest{
 				VodHash:   req.ArtifactHash,
 				RequestId: requestID,
 			}
-			if err := control.SendVodDelete(nodeID, deleteReq); err != nil {
+			if sendErr := control.SendVodDelete(nodeID, deleteReq); sendErr != nil {
 				s.logger.WithFields(logging.Fields{
 					"artifact_hash": req.ArtifactHash,
 					"node_id":       nodeID,
-					"error":         err,
+					"error":         sendErr,
 				}).Warn("Failed to send VOD delete to storage node, will be cleaned up later")
 			} else {
 				s.logger.WithFields(logging.Fields{

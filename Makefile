@@ -1,7 +1,7 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
-	lint lint-fix lint-report lint-analyze \
+	lint lint-all lint-fix lint-report lint-analyze \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
 # Version information
@@ -318,9 +318,28 @@ fmt:
 # Linting
 # =============================================================================
 
-# Run golangci-lint (shows ALL violations for cleanup work)
+# Run golangci-lint with baseline (matches CI - shows only NEW violations)
 lint:
-	@echo "Running golangci-lint for all Go modules..."
+	@echo "Running golangci-lint with baseline (CI mode)..."
+	@BASELINE=$$(cat .golangci-baseline 2>/dev/null || echo ""); \
+	if [ -z "$$BASELINE" ]; then \
+		echo "Warning: No .golangci-baseline file found, running without baseline"; \
+		BASELINE_ARG=""; \
+	else \
+		echo "Using baseline: $$BASELINE"; \
+		BASELINE_ARG="--new-from-rev=$$BASELINE"; \
+	fi; \
+	failed=0; \
+	for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> Linting $$service_name"; \
+		(cd $$service_dir && golangci-lint run --timeout=5m $$BASELINE_ARG ./...) || failed=1; \
+	done; \
+	if [ $$failed -eq 1 ]; then exit 1; fi
+
+# Run golangci-lint without baseline (shows ALL violations for cleanup work)
+lint-all:
+	@echo "Running golangci-lint for all Go modules (all violations)..."
 	@for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
 		echo "==> $$service_name"; \
