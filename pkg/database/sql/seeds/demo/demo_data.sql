@@ -476,7 +476,7 @@ INSERT INTO commodore.clips (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Demo user
     '5eedfeed-11fe-ca57-feed-11feca570001',  -- Demo stream
-    'a1b2c3d4e5f6789012345678901234ab',      -- Must match foghorn.artifacts
+    '20240101120000a1b2c3d4e5f67890',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'clip_int_001',
     'clp1a2b3c4d5e6fg',
     'Demo Highlight Reel',
@@ -494,7 +494,7 @@ INSERT INTO commodore.clips (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedface-5e1f-da7a-face-5e1fda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
-    'b2c3d4e5f6789012345678901234bcde',      -- Must match foghorn.artifacts
+    '20240101120100b2c3d4e5f6789012',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'clip_int_002',
     'clp2a2b3c4d5e6fh',
     'Old Demo Clip',
@@ -527,7 +527,7 @@ INSERT INTO commodore.dvr_recordings (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Demo user
     '5eedfeed-11fe-ca57-feed-11feca570001',  -- Demo stream
-    'fedcba98765432109876543210fedcba',      -- Must match foghorn.artifacts
+    '20240101120200fedcba9876543210',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'dvr_int_001',
     'dvr1a2b3c4d5e6fg',
     'demo_live_stream_001',
@@ -541,7 +541,7 @@ INSERT INTO commodore.dvr_recordings (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedface-5e1f-da7a-face-5e1fda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
-    'gedcba98765432109876543210fedcbb',      -- Must match foghorn.artifacts
+    '20240101120300fedcba9876543211',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'dvr_int_002',
     'dvr2a2b3c4d5e6fh',
     'demo_live_stream_001',
@@ -569,7 +569,7 @@ INSERT INTO commodore.vod_assets (
     '5eedb0d5-1e55-da7a-b0d5-1e55da7a0001',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',  -- Demo tenant
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Demo user
-    'c3d4e5f678901234567890123456abcd',
+    '20240101120400c3d4e5f678901234',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'vod_int_001',
     'vod1a2b3c4d5e6fg',
     'Product Demo 2024',
@@ -586,7 +586,7 @@ INSERT INTO commodore.vod_assets (
     '5eedb0d5-1e55-da7a-b0d5-1e55da7a0002',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedface-5e1f-da7a-face-5e1fda7a0001',
-    'd4e5f6789012345678901234567abcde',
+    '20240101120500d4e5f6789012345a',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'vod_int_002',
     'vod2a2b3c4d5e6fh',
     'Live Streaming Webinar',
@@ -603,7 +603,7 @@ INSERT INTO commodore.vod_assets (
     '5eedb0d5-1e55-da7a-b0d5-1e55da7a0003',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedface-5e1f-da7a-face-5e1fda7a0001',
-    'e5f678901234567890123456789abcdf',
+    '20240101120600e5f6789012345678',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'vod_int_003',
     'vod3a2b3c4d5e6fi',
     'Failed Upload',
@@ -770,13 +770,13 @@ INSERT INTO foghorn.vod_metadata (
 ) VALUES
 -- Demo VOD (ready) - Product demo video
 (
-    'c3d4e5f678901234567890123456abcd',
+    '20240101120400c3d4e5f678901234',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'product_demo_2024.webm',
     'Product Demo 2024',
     'Annual product demonstration showcasing new streaming features',
     'video/webm',
     NULL,            -- Upload completed
-    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/c3d4e5f678901234567890123456abcd/c3d4e5f678901234567890123456abcd.webm',
+    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/20240101120400c3d4e5f678901234/20240101120400c3d4e5f678901234.webm',
     4000,            -- 4 seconds
     '640x360',
     'vp9',
@@ -788,13 +788,13 @@ INSERT INTO foghorn.vod_metadata (
 ),
 -- Demo VOD (processing) - Still being validated
 (
-    'd4e5f6789012345678901234567abcde',
+    '20240101120500d4e5f6789012345a',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'webinar_recording.mp4',
     'Live Streaming Webinar',
     'Educational webinar about low-latency streaming',
     'video/mp4',
     'abc123multipartupload',   -- Still has upload ID (not yet cleaned)
-    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/d4e5f6789012345678901234567abcde/d4e5f6789012345678901234567abcde.mp4',
+    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/20240101120500d4e5f6789012345a/20240101120500d4e5f6789012345a.mp4',
     NULL,            -- Not yet validated
     NULL,
     NULL,
@@ -806,13 +806,13 @@ INSERT INTO foghorn.vod_metadata (
 ),
 -- Demo VOD (failed) - Invalid format
 (
-    'e5f678901234567890123456789abcdf',
+    '20240101120600e5f6789012345678',        -- Must match foghorn.artifacts (30-char: timestamp+hex)
     'corrupted_file.avi',
     'Failed Upload',
     'This file failed validation due to unsupported format',
     'video/x-msvideo',
     NULL,
-    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/e5f678901234567890123456789abcdf/e5f678901234567890123456789abcdf.avi',
+    'vod/5eed517e-ba5e-da7a-517e-ba5eda7a0001/20240101120600e5f6789012345678/20240101120600e5f6789012345678.avi',
     NULL,
     NULL,
     NULL,
