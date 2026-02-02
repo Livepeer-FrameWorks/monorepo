@@ -336,12 +336,12 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 
 	if billingModel == "prepaid" {
 		// Prepaid: deduct usage cost from balance
-		if err := jm.processPrepaidUsage(summary); err != nil {
+		if err := jm.processPrepaidUsage(ctx, summary); err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to process prepaid usage")
 		}
 	} else {
 		// Postpaid: update invoice draft
-		if err := jm.updateInvoiceDraft(summary.TenantID); err != nil {
+		if err := jm.updateInvoiceDraft(ctx, summary.TenantID); err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to update invoice draft")
 		}
 	}
@@ -402,7 +402,7 @@ func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
 }
 
 // processPrepaidUsage calculates usage cost and deducts from prepaid balance
-func (jm *JobManager) processPrepaidUsage(summary models.UsageSummary) error {
+func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.UsageSummary) error {
 	// Get subscription tier info for pricing
 	var (
 		basePrice           float64
@@ -449,7 +449,7 @@ func (jm *JobManager) processPrepaidUsage(summary models.UsageSummary) error {
 	deductCents := int64(meteredAmount * 100)
 
 	// Deduct from prepaid balance
-	newBalanceCents, err := jm.deductPrepaidBalance(summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period))
+	newBalanceCents, err := jm.deductPrepaidBalance(ctx, summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period))
 	if err != nil {
 		return fmt.Errorf("failed to deduct prepaid balance: %w", err)
 	}
@@ -464,7 +464,7 @@ func (jm *JobManager) processPrepaidUsage(summary models.UsageSummary) error {
 	// Check if balance dropped below suspension threshold (-10.00 in default currency)
 	suspensionThreshold := int64(-1000)
 	if newBalanceCents < suspensionThreshold {
-		if err := jm.suspendTenantForBalance(summary.TenantID, newBalanceCents); err != nil {
+		if err := jm.suspendTenantForBalance(ctx, summary.TenantID, newBalanceCents); err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to suspend tenant for low balance")
 		}
 	}
@@ -473,7 +473,7 @@ func (jm *JobManager) processPrepaidUsage(summary models.UsageSummary) error {
 }
 
 // deductPrepaidBalance deducts amount from prepaid balance and returns new balance
-func (jm *JobManager) deductPrepaidBalance(tenantID string, amountCents int64, description string) (int64, error) {
+func (jm *JobManager) deductPrepaidBalance(ctx context.Context, tenantID string, amountCents int64, description string) (int64, error) {
 	var newBalance int64
 	currency := billing.DefaultCurrency()
 
@@ -535,8 +535,9 @@ func (jm *JobManager) deductPrepaidBalance(tenantID string, amountCents int64, d
 	// This triggers soft gate for prepaid tenants with depleted balance
 	if currentBalance > 0 && newBalance <= 0 {
 		if jm.commodoreClient != nil {
-			ctx := context.Background()
-			_, err := jm.commodoreClient.InvalidateTenantCache(ctx, tenantID, "balance_crossed_zero")
+			invalidateCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			_, err := jm.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "balance_crossed_zero")
 			if err != nil {
 				jm.logger.WithFields(logging.Fields{
 					"tenant_id":        tenantID,
@@ -576,7 +577,7 @@ func (jm *JobManager) getPrepaidBalance(tenantID string) (int64, error) {
 
 // suspendTenantForBalance suspends a tenant due to negative prepaid balance
 // This function is called when balance drops below -$10 (threshold defined in processPrepaidUsage)
-func (jm *JobManager) suspendTenantForBalance(tenantID string, balanceCents int64) error {
+func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
 	// Update subscription status to 'suspended'
 	// This blocks NEW ingests/streams via Foghorn (which checks suspension status)
 	result, err := jm.db.Exec(`
@@ -597,7 +598,9 @@ func (jm *JobManager) suspendTenantForBalance(tenantID string, balanceCents int6
 
 		// Terminate all active streams for this tenant via Commodore -> Foghorn -> MistServer
 		if jm.commodoreClient != nil {
-			resp, err := jm.commodoreClient.TerminateTenantStreams(context.Background(), tenantID, "insufficient_balance")
+			terminateCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			resp, err := jm.commodoreClient.TerminateTenantStreams(terminateCtx, tenantID, "insufficient_balance")
 			if err != nil {
 				jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to terminate tenant streams on suspension")
 			} else {
@@ -610,7 +613,9 @@ func (jm *JobManager) suspendTenantForBalance(tenantID string, balanceCents int6
 			}
 
 			// Invalidate media plane caches so suspension takes effect immediately for new requests
-			invalidateResp, err := jm.commodoreClient.InvalidateTenantCache(context.Background(), tenantID, "suspended")
+			invalidateCtx, cancel2 := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel2()
+			invalidateResp, err := jm.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "suspended")
 			if err != nil {
 				jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to invalidate tenant cache on suspension")
 			} else {
@@ -806,7 +811,6 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch usage data")
 		} else {
-			defer usageRows.Close()
 			for usageRows.Next() {
 				var usageType string
 				var val float64
@@ -814,6 +818,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 					usageData[usageType] = val
 				}
 			}
+			usageRows.Close()
 		}
 
 		baseAmount, meteredAmount := calculateCharges(usageData, basePrice, meteringEnabled, overageRates, storageAllocation, bandwidthAllocation, customPricing, customAllocations)
@@ -1003,6 +1008,24 @@ func (jm *JobManager) rollupAndPurgeUsage(ctx context.Context) error {
 }
 
 func (jm *JobManager) rollupUsageRecords(ctx context.Context, fromGranularity, toGranularity, truncUnit, interval string, cutoff time.Time) error {
+	// Defense-in-depth: these values are string-formatted into SQL below.
+	// Keep the allowed set explicit so callers can't accidentally widen input surface.
+	switch truncUnit {
+	case "day", "month":
+	default:
+		return fmt.Errorf("invalid truncUnit: %s", truncUnit)
+	}
+	switch interval {
+	case "1 day", "1 month":
+	default:
+		return fmt.Errorf("invalid interval: %s", interval)
+	}
+	switch toGranularity {
+	case "daily", "monthly":
+	default:
+		return fmt.Errorf("invalid toGranularity: %s", toGranularity)
+	}
+
 	maxTypes := "'peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users', 'unique_users_period', 'livepeer_unique_streams', 'native_av_unique_streams'"
 	avgTypes := "'average_storage_gb'"
 	query := fmt.Sprintf(`
@@ -1385,7 +1408,7 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 }
 
 // updateInvoiceDraft creates or updates an invoice draft for the tenant based on usage
-func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
+func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) error {
 	var (
 		tierID              string
 		subscriptionStatus  string
@@ -1472,7 +1495,7 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 			creditToApplyCents = grossAmountCents
 		}
 		// Deduct from prepaid balance
-		_, err := jm.deductPrepaidBalance(tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
+		_, err := jm.deductPrepaidBalance(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to deduct prepaid balance for invoice credit")
 		} else {
@@ -1506,7 +1529,11 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 		usageDetails[k] = v
 	}
 
-	usageJSON, _ := json.Marshal(usageDetails)
+	usageJSON, err := json.Marshal(usageDetails)
+	if err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to marshal usage details for invoice draft")
+		usageJSON = []byte("{}")
+	}
 
 	// Upsert draft invoice in billing_invoices
 	dueDate := periodEnd.AddDate(0, 0, 14)
