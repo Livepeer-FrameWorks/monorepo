@@ -310,7 +310,7 @@ func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthIn
 		return toolError(fmt.Sprintf("Failed to fetch buffer health data: %v", err))
 	}
 
-	metricsResp, err := serviceClients.Periscope.GetStreamHealthMetrics(ctx, &streamID, timeRange, &periscope.CursorPaginationOpts{First: 200})
+	metricsResp, err := serviceClients.Periscope.GetStreamHealthMetrics(ctx, tenantID, &streamID, timeRange, &periscope.CursorPaginationOpts{First: 200})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to get stream health samples")
 	}
@@ -485,7 +485,7 @@ func handleDiagnosePacketLoss(ctx context.Context, args DiagnosePacketLossInput,
 
 	protocol := ""
 	protocolType := protocolTypeUnknown
-	eventResp, err := serviceClients.Periscope.GetStreamEvents(ctx, streamID, timeRange, &periscope.CursorPaginationOpts{First: 20})
+	eventResp, err := serviceClients.Periscope.GetStreamEvents(ctx, tenantID, streamID, timeRange, &periscope.CursorPaginationOpts{First: 20})
 	if err == nil {
 		for _, evt := range eventResp.Events {
 			if evt.Protocol != nil && *evt.Protocol != "" {
@@ -558,7 +558,7 @@ func handleDiagnoseRouting(ctx context.Context, args DiagnoseRoutingInput, servi
 	}
 
 	timeRangeLabel, timeRange := normalizeTimeRange(args.TimeRange)
-	resp, err := serviceClients.Periscope.GetRoutingEvents(ctx, &streamID, timeRange, nil, []string{tenantID}, nil, nil)
+	resp, err := serviceClients.Periscope.GetRoutingEvents(ctx, tenantID, &streamID, timeRange, nil, []string{tenantID}, nil, nil)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to get routing events")
 		return toolError(fmt.Sprintf("Failed to fetch routing data: %v", err))

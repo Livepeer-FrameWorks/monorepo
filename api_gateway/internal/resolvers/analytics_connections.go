@@ -50,6 +50,11 @@ func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *str
 		return demo.GenerateRoutingEventsConnection(), nil
 	}
 
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
 	if err != nil {
 		return nil, err
@@ -153,6 +158,11 @@ func (r *Resolver) DoGetConnectionEventsConnection(ctx context.Context, stream *
 		return demo.GenerateConnectionEventsConnection(), nil
 	}
 
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
 	if err != nil {
 		return nil, err
@@ -236,6 +246,11 @@ func (r *Resolver) DoGetConnectionEventsConnection(ctx context.Context, stream *
 func (r *Resolver) DoGetArtifactEventsConnection(ctx context.Context, streamId *string, stage *string, contentType *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ArtifactEventsConnection, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateArtifactEventsConnection(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(streamId)
@@ -334,6 +349,11 @@ func (r *Resolver) DoGetNodeMetricsConnection(ctx context.Context, nodeID *strin
 		return demo.GenerateNodeMetricsConnection(), nil
 	}
 
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	// Build cursor pagination options
 	opts := &periscopeclient.CursorPaginationOpts{
 		First: int32(pagination.DefaultLimit),
@@ -406,6 +426,11 @@ func (r *Resolver) DoGetNodeMetricsConnection(ctx context.Context, nodeID *strin
 func (r *Resolver) DoGetNodeMetrics1hConnection(ctx context.Context, timeRange *model.TimeRangeInput, nodeID *string, first *int, after *string, last *int, before *string, noCache *bool) (*model.NodeMetrics1hConnection, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodeMetrics1hConnection(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	// Build cursor pagination options
@@ -482,6 +507,11 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 		return demo.GenerateNodeMetricsAggregated(), nil
 	}
 
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	startTime, endTime := parseTimeRange(timeRange)
 	skipCache := noCache != nil && *noCache
 
@@ -489,10 +519,10 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 	if nodeID != nil {
 		nodeKey = *nodeID
 	}
-	keyParts := []string{nodeKey, timeKey(startTime), timeKey(endTime)}
+	keyParts := []string{tenantID, nodeKey, timeKey(startTime), timeKey(endTime)}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "node_metrics_aggregated", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetNodeMetricsAggregated(ctx, nodeID, timePtrsToTimeRangeOpts(startTime, endTime))
+		return r.Clients.Periscope.GetNodeMetricsAggregated(ctx, tenantID, nodeID, timePtrsToTimeRangeOpts(startTime, endTime))
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -509,6 +539,10 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, stream string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamHealthMetricsConnection, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamHealthMetricsConnection(), nil
+	}
+
+	if tenantIDFromContext(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	normalizedID, err := normalizeStreamID(stream)
@@ -600,6 +634,10 @@ func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream st
 		return nil, fmt.Errorf("stream_id required")
 	}
 
+	if tenantIDFromContext(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	// Build cursor pagination options
 	opts := &periscopeclient.CursorPaginationOpts{
 		First: int32(pagination.DefaultLimit),
@@ -686,6 +724,10 @@ func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId str
 
 	if streamId == "" {
 		return nil, fmt.Errorf("streamId required")
+	}
+
+	if tenantIDFromContext(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	// Build cursor pagination options
@@ -783,10 +825,7 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 		return nil, fmt.Errorf("streamId required")
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -831,7 +870,7 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "buffer_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetBufferEvents(ctx, streamId, timeOpts, opts)
+		return r.Clients.Periscope.GetBufferEvents(ctx, tenantID, streamId, timeOpts, opts)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -893,6 +932,10 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *pb.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamHealthMetricsConnection, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamHealthMetricsConnection(), nil
+	}
+
+	if tenantIDFromContext(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	// Build cursor pagination options
@@ -968,6 +1011,10 @@ func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *p
 		return demo.GenerateNodeMetricsConnection(), nil
 	}
 
+	if tenantIDFromContext(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
 	// Build cursor pagination options
 	opts := &periscopeclient.CursorPaginationOpts{
 		First: int32(pagination.DefaultLimit),
@@ -1033,6 +1080,10 @@ func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *p
 func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj *pb.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetrics1hConnection, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodeMetrics1hConnection(), nil
+	}
+
+	if tenantIDFromContext(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	// Build cursor pagination options
@@ -1117,7 +1168,7 @@ func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*pb.L
 		}
 	}
 
-	response, err := r.Clients.Periscope.GetLiveNodes(ctx, &nodeID, relatedTenantIDs)
+	response, err := r.Clients.Periscope.GetLiveNodes(ctx, user.TenantID, &nodeID, relatedTenantIDs)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get live node state")
 		return nil, err
@@ -2158,6 +2209,10 @@ func (r *Resolver) DoGetViewerGeographicsConnection(ctx context.Context, stream 
 			PageInfo:   pageInfo,
 			TotalCount: len(events),
 		}, nil
+	}
+
+	if tenantIDFromContext(ctx) == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
