@@ -25,6 +25,8 @@ type PeriscopeMetrics struct {
 	AnalyticsEvents         *prometheus.CounterVec
 	BatchProcessingDuration *prometheus.HistogramVec
 	ClickHouseInserts       *prometheus.CounterVec
+	DuplicateEvents         *prometheus.CounterVec
+	DLQMessages             *prometheus.CounterVec
 	KafkaMessages           *prometheus.CounterVec
 	KafkaDuration           *prometheus.HistogramVec
 	KafkaLag                *prometheus.GaugeVec
@@ -553,6 +555,21 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	}
 	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
 		return err
+	}
+	if eventID := parseUUID(event.EventID); eventID != uuid.Nil {
+		rows, err := h.clickhouse.Query(ctx, "SELECT 1 FROM viewer_connection_events WHERE event_id = ? LIMIT 1", eventID)
+		if err != nil {
+			h.logger.WithError(err).WithField("event_id", event.EventID).Warn("Failed to check for duplicate viewer connection event")
+		} else {
+			defer rows.Close()
+			if rows.Next() {
+				h.logger.WithField("event_id", event.EventID).Debug("Skipping duplicate viewer connection event")
+				if h.metrics != nil && h.metrics.DuplicateEvents != nil {
+					h.metrics.DuplicateEvents.WithLabelValues(event.EventType).Inc()
+				}
+				return nil
+			}
+		}
 	}
 
 	var streamName, sessionID, connector, nodeID, host, requestURL string

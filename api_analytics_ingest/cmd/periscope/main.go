@@ -58,6 +58,8 @@ func main() {
 		AnalyticsEvents:         metricsCollector.NewCounter("analytics_events_total", "Analytics events processed", []string{"event_type", "status"}),
 		BatchProcessingDuration: metricsCollector.NewHistogram("batch_processing_duration_seconds", "Batch processing time", []string{"source"}, nil),
 		ClickHouseInserts:       metricsCollector.NewCounter("clickhouse_inserts_total", "ClickHouse inserts", []string{"table", "status"}),
+		DuplicateEvents:         metricsCollector.NewCounter("duplicate_events_total", "Duplicate analytics events skipped", []string{"event_type"}),
+		DLQMessages:             metricsCollector.NewCounter("dlq_messages_total", "Messages sent to the DLQ", []string{"topic", "error_type"}),
 	}
 
 	// Create Kafka metrics
@@ -125,6 +127,10 @@ func main() {
 						"offset":    msg.Offset,
 					}).Error("Failed to publish message to DLQ")
 					return produceErr
+				}
+
+				if metrics.DLQMessages != nil {
+					metrics.DLQMessages.WithLabelValues(msg.Topic, fmt.Sprintf("%T", err)).Inc()
 				}
 
 				logger.WithError(err).WithFields(logging.Fields{
