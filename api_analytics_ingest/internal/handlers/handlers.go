@@ -675,7 +675,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	}
 
 	if err := batch.Append(
-		event.EventID,
+		parseUUID(event.EventID),
 		event.Timestamp,
 		event.TenantID,
 		parseUUID(mt.GetStreamId()),
@@ -2096,8 +2096,9 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	}
 	dvrData := tp.DvrLifecycleData
 
-	var tenantID, internalName string
-	if dvrData.TenantId != nil {
+	tenantID := event.TenantID
+	var internalName string
+	if dvrData.TenantId != nil && *dvrData.TenantId != "" {
 		tenantID = *dvrData.TenantId
 	}
 	if dvrData.InternalName != nil {
@@ -2240,17 +2241,14 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
-		return err
-	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_VodLifecycleData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for vod_lifecycle")
 	}
 	vodData := tp.VodLifecycleData
 
-	var tenantID string
-	if vodData.TenantId != nil {
+	tenantID := event.TenantID
+	if vodData.TenantId != nil && *vodData.TenantId != "" {
 		tenantID = *vodData.TenantId
 	}
 
