@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/clients/commodore"
 	qmclient "frameworks/pkg/clients/quartermaster"
@@ -1255,11 +1257,17 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		}).Error("Failed to process MistServer trigger")
 
 		if blocking {
+			errorCode := pb.IngestErrorCode_INGEST_ERROR_INTERNAL
+			var ingestErr *ingesterrors.IngestError
+			if errors.As(err, &ingestErr) {
+				errorCode = ingestErr.Code
+			}
 			// Send error response for blocking triggers
 			response := &pb.MistTriggerResponse{
 				RequestId: requestID,
 				Response:  "",
 				Abort:     true,
+				ErrorCode: errorCode,
 			}
 			sendMistTriggerResponse(stream, response, logger)
 		}

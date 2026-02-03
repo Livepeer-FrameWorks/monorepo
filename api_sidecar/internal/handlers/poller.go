@@ -580,7 +580,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 	mistTrigger := convertStreamAPIToMistTrigger(nodeID, streamName, internalName, streamData, healthData, trackDetails, trackCount, monitorLogger)
 
 	// Send
-	if _, _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
+	if _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
 		monitorLogger.WithFields(logging.Fields{
 			"error":         err,
 			"internal_name": internalName,
@@ -687,7 +687,7 @@ func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 	enrichNodeLifecycleTrigger(mistTrigger, capIngest, capEdge, capStorage, capProcessing, roles)
 
 	// Send
-	if _, _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
+	if _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
 		monitorLogger.WithError(err).Error("Failed to send node lifecycle update via gRPC")
 		return
 	}
@@ -1035,7 +1035,7 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 				mistTrigger := convertClientAPIToMistTrigger(nodeID, streamName, internalName, protocol, host, sessionID, connectionTime, position, bandwidthIn, bandwidthOut, bytesDown, bytesUp, packetsSent, packetsLost, packetsRetransmitted, monitorLogger)
 
 				// Send
-				if _, _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
+				if _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
 					monitorLogger.WithFields(logging.Fields{
 						"error":  err,
 						"stream": streamName,

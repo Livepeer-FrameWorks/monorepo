@@ -97,13 +97,20 @@ func GetCurrentNodeID() string {
 	return currentNodeID
 }
 
+// MistTriggerResult carries the full response from Foghorn for blocking triggers
+type MistTriggerResult struct {
+	Response  string
+	Abort     bool
+	ErrorCode pb.IngestErrorCode
+}
+
 // SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
-func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (string, bool, error) {
+func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
 	triggerType := mistTrigger.TriggerType
 	stream := currentStream
 	if stream == nil {
 		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
-		return "", true, fmt.Errorf("gRPC control stream not connected")
+		return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL}, fmt.Errorf("gRPC control stream not connected")
 	}
 
 	msg := &pb.ControlMessage{
@@ -113,19 +120,18 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (string
 
 	if err := stream.Send(msg); err != nil {
 		TriggersSent.WithLabelValues(triggerType, "error").Inc()
-		return "", true, fmt.Errorf("failed to send MistTrigger: %w", err)
+		return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL}, fmt.Errorf("failed to send MistTrigger: %w", err)
 	}
 
 	TriggersSent.WithLabelValues(triggerType, "success").Inc()
 
 	// For non-blocking triggers, return immediately
 	if !mistTrigger.Blocking {
-		return "", false, nil
+		return &MistTriggerResult{}, nil
 	}
 
 	// For blocking triggers, wait for response
-	response, shouldAbort, err := waitForMistTriggerResponse(mistTrigger.RequestId, 5*time.Second)
-	return response, shouldAbort, err
+	return waitForMistTriggerResponse(mistTrigger.RequestId, 5*time.Second)
 }
 
 // pendingMistTriggers tracks blocking trigger requests waiting for responses
@@ -135,7 +141,7 @@ var (
 )
 
 // waitForMistTriggerResponse waits for a MistTriggerResponse with matching requestID
-func waitForMistTriggerResponse(requestID string, timeout time.Duration) (string, bool, error) {
+func waitForMistTriggerResponse(requestID string, timeout time.Duration) (*MistTriggerResult, error) {
 	// Create response channel
 	responseChan := make(chan *pb.MistTriggerResponse, 1)
 
@@ -152,7 +158,11 @@ func waitForMistTriggerResponse(requestID string, timeout time.Duration) (string
 		delete(pendingMistTriggers, requestID)
 		<-pendingMutex
 
-		return response.Response, response.Abort, nil
+		return &MistTriggerResult{
+			Response:  response.Response,
+			Abort:     response.Abort,
+			ErrorCode: response.ErrorCode,
+		}, nil
 
 	case <-time.After(timeout):
 		// Clean up on timeout
@@ -160,7 +170,10 @@ func waitForMistTriggerResponse(requestID string, timeout time.Duration) (string
 		delete(pendingMistTriggers, requestID)
 		<-pendingMutex
 
-		return "", true, fmt.Errorf("timeout waiting for MistTrigger response")
+		return &MistTriggerResult{
+			Abort:     true,
+			ErrorCode: pb.IngestErrorCode_INGEST_ERROR_TIMEOUT,
+		}, fmt.Errorf("timeout waiting for MistTrigger response")
 	}
 }
 

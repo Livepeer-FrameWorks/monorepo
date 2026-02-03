@@ -43,7 +43,7 @@ func notifyFoghornShutdown() error {
 		},
 	}
 
-	_, _, err := control.SendMistTrigger(trigger, logging.NewLoggerWithService("helmsman-shutdown"))
+	_, err := control.SendMistTrigger(trigger, logging.NewLoggerWithService("helmsman-shutdown"))
 	return err
 }
 
