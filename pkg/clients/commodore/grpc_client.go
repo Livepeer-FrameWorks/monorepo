@@ -175,6 +175,21 @@ func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (
 
 // ResolveInternalName resolves an internal name to tenant context
 func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName string) (*pb.ResolveInternalNameResponse, error) {
+	if c.cache != nil {
+		cacheKey := "commodore:internal:" + internalName
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveInternalName(ctx, &pb.ResolveInternalNameRequest{
+				InternalName: internalName,
+			})
+			if err != nil {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveInternalNameResponse), nil //nolint:errcheck // type guaranteed by cache
+		}
+	}
+
 	return c.internal.ResolveInternalName(ctx, &pb.ResolveInternalNameRequest{
 		InternalName: internalName,
 	})

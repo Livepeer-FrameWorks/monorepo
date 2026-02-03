@@ -59,6 +59,52 @@ func GetClusterInfo() (string, string) {
 	return clusterID, ownerTenantID
 }
 
+func bootstrapClusterInfo(ctx context.Context) error {
+	if quartermasterClient == nil {
+		return fmt.Errorf("quartermaster client not configured")
+	}
+	advertiseHost := config.GetEnv("FOGHORN_HOST", "foghorn")
+	reqClusterID := config.GetEnv("CLUSTER_ID", "")
+	resp, err := quartermasterClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		Type:           "foghorn",
+		Version:        version.Version,
+		Protocol:       "http",
+		HealthEndpoint: func() *string { s := "/health"; return &s }(),
+		Port:           18008,
+		AdvertiseHost:  &advertiseHost,
+		ClusterId: func() *string {
+			if reqClusterID != "" {
+				return &reqClusterID
+			}
+			return nil
+		}(),
+	})
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("quartermaster bootstrap returned nil response")
+	}
+
+	if resp.OwnerTenantId != nil && *resp.OwnerTenantId != "" {
+		ownerTenantID = *resp.OwnerTenantId
+		logger.WithFields(logging.Fields{
+			"cluster_id":      resp.ClusterId,
+			"owner_tenant_id": ownerTenantID,
+		}).Info("Cached cluster owner tenant for dual-tenant attribution")
+		if triggerProcessor != nil {
+			triggerProcessor.SetOwnerTenantID(ownerTenantID)
+		}
+	}
+	if clusterID == "" && resp.ClusterId != "" {
+		clusterID = resp.ClusterId
+		if triggerProcessor != nil {
+			triggerProcessor.SetClusterID(clusterID)
+		}
+	}
+	return nil
+}
+
 type clipLifecycleContext struct {
 	ClipHash     string
 	TenantID     string
@@ -201,46 +247,18 @@ func Init(
 	control.SetQuartermasterClient(qClient)
 
 	// Self-register Foghorn instance in Quartermaster and cache owner_tenant_id for dual-tenant attribution
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		advertiseHost := config.GetEnv("FOGHORN_HOST", "foghorn")
-		reqClusterID := config.GetEnv("CLUSTER_ID", "")
-		resp, err := quartermasterClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
-			Type:           "foghorn",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: func() *string { s := "/health"; return &s }(),
-			Port:           18008,
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if reqClusterID != "" {
-					return &reqClusterID
-				}
-				return nil
-			}(),
-		})
-		if err == nil && resp != nil {
-			// Cache owner_tenant_id for routing event attribution
-			if resp.OwnerTenantId != nil && *resp.OwnerTenantId != "" {
-				ownerTenantID = *resp.OwnerTenantId
-				logger.WithFields(logging.Fields{
-					"cluster_id":      resp.ClusterId,
-					"owner_tenant_id": ownerTenantID,
-				}).Info("Cached cluster owner tenant for dual-tenant attribution")
-				if triggerProcessor != nil {
-					triggerProcessor.SetOwnerTenantID(ownerTenantID)
-				}
+	bootstrapCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := bootstrapClusterInfo(bootstrapCtx); err != nil {
+		logger.WithError(err).Warn("Synchronous bootstrap failed, retrying async")
+		go func() {
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer retryCancel()
+			if err := bootstrapClusterInfo(retryCtx); err != nil {
+				logger.WithError(err).Warn("Async bootstrap failed")
 			}
-			// Also cache cluster_id from response if not set from env
-			if clusterID == "" && resp.ClusterId != "" {
-				clusterID = resp.ClusterId
-				if triggerProcessor != nil {
-					triggerProcessor.SetClusterID(clusterID)
-				}
-			}
-		}
-	}()
+		}()
+	}
+	cancel()
 
 	// Register clip progress/done handlers to emit analytics
 	control.SetClipHandlers(
@@ -1414,14 +1432,26 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 	// MistServer sends stream names with live+/vod+ prefix; strip it for DB lookup
 	var tenantID, internalName, streamID string
 	if commodoreClient != nil && streamName != "" {
-		ctx := context.Background()
 		bareInternal := mist.ExtractInternalName(streamName)
-		if resolveResp, err := commodoreClient.ResolveInternalName(ctx, bareInternal); err == nil {
+		var resolveResp *pb.ResolveInternalNameResponse
+		var err error
+		for attempt := 0; attempt < 2; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			resolveResp, err = commodoreClient.ResolveInternalName(ctx, bareInternal)
+			cancel()
+			if err == nil {
+				break
+			}
+			if attempt == 0 {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if err == nil && resolveResp != nil {
 			tenantID = resolveResp.TenantId
 			internalName = resolveResp.InternalName
 			streamID = resolveResp.StreamId
 		} else {
-			logger.WithError(err).WithField("stream_name", streamName).Info("Failed to resolve tenant via Commodore")
+			logger.WithError(err).WithField("stream_name", streamName).Warn("Failed to resolve tenant via Commodore after retry")
 		}
 	}
 
