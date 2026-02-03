@@ -18,6 +18,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
 	purserclient "frameworks/pkg/clients/purser"
@@ -47,6 +48,7 @@ var (
 	quartermasterClient *qmclient.GRPCClient
 	metrics             *FoghornMetrics
 	geoipReader         *geoip.Reader
+	geoipCache          *cache.Cache
 	// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
 	// clusterID = emitting cluster identifier
 	// ownerTenantID = cluster operator tenant (infra owner) for event storage
@@ -225,6 +227,7 @@ func Init(
 	pClient *purserclient.GRPCClient,
 	qClient *qmclient.GRPCClient,
 	geo *geoip.Reader,
+	geoCache *cache.Cache,
 ) {
 	db = database
 	logger = log
@@ -235,6 +238,7 @@ func Init(
 	purserClient = pClient
 	quartermasterClient = qClient
 	geoipReader = geo
+	geoipCache = geoCache
 	// Initialize cluster ID for dual-tenant attribution
 	clusterID = config.GetEnv("CLUSTER_ID", "")
 
@@ -1445,7 +1449,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 
 	// If no geo headers and geoip is available, use fallback geo enrichment
 	if country == "" && geoipReader != nil && clientIP != "" {
-		if geoData := geoipReader.Lookup(clientIP); geoData != nil {
+		if geoData := geoip.LookupCached(c.Request.Context(), geoipReader, geoipCache, clientIP); geoData != nil {
 			country = geoData.CountryCode
 			logger.WithFields(logging.Fields{
 				"client_ip":    clientIP,
@@ -2072,7 +2076,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// Get geo location for viewer
 	var lat, lon float64
 	if geoipReader != nil {
-		if geoData := geoipReader.Lookup(viewerIP); geoData != nil {
+		if geoData := geoip.LookupCached(c.Request.Context(), geoipReader, geoipCache, viewerIP); geoData != nil {
 			lat = geoData.Latitude
 			lon = geoData.Longitude
 		}

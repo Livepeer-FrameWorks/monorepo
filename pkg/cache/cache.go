@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type Options struct {
@@ -22,13 +24,12 @@ type MetricsHooks struct {
 }
 
 type entry struct {
-	value      interface{}
-	err        error
-	expiresAt  time.Time
-	staleAt    time.Time
-	negative   bool
-	refreshing bool
-	lastUsed   time.Time
+	value     interface{}
+	err       error
+	expiresAt time.Time
+	staleAt   time.Time
+	negative  bool
+	lastUsed  time.Time
 }
 
 type Cache struct {
@@ -37,6 +38,7 @@ type Cache struct {
 	order   []string
 	opts    Options
 	metrics MetricsHooks
+	sf      singleflight.Group
 }
 
 // SnapshotEntry represents a point-in-time cache entry for debugging.
@@ -61,6 +63,12 @@ func New(opts Options, hooks MetricsHooks) *Cache {
 
 type Loader func(ctx context.Context, key string) (interface{}, bool, error)
 
+type loadResult struct {
+	val interface{}
+	ok  bool
+	err error
+}
+
 func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}, bool, error) {
 	now := time.Now()
 	c.mu.RLock()
@@ -81,10 +89,12 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 			if c.metrics.OnStale != nil {
 				c.metrics.OnStale(map[string]string{"key": key})
 			}
-			if !e.refreshing {
-				e.refreshing = true
-				go c.refresh(ctx, key, loader)
-			}
+			go func() {
+				_, _, _ = c.sf.Do("refresh:"+key, func() (interface{}, error) {
+					c.refresh(ctx, key, loader)
+					return nil, nil
+				})
+			}()
 			val, ok := e.value, !e.negative
 			c.mu.RUnlock()
 			if ok {
@@ -105,12 +115,16 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 	if c.metrics.OnMiss != nil {
 		c.metrics.OnMiss(map[string]string{"key": key})
 	}
-	val, ok, err := loader(ctx, key)
-	c.store(key, val, ok, err)
-	if !ok {
-		return nil, false, err
+	result, _, _ := c.sf.Do(key, func() (interface{}, error) {
+		val, ok, err := loader(ctx, key)
+		c.store(key, val, ok, err)
+		return loadResult{val: val, ok: ok, err: err}, nil
+	})
+	res := result.(loadResult)
+	if !res.ok {
+		return nil, false, res.err
 	}
-	return val, true, nil
+	return res.val, true, nil
 }
 
 func (c *Cache) refresh(ctx context.Context, key string, loader Loader) {
@@ -148,7 +162,6 @@ func (c *Cache) store(key string, val interface{}, ok bool, err error) {
 	} else {
 		c.order = append(c.order, key)
 	}
-	e.refreshing = false
 	c.items[key] = e
 	c.evictIfNeeded()
 	if c.metrics.OnStore != nil {
