@@ -15,6 +15,7 @@ import (
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -132,9 +133,34 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("%s not found", contentType)
+			// Defensive fallback: some older/backfilled rows may have NULL tenant_id.
+			// Prefer tenant-scoped match, but don't break playback availability if the row isn't attributed yet.
+			err = deps.DB.QueryRowContext(ctx, `
+				SELECT COALESCE(internal_name, ''),
+				       status,
+				       duration_seconds,
+				       size_bytes,
+				       created_at,
+				       format,
+				       COALESCE(storage_location, ''),
+				       COALESCE(sync_status, '')
+				FROM foghorn.artifacts
+				WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted' AND tenant_id IS NULL
+			`, artifactResp.ArtifactHash, artifactType).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus)
+			if err == nil {
+				// Keep tenantID from Commodore for downstream metadata, but log the mismatch.
+				controlLogger().WithFields(logging.Fields{
+					"artifact_hash": artifactResp.ArtifactHash,
+					"artifact_type": artifactType,
+					"tenant_id":     tenantID,
+				}).Warn("Artifact row missing tenant_id; fell back to NULL tenant_id lookup")
+			} else if errors.Is(err, sql.ErrNoRows) {
+				return nil, fmt.Errorf("%s not found", contentType)
+			}
 		}
-		return nil, fmt.Errorf("failed to query artifact: %w", err)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query artifact: %w", err)
+		}
 	}
 
 	artifactNodes := state.DefaultManager().FindNodesByArtifactHash(artifactResp.ArtifactHash)
