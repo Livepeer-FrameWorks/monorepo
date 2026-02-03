@@ -88,7 +88,7 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 
 	p.streamCache = cache.New(cache.Options{
 		TTL:                  10 * time.Minute,
-		StaleWhileRevalidate: 2 * time.Minute,
+		StaleWhileRevalidate: streamCacheSWR(),
 		NegativeTTL:          0,
 		MaxEntries:           50000,
 	}, cache.MetricsHooks{
@@ -104,6 +104,16 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 	}, cache.MetricsHooks{})
 
 	return p
+}
+
+func streamCacheSWR() time.Duration {
+	swr := 30 * time.Second
+	if raw := os.Getenv("STREAM_CACHE_SWR"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil {
+			return parsed
+		}
+	}
+	return swr
 }
 
 // StreamContextCacheEntry is a single cached mapping used for tenant/user enrichment.
@@ -207,7 +217,9 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 
 	// Fallback to Quartermaster if we have tenant ID
 	if p.quartermasterClient != nil && tenantID != "" {
-		resp, err := p.quartermasterClient.ValidateTenant(ctx, tenantID, "")
+		qmCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		resp, err := p.quartermasterClient.ValidateTenant(qmCtx, tenantID, "")
 		if err == nil && resp != nil && resp.Valid {
 			return &BillingStatus{
 				TenantID:          tenantID,
@@ -216,6 +228,13 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 				IsBalanceNegative: resp.IsBalanceNegative,
 				FromCache:         false,
 			}
+		}
+		if err != nil {
+			p.logger.WithFields(logging.Fields{
+				"tenant_id":     tenantID,
+				"internal_name": internalName,
+				"error":         err,
+			}).Warn("Quartermaster billing lookup failed")
 		}
 	}
 
@@ -242,6 +261,10 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 	// Evict each matching entry
 	for _, key := range keysToEvict {
 		p.streamCache.Delete(key)
+	}
+
+	if p.commodoreClient != nil {
+		p.commodoreClient.InvalidateTenantCacheKeys(tenantID)
 	}
 
 	if len(keysToEvict) > 0 {
@@ -755,29 +778,33 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 	// Resolve the playback ID to its canonical internal name (e.g. "live+uuid" or "vod+hash").
 	target, _ := control.ResolveStream(context.Background(), playbackID)
 
-	// Check stream owner's billing status from cache (set during PUSH_REWRITE)
-	// For live streams, the cache is populated when ingest starts
-	// For VOD, we may need to fetch from Quartermaster
-	if p.streamCache != nil && target.InternalName != "" {
-		if cached, ok := p.streamCache.Peek(target.InternalName); ok {
-			info := cached.(streamContext)
-			// Reject viewers if stream owner is suspended
-			if info.IsSuspended {
-				p.logger.WithFields(logging.Fields{
-					"playback_id": playbackID,
-					"tenant_id":   info.TenantID,
-				}).Warn("Rejecting viewer: stream owner suspended")
-				return "", true, fmt.Errorf("stream unavailable - owner account suspended")
-			}
-			// Reject viewers if stream owner's balance is negative (402)
-			if info.IsBalanceNegative {
-				p.logger.WithFields(logging.Fields{
-					"playback_id": playbackID,
-					"tenant_id":   info.TenantID,
-				}).Warn("Rejecting viewer: stream owner balance exhausted (402)")
-				return "", true, fmt.Errorf("payment required - stream owner needs to top up balance")
-			}
+	// Check stream owner's billing status from cache (set during PUSH_REWRITE).
+	// Falls back to Quartermaster when cache misses.
+	billing := p.GetBillingStatus(context.Background(), target.InternalName, target.TenantID)
+	if billing != nil {
+		if billing.IsSuspended {
+			p.logger.WithFields(logging.Fields{
+				"playback_id": playbackID,
+				"tenant_id":   billing.TenantID,
+				"from_cache":  billing.FromCache,
+			}).Warn("Rejecting viewer: stream owner suspended")
+			return "", true, fmt.Errorf("stream unavailable - owner account suspended")
 		}
+		if billing.BillingModel == "prepaid" && billing.IsBalanceNegative {
+			p.logger.WithFields(logging.Fields{
+				"playback_id":   playbackID,
+				"tenant_id":     billing.TenantID,
+				"billing_model": billing.BillingModel,
+				"from_cache":    billing.FromCache,
+			}).Warn("Rejecting viewer: stream owner balance exhausted (402)")
+			return "", true, fmt.Errorf("payment required - stream owner needs to top up balance")
+		}
+	} else if target.TenantID != "" {
+		p.logger.WithFields(logging.Fields{
+			"playback_id":   playbackID,
+			"tenant_id":     target.TenantID,
+			"internal_name": target.InternalName,
+		}).Debug("Billing status unknown, failing open")
 	}
 
 	// Enrich with resolved internal name (UUID without prefix) for analytics correlation.
