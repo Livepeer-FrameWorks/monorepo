@@ -816,6 +816,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     }
 
     this.log("Starting streaming");
+    // New session should start from primary WHIP endpoint.
+    this.currentEndpointIndex = 0;
     this.setState("connecting");
 
     try {
