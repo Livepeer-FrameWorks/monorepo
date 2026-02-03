@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -129,6 +130,30 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 
 	artifactNodes := state.DefaultManager().FindNodesByArtifactHash(artifactResp.ArtifactHash)
 	if len(artifactNodes) == 0 {
+		// Fallback to DB artifact_nodes (warm-cache) so playback still works right after restart
+		// before the balancer snapshot is hydrated.
+		rows, qerr := deps.DB.QueryContext(ctx, `
+			SELECT node_id, COALESCE(base_url, ''), COALESCE(is_orphaned, false)
+			FROM foghorn.artifact_nodes
+			WHERE artifact_hash = $1
+			ORDER BY last_seen_at DESC NULLS LAST
+		`, artifactResp.ArtifactHash)
+		if qerr == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var nodeID, baseURL string
+				var orphaned bool
+				if err := rows.Scan(&nodeID, &baseURL, &orphaned); err != nil {
+					continue
+				}
+				if orphaned || nodeID == "" {
+					continue
+				}
+				artifactNodes = append(artifactNodes, state.ArtifactNodeInfo{NodeID: nodeID, Host: baseURL})
+			}
+		}
+	}
+	if len(artifactNodes) == 0 {
 		// No cached nodes - trigger defrost if asset is in S3
 		location := strings.ToLower(strings.TrimSpace(storageLocation.String))
 		sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
@@ -143,7 +168,8 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 			}
 			if _, err := StartDefrost(ctx, contentType, artifactResp.ArtifactHash, nodeID, 30*time.Second, controlLogger()); err != nil {
 				// If defrost already in progress, return retry
-				if defrostErr, ok := err.(*DefrostingError); ok {
+				var defrostErr *DefrostingError
+				if errors.As(err, &defrostErr) {
 					return nil, defrostErr
 				}
 				return nil, fmt.Errorf("failed to start defrost: %w", err)
