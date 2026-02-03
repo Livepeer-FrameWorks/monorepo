@@ -123,6 +123,16 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 	}
 }
 
+// ctxKey is a dedicated key type for values stored on context.Context.
+// (Staticcheck SA1029: avoid built-in types like string to prevent collisions.)
+type ctxKey string
+
+const (
+	ctxKeyUserID       ctxKey = "user_id"
+	ctxKeyTenantID     ctxKey = "tenant_id"
+	ctxKeyRequestStart ctxKey = "request_start"
+)
+
 // extractMetadataToContext extracts tenant_id and user_id from gRPC metadata
 // and adds them to the Go context (for service-to-service calls where
 // the upstream service already validated the user).
@@ -139,10 +149,10 @@ func extractMetadataToContext(ctx context.Context, md metadata.MD, policy Servic
 	}
 
 	if userID != "" {
-		ctx = context.WithValue(ctx, "user_id", userID)
+		ctx = context.WithValue(ctx, ctxKeyUserID, userID)
 	}
 	if tenantID != "" {
-		ctx = context.WithValue(ctx, "tenant_id", tenantID)
+		ctx = context.WithValue(ctx, ctxKeyTenantID, tenantID)
 	}
 	return ctx
 }
@@ -167,7 +177,7 @@ func firstMetadataValue(values []string) string {
 
 // GetTenantID extracts tenant_id from context (set by auth middleware)
 func GetTenantID(ctx context.Context) string {
-	if tenantID, ok := ctx.Value("tenant_id").(string); ok {
+	if tenantID, ok := ctx.Value(ctxKeyTenantID).(string); ok {
 		return tenantID
 	}
 	return ""
@@ -175,7 +185,7 @@ func GetTenantID(ctx context.Context) string {
 
 // GetUserID extracts user_id from context (set by auth middleware)
 func GetUserID(ctx context.Context) string {
-	if userID, ok := ctx.Value("user_id").(string); ok {
+	if userID, ok := ctx.Value(ctxKeyUserID).(string); ok {
 		return userID
 	}
 	return ""
@@ -190,10 +200,10 @@ func IsServiceCall(ctx context.Context) bool {
 // This is a basic logging interceptor that doesn't require authentication.
 func GRPCLoggingInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		start := ctx.Value("request_start")
+		start := ctx.Value(ctxKeyRequestStart)
 		if start == nil {
 			// Add start time if not present
-			ctx = context.WithValue(ctx, "request_start", true)
+			ctx = context.WithValue(ctx, ctxKeyRequestStart, true)
 		}
 
 		resp, err := handler(ctx, req)
@@ -202,10 +212,10 @@ func GRPCLoggingInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 		fields := logging.Fields{
 			"method": info.FullMethod,
 		}
-		if userID, ok := ctx.Value("user_id").(string); ok {
+		if userID, ok := ctx.Value(ctxKeyUserID).(string); ok {
 			fields["user_id"] = userID
 		}
-		if tenantID, ok := ctx.Value("tenant_id").(string); ok {
+		if tenantID, ok := ctx.Value(ctxKeyTenantID).(string); ok {
 			fields["tenant_id"] = tenantID
 		}
 		if err != nil {

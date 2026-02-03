@@ -11,11 +11,13 @@ import (
 // DemoModePostAuth checks for demo mode after authentication has run.
 func DemoModePostAuth(logger logging.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tenantID, ok := c.Get("tenant_id")
-		tenantIDStr, ok := tenantID.(string)
-		if !ok || tenantIDStr == "" || strings.HasPrefix(tenantIDStr, "public:") {
-			c.Next()
-			return
+		// Allow demo mode even for unauthenticated requests.
+		// PublicOrJWTAuth intentionally skips auth for some allowlisted queries, so tenant_id may be unset.
+		var tenantIDStr string
+		if tenantID, ok := c.Get("tenant_id"); ok {
+			if s, ok2 := tenantID.(string); ok2 {
+				tenantIDStr = s
+			}
 		}
 
 		isDemoMode := c.GetHeader("X-Demo-Mode") == "true" ||
@@ -34,6 +36,13 @@ func DemoModePostAuth(logger logging.Logger) gin.HandlerFunc {
 			// Use consistent demo tenant and user for predictable responses
 			ctx = context.WithValue(ctx, "demo_tenant_id", "demo_tenant_frameworks")
 			ctx = context.WithValue(ctx, "demo_user_id", "demo_user_developer")
+
+			// For unauthenticated / public requests, also set tenant_id/user_id so downstream resolvers that
+			// still expect tenant context don't fail.
+			if tenantIDStr == "" || strings.HasPrefix(tenantIDStr, "public:") {
+				ctx = context.WithValue(ctx, "tenant_id", "demo_tenant_frameworks")
+				ctx = context.WithValue(ctx, "user_id", "demo_user_developer")
+			}
 
 			// Mark as read-only for safety
 			ctx = context.WithValue(ctx, "read_only", true)
