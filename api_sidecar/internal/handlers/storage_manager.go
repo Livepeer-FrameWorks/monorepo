@@ -727,7 +727,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		durationMs := duration.Milliseconds()
 		errStr := uploadErr.Error()
 		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:     pb.StorageLifecycleData_ACTION_SYNC_STARTED, // Sync started but failed (error field set)
+			Action:     pb.StorageLifecycleData_ACTION_SYNCED, // Sync finished with error
 			AssetType:  string(asset.AssetType),
 			AssetHash:  asset.AssetHash,
 			Error:      &errStr,
@@ -793,12 +793,25 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 
 	// Check if already local
 	if _, err := os.Stat(req.LocalPath); err == nil {
-		sm.markDefrostJobDone(req.AssetHash, nil, req.LocalPath, 0)
+		var sizeBytes uint64
+		if info, statErr := os.Stat(req.LocalPath); statErr == nil {
+			sizeBytes = uint64(info.Size())
+		}
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHED,
+			AssetType: string(assetType),
+			AssetHash: req.AssetHash,
+			SizeBytes: sizeBytes,
+			LocalPath: &req.LocalPath,
+		})
+		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "success", req.LocalPath, sizeBytes, "")
+		sm.markDefrostJobDone(req.AssetHash, nil, req.LocalPath, sizeBytes)
 		return &pb.DefrostComplete{
 			RequestId: req.RequestId,
 			AssetHash: req.AssetHash,
 			Status:    "success",
 			LocalPath: req.LocalPath,
+			SizeBytes: sizeBytes,
 		}, nil
 	}
 
@@ -931,12 +944,32 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	// Check if already local (manifest exists)
 	manifestPath := filepath.Join(req.LocalPath, req.AssetHash+".m3u8")
 	if _, err := os.Stat(manifestPath); err == nil {
-		sm.markDefrostJobDone(req.AssetHash, nil, manifestPath, 0)
+		var totalBytes uint64
+		_ = filepath.Walk(req.LocalPath, func(_ string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+			totalBytes += uint64(info.Size())
+			return nil
+		})
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHED,
+			AssetType: string(AssetTypeDVR),
+			AssetHash: req.AssetHash,
+			SizeBytes: totalBytes,
+			LocalPath: &manifestPath,
+		})
+		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "success", manifestPath, totalBytes, "")
+		sm.markDefrostJobDone(req.AssetHash, nil, manifestPath, totalBytes)
 		return &pb.DefrostComplete{
 			RequestId: req.RequestId,
 			AssetHash: req.AssetHash,
 			Status:    "success",
 			LocalPath: manifestPath,
+			SizeBytes: totalBytes,
 		}, nil
 	}
 
@@ -1413,9 +1446,11 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 			var deleteErr error
 			if candidate.AssetType == AssetTypeClip || candidate.AssetType == AssetTypeVOD {
 				deleteErr = os.Remove(candidate.FilePath)
-				// Clean up auxiliary files if main file deletion succeeded or if they are orphaned
-				os.Remove(candidate.FilePath + ".dtsh")
-				os.Remove(candidate.FilePath + ".gop")
+				if deleteErr == nil {
+					// Clean up auxiliary files after main file deletion succeeds.
+					os.Remove(candidate.FilePath + ".dtsh")
+					os.Remove(candidate.FilePath + ".gop")
+				}
 			} else {
 				// DVR: remove entire directory
 				deleteErr = os.RemoveAll(candidate.FilePath)
@@ -1423,6 +1458,14 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 
 			if deleteErr != nil {
 				sm.logger.WithError(deleteErr).WithField("asset_hash", candidate.AssetHash).Warn("Failed to delete local copy")
+				errStr := deleteErr.Error()
+				_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+					Action:    pb.StorageLifecycleData_ACTION_EVICTED,
+					AssetType: string(candidate.AssetType),
+					AssetHash: candidate.AssetHash,
+					SizeBytes: candidate.SizeBytes,
+					Error:     &errStr,
+				})
 				continue
 			}
 

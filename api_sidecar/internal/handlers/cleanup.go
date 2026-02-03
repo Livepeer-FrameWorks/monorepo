@@ -409,6 +409,10 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 
 	isEviction = true
 	warmDurationMs = wd
+	assetType := artifact.AssetType
+	if assetType == "" {
+		assetType = "clip"
+	}
 
 	// Remove based on asset type
 	switch artifact.AssetType {
@@ -416,14 +420,30 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 		// DVR is a directory - remove the entire directory
 		dvrDir := filepath.Dir(artifact.FilePath)
 		if err := os.RemoveAll(dvrDir); err != nil {
+			errStr := err.Error()
+			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+				Action:    pb.StorageLifecycleData_ACTION_EVICTED,
+				AssetType: assetType,
+				AssetHash: artifact.ClipHash,
+				SizeBytes: artifact.SizeBytes,
+				Error:     &errStr,
+			})
 			return fmt.Errorf("failed to remove dvr directory: %w", err)
 		}
 	default:
 		// Clip and VOD are single files
 		if err := os.Remove(artifact.FilePath); err != nil {
+			errStr := err.Error()
+			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+				Action:    pb.StorageLifecycleData_ACTION_EVICTED,
+				AssetType: assetType,
+				AssetHash: artifact.ClipHash,
+				SizeBytes: artifact.SizeBytes,
+				Error:     &errStr,
+			})
 			return fmt.Errorf("failed to remove artifact file: %w", err)
 		}
-		// Remove auxiliary files (.dtsh, .gop)
+		// Remove auxiliary files (.dtsh, .gop) after main file succeeds.
 		os.Remove(artifact.FilePath + ".dtsh")
 		os.Remove(artifact.FilePath + ".gop")
 	}
@@ -436,11 +456,6 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 	}
 
 	// Notify Foghorn about the deletion
-	assetType := artifact.AssetType
-	if assetType == "" {
-		assetType = "clip"
-	}
-
 	if isEviction {
 		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 			Action:         pb.StorageLifecycleData_ACTION_EVICTED,
