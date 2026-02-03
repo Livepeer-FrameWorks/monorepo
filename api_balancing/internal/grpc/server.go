@@ -1187,7 +1187,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	case "live":
 		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon)
 	case "dvr", "clip", "vod":
-		response, err = s.resolveArtifactViewerEndpoint(ctx, req)
+		response, err = s.resolveArtifactViewerEndpoint(ctx, req, lat, lon)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "content_type must resolve to 'live', 'dvr', 'clip', or 'vod'")
 	}
@@ -1261,11 +1261,13 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 	return response, nil
 }
 
-func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB: s.db,
-		LB: s.lb,
+		DB:     s.db,
+		LB:     s.lb,
+		GeoLat: lat,
+		GeoLon: lon,
 	}
 
 	response, err := control.ResolveArtifactPlayback(ctx, deps, req.ContentId)

@@ -425,13 +425,13 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		"user_id":       userID,
 	}).Info("Starting DVR recording via Foghorn")
 
-	resp, err := s.foghornClient.StartDVR(ctx, foghornReq)
+	resp, trailers, err := s.foghornClient.StartDVR(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":     tenantID,
 			"internal_name": internalName,
 		}).Error("Failed to start DVR via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to start DVR: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 	return resp, nil
 }
@@ -3161,7 +3161,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 				if err := rows.Scan(&clipHash); err != nil {
 					continue
 				}
-				if _, delErr := s.foghornClient.DeleteClip(ctx, clipHash, &tenantID); delErr != nil {
+				if _, _, delErr := s.foghornClient.DeleteClip(ctx, clipHash, &tenantID); delErr != nil {
 					s.logger.WithError(delErr).WithField("clip_hash", clipHash).Warn("Failed to delete clip during stream cleanup")
 				}
 			}
@@ -4147,11 +4147,11 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	foghornReq.ExpiresAt = func() *int64 { t := retentionUntil.Unix(); return &t }()
 
 	// Call Foghorn for artifact lifecycle management
-	resp, err := s.foghornClient.CreateClip(ctx, foghornReq)
+	resp, trailers, err := s.foghornClient.CreateClip(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to create clip artifact via Foghorn")
 		// Don't rollback business registry - Foghorn can retry later
-		return nil, status.Errorf(codes.Internal, "failed to create clip artifact: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	return resp, nil
@@ -4405,10 +4405,10 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 		WHERE clip_hash = $1 AND tenant_id = $2
 	`, req.ClipHash, tenantID).Scan(&streamID)
 
-	resp, err := s.foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
+	resp, trailers, err := s.foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to delete clip: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	// Delete from business registry (matches VOD pattern)
@@ -4452,10 +4452,10 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 		streamID = &streamIDValue
 	}
 
-	resp, err := s.foghornClient.StopDVR(ctx, req.DvrHash, &tenantID, streamID)
+	resp, trailers, err := s.foghornClient.StopDVR(ctx, req.DvrHash, &tenantID, streamID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to stop DVR via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to stop DVR: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	return resp, nil
@@ -4479,10 +4479,10 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRReques
 		WHERE dvr_hash = $1 AND tenant_id = $2
 	`, req.DvrHash, tenantID).Scan(&streamID)
 
-	resp, err := s.foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
+	resp, trailers, err := s.foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete DVR via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to delete DVR: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	// Delete from business registry (matches VOD pattern)
@@ -5004,11 +5004,11 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	}
 
 	// Call Foghorn for S3 multipart upload setup
-	resp, err := s.foghornClient.CreateVodUpload(ctx, foghornReq)
+	resp, trailers, err := s.foghornClient.CreateVodUpload(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("vod_hash", vodHash).Error("Failed to create VOD upload via Foghorn")
 		// Don't rollback business registry - can be cleaned up later
-		return nil, status.Errorf(codes.Internal, "failed to initiate VOD upload: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	if resp != nil && resp.PlaybackId == "" {
@@ -5043,10 +5043,10 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 		Parts:    req.Parts,
 	}
 
-	resp, err := s.foghornClient.CompleteVodUpload(ctx, foghornReq)
+	resp, trailers, err := s.foghornClient.CompleteVodUpload(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to complete VOD upload via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to complete VOD upload: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5071,10 +5071,10 @@ func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *pb.AbortVodUp
 	}
 
 	// Forward to Foghorn (it manages S3 multipart abort and lifecycle state)
-	resp, err := s.foghornClient.AbortVodUpload(ctx, tenantID, req.UploadId)
+	resp, trailers, err := s.foghornClient.AbortVodUpload(ctx, tenantID, req.UploadId)
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to abort VOD upload via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to abort VOD upload: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	// TODO: Clean up orphaned business registry entry (or let retention job handle it)
@@ -5311,10 +5311,10 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 	}
 
 	// Forward to Foghorn (it handles S3 deletion and lifecycle state)
-	resp, err := s.foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash)
+	resp, trailers, err := s.foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash)
 	if err != nil {
 		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to delete VOD asset via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to delete VOD asset: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	// Delete from business registry
@@ -5357,10 +5357,10 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 	}
 
 	// Forward to Foghorn
-	foghornResp, err := s.foghornClient.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
+	foghornResp, trailers, err := s.foghornClient.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to terminate tenant streams via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to terminate streams: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -5392,10 +5392,10 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 	}
 
 	// Forward to Foghorn
-	foghornResp, err := s.foghornClient.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
+	foghornResp, trailers, err := s.foghornClient.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to invalidate tenant cache via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to invalidate cache: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	s.logger.WithFields(logging.Fields{
