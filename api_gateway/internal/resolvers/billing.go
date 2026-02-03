@@ -11,6 +11,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	periscope "frameworks/pkg/clients/periscope"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 	x402 "frameworks/pkg/x402"
@@ -34,10 +35,7 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 		return r.buildInvoicesConnection(invoices, first, after), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -100,10 +98,7 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 		return r.buildUsageRecordsConnection(records, first, after), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -312,10 +307,7 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
 		return demo.GenerateInvoices(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -336,10 +328,7 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
 
 // DoGetInvoice returns a specific invoice by ID
 func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*pb.Invoice, error) {
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -367,10 +356,7 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*pb.BillingStatusRes
 		return demo.GenerateBillingStatus(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -410,10 +396,7 @@ func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*pb.Invoice, error)
 		return demo.GenerateInvoicePreview(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -439,10 +422,7 @@ func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, perio
 		return demo.GenerateLiveUsageSummary(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -491,10 +471,7 @@ func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRa
 		}, nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -553,10 +530,7 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 		return demo.GenerateUsageRecords(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -583,10 +557,7 @@ func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.Ti
 		return buildUsageAggregates(records, timeRange, granularity, usageTypes), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -719,10 +690,7 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		}, nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -794,14 +762,14 @@ func (r *Resolver) DoSubmitX402Payment(ctx context.Context, payment string, reso
 		return &model.ValidationError{Message: "x402 settlement unavailable"}, nil
 	}
 
-	authTenantID, _ := ctx.Value("tenant_id").(string)
+	authTenantID := ctxkeys.GetTenantID(ctx)
 	resourceValue := ""
 	if resource != nil {
 		resourceValue = strings.TrimSpace(*resource)
 	}
 
 	clientIP := ""
-	if ginCtx, ok := ctx.Value("GinContext").(*gin.Context); ok && ginCtx != nil {
+	if ginCtx, ok := ctx.Value(ctxkeys.KeyGinContext).(*gin.Context); ok && ginCtx != nil {
 		clientIP = ginCtx.ClientIP()
 	}
 
@@ -1004,8 +972,8 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
 
@@ -1064,8 +1032,8 @@ func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page 
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
 
@@ -1163,8 +1131,8 @@ func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPe
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
@@ -1191,8 +1159,8 @@ func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL st
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
@@ -1225,8 +1193,8 @@ func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, metho
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
@@ -1272,8 +1240,8 @@ func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, manda
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
 
@@ -1339,8 +1307,8 @@ func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*pb.MollieMandat
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
 	}
 
@@ -1372,8 +1340,8 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
 	}
 
@@ -1464,8 +1432,8 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
 	}
 
@@ -1600,10 +1568,7 @@ func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.Pr
 		}, nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return &model.ValidationError{
 			Message: "Tenant context required",
@@ -1659,8 +1624,8 @@ func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*pb.BillingDetails,
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
 
@@ -1710,8 +1675,8 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		return details, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
 

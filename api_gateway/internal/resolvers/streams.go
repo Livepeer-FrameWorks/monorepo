@@ -10,6 +10,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
@@ -792,10 +793,7 @@ func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*pb.Clip
 	}
 
 	// Get tenant_id from context
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -997,10 +995,7 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagi
 	}
 
 	// Get tenant_id from context
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -1019,10 +1014,7 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagi
 }
 
 func (r *Resolver) getStreamsMemoized(ctx context.Context) ([]*pb.Stream, error) {
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 
 	var streams []*pb.Stream
 
@@ -1056,10 +1048,7 @@ func (r *Resolver) getStreamsMemoized(ctx context.Context) ([]*pb.Stream, error)
 }
 
 func (r *Resolver) getStreamMemoized(ctx context.Context, streamID string) (*pb.Stream, error) {
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	var stream *pb.Stream
 
 	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
@@ -1280,10 +1269,7 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 	}
 
 	// Get tenant_id from context
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -1400,10 +1386,7 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 	}
 
 	// Extract tenant_id for lifecycle lookup
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 
 	// Enrich with lifecycle data from Periscope (size_bytes, status, storage_location, etc.)
 	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil && tenantID != "" && len(response.DvrRecordings) > 0 {

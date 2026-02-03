@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 )
 
@@ -91,11 +92,7 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 
 	// JWT token is in context, validated by middleware
 	// gRPC uses metadata from context, not explicit token param
-	var ok bool
-	if v := ctx.Value("jwt_token"); v != nil {
-		_, ok = v.(string)
-	}
-	if !ok {
+	if ctxkeys.GetJWTToken(ctx) == "" {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "auth_error").Inc()
 		}
@@ -167,7 +164,7 @@ func (r *Resolver) DoLinkWallet(ctx context.Context, input model.WalletLoginInpu
 	}()
 
 	// Requires authenticated user
-	if _, ok := ctx.Value("user_id").(string); !ok {
+	if ctxkeys.GetUserID(ctx) == "" {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("linkWallet", "auth_error").Inc()
 		}
@@ -209,7 +206,7 @@ func (r *Resolver) DoUnlinkWallet(ctx context.Context, walletID string) (model.U
 	}()
 
 	// Requires authenticated user
-	if _, ok := ctx.Value("user_id").(string); !ok {
+	if ctxkeys.GetUserID(ctx) == "" {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("unlinkWallet", "auth_error").Inc()
 		}
@@ -253,7 +250,7 @@ func (r *Resolver) DoLinkEmail(ctx context.Context, input model.LinkEmailInput) 
 	}()
 
 	// Requires authenticated user
-	if _, ok := ctx.Value("user_id").(string); !ok {
+	if ctxkeys.GetUserID(ctx) == "" {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("linkEmail", "auth_error").Inc()
 		}

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 )
 
@@ -33,11 +34,9 @@ func New(serviceClients *clients.ServiceClients) *Loaders {
 	}
 }
 
-const ctxKey = "loaders"
-
 // ContextWithLoaders stores loaders in the context
 func ContextWithLoaders(ctx context.Context, l *Loaders) context.Context {
-	return context.WithValue(ctx, ctxKey, l)
+	return context.WithValue(ctx, ctxkeys.KeyLoaders, l)
 }
 
 // FromContext retrieves loaders from the context
@@ -45,7 +44,7 @@ func FromContext(ctx context.Context) *Loaders {
 	if ctx == nil {
 		return nil
 	}
-	if l, ok := ctx.Value(ctxKey).(*Loaders); ok {
+	if l, ok := ctx.Value(ctxkeys.KeyLoaders).(*Loaders); ok {
 		return l
 	}
 	return nil

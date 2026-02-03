@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -38,15 +39,15 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		md := metadata.MD{}
 
-		if userID, ok := ctx.Value("user_id").(string); ok && userID != "" {
+		if userID := ctxkeys.GetUserID(ctx); userID != "" {
 			md.Set("x-user-id", userID)
 		}
-		if tenantID, ok := ctx.Value("tenant_id").(string); ok && tenantID != "" {
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			md.Set("x-tenant-id", tenantID)
 		}
 
 		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken, ok := ctx.Value("jwt_token").(string); ok && jwtToken != "" {
+		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
 			md.Set("authorization", "Bearer "+jwtToken)
 		} else if serviceToken != "" {
 			md.Set("authorization", "Bearer "+serviceToken)

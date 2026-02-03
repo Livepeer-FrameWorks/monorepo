@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -67,8 +68,8 @@ type VODListResponse struct {
 }
 
 func handleVODList(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 
@@ -104,8 +105,8 @@ func handleVODList(ctx context.Context, clients *clients.ServiceClients, logger 
 }
 
 func handleVODByID(ctx context.Context, uri string, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 

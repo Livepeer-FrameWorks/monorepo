@@ -11,6 +11,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/auth"
+	"frameworks/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
 )
@@ -59,9 +60,9 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 
 		// Also set in request context for gRPC client interceptor
 		ctx := c.Request.Context()
-		ctx = context.WithValue(ctx, "user_id", claims.UserID)
-		ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
-		ctx = context.WithValue(ctx, "jwt_token", token)
+		ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
+		ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
+		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
@@ -175,7 +176,7 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 
 		// Also forward X-PAYMENT header in context for downstream gRPC calls (viewer-pays flows)
 		if xPayment := GetX402PaymentHeader(c.Request); xPayment != "" {
-			ctx = context.WithValue(ctx, "x_payment", xPayment)
+			ctx = context.WithValue(ctx, ctxkeys.KeyXPayment, xPayment)
 		}
 
 		c.Request = c.Request.WithContext(ctx)

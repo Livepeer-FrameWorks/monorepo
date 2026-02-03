@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/billing"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )
@@ -48,8 +49,8 @@ func NewChecker(clients *clients.ServiceClients, logger logging.Logger) *Checker
 func (c *Checker) GetBlockers(ctx context.Context) ([]Blocker, error) {
 	var blockers []Blocker
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		blockers = append(blockers, Blocker{
 			Code:       "AUTHENTICATION_REQUIRED",
 			Message:    "Not authenticated",
@@ -81,8 +82,8 @@ func (c *Checker) GetBlockers(ctx context.Context) ([]Blocker, error) {
 
 // CheckBillingDetails checks if billing details are complete.
 func (c *Checker) CheckBillingDetails(ctx context.Context) (*Blocker, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("no tenant ID in context")
 	}
 
@@ -116,8 +117,8 @@ func (c *Checker) CheckBillingDetails(ctx context.Context) (*Blocker, error) {
 
 // CheckBalance checks if the prepaid balance is sufficient.
 func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("no tenant ID in context")
 	}
 

@@ -8,6 +8,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/clients/periscope"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -79,8 +80,8 @@ type ProcessingUsage struct {
 }
 
 func handleUsageAnalytics(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 
@@ -136,8 +137,8 @@ type HourlyViewers struct {
 }
 
 func handleViewerAnalytics(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 
@@ -197,8 +198,8 @@ type CountryViewers struct {
 }
 
 func handleGeographicAnalytics(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 

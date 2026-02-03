@@ -11,6 +11,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	periscopeclient "frameworks/pkg/clients/periscope"
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 
 	"github.com/sirupsen/logrus"
@@ -51,10 +52,7 @@ func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID str
 	}
 
 	// Extract tenant ID from context for data isolation
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -91,10 +89,7 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 
 	// Extract tenant ID from context
 	// Extract tenant ID from context for data isolation
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -135,10 +130,7 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 
 	// Extract tenant ID from context for data isolation
 	// Extract tenant ID from context for data isolation
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -320,10 +312,7 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 
 	// Extract tenant ID from context for data isolation
 	// Extract tenant ID from context for data isolation
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -740,10 +729,7 @@ func (r *Resolver) DoGetTenantDailyStats(ctx context.Context, days *int) ([]*pb.
 		return demo.GenerateTenantDailyStats(days), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}

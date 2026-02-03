@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
@@ -72,10 +73,7 @@ func (r *Resolver) DoGetTenant(ctx context.Context) (*pb.Tenant, error) {
 		return demo.GenerateTenant(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -379,10 +377,7 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 		}, nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -456,10 +451,7 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 		return tenant, nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -556,10 +548,7 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		return nil, fmt.Errorf("demo stream not found")
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 
 	r.Logger.WithField("tenant_id", tenantID).
 		WithField("stream_id", id).
@@ -1763,10 +1752,7 @@ func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int
 		return buildClustersAccessConnectionFromSlice(items, first, after, last, before), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}

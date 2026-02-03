@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	x402 "frameworks/pkg/x402"
 
@@ -157,10 +158,7 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 	}
 
 	// Get client IP for VAT evidence
-	clientIP := ""
-	if ip, ok := ctx.Value("client_ip").(string); ok {
-		clientIP = ip
-	}
+	clientIP := ctxkeys.GetClientIP(ctx)
 
 	if x402.IsAuthOnlyPayment(payload) {
 		resp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "")
@@ -198,7 +196,7 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 		return toolSuccessJSON(result)
 	}
 
-	authTenantID, _ := ctx.Value("tenant_id").(string)
+	authTenantID := ctxkeys.GetTenantID(ctx)
 	resource := strings.TrimSpace(args.Resource)
 	settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
 		Payload:                payload,

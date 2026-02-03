@@ -12,6 +12,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -329,7 +330,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	internalName = strings.TrimPrefix(strings.TrimSpace(internalName), "live+")
 
 	// Use load balancer with internal name to find nodes that have the stream
-	lbctx := context.WithValue(ctx, "cap", "edge")
+	lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
 	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
 	if err != nil {
 		return nil, fmt.Errorf("no suitable edge nodes available: %w", err)

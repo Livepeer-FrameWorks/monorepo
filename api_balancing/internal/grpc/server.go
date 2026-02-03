@@ -24,6 +24,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/clips"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/pagination"
@@ -355,14 +356,14 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Select ingest node (cap=ingest)
-	ictx := context.WithValue(ctx, "cap", "ingest")
+	ictx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
 	ingestHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(ictx, req.InternalName, 0, 0, map[string]int{}, "", true)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "no ingest node available: %v", err)
 	}
 
 	// Select storage node (cap=storage)
-	sctx := context.WithValue(ctx, "cap", "storage")
+	sctx := context.WithValue(ctx, ctxkeys.KeyCapability, "storage")
 	storageHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(sctx, "", 0, 0, map[string]int{}, "", false)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "no storage node available: %v", err)
@@ -657,7 +658,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	}
 
 	// Select storage node
-	sctx := context.WithValue(ctx, "cap", "storage")
+	sctx := context.WithValue(ctx, ctxkeys.KeyCapability, "storage")
 	storageHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(sctx, "", 0, 0, map[string]int{}, "", false)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "no storage node available: %v", err)

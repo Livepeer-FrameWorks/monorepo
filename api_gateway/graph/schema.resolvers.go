@@ -14,6 +14,7 @@ import (
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/proto"
@@ -3490,7 +3491,7 @@ func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentID str
 	var viewerIP *string
 
 	// Extract IP from GraphQL request context
-	if ginCtx := ctx.Value("GinContext"); ginCtx != nil {
+	if ginCtx := ctx.Value(ctxkeys.KeyGinContext); ginCtx != nil {
 		if c, ok := ginCtx.(*gin.Context); ok {
 			clientIP := c.ClientIP() // Gin's built-in method handles X-Forwarded-For, etc.
 			viewerIP = &clientIP
@@ -3499,7 +3500,7 @@ func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentID str
 
 	// Fallback: try to get from raw HTTP request
 	if viewerIP == nil {
-		if req := ctx.Value("http_request"); req != nil {
+		if req := ctx.Value(ctxkeys.KeyHTTPRequest); req != nil {
 			if httpReq, ok := req.(*http.Request); ok && httpReq != nil {
 				clientIP := httpReq.Header.Get("X-Forwarded-For")
 				if clientIP == "" {
@@ -3536,7 +3537,7 @@ func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey str
 	// Extract client IP from request context for geo-routing
 	var viewerIP *string
 
-	if ginCtx := ctx.Value("GinContext"); ginCtx != nil {
+	if ginCtx := ctx.Value(ctxkeys.KeyGinContext); ginCtx != nil {
 		if c, ok := ginCtx.(*gin.Context); ok {
 			clientIP := c.ClientIP()
 			viewerIP = &clientIP
@@ -3545,7 +3546,7 @@ func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey str
 
 	// Fallback: try to get from raw HTTP request
 	if viewerIP == nil {
-		if req := ctx.Value("http_request"); req != nil {
+		if req := ctx.Value(ctxkeys.KeyHTTPRequest); req != nil {
 			if httpReq, ok := req.(*http.Request); ok && httpReq != nil {
 				clientIP := httpReq.Header.Get("X-Forwarded-For")
 				if clientIP == "" {
@@ -3928,7 +3929,7 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto
 		return resp, nil
 	}
 
-	tenantID, _ := ctx.Value("tenant_id").(string)
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, nil
 	}
@@ -4529,12 +4530,7 @@ func (r *subscriptionResolver) LiveClipLifecycle(ctx context.Context, streamID s
 	if err != nil {
 		return nil, err
 	}
-	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if s, ok := token.(string); ok {
-			jwtToken = s
-		}
-	}
+	jwtToken := ctxkeys.GetJWTToken(ctx)
 	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
 	return r.Resolver.SubManager.SubscribeToLifecycle(ctx, cfg, rawID)
 }
@@ -4549,12 +4545,7 @@ func (r *subscriptionResolver) LiveDvrLifecycle(ctx context.Context, streamID st
 	if err != nil {
 		return nil, err
 	}
-	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if s, ok := token.(string); ok {
-			jwtToken = s
-		}
-	}
+	jwtToken := ctxkeys.GetJWTToken(ctx)
 	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
 	return r.Resolver.SubManager.SubscribeToDVRLifecycle(ctx, cfg, rawID)
 }
@@ -4565,12 +4556,7 @@ func (r *subscriptionResolver) LiveVodLifecycle(ctx context.Context) (<-chan *pr
 	if err != nil {
 		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
 	}
-	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if s, ok := token.(string); ok {
-			jwtToken = s
-		}
-	}
+	jwtToken := ctxkeys.GetJWTToken(ctx)
 	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
 	return r.Resolver.SubManager.SubscribeToVodLifecycle(ctx, cfg)
 }
@@ -4634,12 +4620,7 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 		return nil, fmt.Errorf("authentication required for firehose subscription: %w", err)
 	}
 
-	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
-	}
+	jwtToken := ctxkeys.GetJWTToken(ctx)
 
 	config := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
 	ch, err := r.Resolver.SubManager.SubscribeToFirehose(ctx, config)

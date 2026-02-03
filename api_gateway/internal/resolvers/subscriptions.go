@@ -8,6 +8,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -60,10 +61,8 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 	}
 
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
@@ -130,10 +129,8 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 
 	// Extract JWT token from context
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	// Create connection config
@@ -203,10 +200,8 @@ func (r *Resolver) DoConnectionEvents(ctx context.Context, streamID *string) (<-
 	}
 
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	config := ConnectionConfig{
@@ -268,10 +263,8 @@ func (r *Resolver) DoStorageEvents(ctx context.Context, streamID *string) (<-cha
 	}
 
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	config := ConnectionConfig{
@@ -333,10 +326,8 @@ func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-
 	}
 
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	config := ConnectionConfig{
@@ -399,10 +390,8 @@ func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *pb.NodeLifecycl
 
 	// Extract JWT token from context
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	// Create connection config
@@ -450,10 +439,8 @@ func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-c
 	}
 
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
@@ -496,10 +483,8 @@ func (r *Resolver) DoMessageUpdates(ctx context.Context, conversationID string) 
 	}
 
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
@@ -559,10 +544,8 @@ func (r *Resolver) DoConversationUpdates(ctx context.Context, conversationID *st
 	}
 
 	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
+		jwtToken = token
 	}
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}

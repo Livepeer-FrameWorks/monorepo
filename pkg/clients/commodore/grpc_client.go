@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/pkg/cache"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -53,22 +54,22 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
 
-		if userID, ok := ctx.Value("user_id").(string); ok && userID != "" {
+		if userID := ctxkeys.GetUserID(ctx); userID != "" {
 			md.Set("x-user-id", userID)
 		}
-		if tenantID, ok := ctx.Value("tenant_id").(string); ok && tenantID != "" {
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			md.Set("x-tenant-id", tenantID)
 		}
 
 		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken, ok := ctx.Value("jwt_token").(string); ok && jwtToken != "" {
+		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
 			md.Set("authorization", "Bearer "+jwtToken)
 		} else if serviceToken != "" {
 			md.Set("authorization", "Bearer "+serviceToken)
 		}
 
 		// Forward X-PAYMENT header for x402 settlement (viewer-pays flows)
-		if xPayment, ok := ctx.Value("x_payment").(string); ok && xPayment != "" {
+		if xPayment, ok := ctx.Value(ctxkeys.KeyXPayment).(string); ok && xPayment != "" {
 			md.Set("x-payment", xPayment)
 		}
 

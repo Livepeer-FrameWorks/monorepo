@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	periscopeclient "frameworks/pkg/clients/periscope"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
@@ -1189,10 +1190,7 @@ func (r *Resolver) DoGetArtifactState(ctx context.Context, requestID string) (*p
 		return demo.GenerateArtifactState(requestID), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1217,10 +1215,7 @@ func (r *Resolver) DoGetArtifactStatesConnection(ctx context.Context, streamId *
 	}
 	streamId = normalizedStreamID
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1306,10 +1301,7 @@ func (r *Resolver) DoGetStreamConnectionHourlyConnection(ctx context.Context, st
 	}
 	stream = normalizedStreamID
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1395,10 +1387,7 @@ func (r *Resolver) DoGetClientMetrics5mConnection(ctx context.Context, stream *s
 	}
 	stream = normalizedStreamID
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1484,10 +1473,7 @@ func (r *Resolver) DoGetQualityTierDailyConnection(ctx context.Context, stream *
 	}
 	stream = normalizedStreamID
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1567,10 +1553,7 @@ func (r *Resolver) DoGetStorageUsageConnection(ctx context.Context, nodeID *stri
 		return demo.GenerateStorageUsageConnection(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1656,10 +1639,7 @@ func (r *Resolver) DoGetStorageEventsConnection(ctx context.Context, streamId *s
 		return demo.GenerateStorageEventsConnection(streamId), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1743,10 +1723,7 @@ func (r *Resolver) DoGetNodePerformance5mConnection(ctx context.Context, nodeID 
 		return demo.GenerateNodePerformance5mConnection(nodeID), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1832,10 +1809,7 @@ func (r *Resolver) DoGetViewerHoursHourlyConnection(ctx context.Context, stream 
 		return demo.GenerateViewerHoursHourlyConnection(stream), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -1915,10 +1889,7 @@ func (r *Resolver) DoGetViewerGeoHourlyConnection(ctx context.Context, timeRange
 		return demo.GenerateViewerGeoHourlyConnection(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2008,10 +1979,7 @@ func (r *Resolver) DoGetStreamHealth5mConnection(ctx context.Context, streamId s
 		return nil, fmt.Errorf("streamId required")
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2098,10 +2066,7 @@ func (r *Resolver) DoGetViewerSessionsConnection(ctx context.Context, stream *st
 		return demo.GenerateViewerSessionsConnection(stream), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2339,10 +2304,7 @@ func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId
 	}
 	streamId = normalizedID
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2461,10 +2423,7 @@ func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamNam
 		return demo.GenerateProcessingUsageConnection(streamName, processType), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2557,10 +2516,7 @@ func (r *Resolver) DoGetRebufferingEventsConnection(ctx context.Context, streamI
 		return demo.GenerateRebufferingEventsConnection(streamId), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2644,10 +2600,7 @@ func (r *Resolver) DoGetTenantAnalyticsDailyConnection(ctx context.Context, time
 		return demo.GenerateTenantAnalyticsDailyConnection(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2733,10 +2686,7 @@ func (r *Resolver) DoGetStreamAnalyticsDailyConnection(ctx context.Context, stre
 		return demo.GenerateStreamAnalyticsDailyConnection(streamId), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2816,10 +2766,7 @@ func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string
 		return demo.GenerateAPIUsageConnection(authType, operationType, operationName), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}
@@ -2907,10 +2854,7 @@ func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, 
 		return demo.GenerateStreamAnalyticsSummariesConnection(), nil
 	}
 
-	var tenantID string
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant_id required")
 	}

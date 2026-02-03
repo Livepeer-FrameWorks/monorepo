@@ -7,6 +7,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -51,8 +52,8 @@ type StartDVRResult struct {
 }
 
 func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
@@ -121,8 +122,8 @@ type StopDVRResult struct {
 }
 
 func handleStopDVR(ctx context.Context, args StopDVRInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 

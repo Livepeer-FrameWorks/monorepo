@@ -23,6 +23,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
@@ -1075,7 +1076,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	var err error
 	ctx := c.Request.Context()
 	if requireCap != "" {
-		ctx = context.WithValue(ctx, "cap", requireCap)
+		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
 	// Source selection (Mist pull) -> isSourceSelection=true (exclude replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
@@ -1151,7 +1152,7 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 	}
 
 	// Find best node for ingest (empty stream name means no same-host filtering)
-	ctx := context.WithValue(c.Request.Context(), "cap", requireCap)
+	ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyCapability, requireCap)
 	// Ingest -> isSourceSelection=true (though less relevant without streamName)
 	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(ctx, "", lat, lon, tagAdjust, "", true)
 	if err != nil {
@@ -1354,7 +1355,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	var err error
 	ctx := c.Request.Context()
 	if requireCap != "" {
-		ctx = context.WithValue(ctx, "cap", requireCap)
+		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
 	// Viewer selection -> isSourceSelection=false (allow replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, internalName, lat, lon, tagAdjust, "", false)

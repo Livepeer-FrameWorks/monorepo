@@ -16,6 +16,7 @@ import (
 	"frameworks/pkg/clients/navigator"
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/config"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/pagination"
@@ -1985,7 +1986,7 @@ func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *pb.Su
 
 	// Allow admin override (if tenant_id is provided in request and differs)
 	if req.GetTenantId() != "" && req.GetTenantId() != tenantID {
-		role, _ := ctx.Value("role").(string)
+		role := ctxkeys.GetRole(ctx)
 		if role == "admin" || role == "provider" {
 			tenantID = req.GetTenantId()
 		} else {
@@ -2038,7 +2039,7 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *p
 
 	// Allow admin override
 	if req.GetTenantId() != "" && req.GetTenantId() != tenantID {
-		role, _ := ctx.Value("role").(string)
+		role := ctxkeys.GetRole(ctx)
 		if role == "admin" || role == "provider" {
 			tenantID = req.GetTenantId()
 		} else {

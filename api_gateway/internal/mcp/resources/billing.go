@@ -7,6 +7,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/billing"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -80,8 +81,8 @@ type PricingRates struct {
 }
 
 func handleBillingBalance(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 
@@ -259,7 +260,7 @@ type ResourcePricing struct {
 }
 
 func handleBillingPricing(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, _ := ctx.Value("tenant_id").(string)
+	tenantID := ctxkeys.GetTenantID(ctx)
 
 	// Fetch billing tiers from API - fail if API fails
 	tiersResp, err := clients.Purser.GetBillingTiers(ctx, false, nil)
@@ -381,8 +382,8 @@ type TransactionsResponse struct {
 }
 
 func handleBillingTransactions(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 
