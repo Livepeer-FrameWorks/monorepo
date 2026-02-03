@@ -2123,9 +2123,7 @@ func appendCorrelationID(redirectURL, viewerID string) string {
 	}
 
 	query := parsedURL.Query()
-	if query.Has("fwcid") {
-		return redirectURL
-	}
+	// Always override any existing fwcid to avoid stale/malicious correlation IDs.
 	query.Set("fwcid", viewerID)
 	parsedURL.RawQuery = query.Encode()
 	return parsedURL.String()
