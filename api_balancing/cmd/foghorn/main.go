@@ -349,6 +349,8 @@ func main() {
 
 	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution, VOD uploads)
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
+	control.SetDecklogClient(decklogClient)
+	control.SetDVRStopRegistry(foghornServer)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)

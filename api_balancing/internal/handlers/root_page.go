@@ -52,6 +52,30 @@ func safeUint64(v interface{}) uint64 {
 	return uint64(val)
 }
 
+func findStreamSourceNodeID(stream *state.StreamState, instances map[string]map[string]*state.StreamInstanceState) string {
+	if stream != nil && stream.NodeID != "" {
+		return stream.NodeID
+	}
+	if stream == nil {
+		return ""
+	}
+	nodeInstances := instances[stream.InternalName]
+	if len(nodeInstances) == 0 {
+		return ""
+	}
+	var bestID string
+	var bestAt time.Time
+	for nodeID, inst := range nodeInstances {
+		if inst.Inputs > 0 && !inst.Replicated && inst.Status != "offline" {
+			if bestID == "" || inst.LastUpdate.After(bestAt) {
+				bestID = nodeID
+				bestAt = inst.LastUpdate
+			}
+		}
+	}
+	return bestID
+}
+
 // HandleRootPage serves a debug webpage showing Foghorn's internal state
 func HandleRootPage(c *gin.Context) {
 	// Generate timestamp for page generation
@@ -1067,6 +1091,7 @@ func HandleRootPage(c *gin.Context) {
 
 	var streamStateData []StreamStateData
 	for _, stream := range streamStates {
+		sourceNodeID := findStreamSourceNodeID(stream, streamInstances)
 		updateAgo := "never"
 		if !stream.LastUpdate.IsZero() {
 			updateAgo = time.Since(stream.LastUpdate).Truncate(time.Second).String() + " ago"
@@ -1087,7 +1112,7 @@ func HandleRootPage(c *gin.Context) {
 			BytesUpStr:       formatBytes(uint64(stream.BytesUp)),
 			BytesDown:        stream.BytesDown,
 			BytesDownStr:     formatBytes(uint64(stream.BytesDown)),
-			NodeID:           stream.NodeID,
+			NodeID:           sourceNodeID,
 			TenantID:         stream.TenantID,
 			StartedAt:        startedAt,
 			LastUpdateAgo:    updateAgo,

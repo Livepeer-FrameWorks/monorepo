@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
@@ -77,6 +78,8 @@ type FoghornGRPCServer struct {
 	s3Client         S3ClientInterface
 	cacheInvalidator CacheInvalidator
 	purserClient     *purserclient.GRPCClient
+	pendingDVRStops  map[string]time.Time
+	pendingDVRMu     sync.Mutex
 }
 
 // NewFoghornGRPCServer creates a new Foghorn gRPC server
@@ -91,14 +94,15 @@ func NewFoghornGRPCServer(
 	purserClient *purserclient.GRPCClient,
 ) *FoghornGRPCServer {
 	return &FoghornGRPCServer{
-		db:            db,
-		logger:        logger,
-		lb:            lb,
-		geoipReader:   geoReader,
-		geoipCache:    geoCache,
-		decklogClient: decklogClient,
-		s3Client:      s3Client,
-		purserClient:  purserClient,
+		db:              db,
+		logger:          logger,
+		lb:              lb,
+		geoipReader:     geoReader,
+		geoipCache:      geoCache,
+		decklogClient:   decklogClient,
+		s3Client:        s3Client,
+		purserClient:    purserClient,
+		pendingDVRStops: make(map[string]time.Time),
 	}
 }
 
@@ -114,6 +118,63 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 // SetCacheInvalidator sets the cache invalidator for tenant cache management
 func (s *FoghornGRPCServer) SetCacheInvalidator(ci CacheInvalidator) {
 	s.cacheInvalidator = ci
+}
+
+func (s *FoghornGRPCServer) RegisterPendingDVRStop(internalName string) {
+	if internalName == "" {
+		return
+	}
+	s.pendingDVRMu.Lock()
+	s.pendingDVRStops[internalName] = time.Now()
+	s.pendingDVRMu.Unlock()
+}
+
+func (s *FoghornGRPCServer) consumePendingDVRStop(internalName string) bool {
+	if internalName == "" {
+		return false
+	}
+	s.pendingDVRMu.Lock()
+	_, ok := s.pendingDVRStops[internalName]
+	if ok {
+		delete(s.pendingDVRStops, internalName)
+	}
+	s.pendingDVRMu.Unlock()
+	return ok
+}
+
+func (s *FoghornGRPCServer) emitDVRStartFailure(req *pb.StartDVRRequest, reason string) {
+	if s.decklogClient == nil {
+		return
+	}
+	dvrData := &pb.DVRLifecycleData{
+		Status: pb.DVRLifecycleData_STATUS_FAILED,
+		Error:  &reason,
+		InternalName: func() *string {
+			if req.InternalName != "" {
+				return &req.InternalName
+			}
+			return nil
+		}(),
+		StreamId: func() *string {
+			if req.StreamId != nil && *req.StreamId != "" {
+				return req.StreamId
+			}
+			return nil
+		}(),
+		TenantId: func() *string {
+			if req.TenantId != "" {
+				return &req.TenantId
+			}
+			return nil
+		}(),
+		UserId: func() *string {
+			if req.UserId != nil && *req.UserId != "" {
+				return req.UserId
+			}
+			return nil
+		}(),
+	}
+	go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
 }
 
 // emitRoutingEvent sends a LoadBalancingData event with dual-tenant attribution
@@ -658,6 +719,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// Resolve actual source node for this stream
 	sourceNodeID, baseURL, ok := control.GetStreamSource(req.InternalName)
 	if !ok {
+		s.emitDVRStartFailure(req, "no source node available")
 		return nil, status.Error(codes.Unavailable, "no source node available")
 	}
 
@@ -665,11 +727,13 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	sctx := context.WithValue(ctx, ctxkeys.KeyCapability, "storage")
 	storageHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(sctx, "", 0, 0, map[string]int{}, "", false)
 	if err != nil {
+		s.emitDVRStartFailure(req, fmt.Sprintf("no storage node available: %v", err))
 		return nil, status.Errorf(codes.Unavailable, "no storage node available: %v", err)
 	}
 
 	storageNodeID := s.lb.GetNodeIDByHost(storageHost)
 	if storageNodeID == "" {
+		s.emitDVRStartFailure(req, "storage node not connected")
 		return nil, status.Error(codes.Unavailable, "storage node not connected")
 	}
 
@@ -756,6 +820,57 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			"error":         err,
 		}).Error("Failed to store DVR artifact in database (Commodore record persists)")
 		return nil, status.Error(codes.Internal, "failed to store DVR artifact")
+	}
+
+	if s.consumePendingDVRStop(req.InternalName) {
+		_, _ = s.db.ExecContext(ctx, `
+			UPDATE foghorn.artifacts
+			SET status = 'stopped', error_message = $1, ended_at = NOW(), updated_at = NOW()
+			WHERE artifact_hash = $2
+		`, "stream ended before DVR start", dvrHash)
+		if s.decklogClient != nil {
+			stoppedAt := time.Now().Unix()
+			errorMsg := "stream ended before DVR start"
+			dvrData := &pb.DVRLifecycleData{
+				Status:  pb.DVRLifecycleData_STATUS_STOPPED,
+				DvrHash: dvrHash,
+				EndedAt: &stoppedAt,
+				Error:   &errorMsg,
+				StreamId: func() *string {
+					if req.StreamId != nil && *req.StreamId != "" {
+						return req.StreamId
+					}
+					return nil
+				}(),
+				TenantId: func() *string {
+					if req.TenantId != "" {
+						return &req.TenantId
+					}
+					return nil
+				}(),
+				InternalName: func() *string {
+					if req.InternalName != "" {
+						return &req.InternalName
+					}
+					return nil
+				}(),
+				UserId: func() *string {
+					if req.UserId != nil && *req.UserId != "" {
+						return req.UserId
+					}
+					return nil
+				}(),
+			}
+			go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
+		}
+		return &pb.StartDVRResponse{
+			Status:        "stopped",
+			DvrHash:       dvrHash,
+			IngestHost:    baseURL,
+			StorageHost:   storageHost,
+			StorageNodeId: storageNodeID,
+			PlaybackId:    playbackID,
+		}, nil
 	}
 
 	// Store node assignment in foghorn.artifact_nodes
