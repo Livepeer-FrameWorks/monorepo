@@ -208,7 +208,13 @@ func handleMistTriggerResponse(response *pb.MistTriggerResponse) {
 func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient {
 	streamReconnectedM.Lock()
 	reconnectCh := streamReconnected
+	s := currentStream
 	streamReconnectedM.Unlock()
+
+	// Re-check after grabbing the channel: if we're already connected, don't wait.
+	if s != nil {
+		return s
+	}
 
 	select {
 	case <-reconnectCh:
