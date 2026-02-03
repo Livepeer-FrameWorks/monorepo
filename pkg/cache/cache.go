@@ -90,8 +90,10 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 				c.metrics.OnStale(map[string]string{"key": key})
 			}
 			go func() {
+				// Decouple background refresh from the caller's cancellation/deadline.
+				refreshCtx := context.WithoutCancel(ctx)
 				_, _, _ = c.sf.Do("refresh:"+key, func() (interface{}, error) {
-					c.refresh(ctx, key, loader)
+					c.refresh(refreshCtx, key, loader)
 					return nil, nil
 				})
 			}()
@@ -116,7 +118,9 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 		c.metrics.OnMiss(map[string]string{"key": key})
 	}
 	result, _, _ := c.sf.Do(key, func() (interface{}, error) {
-		val, ok, err := loader(ctx, key)
+		// Don't let the first caller's cancellation/deadline cancel the shared load.
+		loadCtx := context.WithoutCancel(ctx)
+		val, ok, err := loader(loadCtx, key)
 		c.store(key, val, ok, err)
 		return loadResult{val: val, ok: ok, err: err}, nil
 	})
