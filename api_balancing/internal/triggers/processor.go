@@ -289,6 +289,62 @@ func (p *Processor) SetOwnerTenantID(tenantID string) {
 	p.ownerTenantID = tenantID
 }
 
+func (p *Processor) ensureTriggerTenantID(trigger *pb.MistTrigger) string {
+	if trigger == nil {
+		return ""
+	}
+	if tid := trigger.GetTenantId(); strings.TrimSpace(tid) != "" {
+		return tid
+	}
+
+	// Some trigger types carry tenant_id only inside the payload; accept/mirror it to the envelope
+	// before enforcing the decklog send guard.
+	switch tp := trigger.GetTriggerPayload().(type) {
+	case *pb.MistTrigger_StreamLifecycleUpdate:
+		if tid := strings.TrimSpace(tp.StreamLifecycleUpdate.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	case *pb.MistTrigger_ClientLifecycleUpdate:
+		if tid := strings.TrimSpace(tp.ClientLifecycleUpdate.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	case *pb.MistTrigger_ClipLifecycleData:
+		if tid := strings.TrimSpace(tp.ClipLifecycleData.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	case *pb.MistTrigger_DvrLifecycleData:
+		if tid := strings.TrimSpace(tp.DvrLifecycleData.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	case *pb.MistTrigger_VodLifecycleData:
+		if tid := strings.TrimSpace(tp.VodLifecycleData.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	case *pb.MistTrigger_StorageLifecycleData:
+		if tid := strings.TrimSpace(tp.StorageLifecycleData.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	case *pb.MistTrigger_StorageSnapshot:
+		if tid := strings.TrimSpace(tp.StorageSnapshot.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	case *pb.MistTrigger_ProcessBilling:
+		if tid := strings.TrimSpace(tp.ProcessBilling.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
+	}
+
+	return ""
+}
+
 func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 	if trigger == nil {
 		return fmt.Errorf("nil trigger")
@@ -296,6 +352,17 @@ func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 
 	if trigger.ClusterId == nil && p.clusterID != "" {
 		trigger.ClusterId = &p.clusterID
+	}
+
+	if p.ensureTriggerTenantID(trigger) == "" {
+		if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
+			p.metrics.DecklogTriggerSends.WithLabelValues(trigger.GetTriggerType(), "tenant_missing").Inc()
+		}
+		p.logger.WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+		}).Warn("Refusing to send trigger without tenant_id")
+		return fmt.Errorf("tenant_id required for trigger type %s", trigger.GetTriggerType())
 	}
 
 	if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
