@@ -883,6 +883,7 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     tenant_id UUID,
     stream_id UUID,
     internal_name String,
+    filename Nullable(String),
     request_id String,
 
     stage LowCardinality(String),
@@ -911,6 +912,7 @@ CREATE TABLE IF NOT EXISTS artifact_state_current (
     stream_id UUID,
     request_id String,
     internal_name String,
+    filename Nullable(String),
 
     content_type LowCardinality(String),
     stage LowCardinality(String),

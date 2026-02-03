@@ -363,9 +363,10 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 
 // ExtractInternalName extracts internal name from stream name (handles wildcard format)
 func ExtractInternalName(streamName string) string {
-	// Extract internal name from wildcard stream (format: "live+{internal_name}")
-	if plusIndex := strings.Index(streamName, "+"); plusIndex != -1 {
-		return streamName[plusIndex+1:]
+	for _, prefix := range []string{"live+", "vod+"} {
+		if strings.HasPrefix(streamName, prefix) {
+			return strings.TrimPrefix(streamName, prefix)
+		}
 	}
 	// For non-wildcard streams, use the stream name as-is
 	return streamName
