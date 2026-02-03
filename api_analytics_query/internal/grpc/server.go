@@ -4653,18 +4653,18 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	summary.FrozenDvrBytes = frozenDvrBytes
 	summary.FrozenVodBytes = frozenVodBytes
 
-	// Freeze/defrost operations (from storage_events)
+	// Sync/cache operations (from storage_events)
 	var freezeCount, defrostCount uint32
 	var freezeBytes, defrostBytes uint64
 	err = s.clickhouse.QueryRowContext(ctx, `
-		SELECT
-			countIf(action = 'frozen') AS freeze_count,
-			sumIf(size_bytes, action = 'frozen') AS freeze_bytes,
-			countIf(action = 'defrosted') AS defrost_count,
-			sumIf(size_bytes, action = 'defrosted') AS defrost_bytes
-		FROM storage_events
-		WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?
-	`, tenantID, startTime, endTime).Scan(
+			SELECT
+				countIf(action = 'synced') AS freeze_count,
+				sumIf(size_bytes, action = 'synced') AS freeze_bytes,
+				countIf(action = 'cached') AS defrost_count,
+				sumIf(size_bytes, action = 'cached') AS defrost_bytes
+			FROM storage_events
+			WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?
+		`, tenantID, startTime, endTime).Scan(
 		&freezeCount, &freezeBytes, &defrostCount, &defrostBytes,
 	)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {

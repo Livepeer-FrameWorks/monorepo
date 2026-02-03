@@ -1674,11 +1674,11 @@ func processFreezeComplete(complete *pb.FreezeComplete, nodeID string, logger lo
 	if status == "success" {
 		// Update artifact storage location in database
 		_, _ = db.Exec(`
-			UPDATE foghorn.artifacts
-			SET storage_location = 's3',
-			    sync_status = 'synced',
-			    s3_url = NULLIF($1, ''),
-			    frozen_at = NOW(),
+				UPDATE foghorn.artifacts
+				SET storage_location = 'local',
+				    sync_status = 'synced',
+				    s3_url = NULLIF($1, ''),
+				    frozen_at = NOW(),
 			    last_sync_attempt = NOW(),
 			    sync_error = NULL,
 			    updated_at = NOW()

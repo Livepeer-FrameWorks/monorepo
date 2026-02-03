@@ -1602,6 +1602,11 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			// VodBytes: Reserved for user-uploaded video artifacts (not yet implemented)
 		}
 
+		snapshotTenantID := nodeOwnerTenantID
+		if snapshotTenantID == "" && p.ownerTenantID != "" {
+			snapshotTenantID = p.ownerTenantID
+		}
+
 		// Construct the StorageSnapshot message
 		var tenantUsages []*pb.TenantStorageUsage
 		for _, tu := range tenantUsageMap {
@@ -1611,7 +1616,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		storageSnapshot := &pb.StorageSnapshot{
 			NodeId:       nodeSnap.NodeID,
 			Timestamp:    time.Now().Unix(),
-			TenantId:     func() *string { s := nodeOwnerTenantID; return &s }(),
+			TenantId:     func() *string { s := snapshotTenantID; return &s }(),
 			Location:     func() *string { s := nodeLocation; return &s }(),
 			Capabilities: nodeCapabilities,
 			Usage:        tenantUsages,
@@ -1623,7 +1628,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			TriggerType: "STORAGE_SNAPSHOT",
 			NodeId:      nodeSnap.NodeID,
 			Timestamp:   time.Now().Unix(),
-			TenantId:    func() *string { s := nodeOwnerTenantID; return &s }(),
+			TenantId:    func() *string { s := snapshotTenantID; return &s }(),
 			TriggerPayload: &pb.MistTrigger_StorageSnapshot{
 				StorageSnapshot: storageSnapshot,
 			},
@@ -1662,9 +1667,11 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		})
 	}
 
+	coldTenantID := p.ownerTenantID
 	coldSnapshot := &pb.StorageSnapshot{
 		NodeId:       "s3",
 		Timestamp:    time.Now().Unix(),
+		TenantId:     func() *string { s := coldTenantID; return &s }(),
 		Usage:        coldUsages,
 		StorageScope: stringPtr("cold"),
 	}
@@ -1673,6 +1680,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 		TriggerType: "STORAGE_SNAPSHOT",
 		NodeId:      "s3",
 		Timestamp:   time.Now().Unix(),
+		TenantId:    func() *string { s := coldTenantID; return &s }(),
 		TriggerPayload: &pb.MistTrigger_StorageSnapshot{
 			StorageSnapshot: coldSnapshot,
 		},
