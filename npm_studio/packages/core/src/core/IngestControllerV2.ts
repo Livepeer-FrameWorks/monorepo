@@ -48,6 +48,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private whipClient: WhipClient | null = null;
   private whipEndpoints: string[] = [];
   private currentEndpointIndex = 0;
+  private isStoppingIntentionally = false;
 
   private state: IngestState = "idle";
   private stateContext: IngestStateContextV2 = {};
@@ -783,6 +784,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
           }
         }
       } else if (event.state === "failed" || event.state === "disconnected") {
+        // Skip reconnection/error handling if user intentionally stopped streaming
+        if (this.isStoppingIntentionally) {
+          return;
+        }
         if (this.state === "streaming" && this.config.reconnection?.enabled !== false) {
           this.handleConnectionLost();
         } else {
@@ -795,6 +800,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     });
 
     this.whipClient.on("error", (event) => {
+      if (this.isStoppingIntentionally) {
+        return;
+      }
       this.emit("error", { error: event.message, recoverable: false });
     });
   }
@@ -1001,32 +1009,38 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    */
   async stopStreaming(): Promise<void> {
     this.log("Stopping streaming");
-    this.stopStatsPolling();
-    this.reconnectionManager.stop();
+    this.isStoppingIntentionally = true;
 
-    // Stop encoder
-    if (this.encoderManager) {
-      await this.encoderManager.stop();
-      this.encoderManager.destroy();
-      this.encoderManager = null;
+    try {
+      this.stopStatsPolling();
+      this.reconnectionManager.stop();
+
+      // Stop encoder
+      if (this.encoderManager) {
+        await this.encoderManager.stop();
+        this.encoderManager.destroy();
+        this.encoderManager = null;
+      }
+
+      if (this.whipClient) {
+        await this.whipClient.disconnect();
+        this.whipClient.destroy();
+        this.whipClient = null;
+      }
+
+      if (this.sources.size > 0) {
+        this.setState("capturing");
+      } else {
+        this.setState("idle");
+      }
+
+      this.stateContext = {
+        ...this.stateContext,
+        connectionState: "disconnected",
+      };
+    } finally {
+      this.isStoppingIntentionally = false;
     }
-
-    if (this.whipClient) {
-      await this.whipClient.disconnect();
-      this.whipClient.destroy();
-      this.whipClient = null;
-    }
-
-    if (this.sources.size > 0) {
-      this.setState("capturing");
-    } else {
-      this.setState("idle");
-    }
-
-    this.stateContext = {
-      ...this.stateContext,
-      connectionState: "disconnected",
-    };
   }
 
   /**
