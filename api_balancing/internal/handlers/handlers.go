@@ -446,6 +446,169 @@ func Init(
 		},
 	)
 
+	control.SetDVRStoppedHandler(func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string) {
+		if decklogClient == nil {
+			return
+		}
+
+		status := pb.DVRLifecycleData_STATUS_STOPPED
+		if finalStatus == "failed" {
+			status = pb.DVRLifecycleData_STATUS_FAILED
+		}
+
+		var (
+			tenantIDStr     string
+			userIDStr       string
+			internalNameStr string
+			streamID        string
+			retentionUntil  sql.NullTime
+			startedAt       sql.NullTime
+			endedAt         sql.NullTime
+		)
+
+		if commodoreClient != nil {
+			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
+				tenantIDStr = resp.TenantId
+				userIDStr = resp.UserId
+				internalNameStr = resp.InternalName
+				streamID = resp.StreamId
+			}
+		}
+
+		_ = db.QueryRow(`
+			SELECT retention_until, started_at, ended_at
+			FROM foghorn.artifacts
+			WHERE artifact_hash = $1
+			  AND artifact_type = 'dvr'
+			  AND COALESCE(tenant_id::text, '') = $2
+		`, dvrHash, tenantIDStr).Scan(&retentionUntil, &startedAt, &endedAt)
+
+		dvrData := &pb.DVRLifecycleData{
+			Status:  status,
+			DvrHash: dvrHash,
+		}
+		if nodeID != "" {
+			dvrData.NodeId = &nodeID
+		}
+		if tenantIDStr != "" {
+			dvrData.TenantId = &tenantIDStr
+		}
+		if internalNameStr != "" {
+			dvrData.InternalName = &internalNameStr
+		}
+		if streamID != "" {
+			dvrData.StreamId = &streamID
+		}
+		if userIDStr != "" {
+			dvrData.UserId = &userIDStr
+		}
+		if sizeBytes > 0 {
+			dvrData.SizeBytes = &sizeBytes
+		}
+		if manifestPath != "" {
+			dvrData.ManifestPath = &manifestPath
+		}
+		if errorMsg != "" {
+			dvrData.Error = &errorMsg
+		}
+		if retentionUntil.Valid {
+			exp := retentionUntil.Time.Unix()
+			dvrData.ExpiresAt = &exp
+		}
+		if startedAt.Valid {
+			st := startedAt.Time.Unix()
+			dvrData.StartedAt = &st
+		}
+		if endedAt.Valid {
+			et := endedAt.Time.Unix()
+			dvrData.EndedAt = &et
+		}
+
+		go func() {
+			if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
+				logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to send DVR stopped event to Decklog")
+			}
+		}()
+	})
+
+	control.SetDVRDeletedHandler(func(dvrHash string, sizeBytes uint64, nodeID string) {
+		if decklogClient == nil {
+			return
+		}
+
+		var (
+			tenantIDStr     string
+			userIDStr       string
+			internalNameStr string
+			streamID        string
+			retentionUntil  sql.NullTime
+			startedAt       sql.NullTime
+			endedAt         sql.NullTime
+		)
+
+		if commodoreClient != nil {
+			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
+				tenantIDStr = resp.TenantId
+				userIDStr = resp.UserId
+				internalNameStr = resp.InternalName
+				streamID = resp.StreamId
+			}
+		}
+
+		_ = db.QueryRow(`
+			SELECT retention_until, started_at, ended_at
+			FROM foghorn.artifacts
+			WHERE artifact_hash = $1
+			  AND artifact_type = 'dvr'
+			  AND COALESCE(tenant_id::text, '') = $2
+		`, dvrHash, tenantIDStr).Scan(&retentionUntil, &startedAt, &endedAt)
+
+		dvrData := &pb.DVRLifecycleData{
+			Status:  pb.DVRLifecycleData_STATUS_DELETED,
+			DvrHash: dvrHash,
+		}
+		if nodeID != "" {
+			dvrData.NodeId = &nodeID
+		}
+		if tenantIDStr != "" {
+			dvrData.TenantId = &tenantIDStr
+		}
+		if internalNameStr != "" {
+			dvrData.InternalName = &internalNameStr
+		}
+		if streamID != "" {
+			dvrData.StreamId = &streamID
+		}
+		if userIDStr != "" {
+			dvrData.UserId = &userIDStr
+		}
+		if sizeBytes > 0 {
+			dvrData.SizeBytes = &sizeBytes
+		}
+		if retentionUntil.Valid {
+			exp := retentionUntil.Time.Unix()
+			dvrData.ExpiresAt = &exp
+		}
+		if startedAt.Valid {
+			st := startedAt.Time.Unix()
+			dvrData.StartedAt = &st
+		}
+		if endedAt.Valid {
+			et := endedAt.Time.Unix()
+			dvrData.EndedAt = &et
+		}
+
+		go func() {
+			if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
+				logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to send DVR deleted event to Decklog")
+			}
+		}()
+	})
+
 	// Set dtsh sync handler for incremental .dtsh uploads
 	// Called when periodic artifact scan detects .dtsh exists locally but wasn't synced
 	state.SetDtshSyncHandler(control.TriggerDtshSync)

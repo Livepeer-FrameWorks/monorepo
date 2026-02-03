@@ -118,6 +118,7 @@ var clipProgressHandler func(*pb.ClipProgress)
 var clipDoneHandler func(*pb.ClipDone)
 var artifactDeletedHandler func(*pb.ArtifactDeleted)
 var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
+var dvrStoppedHandler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)
 
 // SetClipHandlers registers callbacks for analytics emission
 func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(*pb.ArtifactDeleted)) {
@@ -129,6 +130,11 @@ func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone
 // SetDVRDeletedHandler registers callback for DVR deletion analytics
 func SetDVRDeletedHandler(handler func(dvrHash string, sizeBytes uint64, nodeID string)) {
 	dvrDeletedHandler = handler
+}
+
+// SetDVRStoppedHandler registers callback for DVR stopped analytics
+func SetDVRStoppedHandler(handler func(dvrHash string, finalStatus string, nodeID string, sizeBytes uint64, manifestPath string, errorMsg string)) {
+	dvrStoppedHandler = handler
 }
 
 // Init initializes the global registry
@@ -902,6 +908,9 @@ func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logg
 	// Emit analytics for deletion (after Helmsman confirmation)
 	if finalStatus == "deleted" && dvrDeletedHandler != nil {
 		go dvrDeletedHandler(dvrHash, uint64(sizeBytes), storageNodeID)
+	}
+	if finalStatus != "deleted" && dvrStoppedHandler != nil {
+		go dvrStoppedHandler(dvrHash, finalStatus, storageNodeID, uint64(sizeBytes), manifestPath, errorMsg)
 	}
 }
 
