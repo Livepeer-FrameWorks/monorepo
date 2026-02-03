@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"frameworks/api_balancing/internal/geo"
-	"frameworks/pkg/logging"
-
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
