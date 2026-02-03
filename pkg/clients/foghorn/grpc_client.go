@@ -181,26 +181,34 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *st
 // VIEWER OPERATIONS
 // =============================================================================
 
-// ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+// ResolveViewerEndpoint resolves the best endpoint(s) for a viewer.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.viewer.ResolveViewerEndpoint(ctx, &pb.ViewerEndpointRequest{
+	req := &pb.ViewerEndpointRequest{
 		ContentId: contentID,
 		ViewerIp:  viewerIP,
-	})
+	}
+	var trailers metadata.MD
+	resp, err := c.viewer.ResolveViewerEndpoint(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter
-func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, error) {
+// ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.viewer.ResolveIngestEndpoint(ctx, &pb.IngestEndpointRequest{
+	req := &pb.IngestEndpointRequest{
 		StreamKey: streamKey,
 		ViewerIp:  viewerIP,
-	})
+	}
+	var trailers metadata.MD
+	resp, err := c.viewer.ResolveIngestEndpoint(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
 // =============================================================================
