@@ -733,9 +733,6 @@ func (r *clipResolver) SizeBytes(ctx context.Context, obj *proto.ClipInfo) (*flo
 // Status is the resolver for the status field.
 // Fetches lifecycle data from Periscope - the source of truth for processing status.
 func (r *clipResolver) Status(ctx context.Context, obj *proto.ClipInfo) (string, error) {
-	if obj.ExpiresAt != nil && obj.ExpiresAt.AsTime().Before(time.Now()) {
-		return "deleted", nil
-	}
 	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.Stage != "" {
 		return state.Stage, nil
 	}
@@ -766,6 +763,9 @@ func (r *clipResolver) UpdatedAt(ctx context.Context, obj *proto.ClipInfo) (*tim
 // StorageLocation is the resolver for the storageLocation field.
 func (r *clipResolver) StorageLocation(ctx context.Context, obj *proto.ClipInfo) (*string, error) {
 	state := r.getLifecycleData(ctx, obj.ClipHash)
+	if state == nil {
+		return nil, nil
+	}
 	if state != nil && state.S3Url != nil && *state.S3Url != "" {
 		loc := "s3"
 		return &loc, nil
@@ -775,10 +775,14 @@ func (r *clipResolver) StorageLocation(ctx context.Context, obj *proto.ClipInfo)
 }
 
 // IsFrozen is the resolver for the isFrozen field.
-func (r *clipResolver) IsFrozen(ctx context.Context, obj *proto.ClipInfo) (bool, error) {
+func (r *clipResolver) IsFrozen(ctx context.Context, obj *proto.ClipInfo) (*bool, error) {
 	// Frozen if stored in S3 (has S3 URL in lifecycle data)
 	state := r.getLifecycleData(ctx, obj.ClipHash)
-	return state != nil && state.S3Url != nil && *state.S3Url != "", nil
+	if state == nil {
+		return nil, nil
+	}
+	frozen := state.S3Url != nil && *state.S3Url != ""
+	return &frozen, nil
 }
 
 // ExpiresAt is the resolver for the expiresAt field.
@@ -788,6 +792,11 @@ func (r *clipResolver) ExpiresAt(ctx context.Context, obj *proto.ClipInfo) (*tim
 	}
 	t := obj.ExpiresAt.AsTime()
 	return &t, nil
+}
+
+// IsExpired is the resolver for the isExpired field.
+func (r *clipResolver) IsExpired(ctx context.Context, obj *proto.ClipInfo) (bool, error) {
+	return obj.ExpiresAt != nil && obj.ExpiresAt.AsTime().Before(time.Now()), nil
 }
 
 // Stage is the resolver for the stage field.
@@ -1106,6 +1115,11 @@ func (r *dVRRequestResolver) ExpiresAt(ctx context.Context, obj *proto.DVRInfo) 
 	return &t, nil
 }
 
+// IsExpired is the resolver for the isExpired field.
+func (r *dVRRequestResolver) IsExpired(ctx context.Context, obj *proto.DVRInfo) (bool, error) {
+	return obj.ExpiresAt != nil && obj.ExpiresAt.AsTime().Before(time.Now()), nil
+}
+
 // StorageNodeID is the resolver for the storageNodeId field.
 // Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) StorageNodeID(ctx context.Context, obj *proto.DVRInfo) (*string, error) {
@@ -1118,10 +1132,6 @@ func (r *dVRRequestResolver) StorageNodeID(ctx context.Context, obj *proto.DVRIn
 // Status is the resolver for the status field.
 // Lifecycle data - from Periscope.
 func (r *dVRRequestResolver) Status(ctx context.Context, obj *proto.DVRInfo) (*string, error) {
-	if obj.ExpiresAt != nil && obj.ExpiresAt.AsTime().Before(time.Now()) {
-		deleted := "deleted"
-		return &deleted, nil
-	}
 	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.Stage != "" {
 		return &state.Stage, nil
 	}
@@ -1206,7 +1216,10 @@ func (r *dVRRequestResolver) ErrorMessage(ctx context.Context, obj *proto.DVRInf
 // Lifecycle data - derived from S3 URL presence.
 func (r *dVRRequestResolver) StorageLocation(ctx context.Context, obj *proto.DVRInfo) (*string, error) {
 	state := r.getLifecycleData(ctx, obj.DvrHash)
-	if state != nil && state.S3Url != nil && *state.S3Url != "" {
+	if state == nil {
+		return nil, nil
+	}
+	if state.S3Url != nil && *state.S3Url != "" {
 		loc := "s3"
 		return &loc, nil
 	}
@@ -1216,9 +1229,13 @@ func (r *dVRRequestResolver) StorageLocation(ctx context.Context, obj *proto.DVR
 
 // IsFrozen is the resolver for the isFrozen field.
 // Lifecycle data - true if stored in S3.
-func (r *dVRRequestResolver) IsFrozen(ctx context.Context, obj *proto.DVRInfo) (bool, error) {
+func (r *dVRRequestResolver) IsFrozen(ctx context.Context, obj *proto.DVRInfo) (*bool, error) {
 	state := r.getLifecycleData(ctx, obj.DvrHash)
-	return state != nil && state.S3Url != nil && *state.S3Url != "", nil
+	if state == nil {
+		return nil, nil
+	}
+	frozen := state.S3Url != nil && *state.S3Url != ""
+	return &frozen, nil
 }
 
 // FrozenAt is the resolver for the frozenAt field.
