@@ -298,6 +298,17 @@ func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 		trigger.ClusterId = &p.clusterID
 	}
 
+	if trigger.GetTenantId() == "" {
+		if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
+			p.metrics.DecklogTriggerSends.WithLabelValues(trigger.GetTriggerType(), "tenant_missing").Inc()
+		}
+		p.logger.WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+		}).Warn("Refusing to send trigger without tenant_id")
+		return fmt.Errorf("tenant_id required for trigger type %s", trigger.GetTriggerType())
+	}
+
 	if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
 		p.metrics.DecklogTriggerSends.WithLabelValues(trigger.GetTriggerType(), "attempt").Inc()
 	}

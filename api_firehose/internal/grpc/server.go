@@ -59,14 +59,15 @@ func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, 
 	// Tenant ID should be enriched by Foghorn; do not normalize to zero UUID.
 	normalized := tenantID
 	if normalized == "" || !isValidUUID(normalized) {
-		// best-effort warning so we can trace missing enrichment
+		// Reject to avoid polluting Kafka with un-attributed events.
 		s.logger.WithFields(logging.Fields{
 			"event_type": eventType,
 			"tenant_id":  tenantID,
-		}).Warn("Missing or invalid tenant_id")
+		}).Error("Rejected event: missing or invalid tenant_id")
 		if s.metrics != nil && s.metrics.EventsIngested != nil {
-			s.metrics.EventsIngested.WithLabelValues(eventType, "tenant_missing").Inc()
+			s.metrics.EventsIngested.WithLabelValues(eventType, "tenant_rejected").Inc()
 		}
+		return nil, fmt.Errorf("tenant_id required for event_type %s", eventType)
 	}
 	// Serialize the entire protobuf message to JSON transparently
 	marshaler := protojson.MarshalOptions{
