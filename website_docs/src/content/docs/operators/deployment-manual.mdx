@@ -696,11 +696,13 @@ BUILD_ENV=production
 JWT_SECRET=<your-jwt-secret>
 SERVICE_TOKEN=<your-service-token>
 CLUSTER_ID=<cluster-id>
+GRPC_METADATA_POLICY=allow
 
 # GraphQL
 GRAPHQL_PLAYGROUND_ENABLED=false
 GRAPHQL_COMPLEXITY_LIMIT=200
 WS_MAX_CONNECTIONS_PER_TENANT=5
+TRUSTED_PROXY_CIDRS=<proxy-cidr-list>
 
 # gRPC dependencies (central over mesh)
 COMMODORE_GRPC_ADDR=<central-ip>:19001

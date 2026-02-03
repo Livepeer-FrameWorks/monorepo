@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"crypto/subtle"
+	"os"
 	"strings"
 
 	"frameworks/pkg/auth"
@@ -24,7 +25,18 @@ type GRPCAuthConfig struct {
 	Logger logging.Logger
 	// SkipMethods is a list of method names to skip auth (e.g., health checks)
 	SkipMethods []string
+	// MetadataPolicy controls how service-token metadata is handled.
+	MetadataPolicy ServiceTokenMetadataPolicy
 }
+
+// ServiceTokenMetadataPolicy controls service-token metadata behavior.
+type ServiceTokenMetadataPolicy int
+
+const (
+	MetadataPolicyUnset ServiceTokenMetadataPolicy = iota
+	MetadataPolicyAllow
+	MetadataPolicyAudit
+)
 
 // GRPCAuthInterceptor returns a unary server interceptor that validates authentication.
 // It accepts either:
@@ -37,6 +49,11 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 	skipMap := make(map[string]bool)
 	for _, m := range cfg.SkipMethods {
 		skipMap[m] = true
+	}
+
+	policy := cfg.MetadataPolicy
+	if policy == MetadataPolicyUnset {
+		policy = parseMetadataPolicy(os.Getenv("GRPC_METADATA_POLICY"))
 	}
 
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
@@ -67,7 +84,7 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 		// Try SERVICE_TOKEN first (constant-time comparison for security)
 		if cfg.ServiceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(cfg.ServiceToken)) == 1 {
 			// Service token is valid - extract tenant/user from metadata if present
-			ctx = extractMetadataToContext(ctx, md)
+			ctx = extractMetadataToContext(ctx, md, policy, cfg.Logger, info.FullMethod)
 
 			if cfg.Logger != nil {
 				cfg.Logger.WithFields(logging.Fields{
@@ -109,14 +126,43 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 // extractMetadataToContext extracts tenant_id and user_id from gRPC metadata
 // and adds them to the Go context (for service-to-service calls where
 // the upstream service already validated the user).
-func extractMetadataToContext(ctx context.Context, md metadata.MD) context.Context {
-	if userIDs := md.Get("x-user-id"); len(userIDs) > 0 {
-		ctx = context.WithValue(ctx, "user_id", userIDs[0])
+func extractMetadataToContext(ctx context.Context, md metadata.MD, policy ServiceTokenMetadataPolicy, logger logging.Logger, method string) context.Context {
+	userID := firstMetadataValue(md.Get("x-user-id"))
+	tenantID := firstMetadataValue(md.Get("x-tenant-id"))
+
+	if policy == MetadataPolicyAudit && (userID != "" || tenantID != "") && logger != nil {
+		logger.WithFields(logging.Fields{
+			"method":          method,
+			"injected_user":   userID,
+			"injected_tenant": tenantID,
+		}).Info("Service token metadata injection (audit)")
 	}
-	if tenantIDs := md.Get("x-tenant-id"); len(tenantIDs) > 0 {
-		ctx = context.WithValue(ctx, "tenant_id", tenantIDs[0])
+
+	if userID != "" {
+		ctx = context.WithValue(ctx, "user_id", userID)
+	}
+	if tenantID != "" {
+		ctx = context.WithValue(ctx, "tenant_id", tenantID)
 	}
 	return ctx
+}
+
+func parseMetadataPolicy(value string) ServiceTokenMetadataPolicy {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "audit":
+		return MetadataPolicyAudit
+	case "allow", "":
+		return MetadataPolicyAllow
+	default:
+		return MetadataPolicyAllow
+	}
+}
+
+func firstMetadataValue(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 // GetTenantID extracts tenant_id from context (set by auth middleware)

@@ -34,6 +34,7 @@ type Server struct {
 	rateLimiter    *middleware.RateLimiter
 	tenantCache    *middleware.TenantCache
 	usageTracker   *middleware.UsageTracker
+	trustedProxies *middleware.TrustedProxies
 }
 
 // Config holds configuration for the MCP server.
@@ -46,6 +47,7 @@ type Config struct {
 	RateLimiter    *middleware.RateLimiter
 	TenantCache    *middleware.TenantCache
 	UsageTracker   *middleware.UsageTracker
+	TrustedProxies *middleware.TrustedProxies
 }
 
 // NewServer creates a new MCP server with all resources, tools, and prompts registered.
@@ -66,6 +68,7 @@ func NewServer(cfg Config) *Server {
 		rateLimiter:    cfg.RateLimiter,
 		tenantCache:    cfg.TenantCache,
 		usageTracker:   cfg.UsageTracker,
+		trustedProxies: cfg.TrustedProxies,
 	}
 
 	// Register resources
@@ -208,7 +211,7 @@ func (s *Server) extractAuthContext(r *http.Request) context.Context {
 		ctx = middleware.ApplyAuthToContext(ctx, authResult)
 	}
 
-	clientIP := middleware.ClientIPFromRequest(r)
+	clientIP := middleware.ClientIPFromRequestWithTrust(r, s.trustedProxies)
 	if clientIP != "" {
 		ctx = context.WithValue(ctx, "client_ip", clientIP)
 	}

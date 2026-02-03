@@ -73,6 +73,12 @@ func main() {
 	})
 	defer usageTracker.Stop()
 
+	trustedProxies, invalidProxies := middleware.ParseTrustedProxies(config.GetEnv("TRUSTED_PROXY_CIDRS", ""))
+	if len(invalidProxies) > 0 {
+		logger.WithField("invalid_entries", strings.Join(invalidProxies, ", ")).
+			Warn("Ignoring invalid trusted proxy entries")
+	}
+
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("bridge", version.Version, version.GitCommit)
@@ -336,8 +342,8 @@ func main() {
 
 	// GraphQL endpoint (single route group)
 	graphqlGroup := app.Group("/graphql")
-	graphqlGroup.Use(middleware.DemoMode(logger))                                                                                                                                           // Demo mode detection (must be before auth)
 	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients))                                                                                                         // Allowlist public queries or require auth
+	graphqlGroup.Use(middleware.DemoModePostAuth(logger))                                                                                                                                   // Demo mode detection (after auth)
 	graphqlGroup.Use(middleware.ViewerX402Middleware(serviceClients, logger))                                                                                                               // Resolve viewer x402 before GraphQL executes
 	graphqlGroup.Use(middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore)) // Rate limiting + 402 for prepaid with x402 support (after auth, needs tenant_id)
 	graphqlGroup.Use(middleware.GraphQLContextMiddleware())                                                                                                                                 // Bridge user context to GraphQL
@@ -378,6 +384,7 @@ func main() {
 		RateLimiter:    rateLimiter,
 		TenantCache:    tenantCache,
 		UsageTracker:   usageTracker,
+		TrustedProxies: trustedProxies,
 	})
 	app.Any("/mcp", gin.WrapH(mcpServer.HTTPHandler()))
 	app.Any("/mcp/*path", gin.WrapH(mcpServer.HTTPHandler()))
