@@ -127,6 +127,18 @@ func (ut *UsageTracker) flushLoop() {
 
 // flush sends all aggregates to Decklog and resets counters
 func (ut *UsageTracker) flush() {
+	// Skip flush if service tenant ID not yet set (Quartermaster bootstrap may still be in progress)
+	if ut.config.Decklog != nil {
+		v := ut.serviceTenantID.Load()
+		tenantID, _ := v.(string)
+		if tenantID == "" {
+			if ut.config.Logger != nil {
+				ut.config.Logger.Debug("Skipping usage flush: service tenant ID not yet set")
+			}
+			return
+		}
+	}
+
 	// Collect all aggregates
 	var aggregates []*pb.APIRequestAggregate
 
