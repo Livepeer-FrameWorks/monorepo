@@ -793,6 +793,13 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 		return err
 	}
 
+	// Persist first so we don't change in-memory balancing behavior unless the DB write succeeds.
+	if sm.nodeRepo != nil {
+		if err := sm.nodeRepo.UpsertNodeMaintenance(ctx, nodeID, normalized, setBy); err != nil {
+			return err
+		}
+	}
+
 	sm.mu.Lock()
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -803,9 +810,6 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 	n.LastUpdate = time.Now()
 	sm.mu.Unlock()
 
-	if sm.nodeRepo != nil {
-		return sm.nodeRepo.UpsertNodeMaintenance(ctx, nodeID, normalized, setBy)
-	}
 	return nil
 }
 
