@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/cache"
 	"frameworks/pkg/config"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -95,7 +96,7 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 	// Resource-based x402 topup (viewer pays for stream owner balance)
 	var httpReq *http.Request
 	x402Paid := false
-	if ginCtx, ok := ctx.Value("GinContext").(*gin.Context); ok && ginCtx != nil {
+	if ginCtx, ok := ctx.Value(ctxkeys.KeyGinContext).(*gin.Context); ok && ginCtx != nil {
 		httpReq = ginCtx.Request
 		if v, ok := ginCtx.Get("x402_paid"); ok {
 			if paid, ok := v.(bool); ok {

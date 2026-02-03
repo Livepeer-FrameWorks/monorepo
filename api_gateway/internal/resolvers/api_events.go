@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -38,20 +39,14 @@ func tenantIDFromContext(ctx context.Context) string {
 	if user := middleware.GetUserFromContext(ctx); user != nil && user.TenantID != "" {
 		return user.TenantID
 	}
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		return v
-	}
-	return ""
+	return ctxkeys.GetTenantID(ctx)
 }
 
 func userIDFromContext(ctx context.Context) string {
 	if user := middleware.GetUserFromContext(ctx); user != nil && user.UserID != "" {
 		return user.UserID
 	}
-	if v, ok := ctx.Value("user_id").(string); ok {
-		return v
-	}
-	return ""
+	return ctxkeys.GetUserID(ctx)
 }
 
 func (r *Resolver) sendServiceEvent(ctx context.Context, event *pb.ServiceEvent) {

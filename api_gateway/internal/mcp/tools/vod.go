@@ -8,6 +8,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 
@@ -89,8 +90,7 @@ type VodUploadPart struct {
 }
 
 func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
@@ -190,8 +190,7 @@ type CompleteVodUploadResult struct {
 }
 
 func handleCompleteVodUpload(ctx context.Context, args CompleteVodUploadInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
@@ -262,8 +261,7 @@ type AbortVodUploadResult struct {
 }
 
 func handleAbortVodUpload(ctx context.Context, args AbortVodUploadInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
@@ -308,8 +306,7 @@ type DeleteVodAssetResult struct {
 }
 
 func handleDeleteVodAsset(ctx context.Context, args DeleteVodAssetInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 

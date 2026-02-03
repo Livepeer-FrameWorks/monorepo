@@ -11,6 +11,7 @@ import (
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/clients/periscope"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -212,8 +213,8 @@ func packetLossStatus(protocolType string, avgLoss float64) string {
 }
 
 func handleDiagnoseRebuffering(ctx context.Context, args DiagnoseRebufferingInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
@@ -290,8 +291,8 @@ func handleDiagnoseRebuffering(ctx context.Context, args DiagnoseRebufferingInpu
 }
 
 func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
@@ -430,8 +431,8 @@ func handleDiagnoseBufferHealth(ctx context.Context, args DiagnoseBufferHealthIn
 }
 
 func handleDiagnosePacketLoss(ctx context.Context, args DiagnosePacketLossInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
@@ -544,8 +545,8 @@ func handleDiagnosePacketLoss(ctx context.Context, args DiagnosePacketLossInput,
 }
 
 func handleDiagnoseRouting(ctx context.Context, args DiagnoseRoutingInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
@@ -642,8 +643,8 @@ func handleDiagnoseRouting(ctx context.Context, args DiagnoseRoutingInput, servi
 }
 
 func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
@@ -721,8 +722,8 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 }
 
 func handleGetAnomalyReport(ctx context.Context, args GetAnomalyReportInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 

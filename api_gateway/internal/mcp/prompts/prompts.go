@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -122,12 +123,12 @@ func RegisterPrompts(server *mcp.Server, clients *clients.ServiceClients, checke
 }
 
 func handleOnboardingPrompt(ctx context.Context, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.GetPromptResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
+	tenantID := ctxkeys.GetTenantID(ctx)
 
 	var steps []string
 	steps = append(steps, "# FrameWorks Account Setup\n")
 
-	if !ok || tenantID == "" {
+	if tenantID == "" {
 		steps = append(steps, "## Step 1: Authentication")
 		steps = append(steps, "You need to authenticate first. Connect with your Ethereum wallet or use an API token.")
 		steps = append(steps, "\n**For wallet auth**: Include X-Wallet-Address, X-Wallet-Signature, and X-Wallet-Message headers.")

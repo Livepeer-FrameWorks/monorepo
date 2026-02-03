@@ -7,6 +7,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -80,8 +81,7 @@ type CreateStreamResult struct {
 }
 
 func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
@@ -147,8 +147,7 @@ type UpdateStreamResult struct {
 }
 
 func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
@@ -196,8 +195,7 @@ type DeleteStreamResult struct {
 }
 
 func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
@@ -240,8 +238,7 @@ type RefreshStreamKeyResult struct {
 }
 
 func handleRefreshStreamKey(ctx context.Context, args RefreshStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 

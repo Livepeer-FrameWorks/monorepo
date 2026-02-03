@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"frameworks/pkg/auth"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 
 	"google.golang.org/grpc"
@@ -101,10 +102,10 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 			claims, err := auth.ValidateJWT(token, cfg.JWTSecret)
 			if err == nil {
 				// JWT is valid - add claims to context
-				ctx = context.WithValue(ctx, "user_id", claims.UserID)
-				ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
-				ctx = context.WithValue(ctx, "role", claims.Role)
-				ctx = context.WithValue(ctx, "jwt_token", token)
+				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
+				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
+				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
+				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
 
 				if cfg.Logger != nil {
 					cfg.Logger.WithFields(logging.Fields{
@@ -123,16 +124,6 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 	}
 }
 
-// ctxKey is a dedicated key type for values stored on context.Context.
-// (Staticcheck SA1029: avoid built-in types like string to prevent collisions.)
-type ctxKey string
-
-const (
-	ctxKeyUserID       ctxKey = "user_id"
-	ctxKeyTenantID     ctxKey = "tenant_id"
-	ctxKeyRequestStart ctxKey = "request_start"
-)
-
 // extractMetadataToContext extracts tenant_id and user_id from gRPC metadata
 // and adds them to the Go context (for service-to-service calls where
 // the upstream service already validated the user).
@@ -149,10 +140,10 @@ func extractMetadataToContext(ctx context.Context, md metadata.MD, policy Servic
 	}
 
 	if userID != "" {
-		ctx = context.WithValue(ctx, ctxKeyUserID, userID)
+		ctx = context.WithValue(ctx, ctxkeys.KeyUserID, userID)
 	}
 	if tenantID != "" {
-		ctx = context.WithValue(ctx, ctxKeyTenantID, tenantID)
+		ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	}
 	return ctx
 }
@@ -177,33 +168,27 @@ func firstMetadataValue(values []string) string {
 
 // GetTenantID extracts tenant_id from context (set by auth middleware)
 func GetTenantID(ctx context.Context) string {
-	if tenantID, ok := ctx.Value(ctxKeyTenantID).(string); ok {
-		return tenantID
-	}
-	return ""
+	return ctxkeys.GetTenantID(ctx)
 }
 
 // GetUserID extracts user_id from context (set by auth middleware)
 func GetUserID(ctx context.Context) string {
-	if userID, ok := ctx.Value(ctxKeyUserID).(string); ok {
-		return userID
-	}
-	return ""
+	return ctxkeys.GetUserID(ctx)
 }
 
 // IsServiceCall returns true if this is a service-to-service call (no user_id)
 func IsServiceCall(ctx context.Context) bool {
-	return GetUserID(ctx) == "" && GetTenantID(ctx) == ""
+	return ctxkeys.GetUserID(ctx) == "" && ctxkeys.GetTenantID(ctx) == ""
 }
 
 // GRPCLoggingInterceptor returns a unary server interceptor for request logging.
 // This is a basic logging interceptor that doesn't require authentication.
 func GRPCLoggingInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		start := ctx.Value(ctxKeyRequestStart)
+		start := ctx.Value(ctxkeys.KeyRequestStart)
 		if start == nil {
 			// Add start time if not present
-			ctx = context.WithValue(ctx, ctxKeyRequestStart, true)
+			ctx = context.WithValue(ctx, ctxkeys.KeyRequestStart, true)
 		}
 
 		resp, err := handler(ctx, req)
@@ -212,10 +197,10 @@ func GRPCLoggingInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 		fields := logging.Fields{
 			"method": info.FullMethod,
 		}
-		if userID, ok := ctx.Value(ctxKeyUserID).(string); ok {
+		if userID := ctxkeys.GetUserID(ctx); userID != "" {
 			fields["user_id"] = userID
 		}
-		if tenantID, ok := ctx.Value(ctxKeyTenantID).(string); ok {
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			fields["tenant_id"] = tenantID
 		}
 		if err != nil {

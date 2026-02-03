@@ -10,6 +10,7 @@ import (
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/billing"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -54,8 +55,8 @@ type AccountRateLimitInfo struct {
 }
 
 func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		// Not authenticated - return unauthenticated status
 		status := AccountStatus{
 			AccountReady: false,
@@ -77,7 +78,7 @@ func handleAccountStatus(ctx context.Context, clients *clients.ServiceClients, c
 		return marshalResourceResult("account://status", status)
 	}
 
-	userID, _ := ctx.Value("user_id").(string)
+	userID := ctxkeys.GetUserID(ctx)
 
 	// Get blockers
 	blockers, err := checker.GetBlockers(ctx)

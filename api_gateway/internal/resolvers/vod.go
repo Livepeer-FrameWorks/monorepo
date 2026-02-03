@@ -13,6 +13,7 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
@@ -30,18 +31,12 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	}
 
 	// Get tenant and user from context
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	userID := ""
-	if v, ok := ctx.Value("user_id").(string); ok {
-		userID = v
-	}
+	userID := ctxkeys.GetUserID(ctx)
 
 	// Build gRPC request
 	req := &pb.CreateVodUploadRequest{
@@ -114,10 +109,7 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	}
 
 	// Get tenant from context
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -186,10 +178,7 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 	}
 
 	// Get tenant from context
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -241,10 +230,7 @@ func (r *Resolver) DoDeleteVodAsset(ctx context.Context, id string) (model.Delet
 	}
 
 	// Get tenant from context
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -276,10 +262,7 @@ func (r *Resolver) DoGetVodAsset(ctx context.Context, id string) (*model.VodAsse
 	}
 
 	// Get tenant from context
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
@@ -336,10 +319,7 @@ func (r *Resolver) DoGetVodAssetsConnection(ctx context.Context, first *int, aft
 	}
 
 	// Get tenant from context
-	tenantID := ""
-	if v, ok := ctx.Value("tenant_id").(string); ok {
-		tenantID = v
-	}
+	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}

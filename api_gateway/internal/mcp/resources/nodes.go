@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -53,8 +54,7 @@ type NodesListResponse struct {
 }
 
 func handleNodesList(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 
@@ -94,8 +94,7 @@ func handleNodesList(ctx context.Context, clients *clients.ServiceClients, logge
 
 // HandleNodeByID handles requests for nodes://{id} resources.
 func HandleNodeByID(ctx context.Context, uri string, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 

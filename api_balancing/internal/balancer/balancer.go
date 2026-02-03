@@ -7,9 +7,9 @@ import (
 	"net"
 	"strings"
 
-	"frameworks/pkg/logging"
-
 	"frameworks/api_balancing/internal/state"
+	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/logging"
 )
 
 // LoadBalancer is the main load balancer instance
@@ -184,7 +184,7 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	var scoredNodes []scoredNode
 
 	// Parse capability requirements
-	requireCap, _ := ctx.Value("cap").(string)
+	requireCap := ctxkeys.GetCapability(ctx)
 	var reqs []string
 	if requireCap != "" {
 		for _, p := range strings.Split(requireCap, ",") {
@@ -273,8 +273,8 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	if len(scoredNodes) == 0 {
 		// More actionable error reporting than the old generic "out of bandwidth" message.
 		if seenCandidates == 0 && skippedForCapCount > 0 {
-			if requireCap, _ := ctx.Value("cap").(string); strings.TrimSpace(requireCap) != "" {
-				return nil, fmt.Errorf("no nodes match required capabilities (%s)", strings.TrimSpace(requireCap))
+			if cap := ctxkeys.GetCapability(ctx); strings.TrimSpace(cap) != "" {
+				return nil, fmt.Errorf("no nodes match required capabilities (%s)", strings.TrimSpace(cap))
 			}
 			return nil, fmt.Errorf("no nodes match required capabilities")
 		}

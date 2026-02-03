@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/auth"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 )
 
@@ -176,28 +177,28 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 	if auth == nil {
 		return ctx
 	}
-	ctx = context.WithValue(ctx, "user_id", auth.UserID)
-	ctx = context.WithValue(ctx, "tenant_id", auth.TenantID)
-	ctx = context.WithValue(ctx, "email", auth.Email)
-	ctx = context.WithValue(ctx, "role", auth.Role)
-	ctx = context.WithValue(ctx, "auth_type", auth.AuthType)
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, auth.UserID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, auth.TenantID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyEmail, auth.Email)
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, auth.Role)
+	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, auth.AuthType)
 	if auth.JWTToken != "" {
-		ctx = context.WithValue(ctx, "jwt_token", auth.JWTToken)
+		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, auth.JWTToken)
 	}
 	if auth.ExpiresAt != nil {
-		ctx = context.WithValue(ctx, "jwt_expires_at", *auth.ExpiresAt)
+		ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, *auth.ExpiresAt)
 	}
 	if auth.APIToken != "" {
-		ctx = context.WithValue(ctx, "api_token", auth.APIToken)
+		ctx = context.WithValue(ctx, ctxkeys.KeyAPIToken, auth.APIToken)
 	}
 	if auth.WalletAddress != "" {
-		ctx = context.WithValue(ctx, "wallet_address", auth.WalletAddress)
+		ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, auth.WalletAddress)
 	}
 	if auth.AuthType == "x402" {
-		ctx = context.WithValue(ctx, "x402_processed", auth.X402Processed)
-		ctx = context.WithValue(ctx, "x402_auth_only", auth.X402AuthOnly)
+		ctx = context.WithValue(ctx, ctxkeys.KeyX402Processed, auth.X402Processed)
+		ctx = context.WithValue(ctx, ctxkeys.KeyX402AuthOnly, auth.X402AuthOnly)
 		if auth.JWTToken != "" {
-			ctx = context.WithValue(ctx, "session_token", auth.JWTToken)
+			ctx = context.WithValue(ctx, ctxkeys.KeySessionToken, auth.JWTToken)
 		}
 	}
 	if auth.AuthType == "api_token" {
@@ -205,10 +206,10 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 		if tokenID == "" {
 			tokenID = auth.APIToken
 		}
-		ctx = context.WithValue(ctx, "api_token_hash", hashIdentifier(tokenID))
+		ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, hashIdentifier(tokenID))
 	}
 	if auth.UserID != "" && auth.TenantID != "" {
-		ctx = context.WithValue(ctx, "user", &UserContext{
+		ctx = context.WithValue(ctx, ctxkeys.KeyUser, &UserContext{
 			UserID:   auth.UserID,
 			TenantID: auth.TenantID,
 			Email:    auth.Email,

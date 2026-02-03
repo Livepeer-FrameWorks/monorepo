@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/countries"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -49,8 +50,8 @@ type BillingDetailsResult struct {
 }
 
 func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 

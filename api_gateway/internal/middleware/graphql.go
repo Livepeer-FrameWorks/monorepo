@@ -7,6 +7,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/pkg/auth"
+	"frameworks/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,15 +28,15 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 		ctx := c.Request.Context()
 
 		// Inject Gin context for resolvers that need direct access (e.g. for ClientIP)
-		ctx = context.WithValue(ctx, "GinContext", c)
+		ctx = context.WithValue(ctx, ctxkeys.KeyGinContext, c)
 
 		// Check for service token in Authorization header
-		if existingServiceToken := ctx.Value("service_token"); existingServiceToken == nil {
+		if ctxkeys.GetServiceToken(ctx) == "" {
 			authHeader := c.GetHeader("Authorization")
 			if authHeader != "" {
 				parts := strings.Split(authHeader, " ")
 				if len(parts) == 2 && parts[0] == "Service" {
-					ctx = context.WithValue(ctx, "service_token", parts[1])
+					ctx = context.WithValue(ctx, ctxkeys.KeyServiceToken, parts[1])
 				}
 			}
 		}
@@ -62,11 +63,11 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 
 		// Fall back to request context (WebSocket connections)
 		if !authenticated {
-			if userIDVal := ctx.Value("user_id"); userIDVal != nil {
+			if userIDVal := ctx.Value(ctxkeys.KeyUserID); userIDVal != nil {
 				if userIDStr, authenticated = userIDVal.(string); authenticated {
-					tenantIDStr, _ = ctx.Value("tenant_id").(string)
-					emailStr, _ = ctx.Value("email").(string)
-					roleStr, _ = ctx.Value("role").(string)
+					tenantIDStr = ctxkeys.GetTenantID(ctx)
+					emailStr = ctxkeys.GetEmail(ctx)
+					roleStr = ctxkeys.GetRole(ctx)
 				}
 			}
 		}
@@ -79,11 +80,11 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 				Email:    emailStr,
 				Role:     roleStr,
 			}
-			ctx = context.WithValue(ctx, "user", user)
-			ctx = context.WithValue(ctx, "user_id", userIDStr)
-			ctx = context.WithValue(ctx, "tenant_id", tenantIDStr)
-			ctx = context.WithValue(ctx, "email", emailStr)
-			ctx = context.WithValue(ctx, "role", roleStr)
+			ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
+			ctx = context.WithValue(ctx, ctxkeys.KeyUserID, userIDStr)
+			ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantIDStr)
+			ctx = context.WithValue(ctx, ctxkeys.KeyEmail, emailStr)
+			ctx = context.WithValue(ctx, ctxkeys.KeyRole, roleStr)
 		}
 
 		c.Request = c.Request.WithContext(ctx)
@@ -104,7 +105,7 @@ func GraphQLAttachLoaders(sc *clients.ServiceClients) gin.HandlerFunc {
 
 // GetUserFromContext extracts user information from GraphQL resolver context
 func GetUserFromContext(ctx context.Context) *UserContext {
-	if v := ctx.Value("user"); v != nil {
+	if v := ctx.Value(ctxkeys.KeyUser); v != nil {
 		if user, ok := v.(*UserContext); ok {
 			return user
 		}
@@ -123,10 +124,5 @@ func RequireAuth(ctx context.Context) (*UserContext, error) {
 
 // HasServiceToken checks if the current context has a service token
 func HasServiceToken(ctx context.Context) bool {
-	var token string
-	var ok bool
-	if v := ctx.Value("service_token"); v != nil {
-		token, ok = v.(string)
-	}
-	return ok && token != ""
+	return ctxkeys.GetServiceToken(ctx) != ""
 }

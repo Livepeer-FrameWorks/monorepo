@@ -18,6 +18,7 @@ import (
 	"frameworks/api_gateway/internal/webhooks"
 	pkgauth "frameworks/pkg/auth"
 	"frameworks/pkg/config"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
@@ -147,7 +148,7 @@ func main() {
 	gqlHandler.AroundResponses(func(ctx context.Context, next graphql.ResponseHandler) *graphql.Response {
 		resp := next(ctx)
 		if resp != nil {
-			if ginCtx, ok := ctx.Value("GinContext").(*gin.Context); ok && ginCtx != nil {
+			if ginCtx, ok := ctx.Value(ctxkeys.KeyGinContext).(*gin.Context); ok && ginCtx != nil {
 				ginCtx.Set("graphql_error_count", len(resp.Errors))
 				if graphql.HasOperationContext(ctx) {
 					if opCtx := graphql.GetOperationContext(ctx); opCtx.Operation != nil {
@@ -212,7 +213,7 @@ func main() {
 
 			// 2. Fall back to cookie token passed via Gin context
 			if token == "" {
-				if cookieToken, ok := ctx.Value("ws_cookie_token").(string); ok && cookieToken != "" {
+				if cookieToken, ok := ctx.Value(ctxkeys.KeyWSCookieToken).(string); ok && cookieToken != "" {
 					token = cookieToken
 				}
 			}
@@ -221,12 +222,12 @@ func main() {
 				// Try JWT validation
 				claims, err := pkgauth.ValidateJWT(token, []byte(jwtSecret))
 				if err == nil {
-					ctx = context.WithValue(ctx, "user_id", claims.UserID)
-					ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
-					ctx = context.WithValue(ctx, "email", claims.Email)
-					ctx = context.WithValue(ctx, "role", claims.Role)
-					ctx = context.WithValue(ctx, "jwt_token", token)
-					ctx = context.WithValue(ctx, "auth_type", "jwt")
+					ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
+					ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
+					ctx = context.WithValue(ctx, ctxkeys.KeyEmail, claims.Email)
+					ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
+					ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
+					ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
 
 					user := &middleware.UserContext{
 						UserID:   claims.UserID,
@@ -234,20 +235,20 @@ func main() {
 						Email:    claims.Email,
 						Role:     claims.Role,
 					}
-					ctx = context.WithValue(ctx, "user", user)
+					ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 				} else {
 					// Try API Token via Commodore
 					resp, err := serviceClients.Commodore.ValidateAPIToken(ctx, token)
 					if err == nil && resp.Valid {
-						ctx = context.WithValue(ctx, "user_id", resp.UserId)
-						ctx = context.WithValue(ctx, "tenant_id", resp.TenantId)
-						ctx = context.WithValue(ctx, "email", resp.Email)
-						ctx = context.WithValue(ctx, "role", resp.Role)
-						ctx = context.WithValue(ctx, "auth_type", "api_token")
+						ctx = context.WithValue(ctx, ctxkeys.KeyUserID, resp.UserId)
+						ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, resp.TenantId)
+						ctx = context.WithValue(ctx, ctxkeys.KeyEmail, resp.Email)
+						ctx = context.WithValue(ctx, ctxkeys.KeyRole, resp.Role)
+						ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "api_token")
 						if resp.TokenId != "" {
-							ctx = context.WithValue(ctx, "api_token_hash", middleware.HashIdentifier(resp.TokenId))
+							ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, middleware.HashIdentifier(resp.TokenId))
 						} else {
-							ctx = context.WithValue(ctx, "api_token_hash", middleware.HashIdentifier(token))
+							ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, middleware.HashIdentifier(token))
 						}
 
 						user := &middleware.UserContext{
@@ -256,7 +257,7 @@ func main() {
 							Email:    resp.Email,
 							Role:     resp.Role,
 						}
-						ctx = context.WithValue(ctx, "user", user)
+						ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 					}
 				}
 			}
@@ -367,7 +368,7 @@ func main() {
 	app.GET("/graphql/ws", func(c *gin.Context) {
 		// Read access_token cookie and pass it to the WebSocket InitFunc via context
 		if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
-			ctx := context.WithValue(c.Request.Context(), "ws_cookie_token", cookieToken)
+			ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyWSCookieToken, cookieToken)
 			c.Request = c.Request.WithContext(ctx)
 		}
 		gqlHandler.ServeHTTP(c.Writer, c.Request)
@@ -437,28 +438,16 @@ func main() {
 }
 
 func extractUsageContext(ctx context.Context) (tenantID, authType, userID string, tokenHash uint64) {
-	if v := ctx.Value("tenant_id"); v != nil {
-		if s, ok := v.(string); ok {
-			tenantID = s
-		}
-	}
+	tenantID = ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		tenantID = "anonymous"
 	}
-	if v := ctx.Value("auth_type"); v != nil {
-		if s, ok := v.(string); ok && s != "" {
-			authType = s
-		}
-	}
+	authType = ctxkeys.GetAuthType(ctx)
 	if authType == "" {
 		authType = "anonymous"
 	}
-	if v := ctx.Value("user_id"); v != nil {
-		if s, ok := v.(string); ok {
-			userID = s
-		}
-	}
-	if v := ctx.Value("api_token_hash"); v != nil {
+	userID = ctxkeys.GetUserID(ctx)
+	if v := ctx.Value(ctxkeys.KeyAPITokenHash); v != nil {
 		switch t := v.(type) {
 		case uint64:
 			tokenHash = t

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 )
 
@@ -420,10 +421,10 @@ func authHeaderFromContext(ctx context.Context) (string, error) {
 	if ctx == nil {
 		return "", fmt.Errorf("missing auth context")
 	}
-	if token, ok := ctx.Value("jwt_token").(string); ok && token != "" {
+	if token := ctxkeys.GetJWTToken(ctx); token != "" {
 		return "Bearer " + token, nil
 	}
-	if token, ok := ctx.Value("api_token").(string); ok && token != "" {
+	if token := ctxkeys.GetAPIToken(ctx); token != "" {
 		return "Bearer " + token, nil
 	}
 	return "", fmt.Errorf("missing auth token (jwt or api token) for schema introspection")

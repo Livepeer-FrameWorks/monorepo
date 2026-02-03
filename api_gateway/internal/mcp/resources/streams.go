@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -69,8 +70,7 @@ type StreamsListResponse struct {
 }
 
 func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 
@@ -116,8 +116,7 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 // HandleStreamByID handles requests for streams://{id} resources.
 // This is called when a dynamic resource URI is requested.
 func HandleStreamByID(ctx context.Context, uri string, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
-	_, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, fmt.Errorf("not authenticated")
 	}
 

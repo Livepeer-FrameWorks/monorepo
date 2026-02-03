@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -54,8 +55,8 @@ type SearchSupportHistoryResult struct {
 }
 
 func handleSearchSupportHistory(ctx context.Context, args SearchSupportHistoryInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 

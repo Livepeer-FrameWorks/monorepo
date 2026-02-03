@@ -16,6 +16,7 @@ import (
 	"frameworks/api_gateway/internal/mcp/tools"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/version"
 
@@ -180,11 +181,11 @@ func (s *Server) HTTPHandler() http.Handler {
 		ctx := s.extractAuthContext(r)
 		r = r.WithContext(ctx)
 
-		if authType, _ := ctx.Value("auth_type").(string); authType == "x402" {
-			if token, ok := ctx.Value("jwt_token").(string); ok && token != "" {
+		if ctxkeys.GetAuthType(ctx) == "x402" {
+			if token := ctxkeys.GetJWTToken(ctx); token != "" {
 				w.Header().Set("X-Access-Token", token)
 			}
-			if expiresAt, ok := ctx.Value("jwt_expires_at").(time.Time); ok && !expiresAt.IsZero() {
+			if expiresAt, ok := ctxkeys.GetJWTExpiresAt(ctx); ok && !expiresAt.IsZero() {
 				w.Header().Set("X-Access-Token-Expires-At", expiresAt.UTC().Format(time.RFC3339))
 			}
 		}
@@ -213,17 +214,17 @@ func (s *Server) extractAuthContext(r *http.Request) context.Context {
 
 	clientIP := middleware.ClientIPFromRequestWithTrust(r, s.trustedProxies)
 	if clientIP != "" {
-		ctx = context.WithValue(ctx, "client_ip", clientIP)
+		ctx = context.WithValue(ctx, ctxkeys.KeyClientIP, clientIP)
 	}
 
 	var xPayment string
 	if r != nil {
 		if r.URL != nil {
-			ctx = context.WithValue(ctx, "request_path", r.URL.Path)
+			ctx = context.WithValue(ctx, ctxkeys.KeyRequestPath, r.URL.Path)
 		}
 		xPayment = middleware.GetX402PaymentHeader(r)
 		if xPayment != "" {
-			ctx = context.WithValue(ctx, "x_payment", xPayment)
+			ctx = context.WithValue(ctx, ctxkeys.KeyXPayment, xPayment)
 		}
 	}
 
@@ -232,8 +233,8 @@ func (s *Server) extractAuthContext(r *http.Request) context.Context {
 
 // sendOnConnectNotification checks account status and sends a notification if setup is needed.
 func (s *Server) sendOnConnectNotification(ctx context.Context) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok || tenantID == "" {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
 		return // No tenant context, skip notification
 	}
 
@@ -271,8 +272,8 @@ func (s *Server) registerAccessMiddleware() {
 			start := time.Now()
 			opName := mcpOperationName(method, req.GetParams())
 
-			clientIP := getContextString(ctx, "client_ip")
-			xPayment := getContextString(ctx, "x_payment")
+			clientIP := ctxkeys.GetClientIP(ctx)
+			xPayment := ctxkeys.GetXPayment(ctx)
 			if extra := req.GetExtra(); extra != nil && extra.Header != nil {
 				if headerPayment := middleware.GetX402PaymentHeaderFromHeaders(extra.Header); headerPayment != "" {
 					xPayment = headerPayment
@@ -280,20 +281,20 @@ func (s *Server) registerAccessMiddleware() {
 			}
 
 			resourcePath := mcpOperationResourcePath(opName, req.GetParams())
-			tenantID := getContextString(ctx, "tenant_id")
+			tenantID := ctxkeys.GetTenantID(ctx)
 			contentID := ""
 			if opName == "mcp:tools/call:resolve_playback_endpoint" {
 				contentID = extractPlaybackContentID(req.GetParams())
 				if contentID != "" {
 					if ownerTenantID := s.resolvePlaybackOwnerTenant(ctx, contentID); ownerTenantID != "" {
 						tenantID = ownerTenantID
-						ctx = context.WithValue(ctx, "tenant_id", ownerTenantID)
+						ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, ownerTenantID)
 						resourcePath = "viewer://" + contentID
 					}
 				}
 			} else if tenantID == "" && xPayment != "" {
 				ctx = s.applyX402Auth(ctx, xPayment, clientIP)
-				tenantID = getContextString(ctx, "tenant_id")
+				tenantID = ctxkeys.GetTenantID(ctx)
 			}
 
 			publicAllowlisted := isPublicMCPOperation(opName)
@@ -304,8 +305,8 @@ func (s *Server) registerAccessMiddleware() {
 				OperationName:     opName,
 				XPayment:          xPayment,
 				PublicAllowlisted: publicAllowlisted,
-				X402Processed:     getContextBool(ctx, "x402_processed"),
-				X402AuthOnly:      getContextBool(ctx, "x402_auth_only"),
+				X402Processed:     ctxkeys.IsX402Processed(ctx),
+				X402AuthOnly:      ctxkeys.IsX402AuthOnly(ctx),
 			}, s.rateLimiter, s.tenantCache.GetLimitsFunc(), s.tenantCache, s.serviceClients.Purser, s.serviceClients.Purser, s.serviceClients.Commodore, s.logger)
 
 			if !decision.Allowed {
@@ -316,8 +317,8 @@ func (s *Server) registerAccessMiddleware() {
 			if s.usageTracker != nil {
 				durationMs := uint64(time.Since(start).Milliseconds())
 				authType := deriveAuthType(ctx)
-				userID := getContextString(ctx, "user_id")
-				tenantID := getContextString(ctx, "tenant_id")
+				userID := ctxkeys.GetUserID(ctx)
+				tenantID := ctxkeys.GetTenantID(ctx)
 				if tenantID == "" {
 					tenantID = "anonymous"
 				}
@@ -512,41 +513,23 @@ func isPublicMCPOperation(opName string) bool {
 }
 
 func deriveAuthType(ctx context.Context) string {
-	if v := getContextString(ctx, "auth_type"); v != "" {
+	if v := ctxkeys.GetAuthType(ctx); v != "" {
 		return v
 	}
-	if getContextString(ctx, "jwt_token") != "" {
+	if ctxkeys.GetJWTToken(ctx) != "" {
 		return "jwt"
 	}
-	if getContextString(ctx, "api_token") != "" {
+	if ctxkeys.GetAPIToken(ctx) != "" {
 		return "api_token"
 	}
-	if getContextString(ctx, "wallet_address") != "" {
+	if ctxkeys.GetWalletAddress(ctx) != "" {
 		return "wallet"
 	}
 	return "anonymous"
 }
 
-func getContextString(ctx context.Context, key string) string {
-	if v := ctx.Value(key); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-func getContextBool(ctx context.Context, key string) bool {
-	if v := ctx.Value(key); v != nil {
-		if b, ok := v.(bool); ok {
-			return b
-		}
-	}
-	return false
-}
-
 func getContextTokenHash(ctx context.Context) uint64 {
-	if v := ctx.Value("api_token_hash"); v != nil {
+	if v := ctx.Value(ctxkeys.KeyAPITokenHash); v != nil {
 		switch t := v.(type) {
 		case uint64:
 			return t
