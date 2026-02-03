@@ -297,6 +297,18 @@ func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 		trigger.ClusterId = &p.clusterID
 	}
 
+	tenantID := tenantIDFromTrigger(trigger)
+	if tenantID == "" {
+		if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
+			p.metrics.DecklogTriggerSends.WithLabelValues(trigger.GetTriggerType(), "tenant_missing").Inc()
+		}
+		p.logger.WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+		}).Warn("Refusing to send trigger without tenant_id")
+		return fmt.Errorf("tenant_id required for trigger type %s", trigger.GetTriggerType())
+	}
+
 	if p.metrics != nil && p.metrics.DecklogTriggerSends != nil {
 		p.metrics.DecklogTriggerSends.WithLabelValues(trigger.GetTriggerType(), "attempt").Inc()
 	}
@@ -319,6 +331,39 @@ func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 		p.metrics.DecklogTriggerSends.WithLabelValues(trigger.GetTriggerType(), "success").Inc()
 	}
 	return nil
+}
+
+func tenantIDFromTrigger(trigger *pb.MistTrigger) string {
+	if trigger == nil {
+		return ""
+	}
+	if trigger.TenantId != nil && *trigger.TenantId != "" {
+		return *trigger.TenantId
+	}
+	switch payload := trigger.GetTriggerPayload().(type) {
+	case *pb.MistTrigger_StreamLifecycleUpdate:
+		return payload.StreamLifecycleUpdate.GetTenantId()
+	case *pb.MistTrigger_ClientLifecycleUpdate:
+		return payload.ClientLifecycleUpdate.GetTenantId()
+	case *pb.MistTrigger_NodeLifecycleUpdate:
+		return payload.NodeLifecycleUpdate.GetTenantId()
+	case *pb.MistTrigger_LoadBalancingData:
+		return payload.LoadBalancingData.GetTenantId()
+	case *pb.MistTrigger_ClipLifecycleData:
+		return payload.ClipLifecycleData.GetTenantId()
+	case *pb.MistTrigger_DvrLifecycleData:
+		return payload.DvrLifecycleData.GetTenantId()
+	case *pb.MistTrigger_StorageLifecycleData:
+		return payload.StorageLifecycleData.GetTenantId()
+	case *pb.MistTrigger_ProcessBilling:
+		return payload.ProcessBilling.GetTenantId()
+	case *pb.MistTrigger_StorageSnapshot:
+		return payload.StorageSnapshot.GetTenantId()
+	case *pb.MistTrigger_VodLifecycleData:
+		return payload.VodLifecycleData.GetTenantId()
+	default:
+		return ""
+	}
 }
 
 // ProcessTypedTrigger processes a typed protobuf MistTrigger directly
