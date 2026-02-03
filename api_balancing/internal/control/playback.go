@@ -27,6 +27,7 @@ type ContentResolution struct {
 	FixedNode    string // Storage node URL for VOD content, empty for live
 	FixedNodeID  string // Storage node ID for VOD content
 	TenantId     string
+	StreamId     string
 	InternalName string // Original stream internal name (for clips/DVR: the source stream)
 }
 
@@ -44,6 +45,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				ContentType:  resp.ContentType,
 				ContentId:    input,
 				TenantId:     resp.TenantId,
+				StreamId:     resp.StreamId,
 				InternalName: resp.ArtifactInternalName,
 			}
 			if resp.ArtifactHash != "" {
@@ -65,6 +67,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				ContentType:  "live",
 				ContentId:    input,
 				TenantId:     resp.TenantId,
+				StreamId:     resp.StreamId,
 				InternalName: resp.InternalName,
 			}, nil
 		}
@@ -97,9 +100,13 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	if err != nil || !artifactResp.Found || artifactResp.ArtifactHash == "" || artifactResp.ContentType == "" {
 		return nil, fmt.Errorf("content not found")
 	}
+	if artifactResp.TenantId == "" {
+		return nil, fmt.Errorf("tenant_id missing for artifact")
+	}
 
 	contentType := strings.ToLower(artifactResp.ContentType)
 	artifactType := contentType
+	tenantID := artifactResp.TenantId
 
 	// Query foghorn.artifacts for lifecycle state
 	var internalName string
@@ -121,10 +128,10 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		       COALESCE(storage_location, ''),
 		       COALESCE(sync_status, '')
 		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted'
-	`, artifactResp.ArtifactHash, artifactType).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus)
+		WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted' AND tenant_id = $3
+	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("%s not found", contentType)
 		}
 		return nil, fmt.Errorf("failed to query artifact: %w", err)
@@ -157,7 +164,6 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		return nil, fmt.Errorf("storage node unknown: no node assignment found")
 	}
 
-	tenantID := artifactResp.TenantId
 	streamID := artifactResp.StreamId
 	title := ""
 	description := ""
@@ -360,7 +366,7 @@ func preferredArtifactOutputKeys(format string) []string {
 }
 
 // ResolveLivePlayback resolves playback endpoints for a live stream using load balancing
-func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string) (*pb.ViewerEndpointResponse, error) {
+func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string, tenantID string) (*pb.ViewerEndpointResponse, error) {
 	if deps.LB == nil {
 		return nil, fmt.Errorf("load balancer not available")
 	}
@@ -435,6 +441,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	metadata := &pb.PlaybackMetadata{
 		Status:      "live",
 		IsLive:      true,
+		TenantId:    tenantID,
 		ContentId:   viewKey,
 		ContentType: "live",
 	}
