@@ -101,6 +101,12 @@ const RETRY_CONFIGS: Record<ErrorCode, RetryConfig> = {
     maxDelayMs: 0,
     jitterPercent: 0,
   },
+  [ErrorCode.ALL_PROTOCOLS_BLACKLISTED]: {
+    maxAttempts: 0,
+    baseDelayMs: 0,
+    maxDelayMs: 0,
+    jitterPercent: 0,
+  },
   [ErrorCode.STREAM_OFFLINE]: { maxAttempts: 0, baseDelayMs: 0, maxDelayMs: 0, jitterPercent: 0 },
   [ErrorCode.AUTH_REQUIRED]: { maxAttempts: 0, baseDelayMs: 0, maxDelayMs: 0, jitterPercent: 0 },
   [ErrorCode.GEO_BLOCKED]: { maxAttempts: 0, baseDelayMs: 0, maxDelayMs: 0, jitterPercent: 0 },
@@ -137,6 +143,7 @@ const CODE_TO_SEVERITY: Record<ErrorCode, ErrorSeverity> = {
 
   // Tier 4
   [ErrorCode.ALL_PROTOCOLS_EXHAUSTED]: ErrorSeverity.FATAL,
+  [ErrorCode.ALL_PROTOCOLS_BLACKLISTED]: ErrorSeverity.FATAL,
   [ErrorCode.STREAM_OFFLINE]: ErrorSeverity.FATAL,
   [ErrorCode.AUTH_REQUIRED]: ErrorSeverity.FATAL,
   [ErrorCode.GEO_BLOCKED]: ErrorSeverity.FATAL,
@@ -161,6 +168,7 @@ const CODE_TO_MESSAGE: Record<ErrorCode, string> = {
   [ErrorCode.QUALITY_DROPPED]: "Quality reduced",
   [ErrorCode.BANDWIDTH_LIMITED]: "Bandwidth limited",
   [ErrorCode.ALL_PROTOCOLS_EXHAUSTED]: "Unable to play video",
+  [ErrorCode.ALL_PROTOCOLS_BLACKLISTED]: "No compatible playback protocols available",
   [ErrorCode.STREAM_OFFLINE]: "Stream is offline",
   [ErrorCode.AUTH_REQUIRED]: "Sign in to watch",
   [ErrorCode.GEO_BLOCKED]: "Not available in your region",
@@ -270,9 +278,16 @@ export class ErrorClassifier {
         return { type: "swap", reason: classified.message };
       }
       // No alternatives: escalate to fatal
+      const originalCode = classified.code;
+      const originalMessage = classified.message;
       classified.severity = ErrorSeverity.FATAL;
       classified.code = ErrorCode.ALL_PROTOCOLS_EXHAUSTED;
-      classified.message = CODE_TO_MESSAGE[ErrorCode.ALL_PROTOCOLS_EXHAUSTED];
+      classified.message = `${originalMessage} (no alternatives remaining)`;
+      classified.details = {
+        ...classified.details,
+        originalCode,
+        originalMessage,
+      };
     }
 
     // Tier 3: Quality degradation toast (debounced)
@@ -293,6 +308,35 @@ export class ErrorClassifier {
     // Tier 4: Fatal error
     this.emit("playbackFailed", classified);
     return { type: "fatal", error: classified };
+  }
+
+  classifyWithDetails(
+    code: ErrorCode,
+    message: string,
+    details?: ClassifiedError["details"],
+    originalError?: Error | string
+  ): RecoveryAction {
+    if (CODE_TO_SEVERITY[code] === ErrorSeverity.FATAL) {
+      const classified: ClassifiedError = {
+        severity: ErrorSeverity.FATAL,
+        code,
+        message,
+        retriesRemaining: 0,
+        alternativesRemaining: this.alternativesRemaining,
+        originalError,
+        timestamp: Date.now(),
+        details,
+      };
+      this.emit("playbackFailed", classified);
+      return { type: "fatal", error: classified };
+    }
+
+    const action = this.classify(code, originalError);
+    if (action.type === "fatal") {
+      action.error.message = message;
+      action.error.details = details;
+    }
+    return action;
   }
 
   /**

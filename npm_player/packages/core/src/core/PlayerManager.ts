@@ -18,6 +18,7 @@ import type {
   StreamInfo,
   PlayerOptions,
   ErrorHandlingEvents,
+  ClassifiedError,
 } from "./PlayerInterface";
 import { ErrorCode } from "./PlayerInterface";
 import { ErrorClassifier, type RecoveryAction } from "./ErrorClassifier";
@@ -575,6 +576,69 @@ export class PlayerManager {
     });
   }
 
+  private diagnoseNoPlayersAvailable(
+    streamInfo: StreamInfo,
+    combinations: PlayerCombination[]
+  ): { code: ErrorCode; message: string; details?: ClassifiedError["details"] } {
+    const allSources = streamInfo.source ?? [];
+    const blacklistedSources = allSources.filter((source) => isProtocolBlacklisted(source.type));
+    const blacklistedProtocols = Array.from(
+      new Set(blacklistedSources.map((source) => source.type))
+    );
+
+    if (allSources.length > 0 && blacklistedSources.length === allSources.length) {
+      return {
+        code: ErrorCode.ALL_PROTOCOLS_BLACKLISTED,
+        message: `All ${allSources.length} protocols are blacklisted`,
+        details: {
+          blacklistedProtocols,
+          incompatibilityReasons: [
+            `All source protocols are blacklisted: ${blacklistedProtocols.join(", ")}`,
+          ],
+        },
+      };
+    }
+
+    const incompatibilityReasons = Array.from(
+      new Set(
+        combinations
+          .filter((combo) => !combo.compatible && combo.incompatibleReason)
+          .map((combo) => combo.incompatibleReason as string)
+      )
+    );
+
+    if (allSources.length === 0) {
+      return {
+        code: ErrorCode.ALL_PROTOCOLS_EXHAUSTED,
+        message: "No playback sources provided",
+        details: {
+          incompatibilityReasons,
+          blacklistedProtocols,
+        },
+      };
+    }
+
+    if (incompatibilityReasons.length === 1) {
+      return {
+        code: ErrorCode.ALL_PROTOCOLS_EXHAUSTED,
+        message: incompatibilityReasons[0],
+        details: {
+          incompatibilityReasons,
+          blacklistedProtocols,
+        },
+      };
+    }
+
+    return {
+      code: ErrorCode.ALL_PROTOCOLS_EXHAUSTED,
+      message: "No compatible player/protocol combinations",
+      details: {
+        incompatibilityReasons: incompatibilityReasons.slice(0, 5),
+        blacklistedProtocols,
+      },
+    };
+  }
+
   /**
    * Pick best compatible combination
    */
@@ -665,10 +729,10 @@ export class PlayerManager {
     container.innerHTML = "";
 
     // Update classifier with current alternatives count
-    const compatibleCombos = this.getAllCombinations(
-      streamInfo,
-      managerOptions?.playbackMode
-    ).filter((c) => c.compatible && !excludePlayers.has(c.player));
+    const allCombinations = this.getAllCombinations(streamInfo, managerOptions?.playbackMode);
+    const compatibleCombos = allCombinations.filter(
+      (combo) => combo.compatible && !excludePlayers.has(combo.player)
+    );
     this.errorClassifier.setAlternativesRemaining(Math.max(0, compatibleCombos.length - 1));
 
     // Filter excluded players
@@ -683,11 +747,16 @@ export class PlayerManager {
 
     if (availableSources.length === 0) {
       this.log("No available sources after filtering");
-      const action = this.errorClassifier.classify(ErrorCode.ALL_PROTOCOLS_EXHAUSTED);
+      const diagnostic = this.diagnoseNoPlayersAvailable(streamInfo, allCombinations);
+      const action = this.errorClassifier.classifyWithDetails(
+        diagnostic.code,
+        diagnostic.message,
+        diagnostic.details
+      );
       if (action.type === "fatal") {
-        throw new Error("No available players after fallback attempts");
+        throw new Error(diagnostic.message);
       }
-      throw new Error("No available players after fallback attempts");
+      throw new Error(diagnostic.message);
     }
 
     this.log(`Available sources: ${availableSources.length}`);
@@ -696,8 +765,17 @@ export class PlayerManager {
 
     if (!selection) {
       this.log("No suitable player selected");
-      this.errorClassifier.classify(ErrorCode.ALL_PROTOCOLS_EXHAUSTED);
-      throw new Error("No suitable player found for stream");
+      const selectionCombinations = this.getAllCombinations(
+        modifiedStreamInfo,
+        managerOptions?.playbackMode
+      );
+      const diagnostic = this.diagnoseNoPlayersAvailable(modifiedStreamInfo, selectionCombinations);
+      this.errorClassifier.classifyWithDetails(
+        diagnostic.code,
+        diagnostic.message,
+        diagnostic.details
+      );
+      throw new Error(diagnostic.message);
     }
 
     this.log(`Selected: ${selection.player} for ${selection.source.type}`);

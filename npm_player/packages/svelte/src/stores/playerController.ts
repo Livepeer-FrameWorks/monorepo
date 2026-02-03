@@ -12,6 +12,7 @@ import {
   type PlaybackQuality,
   type ContentEndpoints,
   type ContentMetadata,
+  type ClassifiedError,
 } from "@livepeer-frameworks/player-core";
 
 // ============================================================================
@@ -50,6 +51,8 @@ export interface PlayerControllerState {
   volume: number;
   /** Error text */
   error: string | null;
+  /** Error details for debugging */
+  errorDetails: ClassifiedError["details"] | null;
   /** Is passive error */
   isPassiveError: boolean;
   /** Has playback ever started */
@@ -162,6 +165,7 @@ const initialState: PlayerControllerState = {
   isMuted: true,
   volume: 1,
   error: null,
+  errorDetails: null,
   isPassiveError: false,
   hasPlaybackStarted: false,
   isHoldingSpeed: false,
@@ -419,6 +423,7 @@ export function createPlayerControllerStore(
         store.update((prev) => ({
           ...prev,
           error: data.message,
+          errorDetails: data.details ?? null,
           isPassiveError: false,
         }));
       })
@@ -506,7 +511,12 @@ export function createPlayerControllerStore(
 
   function clearError(): void {
     controller?.clearError();
-    store.update((prev) => ({ ...prev, error: null, isPassiveError: false }));
+    store.update((prev) => ({
+      ...prev,
+      error: null,
+      errorDetails: null,
+      isPassiveError: false,
+    }));
   }
 
   function dismissToast(): void {
