@@ -2390,6 +2390,9 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 	// 3. Timeout stale PENDING viewers (>30s old)
 	sm.timeoutStalePendingViewersLocked(nodeID, 30*time.Second)
 
+	// 3.5. Cleanup old ABANDONED/DISCONNECTED viewers
+	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+
 	// 4. Recalculate AddBandwidth based on remaining pending viewers
 	var totalPendingBW uint64
 	pendingCount := 0
@@ -2547,7 +2550,70 @@ func (sm *StreamStateManager) GetVirtualViewerStats() map[string]interface{} {
 	}
 	stats["pending_by_node"] = nodeStats
 
+	// Drift: virtual ACTIVE count vs Helmsman real count per node
+	activeByNode := make(map[string]int)
+	for _, viewer := range sm.virtualViewers {
+		if viewer != nil && viewer.State == VirtualViewerActive {
+			activeByNode[viewer.NodeID]++
+		}
+	}
+	realByNode := make(map[string]int)
+	for _, instances := range sm.streamInstances {
+		for nodeID, inst := range instances {
+			if inst != nil {
+				realByNode[nodeID] += inst.TotalConnections
+			}
+		}
+	}
+	driftByNode := make(map[string]int)
+	for nodeID := range sm.nodes {
+		driftByNode[nodeID] = activeByNode[nodeID] - realByNode[nodeID]
+	}
+	stats["drift_by_node"] = driftByNode
+
 	return stats
+}
+
+// GetViewerDrift returns the difference between event-based ACTIVE viewer count and Helmsman total connections per node.
+// Positive = more virtual than real (potential ghosts), Negative = more real than virtual (missed USER_NEW).
+func (sm *StreamStateManager) GetViewerDrift() map[string]int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	drift := make(map[string]int)
+
+	// Count ACTIVE virtual viewers per node
+	activeByNode := make(map[string]int)
+	for _, viewerID := range sm.virtualViewers {
+		if viewerID != nil && viewerID.State == VirtualViewerActive {
+			activeByNode[viewerID.NodeID]++
+		}
+	}
+
+	// Get real totals from Helmsman per node
+	realByNode := make(map[string]int)
+	for _, instances := range sm.streamInstances {
+		for nodeID, inst := range instances {
+			if inst != nil {
+				realByNode[nodeID] += inst.TotalConnections
+			}
+		}
+	}
+
+	// Calculate drift for each node that has either virtual or real viewers
+	allNodes := make(map[string]bool)
+	for nodeID := range activeByNode {
+		allNodes[nodeID] = true
+	}
+	for nodeID := range realByNode {
+		allNodes[nodeID] = true
+	}
+
+	for nodeID := range allNodes {
+		drift[nodeID] = activeByNode[nodeID] - realByNode[nodeID]
+	}
+
+	return drift
 }
 
 // GetVirtualViewersForNode returns all virtual viewers for a specific node
