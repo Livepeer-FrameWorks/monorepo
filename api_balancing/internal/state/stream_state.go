@@ -1105,10 +1105,12 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 
 // ArtifactNodeInfo contains node information for artifact routing
 type ArtifactNodeInfo struct {
-	NodeID   string
-	Host     string // Base URL
-	Score    int64  // Load balancing score (lower is better)
-	Artifact *pb.StoredArtifact
+	NodeID       string
+	Host         string // Base URL
+	Score        int64  // Load balancing score (lower is better)
+	Artifact     *pb.StoredArtifact
+	GeoLatitude  float64
+	GeoLongitude float64
 }
 
 // FindNodesByArtifactHash searches for ALL nodes hosting the specified artifact (Clip/DVR).
@@ -1130,10 +1132,12 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 				// Combine CPU and RAM scores for load balancing (lower is better)
 				combinedScore := int64(node.CPUScore + node.RAMScore)
 				nodes = append(nodes, ArtifactNodeInfo{
-					NodeID:   node.NodeID,
-					Host:     node.Host,
-					Score:    combinedScore,
-					Artifact: artifact,
+					NodeID:       node.NodeID,
+					Host:         node.Host,
+					Score:        combinedScore,
+					Artifact:     artifact,
+					GeoLatitude:  node.GeoLatitude,
+					GeoLongitude: node.GeoLongitude,
 				})
 				break // Only count once per node
 			}
