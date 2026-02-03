@@ -3,6 +3,7 @@ package triggers
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -960,7 +961,14 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 	// Confirm virtual viewer: transition PENDING -> ACTIVE
 	// This decrements PendingRedirects and recalculates AddBandwidth
 	clientIP := userNew.GetHost()
-	if confirmed := state.DefaultManager().ConfirmVirtualViewer(trigger.GetNodeId(), internalName, clientIP); confirmed {
+	correlationID := extractCorrelationID(userNew.GetRequestUrl())
+	if confirmed := state.DefaultManager().ConfirmVirtualViewerByID(
+		correlationID,
+		trigger.GetNodeId(),
+		internalName,
+		clientIP,
+		userNew.GetSessionId(),
+	); confirmed {
 		p.logger.WithFields(logging.Fields{
 			"node_id":       trigger.GetNodeId(),
 			"internal_name": internalName,
@@ -1124,9 +1132,20 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 
 	// Disconnect virtual viewer: transition ACTIVE -> DISCONNECTED
 	clientIP := userEnd.GetHost()
-	state.DefaultManager().DisconnectVirtualViewer(trigger.GetNodeId(), internalStreamName, clientIP)
+	state.DefaultManager().DisconnectVirtualViewerBySessionID(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName, clientIP)
 
 	return "", false, nil
+}
+
+func extractCorrelationID(requestURL string) string {
+	if requestURL == "" {
+		return ""
+	}
+	parsedURL, err := url.Parse(requestURL)
+	if err != nil {
+		return ""
+	}
+	return parsedURL.Query().Get("fwcid")
 }
 
 // handleLiveTrackList processes LIVE_TRACK_LIST trigger (non-blocking)

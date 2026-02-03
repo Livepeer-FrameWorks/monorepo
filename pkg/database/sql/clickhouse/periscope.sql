@@ -366,11 +366,11 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_current (
     stream_id UUID,
     internal_name LowCardinality(String),
     session_id String,
+    node_id LowCardinality(String),
 
     connected_at SimpleAggregateFunction(min, Nullable(DateTime)),
     disconnected_at SimpleAggregateFunction(max, Nullable(DateTime)),
 
-    node_id SimpleAggregateFunction(any, LowCardinality(String)),
     connector SimpleAggregateFunction(any, LowCardinality(String)),
 
     country_code SimpleAggregateFunction(any, FixedString(2)),
@@ -383,7 +383,7 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_current (
 
     last_updated SimpleAggregateFunction(max, DateTime)
 ) ENGINE = AggregatingMergeTree()
-ORDER BY (tenant_id, stream_id, session_id);
+ORDER BY (tenant_id, stream_id, node_id, session_id);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_connect_mv TO viewer_sessions_current AS
 SELECT
@@ -391,9 +391,9 @@ SELECT
     stream_id,
     internal_name,
     session_id,
+    node_id,
     timestamp AS connected_at,
     CAST(NULL AS Nullable(DateTime)) AS disconnected_at,
-    node_id,
     connector,
     country_code,
     city,
@@ -411,9 +411,9 @@ SELECT
     stream_id,
     internal_name,
     session_id,
+    node_id,
     CAST(NULL AS Nullable(DateTime)) AS connected_at,
     timestamp AS disconnected_at,
-    node_id,
     connector,
     country_code,
     city,

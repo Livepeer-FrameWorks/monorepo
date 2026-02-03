@@ -25,7 +25,7 @@ It is written as a “how the system works” reference (vs an audit checklist).
 - `stream_id`: Public, stable stream identifier exposed via GraphQL (safe to share with tenants/users).
 - `internal_name`: Canonical stream identifier inside FrameWorks (not the external stream key). Some upstream payloads may include prefixes like `live+` / `vod+`; ingest normalizes with `mist.ExtractInternalName(...)` before storing. This value is **not exposed** publicly.
 - `node_id`: Node identifier (MistServer instance / edge node).
-- `session_id`: Viewer session identifier from MistServer (connect/disconnect lifecycle).
+- `session_id`: Viewer session identifier from MistServer (connect/disconnect lifecycle). Session IDs are node-scoped, so `viewer_sessions_current` keys on `node_id` plus `session_id` to avoid cross-node collisions.
 - `event_id`: Event identifier used for pagination/cursors and uniqueness in ClickHouse.
 - `request_id`: Clip/DVR workflow identifier.
 

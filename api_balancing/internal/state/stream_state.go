@@ -111,6 +111,7 @@ type VirtualViewer struct {
 	NodeID         string             `json:"node_id"`         // Target node for redirect
 	StreamName     string             `json:"stream_name"`     // Internal stream name
 	ClientIP       string             `json:"client_ip"`       // Client IP for matching USER_NEW
+	MistSessionID  string             `json:"mist_session_id"` // Mist session ID for disconnect correlation
 	State          VirtualViewerState `json:"state"`           // Current lifecycle state
 	RedirectTime   time.Time          `json:"redirect_time"`   // When redirect was issued
 	ConnectTime    time.Time          `json:"connect_time"`    // When USER_NEW matched (zero if not yet)
@@ -2208,6 +2209,12 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 // Matches by (nodeID, streamName, clientIP), oldest PENDING first.
 // Returns true if a matching viewer was found and confirmed.
 func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP string) bool {
+	return sm.ConfirmVirtualViewerByID("", nodeID, streamName, clientIP, "")
+}
+
+// ConfirmVirtualViewerByID transitions a PENDING viewer to ACTIVE when USER_NEW arrives.
+// If viewerID is provided, match the exact virtual viewer; otherwise fallback to IP matching.
+func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamName, clientIP, mistSessionID string) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -2220,16 +2227,27 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 	var matchedViewer *VirtualViewer
 	var oldestTime time.Time
 
-	for _, viewerID := range sm.viewersByNode[nodeID] {
-		viewer := sm.virtualViewers[viewerID]
-		if viewer == nil || viewer.State != VirtualViewerPending {
-			continue
+	if viewerID != "" {
+		if viewer := sm.virtualViewers[viewerID]; viewer != nil &&
+			viewer.State == VirtualViewerPending &&
+			viewer.NodeID == nodeID &&
+			viewer.StreamName == streamName {
+			matchedViewer = viewer
 		}
-		// Match by node, stream, and client IP
-		if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
-			if matchedViewer == nil || viewer.RedirectTime.Before(oldestTime) {
-				matchedViewer = viewer
-				oldestTime = viewer.RedirectTime
+	}
+
+	if matchedViewer == nil {
+		for _, candidateID := range sm.viewersByNode[nodeID] {
+			viewer := sm.virtualViewers[candidateID]
+			if viewer == nil || viewer.State != VirtualViewerPending {
+				continue
+			}
+			// Match by node, stream, and client IP
+			if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
+				if matchedViewer == nil || viewer.RedirectTime.Before(oldestTime) {
+					matchedViewer = viewer
+					oldestTime = viewer.RedirectTime
+				}
 			}
 		}
 	}
@@ -2242,6 +2260,9 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 	// Transition to ACTIVE
 	matchedViewer.State = VirtualViewerActive
 	matchedViewer.ConnectTime = time.Now()
+	if mistSessionID != "" {
+		matchedViewer.MistSessionID = mistSessionID
+	}
 
 	// Decrement pending count and remove bandwidth penalty
 	node.PendingRedirects--
@@ -2263,6 +2284,12 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 // DisconnectVirtualViewer transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
 // Matches by (nodeID, streamName, clientIP), oldest ACTIVE first.
 func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, clientIP string) {
+	sm.DisconnectVirtualViewerBySessionID("", nodeID, streamName, clientIP)
+}
+
+// DisconnectVirtualViewerBySessionID transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
+// If mistSessionID is provided, match by Mist session ID; otherwise fallback to IP matching.
+func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, nodeID, streamName, clientIP string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -2270,15 +2297,32 @@ func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, client
 	var matchedViewer *VirtualViewer
 	var oldestTime time.Time
 
-	for _, viewerID := range sm.viewersByNode[nodeID] {
-		viewer := sm.virtualViewers[viewerID]
-		if viewer == nil || viewer.State != VirtualViewerActive {
-			continue
+	if mistSessionID != "" {
+		for _, candidateID := range sm.viewersByNode[nodeID] {
+			viewer := sm.virtualViewers[candidateID]
+			if viewer == nil || viewer.State != VirtualViewerActive {
+				continue
+			}
+			if viewer.StreamName == streamName && viewer.MistSessionID == mistSessionID {
+				if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
+					matchedViewer = viewer
+					oldestTime = viewer.ConnectTime
+				}
+			}
 		}
-		if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
-			if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
-				matchedViewer = viewer
-				oldestTime = viewer.ConnectTime
+	}
+
+	if matchedViewer == nil {
+		for _, candidateID := range sm.viewersByNode[nodeID] {
+			viewer := sm.virtualViewers[candidateID]
+			if viewer == nil || viewer.State != VirtualViewerActive {
+				continue
+			}
+			if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
+				if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
+					matchedViewer = viewer
+					oldestTime = viewer.ConnectTime
+				}
 			}
 		}
 	}
