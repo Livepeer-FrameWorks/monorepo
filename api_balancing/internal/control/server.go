@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
-	"frameworks/api_balancing/internal/triggers"
 	"frameworks/pkg/clients/commodore"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/geoip"
@@ -1258,7 +1258,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 
 		if blocking {
 			errorCode := pb.IngestErrorCode_INGEST_ERROR_INTERNAL
-			var ingestErr *triggers.IngestError
+			var ingestErr *ingesterrors.IngestError
 			if errors.As(err, &ingestErr) {
 				errorCode = ingestErr.Code
 			}

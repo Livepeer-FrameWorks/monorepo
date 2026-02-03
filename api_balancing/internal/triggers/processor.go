@@ -13,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/geo"
+	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
@@ -487,7 +488,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"stream_key": pushRewrite.GetStreamName(),
 			"error":      err,
 		}).Error("Failed to validate stream key with Commodore")
-		return "", true, NewIngestError(pb.IngestErrorCode_INGEST_ERROR_INTERNAL, "failed to validate stream key")
+		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_INTERNAL, "failed to validate stream key")
 	}
 
 	if !streamValidation.Valid {
@@ -495,7 +496,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		if message == "" {
 			message = "invalid stream key"
 		}
-		return "", true, NewIngestError(pb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, message)
+		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, message)
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
@@ -505,7 +506,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"stream_key": pushRewrite.GetStreamName(),
 			"tenant_id":  streamValidation.TenantId,
 		}).Warn("Rejecting ingest: tenant suspended due to negative balance")
-		return "", true, NewIngestError(pb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED, "account suspended - please top up your balance")
+		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED, "account suspended - please top up your balance")
 	}
 
 	// Check if balance is negative (balance <= 0, but not yet suspended)
@@ -515,7 +516,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			"stream_key": pushRewrite.GetStreamName(),
 			"tenant_id":  streamValidation.TenantId,
 		}).Warn("Rejecting ingest: insufficient balance (402 Payment Required)")
-		return "", true, NewIngestError(pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED, "payment required - please top up your balance")
+		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED, "payment required - please top up your balance")
 	}
 
 	// Cache stream context (tenant + user + billing info)
