@@ -17,6 +17,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
+	"frameworks/pkg/clients/decklog"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
@@ -54,9 +55,21 @@ var db *sql.DB
 var quartermasterClient *qmclient.GRPCClient
 var livepeerGatewayURL string // Set from main.go if LIVEPEER_GATEWAY_URL is configured
 var geoipCache *cache.Cache
+var decklogClient *decklog.BatchedClient
+var dvrStopRegistry DVRStopRegistry
+
+type DVRStopRegistry interface {
+	RegisterPendingDVRStop(internalName string)
+}
 
 // SetLivepeerGatewayURL sets the Livepeer Gateway URL for processing config
 func SetLivepeerGatewayURL(url string) { livepeerGatewayURL = url }
+
+// SetDVRStopRegistry sets the registry used for deferring DVR stop requests.
+func SetDVRStopRegistry(registry DVRStopRegistry) { dvrStopRegistry = registry }
+
+// SetDecklogClient sets the Decklog client for DVR lifecycle emissions.
+func SetDecklogClient(client *decklog.BatchedClient) { decklogClient = client }
 
 // GetStreamSource returns the source node and base URL for a given internal_name if known
 func GetStreamSource(internalName string) (nodeID string, baseURL string, ok bool) {
@@ -65,7 +78,7 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 	var bestID string
 	var bestAt time.Time
 	for id, inst := range instances {
-		if inst.Inputs > 0 && !inst.Replicated {
+		if inst.Inputs > 0 && !inst.Replicated && inst.Status != "offline" {
 			if bestID == "" || inst.LastUpdate.After(bestAt) {
 				bestID = id
 				bestAt = inst.LastUpdate
@@ -79,16 +92,15 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 		return bestID, "", true
 	}
 
-	// Fallback to union state (legacy behavior).
-	if s := state.DefaultManager().GetStreamState(internalName); s != nil {
-		nodeID = s.NodeID
-		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil {
-			baseURL = ns.BaseURL
+	// Fallback: early-start flows can see STREAM_BUFFER before node stats populate Inputs.
+	// In that case, use the stream union state's NodeID.
+	if st := state.DefaultManager().GetStreamState(internalName); st != nil && st.NodeID != "" {
+		if ns := state.DefaultManager().GetNodeState(st.NodeID); ns != nil {
+			return st.NodeID, ns.BaseURL, true
 		}
-		if nodeID != "" {
-			return nodeID, baseURL, true
-		}
+		return st.NodeID, "", true
 	}
+
 	return "", "", false
 }
 
@@ -495,23 +507,66 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 		return
 	}
 	// Query foghorn.artifacts for active DVR, join with artifact_nodes for node_id
-	var dvrHash, storageNodeID string
+	var dvrHash, storageNodeID, tenantID, userID, streamID string
 	err := db.QueryRow(`
-        SELECT a.artifact_hash, COALESCE(an.node_id,'')
+        SELECT a.artifact_hash, COALESCE(an.node_id,''), COALESCE(a.tenant_id::text, ''), COALESCE(a.user_id::text, ''), COALESCE(a.stream_id::text, '')
         FROM foghorn.artifacts a
         LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
         WHERE a.internal_name = $1 AND a.artifact_type = 'dvr'
               AND a.status IN ('requested','starting','recording')
         ORDER BY a.created_at DESC
-        LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID)
+        LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID, &tenantID, &userID, &streamID)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) && dvrStopRegistry != nil {
+			dvrStopRegistry.RegisterPendingDVRStop(internalName)
+		}
 		return
 	}
 	if storageNodeID == "" || dvrHash == "" {
+		if dvrHash == "" && dvrStopRegistry != nil {
+			dvrStopRegistry.RegisterPendingDVRStop(internalName)
+		}
 		return
 	}
 	_ = SendDVRStop(storageNodeID, &pb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash})
 	_, _ = db.Exec(`UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash)
+	if decklogClient != nil {
+		stoppedAt := time.Now().Unix()
+		dvrData := &pb.DVRLifecycleData{
+			Status:  pb.DVRLifecycleData_STATUS_STOPPED,
+			DvrHash: dvrHash,
+			EndedAt: &stoppedAt,
+			InternalName: func() *string {
+				if internalName != "" {
+					return &internalName
+				}
+				return nil
+			}(),
+			StreamId: func() *string {
+				if streamID != "" {
+					return &streamID
+				}
+				return nil
+			}(),
+			TenantId: func() *string {
+				if tenantID != "" {
+					return &tenantID
+				}
+				return nil
+			}(),
+			UserId: func() *string {
+				if userID != "" {
+					return &userID
+				}
+				return nil
+			}(),
+		}
+		go func() {
+			if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
+				logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to emit DVR stopped event")
+			}
+		}()
+	}
 }
 
 // ServiceRegistrar is a function that registers additional gRPC services
@@ -1057,7 +1112,21 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	}
 
 	// Stream is ready! Build source URI and potentially mutate config
-	sourceURI := BuildDTSCURI(streamState.NodeID, internalName, true, logger)
+	sourceNodeID, _, ok := GetStreamSource(internalName)
+	if !ok {
+		logger.WithFields(logging.Fields{
+			"dvr_hash":      dvrHash,
+			"internal_name": internalName,
+		}).Warn("Stream ready but no source node available for DVR")
+		response := &pb.DVRReadyResponse{
+			DvrHash: dvrHash,
+			Ready:   false,
+			Reason:  "stream_source_missing",
+		}
+		sendDVRReadyResponse(stream, response, logger)
+		return
+	}
+	sourceURI := BuildDTSCURI(sourceNodeID, internalName, true, logger)
 
 	// Tag storage node (requesting node) instance as ready with source URI
 	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]interface{}{

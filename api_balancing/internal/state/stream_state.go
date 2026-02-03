@@ -505,7 +505,6 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 	if union.Viewers < 0 {
 		union.Viewers = 0
 	}
-	union.NodeID = nodeID
 	union.TenantID = tenantID
 	union.LastUpdate = time.Now()
 	if sm.streamInstances[internalName] == nil {
@@ -586,7 +585,6 @@ func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, tr
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
 		sm.streams[internalName] = union
 	}
-	union.NodeID = nodeID
 	union.TenantID = tenantID
 	union.LastTrackList = trackListJSON
 	union.LastUpdate = time.Now()
@@ -612,7 +610,6 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	}
 	union.Status = "offline"
 	union.BufferState = "EMPTY"
-	union.NodeID = nodeID
 	union.LastUpdate = time.Now()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
@@ -635,7 +632,6 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
 		sm.streams[internalName] = union
 	}
-	union.NodeID = nodeID
 	union.TotalConnections = total
 	union.Inputs = inputs
 	union.BytesUp = up
