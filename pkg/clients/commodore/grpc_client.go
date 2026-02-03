@@ -3,6 +3,7 @@ package commodore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/pkg/cache"
@@ -122,6 +123,23 @@ func (c *GRPCClient) Close() error {
 		return c.conn.Close()
 	}
 	return nil
+}
+
+// InvalidateTenantCacheKeys removes cached ValidateStreamKey entries for a tenant.
+func (c *GRPCClient) InvalidateTenantCacheKeys(tenantID string) {
+	if c.cache == nil || tenantID == "" {
+		return
+	}
+	for _, entry := range c.cache.Snapshot() {
+		if !strings.HasPrefix(entry.Key, "commodore:validate:") {
+			continue
+		}
+		resp, ok := entry.Value.(*pb.ValidateStreamKeyResponse)
+		if !ok || resp.GetTenantId() != tenantID {
+			continue
+		}
+		c.cache.Delete(entry.Key)
+	}
 }
 
 // ============================================================================
