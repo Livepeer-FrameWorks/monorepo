@@ -91,6 +91,16 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 		}
 		return bestID, "", true
 	}
+
+	// Fallback: early-start flows can see STREAM_BUFFER before node stats populate Inputs.
+	// In that case, use the stream union state's NodeID.
+	if st := state.DefaultManager().GetStreamState(internalName); st != nil && st.NodeID != "" {
+		if ns := state.DefaultManager().GetNodeState(st.NodeID); ns != nil {
+			return st.NodeID, ns.BaseURL, true
+		}
+		return st.NodeID, "", true
+	}
+
 	return "", "", false
 }
 

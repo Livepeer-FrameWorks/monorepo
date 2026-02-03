@@ -52,7 +52,7 @@ func safeUint64(v interface{}) uint64 {
 	return uint64(val)
 }
 
-func findStreamSourceNodeID(stream *state.StreamState, instances map[string]map[string]*state.StreamInstanceState) string {
+func findStreamSourceNodeID(stream *state.StreamState, instances map[string]map[string]state.StreamInstanceState) string {
 	if stream != nil && stream.NodeID != "" {
 		return stream.NodeID
 	}
