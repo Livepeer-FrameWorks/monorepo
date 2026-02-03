@@ -1865,7 +1865,7 @@ func toInt64(v interface{}) (int64, bool) {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
@@ -1875,18 +1875,12 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 		GeoLon: lon,
 	}
 
-	// Resolve view key to internal name
-	viewKey := req.ContentId
-	ctx := context.Background()
-	target, err := control.ResolveStream(ctx, viewKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve stream: %w", err)
-	}
-	if target.InternalName == "" {
+	if internalName == "" {
 		return nil, fmt.Errorf("stream not found")
 	}
 
-	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName, target.StreamID)
+	ctx := context.Background()
+	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, streamTenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -1898,7 +1892,7 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 		if response.Primary != nil {
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
-		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, target.InternalName, target.TenantID, target.StreamID, durationMs, candidatesCount, "play_rewrite", "http")
+		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, internalName, streamTenantID, streamID, durationMs, candidatesCount, "play_rewrite", "http")
 	}
 
 	return response, nil
@@ -1936,6 +1930,18 @@ func resolveArtifactViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEnd
 	return response, nil
 }
 
+func respondPlaybackError(c *gin.Context, status int, code, message string, extra gin.H) {
+	payload := gin.H{
+		"error":   strings.ToLower(code),
+		"message": message,
+		"code":    code,
+	}
+	for key, value := range extra {
+		payload[key] = value
+	}
+	c.JSON(status, payload)
+}
+
 // HandleGenericViewerPlayback handles /play/* and /resolve/* endpoints for generic players
 // Supports patterns:
 //   - /play/:viewkey or /resolve/:viewkey -> Returns full JSON with all protocols
@@ -1946,7 +1952,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// Extract the full path after /play or /resolve
 	fullPath := c.Param("path")
 	if fullPath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing view key in path"})
+		respondPlaybackError(c, http.StatusBadRequest, "MISSING_VIEW_KEY", "Missing view key in path", nil)
 		return
 	}
 
@@ -1962,7 +1968,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	parts := strings.Split(fullPath, "/")
 
 	if len(parts) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid path format"})
+		respondPlaybackError(c, http.StatusBadRequest, "INVALID_PATH", "Invalid path format", nil)
 		return
 	}
 
@@ -2003,7 +2009,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Validate view key format (should be non-empty)
 	if viewKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid view key"})
+		respondPlaybackError(c, http.StatusBadRequest, "INVALID_VIEW_KEY", "Invalid view key", nil)
 		return
 	}
 
@@ -2013,7 +2019,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	resolution, err := control.ResolveContent(ctx, viewKey)
 	if err != nil {
 		logger.WithError(err).WithField("view_key", viewKey).Warn("Failed to resolve content")
-		c.JSON(http.StatusNotFound, gin.H{"error": "Invalid or expired view key"})
+		respondPlaybackError(c, http.StatusNotFound, "VIEW_KEY_NOT_FOUND", "Invalid or expired view key", nil)
 		return
 	}
 
@@ -2075,7 +2081,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// Resolve endpoint
 	var response *pb.ViewerEndpointResponse
 	if contentType == "live" {
-		response, err = resolveLiveViewerEndpoint(req, lat, lon)
+		response, err = resolveLiveViewerEndpoint(req, lat, lon, internalName, resolution.TenantId, resolution.StreamId)
 	} else {
 		response, err = resolveArtifactViewerEndpoint(req)
 	}
@@ -2088,7 +2094,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 				retryAfter = 10
 			}
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
-			c.JSON(http.StatusAccepted, gin.H{
+			respondPlaybackError(c, http.StatusAccepted, "DEFROSTING", "content defrosting in progress", gin.H{
 				"status":      "defrosting",
 				"retryAfter":  retryAfter,
 				"contentType": contentType,
@@ -2102,7 +2108,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			"internal_name": contentID,
 			"content_type":  contentType,
 		}).Error("Failed to resolve viewer endpoint")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve playback endpoint"})
+		respondPlaybackError(c, http.StatusInternalServerError, "PLAYBACK_RESOLUTION_FAILED", "Failed to resolve playback endpoint", nil)
 		return
 	}
 
@@ -2132,7 +2138,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		// Use protojson for proper JSON serialization of proto message
 		jsonBytes, err := protojson.Marshal(response)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to serialize response"})
+			respondPlaybackError(c, http.StatusInternalServerError, "SERIALIZATION_FAILED", "Failed to serialize response", nil)
 			return
 		}
 		c.Data(http.StatusOK, "application/json", jsonBytes)
@@ -2154,9 +2160,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	}
 
 	if redirectURL == "" {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": fmt.Sprintf("Protocol '%s' not available for this stream", protocol),
-		})
+		respondPlaybackError(c, http.StatusNotFound, "PROTOCOL_NOT_AVAILABLE", fmt.Sprintf("Protocol '%s' not available for this stream", protocol), nil)
 		return
 	}
 

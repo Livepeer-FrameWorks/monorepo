@@ -1243,7 +1243,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
-	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName, target.StreamID)
+	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName, target.StreamID, target.TenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "%v", err)
 	}
