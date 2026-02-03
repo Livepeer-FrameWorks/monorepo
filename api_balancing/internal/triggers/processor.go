@@ -1245,7 +1245,7 @@ func (p *Processor) handleRecordingSegment(trigger *pb.MistTrigger) (string, boo
 // handleStreamLifecycleUpdate forwards StreamLifecycleUpdate to Decklog and updates state
 func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
 	slu := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate).StreamLifecycleUpdate
-	internal := slu.GetInternalName()
+	internal := mist.ExtractInternalName(slu.GetInternalName())
 	nodeID := slu.GetNodeId()
 
 	// Enrich tenant context before forwarding (same pattern as handleStreamEnd)

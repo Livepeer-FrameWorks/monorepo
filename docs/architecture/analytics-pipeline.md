@@ -23,7 +23,7 @@ It is written as a “how the system works” reference (vs an audit checklist).
 
 - `tenant_id`: Tenant UUID. **All analytics data must be partitioned and queried by tenant_id.**
 - `stream_id`: Public, stable stream identifier exposed via GraphQL (safe to share with tenants/users).
-- `internal_name`: Canonical stream identifier inside FrameWorks (not the external stream key). Some upstream payloads may include prefixes like `live+` / `vod+`; ingest normalizes with `mist.ExtractInternalName(...)` before storing. This value is **not exposed** publicly.
+- `internal_name`: Canonical stream identifier inside FrameWorks (not the external stream key). Some upstream payloads may include prefixes like `live+` / `vod+`; ingest normalizes by stripping those known prefixes via `mist.ExtractInternalName(...)` before storing. This value is **not exposed** publicly.
 - `node_id`: Node identifier (MistServer instance / edge node).
 - `session_id`: Viewer session identifier from MistServer (connect/disconnect lifecycle).
 - `event_id`: Event identifier used for pagination/cursors and uniqueness in ClickHouse.
