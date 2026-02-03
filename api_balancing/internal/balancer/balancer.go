@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 
+	"frameworks/api_balancing/internal/geo"
 	"frameworks/pkg/logging"
 
 	"frameworks/api_balancing/internal/state"
@@ -424,7 +425,7 @@ func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapsh
 
 	// Geographic score (still computed dynamically)
 	var geoScore uint64 = 0
-	if snap.GeoLatitude != 0 && snap.GeoLongitude != 0 && lat != 0 && lon != 0 {
+	if geo.IsValidLatLon(snap.GeoLatitude, snap.GeoLongitude) && geo.IsValidLatLon(lat, lon) {
 		distance := lb.geoDist(snap.GeoLatitude, snap.GeoLongitude, lat, lon)
 		geoScore = weights["geo"] - uint64(float64(weights["geo"])*distance)
 	}
@@ -475,6 +476,11 @@ func (lb *LoadBalancer) geoDist(lat1, long1, lat2, long2 float64) float64 {
 	long2Rad := long2 * toRadConstant
 
 	dist := math.Sin(lat1Rad)*math.Sin(lat2Rad) + math.Cos(lat1Rad)*math.Cos(lat2Rad)*math.Cos(long1Rad-long2Rad)
+	if dist > 1 {
+		dist = 1
+	} else if dist < -1 {
+		dist = -1
+	}
 	return 0.31830988618379067153 * math.Acos(dist) // Exact C++ constants
 }
 
