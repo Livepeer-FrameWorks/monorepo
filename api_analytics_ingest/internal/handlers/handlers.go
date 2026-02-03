@@ -1532,11 +1532,12 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 
 	// Extract stream-wide buffer metrics
 	// Note: 0 is a valid buffer value during DRY/rebuffering states.
+	// IMPORTANT: only set buffer_size when the optional stream_buffer_ms field is present.
+	// Otherwise we turn "unknown" into a hard 0 which corrupts analytics.
 	var bufferSize *uint32
-	bufferMs := streamBuffer.GetStreamBufferMs()
-	bufferState := streamBuffer.GetBufferState()
-	if bufferState != "" {
-		bs := uint32(bufferMs)
+	bufferMsPtr := streamBuffer.StreamBufferMs
+	if bufferMsPtr != nil {
+		bs := uint32(*bufferMsPtr)
 		bufferSize = &bs
 	}
 
