@@ -1910,11 +1910,13 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 
 // resolveArtifactViewerEndpoint queries database for VOD/Clip/DVR storage nodes via a single resolver.
 // It derives type from the public ID and does not depend on any caller-provided content type.
-func resolveArtifactViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+func resolveArtifactViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB: db,
-		LB: lb,
+		DB:     db,
+		LB:     lb,
+		GeoLat: lat,
+		GeoLon: lon,
 	}
 
 	ctx := context.Background()
@@ -2081,7 +2083,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	if contentType == "live" {
 		response, err = resolveLiveViewerEndpoint(req, lat, lon)
 	} else {
-		response, err = resolveArtifactViewerEndpoint(req)
+		response, err = resolveArtifactViewerEndpoint(req, lat, lon)
 	}
 
 	if err != nil {

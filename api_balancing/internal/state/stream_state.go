@@ -1105,10 +1105,12 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 
 // ArtifactNodeInfo contains node information for artifact routing
 type ArtifactNodeInfo struct {
-	NodeID   string
-	Host     string // Base URL
-	Score    int64  // Load balancing score (lower is better)
-	Artifact *pb.StoredArtifact
+	NodeID       string
+	Host         string // Base URL
+	Score        int64  // Load balancing score (lower is better)
+	Artifact     *pb.StoredArtifact
+	GeoLatitude  float64
+	GeoLongitude float64
 }
 
 // FindNodesByArtifactHash searches for ALL nodes hosting the specified artifact (Clip/DVR).
@@ -1130,10 +1132,12 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 				// Combine CPU and RAM scores for load balancing (lower is better)
 				combinedScore := int64(node.CPUScore + node.RAMScore)
 				nodes = append(nodes, ArtifactNodeInfo{
-					NodeID:   node.NodeID,
-					Host:     node.Host,
-					Score:    combinedScore,
-					Artifact: artifact,
+					NodeID:       node.NodeID,
+					Host:         node.Host,
+					Score:        combinedScore,
+					Artifact:     artifact,
+					GeoLatitude:  node.GeoLatitude,
+					GeoLongitude: node.GeoLongitude,
 				})
 				break // Only count once per node
 			}
@@ -1223,6 +1227,23 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	// Check for .dtsh files that appeared after initial sync
 	// If an artifact has HasDtsh=true but was synced without it, trigger incremental sync
 	go sm.checkAndTriggerDtshSync(nodeID, artifacts)
+}
+
+// setNodeArtifactsMemoryOnly updates artifacts in memory without persisting to DB.
+// Used during rehydration to avoid corrupting warm-cache state.
+func (sm *StreamStateManager) setNodeArtifactsMemoryOnly(nodeID string, artifacts []*pb.StoredArtifact) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = &NodeState{NodeID: nodeID}
+		sm.nodes[nodeID] = n
+	}
+
+	n.Artifacts = make([]*pb.StoredArtifact, len(artifacts))
+	copy(n.Artifacts, artifacts)
+	// Don't update LastUpdate - this is stale data from DB, not a fresh node report
 }
 
 // inferArtifactType determines artifact type from file path
@@ -1921,6 +1942,34 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 			}
 		}
 	}
+	// Artifacts (warm cache for FindNodesByArtifactHash) - memory only, no DB writes
+	if sm.repos.Artifacts != nil {
+		nodeArtifacts, err := sm.repos.Artifacts.ListAllNodeArtifacts(ctx)
+		if err != nil {
+			if rehydrateErr == nil {
+				rehydrateErr = err
+			}
+			if stateLogger != nil {
+				stateLogger.WithError(err).Warn("Failed to rehydrate artifact records")
+			}
+		} else {
+			for nodeID, records := range nodeArtifacts {
+				artifacts := make([]*pb.StoredArtifact, 0, len(records))
+				for _, r := range records {
+					artifacts = append(artifacts, &pb.StoredArtifact{
+						ClipHash:     r.ArtifactHash,
+						StreamName:   r.StreamName,
+						FilePath:     r.FilePath,
+						SizeBytes:    uint64(r.SizeBytes),
+						CreatedAt:    r.CreatedAt,
+						AccessCount:  uint64(r.AccessCount),
+						LastAccessed: r.LastAccessed,
+					})
+				}
+				sm.setNodeArtifactsMemoryOnly(nodeID, artifacts)
+			}
+		}
+	}
 	if rehydrateDurationObserve != nil {
 		rehydrateDurationObserve(time.Since(start).Seconds(), map[string]string{"entity": "all"})
 	}
@@ -2252,6 +2301,8 @@ type ArtifactRepository interface {
 	SetCachedAt(ctx context.Context, artifactHash string) error
 	// GetCachedAt retrieves the cached_at timestamp (Unix ms) for calculating warm duration
 	GetCachedAt(ctx context.Context, artifactHash string) (int64, error)
+	// ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)
+	ListAllNodeArtifacts(ctx context.Context) (map[string][]ArtifactRecord, error)
 }
 
 // ArtifactRecord represents an artifact (clip or DVR) stored on a node

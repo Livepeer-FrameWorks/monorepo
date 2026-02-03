@@ -112,16 +112,20 @@ func (c *GRPCClient) Close() error {
 // CLIP OPERATIONS
 // =============================================================================
 
-// CreateClip creates a new clip from a stream
-func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
+// CreateClip creates a new clip from a stream.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.clip.CreateClip(ctx, req)
+	var trailers metadata.MD
+	resp, err := c.clip.CreateClip(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// DeleteClip deletes a clip
-func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *string) (*pb.DeleteClipResponse, error) {
+// DeleteClip deletes a clip.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *string) (*pb.DeleteClipResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -131,23 +135,29 @@ func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *
 	if tenantID != nil {
 		req.TenantId = *tenantID
 	}
-	return c.clip.DeleteClip(ctx, req)
+	var trailers metadata.MD
+	resp, err := c.clip.DeleteClip(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
 // =============================================================================
 // DVR OPERATIONS
 // =============================================================================
 
-// StartDVR initiates DVR recording for a stream
-func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+// StartDVR initiates DVR recording for a stream.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.dvr.StartDVR(ctx, req)
+	var trailers metadata.MD
+	resp, err := c.dvr.StartDVR(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// StopDVR stops an active DVR recording
-func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string, streamID *string) (*pb.StopDVRResponse, error) {
+// StopDVR stops an active DVR recording.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string, streamID *string) (*pb.StopDVRResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -160,11 +170,14 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *stri
 	if streamID != nil && *streamID != "" {
 		req.StreamId = streamID
 	}
-	return c.dvr.StopDVR(ctx, req)
+	var trailers metadata.MD
+	resp, err := c.dvr.StopDVR(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// DeleteDVR deletes a DVR recording and its files
-func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *string) (*pb.DeleteDVRResponse, error) {
+// DeleteDVR deletes a DVR recording and its files.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *string) (*pb.DeleteDVRResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -174,117 +187,151 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *st
 	if tenantID != nil {
 		req.TenantId = *tenantID
 	}
-	return c.dvr.DeleteDVR(ctx, req)
+	var trailers metadata.MD
+	resp, err := c.dvr.DeleteDVR(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
 // =============================================================================
 // VIEWER OPERATIONS
 // =============================================================================
 
-// ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
-func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+// ResolveViewerEndpoint resolves the best endpoint(s) for a viewer.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.viewer.ResolveViewerEndpoint(ctx, &pb.ViewerEndpointRequest{
+	req := &pb.ViewerEndpointRequest{
 		ContentId: contentID,
 		ViewerIp:  viewerIP,
-	})
+	}
+	var trailers metadata.MD
+	resp, err := c.viewer.ResolveViewerEndpoint(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter
-func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, error) {
+// ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.viewer.ResolveIngestEndpoint(ctx, &pb.IngestEndpointRequest{
+	req := &pb.IngestEndpointRequest{
 		StreamKey: streamKey,
 		ViewerIp:  viewerIP,
-	})
+	}
+	var trailers metadata.MD
+	resp, err := c.viewer.ResolveIngestEndpoint(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
 // =============================================================================
 // VOD OPERATIONS
 // =============================================================================
 
-// CreateVodUpload initiates a multipart upload and returns presigned URLs
-func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
+// CreateVodUpload initiates a multipart upload and returns presigned URLs.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.vod.CreateVodUpload(ctx, req)
+	var trailers metadata.MD
+	resp, err := c.vod.CreateVodUpload(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// CompleteVodUpload finalizes a multipart upload after all parts are uploaded
-func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
+// CompleteVodUpload finalizes a multipart upload after all parts are uploaded.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.vod.CompleteVodUpload(ctx, req)
+	var trailers metadata.MD
+	resp, err := c.vod.CompleteVodUpload(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// AbortVodUpload cancels an in-progress multipart upload
-func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*pb.AbortVodUploadResponse, error) {
+// AbortVodUpload cancels an in-progress multipart upload.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*pb.AbortVodUploadResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.vod.AbortVodUpload(ctx, &pb.AbortVodUploadRequest{
+	var trailers metadata.MD
+	resp, err := c.vod.AbortVodUpload(ctx, &pb.AbortVodUploadRequest{
 		TenantId: tenantID,
 		UploadId: uploadID,
-	})
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// GetVodAsset returns a single VOD asset by hash
-func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, error) {
+// GetVodAsset returns a single VOD asset by hash.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.vod.GetVodAsset(ctx, &pb.GetVodAssetRequest{
+	var trailers metadata.MD
+	resp, err := c.vod.GetVodAsset(ctx, &pb.GetVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
-	})
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// ListVodAssets returns paginated list of VOD assets for a tenant
-func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListVodAssetsResponse, error) {
+// ListVodAssets returns paginated list of VOD assets for a tenant.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListVodAssetsResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.vod.ListVodAssets(ctx, &pb.ListVodAssetsRequest{
+	var trailers metadata.MD
+	resp, err := c.vod.ListVodAssets(ctx, &pb.ListVodAssetsRequest{
 		TenantId:   tenantID,
 		Pagination: pagination,
-	})
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// DeleteVodAsset deletes a VOD asset
-func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.DeleteVodAssetResponse, error) {
+// DeleteVodAsset deletes a VOD asset.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.DeleteVodAssetResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
+	var trailers metadata.MD
+	resp, err := c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
 		TenantId:     tenantID,
 		ArtifactHash: artifactHash,
-	})
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// TerminateTenantStreams stops all active streams for a suspended tenant
-func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, error) {
+// TerminateTenantStreams stops all active streams for a suspended tenant.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*pb.TerminateTenantStreamsResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.tenant.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{
+	var trailers metadata.MD
+	resp, err := c.tenant.TerminateTenantStreams(ctx, &pb.TerminateTenantStreamsRequest{
 		TenantId: tenantID,
 		Reason:   reason,
-	})
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }
 
-// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation)
-func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, error) {
+// InvalidateTenantCache clears cached suspension status for a tenant (called on reactivation).
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*pb.InvalidateTenantCacheResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.tenant.InvalidateTenantCache(ctx, &pb.InvalidateTenantCacheRequest{
+	var trailers metadata.MD
+	resp, err := c.tenant.InvalidateTenantCache(ctx, &pb.InvalidateTenantCacheRequest{
 		TenantId: tenantID,
 		Reason:   reason,
-	})
+	}, grpc.Trailer(&trailers))
+	return resp, trailers, err
 }

@@ -3,9 +3,11 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -128,41 +130,31 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		return nil, fmt.Errorf("failed to query artifact: %w", err)
 	}
 
-	// Query foghorn.artifact_nodes for node assignment
-	var nodeID string
-	err = deps.DB.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 LIMIT 1
-	`, artifactResp.ArtifactHash).Scan(&nodeID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			// No cached nodes - trigger defrost if asset is in S3
-			location := strings.ToLower(strings.TrimSpace(storageLocation.String))
-			sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
-			if location == "defrosting" {
-				return nil, NewDefrostingError(10, "defrost in progress")
-			}
-			if sync == "synced" || location == "s3" {
-				// Pick a storage node for defrost
-				nodeID, err = pickStorageNodeID()
-				if err != nil {
-					return nil, fmt.Errorf("storage node unknown: %w", err)
-				}
-				if _, err := StartDefrost(ctx, contentType, artifactResp.ArtifactHash, nodeID, 30*time.Second, controlLogger()); err != nil {
-					// If defrost already in progress, return retry
-					if defrostErr, ok := err.(*DefrostingError); ok {
-						return nil, defrostErr
-					}
-					return nil, fmt.Errorf("failed to start defrost: %w", err)
-				}
-				return nil, NewDefrostingError(10, "defrost started")
-			}
-			return nil, fmt.Errorf("storage node unknown: no node assignment found")
+	artifactNodes := state.DefaultManager().FindNodesByArtifactHash(artifactResp.ArtifactHash)
+	if len(artifactNodes) == 0 {
+		// No cached nodes - trigger defrost if asset is in S3
+		location := strings.ToLower(strings.TrimSpace(storageLocation.String))
+		sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
+		if location == "defrosting" {
+			return nil, NewDefrostingError(10, "defrost in progress")
 		}
-		return nil, fmt.Errorf("storage node unknown: %w", err)
-	}
-	if nodeID == "" {
-		return nil, fmt.Errorf("storage node unknown: empty node_id")
+		if sync == "synced" || location == "s3" {
+			// Pick a storage node for defrost
+			nodeID, err := pickStorageNodeID()
+			if err != nil {
+				return nil, fmt.Errorf("storage node unknown: %w", err)
+			}
+			if _, err := StartDefrost(ctx, contentType, artifactResp.ArtifactHash, nodeID, 30*time.Second, controlLogger()); err != nil {
+				// If defrost already in progress, return retry
+				var defrostErr *DefrostingError
+				if errors.As(err, &defrostErr) {
+					return nil, defrostErr
+				}
+				return nil, fmt.Errorf("failed to start defrost: %w", err)
+			}
+			return nil, NewDefrostingError(10, "defrost started")
+		}
+		return nil, fmt.Errorf("storage node unknown: no node assignment found")
 	}
 
 	tenantID := artifactResp.TenantId
@@ -216,31 +208,48 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		}
 	}
 
-	nodeOutputs, exists := GetNodeOutputs(nodeID)
-	if !exists || nodeOutputs.Outputs == nil {
+	rankedNodes := rankArtifactNodes(artifactNodes, deps.GeoLat, deps.GeoLon, 5)
+	if len(rankedNodes) == 0 {
 		return nil, fmt.Errorf("storage node outputs not available")
 	}
 
-	// Build URLs using playback ID (MistServer resolves via PLAY_REWRITE trigger)
-	var protocol, endpointURL string
-	formatValue := ""
-	if format.Valid {
-		formatValue = format.String
-	}
-	protocol, endpointURL = selectPrimaryArtifactOutput(nodeOutputs.Outputs, nodeOutputs.BaseURL, resolvedPlaybackID, formatValue)
-	if endpointURL == "" {
-		endpointURL = EnsureTrailingSlash(nodeOutputs.BaseURL) + resolvedPlaybackID + ".html"
-		protocol = "html"
+	var endpoints []*pb.ViewerEndpoint
+	for _, node := range rankedNodes {
+		nodeOutputs, exists := GetNodeOutputs(node.NodeID)
+		if !exists || nodeOutputs.Outputs == nil {
+			continue
+		}
+
+		// Build URLs using playback ID (MistServer resolves via PLAY_REWRITE trigger)
+		var protocol, endpointURL string
+		formatValue := ""
+		if format.Valid {
+			formatValue = format.String
+		}
+		protocol, endpointURL = selectPrimaryArtifactOutput(nodeOutputs.Outputs, nodeOutputs.BaseURL, resolvedPlaybackID, formatValue)
+		if endpointURL == "" {
+			endpointURL = EnsureTrailingSlash(nodeOutputs.BaseURL) + resolvedPlaybackID + ".html"
+			protocol = "html"
+		}
+
+		geoDistance := 0.0
+		if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
+			geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
+		}
+
+		endpoints = append(endpoints, &pb.ViewerEndpoint{
+			NodeId:      node.NodeID,
+			BaseUrl:     nodeOutputs.BaseURL,
+			Protocol:    protocol,
+			Url:         endpointURL,
+			GeoDistance: geoDistance,
+			LoadScore:   float64(node.Score),
+			Outputs:     BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, resolvedPlaybackID, false),
+		})
 	}
 
-	endpoint := &pb.ViewerEndpoint{
-		NodeId:      nodeID,
-		BaseUrl:     nodeOutputs.BaseURL,
-		Protocol:    protocol,
-		Url:         endpointURL,
-		GeoDistance: 0,
-		LoadScore:   0,
-		Outputs:     BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, resolvedPlaybackID, false),
+	if len(endpoints) == 0 {
+		return nil, fmt.Errorf("storage node outputs not available")
 	}
 
 	metadata := &pb.PlaybackMetadata{
@@ -283,10 +292,42 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	}
 
 	return &pb.ViewerEndpointResponse{
-		Primary:   endpoint,
-		Fallbacks: []*pb.ViewerEndpoint{},
+		Primary:   endpoints[0],
+		Fallbacks: endpoints[1:],
 		Metadata:  metadata,
 	}, nil
+}
+
+func rankArtifactNodes(nodes []state.ArtifactNodeInfo, viewerLat, viewerLon float64, maxNodes int) []state.ArtifactNodeInfo {
+	if len(nodes) == 0 {
+		return nil
+	}
+	ranked := append([]state.ArtifactNodeInfo(nil), nodes...)
+	useGeo := viewerLat != 0 || viewerLon != 0
+	sort.Slice(ranked, func(i, j int) bool {
+		if useGeo {
+			di := artifactGeoDistance(viewerLat, viewerLon, ranked[i])
+			dj := artifactGeoDistance(viewerLat, viewerLon, ranked[j])
+			if di != dj {
+				return di < dj
+			}
+		}
+		if ranked[i].Score != ranked[j].Score {
+			return ranked[i].Score < ranked[j].Score
+		}
+		return ranked[i].NodeID < ranked[j].NodeID
+	})
+	if maxNodes > 0 && len(ranked) > maxNodes {
+		return ranked[:maxNodes]
+	}
+	return ranked
+}
+
+func artifactGeoDistance(viewerLat, viewerLon float64, node state.ArtifactNodeInfo) float64 {
+	if node.GeoLatitude == 0 && node.GeoLongitude == 0 {
+		return math.MaxFloat64
+	}
+	return CalculateGeoDistance(viewerLat, viewerLon, node.GeoLatitude, node.GeoLongitude)
 }
 
 func selectPrimaryArtifactOutput(outputs map[string]interface{}, baseURL, playbackID, format string) (string, string) {

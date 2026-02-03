@@ -36,6 +36,7 @@ func Bucket(lat, lon float64) (*pb.GeoBucket, float64, float64, bool) {
 }
 
 // IsValidLatLon validates geographic coordinates.
+// Rejects NaN, Inf, out-of-range, and 0,0 (common default value, located in the ocean).
 func IsValidLatLon(lat, lon float64) bool {
 	if math.IsNaN(lat) || math.IsNaN(lon) || math.IsInf(lat, 0) || math.IsInf(lon, 0) {
 		return false
@@ -44,6 +45,10 @@ func IsValidLatLon(lat, lon float64) bool {
 		return false
 	}
 	if lon < -180 || lon > 180 {
+		return false
+	}
+	// 0,0 is in the Gulf of Guinea - treat as unknown (common default value)
+	if lat == 0 && lon == 0 {
 		return false
 	}
 	return true
