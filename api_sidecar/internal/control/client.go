@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
@@ -48,6 +49,10 @@ var (
 	deleteClipFn   DeleteClipFunc
 	deleteDVRFn    DeleteDVRFunc
 	deleteVodFn    DeleteVodFunc
+
+	blockingGraceMs    int
+	streamReconnected  = make(chan struct{})
+	streamReconnectedM sync.Mutex
 )
 
 // SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
@@ -78,14 +83,23 @@ func SetDeleteVodHandler(fn DeleteVodFunc) {
 // Start launches the Helmsman control client and maintains the stream to Foghorn
 func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 	currentConfig = cfg
+	blockingGraceMs = cfg.BlockingGraceMs
+	if blockingGraceMs > 0 {
+		logger.WithField("grace_ms", blockingGraceMs).Info("Blocking trigger grace period enabled")
+	}
 	go func() {
 		backoff := time.Second
+		const maxBackoff = 30 * time.Second
 		for {
+			connStart := time.Now()
 			if err := runClient(cfg.FoghornControlAddr, logger); err != nil {
 				logger.WithError(err).Warn("Helmsman control client disconnected; retrying")
 			}
+			if time.Since(connStart) > maxBackoff {
+				backoff = time.Second
+			}
 			time.Sleep(backoff)
-			if backoff < 30*time.Second {
+			if backoff < maxBackoff {
 				backoff *= 2
 			}
 		}
@@ -108,6 +122,9 @@ type MistTriggerResult struct {
 func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
 	triggerType := mistTrigger.TriggerType
 	stream := currentStream
+	if stream == nil && mistTrigger.Blocking && blockingGraceMs > 0 {
+		stream = waitForReconnection(time.Duration(blockingGraceMs) * time.Millisecond)
+	}
 	if stream == nil {
 		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
 		return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL}, fmt.Errorf("gRPC control stream not connected")
@@ -185,6 +202,25 @@ func handleMistTriggerResponse(response *pb.MistTriggerResponse) {
 
 	if exists {
 		responseChan <- response
+	}
+}
+
+func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient {
+	streamReconnectedM.Lock()
+	reconnectCh := streamReconnected
+	s := currentStream
+	streamReconnectedM.Unlock()
+
+	// Re-check after grabbing the channel: if we're already connected, don't wait.
+	if s != nil {
+		return s
+	}
+
+	select {
+	case <-reconnectCh:
+		return currentStream
+	case <-time.After(timeout):
+		return nil
 	}
 }
 
@@ -310,7 +346,16 @@ func runClient(addr string, logger logging.Logger) error {
 	// Store current stream for external access
 	currentStream = stream
 	currentNodeID = nodeID
-	defer func() { currentStream = nil; currentNodeID = "" }()
+	ControlStreamStatus.Set(1)
+	streamReconnectedM.Lock()
+	close(streamReconnected)
+	streamReconnected = make(chan struct{})
+	streamReconnectedM.Unlock()
+	defer func() {
+		currentStream = nil
+		currentNodeID = ""
+		ControlStreamStatus.Set(0)
+	}()
 
 	// Heartbeat ticker
 	hbTicker := time.NewTicker(30 * time.Second)
