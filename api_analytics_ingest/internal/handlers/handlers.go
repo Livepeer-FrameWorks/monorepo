@@ -301,11 +301,11 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	}
 	if !isValidUUIDString(mt.GetStreamId()) {
 		h.logger.WithFields(logging.Fields{
-			"event_id":   event.EventID,
-			"tenant_id":  event.TenantID,
-			"stream_id":  mt.GetStreamId(),
-			"asset_hash": mt.GetStorageLifecycleData().GetAssetHash(),
-		}).Warn("Storage lifecycle event missing or invalid stream_id")
+			"event_id":  event.EventID,
+			"tenant_id": event.TenantID,
+			"stream_id": mt.GetStreamId(),
+		}).Warn("Stream lifecycle event missing or invalid stream_id; skipping to avoid corrupting current state")
+		return nil
 	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate)
 	if !ok || tp == nil {
