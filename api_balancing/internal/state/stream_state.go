@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -123,7 +124,8 @@ type NodeState struct {
 	NodeID               string                 `json:"node_id"`
 	BaseURL              string                 `json:"base_url"`
 	IsHealthy            bool                   `json:"is_healthy"`
-	IsStale              bool                   `json:"is_stale"`            // Node hasn't reported recently
+	IsStale              bool                   `json:"is_stale"` // Node hasn't reported recently
+	OperationalMode      NodeOperationalMode    `json:"operational_mode,omitempty"`
 	TenantID             string                 `json:"tenant_id,omitempty"` // Tenant owning this dedicated node
 	Latitude             *float64               `json:"latitude,omitempty"`
 	Longitude            *float64               `json:"longitude,omitempty"`
@@ -182,6 +184,14 @@ type NodeState struct {
 	EstBandwidthPerUser uint64    `json:"-"`                 // Cached per-viewer bandwidth estimate (bytes/sec)
 	LastPollTime        time.Time `json:"-"`                 // When real metrics arrived from Helmsman
 }
+
+type NodeOperationalMode string
+
+const (
+	NodeModeNormal      NodeOperationalMode = "normal"
+	NodeModeDraining    NodeOperationalMode = "draining"
+	NodeModeMaintenance NodeOperationalMode = "maintenance"
+)
 
 // StreamStateManager manages in-memory cluster state
 type StreamStateManager struct {
@@ -254,6 +264,24 @@ func NewStreamStateManager() *StreamStateManager {
 	go sm.runStalenessChecker()
 
 	return sm
+}
+
+func newNodeState(nodeID string) *NodeState {
+	return &NodeState{
+		NodeID:          nodeID,
+		OperationalMode: NodeModeNormal,
+	}
+}
+
+func normalizeNodeOperationalMode(mode NodeOperationalMode) (NodeOperationalMode, error) {
+	switch mode {
+	case "":
+		return NodeModeNormal, nil
+	case NodeModeNormal, NodeModeDraining, NodeModeMaintenance:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid operational mode %q", mode)
+	}
 }
 
 // UpdateStreamFromBuffer updates stream state from STREAM_BUFFER event
@@ -656,7 +684,7 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 	n.IsHealthy = isHealthy
@@ -670,7 +698,7 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 	defer sm.mu.Unlock()
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 	n.BaseURL = baseURL
@@ -719,7 +747,7 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	defer sm.mu.Unlock()
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 	n.CPU = metrics.CPU
@@ -750,13 +778,56 @@ func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, disk
 
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 
 	n.DiskTotalBytes = diskTotal
 	n.DiskUsedBytes = diskUsed
 	n.LastUpdate = time.Now()
+}
+
+func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error {
+	normalized, err := normalizeNodeOperationalMode(mode)
+	if err != nil {
+		return err
+	}
+
+	sm.mu.Lock()
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = newNodeState(nodeID)
+		sm.nodes[nodeID] = n
+	}
+	n.OperationalMode = normalized
+	n.LastUpdate = time.Now()
+	sm.mu.Unlock()
+
+	if sm.nodeRepo != nil {
+		return sm.nodeRepo.UpsertNodeMaintenance(ctx, nodeID, normalized, setBy)
+	}
+	return nil
+}
+
+func (sm *StreamStateManager) GetNodeOperationalMode(nodeID string) NodeOperationalMode {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if node := sm.nodes[nodeID]; node != nil && node.OperationalMode != "" {
+		return node.OperationalMode
+	}
+	return NodeModeNormal
+}
+
+func (sm *StreamStateManager) GetNodeActiveViewers(nodeID string) int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	total := 0
+	for _, nodes := range sm.streamInstances {
+		if inst := nodes[nodeID]; inst != nil {
+			total += inst.TotalConnections
+		}
+	}
+	return total
 }
 
 // SetNodeGPUInfo updates GPU information for a node
@@ -766,7 +837,7 @@ func (sm *StreamStateManager) SetNodeGPUInfo(nodeID string, gpuVendor string, gp
 
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 
@@ -784,7 +855,7 @@ func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, s
 
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 
@@ -1003,7 +1074,7 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 
@@ -1109,7 +1180,7 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 
 	n := sm.nodes[nodeID]
 	if n == nil {
-		n = &NodeState{NodeID: nodeID}
+		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
 	}
 
@@ -1337,13 +1408,14 @@ func (sm *StreamStateManager) GetWeights() map[string]uint64 {
 // EnhancedBalancerNodeSnapshot includes pre-computed fields for fast scoring
 type EnhancedBalancerNodeSnapshot struct {
 	// Basic node info
-	Host         string    `json:"host"`
-	NodeID       string    `json:"node_id"`
-	GeoLatitude  float64   `json:"geo_latitude"`
-	GeoLongitude float64   `json:"geo_longitude"`
-	LocationName string    `json:"location_name"`
-	IsActive     bool      `json:"is_active"`
-	LastUpdate   time.Time `json:"last_update"`
+	Host            string              `json:"host"`
+	NodeID          string              `json:"node_id"`
+	GeoLatitude     float64             `json:"geo_latitude"`
+	GeoLongitude    float64             `json:"geo_longitude"`
+	LocationName    string              `json:"location_name"`
+	IsActive        bool                `json:"is_active"`
+	LastUpdate      time.Time           `json:"last_update"`
+	OperationalMode NodeOperationalMode `json:"operational_mode"`
 
 	// Performance-critical fields
 	BinHost       [16]byte `json:"-"` // Binary IP for fast comparison
@@ -1471,6 +1543,11 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			continue
 		}
 
+		mode := n.OperationalMode
+		if mode == "" {
+			mode = NodeModeNormal
+		}
+		isActive := n.IsHealthy && mode != NodeModeMaintenance
 		snapshot := EnhancedBalancerNodeSnapshot{
 			Host:   n.BaseURL,
 			NodeID: nodeID,
@@ -1486,9 +1563,10 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 				}
 				return 0
 			}(),
-			LocationName: n.Location,
-			IsActive:     n.IsHealthy,
-			LastUpdate:   n.LastUpdate,
+			LocationName:    n.Location,
+			IsActive:        isActive,
+			LastUpdate:      n.LastUpdate,
+			OperationalMode: mode,
 
 			// Performance-critical fields
 			BinHost:       n.BinHost,
@@ -1755,6 +1833,37 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 				// Basic node info
 				sm.SetNodeInfo(r.NodeID, r.BaseURL, true, nil, nil, "", r.OutputsJSON, nil)
 			}
+		}
+
+		maintenance, err := sm.nodeRepo.ListNodeMaintenance(ctx)
+		if err != nil {
+			if rehydrateErr == nil {
+				rehydrateErr = err
+			}
+			if stateLogger != nil {
+				stateLogger.WithError(err).Warn("Failed to rehydrate node maintenance modes")
+			}
+		} else {
+			sm.mu.Lock()
+			for _, rec := range maintenance {
+				mode, modeErr := normalizeNodeOperationalMode(rec.Mode)
+				if modeErr != nil {
+					if stateLogger != nil {
+						stateLogger.WithFields(logging.Fields{
+							"node_id": rec.NodeID,
+							"mode":    rec.Mode,
+						}).Warn("Skipping invalid operational mode during rehydrate")
+					}
+					continue
+				}
+				node := sm.nodes[rec.NodeID]
+				if node == nil {
+					node = newNodeState(rec.NodeID)
+					sm.nodes[rec.NodeID] = node
+				}
+				node.OperationalMode = mode
+			}
+			sm.mu.Unlock()
 		}
 	}
 	// DVR
@@ -2079,6 +2188,13 @@ type NodeRecord struct {
 	OutputsJSON string
 }
 
+type NodeMaintenanceRecord struct {
+	NodeID string
+	Mode   NodeOperationalMode
+	SetAt  time.Time
+	SetBy  string
+}
+
 // Repository interfaces
 
 type ClipRepository interface {
@@ -2101,8 +2217,10 @@ type DVRRepository interface {
 
 type NodeRepository interface {
 	ListAllNodes(ctx context.Context) ([]NodeRecord, error)
+	ListNodeMaintenance(ctx context.Context) ([]NodeMaintenanceRecord, error)
 	UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error
 	UpsertNodeLifecycle(ctx context.Context, update *pb.NodeLifecycleUpdate) error
+	UpsertNodeMaintenance(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error
 }
 
 // ArtifactRepository handles persistence of artifact registry (clips/DVR on storage nodes)
@@ -2171,7 +2289,7 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 	// Ensure node exists
 	node := sm.nodes[nodeID]
 	if node == nil {
-		node = &NodeState{NodeID: nodeID}
+		node = newNodeState(nodeID)
 		sm.nodes[nodeID] = node
 	}
 

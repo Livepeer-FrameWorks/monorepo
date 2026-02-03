@@ -153,6 +153,8 @@ const (
 	rejectStreamReplicated nodeRejectionReason = "stream is replicated on node (excluded for source selection)"
 	rejectConfigStreams    nodeRejectionReason = "stream not allowed by node config"
 	rejectAdjustedToZero   nodeRejectionReason = "score adjusted to zero"
+	rejectNodeMaintenance  nodeRejectionReason = "node in maintenance"
+	rejectNodeDraining     nodeRejectionReason = "node is draining"
 )
 
 // GetBestNodeWithScore finds the best node and returns both node and score
@@ -239,10 +241,18 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	skippedForCapCount := 0
 
 	for _, snap := range snapshot.Nodes {
+		if snap.OperationalMode == state.NodeModeMaintenance {
+			rejections[rejectNodeMaintenance]++
+			continue
+		}
 		if !snap.IsActive || skipForCap(snap) {
 			if snap.IsActive {
 				skippedForCapCount++
 			}
+			continue
+		}
+		if snap.OperationalMode == state.NodeModeDraining {
+			rejections[rejectNodeDraining]++
 			continue
 		}
 
@@ -300,6 +310,12 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		}
 		if rejections[rejectConfigStreams] > 0 && len(rejections) == 1 {
 			return nil, fmt.Errorf("stream %q not allowed by node configuration", streamName)
+		}
+		if rejections[rejectNodeMaintenance] > 0 && len(rejections) == 1 {
+			return nil, fmt.Errorf("all suitable nodes are in maintenance")
+		}
+		if rejections[rejectNodeDraining] > 0 && len(rejections) == 1 {
+			return nil, fmt.Errorf("all suitable nodes are draining")
 		}
 		return nil, fmt.Errorf("no suitable nodes available")
 	}

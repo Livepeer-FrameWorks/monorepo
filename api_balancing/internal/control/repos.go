@@ -259,6 +259,32 @@ func (r *nodeRepositoryDB) ListAllNodes(ctx context.Context) ([]state.NodeRecord
 	return out, rows.Err()
 }
 
+func (r *nodeRepositoryDB) ListNodeMaintenance(ctx context.Context) ([]state.NodeMaintenanceRecord, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT node_id, mode, set_at, COALESCE(set_by, '')
+		FROM foghorn.node_maintenance
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []state.NodeMaintenanceRecord
+	for rows.Next() {
+		var rec state.NodeMaintenanceRecord
+		var mode string
+		if err := rows.Scan(&rec.NodeID, &mode, &rec.SetAt, &rec.SetBy); err != nil {
+			return nil, err
+		}
+		rec.Mode = state.NodeOperationalMode(mode)
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
 func (r *nodeRepositoryDB) UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error {
 	if db == nil {
 		return sql.ErrConnDone
@@ -292,6 +318,21 @@ func (r *nodeRepositoryDB) UpsertNodeLifecycle(ctx context.Context, update *pb.N
 			lifecycle = EXCLUDED.lifecycle,
 			last_updated = NOW()
 	`, update.GetNodeId(), string(b))
+	return err
+}
+
+func (r *nodeRepositoryDB) UpsertNodeMaintenance(ctx context.Context, nodeID string, mode state.NodeOperationalMode, setBy string) error {
+	if db == nil {
+		return sql.ErrConnDone
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO foghorn.node_maintenance (node_id, mode, set_at, set_by)
+		VALUES ($1, $2, NOW(), NULLIF($3, ''))
+		ON CONFLICT (node_id) DO UPDATE SET
+			mode = EXCLUDED.mode,
+			set_at = NOW(),
+			set_by = EXCLUDED.set_by
+	`, nodeID, string(mode), setBy)
 	return err
 }
 

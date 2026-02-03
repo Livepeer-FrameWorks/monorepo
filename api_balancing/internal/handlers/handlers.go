@@ -572,9 +572,10 @@ func HandleNodesOverview(c *gin.Context) {
 			}
 
 			entry := map[string]interface{}{
-				"node_id": n.NodeID,
-				"host":    n.Host,
-				"roles":   n.Roles,
+				"node_id":          n.NodeID,
+				"host":             n.Host,
+				"roles":            n.Roles,
+				"operational_mode": n.OperationalMode,
 				// capabilities
 				"cap_ingest":     n.CapIngest,
 				"cap_edge":       n.CapEdge,
@@ -899,6 +900,56 @@ func HandleNodesOverview(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+type nodeOperationalModeRequest struct {
+	Mode  string `json:"mode"`
+	SetBy string `json:"set_by"`
+}
+
+func HandleSetNodeMaintenanceMode(c *gin.Context) {
+	nodeID := strings.TrimSpace(c.Param("node_id"))
+	if nodeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id is required"})
+		return
+	}
+
+	var req nodeOperationalModeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	mode := state.NodeOperationalMode(strings.ToLower(strings.TrimSpace(req.Mode)))
+	if err := state.DefaultManager().SetNodeOperationalMode(c.Request.Context(), nodeID, mode, strings.TrimSpace(req.SetBy)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"node_id":          nodeID,
+		"operational_mode": state.DefaultManager().GetNodeOperationalMode(nodeID),
+		"active_viewers":   state.DefaultManager().GetNodeActiveViewers(nodeID),
+	})
+}
+
+func HandleGetNodeDrainStatus(c *gin.Context) {
+	nodeID := strings.TrimSpace(c.Param("node_id"))
+	if nodeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id is required"})
+		return
+	}
+
+	if state.DefaultManager().GetNodeState(nodeID) == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"node_id":          nodeID,
+		"operational_mode": state.DefaultManager().GetNodeOperationalMode(nodeID),
+		"active_viewers":   state.DefaultManager().GetNodeActiveViewers(nodeID),
+	})
 }
 
 // handleRootQueries handles the admin API endpoints (EXACT C++ implementation)
