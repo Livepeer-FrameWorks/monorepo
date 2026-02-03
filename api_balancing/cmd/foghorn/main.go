@@ -416,6 +416,8 @@ func main() {
 
 	// Nodes overview for debugging (kept as HTTP for quick inspection)
 	router.GET("/nodes/overview", handlers.HandleNodesOverview)
+	router.PUT("/nodes/:node_id/mode", handlers.HandleSetNodeMaintenanceMode)
+	router.GET("/nodes/:node_id/drain-status", handlers.HandleGetNodeDrainStatus)
 
 	// Root page debug interface
 	router.GET("/dashboard", handlers.HandleRootPage)

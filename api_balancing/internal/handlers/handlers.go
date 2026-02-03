@@ -60,6 +60,52 @@ func GetClusterInfo() (string, string) {
 	return clusterID, ownerTenantID
 }
 
+func bootstrapClusterInfo(ctx context.Context) error {
+	if quartermasterClient == nil {
+		return fmt.Errorf("quartermaster client not configured")
+	}
+	advertiseHost := config.GetEnv("FOGHORN_HOST", "foghorn")
+	reqClusterID := config.GetEnv("CLUSTER_ID", "")
+	resp, err := quartermasterClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		Type:           "foghorn",
+		Version:        version.Version,
+		Protocol:       "http",
+		HealthEndpoint: func() *string { s := "/health"; return &s }(),
+		Port:           18008,
+		AdvertiseHost:  &advertiseHost,
+		ClusterId: func() *string {
+			if reqClusterID != "" {
+				return &reqClusterID
+			}
+			return nil
+		}(),
+	})
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("quartermaster bootstrap returned nil response")
+	}
+
+	if resp.OwnerTenantId != nil && *resp.OwnerTenantId != "" {
+		ownerTenantID = *resp.OwnerTenantId
+		logger.WithFields(logging.Fields{
+			"cluster_id":      resp.ClusterId,
+			"owner_tenant_id": ownerTenantID,
+		}).Info("Cached cluster owner tenant for dual-tenant attribution")
+		if triggerProcessor != nil {
+			triggerProcessor.SetOwnerTenantID(ownerTenantID)
+		}
+	}
+	if clusterID == "" && resp.ClusterId != "" {
+		clusterID = resp.ClusterId
+		if triggerProcessor != nil {
+			triggerProcessor.SetClusterID(clusterID)
+		}
+	}
+	return nil
+}
+
 type clipLifecycleContext struct {
 	ClipHash     string
 	TenantID     string
@@ -202,46 +248,18 @@ func Init(
 	control.SetQuartermasterClient(qClient)
 
 	// Self-register Foghorn instance in Quartermaster and cache owner_tenant_id for dual-tenant attribution
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		advertiseHost := config.GetEnv("FOGHORN_HOST", "foghorn")
-		reqClusterID := config.GetEnv("CLUSTER_ID", "")
-		resp, err := quartermasterClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
-			Type:           "foghorn",
-			Version:        version.Version,
-			Protocol:       "http",
-			HealthEndpoint: func() *string { s := "/health"; return &s }(),
-			Port:           18008,
-			AdvertiseHost:  &advertiseHost,
-			ClusterId: func() *string {
-				if reqClusterID != "" {
-					return &reqClusterID
-				}
-				return nil
-			}(),
-		})
-		if err == nil && resp != nil {
-			// Cache owner_tenant_id for routing event attribution
-			if resp.OwnerTenantId != nil && *resp.OwnerTenantId != "" {
-				ownerTenantID = *resp.OwnerTenantId
-				logger.WithFields(logging.Fields{
-					"cluster_id":      resp.ClusterId,
-					"owner_tenant_id": ownerTenantID,
-				}).Info("Cached cluster owner tenant for dual-tenant attribution")
-				if triggerProcessor != nil {
-					triggerProcessor.SetOwnerTenantID(ownerTenantID)
-				}
+	bootstrapCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := bootstrapClusterInfo(bootstrapCtx); err != nil {
+		logger.WithError(err).Warn("Synchronous bootstrap failed, retrying async")
+		go func() {
+			retryCtx, retryCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer retryCancel()
+			if err := bootstrapClusterInfo(retryCtx); err != nil {
+				logger.WithError(err).Warn("Async bootstrap failed")
 			}
-			// Also cache cluster_id from response if not set from env
-			if clusterID == "" && resp.ClusterId != "" {
-				clusterID = resp.ClusterId
-				if triggerProcessor != nil {
-					triggerProcessor.SetClusterID(clusterID)
-				}
-			}
-		}
-	}()
+		}()
+	}
+	cancel()
 
 	// Register clip progress/done handlers to emit analytics
 	control.SetClipHandlers(
@@ -555,9 +573,10 @@ func HandleNodesOverview(c *gin.Context) {
 			}
 
 			entry := map[string]interface{}{
-				"node_id": n.NodeID,
-				"host":    n.Host,
-				"roles":   n.Roles,
+				"node_id":          n.NodeID,
+				"host":             n.Host,
+				"roles":            n.Roles,
+				"operational_mode": n.OperationalMode,
 				// capabilities
 				"cap_ingest":     n.CapIngest,
 				"cap_edge":       n.CapEdge,
@@ -882,6 +901,56 @@ func HandleNodesOverview(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+type nodeOperationalModeRequest struct {
+	Mode  string `json:"mode"`
+	SetBy string `json:"set_by"`
+}
+
+func HandleSetNodeMaintenanceMode(c *gin.Context) {
+	nodeID := strings.TrimSpace(c.Param("node_id"))
+	if nodeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id is required"})
+		return
+	}
+
+	var req nodeOperationalModeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	mode := state.NodeOperationalMode(strings.ToLower(strings.TrimSpace(req.Mode)))
+	if err := state.DefaultManager().SetNodeOperationalMode(c.Request.Context(), nodeID, mode, strings.TrimSpace(req.SetBy)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"node_id":          nodeID,
+		"operational_mode": state.DefaultManager().GetNodeOperationalMode(nodeID),
+		"active_viewers":   state.DefaultManager().GetNodeActiveViewers(nodeID),
+	})
+}
+
+func HandleGetNodeDrainStatus(c *gin.Context) {
+	nodeID := strings.TrimSpace(c.Param("node_id"))
+	if nodeID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id is required"})
+		return
+	}
+
+	if state.DefaultManager().GetNodeState(nodeID) == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"node_id":          nodeID,
+		"operational_mode": state.DefaultManager().GetNodeOperationalMode(nodeID),
+		"active_viewers":   state.DefaultManager().GetNodeActiveViewers(nodeID),
+	})
 }
 
 // handleRootQueries handles the admin API endpoints (EXACT C++ implementation)
@@ -1394,7 +1463,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 
 	// Compute routing distance if we have both points
 	routingDistanceKm := 0.0
-	if lat != 0 && lon != 0 && nodeLat != 0 && nodeLon != 0 {
+	if geo.IsValidLatLon(lat, lon) && geo.IsValidLatLon(nodeLat, nodeLon) {
 		const toRad = math.Pi / 180.0
 		lat1 := lat * toRad
 		lon1 := lon * toRad
@@ -1415,14 +1484,26 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 	// MistServer sends stream names with live+/vod+ prefix; strip it for DB lookup
 	var tenantID, internalName, streamID string
 	if commodoreClient != nil && streamName != "" {
-		ctx := context.Background()
 		bareInternal := mist.ExtractInternalName(streamName)
-		if resolveResp, err := commodoreClient.ResolveInternalName(ctx, bareInternal); err == nil {
+		var resolveResp *pb.ResolveInternalNameResponse
+		var err error
+		for attempt := 0; attempt < 2; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			resolveResp, err = commodoreClient.ResolveInternalName(ctx, bareInternal)
+			cancel()
+			if err == nil {
+				break
+			}
+			if attempt == 0 {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if err == nil && resolveResp != nil {
 			tenantID = resolveResp.TenantId
 			internalName = resolveResp.InternalName
 			streamID = resolveResp.StreamId
 		} else {
-			logger.WithError(err).WithField("stream_name", streamName).Info("Failed to resolve tenant via Commodore")
+			logger.WithError(err).WithField("stream_name", streamName).Warn("Failed to resolve tenant via Commodore after retry")
 		}
 	}
 
@@ -1559,7 +1640,7 @@ func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEnd
 	selectedNodeID := primary.NodeId
 
 	routingDistanceKm := 0.0
-	if viewerLat != 0 && viewerLon != 0 && nodeLat != 0 && nodeLon != 0 {
+	if geo.IsValidLatLon(viewerLat, viewerLon) && geo.IsValidLatLon(nodeLat, nodeLon) {
 		const toRad = math.Pi / 180.0
 		lat1 := viewerLat * toRad
 		lon1 := viewerLon * toRad
@@ -1728,7 +1809,7 @@ func getLatLon(c *gin.Context, query url.Values, queryKey, headerKey string) flo
 			return f
 		}
 	}
-	return 0
+	return math.NaN()
 }
 
 func getTagAdjustments(c *gin.Context, query url.Values) map[string]int {

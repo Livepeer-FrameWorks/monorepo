@@ -17,7 +17,9 @@ export default tseslint.config(
       "src/lib/components/ui/**",
       "src/lib/graphql/generated/**",
       "**/*.config.js",
+      "**/*.config.ts",
       "**/*.svelte.ts",
+      "test/**",
     ],
   },
   {

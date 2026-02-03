@@ -454,7 +454,7 @@ FROM numbers(0, 10080);
 -- 7. Artifact Events + State (clips, DVR, VOD)
 -- =================================================================================================
 INSERT INTO periscope.artifact_events (
-    timestamp, tenant_id, stream_id, internal_name, request_id,
+    timestamp, tenant_id, stream_id, internal_name, filename, request_id,
     stage, content_type, start_unix, stop_unix,
     ingest_node_id, percent, message,
     file_path, s3_url, size_bytes, expires_at
@@ -464,6 +464,7 @@ INSERT INTO periscope.artifact_events (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
+    NULL,
     'clip_demo_001',
     'done', 'clip', 1700000000, 1700003600,
     'edge-leiden', 100, 'clip complete',
@@ -475,6 +476,7 @@ INSERT INTO periscope.artifact_events (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
+    NULL,
     'dvr_demo_001',
     'done', 'dvr', 1700001000, 1700004600,
     'edge-leiden', 100, 'dvr complete',
@@ -485,7 +487,8 @@ INSERT INTO periscope.artifact_events (
     now() - INTERVAL 10 HOUR,
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
-    'demo_live_stream_001',
+    'vod_demo_001',
+    'vod_demo_001.mp4',
     'vod_demo_001',
     'done', 'vod', NULL, NULL,
     'edge-leiden', 100, 'vod uploaded',
@@ -494,7 +497,7 @@ INSERT INTO periscope.artifact_events (
 );
 
 INSERT INTO periscope.artifact_state_current (
-    tenant_id, stream_id, request_id, internal_name,
+    tenant_id, stream_id, request_id, internal_name, filename,
     content_type, stage, progress_percent, error_message,
     requested_at, started_at, completed_at,
     clip_start_unix, clip_stop_unix,
@@ -508,6 +511,7 @@ INSERT INTO periscope.artifact_state_current (
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'clip_demo_001',
     'demo_live_stream_001',
+    NULL,
     'clip', 'done', 100, NULL,
     now() - INTERVAL 6 HOUR, now() - INTERVAL 6 HOUR, now() - INTERVAL 6 HOUR,
     1700000000, 1700003600,
@@ -521,6 +525,7 @@ INSERT INTO periscope.artifact_state_current (
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'dvr_demo_001',
     'demo_live_stream_001',
+    NULL,
     'dvr', 'done', 100, NULL,
     now() - INTERVAL 8 HOUR, now() - INTERVAL 8 HOUR, now() - INTERVAL 8 HOUR,
     1700001000, 1700004600,
@@ -533,7 +538,8 @@ INSERT INTO periscope.artifact_state_current (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'vod_demo_001',
-    'demo_live_stream_001',
+    'vod_demo_001',
+    'vod_demo_001.mp4',
     'vod', 'done', 100, NULL,
     now() - INTERVAL 10 HOUR, now() - INTERVAL 10 HOUR, now() - INTERVAL 10 HOUR,
     NULL, NULL,

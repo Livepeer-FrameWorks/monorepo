@@ -538,7 +538,7 @@ func (h *X402Handler) recordNonceAndCredit(ctx context.Context, network, payerAd
 	}
 
 	if !inserted {
-		if err := tx.Commit(); err != nil {
+		if err = tx.Commit(); err != nil {
 			return 0, 0, false, "", "", err
 		}
 		return 0, storedAmount, false, nonceStatus, storedTxHash, nil
@@ -549,7 +549,7 @@ func (h *X402Handler) recordNonceAndCredit(ctx context.Context, network, payerAd
 		return 0, 0, false, "", "", err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return 0, 0, false, "", "", err
 	}
 
@@ -785,8 +785,6 @@ func (h *X402Handler) sendRawTransaction(ctx context.Context, network NetworkCon
 
 // creditPrepaidBalance credits the tenant's prepaid balance
 func (h *X402Handler) creditPrepaidBalance(ctx context.Context, tenantID string, amountCents int64, txHash string) (int64, error) {
-	currency := billing.DefaultCurrency()
-
 	tx, err := h.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err

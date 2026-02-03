@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
@@ -369,7 +370,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 
 		// Calculate geo distance
 		geoDistance := 0.0
-		if deps.GeoLat != 0 && deps.GeoLon != 0 && node.GeoLatitude != 0 && node.GeoLongitude != 0 {
+		if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
 			geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
 		}
 

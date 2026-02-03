@@ -675,7 +675,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	}
 
 	if err := batch.Append(
-		event.EventID,
+		parseUUID(event.EventID),
 		event.Timestamp,
 		event.TenantID,
 		parseUUID(mt.GetStreamId()),
@@ -1531,9 +1531,13 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	}
 
 	// Extract stream-wide buffer metrics
+	// Note: 0 is a valid buffer value during DRY/rebuffering states.
+	// IMPORTANT: only set buffer_size when the optional stream_buffer_ms field is present.
+	// Otherwise we turn "unknown" into a hard 0 which corrupts analytics.
 	var bufferSize *uint32
-	if v := streamBuffer.GetStreamBufferMs(); v > 0 {
-		bs := uint32(v)
+	bufferMsPtr := streamBuffer.StreamBufferMs
+	if bufferMsPtr != nil {
+		bs := uint32(*bufferMsPtr)
 		bufferSize = &bs
 	}
 
@@ -1964,7 +1968,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
 	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_state_current (
-			tenant_id, stream_id, request_id, internal_name, content_type, stage,
+			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			clip_start_unix, clip_stop_unix, file_path, s3_url, size_bytes,
 			processing_node_id, updated_at, expires_at
@@ -1985,6 +1989,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		parseUUID(mt.GetStreamId()),
 		requestID,
 		internalName,
+		nil,
 		"clip",
 		stageStr,
 		uint8(cl.GetProgressPercent()),
@@ -2024,7 +2029,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, request_id, stage, content_type,
+			timestamp, tenant_id, stream_id, internal_name, filename, request_id, stage, content_type,
 			start_unix, stop_unix, ingest_node_id,
 			percent, message, file_path, s3_url, size_bytes, expires_at
 		)`)
@@ -2040,6 +2045,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		internalName,
+		nil,
 		requestID,
 		stageStr,
 		"clip",
@@ -2092,8 +2098,9 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	}
 	dvrData := tp.DvrLifecycleData
 
-	var tenantID, internalName string
-	if dvrData.TenantId != nil {
+	tenantID := event.TenantID
+	var internalName string
+	if dvrData.TenantId != nil && *dvrData.TenantId != "" {
 		tenantID = *dvrData.TenantId
 	}
 	if dvrData.InternalName != nil {
@@ -2118,7 +2125,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
 	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_state_current (
-			tenant_id, stream_id, request_id, internal_name, content_type, stage,
+			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			segment_count, manifest_path, file_path, size_bytes, processing_node_id, updated_at, expires_at
 		)`)
@@ -2135,6 +2142,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		parseUUID(mt.GetStreamId()),
 		dvrData.GetDvrHash(),
 		internalName,
+		nil,
 		"dvr",
 		stageStr,
 		uint8(0), // progress_percent - not in DVRLifecycleData
@@ -2173,7 +2181,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, request_id, stage, content_type,
+			timestamp, tenant_id, stream_id, internal_name, filename, request_id, stage, content_type,
 			start_unix, stop_unix, ingest_node_id, file_path, size_bytes, message, expires_at
 		)`)
 	if err != nil {
@@ -2193,6 +2201,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		internalName,
+		nil,
 		dvrData.GetDvrHash(),                   // request_id
 		stageStr,                               // stage
 		"dvr",                                  // content_type
@@ -2236,17 +2245,14 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
-		return err
-	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_VodLifecycleData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for vod_lifecycle")
 	}
 	vodData := tp.VodLifecycleData
 
-	var tenantID string
-	if vodData.TenantId != nil {
+	tenantID := event.TenantID
+	if vodData.TenantId != nil && *vodData.TenantId != "" {
 		tenantID = *vodData.TenantId
 	}
 
@@ -2266,7 +2272,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	// VOD uses vod_hash as request_id, and content_type='vod'
 	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_state_current (
-			tenant_id, stream_id, request_id, internal_name, content_type, stage,
+			tenant_id, stream_id, request_id, internal_name, filename, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at
 		)`)
@@ -2278,20 +2284,21 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		return err
 	}
 
-	// VOD assets don't have an internal_name (stream name), use filename instead
-	internalName := ""
-	if vodData.Filename != nil {
-		internalName = *vodData.Filename
+	internalName := vodData.GetVodHash()
+	var filename *string
+	if vodData.Filename != nil && *vodData.Filename != "" {
+		filename = vodData.Filename
 	}
 
 	if err := stateBatch.Append(
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		vodData.GetVodHash(), // request_id = vod_hash
-		internalName,         // internal_name = filename for VOD
-		"vod",                // content_type
-		stageStr,             // stage
-		uint8(0),             // progress_percent - not tracked for VOD
+		internalName,         // internal_name = vod_hash for VOD
+		filename,
+		"vod",    // content_type
+		stageStr, // stage
+		uint8(0), // progress_percent - not tracked for VOD
 		nilIfEmptyStringPtr(vodData.Error),
 		event.Timestamp,                        // requested_at
 		nilIfZeroInt64Ptr(vodData.StartedAt),   // started_at
@@ -2327,7 +2334,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	// Reuse clip_events table for VOD lifecycle events (content_type differentiates)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, request_id, stage, content_type,
+			timestamp, tenant_id, stream_id, internal_name, filename, request_id, stage, content_type,
 			ingest_node_id, file_path, s3_url, size_bytes, message, expires_at
 		)`)
 	if err != nil {
@@ -2346,7 +2353,8 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		event.Timestamp,
 		tenantID,
 		parseUUID(mt.GetStreamId()),
-		internalName,                          // internal_name = filename
+		internalName, // internal_name = vod_hash
+		filename,
 		vodData.GetVodHash(),                  // request_id = vod_hash
 		stageStr,                              // stage
 		"vod",                                 // content_type

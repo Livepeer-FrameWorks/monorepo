@@ -291,6 +291,15 @@ coverage: proto graphql
 			fi; \
 		rm -f "$$tmpfile" ); \
 	done;
+	@# Filter out generated code from coverage
+	@if [ -f "$(CURDIR)/coverage/coverage.out" ]; then \
+		grep -v '\.pb\.go:' "$(CURDIR)/coverage/coverage.out" | \
+			grep -v '_grpc\.pb\.go:' | \
+			grep -v 'graph/generated/' | \
+			grep -v 'graph/model/models_gen\.go:' > "$(CURDIR)/coverage/coverage.filtered.out" && \
+			mv "$(CURDIR)/coverage/coverage.filtered.out" "$(CURDIR)/coverage/coverage.out"; \
+		echo "Filtered generated code from coverage report"; \
+	fi
 	@echo "Combined coverage saved to $(CURDIR)/coverage/coverage.out"
 
 env:

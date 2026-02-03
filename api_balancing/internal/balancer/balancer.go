@@ -7,6 +7,9 @@ import (
 	"net"
 	"strings"
 
+	"frameworks/api_balancing/internal/geo"
+	"frameworks/pkg/logging"
+
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
@@ -153,6 +156,8 @@ const (
 	rejectStreamReplicated nodeRejectionReason = "stream is replicated on node (excluded for source selection)"
 	rejectConfigStreams    nodeRejectionReason = "stream not allowed by node config"
 	rejectAdjustedToZero   nodeRejectionReason = "score adjusted to zero"
+	rejectNodeMaintenance  nodeRejectionReason = "node in maintenance"
+	rejectNodeDraining     nodeRejectionReason = "node is draining"
 )
 
 // GetBestNodeWithScore finds the best node and returns both node and score
@@ -239,10 +244,18 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	skippedForCapCount := 0
 
 	for _, snap := range snapshot.Nodes {
+		if snap.OperationalMode == state.NodeModeMaintenance {
+			rejections[rejectNodeMaintenance]++
+			continue
+		}
 		if !snap.IsActive || skipForCap(snap) {
 			if snap.IsActive {
 				skippedForCapCount++
 			}
+			continue
+		}
+		if snap.OperationalMode == state.NodeModeDraining {
+			rejections[rejectNodeDraining]++
 			continue
 		}
 
@@ -300,6 +313,12 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		}
 		if rejections[rejectConfigStreams] > 0 && len(rejections) == 1 {
 			return nil, fmt.Errorf("stream %q not allowed by node configuration", streamName)
+		}
+		if rejections[rejectNodeMaintenance] > 0 && len(rejections) == 1 {
+			return nil, fmt.Errorf("all suitable nodes are in maintenance")
+		}
+		if rejections[rejectNodeDraining] > 0 && len(rejections) == 1 {
+			return nil, fmt.Errorf("all suitable nodes are draining")
 		}
 		return nil, fmt.Errorf("no suitable nodes available")
 	}
@@ -408,7 +427,7 @@ func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapsh
 
 	// Geographic score (still computed dynamically)
 	var geoScore uint64 = 0
-	if snap.GeoLatitude != 0 && snap.GeoLongitude != 0 && lat != 0 && lon != 0 {
+	if geo.IsValidLatLon(snap.GeoLatitude, snap.GeoLongitude) && geo.IsValidLatLon(lat, lon) {
 		distance := lb.geoDist(snap.GeoLatitude, snap.GeoLongitude, lat, lon)
 		geoScore = weights["geo"] - uint64(float64(weights["geo"])*distance)
 	}
@@ -459,6 +478,11 @@ func (lb *LoadBalancer) geoDist(lat1, long1, lat2, long2 float64) float64 {
 	long2Rad := long2 * toRadConstant
 
 	dist := math.Sin(lat1Rad)*math.Sin(lat2Rad) + math.Cos(lat1Rad)*math.Cos(lat2Rad)*math.Cos(long1Rad-long2Rad)
+	if dist > 1 {
+		dist = 1
+	} else if dist < -1 {
+		dist = -1
+	}
 	return 0.31830988618379067153 * math.Acos(dist) // Exact C++ constants
 }
 
