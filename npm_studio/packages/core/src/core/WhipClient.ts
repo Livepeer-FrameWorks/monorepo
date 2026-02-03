@@ -514,6 +514,13 @@ export class WhipClient extends TypedEventEmitter<WhipClientEvents> {
         );
       }
 
+      // Store WHIP resource URL from Location header (per RFC 9725)
+      // This URL is used for DELETE on disconnect
+      this.resourceUrl = response.headers.get("Location");
+      if (this.resourceUrl) {
+        this.log("WHIP resource URL:", this.resourceUrl);
+      }
+
       // Get and set remote description
       const answerSdp = await response.text();
       this.log("Received SDP answer", { length: answerSdp.length });
