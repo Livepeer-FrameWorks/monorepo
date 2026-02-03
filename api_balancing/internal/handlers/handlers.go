@@ -1373,9 +1373,10 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 
 	// Create virtual viewer to track this redirect
 	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
+	viewerID := ""
 	if nodeID := lb.GetNodeIDByHost(bestNode); nodeID != "" {
 		clientIP := c.ClientIP()
-		state.DefaultManager().CreateVirtualViewer(nodeID, internalName, clientIP)
+		viewerID = state.DefaultManager().CreateVirtualViewer(nodeID, internalName, clientIP)
 	}
 
 	// Check if redirect is requested (like C++)
@@ -1385,6 +1386,9 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		redirectURL := fmt.Sprintf("%s://%s/%s", proto, bestNode, streamName)
 		if vars != "" {
 			redirectURL += "?" + vars
+		}
+		if viewerID != "" {
+			redirectURL = appendCorrelationID(redirectURL, viewerID)
 		}
 		c.Header("Location", redirectURL)
 		c.String(http.StatusTemporaryRedirect, redirectURL)
@@ -2107,11 +2111,12 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Create virtual viewer for live streams to track this redirect
 	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
+	viewerID := ""
 	if contentType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
 		if internalName == "" {
 			internalName = contentID
 		}
-		state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, viewerIP)
+		viewerID = state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, viewerIP)
 	}
 
 	// If no protocol or "any", return full JSON response
@@ -2167,6 +2172,9 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		}
 		redirectURL += manifestPath
 	}
+	if viewerID != "" {
+		redirectURL = appendCorrelationID(redirectURL, viewerID)
+	}
 
 	// Record metrics
 	if metrics != nil {
@@ -2183,6 +2191,23 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Return 307 Temporary Redirect
 	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+}
+
+func appendCorrelationID(redirectURL, viewerID string) string {
+	if viewerID == "" || redirectURL == "" {
+		return redirectURL
+	}
+
+	parsedURL, err := url.Parse(redirectURL)
+	if err != nil {
+		return redirectURL
+	}
+
+	query := parsedURL.Query()
+	// Always override any existing fwcid to avoid stale/malicious correlation IDs.
+	query.Set("fwcid", viewerID)
+	parsedURL.RawQuery = query.Encode()
+	return parsedURL.String()
 }
 
 // normalizeProtocol converts protocol hints to standard names

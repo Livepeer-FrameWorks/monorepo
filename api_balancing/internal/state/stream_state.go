@@ -112,6 +112,7 @@ type VirtualViewer struct {
 	NodeID         string             `json:"node_id"`         // Target node for redirect
 	StreamName     string             `json:"stream_name"`     // Internal stream name
 	ClientIP       string             `json:"client_ip"`       // Client IP for matching USER_NEW
+	MistSessionID  string             `json:"mist_session_id"` // Mist session ID for disconnect correlation
 	State          VirtualViewerState `json:"state"`           // Current lifecycle state
 	RedirectTime   time.Time          `json:"redirect_time"`   // When redirect was issued
 	ConnectTime    time.Time          `json:"connect_time"`    // When USER_NEW matched (zero if not yet)
@@ -2330,6 +2331,12 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 // Matches by (nodeID, streamName, clientIP), oldest PENDING first.
 // Returns true if a matching viewer was found and confirmed.
 func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP string) bool {
+	return sm.ConfirmVirtualViewerByID("", nodeID, streamName, clientIP, "")
+}
+
+// ConfirmVirtualViewerByID transitions a PENDING viewer to ACTIVE when USER_NEW arrives.
+// If viewerID is provided, match the exact virtual viewer; otherwise fallback to IP matching.
+func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamName, clientIP, mistSessionID string) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -2342,16 +2349,27 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 	var matchedViewer *VirtualViewer
 	var oldestTime time.Time
 
-	for _, viewerID := range sm.viewersByNode[nodeID] {
-		viewer := sm.virtualViewers[viewerID]
-		if viewer == nil || viewer.State != VirtualViewerPending {
-			continue
+	if viewerID != "" {
+		if viewer := sm.virtualViewers[viewerID]; viewer != nil &&
+			viewer.State == VirtualViewerPending &&
+			viewer.NodeID == nodeID &&
+			viewer.StreamName == streamName {
+			matchedViewer = viewer
 		}
-		// Match by node, stream, and client IP
-		if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
-			if matchedViewer == nil || viewer.RedirectTime.Before(oldestTime) {
-				matchedViewer = viewer
-				oldestTime = viewer.RedirectTime
+	}
+
+	if matchedViewer == nil {
+		for _, candidateID := range sm.viewersByNode[nodeID] {
+			viewer := sm.virtualViewers[candidateID]
+			if viewer == nil || viewer.State != VirtualViewerPending {
+				continue
+			}
+			// Match by node, stream, and client IP
+			if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
+				if matchedViewer == nil || viewer.RedirectTime.Before(oldestTime) {
+					matchedViewer = viewer
+					oldestTime = viewer.RedirectTime
+				}
 			}
 		}
 	}
@@ -2364,6 +2382,9 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 	// Transition to ACTIVE
 	matchedViewer.State = VirtualViewerActive
 	matchedViewer.ConnectTime = time.Now()
+	if mistSessionID != "" {
+		matchedViewer.MistSessionID = mistSessionID
+	}
 
 	// Decrement pending count and remove bandwidth penalty
 	node.PendingRedirects--
@@ -2385,6 +2406,12 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 // DisconnectVirtualViewer transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
 // Matches by (nodeID, streamName, clientIP), oldest ACTIVE first.
 func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, clientIP string) {
+	sm.DisconnectVirtualViewerBySessionID("", nodeID, streamName, clientIP)
+}
+
+// DisconnectVirtualViewerBySessionID transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
+// If mistSessionID is provided, match by Mist session ID; otherwise fallback to IP matching.
+func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, nodeID, streamName, clientIP string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -2392,15 +2419,32 @@ func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, client
 	var matchedViewer *VirtualViewer
 	var oldestTime time.Time
 
-	for _, viewerID := range sm.viewersByNode[nodeID] {
-		viewer := sm.virtualViewers[viewerID]
-		if viewer == nil || viewer.State != VirtualViewerActive {
-			continue
+	if mistSessionID != "" {
+		for _, candidateID := range sm.viewersByNode[nodeID] {
+			viewer := sm.virtualViewers[candidateID]
+			if viewer == nil || viewer.State != VirtualViewerActive {
+				continue
+			}
+			if viewer.StreamName == streamName && viewer.MistSessionID == mistSessionID {
+				if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
+					matchedViewer = viewer
+					oldestTime = viewer.ConnectTime
+				}
+			}
 		}
-		if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
-			if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
-				matchedViewer = viewer
-				oldestTime = viewer.ConnectTime
+	}
+
+	if matchedViewer == nil {
+		for _, candidateID := range sm.viewersByNode[nodeID] {
+			viewer := sm.virtualViewers[candidateID]
+			if viewer == nil || viewer.State != VirtualViewerActive {
+				continue
+			}
+			if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
+				if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
+					matchedViewer = viewer
+					oldestTime = viewer.ConnectTime
+				}
 			}
 		}
 	}
@@ -2467,6 +2511,9 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 
 	// 3. Timeout stale PENDING viewers (>30s old)
 	sm.timeoutStalePendingViewersLocked(nodeID, 30*time.Second)
+
+	// 3.5. Cleanup old ABANDONED/DISCONNECTED viewers
+	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
 
 	// 4. Recalculate AddBandwidth based on remaining pending viewers
 	var totalPendingBW uint64
@@ -2625,7 +2672,70 @@ func (sm *StreamStateManager) GetVirtualViewerStats() map[string]interface{} {
 	}
 	stats["pending_by_node"] = nodeStats
 
+	// Drift: virtual ACTIVE count vs Helmsman real count per node
+	activeByNode := make(map[string]int)
+	for _, viewer := range sm.virtualViewers {
+		if viewer != nil && viewer.State == VirtualViewerActive {
+			activeByNode[viewer.NodeID]++
+		}
+	}
+	realByNode := make(map[string]int)
+	for _, instances := range sm.streamInstances {
+		for nodeID, inst := range instances {
+			if inst != nil {
+				realByNode[nodeID] += inst.TotalConnections
+			}
+		}
+	}
+	driftByNode := make(map[string]int)
+	for nodeID := range sm.nodes {
+		driftByNode[nodeID] = activeByNode[nodeID] - realByNode[nodeID]
+	}
+	stats["drift_by_node"] = driftByNode
+
 	return stats
+}
+
+// GetViewerDrift returns the difference between event-based ACTIVE viewer count and Helmsman total connections per node.
+// Positive = more virtual than real (potential ghosts), Negative = more real than virtual (missed USER_NEW).
+func (sm *StreamStateManager) GetViewerDrift() map[string]int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	drift := make(map[string]int)
+
+	// Count ACTIVE virtual viewers per node
+	activeByNode := make(map[string]int)
+	for _, viewerID := range sm.virtualViewers {
+		if viewerID != nil && viewerID.State == VirtualViewerActive {
+			activeByNode[viewerID.NodeID]++
+		}
+	}
+
+	// Get real totals from Helmsman per node
+	realByNode := make(map[string]int)
+	for _, instances := range sm.streamInstances {
+		for nodeID, inst := range instances {
+			if inst != nil {
+				realByNode[nodeID] += inst.TotalConnections
+			}
+		}
+	}
+
+	// Calculate drift for each node that has either virtual or real viewers
+	allNodes := make(map[string]bool)
+	for nodeID := range activeByNode {
+		allNodes[nodeID] = true
+	}
+	for nodeID := range realByNode {
+		allNodes[nodeID] = true
+	}
+
+	for nodeID := range allNodes {
+		drift[nodeID] = activeByNode[nodeID] - realByNode[nodeID]
+	}
+
+	return drift
 }
 
 // GetVirtualViewersForNode returns all virtual viewers for a specific node
