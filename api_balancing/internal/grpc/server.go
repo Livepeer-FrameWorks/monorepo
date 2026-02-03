@@ -1169,7 +1169,8 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	}
 
 	// GeoIP resolution
-	var lat, lon float64 = 0.0, 0.0
+	// IMPORTANT: default to NaN so missing GeoIP does not look like a real (0,0) coordinate.
+	lat, lon := math.NaN(), math.NaN()
 	viewerIP := req.GetViewerIp()
 
 	if viewerIP != "" && s.geoipReader != nil {
