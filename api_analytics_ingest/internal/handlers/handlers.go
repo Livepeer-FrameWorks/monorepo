@@ -254,6 +254,14 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 	}
 
 	for _, usage := range storageSnapshot.GetUsage() {
+		if !isValidUUIDString(usage.GetTenantId()) {
+			h.logger.WithFields(logging.Fields{
+				"event_id":  event.EventID,
+				"tenant_id": usage.GetTenantId(),
+				"node_id":   storageSnapshot.GetNodeId(),
+			}).Warn("Skipping storage snapshot row: missing or invalid tenant_id")
+			continue
+		}
 		if err := batch.Append(
 			event.Timestamp,
 			storageSnapshot.GetNodeId(),
@@ -291,8 +299,13 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
-		return err
+	if !isValidUUIDString(mt.GetStreamId()) {
+		h.logger.WithFields(logging.Fields{
+			"event_id":  event.EventID,
+			"tenant_id": event.TenantID,
+			"stream_id": mt.GetStreamId(),
+		}).Warn("Stream lifecycle event missing or invalid stream_id; skipping to avoid corrupting current state")
+		return nil
 	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate)
 	if !ok || tp == nil {
@@ -2420,14 +2433,19 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
-		return err
-	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StorageLifecycleData)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for storage_lifecycle")
 	}
 	sld := tp.StorageLifecycleData
+	if !isValidUUIDString(mt.GetStreamId()) {
+		h.logger.WithFields(logging.Fields{
+			"event_id":   event.EventID,
+			"tenant_id":  event.TenantID,
+			"stream_id":  mt.GetStreamId(),
+			"asset_hash": sld.GetAssetHash(),
+		}).Warn("Storage lifecycle event missing or invalid stream_id")
+	}
 
 	// Normalize internal name
 	internalName := ""

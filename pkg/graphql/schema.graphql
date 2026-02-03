@@ -3281,7 +3281,7 @@ type StorageEvent implements Node {
   streamId: ID!
   stream: Stream
   assetHash: String! # clip_hash or dvr_hash
-  action: String! # freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
+  action: String! # sync_started, synced, cache_started, cached, sync_failed, cache_failed
   assetType: String! # clip, dvr
   sizeBytes: Float!
   s3Url: String
