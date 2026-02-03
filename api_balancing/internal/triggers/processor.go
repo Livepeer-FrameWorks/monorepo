@@ -960,7 +960,8 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 	// Confirm virtual viewer: transition PENDING -> ACTIVE
 	// This decrements PendingRedirects and recalculates AddBandwidth
 	clientIP := userNew.GetHost()
-	if confirmed := state.DefaultManager().ConfirmVirtualViewer(trigger.GetNodeId(), internalName, clientIP); confirmed {
+	sessionID := userNew.GetSessionId()
+	if confirmed := state.DefaultManager().ConfirmVirtualViewerWithSession(trigger.GetNodeId(), internalName, clientIP, sessionID); confirmed {
 		p.logger.WithFields(logging.Fields{
 			"node_id":       trigger.GetNodeId(),
 			"internal_name": internalName,
@@ -1124,7 +1125,8 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 
 	// Disconnect virtual viewer: transition ACTIVE -> DISCONNECTED
 	clientIP := userEnd.GetHost()
-	state.DefaultManager().DisconnectVirtualViewer(trigger.GetNodeId(), internalStreamName, clientIP)
+	sessionID := userEnd.GetSessionId()
+	state.DefaultManager().DisconnectVirtualViewerWithSession(trigger.GetNodeId(), internalStreamName, clientIP, sessionID)
 
 	return "", false, nil
 }

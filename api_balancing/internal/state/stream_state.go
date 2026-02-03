@@ -111,6 +111,7 @@ type VirtualViewer struct {
 	NodeID         string             `json:"node_id"`         // Target node for redirect
 	StreamName     string             `json:"stream_name"`     // Internal stream name
 	ClientIP       string             `json:"client_ip"`       // Client IP for matching USER_NEW
+	SessionID      string             `json:"session_id"`      // Session ID for USER_NEW/USER_END correlation
 	State          VirtualViewerState `json:"state"`           // Current lifecycle state
 	RedirectTime   time.Time          `json:"redirect_time"`   // When redirect was issued
 	ConnectTime    time.Time          `json:"connect_time"`    // When USER_NEW matched (zero if not yet)
@@ -191,8 +192,9 @@ type StreamStateManager struct {
 	mu              sync.RWMutex
 
 	// Virtual Viewer Tracking (Option B: per-session)
-	virtualViewers map[string]*VirtualViewer // viewerID -> viewer (for full session tracking)
-	viewersByNode  map[string][]string       // nodeID -> []viewerIDs (for fast per-node lookups)
+	virtualViewers   map[string]*VirtualViewer // viewerID -> viewer (for full session tracking)
+	viewersByNode    map[string][]string       // nodeID -> []viewerIDs (for fast per-node lookups)
+	viewersBySession map[string]string         // sessionID -> viewerID
 
 	// Load balancer weights (exactly like C++ version)
 	WeightCPU   uint64
@@ -233,8 +235,9 @@ func NewStreamStateManager() *StreamStateManager {
 		stalenessChecker: make(chan bool),
 
 		// Virtual Viewer Tracking
-		virtualViewers: make(map[string]*VirtualViewer),
-		viewersByNode:  make(map[string][]string),
+		virtualViewers:   make(map[string]*VirtualViewer),
+		viewersByNode:    make(map[string][]string),
+		viewersBySession: make(map[string]string),
 
 		// Load balancer weights (same as C++ defaults)
 		WeightCPU:   500,  // Same as C++
@@ -1029,10 +1032,12 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 
 // ArtifactNodeInfo contains node information for artifact routing
 type ArtifactNodeInfo struct {
-	NodeID   string
-	Host     string // Base URL
-	Score    int64  // Load balancing score (lower is better)
-	Artifact *pb.StoredArtifact
+	NodeID       string
+	Host         string // Base URL
+	Score        int64  // Load balancing score (lower is better)
+	Artifact     *pb.StoredArtifact
+	GeoLatitude  float64
+	GeoLongitude float64
 }
 
 // FindNodesByArtifactHash searches for ALL nodes hosting the specified artifact (Clip/DVR).
@@ -1054,10 +1059,12 @@ func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNod
 				// Combine CPU and RAM scores for load balancing (lower is better)
 				combinedScore := int64(node.CPUScore + node.RAMScore)
 				nodes = append(nodes, ArtifactNodeInfo{
-					NodeID:   node.NodeID,
-					Host:     node.Host,
-					Score:    combinedScore,
-					Artifact: artifact,
+					NodeID:       node.NodeID,
+					Host:         node.Host,
+					Score:        combinedScore,
+					Artifact:     artifact,
+					GeoLatitude:  node.GeoLatitude,
+					GeoLongitude: node.GeoLongitude,
 				})
 				break // Only count once per node
 			}
@@ -2165,6 +2172,11 @@ type ArtifactSyncInfo struct {
 // CreateVirtualViewer creates a new PENDING virtual viewer when a redirect is issued.
 // Returns the viewer ID for correlation.
 func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP string) string {
+	return sm.CreateVirtualViewerWithSession(nodeID, streamName, clientIP, "")
+}
+
+// CreateVirtualViewerWithSession creates a new PENDING virtual viewer and registers a session ID if available.
+func (sm *StreamStateManager) CreateVirtualViewerWithSession(nodeID, streamName, clientIP, sessionID string) string {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -2185,6 +2197,7 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 		NodeID:       nodeID,
 		StreamName:   streamName,
 		ClientIP:     clientIP,
+		SessionID:    sessionID,
 		State:        VirtualViewerPending,
 		RedirectTime: time.Now(),
 		EstBandwidth: estBW,
@@ -2193,6 +2206,9 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 	// Store in maps
 	sm.virtualViewers[viewerID] = viewer
 	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], viewerID)
+	if sessionID != "" {
+		sm.viewersBySession[sessionID] = viewerID
+	}
 
 	// Update node's pending count and add bandwidth
 	node.PendingRedirects++
@@ -2208,12 +2224,28 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 // Matches by (nodeID, streamName, clientIP), oldest PENDING first.
 // Returns true if a matching viewer was found and confirmed.
 func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP string) bool {
+	return sm.ConfirmVirtualViewerWithSession(nodeID, streamName, clientIP, "")
+}
+
+// ConfirmVirtualViewerWithSession transitions a PENDING viewer to ACTIVE when USER_NEW arrives.
+// Uses session_id first, then falls back to (nodeID, streamName, clientIP).
+func (sm *StreamStateManager) ConfirmVirtualViewerWithSession(nodeID, streamName, clientIP, sessionID string) bool {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	node := sm.nodes[nodeID]
 	if node == nil {
 		return false
+	}
+
+	if sessionID != "" {
+		if viewerID, ok := sm.viewersBySession[sessionID]; ok {
+			viewer := sm.virtualViewers[viewerID]
+			if viewer != nil && viewer.State == VirtualViewerPending && viewer.NodeID == nodeID && viewer.StreamName == streamName {
+				sm.confirmVirtualViewerLocked(node, viewer, sessionID)
+				return true
+			}
+		}
 	}
 
 	// Find oldest PENDING viewer matching criteria
@@ -2239,23 +2271,7 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 		return false
 	}
 
-	// Transition to ACTIVE
-	matchedViewer.State = VirtualViewerActive
-	matchedViewer.ConnectTime = time.Now()
-
-	// Decrement pending count and remove bandwidth penalty
-	node.PendingRedirects--
-	if node.PendingRedirects < 0 {
-		node.PendingRedirects = 0
-	}
-	if node.AddBandwidth >= matchedViewer.EstBandwidth {
-		node.AddBandwidth -= matchedViewer.EstBandwidth
-	} else {
-		node.AddBandwidth = 0
-	}
-
-	// Recompute scores
-	sm.recomputeNodeScoresLocked(node)
+	sm.confirmVirtualViewerLocked(node, matchedViewer, sessionID)
 
 	return true
 }
@@ -2263,8 +2279,47 @@ func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP 
 // DisconnectVirtualViewer transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
 // Matches by (nodeID, streamName, clientIP), oldest ACTIVE first.
 func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, clientIP string) {
+	sm.DisconnectVirtualViewerWithSession(nodeID, streamName, clientIP, "")
+}
+
+// DisconnectVirtualViewerWithSession transitions a viewer to DISCONNECTED using session_id when available.
+func (sm *StreamStateManager) DisconnectVirtualViewerWithSession(nodeID, streamName, clientIP, sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	if sessionID != "" {
+		if viewerID, ok := sm.viewersBySession[sessionID]; ok {
+			viewer := sm.virtualViewers[viewerID]
+			if viewer != nil && viewer.NodeID == nodeID && viewer.StreamName == streamName {
+				if viewer.State == VirtualViewerActive {
+					viewer.State = VirtualViewerDisconnected
+					viewer.DisconnectTime = time.Now()
+					delete(sm.viewersBySession, sessionID)
+					sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+					return
+				}
+				if viewer.State == VirtualViewerPending {
+					viewer.State = VirtualViewerAbandoned
+					viewer.DisconnectTime = time.Now()
+					delete(sm.viewersBySession, sessionID)
+					if node := sm.nodes[nodeID]; node != nil {
+						node.PendingRedirects--
+						if node.PendingRedirects < 0 {
+							node.PendingRedirects = 0
+						}
+						if node.AddBandwidth >= viewer.EstBandwidth {
+							node.AddBandwidth -= viewer.EstBandwidth
+						} else {
+							node.AddBandwidth = 0
+						}
+						sm.recomputeNodeScoresLocked(node)
+					}
+					sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+					return
+				}
+			}
+		}
+	}
 
 	// Find oldest ACTIVE viewer matching criteria
 	var matchedViewer *VirtualViewer
@@ -2286,6 +2341,9 @@ func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, client
 	if matchedViewer != nil {
 		matchedViewer.State = VirtualViewerDisconnected
 		matchedViewer.DisconnectTime = time.Now()
+		if matchedViewer.SessionID != "" {
+			delete(sm.viewersBySession, matchedViewer.SessionID)
+		}
 	} else {
 		var pendingViewer *VirtualViewer
 		var pendingTime time.Time
@@ -2304,6 +2362,9 @@ func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, client
 		if pendingViewer != nil {
 			pendingViewer.State = VirtualViewerAbandoned
 			pendingViewer.DisconnectTime = time.Now()
+			if pendingViewer.SessionID != "" {
+				delete(sm.viewersBySession, pendingViewer.SessionID)
+			}
 			if node := sm.nodes[nodeID]; node != nil {
 				node.PendingRedirects--
 				if node.PendingRedirects < 0 {
@@ -2321,6 +2382,29 @@ func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, client
 
 	// Cleanup old DISCONNECTED viewers (keep for a short retention period)
 	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+}
+
+func (sm *StreamStateManager) confirmVirtualViewerLocked(node *NodeState, viewer *VirtualViewer, sessionID string) {
+	viewer.State = VirtualViewerActive
+	viewer.ConnectTime = time.Now()
+	if sessionID != "" {
+		viewer.SessionID = sessionID
+		sm.viewersBySession[sessionID] = viewer.ID
+	} else if viewer.SessionID != "" {
+		sm.viewersBySession[viewer.SessionID] = viewer.ID
+	}
+
+	node.PendingRedirects--
+	if node.PendingRedirects < 0 {
+		node.PendingRedirects = 0
+	}
+	if node.AddBandwidth >= viewer.EstBandwidth {
+		node.AddBandwidth -= viewer.EstBandwidth
+	} else {
+		node.AddBandwidth = 0
+	}
+
+	sm.recomputeNodeScoresLocked(node)
 }
 
 // ReconcileVirtualViewers is called on NODE_LIFECYCLE_UPDATE to reconcile state with reality.
@@ -2398,6 +2482,9 @@ func (sm *StreamStateManager) cleanupOldViewersLocked(nodeID string, retention t
 			remainingViewers = append(remainingViewers, viewerID)
 		} else {
 			// Remove from main map
+			if viewer.SessionID != "" {
+				delete(sm.viewersBySession, viewer.SessionID)
+			}
 			delete(sm.virtualViewers, viewerID)
 		}
 	}

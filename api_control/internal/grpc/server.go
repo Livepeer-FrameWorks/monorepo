@@ -24,6 +24,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/pagination"
@@ -4665,10 +4666,10 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 		}
 	}
 
-	resp, err := s.foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp)
+	resp, trailers, err := s.foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to resolve viewer endpoint: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	// Enrich metadata with stream info from Commodore's database
@@ -4720,10 +4721,10 @@ func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *pb.Ing
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	resp, err := s.foghornClient.ResolveIngestEndpoint(ctx, req.StreamKey, req.ViewerIp)
+	resp, trailers, err := s.foghornClient.ResolveIngestEndpoint(ctx, req.StreamKey, req.ViewerIp)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve ingest endpoint from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to resolve ingest endpoint: %v", err)
+		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
 	// Enrich metadata with stream info from Commodore's database (best-effort)
