@@ -667,7 +667,8 @@ export class PlayerManager {
     if (!this.cachedSelection || !newSelection) return true;
     return (
       this.cachedSelection.player !== newSelection.player ||
-      this.cachedSelection.source?.type !== newSelection.source?.type
+      this.cachedSelection.source?.type !== newSelection.source?.type ||
+      (this.cachedSelection.source?.url ?? "") !== (newSelection.source?.url ?? "")
     );
   }
 
