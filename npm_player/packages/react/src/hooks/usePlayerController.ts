@@ -15,6 +15,7 @@ import {
   type PlaybackQuality,
   type ContentEndpoints,
   type ContentMetadata,
+  type ClassifiedError,
 } from "@livepeer-frameworks/player-core";
 
 // ============================================================================
@@ -41,7 +42,11 @@ export interface UsePlayerControllerConfig extends Omit<PlayerControllerConfig, 
     reason: string;
   }) => void;
   /** Callback when playback fails after all recovery attempts (for error modal) */
-  onPlaybackFailed?: (error: { code: string; message: string }) => void;
+  onPlaybackFailed?: (error: {
+    code: string;
+    message: string;
+    details?: ClassifiedError["details"];
+  }) => void;
 }
 
 export interface PlayerControllerState {
@@ -71,6 +76,8 @@ export interface PlayerControllerState {
   volume: number;
   /** Error text */
   error: string | null;
+  /** Error details for debugging */
+  errorDetails: ClassifiedError["details"] | null;
   /** Is passive error */
   isPassiveError: boolean;
   /** Has playback ever started */
@@ -197,6 +204,7 @@ const initialState: PlayerControllerState = {
   isMuted: true,
   volume: 1,
   error: null,
+  errorDetails: null,
   isPassiveError: false,
   hasPlaybackStarted: false,
   isHoldingSpeed: false,
@@ -452,9 +460,14 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
         setState((prev) => ({
           ...prev,
           error: data.message,
+          errorDetails: data.details ?? null,
           isPassiveError: false,
         }));
-        onPlaybackFailed?.({ code: data.code, message: data.message });
+        onPlaybackFailed?.({
+          code: data.code,
+          message: data.message,
+          details: data.details,
+        });
       })
     );
 
@@ -525,7 +538,12 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
 
   const clearError = useCallback(() => {
     controllerRef.current?.clearError();
-    setState((prev) => ({ ...prev, error: null, isPassiveError: false }));
+    setState((prev) => ({
+      ...prev,
+      error: null,
+      errorDetails: null,
+      isPassiveError: false,
+    }));
   }, []);
 
   const dismissToast = useCallback(() => {

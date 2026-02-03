@@ -137,6 +137,7 @@ export enum ErrorCode {
 
   // Tier 4: Fatal
   ALL_PROTOCOLS_EXHAUSTED = "ALL_PROTOCOLS_EXHAUSTED",
+  ALL_PROTOCOLS_BLACKLISTED = "ALL_PROTOCOLS_BLACKLISTED",
   STREAM_OFFLINE = "STREAM_OFFLINE",
   AUTH_REQUIRED = "AUTH_REQUIRED",
   GEO_BLOCKED = "GEO_BLOCKED",
@@ -164,6 +165,13 @@ export interface ClassifiedError {
   originalError?: Error | string;
   /** Timestamp when error occurred */
   timestamp: number;
+  /** Diagnostic details for operators/debugging */
+  details?: {
+    incompatibilityReasons?: string[];
+    blacklistedProtocols?: string[];
+    originalCode?: ErrorCode;
+    originalMessage?: string;
+  };
 }
 
 /**
