@@ -137,6 +137,7 @@ func (s *DecklogServer) SendServiceEvent(ctx context.Context, event *pb.ServiceE
 		if s.metrics != nil && s.metrics.EventsIngested != nil {
 			s.metrics.EventsIngested.WithLabelValues(eventType, "tenant_missing").Inc()
 		}
+		return nil, fmt.Errorf("tenant_id required for service event type %s", eventType)
 	}
 
 	timestamp := time.Now()

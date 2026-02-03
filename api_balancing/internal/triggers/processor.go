@@ -516,7 +516,8 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 		trigger.TenantId = dld.TenantId
 	}
 	if dld.InternalName != nil && *dld.InternalName != "" {
-		p.applyStreamContext(trigger, *dld.InternalName)
+		normalizedName := mist.ExtractInternalName(*dld.InternalName)
+		p.applyStreamContext(trigger, normalizedName)
 	} else if dld.StreamId != nil && *dld.StreamId != "" {
 		// Fallback: resolve tenant/user context from stream_id (UUID)
 		p.applyStreamContext(trigger, *dld.StreamId)
@@ -753,7 +754,13 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 	}).Debug("Processing PLAY_REWRITE trigger")
 
 	// Resolve the playback ID to its canonical internal name (e.g. "live+uuid" or "vod+hash").
-	target, _ := control.ResolveStream(context.Background(), playbackID)
+	target, err := control.ResolveStream(context.Background(), playbackID)
+	if err != nil {
+		p.logger.WithFields(logging.Fields{
+			"playback_id": playbackID,
+			"error":       err,
+		}).Warn("Failed to resolve playback ID")
+	}
 
 	// Check stream owner's billing status from cache (set during PUSH_REWRITE)
 	// For live streams, the cache is populated when ingest starts
@@ -869,7 +876,13 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 		return "", true, nil
 	}
 
-	target, _ := control.ResolveStream(context.Background(), streamName)
+	target, err := control.ResolveStream(context.Background(), streamName)
+	if err != nil {
+		p.logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+			"error":       err,
+		}).Warn("Failed to resolve stream source")
+	}
 	if target != nil {
 		if target.TenantID != "" {
 			trigger.TenantId = &target.TenantID
@@ -976,9 +989,10 @@ func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, e
 // handleUserNew processes USER_NEW trigger (blocking)
 func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error) {
 	userNew := trigger.GetTriggerPayload().(*pb.MistTrigger_ViewerConnect).ViewerConnect
+	internalName := mist.ExtractInternalName(userNew.GetStreamName())
 	p.logger.WithFields(logging.Fields{
 		"session_id":      userNew.GetSessionId(),
-		"internal_name":   userNew.GetStreamName(),
+		"internal_name":   internalName,
 		"connection_addr": userNew.GetHost(),
 		"node_id":         trigger.GetNodeId(),
 	}).Debug("Processing USER_NEW trigger")
@@ -1023,7 +1037,7 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"session_id":    userNew.GetSessionId(),
-			"internal_name": userNew.GetStreamName(),
+			"internal_name": internalName,
 			"trigger_type":  trigger.GetTriggerType(),
 			"error":         err,
 		}).Error("Failed to send user connection trigger to Decklog")
@@ -1031,7 +1045,6 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 
 	// Update state (viewer +1) - reuse info from earlier lookup
 	// CRITICAL: Extract internal name to avoid creating duplicate state entries
-	internalName := mist.ExtractInternalName(userNew.GetStreamName())
 	state.DefaultManager().UpdateUserConnection(internalName, trigger.GetNodeId(), info.TenantID, 1)
 
 	// Confirm virtual viewer: transition PENDING -> ACTIVE
@@ -1271,7 +1284,7 @@ func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, 
 func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, error) {
 	// Extract RecordingEnd payload from protobuf
 	recordingEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_RecordingComplete).RecordingComplete
-	internalName := recordingEnd.GetStreamName()
+	internalName := mist.ExtractInternalName(recordingEnd.GetStreamName())
 	nodeID := trigger.GetNodeId()
 
 	p.logger.WithFields(logging.Fields{
