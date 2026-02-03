@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     internal_name VARCHAR(255),             -- Stream identifier for routing
     artifact_internal_name VARCHAR(64),     -- Artifact routing name (vod+<artifact_internal_name>)
     stream_id UUID,                         -- Public stream ID (for DVR local path reconstruction)
-    tenant_id UUID,                         -- Fallback when Commodore unavailable
+    tenant_id UUID NOT NULL,                -- Tenant owning the artifact (required)
     user_id UUID,                           -- User who created the artifact (for Decklog events)
 
     -- ===== LIFECYCLE STATE =====
@@ -103,6 +103,10 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_artifact_internal ON foghorn.ar
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_tenant ON foghorn.artifacts(tenant_id) WHERE tenant_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_user ON foghorn.artifacts(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_retention ON foghorn.artifacts(retention_until) WHERE retention_until IS NOT NULL;
+
+-- Enforce tenant attribution: tenant_id is required for all artifacts.
+-- This will fail loudly if any NULL tenant_id rows exist.
+ALTER TABLE foghorn.artifacts ALTER COLUMN tenant_id SET NOT NULL;
 
 -- ============================================================================
 -- WARM STORAGE DISTRIBUTION (NODE CACHES)
