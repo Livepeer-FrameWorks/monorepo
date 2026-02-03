@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/geoip"
@@ -52,6 +53,7 @@ var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var quartermasterClient *qmclient.GRPCClient
 var livepeerGatewayURL string // Set from main.go if LIVEPEER_GATEWAY_URL is configured
+var geoipCache *cache.Cache
 
 // SetLivepeerGatewayURL sets the Livepeer Gateway URL for processing config
 func SetLivepeerGatewayURL(url string) { livepeerGatewayURL = url }
@@ -137,6 +139,9 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 // SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
 func SetQuartermasterClient(c *qmclient.GRPCClient) { quartermasterClient = c }
 
+// SetGeoIPCache sets the GeoIP cache for cached lookup usage.
+func SetGeoIPCache(c *cache.Cache) { geoipCache = c }
+
 // Server implements HelmsmanControl
 type Server struct {
 	pb.UnimplementedHelmsmanControlServer
@@ -205,7 +210,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				var lat, lon float64
 				geoOnce.Do(func() { geoipReader = geoip.GetSharedReader() })
 				if geoipReader != nil {
-					if gd := geoipReader.Lookup(host); gd != nil {
+					if gd := geoip.LookupCached(stream.Context(), geoipReader, geoipCache, host); gd != nil {
 						country = gd.CountryCode
 						city = gd.City
 						lat = gd.Latitude
@@ -1334,7 +1339,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string) *pb.ConfigSee
 	})
 
 	if geoipReader != nil {
-		if gd := geoipReader.Lookup(peerAddr); gd != nil {
+		if gd := geoip.LookupCached(context.Background(), geoipReader, geoipCache, peerAddr); gd != nil {
 			lat = gd.Latitude
 			lon = gd.Longitude
 			if gd.City != "" {

@@ -21,6 +21,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/decklog"
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/clips"
@@ -71,6 +72,7 @@ type FoghornGRPCServer struct {
 	logger           logging.Logger
 	lb               *balancer.LoadBalancer
 	geoipReader      *geoip.Reader
+	geoipCache       *cache.Cache
 	decklogClient    *decklog.BatchedClient
 	s3Client         S3ClientInterface
 	cacheInvalidator CacheInvalidator
@@ -83,6 +85,7 @@ func NewFoghornGRPCServer(
 	logger logging.Logger,
 	lb *balancer.LoadBalancer,
 	geoReader *geoip.Reader,
+	geoCache *cache.Cache,
 	decklogClient *decklog.BatchedClient,
 	s3Client S3ClientInterface,
 	purserClient *purserclient.GRPCClient,
@@ -92,6 +95,7 @@ func NewFoghornGRPCServer(
 		logger:        logger,
 		lb:            lb,
 		geoipReader:   geoReader,
+		geoipCache:    geoCache,
 		decklogClient: decklogClient,
 		s3Client:      s3Client,
 		purserClient:  purserClient,
@@ -1175,7 +1179,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	viewerIP := req.GetViewerIp()
 
 	if viewerIP != "" && s.geoipReader != nil {
-		if geoData := s.geoipReader.Lookup(viewerIP); geoData != nil {
+		if geoData := geoip.LookupCached(ctx, s.geoipReader, s.geoipCache, viewerIP); geoData != nil {
 			lat = geoData.Latitude
 			lon = geoData.Longitude
 		}

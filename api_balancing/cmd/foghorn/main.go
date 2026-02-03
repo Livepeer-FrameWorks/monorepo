@@ -306,7 +306,7 @@ func main() {
 	}
 
 	// Initialize handlers with injected clients
-	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader)
+	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
 
 	// Initialize trigger processor (Lifted from Handlers)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
@@ -326,6 +326,7 @@ func main() {
 
 	// Start Helmsman control gRPC server with injected dependencies
 	control.Init(logger, commodoreClient, triggerProcessor)
+	control.SetGeoIPCache(geoipCache)
 
 	// Configure unified state policies and rehydrate from DB (nodes, DVR, clips, artifacts)
 	state.DefaultManager().ConfigurePolicies(state.PoliciesConfig{
@@ -347,7 +348,7 @@ func main() {
 	control.SetArtifactRepository(control.NewArtifactRepository())
 
 	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution, VOD uploads)
-	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, decklogClient, s3ForGRPC, purserClient)
+	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
