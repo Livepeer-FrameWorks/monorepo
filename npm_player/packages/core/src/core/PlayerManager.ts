@@ -127,7 +127,7 @@ export class PlayerManager {
   private lastStreamInfo: StreamInfo | null = null;
   private lastPlayerOptions: PlayerOptions = {};
   private lastManagerOptions: PlayerManagerOptions = {};
-  private excludedPlayers: Set<string> = new Set();
+  private excludedCombos: Set<string> = new Set();
 
   // Serializes lifecycle operations to prevent race conditions
   private opQueue: Promise<void> = Promise.resolve();
@@ -186,13 +186,17 @@ export class PlayerManager {
    */
   private computeCacheKey(streamInfo: StreamInfo, mode: PlaybackMode): string {
     return JSON.stringify({
-      sources: streamInfo.source.map((s) => s.type).sort(),
+      sources: streamInfo.source.map((s) => `${s.type}:${s.url ?? ""}`).sort(),
       tracks: streamInfo.meta?.tracks?.map((t) => t.codec).sort() ?? [],
       mode,
       forcePlayer: this.options.forcePlayer,
       forceSource: this.options.forceSource,
       forceType: this.options.forceType,
     });
+  }
+
+  private getComboKey(playerShortname: string, source: StreamSource): string {
+    return `${playerShortname}:${source.type}:${source.url ?? ""}`;
   }
 
   /** Invalidate cache (called when player registrations change) */
@@ -375,7 +379,7 @@ export class PlayerManager {
     for (const player of players) {
       for (let sourceIndex = 0; sourceIndex < streamInfo.source.length; sourceIndex++) {
         const source = streamInfo.source[sourceIndex];
-        const pairKey = `${player.capability.shortname}:${source.type}`;
+        const pairKey = this.getComboKey(player.capability.shortname, source);
 
         // Skip duplicate player+sourceType combinations
         if (seenPairs.has(pairKey)) continue;
@@ -690,7 +694,7 @@ export class PlayerManager {
     return this.enqueueOp(async () => {
       this.log("Inside enqueueOp - starting");
       this.fallbackAttempts = 0;
-      this.excludedPlayers.clear();
+      this.excludedCombos.clear();
       this.errorClassifier.reset();
 
       // Save for fallback (strip force settings - they're one-shot, not for fallback)
@@ -716,7 +720,7 @@ export class PlayerManager {
     streamInfo: StreamInfo,
     playerOptions: PlayerOptions,
     managerOptions?: PlayerManagerOptions,
-    excludePlayers: Set<string> = new Set()
+    excludeCombos: Set<string> = new Set()
   ): Promise<HTMLVideoElement> {
     this.log("tryInitializePlayer() starting");
 
@@ -731,18 +735,18 @@ export class PlayerManager {
     // Update classifier with current alternatives count
     const allCombinations = this.getAllCombinations(streamInfo, managerOptions?.playbackMode);
     const compatibleCombos = allCombinations.filter(
-      (combo) => combo.compatible && !excludePlayers.has(combo.player)
+      (c) => c.compatible && !excludeCombos.has(this.getComboKey(c.player, c.source))
     );
     this.errorClassifier.setAlternativesRemaining(Math.max(0, compatibleCombos.length - 1));
 
-    // Filter excluded players
+    // Filter excluded combinations
     const availableSources = streamInfo.source.filter((_, index) => {
-      if (excludePlayers.size === 0) return true;
+      if (excludeCombos.size === 0) return true;
       const selection = this.selectBestPlayer(
         { ...streamInfo, source: [streamInfo.source[index]] },
         managerOptions
       );
-      return selection && !excludePlayers.has(selection.player);
+      return selection && !excludeCombos.has(this.getComboKey(selection.player, selection.source));
     });
 
     if (availableSources.length === 0) {
@@ -806,7 +810,7 @@ export class PlayerManager {
         streamInfo,
         playerOptions,
         managerOptions,
-        excludePlayers
+        excludeCombos
       );
     }
   }
@@ -821,7 +825,7 @@ export class PlayerManager {
     streamInfo: StreamInfo,
     playerOptions: PlayerOptions,
     managerOptions: PlayerManagerOptions | undefined,
-    excludePlayers: Set<string>
+    excludeCombos: Set<string>
   ): Promise<HTMLVideoElement> {
     const errorCode = ErrorClassifier.mapErrorToCode(
       error instanceof Error ? error : new Error(String(error))
@@ -842,7 +846,7 @@ export class PlayerManager {
           streamInfo,
           playerOptions,
           managerOptions,
-          excludePlayers
+          excludeCombos
         );
       }
 
@@ -856,7 +860,7 @@ export class PlayerManager {
         this.fallbackAttempts++;
         const previousPlayer = selection.player;
         const previousProtocol = selection.source.type;
-        excludePlayers.add(selection.player);
+        excludeCombos.add(this.getComboKey(selection.player, selection.source));
 
         this.log(
           `Swapping from ${previousPlayer} (attempt ${this.fallbackAttempts}/${maxAttempts})`
@@ -868,7 +872,7 @@ export class PlayerManager {
             streamInfo,
             playerOptions,
             managerOptions,
-            excludePlayers
+            excludeCombos
           );
 
           // Notify classifier and emit toast event for successful swap
@@ -925,13 +929,18 @@ export class PlayerManager {
       const previousProtocol = this.cachedSelection?.source.type || "unknown";
 
       if (this.currentPlayer) {
-        this.excludedPlayers.add(this.currentPlayer.capability.shortname);
+        if (this.cachedSelection) {
+          this.excludedCombos.add(
+            this.getComboKey(this.cachedSelection.player, this.cachedSelection.source)
+          );
+        }
         await Promise.resolve(this.currentPlayer.destroy());
         this.currentPlayer = null;
       }
 
       this.fallbackAttempts++;
       this.lastContainer.innerHTML = "";
+      this.errorClassifier.reset();
 
       try {
         await this.tryInitializePlayer(
@@ -939,7 +948,7 @@ export class PlayerManager {
           this.lastStreamInfo,
           this.lastPlayerOptions,
           this.lastManagerOptions,
-          this.excludedPlayers
+          this.excludedCombos
         );
 
         const current = this.getCurrentPlayer();
