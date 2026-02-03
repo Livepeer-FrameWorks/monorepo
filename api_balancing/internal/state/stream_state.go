@@ -1206,9 +1206,13 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	if artifactRepo != nil && len(artifacts) > 0 {
 		records := make([]ArtifactRecord, 0, len(artifacts))
 		for _, a := range artifacts {
+			artifactType := artifactTypeToString(a.GetArtifactType())
+			if artifactType == "" {
+				artifactType = inferArtifactType(a.GetFilePath())
+			}
 			records = append(records, ArtifactRecord{
 				ArtifactHash: a.GetClipHash(),
-				ArtifactType: inferArtifactType(a.GetFilePath()),
+				ArtifactType: artifactType,
 				StreamName:   a.GetStreamName(),
 				FilePath:     a.GetFilePath(),
 				SizeBytes:    int64(a.GetSizeBytes()),
@@ -1227,6 +1231,33 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	// Check for .dtsh files that appeared after initial sync
 	// If an artifact has HasDtsh=true but was synced without it, trigger incremental sync
 	go sm.checkAndTriggerDtshSync(nodeID, artifacts)
+}
+
+// AddNodeArtifact adds or updates a single artifact in the in-memory node state.
+func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *pb.StoredArtifact) {
+	if artifact == nil {
+		return
+	}
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = newNodeState(nodeID)
+		sm.nodes[nodeID] = n
+	}
+
+	for i, existing := range n.Artifacts {
+		if existing.GetClipHash() == artifact.GetClipHash() {
+			n.Artifacts[i] = artifact
+			n.LastUpdate = time.Now()
+			return
+		}
+	}
+
+	n.Artifacts = append(n.Artifacts, artifact)
+	n.LastUpdate = time.Now()
 }
 
 // setNodeArtifactsMemoryOnly updates artifacts in memory without persisting to DB.
@@ -1257,6 +1288,19 @@ func inferArtifactType(filePath string) string {
 	return "clip"
 }
 
+func artifactTypeToString(artifactType pb.ArtifactEvent_ArtifactType) string {
+	switch artifactType {
+	case pb.ArtifactEvent_ARTIFACT_TYPE_CLIP:
+		return "clip"
+	case pb.ArtifactEvent_ARTIFACT_TYPE_DVR:
+		return "dvr"
+	case pb.ArtifactEvent_ARTIFACT_TYPE_VOD:
+		return "vod"
+	default:
+		return ""
+	}
+}
+
 // checkAndTriggerDtshSync checks for artifacts that have .dtsh locally but weren't synced with it
 // This catches the race condition where .dtsh is created after the initial sync
 func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts []*pb.StoredArtifact) {
@@ -1276,7 +1320,10 @@ func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts [
 			continue // No .dtsh locally, nothing to sync
 		}
 
-		artifactType := inferArtifactType(artifact.GetFilePath())
+		artifactType := artifactTypeToString(artifact.GetArtifactType())
+		if artifactType == "" {
+			artifactType = inferArtifactType(artifact.GetFilePath())
+		}
 		hash := artifact.GetClipHash()
 
 		var needsSync bool
@@ -2291,6 +2338,8 @@ type ArtifactRepository interface {
 	SetSyncStatus(ctx context.Context, artifactHash, status, s3URL string) error
 	// AddCachedNode adds a node to the cached_nodes array for an artifact
 	AddCachedNode(ctx context.Context, artifactHash, nodeID string) error
+	// AddCachedNodeWithPath updates cache tracking with file path and size info.
+	AddCachedNodeWithPath(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64) error
 	// RemoveCachedNode removes a node from the cached_nodes array
 	RemoveCachedNode(ctx context.Context, artifactHash, nodeID string) error
 	// IsSynced returns true if the artifact is synced to S3

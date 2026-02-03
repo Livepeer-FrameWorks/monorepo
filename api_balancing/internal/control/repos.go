@@ -525,6 +525,24 @@ func (r *artifactRepositoryDB) AddCachedNode(ctx context.Context, artifactHash, 
 	return err
 }
 
+// AddCachedNodeWithPath records that a node has a local copy of an artifact with path details.
+func (r *artifactRepositoryDB) AddCachedNodeWithPath(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64) error {
+	if db == nil {
+		return sql.ErrConnDone
+	}
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at)
+		VALUES ($1, $2, $3, NULLIF($4, 0), NOW(), false, NOW())
+		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+			file_path = EXCLUDED.file_path,
+			size_bytes = COALESCE(EXCLUDED.size_bytes, foghorn.artifact_nodes.size_bytes),
+			last_seen_at = NOW(),
+			is_orphaned = false,
+			cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())
+	`, artifactHash, nodeID, filePath, sizeBytes)
+	return err
+}
+
 // SetCachedAt explicitly sets the cached_at timestamp
 func (r *artifactRepositoryDB) SetCachedAt(ctx context.Context, artifactHash string) error {
 	if db == nil {

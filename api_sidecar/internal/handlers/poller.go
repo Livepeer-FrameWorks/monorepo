@@ -38,6 +38,7 @@ type ClipInfo struct {
 	HasDtsh      bool // True if .dtsh index file exists locally
 	AccessCount  int
 	LastAccessed time.Time
+	ArtifactType pb.ArtifactEvent_ArtifactType
 }
 
 // PrometheusMonitor handles monitoring of MistServer Prometheus endpoints
@@ -1148,6 +1149,7 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 			CreatedAt:    info.ModTime(),
 			SegmentCount: 0,
 			HasDtsh:      false,
+			ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 		}
 		artifactIndex[hash] = vodInfo
 		totalSize += uint64(info.Size())
@@ -1221,6 +1223,7 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 							HasDtsh:      hasDtsh,
 							AccessCount:  0,
 							LastAccessed: fileInfo.ModTime(),
+							ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 						}
 
 						artifactIndex[clipHash] = clipInfo
@@ -1275,6 +1278,7 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 					HasDtsh:      hasDtsh,
 					AccessCount:  0,
 					LastAccessed: fileInfo.ModTime(),
+					ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 				}
 
 				artifactIndex[clipHash] = clipInfo
@@ -1393,6 +1397,7 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 				HasDtsh:      hasDtsh,
 				AccessCount:  0,
 				LastAccessed: fileInfo.ModTime(),
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
 			}
 
 			artifactIndex[dvrHash] = dvrInfo
@@ -1423,6 +1428,12 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 			CreatedAt:  clipInfo.CreatedAt.Unix(),
 			Format:     clipInfo.Format,
 			HasDtsh:    clipInfo.HasDtsh,
+			ArtifactType: func() pb.ArtifactEvent_ArtifactType {
+				if clipInfo.ArtifactType != pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED {
+					return clipInfo.ArtifactType
+				}
+				return pb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
+			}(),
 			AccessCount: func() uint64 {
 				if clipInfo.AccessCount < 0 {
 					return 0

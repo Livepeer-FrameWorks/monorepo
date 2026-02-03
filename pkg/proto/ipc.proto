@@ -1288,6 +1288,7 @@ message StoredArtifact {
   bool has_dtsh = 8;         // True if .dtsh index file exists locally
   uint64 access_count = 9;   // Local access count (best-effort, per node)
   int64 last_accessed = 10;  // Last access timestamp (Unix seconds)
+  ArtifactEvent.ArtifactType artifact_type = 11; // Explicit artifact type (clip/dvr/vod)
 }
 
 message StreamProcess {
