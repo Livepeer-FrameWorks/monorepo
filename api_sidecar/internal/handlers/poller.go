@@ -577,7 +577,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 	// Analytics data forwarded via MistTrigger below
 
 	// Convert API response to MistTrigger using converter
-	mistTrigger := convertStreamAPIToMistTrigger(nodeID, streamName, internalName, streamData, healthData, trackDetails, monitorLogger)
+	mistTrigger := convertStreamAPIToMistTrigger(nodeID, streamName, internalName, streamData, healthData, trackDetails, trackCount, monitorLogger)
 
 	// Send
 	if _, _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
@@ -1823,7 +1823,7 @@ func interpretCapabilityFlag(value string, def bool) bool {
 }
 
 // convertStreamAPIToMistTrigger converts stream API response data to a MistTrigger protobuf
-func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, streamData, healthData map[string]interface{}, trackDetails []map[string]interface{}, logger logging.Logger) *pb.MistTrigger {
+func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, streamData, healthData map[string]interface{}, trackDetails []map[string]interface{}, trackCount int, logger logging.Logger) *pb.MistTrigger {
 	streamLifecycleUpdate := &pb.StreamLifecycleUpdate{
 		NodeId:       nodeID,
 		InternalName: internalName,
@@ -2068,6 +2068,13 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	}
 	if primaryBitrate > 0 {
 		streamLifecycleUpdate.PrimaryBitrate = &primaryBitrate
+	}
+	if primaryCodec != "" {
+		streamLifecycleUpdate.PrimaryCodec = &primaryCodec
+	}
+	if trackCount > 0 {
+		count := int32(trackCount)
+		streamLifecycleUpdate.TrackCount = &count
 	}
 
 	return &pb.MistTrigger{
