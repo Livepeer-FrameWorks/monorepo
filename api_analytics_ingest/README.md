@@ -23,7 +23,7 @@ Consumes analytics events from Kafka and writes time‑series data exclusively t
 - `node_lifecycle_update` → `node_state_current` + `node_metrics_samples`
 - `client_lifecycle_update` → `client_qoe_samples`
 - `load_balancing` → `routing_decisions`
-- `clip_lifecycle`, `dvr_lifecycle` → `artifact_state_current` + `artifact_events`
+- `clip_lifecycle`, `dvr_lifecycle`, `vod_lifecycle` → `artifact_state_current` + `artifact_events`
 - `storage_snapshot` → `storage_snapshots`
 - `process_billing` → `processing_events`
 
