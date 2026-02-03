@@ -611,3 +611,53 @@ func (r *artifactRepositoryDB) GetArtifactNodes(ctx context.Context, artifactHas
 	}
 	return nodes, rows.Err()
 }
+
+// ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)
+func (r *artifactRepositoryDB) ListAllNodeArtifacts(ctx context.Context) (map[string][]state.ArtifactRecord, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT
+			an.node_id,
+			an.artifact_hash,
+			COALESCE(a.artifact_type, 'clip'),
+			COALESCE(a.internal_name, ''),
+			COALESCE(an.file_path, ''),
+			COALESCE(an.size_bytes, 0),
+			COALESCE(EXTRACT(EPOCH FROM a.created_at)::bigint, 0),
+			COALESCE(an.access_count, 0),
+			COALESCE(EXTRACT(EPOCH FROM an.last_accessed), 0)::bigint
+		FROM foghorn.artifact_nodes an
+		JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
+		WHERE an.is_orphaned = false
+		  AND a.status != 'deleted'
+		ORDER BY an.node_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]state.ArtifactRecord)
+	for rows.Next() {
+		var nodeID string
+		var rec state.ArtifactRecord
+		if err := rows.Scan(
+			&nodeID,
+			&rec.ArtifactHash,
+			&rec.ArtifactType,
+			&rec.StreamName,
+			&rec.FilePath,
+			&rec.SizeBytes,
+			&rec.CreatedAt,
+			&rec.AccessCount,
+			&rec.LastAccessed,
+		); err != nil {
+			return nil, err
+		}
+		result[nodeID] = append(result[nodeID], rec)
+	}
+	return result, rows.Err()
+}
