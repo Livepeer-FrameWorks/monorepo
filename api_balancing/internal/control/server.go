@@ -1265,7 +1265,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 			// Send error response for blocking triggers
 			response := &pb.MistTriggerResponse{
 				RequestId: requestID,
-				Response:  err.Error(),
+				Response:  "",
 				Abort:     true,
 				ErrorCode: errorCode,
 			}

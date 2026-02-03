@@ -420,11 +420,12 @@ func HandlePushRewrite(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	result, err := control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
-			"error": err,
+			"error":      err,
+			"error_code": result.ErrorCode.String(),
 		}).Error("Failed to forward PUSH_REWRITE to Foghorn")
 
 		if metrics != nil {
@@ -435,10 +436,11 @@ func HandlePushRewrite(c *gin.Context) {
 		return
 	}
 
-	if shouldAbort {
+	if result.Abort {
 		incMistWebhook("PUSH_REWRITE", "aborted")
 		logger.WithFields(logging.Fields{
-			"response": response,
+			"response":   result.Response,
+			"error_code": result.ErrorCode.String(),
 		}).Info("PUSH_REWRITE aborted by Foghorn")
 
 		if metrics != nil {
@@ -450,7 +452,7 @@ func HandlePushRewrite(c *gin.Context) {
 	}
 
 	logger.WithFields(logging.Fields{
-		"response": response,
+		"response": result.Response,
 	}).Info("PUSH_REWRITE approved by Foghorn")
 	incMistWebhook("PUSH_REWRITE", "success")
 
@@ -462,7 +464,7 @@ func HandlePushRewrite(c *gin.Context) {
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, response)
+	c.String(http.StatusOK, result.Response)
 }
 
 // HandlePlayRewrite handles the PLAY_REWRITE trigger from MistServer
@@ -517,11 +519,12 @@ func HandlePlayRewrite(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	result, err := control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
-			"error": err,
+			"error":      err,
+			"error_code": result.ErrorCode.String(),
 		}).Error("Failed to forward PLAY_REWRITE to Foghorn")
 
 		if metrics != nil {
@@ -532,10 +535,11 @@ func HandlePlayRewrite(c *gin.Context) {
 		return
 	}
 
-	if shouldAbort {
+	if result.Abort {
 		incMistWebhook("PLAY_REWRITE", "aborted")
 		logger.WithFields(logging.Fields{
-			"response": response,
+			"response":   result.Response,
+			"error_code": result.ErrorCode.String(),
 		}).Info("PLAY_REWRITE aborted by Foghorn")
 
 		if metrics != nil {
@@ -547,7 +551,7 @@ func HandlePlayRewrite(c *gin.Context) {
 	}
 
 	logger.WithFields(logging.Fields{
-		"response": response,
+		"response": result.Response,
 	}).Info("PLAY_REWRITE resolved by Foghorn")
 	incMistWebhook("PLAY_REWRITE", "success")
 
@@ -559,7 +563,7 @@ func HandlePlayRewrite(c *gin.Context) {
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, response)
+	c.String(http.StatusOK, result.Response)
 }
 
 // HandleStreamSource handles the STREAM_SOURCE trigger from MistServer
@@ -612,11 +616,12 @@ func HandleStreamSource(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	result, err := control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_SOURCE", "forward_error")
 		logger.WithFields(logging.Fields{
-			"error": err,
+			"error":      err,
+			"error_code": result.ErrorCode.String(),
 		}).Error("Failed to forward STREAM_SOURCE to Foghorn")
 
 		if metrics != nil {
@@ -627,10 +632,11 @@ func HandleStreamSource(c *gin.Context) {
 		return
 	}
 
-	if shouldAbort {
+	if result.Abort {
 		incMistWebhook("STREAM_SOURCE", "aborted")
 		logger.WithFields(logging.Fields{
-			"response": response,
+			"response":   result.Response,
+			"error_code": result.ErrorCode.String(),
 		}).Info("STREAM_SOURCE aborted by Foghorn")
 
 		if metrics != nil {
@@ -642,7 +648,7 @@ func HandleStreamSource(c *gin.Context) {
 	}
 
 	logger.WithFields(logging.Fields{
-		"response": response,
+		"response": result.Response,
 	}).Info("STREAM_SOURCE resolved by Foghorn")
 	incMistWebhook("STREAM_SOURCE", "success")
 
@@ -654,7 +660,7 @@ func HandleStreamSource(c *gin.Context) {
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, response)
+	c.String(http.StatusOK, result.Response)
 }
 
 // getNodeID returns the current node ID for building triggers
@@ -711,7 +717,7 @@ func HandlePushEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_END", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -755,32 +761,34 @@ func HandlePushOutStart(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	result, err := control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_OUT_START", "forward_error")
 		logger.WithFields(logging.Fields{
-			"error": err,
+			"error":      err,
+			"error_code": result.ErrorCode.String(),
 		}).Error("Failed to forward PUSH_OUT_START to Foghorn")
 		c.String(http.StatusOK, "") // Empty response aborts push
 		return
 	}
 
-	if shouldAbort {
+	if result.Abort {
 		incMistWebhook("PUSH_OUT_START", "aborted")
 		logger.WithFields(logging.Fields{
-			"response": response,
+			"response":   result.Response,
+			"error_code": result.ErrorCode.String(),
 		}).Info("PUSH_OUT_START aborted by Foghorn")
 		c.String(http.StatusOK, "") // Empty response aborts push
 		return
 	}
 
 	logger.WithFields(logging.Fields{
-		"response": response,
+		"response": result.Response,
 	}).Info("PUSH_OUT_START approved by Foghorn")
 	incMistWebhook("PUSH_OUT_START", "success")
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, response)
+	c.String(http.StatusOK, result.Response)
 }
 
 // HandleStreamBuffer handles STREAM_BUFFER webhook
@@ -819,7 +827,7 @@ func HandleStreamBuffer(c *gin.Context) {
 	}
 
 	// Forward enriched trigger to Foghorn via gRPC (non-blocking)
-	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_BUFFER", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -868,7 +876,7 @@ func HandleStreamEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_END", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -917,27 +925,29 @@ func HandleUserNew(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	result, err := control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("USER_NEW", "forward_error")
 		logger.WithFields(logging.Fields{
-			"error": err,
+			"error":      err,
+			"error_code": result.ErrorCode.String(),
 		}).Error("Failed to forward USER_NEW to Foghorn")
 		c.String(http.StatusOK, "false") // Deny session on error
 		return
 	}
 
-	if shouldAbort {
+	if result.Abort {
 		incMistWebhook("USER_NEW", "aborted")
 		logger.WithFields(logging.Fields{
-			"response": response,
+			"response":   result.Response,
+			"error_code": result.ErrorCode.String(),
 		}).Info("USER_NEW denied by Foghorn")
 		c.String(http.StatusOK, "false") // Deny session
 		return
 	}
 
 	logger.WithFields(logging.Fields{
-		"response": response,
+		"response": result.Response,
 	}).Info("USER_NEW approved by Foghorn")
 	incMistWebhook("USER_NEW", "success")
 
@@ -949,7 +959,7 @@ func HandleUserNew(c *gin.Context) {
 	}
 
 	// Return Foghorn's response to MistServer
-	c.String(http.StatusOK, response)
+	c.String(http.StatusOK, result.Response)
 }
 
 // HandleUserEnd handles USER_END webhook
@@ -983,7 +993,7 @@ func HandleUserEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("USER_END", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1032,7 +1042,7 @@ func HandleLiveTrackList(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("LIVE_TRACK_LIST", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1076,7 +1086,7 @@ func HandleRecordingEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("RECORDING_END", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1119,7 +1129,7 @@ func HandleRecordingSegment(c *gin.Context) {
 
 	// Forward to Foghorn for analytics (fire-and-forget with error logging)
 	go func() {
-		if _, _, err := control.SendMistTrigger(mistTrigger, logger); err != nil {
+		if _, err := control.SendMistTrigger(mistTrigger, logger); err != nil {
 			incMistWebhook("RECORDING_SEGMENT", "forward_error")
 			logger.WithError(err).WithField("trigger_type", "RECORDING_SEGMENT").Error("Failed to send RECORDING_SEGMENT trigger to Foghorn")
 		} else {
