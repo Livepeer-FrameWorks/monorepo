@@ -92,6 +92,7 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 			go func() {
 				// Decouple background refresh from the caller's cancellation/deadline.
 				refreshCtx := context.WithoutCancel(ctx)
+				// x/sync/singleflight.Group.Do returns (val, err, shared) in this version.
 				_, _, _ = c.sf.Do("refresh:"+key, func() (interface{}, error) {
 					c.refresh(refreshCtx, key, loader)
 					return nil, nil
@@ -117,13 +118,21 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 	if c.metrics.OnMiss != nil {
 		c.metrics.OnMiss(map[string]string{"key": key})
 	}
-	result, _, _ := c.sf.Do(key, func() (interface{}, error) {
+	// NOTE: In our x/sync version, singleflight.Do returns (val, err, shared).
+	result, err, _ := c.sf.Do(key, func() (interface{}, error) {
 		// Don't let the first caller's cancellation/deadline cancel the shared load.
 		loadCtx := context.WithoutCancel(ctx)
 		val, ok, err := loader(loadCtx, key)
 		c.store(key, val, ok, err)
 		return loadResult{val: val, ok: ok, err: err}, nil
 	})
+	if err != nil {
+		// singleflight function should always return nil error, but be defensive
+		if c.metrics.OnError != nil {
+			c.metrics.OnError(map[string]string{"key": key})
+		}
+		return nil, false, err
+	}
 	res := result.(loadResult)
 	if !res.ok {
 		return nil, false, res.err
