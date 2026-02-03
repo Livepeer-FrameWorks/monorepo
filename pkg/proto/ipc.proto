@@ -308,6 +308,16 @@ message MistTriggerResponse {
   string request_id = 1;      // Correlates to MistTrigger.request_id
   string response = 2;        // What to return to MistServer (empty string aborts for blocking triggers)
   bool abort = 3;             // Explicit abort flag
+  IngestErrorCode error_code = 4;
+}
+
+enum IngestErrorCode {
+  INGEST_ERROR_NONE = 0;
+  INGEST_ERROR_INVALID_STREAM_KEY = 1;
+  INGEST_ERROR_ACCOUNT_SUSPENDED = 2;
+  INGEST_ERROR_PAYMENT_REQUIRED = 3;
+  INGEST_ERROR_INTERNAL = 4;
+  INGEST_ERROR_TIMEOUT = 5;
 }
 
 message StorageSnapshot {
