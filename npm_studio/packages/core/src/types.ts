@@ -347,6 +347,7 @@ export interface ReconnectionEvents {
 // ============================================================================
 
 export interface IngestControllerConfigV2 extends IngestControllerConfig {
+  whipUrls?: string[];
   reconnection?: Partial<ReconnectionConfig>;
   audioMixing?: boolean;
   compositor?: Partial<CompositorConfig>;

@@ -46,6 +46,8 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   private audioMixer: AudioMixer;
   private reconnectionManager: ReconnectionManager;
   private whipClient: WhipClient | null = null;
+  private whipEndpoints: string[] = [];
+  private currentEndpointIndex = 0;
 
   private state: IngestState = "idle";
   private stateContext: IngestStateContextV2 = {};
@@ -69,6 +71,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     super();
     this.config = config;
     this.currentProfile = config.profile || "broadcast";
+    this.whipEndpoints = this.buildWhipEndpoints(config);
     this.deviceManager = new DeviceManager();
     this.screenCapture = new ScreenCapture();
     this.audioMixer = new AudioMixer();
@@ -86,6 +89,36 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       profile: this.currentProfile,
       audioMixing: config.audioMixing ?? false,
     });
+  }
+
+  /**
+   * Build WHIP endpoint list with primary first.
+   */
+  private buildWhipEndpoints(config: IngestControllerConfigV2): string[] {
+    if (config.whipUrls && config.whipUrls.length > 0) {
+      const deduped = [config.whipUrl, ...config.whipUrls].filter(
+        (value, index, self) => self.indexOf(value) === index
+      );
+      return deduped;
+    }
+    return [config.whipUrl];
+  }
+
+  /**
+   * Get current WHIP endpoint without rotating.
+   */
+  private getCurrentWhipUrl(): string {
+    return this.whipEndpoints[this.currentEndpointIndex] ?? this.config.whipUrl;
+  }
+
+  /**
+   * Rotate to next WHIP endpoint if available.
+   */
+  private getNextWhipUrl(): string {
+    if (this.whipEndpoints.length > 1) {
+      this.currentEndpointIndex = (this.currentEndpointIndex + 1) % this.whipEndpoints.length;
+    }
+    return this.getCurrentWhipUrl();
   }
 
   /**
@@ -752,8 +785,10 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       } else if (event.state === "failed" || event.state === "disconnected") {
         if (this.state === "streaming" && this.config.reconnection?.enabled !== false) {
           this.handleConnectionLost();
-        } else if (event.state === "failed") {
-          this.setState("error", { error: "Connection failed" });
+        } else {
+          this.setState("error", {
+            error: event.state === "failed" ? "Connection failed" : "Connection lost",
+          });
           this.stopStatsPolling();
         }
       }
@@ -778,7 +813,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     try {
       // Create WHIP client
       this.whipClient = new WhipClient({
-        whipUrl: this.config.whipUrl,
+        whipUrl: this.getCurrentWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
@@ -871,8 +906,12 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     // Clean up old WHIP client
     if (this.whipClient) {
-      this.whipClient.destroy();
-      this.whipClient = null;
+      try {
+        await this.whipClient.disconnect();
+      } finally {
+        this.whipClient.destroy();
+        this.whipClient = null;
+      }
     }
 
     // Reconnect without WebCodecs
@@ -883,7 +922,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     try {
       this.whipClient = new WhipClient({
-        whipUrl: this.config.whipUrl,
+        whipUrl: this.getNextWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
@@ -910,8 +949,12 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     this.reconnectionManager.start(async () => {
       // Clean up old client
       if (this.whipClient) {
-        this.whipClient.destroy();
-        this.whipClient = null;
+        try {
+          await this.whipClient.disconnect();
+        } finally {
+          this.whipClient.destroy();
+          this.whipClient = null;
+        }
       }
 
       // Create new client and reconnect
@@ -920,7 +963,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       }
 
       this.whipClient = new WhipClient({
-        whipUrl: this.config.whipUrl,
+        whipUrl: this.getNextWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
