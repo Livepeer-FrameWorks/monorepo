@@ -72,16 +72,11 @@ func (r *clipRepositoryDB) UpdateClipProgressByRequestID(ctx context.Context, re
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	// Update artifact status based on progress
-	status := "processing"
-	if percent == 100 {
-		status = "ready"
-	}
 	_, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
-		SET status = $2, updated_at = NOW()
+		SET status = 'processing', updated_at = NOW()
 		WHERE request_id = $1 AND artifact_type = 'clip'
-	`, requestID, status)
+	`, requestID)
 	return err
 }
 
@@ -98,6 +93,7 @@ func (r *clipRepositoryDB) UpdateClipDoneByRequestID(ctx context.Context, reques
 	_, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET status = $1,
+		    manifest_path = NULLIF($2, ''),
 		    size_bytes = $3,
 		    error_message = NULLIF($4, ''),
 		    updated_at = NOW()

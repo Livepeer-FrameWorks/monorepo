@@ -592,6 +592,8 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 		ORDER BY last_seen_at DESC LIMIT 1
 	`, req.ClipHash).Scan(&nodeID)
 
+	cleanupError := ""
+
 	// Send delete request to Helmsman if we know the storage node
 	if nodeID != "" {
 		requestID := uuid.NewString()
@@ -600,6 +602,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 			RequestId: requestID,
 		}
 		if err := control.SendClipDelete(nodeID, deleteReq); err != nil {
+			cleanupError = fmt.Sprintf("node cleanup pending: %v", err)
 			// Log but don't fail - the soft delete still works, cleanup can happen later
 			s.logger.WithFields(logging.Fields{
 				"clip_hash": req.ClipHash,
@@ -628,7 +631,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 	s.logger.WithField("clip_hash", req.ClipHash).Info("Clip soft-deleted successfully")
 
 	// Emit deletion lifecycle immediately (do not wait for node cleanup)
-	s.emitClipDeletedLifecycle(ctx, req.ClipHash, nodeID, sizeBytes, retentionUntil, internalName, denormTenantID, denormUserID)
+	s.emitClipDeletedLifecycle(ctx, req.ClipHash, nodeID, sizeBytes, retentionUntil, internalName, denormTenantID, denormUserID, cleanupError)
 
 	return &pb.DeleteClipResponse{
 		Success: true,
@@ -968,40 +971,6 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 		s.logger.WithError(err).Error("Failed to update DVR status to stopping")
 	}
 
-	// Emit DVR STATUS_STOPPED event to Decklog
-	if s.decklogClient != nil {
-		dvrData := &pb.DVRLifecycleData{
-			Status:  pb.DVRLifecycleData_STATUS_STOPPED,
-			DvrHash: req.DvrHash,
-			EndedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
-			StreamId: func() *string {
-				if req.StreamId != nil && *req.StreamId != "" {
-					return req.StreamId
-				}
-				return nil
-			}(),
-			TenantId: func() *string {
-				if req.TenantId != "" {
-					return &req.TenantId
-				}
-				return nil
-			}(),
-			InternalName: func() *string {
-				if internalName != "" {
-					return &internalName
-				}
-				return nil
-			}(),
-			UserId: func() *string {
-				if denormUserID.Valid && denormUserID.String != "" {
-					return &denormUserID.String
-				}
-				return nil
-			}(),
-		}
-		go func() { _ = s.decklogClient.SendDVRLifecycle(dvrData) }()
-	}
-
 	return &pb.StopDVRResponse{
 		Success: true,
 		Message: "DVR recording stopping",
@@ -1072,6 +1041,8 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 		}
 	}
 
+	cleanupError := ""
+
 	// Send delete request to Helmsman if we know the storage node
 	if nodeID != "" {
 		requestID := uuid.NewString()
@@ -1080,6 +1051,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 			RequestId: requestID,
 		}
 		if err := control.SendDVRDelete(nodeID, deleteReq); err != nil {
+			cleanupError = fmt.Sprintf("node cleanup pending: %v", err)
 			// Log but don't fail - the soft delete still works, cleanup can happen later
 			s.logger.WithFields(logging.Fields{
 				"dvr_hash": req.DvrHash,
@@ -1108,7 +1080,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 	s.logger.WithField("dvr_hash", req.DvrHash).Info("DVR recording soft-deleted successfully")
 
 	// Emit deletion lifecycle immediately (do not wait for node cleanup)
-	s.emitDVRDeletedLifecycle(ctx, req.DvrHash, nodeID, sizeBytes, retentionUntil, startedAt, endedAt, internalName, denormTenantID, denormUserID)
+	s.emitDVRDeletedLifecycle(ctx, req.DvrHash, nodeID, sizeBytes, retentionUntil, startedAt, endedAt, internalName, denormTenantID, denormUserID, cleanupError)
 
 	return &pb.DeleteDVRResponse{
 		Success: true,
@@ -1974,6 +1946,8 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		}
 	}
 
+	cleanupErrors := make([]string, 0, 2)
+
 	// Send delete request to nodes that have this VOD cached
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT node_id FROM foghorn.artifact_nodes
@@ -1992,6 +1966,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 				RequestId: requestID,
 			}
 			if sendErr := control.SendVodDelete(nodeID, deleteReq); sendErr != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Sprintf("node %s cleanup pending: %v", nodeID, sendErr))
 				s.logger.WithFields(logging.Fields{
 					"artifact_hash": req.ArtifactHash,
 					"node_id":       nodeID,
@@ -2010,6 +1985,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 	// Delete from S3 if we have a key and client
 	if s3Key != "" && s.s3Client != nil && currentStatus != "uploading" {
 		if err := s.s3Client.Delete(ctx, s3Key); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Sprintf("s3 cleanup pending: %v", err))
 			s.logger.WithFields(logging.Fields{
 				"artifact_hash": req.ArtifactHash,
 				"s3_key":        s3Key,
@@ -2035,11 +2011,18 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 
 	// Emit VOD lifecycle event (STATUS_DELETED)
 	if s.decklogClient != nil {
+		var cleanupError string
+		if len(cleanupErrors) > 0 {
+			cleanupError = strings.Join(cleanupErrors, "; ")
+		}
 		vodData := &pb.VodLifecycleData{
 			Status:      pb.VodLifecycleData_STATUS_DELETED,
 			VodHash:     req.ArtifactHash,
 			TenantId:    &req.TenantId,
 			CompletedAt: proto.Int64(time.Now().Unix()),
+		}
+		if cleanupError != "" {
+			vodData.Error = &cleanupError
 		}
 		if userID.Valid && userID.String != "" {
 			vodData.UserId = &userID.String
@@ -2213,6 +2196,7 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 	internalName sql.NullString,
 	denormTenantID sql.NullString,
 	denormUserID sql.NullString,
+	cleanupError string,
 ) {
 	if s.decklogClient == nil {
 		return
@@ -2278,6 +2262,9 @@ func (s *FoghornGRPCServer) emitClipDeletedLifecycle(
 		Stage:    pb.ClipLifecycleData_STAGE_DELETED,
 		ClipHash: clipHash,
 	}
+	if cleanupError != "" {
+		clipData.Error = &cleanupError
+	}
 	if nodeID != "" {
 		clipData.NodeId = &nodeID
 	}
@@ -2322,6 +2309,7 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 	internalName string,
 	denormTenantID sql.NullString,
 	denormUserID sql.NullString,
+	cleanupError string,
 ) {
 	if s.decklogClient == nil {
 		return
@@ -2366,6 +2354,9 @@ func (s *FoghornGRPCServer) emitDVRDeletedLifecycle(
 	dvrData := &pb.DVRLifecycleData{
 		Status:  pb.DVRLifecycleData_STATUS_DELETED,
 		DvrHash: dvrHash,
+	}
+	if cleanupError != "" {
+		dvrData.Error = &cleanupError
 	}
 	if nodeID != "" {
 		dvrData.NodeId = &nodeID
