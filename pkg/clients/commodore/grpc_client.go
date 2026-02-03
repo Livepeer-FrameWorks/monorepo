@@ -186,7 +186,14 @@ func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName strin
 			}
 			return resp, true, nil
 		}); ok {
-			return v.(*pb.ResolveInternalNameResponse), nil //nolint:errcheck // type guaranteed by cache
+			if v == nil {
+				return nil, fmt.Errorf("cached ResolveInternalName response is nil")
+			}
+			resp, ok := v.(*pb.ResolveInternalNameResponse)
+			if !ok {
+				return nil, fmt.Errorf("cached ResolveInternalName response has unexpected type %T", v)
+			}
+			return resp, nil
 		}
 	}
 
