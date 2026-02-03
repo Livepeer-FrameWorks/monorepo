@@ -21,6 +21,7 @@
 package geoip
 
 import (
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -146,13 +147,9 @@ func (r *Reader) Lookup(ipStr string) *GeoData {
 		geoData.City = record.City.Names["en"]
 	}
 
-	// Extract coordinates (only if non-zero)
-	if record.Location.Latitude != 0 {
-		geoData.Latitude = record.Location.Latitude
-	}
-	if record.Location.Longitude != 0 {
-		geoData.Longitude = record.Location.Longitude
-	}
+	// Extract coordinates
+	geoData.Latitude = record.Location.Latitude
+	geoData.Longitude = record.Location.Longitude
 
 	// Extract timezone
 	if record.Location.TimeZone != "" {
@@ -278,10 +275,10 @@ func (r *Reader) EnrichEvent(event map[string]interface{}, ipField string) {
 	if geoData.City != "" {
 		event["city"] = geoData.City
 	}
-	if geoData.Latitude != 0 {
+	if !math.IsNaN(geoData.Latitude) && !math.IsInf(geoData.Latitude, 0) {
 		event["latitude"] = geoData.Latitude
 	}
-	if geoData.Longitude != 0 {
+	if !math.IsNaN(geoData.Longitude) && !math.IsInf(geoData.Longitude, 0) {
 		event["longitude"] = geoData.Longitude
 	}
 	if geoData.Timezone != "" {

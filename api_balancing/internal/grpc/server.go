@@ -133,7 +133,7 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 
 	// Calculate routing distance
 	routingDistanceKm := 0.0
-	if viewerLat != 0 && viewerLon != 0 && nodeLat != 0 && nodeLon != 0 {
+	if geo.IsValidLatLon(viewerLat, viewerLon) && geo.IsValidLatLon(nodeLat, nodeLon) {
 		const toRad = math.Pi / 180.0
 		lat1, lon1 := viewerLat*toRad, viewerLon*toRad
 		lat2, lon2 := nodeLat*toRad, nodeLon*toRad

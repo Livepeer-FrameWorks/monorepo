@@ -1393,7 +1393,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 
 	// Compute routing distance if we have both points
 	routingDistanceKm := 0.0
-	if lat != 0 && lon != 0 && nodeLat != 0 && nodeLon != 0 {
+	if geo.IsValidLatLon(lat, lon) && geo.IsValidLatLon(nodeLat, nodeLon) {
 		const toRad = math.Pi / 180.0
 		lat1 := lat * toRad
 		lon1 := lon * toRad
@@ -1558,7 +1558,7 @@ func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEnd
 	selectedNodeID := primary.NodeId
 
 	routingDistanceKm := 0.0
-	if viewerLat != 0 && viewerLon != 0 && nodeLat != 0 && nodeLon != 0 {
+	if geo.IsValidLatLon(viewerLat, viewerLon) && geo.IsValidLatLon(nodeLat, nodeLon) {
 		const toRad = math.Pi / 180.0
 		lat1 := viewerLat * toRad
 		lon1 := viewerLon * toRad
@@ -1727,7 +1727,7 @@ func getLatLon(c *gin.Context, query url.Values, queryKey, headerKey string) flo
 			return f
 		}
 	}
-	return 0
+	return math.NaN()
 }
 
 func getTagAdjustments(c *gin.Context, query url.Values) map[string]int {
