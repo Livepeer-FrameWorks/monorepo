@@ -86,7 +86,7 @@ USER_END trigger (uploaded/downloaded bytes total)
 **Where packet loss + jitter live**
 
 - Packet loss rate is derived from client QoE rollups (`client_qoe_5m.pkt_loss_rate`).
-- Jitter is available inside `track_metadata` (per-track), and in the `StreamBufferTrigger.stream_jitter_ms` field upstream, but is not currently stored as a dedicated ClickHouse column.
+- Jitter is stored in `stream_health_samples.frame_jitter_ms` (from `StreamBufferTrigger.stream_jitter_ms`) with 5m rollups in `stream_health_5m.avg_frame_jitter_ms` and `stream_health_5m.max_frame_jitter_ms`. Per-track jitter is also available inside `track_metadata`.
 
 ### 4. Real-time Viewer Metrics (Live Dashboard)
 
