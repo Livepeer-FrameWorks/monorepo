@@ -93,10 +93,15 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 				// Decouple background refresh from the caller's cancellation/deadline.
 				refreshCtx := context.WithoutCancel(ctx)
 				// x/sync/singleflight.Group.Do returns (val, err, shared) in this version.
-				_, _, _ = c.sf.Do("refresh:"+key, func() (interface{}, error) {
+				_, err, _ := c.sf.Do("refresh:"+key, func() (interface{}, error) {
 					c.refresh(refreshCtx, key, loader)
 					return nil, nil
 				})
+				if err != nil {
+					if c.metrics.OnError != nil {
+						c.metrics.OnError(map[string]string{"key": key})
+					}
+				}
 			}()
 			val, ok := e.value, !e.negative
 			c.mu.RUnlock()
@@ -133,7 +138,13 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 		}
 		return nil, false, err
 	}
-	res := result.(loadResult)
+	res, ok := result.(loadResult)
+	if !ok {
+		if c.metrics.OnError != nil {
+			c.metrics.OnError(map[string]string{"key": key})
+		}
+		return nil, false, context.Canceled // shouldn't happen; indicates programmer error
+	}
 	if !res.ok {
 		return nil, false, res.err
 	}
