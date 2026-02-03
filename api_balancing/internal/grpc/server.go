@@ -1185,7 +1185,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 
 	switch resolvedType {
 	case "live":
-		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon)
+		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId)
 	case "dvr", "clip", "vod":
 		response, err = s.resolveArtifactViewerEndpoint(ctx, req, lat, lon)
 	default:
@@ -1223,9 +1223,8 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	return response, nil
 }
 
-func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
-	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
 		DB:     s.db,
 		LB:     s.lb,
@@ -1233,17 +1232,11 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		GeoLon: lon,
 	}
 
-	// Resolve view key to internal name
-	viewKey := req.ContentId
-	target, err := control.ResolveStream(ctx, viewKey)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "failed to resolve stream: %v", err)
-	}
-	if target.InternalName == "" {
+	if internalName == "" {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
-	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName, target.StreamID)
+	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "%v", err)
 	}
@@ -1255,7 +1248,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		if response.Primary != nil {
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
-		s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, target.InternalName, target.TenantID, target.StreamID, durationMs, candidatesCount, "grpc_resolve", "grpc")
+		s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, durationMs, candidatesCount, "grpc_resolve", "grpc")
 	}
 
 	return response, nil
