@@ -243,12 +243,12 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 	}
 
 	includeTestnets := config.GetEnv("X402_INCLUDE_TESTNETS", "false") == "true"
-	emailService := NewEmailService(log)
+	emailSvc := NewEmailService(log)
 
 	return &JobManager{
 		db:                database,
 		logger:            log,
-		emailService:      emailService,
+		emailService:      emailSvc,
 		cryptoMonitor:     NewCryptoMonitor(database, log, decklogSvc),
 		gasWalletMonitor:  NewGasWalletMonitor(log),
 		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets),
@@ -257,7 +257,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		billingTopic:      billingTopic,
 		commodoreClient:   commodoreClient,
 		periscopeClient:   periscopeSvc,
-		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailService),
+		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc),
 	}
 }
 
@@ -694,6 +694,8 @@ func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tena
 
 // suspendTenantForBalance suspends a tenant due to negative prepaid balance
 // This function is called when balance drops below -$10 (threshold defined in processPrepaidUsage)
+//
+//nolint:unused // retained for reference; threshold enforcer handles suspensions now
 func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
 	// Update subscription status to 'suspended'
 	// This blocks NEW ingests/streams via Foghorn (which checks suspension status)
