@@ -41,8 +41,14 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 	// 1. Artifact playback_id (clip/dvr/vod)
 	if CommodoreClient != nil {
 		if resp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, input); err == nil && resp.Found {
+			contentType := strings.ToLower(strings.TrimSpace(resp.ContentType))
+			switch contentType {
+			case "clip", "dvr", "vod":
+			default:
+				return nil, fmt.Errorf("invalid artifact content_type %q", resp.ContentType)
+			}
 			res := &ContentResolution{
-				ContentType:  resp.ContentType,
+				ContentType:  contentType,
 				ContentId:    input,
 				TenantId:     resp.TenantId,
 				StreamId:     resp.StreamId,
