@@ -38,6 +38,26 @@ import (
 
 func streamCtx() context.Context { return context.Background() }
 
+func categorizeEnrollmentError(err error) bool {
+	st, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch st.Code() {
+	case codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument:
+		return true
+	default:
+		return false
+	}
+}
+
+func sendControlError(stream pb.HelmsmanControl_ConnectServer, code, message string) error {
+	return stream.Send(&pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_Error{Error: &pb.ControlError{Code: code, Message: message}},
+	})
+}
+
 // Registry holds active Helmsman control streams keyed by node_id
 type Registry struct {
 	mu    sync.RWMutex
@@ -199,6 +219,13 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			// Mark node healthy in unified state (baseURL unknown at register)
 			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 
+			cleanup := func() {
+				registry.mu.Lock()
+				delete(registry.conns, nodeID)
+				registry.mu.Unlock()
+				state.DefaultManager().MarkNodeDisconnected(nodeID)
+			}
+
 			// Fingerprint-based tenant resolution (pre-provisioned mappings only; no creation here)
 			tenantID := ""
 			canonicalNodeID := nodeID
@@ -262,8 +289,27 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				cancel()
 			}
 
-			// Edge enrollment handshake: if enrollment token provided, register this node in Quartermaster
-			if tok := strings.TrimSpace(x.Register.GetEnrollmentToken()); tok != "" && quartermasterClient != nil {
+			fingerprintResolved := tenantID != ""
+			tok := strings.TrimSpace(x.Register.GetEnrollmentToken())
+
+			if !fingerprintResolved && tok == "" {
+				registry.log.WithField("node_id", nodeID).Error("New edge node missing enrollment token")
+				_ = sendControlError(stream, "ENROLLMENT_REQUIRED", "new edge nodes must provide an enrollment token")
+				cleanup()
+				return nil
+			}
+
+			if fingerprintResolved {
+				if tok != "" {
+					registry.log.WithField("node_id", nodeID).Debug("Ignoring enrollment token for already-registered node")
+				}
+			} else if tok != "" {
+				if quartermasterClient == nil {
+					registry.log.WithField("node_id", nodeID).Error("Quartermaster client unavailable for enrollment")
+					_ = sendControlError(stream, "ENROLLMENT_UNAVAILABLE", "enrollment service temporarily unavailable")
+					cleanup()
+					return nil
+				}
 				// Parse client IP from forwarded metadata or peer address
 				host := ""
 				if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
@@ -303,15 +349,29 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 						req.MachineIdSha256 = &s
 					}
 				}
-				if resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req); err == nil && resp != nil {
-					if resp.NodeId != "" {
-						canonicalNodeID = resp.NodeId
+				resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req)
+				if err != nil {
+					if categorizeEnrollmentError(err) {
+						registry.log.WithError(err).WithField("node_id", nodeID).Error("Edge enrollment failed: invalid token")
+						_ = sendControlError(stream, "ENROLLMENT_FAILED", "enrollment token invalid or expired")
+					} else {
+						registry.log.WithError(err).WithField("node_id", nodeID).Error("Edge enrollment unavailable")
+						_ = sendControlError(stream, "ENROLLMENT_UNAVAILABLE", "enrollment service temporarily unavailable")
 					}
-					tenantID = resp.TenantId
-					registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Edge node enrolled via Quartermaster")
-				} else if err != nil {
-					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Edge enrollment failed; continuing without mapping")
+					cleanup()
+					return nil
 				}
+				if resp == nil {
+					registry.log.WithField("node_id", nodeID).Error("Edge enrollment returned empty response")
+					_ = sendControlError(stream, "ENROLLMENT_UNAVAILABLE", "enrollment service temporarily unavailable")
+					cleanup()
+					return nil
+				}
+				if resp.NodeId != "" {
+					canonicalNodeID = resp.NodeId
+				}
+				tenantID = resp.TenantId
+				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Edge node enrolled via Quartermaster")
 			}
 
 			// Determine operational mode: DB-persisted wins over Helmsman's request
