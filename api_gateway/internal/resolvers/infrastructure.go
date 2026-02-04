@@ -1718,19 +1718,23 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 
 	if sub != nil {
 		eventReason := ""
+		reasonCode := pb.ClusterRejectReason_CLUSTER_REJECT_REASON_UNSPECIFIED
 		if reason != nil {
-			eventReason = *reason
+			eventReason = truncateReason(*reason)
+			reasonCode = parseRejectReasonCode(*reason)
 		}
 		r.sendServiceEvent(ctx, &pb.ServiceEvent{
 			EventType:    apiEventClusterSubscriptionRejected,
 			ResourceType: "cluster_subscription",
 			ResourceId:   sub.Id,
+			TenantId:     tenantID,
 			Payload: &pb.ServiceEvent_ClusterEvent{
 				ClusterEvent: &pb.ClusterEvent{
-					ClusterId:      sub.ClusterId,
-					TenantId:       tenantID,
-					SubscriptionId: sub.Id,
-					Reason:         eventReason,
+					ClusterId:        sub.ClusterId,
+					TenantId:         tenantID,
+					SubscriptionId:   sub.Id,
+					Reason:           eventReason,
+					RejectReasonCode: reasonCode,
 				},
 			},
 		})

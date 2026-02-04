@@ -70,12 +70,24 @@ message TenantEvent {
   repeated string changed_fields = 2;
 }
 
+// ClusterRejectReason standardizes rejection reasons for audit trails.
+enum ClusterRejectReason {
+  CLUSTER_REJECT_REASON_UNSPECIFIED = 0;
+  CLUSTER_REJECT_REASON_CAPACITY = 1;
+  CLUSTER_REJECT_REASON_POLICY = 2;
+  CLUSTER_REJECT_REASON_ELIGIBILITY = 3;
+  CLUSTER_REJECT_REASON_DUPLICATE = 4;
+  CLUSTER_REJECT_REASON_WITHDRAWN = 5;
+  CLUSTER_REJECT_REASON_OTHER = 99;
+}
+
 message ClusterEvent {
   string cluster_id = 1;
   string tenant_id = 2;
   string invite_id = 3;
   string subscription_id = 4;
   string reason = 5;
+  ClusterRejectReason reject_reason_code = 6;
 }
 
 // StreamChangeEvent signals that a stream's metadata was updated.

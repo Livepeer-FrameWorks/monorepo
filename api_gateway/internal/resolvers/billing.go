@@ -904,6 +904,7 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 		EventType:    apiEventSubscriptionUpdated,
 		ResourceType: "subscription",
 		ResourceId:   subscription.Id,
+		TenantId:     tenantID,
 		Payload: &pb.ServiceEvent_BillingEvent{
 			BillingEvent: &pb.BillingEvent{
 				TenantId:       tenantID,
@@ -1710,6 +1711,18 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 		r.Logger.WithError(err).Error("Failed to update billing details")
 		return nil, err
 	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventBillingDetailsUpdated,
+		ResourceType: "billing_details",
+		ResourceId:   tenantID,
+		Payload: &pb.ServiceEvent_TenantEvent{
+			TenantEvent: &pb.TenantEvent{
+				TenantId:      tenantID,
+				ChangedFields: []string{"billing_details"},
+			},
+		},
+	})
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Billing details updated")
 	return resp, nil

@@ -495,7 +495,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	}
 
 	modeStr := mode.String()
-	return &pb.ClipInfo{
+	clipInfo := &pb.ClipInfo{
 		Id:          clipResp.RequestId,
 		ClipHash:    clipResp.ClipHash,
 		PlaybackId:  clipResp.PlaybackId,
@@ -509,7 +509,23 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		CreatedAt:   timestamppb.New(now),
 		UpdatedAt:   timestamppb.New(now),
 		ClipMode:    &modeStr,
-	}, nil
+	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventClipCreated,
+		ResourceType: "clip",
+		ResourceId:   clipResp.RequestId,
+		Payload: &pb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &pb.ArtifactEvent{
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+				ArtifactId:   clipResp.RequestId,
+				StreamId:     streamID,
+				Status:       "requested",
+			},
+		},
+	})
+
+	return clipInfo, nil
 }
 
 // === STREAM KEYS MANAGEMENT ===
@@ -860,6 +876,19 @@ func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (model.DeleteCli
 		return nil, fmt.Errorf("failed to delete clip: %w", err)
 	}
 
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventClipDeleted,
+		ResourceType: "clip",
+		ResourceId:   id,
+		Payload: &pb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &pb.ArtifactEvent{
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
+				ArtifactId:   id,
+				Status:       "deleted",
+			},
+		},
+	})
+
 	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }
 
@@ -947,6 +976,20 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 		}
 		return nil, fmt.Errorf("failed to delete DVR: %w", err)
 	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventDVRDeleted,
+		ResourceType: "dvr",
+		ResourceId:   dvrHash,
+		Payload: &pb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &pb.ArtifactEvent{
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_DVR,
+				ArtifactId:   dvrHash,
+				Status:       "deleted",
+			},
+		},
+	})
+
 	return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
 }
 
