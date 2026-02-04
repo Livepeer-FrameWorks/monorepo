@@ -7583,8 +7583,8 @@ type NodeLifecycleUpdate struct {
 	NodeId string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	// Resource metrics
 	CpuTenths      uint32 `protobuf:"varint,2,opt,name=cpu_tenths,json=cpuTenths,proto3" json:"cpu_tenths,omitempty"`    // 0-1000
-	RamMax         uint64 `protobuf:"varint,3,opt,name=ram_max,json=ramMax,proto3" json:"ram_max,omitempty"`             // MiB
-	RamCurrent     uint64 `protobuf:"varint,4,opt,name=ram_current,json=ramCurrent,proto3" json:"ram_current,omitempty"` // MiB
+	RamMax         uint64 `protobuf:"varint,3,opt,name=ram_max,json=ramMax,proto3" json:"ram_max,omitempty"`             // bytes
+	RamCurrent     uint64 `protobuf:"varint,4,opt,name=ram_current,json=ramCurrent,proto3" json:"ram_current,omitempty"` // bytes
 	ShmTotalBytes  uint64 `protobuf:"varint,5,opt,name=shm_total_bytes,json=shmTotalBytes,proto3" json:"shm_total_bytes,omitempty"`
 	ShmUsedBytes   uint64 `protobuf:"varint,6,opt,name=shm_used_bytes,json=shmUsedBytes,proto3" json:"shm_used_bytes,omitempty"`
 	DiskTotalBytes uint64 `protobuf:"varint,7,opt,name=disk_total_bytes,json=diskTotalBytes,proto3" json:"disk_total_bytes,omitempty"`
