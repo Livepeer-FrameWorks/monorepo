@@ -1,0 +1,192 @@
+name: Mutation Testing
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 3 AM UTC daily
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "What to test"
+        required: true
+        default: "changed"
+        type: choice
+        options:
+          - changed # Only packages changed since last run
+          - critical # All critical modules (auth, x402, errors)
+          - all # Everything (slow!)
+      compare_ref:
+        description: "Compare changes against (default: HEAD~1 for nightly, main for manual)"
+        required: false
+        type: string
+
+env:
+  GO_VERSION: "1.24"
+  CRITICAL_PACKAGES: "pkg/auth pkg/x402 api_gateway/internal/errors"
+
+jobs:
+  detect-changes:
+    name: Detect changed packages
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.changes.outputs.packages }}
+      has_changes: ${{ steps.changes.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine comparison ref
+        id: ref
+        run: |
+          if [ -n "${{ inputs.compare_ref }}" ]; then
+            echo "ref=${{ inputs.compare_ref }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "ref=HEAD~1" >> $GITHUB_OUTPUT
+          else
+            echo "ref=origin/main" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get changed Go packages
+        id: changes
+        run: |
+          REF="${{ steps.ref.outputs.ref }}"
+          echo "Comparing against: $REF"
+
+          # Get changed .go files (excluding tests and generated)
+          CHANGED=$(git diff --name-only "$REF" 2>/dev/null | \
+            grep '\.go$' | \
+            grep -v '_test\.go$' | \
+            grep -v '\.pb\.go$' | \
+            grep -v 'generated' | \
+            grep -v 'models_gen\.go$' || true)
+
+          if [ -z "$CHANGED" ]; then
+            echo "No Go files changed"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "packages=" >> $GITHUB_OUTPUT
+          else
+            # Extract unique package directories
+            PACKAGES=$(echo "$CHANGED" | xargs -I{} dirname {} | sort -u | paste -sd ' ')
+            echo "Changed packages: $PACKAGES"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+          fi
+
+  mutation-test:
+    name: Run mutation tests
+    needs: detect-changes
+    if: |
+      inputs.scope == 'critical' ||
+      inputs.scope == 'all' ||
+      needs.detect-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+
+      - name: Determine packages to test
+        id: packages
+        run: |
+          SCOPE="${{ inputs.scope || 'changed' }}"
+
+          if [ "$SCOPE" == "critical" ]; then
+            echo "packages=${{ env.CRITICAL_PACKAGES }}" >> $GITHUB_OUTPUT
+          elif [ "$SCOPE" == "all" ]; then
+            # All Go modules with tests
+            PKGS=$(find . -name '*_test.go' -exec dirname {} \; | sort -u | paste -sd ' ')
+            echo "packages=$PKGS" >> $GITHUB_OUTPUT
+          else
+            # Changed packages only
+            echo "packages=${{ needs.detect-changes.outputs.packages }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run mutation tests
+        id: mutation
+        run: |
+          PACKAGES="${{ steps.packages.outputs.packages }}"
+          echo "Testing packages: $PACKAGES"
+
+          mkdir -p reports
+          SUMMARY=""
+          FAILED=0
+
+          for pkg in $PACKAGES; do
+            echo ""
+            echo "=========================================="
+            echo "Testing: $pkg"
+            echo "=========================================="
+
+            # Handle monorepo structure - find go.mod directory
+            MODULE_DIR="."
+            RELATIVE_PKG="$pkg"
+
+            if [[ "$pkg" == pkg/* ]] && [ -f "pkg/go.mod" ]; then
+              MODULE_DIR="pkg"
+              RELATIVE_PKG="${pkg#pkg/}"
+            elif [[ "$pkg" == api_* ]] || [[ "$pkg" == cli/* ]]; then
+              SERVICE_DIR=$(echo "$pkg" | cut -d'/' -f1)
+              if [ -f "$SERVICE_DIR/go.mod" ]; then
+                MODULE_DIR="$SERVICE_DIR"
+                RELATIVE_PKG="${pkg#$SERVICE_DIR/}"
+              fi
+            fi
+
+            echo "Module: $MODULE_DIR, Package: $RELATIVE_PKG"
+
+            # Run gremlins and capture output
+            if (cd "$MODULE_DIR" && gremlins unleash "./$RELATIVE_PKG" \
+              --timeout-coefficient 5 \
+              --workers 4 2>&1 | tee "$OLDPWD/reports/mutation-${pkg//\//-}.txt"); then
+              SUMMARY="${SUMMARY}${pkg}: PASSED\n"
+            else
+              SUMMARY="${SUMMARY}${pkg}: FAILED (or no tests)\n"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "SUMMARY"
+          echo "=========================================="
+          echo -e "$SUMMARY"
+
+          # Don't fail the workflow - mutation testing is informational
+          echo "failed_count=$FAILED" >> $GITHUB_OUTPUT
+
+      - name: Upload mutation reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-reports
+          path: reports/
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "## Mutation Testing Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scope:** ${{ inputs.scope || 'changed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Packages tested:** ${{ steps.packages.outputs.packages }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See artifacts for detailed reports." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Interpret Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **KILLED**: Tests caught the mutation (good)" >> $GITHUB_STEP_SUMMARY
+          echo "- **LIVED**: Tests missed the mutation (needs improvement)" >> $GITHUB_STEP_SUMMARY
+          echo "- **NOT_COVERED**: No tests for this code" >> $GITHUB_STEP_SUMMARY
+
+  skip-notice:
+    name: Skip (no changes)
+    needs: detect-changes
+    if: |
+      (inputs.scope == 'changed' || inputs.scope == '') &&
+      needs.detect-changes.outputs.has_changes != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No Go files changed - skipping mutation testing"

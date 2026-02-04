@@ -117,12 +117,23 @@ Mutation testing validates test quality by asking: "If I introduce a bug, will m
 ### Running Mutation Tests
 
 ```bash
-# Run mutation tests on a module
+# Single package
 ./scripts/mutation-test.sh pkg/auth/
 
-# Run on specific file
-./scripts/mutation-test.sh pkg/x402/settlement.go
+# All critical modules (auth, x402, errors, webhooks, middleware)
+./scripts/mutation-test.sh --all
+
+# Only packages changed vs main branch
+./scripts/mutation-test.sh --changed
+
+# Only packages changed in last 5 commits
+./scripts/mutation-test.sh --changed HEAD~5
+
+# Show help
+./scripts/mutation-test.sh --help
 ```
+
+**CI Integration:** Mutation tests run nightly on changed packages. Manual runs available via GitHub Actions with scope options: `changed`, `critical`, or `all`.
 
 ### Target Mutation Score
 
