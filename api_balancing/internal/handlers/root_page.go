@@ -39,6 +39,13 @@ func formatBitsPerSec(bps uint64) string {
 	return fmt.Sprintf("%.1f %cbps", float64(bps)/float64(div), "KMG"[exp])
 }
 
+// formatBytesPerSec converts bytes/sec to human-readable bits/sec.
+// MistServer and NodeLifecycleUpdate report bandwidth in bytes/sec,
+// but network bandwidth is conventionally displayed in bits/sec.
+func formatBytesPerSec(bytesPerSec uint64) string {
+	return formatBitsPerSec(bytesPerSec * 8)
+}
+
 // safeInt extracts int from interface, returns 0 if invalid
 func safeInt(v interface{}) int {
 	val, _ := toInt(v)
@@ -990,7 +997,7 @@ func HandleRootPage(c *gin.Context) {
 				Total:        stream.Total,
 				Inputs:       stream.Inputs,
 				Bandwidth:    stream.Bandwidth,
-				BandwidthStr: formatBitsPerSec(uint64(stream.Bandwidth)),
+				BandwidthStr: formatBytesPerSec(uint64(stream.Bandwidth)),
 				BytesUp:      stream.BytesUp,
 				BytesUpStr:   formatBytes(stream.BytesUp),
 				BytesDown:    stream.BytesDown,
@@ -1071,18 +1078,18 @@ func HandleRootPage(c *gin.Context) {
 			MaxTranscodes:       node.MaxTranscodes,
 			CurrentTranscodes:   node.CurrentTranscodes,
 			UpSpeed:             uint64(node.UpSpeed),
-			UpSpeedStr:          formatBitsPerSec(uint64(node.UpSpeed)),
+			UpSpeedStr:          formatBytesPerSec(uint64(node.UpSpeed)),
 			DownSpeed:           uint64(node.DownSpeed),
-			DownSpeedStr:        formatBitsPerSec(uint64(node.DownSpeed)),
+			DownSpeedStr:        formatBytesPerSec(uint64(node.DownSpeed)),
 			BWLimit:             node.BWLimit,
-			BWLimitStr:          formatBitsPerSec(uint64(node.BWLimit)),
+			BWLimitStr:          formatBytesPerSec(uint64(node.BWLimit)),
 			AvailBandwidth:      node.AvailBandwidth,
-			AvailBandwidthStr:   formatBitsPerSec(uint64(node.AvailBandwidth)),
+			AvailBandwidthStr:   formatBytesPerSec(uint64(node.AvailBandwidth)),
 			AddBandwidth:        node.AddBandwidth,
-			AddBandwidthStr:     formatBitsPerSec(node.AddBandwidth),
+			AddBandwidthStr:     formatBytesPerSec(node.AddBandwidth),
 			PendingRedirects:    node.PendingRedirects,
 			EstBandwidthPerUser: node.EstBandwidthPerUser,
-			EstBandwidthStr:     formatBitsPerSec(node.EstBandwidthPerUser),
+			EstBandwidthStr:     formatBytesPerSec(node.EstBandwidthPerUser),
 			Streams:             streamList,
 			Artifacts:           artifactList,
 		})
@@ -1370,7 +1377,7 @@ func HandleRootPage(c *gin.Context) {
 		TotalActive:         safeInt(virtualViewerStats["active"]),
 		TotalAbandoned:      safeInt(virtualViewerStats["abandoned"]),
 		TotalDisconnected:   safeInt(virtualViewerStats["disconnected"]),
-		EstPendingBandwidth: formatBitsPerSec(safeUint64(virtualViewerStats["est_pending_bandwidth"])),
+		EstPendingBandwidth: formatBytesPerSec(safeUint64(virtualViewerStats["est_pending_bandwidth"])),
 	}
 
 	type StreamContextCacheEntryData struct {

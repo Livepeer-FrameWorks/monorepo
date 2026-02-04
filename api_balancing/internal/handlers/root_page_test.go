@@ -51,3 +51,27 @@ func TestFormatBitsPerSec(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatBytesPerSec(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    uint64
+		expected string
+	}{
+		{name: "zero", input: 0, expected: "0 bps"},
+		{name: "125-bytes-is-1kbps", input: 125, expected: "1.0 Kbps"},
+		{name: "125000-bytes-is-1mbps", input: 125000, expected: "1.0 Mbps"},
+		{name: "1-mebibyte-is-about-8mbps", input: 1048576, expected: "8.4 Mbps"},
+		{name: "125000000-bytes-is-1gbps", input: 125000000, expected: "1.0 Gbps"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			actual := formatBytesPerSec(tc.input)
+			if actual != tc.expected {
+				t.Fatalf("formatBytesPerSec(%d) = %q, want %q", tc.input, actual, tc.expected)
+			}
+		})
+	}
+}
