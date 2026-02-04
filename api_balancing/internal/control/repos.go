@@ -309,17 +309,42 @@ func (r *nodeRepositoryDB) UpsertNodeLifecycle(ctx context.Context, update *pb.N
 	if update == nil {
 		return nil
 	}
-	b, err := json.Marshal(update)
-	if err != nil {
-		return err
+	return r.UpsertNodeLifecycles(ctx, []*pb.NodeLifecycleUpdate{update})
+}
+
+func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error {
+	if db == nil {
+		return sql.ErrConnDone
 	}
-	_, err = db.ExecContext(ctx, `
+	if len(updates) == 0 {
+		return nil
+	}
+
+	nodeIDs := make([]string, 0, len(updates))
+	lifecycles := make([]string, 0, len(updates))
+	for _, update := range updates {
+		if update == nil {
+			continue
+		}
+		b, err := json.Marshal(update)
+		if err != nil {
+			return err
+		}
+		nodeIDs = append(nodeIDs, update.GetNodeId())
+		lifecycles = append(lifecycles, string(b))
+	}
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO foghorn.node_lifecycle (node_id, lifecycle, last_updated)
-		VALUES ($1, $2::jsonb, NOW())
+		SELECT node_id, lifecycle::jsonb, NOW()
+		FROM unnest($1::text[], $2::text[]) AS t(node_id, lifecycle)
 		ON CONFLICT (node_id) DO UPDATE SET
 			lifecycle = EXCLUDED.lifecycle,
 			last_updated = NOW()
-	`, update.GetNodeId(), string(b))
+	`, nodeIDs, lifecycles)
 	return err
 }
 

@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -97,7 +98,12 @@ func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
 	// Build URL: https://raw.githubusercontent.com/Livepeer-FrameWorks/gitops/main/manifests/{channel}/{version}.yaml
 	url := fmt.Sprintf("%s/manifests/%s/%s.yaml", f.repository, channel, version)
 
-	resp, err := f.client.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build request: %w", err)
+	}
+
+	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download manifest: %w", err)
 	}

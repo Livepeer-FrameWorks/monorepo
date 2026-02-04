@@ -236,6 +236,12 @@ type StreamStateManager struct {
 	reconcileStop   chan struct{}
 	reconcileTicker *time.Ticker
 
+	nodeLifecycleBatchMu            sync.Mutex
+	nodeLifecycleBatch              []*pb.NodeLifecycleUpdate
+	nodeLifecycleBatchTimer         *time.Timer
+	nodeLifecycleBatchSize          int
+	nodeLifecycleBatchFlushInterval time.Duration
+
 	rehydrateMu      sync.Mutex
 	lastRehydrateAt  time.Time
 	lastRehydrateErr string
@@ -266,6 +272,9 @@ func NewStreamStateManager() *StreamStateManager {
 		syncPolicies:  make(map[EntityType]SyncPolicy),
 		cachePolicies: make(map[string]CachePolicy),
 		reconcileStop: make(chan struct{}),
+
+		nodeLifecycleBatchSize:          200,
+		nodeLifecycleBatchFlushInterval: 2 * time.Second,
 
 		stalenessCheckInterval:  30 * time.Second,
 		stalenessConfigRefreshC: make(chan struct{}, 1),
@@ -2285,9 +2294,59 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb
 		if update.GetOutputsJson() != "" {
 			_ = sm.nodeRepo.UpsertNodeOutputs(ctx, update.GetNodeId(), update.GetBaseUrl(), update.GetOutputsJson())
 		}
-		_ = sm.nodeRepo.UpsertNodeLifecycle(ctx, update)
+		sm.queueNodeLifecycleWrite(update)
 	}
 	return nil
+}
+
+func (sm *StreamStateManager) queueNodeLifecycleWrite(update *pb.NodeLifecycleUpdate) {
+	if sm.nodeRepo == nil || update == nil {
+		return
+	}
+	sm.nodeLifecycleBatchMu.Lock()
+	sm.nodeLifecycleBatch = append(sm.nodeLifecycleBatch, update)
+
+	if len(sm.nodeLifecycleBatch) >= sm.nodeLifecycleBatchSize {
+		batch := sm.nodeLifecycleBatch
+		sm.nodeLifecycleBatch = nil
+		if sm.nodeLifecycleBatchTimer != nil {
+			sm.nodeLifecycleBatchTimer.Stop()
+			sm.nodeLifecycleBatchTimer = nil
+		}
+		sm.nodeLifecycleBatchMu.Unlock()
+		sm.flushNodeLifecycleBatch(batch)
+		return
+	}
+
+	if sm.nodeLifecycleBatchTimer == nil {
+		sm.nodeLifecycleBatchTimer = time.AfterFunc(sm.nodeLifecycleBatchFlushInterval, sm.flushNodeLifecycleBatchFromTimer)
+	}
+	sm.nodeLifecycleBatchMu.Unlock()
+}
+
+func (sm *StreamStateManager) flushNodeLifecycleBatchFromTimer() {
+	sm.flushNodeLifecycleBatch(nil)
+}
+
+func (sm *StreamStateManager) flushNodeLifecycleBatch(batch []*pb.NodeLifecycleUpdate) {
+	if sm.nodeRepo == nil {
+		return
+	}
+	if batch == nil {
+		sm.nodeLifecycleBatchMu.Lock()
+		batch = sm.nodeLifecycleBatch
+		sm.nodeLifecycleBatch = nil
+		sm.nodeLifecycleBatchTimer = nil
+		sm.nodeLifecycleBatchMu.Unlock()
+	}
+	if len(batch) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := sm.nodeRepo.UpsertNodeLifecycles(ctx, batch); err != nil && stateLogger != nil {
+		stateLogger.WithError(err).Warn("Failed to batch upsert node lifecycle updates")
+	}
 }
 
 // === Policy and repository types ===
@@ -2397,6 +2456,7 @@ type NodeRepository interface {
 	ListNodeMaintenance(ctx context.Context) ([]NodeMaintenanceRecord, error)
 	UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error
 	UpsertNodeLifecycle(ctx context.Context, update *pb.NodeLifecycleUpdate) error
+	UpsertNodeLifecycles(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error
 	UpsertNodeMaintenance(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error
 }
 

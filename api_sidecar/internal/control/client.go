@@ -670,7 +670,13 @@ func buildClipParams(req *pb.ClipPullRequest) string {
 }
 
 func downloadToFile(url, dst string) error {
-	resp, err := http.Get(url)
+	ctx := context.Background()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}

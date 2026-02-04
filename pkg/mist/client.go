@@ -1,6 +1,7 @@
 package mist
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -120,7 +121,7 @@ func (c *Client) callAPI(command map[string]interface{}) (map[string]interface{}
 	}
 	u := fmt.Sprintf("%s/api2?command=%s", base, url.QueryEscape(string(commandJSON)))
 
-	req, err := http.NewRequest("GET", u, nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -484,7 +485,12 @@ func (c *Client) FetchJSON(endpoint string) (map[string]interface{}, error) {
 		urlStr = fmt.Sprintf("%s/%s.json", base, c.MetricsPassword)
 	}
 
-	resp, err := c.httpClient.Get(urlStr)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, urlStr, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create JSON request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JSON from %s: %w", urlStr, err)
 	}

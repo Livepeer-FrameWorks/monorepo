@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +18,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 	r.GET("/ping", func(c *gin.Context) { c.String(http.StatusOK, "pong") })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/ping", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ping", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != 200 {
@@ -45,7 +46,7 @@ func TestTimeoutMiddleware(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/context-aware", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/context-aware", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusGatewayTimeout {
@@ -60,7 +61,7 @@ func TestLoggingMiddleware(t *testing.T) {
 	r.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -74,7 +75,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	r.GET("/panic", func(c *gin.Context) { panic("boom") })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/panic", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/panic", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)

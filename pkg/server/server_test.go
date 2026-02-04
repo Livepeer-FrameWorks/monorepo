@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,7 +20,7 @@ func TestSetupServiceRouter(t *testing.T) {
 	r.GET("/ping", func(c *gin.Context) { c.String(200, "pong") })
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/ping", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ping", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Fatalf("expected 200, got %d", w.Code)
