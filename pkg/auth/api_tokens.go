@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 var (
@@ -37,7 +39,7 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 		WHERE token_value = $1 AND is_active = true
 	`, hashToken(tokenValue)).Scan(
 		&token.ID, &token.TenantID, &token.UserID,
-		&token.TokenName, &token.Permissions, &token.IsActive,
+		&token.TokenName, pq.Array(&token.Permissions), &token.IsActive,
 		&token.ExpiresAt, &token.CreatedAt,
 	)
 

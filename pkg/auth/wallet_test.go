@@ -186,6 +186,38 @@ func TestValidateWalletMessageTimestamp(t *testing.T) {
 			t.Errorf("unexpected error for valid past timestamp: %v", err)
 		}
 	})
+
+	t.Run("exactly 1 minute in future fails", func(t *testing.T) {
+		future := time.Now().UTC().Add(61 * time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", future.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("expected error for timestamp 1+ minute in future")
+		}
+	})
+
+	t.Run("just under 1 minute in future passes", func(t *testing.T) {
+		future := time.Now().UTC().Add(59 * time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", future.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err != nil {
+			t.Errorf("unexpected error for timestamp under 1 minute in future: %v", err)
+		}
+	})
+
+	t.Run("just under 5 minutes in past passes", func(t *testing.T) {
+		past := time.Now().UTC().Add(-4*time.Minute - 58*time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err != nil {
+			t.Errorf("unexpected error for timestamp under 5 minutes old: %v", err)
+		}
+	})
+
+	t.Run("just over 5 minutes in past fails", func(t *testing.T) {
+		past := time.Now().UTC().Add(-5*time.Minute - 1*time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("expected error for timestamp over 5 minutes old")
+		}
+	})
 }
 
 func TestGenerateWalletAuthMessage(t *testing.T) {

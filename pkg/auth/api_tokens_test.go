@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func TestValidateAPIToken(t *testing.T) {
@@ -20,11 +22,12 @@ func TestValidateAPIToken(t *testing.T) {
 	baseTime := time.Now()
 
 	tests := []struct {
-		name        string
-		tokenValue  string
-		setupMock   func(sqlmock.Sqlmock)
-		wantErr     error
-		wantTokenID string
+		name           string
+		tokenValue     string
+		setupMock      func(sqlmock.Sqlmock)
+		wantErr        error
+		wantErrContain string
+		wantTokenID    string
 	}{
 		{
 			name:       "valid token",
@@ -37,7 +40,7 @@ func TestValidateAPIToken(t *testing.T) {
 					"tenant-id",
 					"user-id",
 					"token-name",
-					nil,
+					pq.Array([]string{"read", "write"}),
 					true,
 					baseTime.Add(10*time.Minute),
 					baseTime,
@@ -57,7 +60,7 @@ func TestValidateAPIToken(t *testing.T) {
 					"tenant-id",
 					"user-id",
 					"token-name",
-					nil,
+					pq.Array([]string{}),
 					true,
 					baseTime.Add(-10*time.Minute),
 					baseTime,
@@ -80,7 +83,7 @@ func TestValidateAPIToken(t *testing.T) {
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(query).WithArgs(hashToken("error-token")).WillReturnError(errors.New("db down"))
 			},
-			wantErr: errors.New("db down"),
+			wantErrContain: "db down",
 		},
 	}
 
@@ -101,6 +104,15 @@ func TestValidateAPIToken(t *testing.T) {
 				}
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("expected error %v, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if tt.wantErrContain != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q", tt.wantErrContain)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContain) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErrContain, err)
 				}
 				return
 			}
