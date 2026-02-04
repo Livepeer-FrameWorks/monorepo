@@ -245,7 +245,8 @@ func (ut *UsageTracker) enqueueFailedBatch(event *pb.ServiceEvent, aggregateCoun
 	ut.failedBatches = append(ut.failedBatches, failedBatch{
 		event:          event,
 		aggregateCount: aggregateCount,
-		attempts:       1,
+		// attempts counts retry attempts already performed (not the initial send)
+		attempts: 0,
 	})
 	ut.failedMu.Unlock()
 }
