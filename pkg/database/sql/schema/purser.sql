@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS purser.billing_payments (
     amount DECIMAL(10,2) NOT NULL,
     currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     tx_id VARCHAR(255), -- External transaction ID
+    actual_tx_amount DECIMAL(30,18),
+    asset_type VARCHAR(10),
+    network VARCHAR(20),
+    block_number BIGINT,
     
     -- ===== STATUS =====
     status VARCHAR(50) NOT NULL DEFAULT 'pending', -- pending, confirmed, failed
@@ -136,6 +140,10 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
     CONSTRAINT chk_wallet_status CHECK (status IN ('active', 'used', 'swept', 'expired')),
 
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    confirmed_tx_hash VARCHAR(66),
+    actual_amount_received DECIMAL(30,18),
+    block_number BIGINT,
+    confirmed_at TIMESTAMP WITH TIME ZONE,
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -160,6 +168,9 @@ CREATE TABLE IF NOT EXISTS purser.crypto_wallets (
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_active ON purser.crypto_wallets(status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_tenant ON purser.crypto_wallets(tenant_id, purpose);
 CREATE INDEX IF NOT EXISTS idx_purser_crypto_wallets_address ON purser.crypto_wallets(wallet_address);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_crypto_wallets_confirmed_tx
+    ON purser.crypto_wallets(network, confirmed_tx_hash)
+    WHERE confirmed_tx_hash IS NOT NULL;
 
 -- ============================================================================
 -- BILLING TIERS & SUBSCRIPTION PLANS
@@ -403,6 +414,9 @@ CREATE INDEX IF NOT EXISTS idx_purser_billing_invoices_period ON purser.billing_
 CREATE INDEX IF NOT EXISTS idx_purser_billing_invoices_tenant_status_due ON purser.billing_invoices(tenant_id, status, due_date);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_payments_invoice_id ON purser.billing_payments(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_payments_tx_id ON purser.billing_payments(tx_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_payments_tx_unique
+    ON purser.billing_payments(tx_id)
+    WHERE tx_id IS NOT NULL;
 
 -- ============================================================================
 -- BILLING & SUBSCRIPTION INDEXES
