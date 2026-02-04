@@ -833,6 +833,58 @@ func TestSettleX402Payment(t *testing.T) {
 			t.Fatalf("unexpected payer: %s", result.PayerAddress)
 		}
 	})
+
+	t.Run("stream resource with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			IdentifierResponse: &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "stream://stream-id", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
+
+	t.Run("ingest key with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			StreamKeyResponse: &pb.ValidateStreamKeyResponse{Valid: true, StreamId: "stream-id", TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "ingest:stream-key", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
+
+	t.Run("vod resource with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			VodResponse: &pb.ResolveVodIDResponse{Found: true, TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "vod://4c0883a6-9102-4937-9d62-31471b5dbb62", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
+
+	t.Run("vod hash with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			IdentifierResponse: &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "vod_hash", TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "vod://some-hash", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
 }
 
 func paymentPayload(value string) *pb.X402PaymentPayload {
@@ -858,4 +910,21 @@ func validPaymentHeader() string {
 	payload := paymentPayload("10")
 	jsonBytes, _ := json.Marshal(payload)
 	return base64.StdEncoding.EncodeToString(jsonBytes)
+}
+
+func makePaymentHeader(value string) string {
+	payload := map[string]interface{}{
+		"x402Version": 1,
+		"scheme":      "exact",
+		"network":     "base-sepolia",
+		"payload": map[string]interface{}{
+			"authorization": map[string]interface{}{
+				"from":  "0xfrom",
+				"to":    "0xto",
+				"value": value,
+			},
+		},
+	}
+	data, _ := json.Marshal(payload)
+	return base64.StdEncoding.EncodeToString(data)
 }
