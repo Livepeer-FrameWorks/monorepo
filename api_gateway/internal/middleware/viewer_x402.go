@@ -84,6 +84,7 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 			return
 		}
 
+		x402Paid := false
 		if paymentHeader := GetX402PaymentHeader(c.Request); paymentHeader != "" && serviceClients.Purser != nil {
 			settleResult, settleErr := x402.SettleX402Payment(c.Request.Context(), x402.SettlementOptions{
 				PaymentHeader: paymentHeader,
@@ -101,10 +102,11 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 			}
 			if settleResult != nil {
 				c.Set("x402_paid", true)
+				x402Paid = true
 			}
 		}
 
-		if status.IsSuspended || (status.BillingModel == "prepaid" && status.IsBalanceNegative) {
+		if !x402Paid && (status.IsSuspended || (status.BillingModel == "prepaid" && status.IsBalanceNegative)) {
 			message := "payment required - stream owner needs to top up balance"
 			if status.IsSuspended {
 				message = "payment required - owner account suspended"

@@ -334,7 +334,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	isPublic := isPublicTenant(tenantIDStr)
 	x402Paid := req.X402Processed && !req.X402AuthOnly
 
-	if req.XPayment != "" && x402Settler != nil && !isPublic && !req.X402Processed {
+	if req.XPayment != "" && x402Settler != nil && !req.X402Processed {
 		settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
 			PaymentHeader:          req.XPayment,
 			Resource:               req.Path,
@@ -381,7 +381,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		}
 	}
 
-	if isPublic && !req.PublicAllowlisted {
+	if isPublic && !req.PublicAllowlisted && !x402Paid {
 		response := build402Response(ctx, "", req.OperationName, req.Path, x402Provider, logger)
 		return AccessDecision{
 			Allowed: false,
