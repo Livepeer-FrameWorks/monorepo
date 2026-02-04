@@ -617,7 +617,9 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 			tenant_id, amount_cents, balance_after_cents,
 			transaction_type, description, reference_id, reference_type, created_at
 		) VALUES ($1, $2, $3, 'usage', $4, $5, 'usage_summary', NOW())
-		ON CONFLICT (tenant_id, reference_type, reference_id) DO NOTHING
+		ON CONFLICT (tenant_id, reference_type, reference_id)
+			WHERE reference_type = 'usage_summary'
+		DO NOTHING
 	`, tenantID, -amountCents, newBalance, description, referenceID)
 	if err != nil {
 		return 0, false, err
@@ -628,8 +630,8 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		return 0, false, err
 	}
 	if rowsAffected == 0 {
-		if err := tx.Commit(); err != nil {
-			return 0, false, err
+		if commitErr := tx.Commit(); commitErr != nil {
+			return 0, false, commitErr
 		}
 		return currentBalance, false, nil
 	}
