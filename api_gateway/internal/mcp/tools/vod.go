@@ -35,7 +35,7 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 			Description: "Complete a VOD upload after all parts are uploaded. Triggers processing and returns the asset with playback ID.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args CompleteVodUploadInput) (*mcp.CallToolResult, any, error) {
-			return handleCompleteVodUpload(ctx, args, resolver, logger)
+			return handleCompleteVodUpload(ctx, args, resolver, checker, logger)
 		},
 	)
 
@@ -57,7 +57,7 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 			Description: "Delete a VOD asset. This action cannot be undone.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DeleteVodAssetInput) (*mcp.CallToolResult, any, error) {
-			return handleDeleteVodAsset(ctx, args, resolver, logger)
+			return handleDeleteVodAsset(ctx, args, resolver, checker, logger)
 		},
 	)
 }
@@ -189,9 +189,25 @@ type CompleteVodUploadResult struct {
 	Message      string  `json:"message"`
 }
 
-func handleCompleteVodUpload(ctx context.Context, args CompleteVodUploadInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleCompleteVodUpload(ctx context.Context, args CompleteVodUploadInput, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
+	}
+
+	// Pre-flight: require billing details
+	if err := checker.RequireBillingDetails(ctx); err != nil {
+		if pfe, ok := preflight.IsPreflightError(err); ok {
+			return toolErrorWithResolution(pfe.Blocker)
+		}
+		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
+	}
+
+	// Pre-flight: require positive balance
+	if err := checker.RequireBalance(ctx); err != nil {
+		if pfe, ok := preflight.IsPreflightError(err); ok {
+			return toolErrorWithResolution(pfe.Blocker)
+		}
+		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
 	}
 
 	// Validate required fields
@@ -305,9 +321,25 @@ type DeleteVodAssetResult struct {
 	Message      string  `json:"message"`
 }
 
-func handleDeleteVodAsset(ctx context.Context, args DeleteVodAssetInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleDeleteVodAsset(ctx context.Context, args DeleteVodAssetInput, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
+	}
+
+	// Pre-flight: require billing details
+	if err := checker.RequireBillingDetails(ctx); err != nil {
+		if pfe, ok := preflight.IsPreflightError(err); ok {
+			return toolErrorWithResolution(pfe.Blocker)
+		}
+		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
+	}
+
+	// Pre-flight: require positive balance
+	if err := checker.RequireBalance(ctx); err != nil {
+		if pfe, ok := preflight.IsPreflightError(err); ok {
+			return toolErrorWithResolution(pfe.Blocker)
+		}
+		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
 	}
 
 	if args.ArtifactHash == "" {
