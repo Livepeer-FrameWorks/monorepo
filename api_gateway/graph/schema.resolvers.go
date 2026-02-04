@@ -707,6 +707,9 @@ func (r *clipResolver) NodeID(ctx context.Context, obj *proto.ClipInfo) (*string
 	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.ProcessingNodeId != nil && *state.ProcessingNodeId != "" {
 		return state.ProcessingNodeId, nil
 	}
+	if obj.NodeId != "" {
+		return &obj.NodeId, nil
+	}
 	return nil, nil
 }
 
@@ -718,6 +721,9 @@ func (r *clipResolver) StoragePath(ctx context.Context, obj *proto.ClipInfo) (*s
 	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.FilePath != nil && *state.FilePath != "" {
 		return state.FilePath, nil
 	}
+	if obj.StoragePath != "" {
+		return &obj.StoragePath, nil
+	}
 	return nil, nil
 }
 
@@ -725,6 +731,10 @@ func (r *clipResolver) StoragePath(ctx context.Context, obj *proto.ClipInfo) (*s
 func (r *clipResolver) SizeBytes(ctx context.Context, obj *proto.ClipInfo) (*float64, error) {
 	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.SizeBytes != nil {
 		size := float64(*state.SizeBytes)
+		return &size, nil
+	}
+	if obj.SizeBytes != nil {
+		size := float64(*obj.SizeBytes)
 		return &size, nil
 	}
 	return nil, nil
@@ -736,9 +746,9 @@ func (r *clipResolver) Status(ctx context.Context, obj *proto.ClipInfo) (string,
 	if state := r.getLifecycleData(ctx, obj.ClipHash); state != nil && state.Stage != "" {
 		return state.Stage, nil
 	}
-	// No fallback - return "unknown" to let frontend handle missing lifecycle data.
-	// Previously assumed "completed" when lifecycle data unavailable, but this
-	// incorrectly showed deleted items as completed.
+	if obj.Status != "" {
+		return obj.Status, nil
+	}
 	return "unknown", nil
 }
 
@@ -1135,10 +1145,11 @@ func (r *dVRRequestResolver) Status(ctx context.Context, obj *proto.DVRInfo) (*s
 	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.Stage != "" {
 		return &state.Stage, nil
 	}
-	// No fallback - return nil to let frontend handle unknown status.
-	// Previously assumed "completed" when lifecycle data unavailable, but this
-	// incorrectly showed deleted items as completed.
-	return nil, nil
+	if obj.Status != "" {
+		return &obj.Status, nil
+	}
+	status := "unknown"
+	return &status, nil
 }
 
 // StartedAt is the resolver for the startedAt field.
@@ -1146,6 +1157,10 @@ func (r *dVRRequestResolver) Status(ctx context.Context, obj *proto.DVRInfo) (*s
 func (r *dVRRequestResolver) StartedAt(ctx context.Context, obj *proto.DVRInfo) (*time.Time, error) {
 	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.StartedAt != nil {
 		t := state.StartedAt.AsTime()
+		return &t, nil
+	}
+	if obj.StartedAt != nil {
+		t := obj.StartedAt.AsTime()
 		return &t, nil
 	}
 	return nil, nil
@@ -1156,6 +1171,10 @@ func (r *dVRRequestResolver) StartedAt(ctx context.Context, obj *proto.DVRInfo) 
 func (r *dVRRequestResolver) EndedAt(ctx context.Context, obj *proto.DVRInfo) (*time.Time, error) {
 	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.CompletedAt != nil {
 		t := state.CompletedAt.AsTime()
+		return &t, nil
+	}
+	if obj.EndedAt != nil {
+		t := obj.EndedAt.AsTime()
 		return &t, nil
 	}
 	return nil, nil
@@ -1186,6 +1205,10 @@ func (r *dVRRequestResolver) DurationSeconds(ctx context.Context, obj *proto.DVR
 func (r *dVRRequestResolver) SizeBytes(ctx context.Context, obj *proto.DVRInfo) (*float64, error) {
 	if state := r.getLifecycleData(ctx, obj.DvrHash); state != nil && state.SizeBytes != nil {
 		size := float64(*state.SizeBytes)
+		return &size, nil
+	}
+	if obj.SizeBytes != nil {
+		size := float64(*obj.SizeBytes)
 		return &size, nil
 	}
 	return nil, nil
