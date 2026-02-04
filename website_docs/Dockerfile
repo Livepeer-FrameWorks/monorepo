@@ -45,8 +45,11 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
 
 # copy the remaining sources now that deps are cached
 COPY website_docs/ website_docs/
+COPY docs/skills/ docs/skills/
 
 # build the docs site
+RUN cp docs/skills/skill.md website_docs/public/skill.md \
+  && cp docs/skills/skill.json website_docs/public/skill.json
 RUN pnpm --filter website_docs... run build
 
 FROM node:24-alpine AS runner

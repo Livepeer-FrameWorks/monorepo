@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,8 @@ func main() {
 	config.LoadEnv(logger)
 
 	logger.Info("Starting Bridge GraphQL Gateway")
+
+	skillMarkdown, skillJSON := loadSkillFiles(logger)
 
 	// Initialize service clients (all gRPC-based)
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
@@ -331,6 +334,24 @@ func main() {
 			})
 		})
 
+		app.GET("/skill.md", func(c *gin.Context) {
+			if skillMarkdown == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "skill.md not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skillMarkdown)
+		})
+
+		app.GET("/skill.json", func(c *gin.Context) {
+			if skillJSON == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "skill.json not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skillJSON)
+		})
+
 		// MCP discovery endpoint (SEP-1649)
 		app.GET("/.well-known/mcp.json", func(c *gin.Context) {
 			c.Header("Access-Control-Allow-Origin", "*")
@@ -521,6 +542,45 @@ func extractUsageContext(ctx context.Context) (tenantID, authType, userID string
 		}
 	}
 	return tenantID, authType, userID, tokenHash
+}
+
+func loadSkillFiles(logger logging.Logger) ([]byte, []byte) {
+	candidates := []string{}
+	if envDir := strings.TrimSpace(os.Getenv("SKILL_FILES_DIR")); envDir != "" {
+		candidates = append(candidates, envDir)
+	}
+	candidates = append(candidates, "/app", "docs/skills")
+
+	var markdownPath string
+	var jsonPath string
+	for _, candidate := range candidates {
+		mdPath := filepath.Join(candidate, "skill.md")
+		jsPath := filepath.Join(candidate, "skill.json")
+		if _, err := os.Stat(mdPath); err == nil {
+			if _, err := os.Stat(jsPath); err == nil {
+				markdownPath = mdPath
+				jsonPath = jsPath
+				break
+			}
+		}
+	}
+
+	if markdownPath == "" || jsonPath == "" {
+		logger.WithField("candidates", strings.Join(candidates, ", ")).Warn("skill files not found in any candidate directory")
+		return nil, nil
+	}
+
+	markdown, err := os.ReadFile(markdownPath)
+	if err != nil {
+		logger.WithError(err).WithField("path", markdownPath).Warn("skill.md not found")
+	}
+
+	jsonData, err := os.ReadFile(jsonPath)
+	if err != nil {
+		logger.WithError(err).WithField("path", jsonPath).Warn("skill.json not found")
+	}
+
+	return markdown, jsonData
 }
 
 // calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.

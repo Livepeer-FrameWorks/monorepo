@@ -15,6 +15,16 @@ FrameWorks exposes an MCP (Model Context Protocol) server for AI agent integrati
   [modelcontextprotocol.io](https://modelcontextprotocol.io).
 </Aside>
 
+## For AI Agents
+
+FrameWorks publishes agent-facing metadata and a wallet-first auth flow:
+
+- **skill.md**: https://frameworks.network/skill.md
+- **skill.json**: https://frameworks.network/skill.json
+- **MCP discovery**: `/.well-known/mcp.json`
+
+Agents should use wallet authentication or x402 payment headers for headless access. Wallet auth auto-provisions a prepaid tenant with $0 balance, while x402 enables instant top-ups and acts as an anti-abuse barrier.
+
 ## Endpoint
 
 ```
@@ -72,6 +82,14 @@ Authorization: Bearer YOUR_TOKEN
 X-Wallet-Address: 0x...
 X-Wallet-Signature: 0x...
 X-Wallet-Message: <signed message>
+```
+
+Message format (verbatim):
+
+```
+FrameWorks Login
+Timestamp: 2025-01-15T12:00:00Z
+Nonce: 12345
 ```
 
 **x402 Auth‑Only** (wallet auth via payment header):

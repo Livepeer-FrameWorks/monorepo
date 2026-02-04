@@ -74,10 +74,15 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 COPY npm_player/ npm_player/
 COPY npm_studio/ npm_studio/
 COPY website_application/ website_application/
+COPY docs/skills/ docs/skills/
 
 # copy GraphQL schema and operations for Houdini codegen
 COPY pkg/graphql/schema.graphql pkg/graphql/schema.graphql
 COPY pkg/graphql/operations/ pkg/graphql/operations/
+
+# ensure skill files are present in static assets
+RUN cp docs/skills/skill.md website_application/static/skill.md \
+  && cp docs/skills/skill.json website_application/static/skill.json
 
 # build the app (increase memory for Houdini codegen + Vite SSR + adapter-node)
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter frameworks-frontend... run build

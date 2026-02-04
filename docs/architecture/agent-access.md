@@ -11,6 +11,14 @@ The agent access system provides:
 3. **x402 protocol** - Gasless USDC payments for instant top-ups
 4. **MCP adapter** - Model Context Protocol for AI-native tool discovery
 
+## Agent Quick Start
+
+1. **Create or load an EVM wallet.**
+2. **Sign a wallet login message** and call `/auth/wallet-login` to auto-provision a prepaid tenant.
+3. **Check `account://status`** to confirm readiness and blockers.
+4. **Fund the tenant** via x402 (`X-PAYMENT`) or a crypto deposit.
+5. **Create a stream** using MCP `create_stream`, then push RTMP with the returned stream key.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        AI Agent / Client                        │
@@ -57,6 +65,63 @@ EVM wallet identity system. Signature auth is currently Ethereum (EIP-191); Base
 | `X-Wallet-Address`   | 0x-prefixed Ethereum address                |
 | `X-Wallet-Signature` | EIP-191 `personal_sign` signature           |
 | `X-Wallet-Message`   | Signed message (includes timestamp + nonce) |
+
+### EIP-191 Message Format
+
+Wallet login requires the following exact message format:
+
+```
+FrameWorks Login
+Timestamp: 2025-01-15T12:00:00Z
+Nonce: 12345
+```
+
+Notes:
+
+- Timestamp must be ISO8601 UTC.
+- Nonce can be any random string; it only needs to be unique per request.
+
+### Signing Examples
+
+TypeScript (viem):
+
+```ts
+import { createWalletClient, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+
+const account = privateKeyToAccount("0x...");
+const client = createWalletClient({ account, transport: http() });
+
+const message = [
+  "FrameWorks Login",
+  `Timestamp: ${new Date().toISOString()}`,
+  `Nonce: ${crypto.randomUUID()}`,
+].join("\n");
+
+const signature = await client.signMessage({ message });
+```
+
+Python (eth-account):
+
+```python
+from eth_account import Account
+from eth_account.messages import encode_defunct
+import os
+from datetime import datetime, timezone
+import uuid
+
+message = "\n".join([
+    "FrameWorks Login",
+    f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
+    f"Nonce: {uuid.uuid4()}"
+])
+
+signed = Account.sign_message(
+    encode_defunct(text=message),
+    private_key=os.environ["FRAMEWORKS_WALLET_PRIVKEY"]
+)
+signature = signed.signature.hex()
+```
 
 **Notes**
 
@@ -188,6 +253,15 @@ Implementation of [x402](https://github.com/coinbase/x402) for gasless USDC paym
 ### Token Limitation
 
 x402 only works with EIP-3009 tokens (USDC). ETH/LPT use the deposit flow.
+
+### Testnet Support
+
+When enabled, testnet x402 payments are accepted:
+
+- Base Sepolia (`X402_INCLUDE_TESTNETS=true`)
+- Arbitrum Sepolia (`X402_INCLUDE_TESTNETS=true`)
+
+Use testnets for agent dry-runs without spending mainnet funds.
 
 ### Gas Wallet
 
@@ -329,6 +403,17 @@ Phase 1 is implemented and focuses on:
 - Support history access (`support://conversations`).
 
 See: `api_gateway/internal/mcp/resources/*` and `api_gateway/internal/mcp/tools/*` for the authoritative list.
+
+---
+
+## Example: Agent Streaming Workflow
+
+1. **Authenticate** with wallet headers and call `account://status`.
+2. **Resolve blockers** (e.g., `update_billing_details`) if any are returned.
+3. **Fund balance** using x402 `submit_payment` or `topup_balance`.
+4. **Create stream** via `create_stream` and capture `stream_key`.
+5. **Push RTMP** and monitor `streams://{id}/health`.
+6. **Watch balance** via `billing://balance` to avoid unexpected shutdowns.
 
 ---
 
