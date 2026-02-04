@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -288,7 +289,7 @@ func (s *SignalmanServer) Subscribe(stream pb.SignalmanService_SubscribeServer) 
 	// Read client messages
 	for {
 		msg, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

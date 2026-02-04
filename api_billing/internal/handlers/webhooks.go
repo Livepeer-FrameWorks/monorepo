@@ -743,12 +743,12 @@ func ProcessMollieWebhookGRPC(body []byte, headers map[string]string) (bool, str
 		eventID, err = handleMollieSubscriptionWebhook(payload.ID)
 	case "", "payment":
 		eventID, err = handleMolliePaymentWebhook(payload.ID)
-		if err == errMollieResourceNotFound {
+		if errors.Is(err, errMollieResourceNotFound) {
 			eventID, err = handleMollieSubscriptionWebhook(payload.ID)
 		}
 	default:
 		eventID, err = handleMolliePaymentWebhook(payload.ID)
-		if err == errMollieResourceNotFound {
+		if errors.Is(err, errMollieResourceNotFound) {
 			eventID, err = handleMollieSubscriptionWebhook(payload.ID)
 		}
 	}

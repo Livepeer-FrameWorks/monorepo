@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -126,7 +127,7 @@ func TestJWTValidationEdgeCases(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error but got none")
 				}
-				if tt.errorType != nil && err != tt.errorType {
+				if tt.errorType != nil && !errors.Is(err, tt.errorType) {
 					t.Fatalf("expected error %v but got %v", tt.errorType, err)
 				}
 				if claims != nil {
@@ -173,7 +174,7 @@ func TestJWTAlgorithmConfusionPrevention(t *testing.T) {
 		t.Fatalf("expected nil claims when rejecting none algorithm")
 	}
 	// The error should be either invalid JWT or unexpected signing method
-	if err != ErrInvalidJWT && !strings.Contains(err.Error(), "unexpected signing method") {
+	if !errors.Is(err, ErrInvalidJWT) && !strings.Contains(err.Error(), "unexpected signing method") {
 		t.Fatalf("expected signing method or invalid JWT error but got: %v", err)
 	}
 }
