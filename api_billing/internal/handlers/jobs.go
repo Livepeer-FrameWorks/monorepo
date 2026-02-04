@@ -210,17 +210,18 @@ type CommodoreClient interface {
 
 // JobManager handles background billing jobs
 type JobManager struct {
-	db               *sql.DB
-	logger           logging.Logger
-	emailService     *EmailService
-	cryptoMonitor    *CryptoMonitor
-	gasWalletMonitor *GasWalletMonitor
-	x402Reconciler   *X402Reconciler
-	kafkaConsumer    *kafka.Consumer
-	stopCh           chan struct{}
-	billingTopic     string
-	commodoreClient  CommodoreClient
-	periscopeClient  *periscope.GRPCClient
+	db                *sql.DB
+	logger            logging.Logger
+	emailService      *EmailService
+	cryptoMonitor     *CryptoMonitor
+	gasWalletMonitor  *GasWalletMonitor
+	x402Reconciler    *X402Reconciler
+	kafkaConsumer     *kafka.Consumer
+	stopCh            chan struct{}
+	billingTopic      string
+	commodoreClient   CommodoreClient
+	periscopeClient   *periscope.GRPCClient
+	thresholdEnforcer *ThresholdEnforcer
 }
 
 // NewJobManager creates a new job manager
@@ -242,19 +243,21 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 	}
 
 	includeTestnets := config.GetEnv("X402_INCLUDE_TESTNETS", "false") == "true"
+	emailSvc := NewEmailService(log)
 
 	return &JobManager{
-		db:               database,
-		logger:           log,
-		emailService:     NewEmailService(log),
-		cryptoMonitor:    NewCryptoMonitor(database, log, decklogSvc),
-		gasWalletMonitor: NewGasWalletMonitor(log),
-		x402Reconciler:   NewX402Reconciler(database, log, includeTestnets),
-		kafkaConsumer:    consumer,
-		stopCh:           make(chan struct{}),
-		billingTopic:     billingTopic,
-		commodoreClient:  commodoreClient,
-		periscopeClient:  periscopeSvc,
+		db:                database,
+		logger:            log,
+		emailService:      emailSvc,
+		cryptoMonitor:     NewCryptoMonitor(database, log, decklogSvc),
+		gasWalletMonitor:  NewGasWalletMonitor(log),
+		x402Reconciler:    NewX402Reconciler(database, log, includeTestnets),
+		kafkaConsumer:     consumer,
+		stopCh:            make(chan struct{}),
+		billingTopic:      billingTopic,
+		commodoreClient:   commodoreClient,
+		periscopeClient:   periscopeSvc,
+		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc),
 	}
 }
 
@@ -461,7 +464,7 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 
 	// Deduct from prepaid balance
 	referenceID := usageSummaryReferenceID(summary)
-	newBalanceCents, applied, err := jm.deductPrepaidBalanceForUsage(ctx, summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period), referenceID)
+	previousBalance, newBalanceCents, applied, err := jm.deductPrepaidBalanceForUsage(ctx, summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period), referenceID)
 	if err != nil {
 		return fmt.Errorf("failed to deduct prepaid balance: %w", err)
 	}
@@ -481,39 +484,13 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		"new_balance_cents": newBalanceCents,
 	}).Info("Deducted prepaid usage")
 
-	// Check if balance dropped below suspension threshold (-10.00 in default currency)
-	suspensionThreshold := int64(-1000)
-	if newBalanceCents < suspensionThreshold {
-		if err := jm.suspendTenantForBalance(ctx, summary.TenantID, newBalanceCents); err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to suspend tenant for low balance")
+	if jm.thresholdEnforcer != nil {
+		if err := jm.thresholdEnforcer.EnforcePrepaidThresholds(ctx, summary.TenantID, previousBalance, newBalanceCents); err != nil {
+			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to enforce prepaid thresholds")
 		}
 	}
 
 	return nil
-}
-
-func (jm *JobManager) handleBalanceCrossedZero(ctx context.Context, tenantID string, previousBalance, newBalance int64) {
-	if previousBalance > 0 && newBalance <= 0 {
-		if jm.commodoreClient != nil {
-			invalidateCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			_, err := jm.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "balance_crossed_zero")
-			if err != nil {
-				jm.logger.WithFields(logging.Fields{
-					"tenant_id":        tenantID,
-					"previous_balance": previousBalance,
-					"new_balance":      newBalance,
-					"error":            err,
-				}).Warn("Failed to invalidate tenant cache after balance crossed zero")
-			} else {
-				jm.logger.WithFields(logging.Fields{
-					"tenant_id":        tenantID,
-					"previous_balance": previousBalance,
-					"new_balance":      newBalance,
-				}).Info("Invalidated tenant cache: balance crossed zero")
-			}
-		}
-	}
 }
 
 // deductPrepaidBalanceForCredit deducts amount from prepaid balance for non-usage adjustments.
@@ -599,19 +576,23 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 		return 0, false, err
 	}
 
-	jm.handleBalanceCrossedZero(ctx, tenantID, currentBalance, newBalance)
+	if jm.thresholdEnforcer != nil {
+		if err := jm.thresholdEnforcer.EnforcePrepaidThresholds(ctx, tenantID, currentBalance, newBalance); err != nil {
+			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to enforce prepaid thresholds for credit deduction")
+		}
+	}
 
 	return newBalance, false, nil
 }
 
 // deductPrepaidBalanceForUsage deducts prepaid usage once per usage summary reference.
-func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID string, amountCents int64, description string, referenceID uuid.UUID) (int64, bool, error) {
+func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID string, amountCents int64, description string, referenceID uuid.UUID) (int64, int64, bool, error) {
 	var newBalance int64
 	currency := billing.DefaultCurrency()
 
 	tx, err := jm.db.Begin()
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
@@ -621,7 +602,7 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		ON CONFLICT (tenant_id, currency) DO NOTHING
 	`, tenantID, currency)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
 	var currentBalance int64
@@ -632,7 +613,7 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		FOR UPDATE
 	`, tenantID, currency).Scan(&currentBalance)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
 	newBalance = currentBalance - amountCents
@@ -646,18 +627,18 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		DO NOTHING
 	`, tenantID, -amountCents, newBalance, description, referenceID)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 	if rowsAffected == 0 {
 		if commitErr := tx.Commit(); commitErr != nil {
-			return 0, false, commitErr
+			return 0, 0, false, commitErr
 		}
-		return currentBalance, false, nil
+		return currentBalance, currentBalance, false, nil
 	}
 
 	_, err = tx.Exec(`
@@ -666,16 +647,14 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		WHERE tenant_id = $2 AND currency = $3
 	`, newBalance, tenantID, currency)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
 
-	jm.handleBalanceCrossedZero(ctx, tenantID, currentBalance, newBalance)
-
-	return newBalance, true, nil
+	return currentBalance, newBalance, true, nil
 }
 
 // getPrepaidBalance returns the current prepaid balance in cents for a tenant (0 if none exists)
@@ -715,6 +694,8 @@ func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tena
 
 // suspendTenantForBalance suspends a tenant due to negative prepaid balance
 // This function is called when balance drops below -$10 (threshold defined in processPrepaidUsage)
+//
+//nolint:unused // retained for reference; threshold enforcer handles suspensions now
 func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID string, balanceCents int64) error {
 	// Update subscription status to 'suspended'
 	// This blocks NEW ingests/streams via Foghorn (which checks suspension status)
