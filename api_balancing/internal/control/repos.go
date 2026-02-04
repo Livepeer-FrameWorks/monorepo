@@ -297,21 +297,6 @@ func (r *nodeRepositoryDB) UpsertNodeOutputs(ctx context.Context, nodeID string,
 	return err
 }
 
-// UpsertNodeLifecycle persists the full NodeLifecycleUpdate to PostgreSQL.
-// NOTE: This data is also sent to ClickHouse (node_state_current, node_metrics_samples)
-// where it is actively queried. The PostgreSQL foghorn.node_lifecycle table currently
-// has NO read path - it's written but never read. Keeping this write for potential
-// disaster recovery or future features. See schema comment in foghorn.sql.
-func (r *nodeRepositoryDB) UpsertNodeLifecycle(ctx context.Context, update *pb.NodeLifecycleUpdate) error {
-	if db == nil {
-		return sql.ErrConnDone
-	}
-	if update == nil {
-		return nil
-	}
-	return r.UpsertNodeLifecycles(ctx, []*pb.NodeLifecycleUpdate{update})
-}
-
 func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error {
 	if db == nil {
 		return sql.ErrConnDone
@@ -446,17 +431,6 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 	return tx.Commit()
 }
 
-func (r *artifactRepositoryDB) DeleteArtifact(ctx context.Context, nodeID string, artifactHash string) error {
-	if db == nil {
-		return sql.ErrConnDone
-	}
-	_, err := db.ExecContext(ctx, `
-		DELETE FROM foghorn.artifact_nodes
-		WHERE node_id = $1 AND artifact_hash = $2
-	`, nodeID, artifactHash)
-	return err
-}
-
 // GetArtifactSyncInfo retrieves sync tracking info for an artifact
 func (r *artifactRepositoryDB) GetArtifactSyncInfo(ctx context.Context, artifactHash string) (*state.ArtifactSyncInfo, error) {
 	if db == nil {
@@ -570,19 +544,6 @@ func (r *artifactRepositoryDB) AddCachedNodeWithPath(ctx context.Context, artifa
 	return err
 }
 
-// SetCachedAt explicitly sets the cached_at timestamp
-func (r *artifactRepositoryDB) SetCachedAt(ctx context.Context, artifactHash string) error {
-	if db == nil {
-		return sql.ErrConnDone
-	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifact_nodes
-		SET cached_at = NOW()
-		WHERE artifact_hash = $1
-	`, artifactHash)
-	return err
-}
-
 // GetCachedAt retrieves the cached_at timestamp for calculating warm duration
 func (r *artifactRepositoryDB) GetCachedAt(ctx context.Context, artifactHash string) (int64, error) {
 	if db == nil {
@@ -602,18 +563,6 @@ func (r *artifactRepositoryDB) GetCachedAt(ctx context.Context, artifactHash str
 	return cachedAt.Time.UnixMilli(), nil
 }
 
-// RemoveCachedNode removes a node from having a copy of an artifact
-func (r *artifactRepositoryDB) RemoveCachedNode(ctx context.Context, artifactHash, nodeID string) error {
-	if db == nil {
-		return sql.ErrConnDone
-	}
-	_, err := db.ExecContext(ctx, `
-		DELETE FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND node_id = $2
-	`, artifactHash, nodeID)
-	return err
-}
-
 // IsSynced returns true if the artifact is synced to S3
 func (r *artifactRepositoryDB) IsSynced(ctx context.Context, artifactHash string) (bool, error) {
 	if db == nil {
@@ -630,31 +579,6 @@ func (r *artifactRepositoryDB) IsSynced(ctx context.Context, artifactHash string
 		return false, err
 	}
 	return synced, nil
-}
-
-// GetArtifactNodes returns all node IDs that have a local copy of the artifact
-func (r *artifactRepositoryDB) GetArtifactNodes(ctx context.Context, artifactHash string) ([]string, error) {
-	if db == nil {
-		return nil, sql.ErrConnDone
-	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND is_orphaned = false
-	`, artifactHash)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var nodes []string
-	for rows.Next() {
-		var nodeID string
-		if err := rows.Scan(&nodeID); err != nil {
-			return nil, err
-		}
-		nodes = append(nodes, nodeID)
-	}
-	return nodes, rows.Err()
 }
 
 // ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)

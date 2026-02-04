@@ -472,7 +472,7 @@ func (p *Processor) ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, 
 
 // handleProcessBilling forwards ProcessBillingEvent to Decklog
 func (p *Processor) handleProcessBilling(trigger *pb.MistTrigger) (string, bool, error) {
-	pbill := trigger.GetTriggerPayload().(*pb.MistTrigger_ProcessBilling).ProcessBilling
+	pbill := trigger.GetTriggerPayload().(*pb.MistTrigger_ProcessBilling).ProcessBilling //nolint:errcheck
 	internalName := mist.ExtractInternalName(pbill.GetStreamName())
 
 	// Enrich tenant context if not already present
@@ -514,7 +514,7 @@ func (p *Processor) ProcessTrigger(triggerType string, rawPayload []byte, nodeID
 
 // handleStorageLifecycleData forwards StorageLifecycleData to Decklog
 func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string, bool, error) {
-	sld := trigger.GetTriggerPayload().(*pb.MistTrigger_StorageLifecycleData).StorageLifecycleData
+	sld := trigger.GetTriggerPayload().(*pb.MistTrigger_StorageLifecycleData).StorageLifecycleData //nolint:errcheck
 	// Enrich tenant context if available in the payload
 	if sld.TenantId != nil {
 		trigger.TenantId = sld.TenantId
@@ -543,7 +543,7 @@ func (p *Processor) handleStorageLifecycleData(trigger *pb.MistTrigger) (string,
 
 // handleDVRLifecycleData forwards DVRLifecycleData to Decklog
 func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, bool, error) {
-	dld := trigger.GetTriggerPayload().(*pb.MistTrigger_DvrLifecycleData).DvrLifecycleData
+	dld := trigger.GetTriggerPayload().(*pb.MistTrigger_DvrLifecycleData).DvrLifecycleData //nolint:errcheck
 	// Enrich tenant context if available in the payload
 	if dld.TenantId != nil && *dld.TenantId != "" {
 		trigger.TenantId = dld.TenantId
@@ -574,7 +574,7 @@ func (p *Processor) handleDVRLifecycleData(trigger *pb.MistTrigger) (string, boo
 
 // handlePushRewrite processes PUSH_REWRITE trigger (blocking)
 func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, error) {
-	pushRewrite := trigger.GetTriggerPayload().(*pb.MistTrigger_PushRewrite).PushRewrite
+	pushRewrite := trigger.GetTriggerPayload().(*pb.MistTrigger_PushRewrite).PushRewrite //nolint:errcheck
 	p.logger.WithFields(logging.Fields{
 		"stream_key": pushRewrite.GetStreamName(), // This is the stream key
 		"node_id":    trigger.GetNodeId(),
@@ -778,8 +778,8 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 
 // handlePlayRewrite processes PLAY_REWRITE trigger (blocking)
 func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, error) {
-	defaultStream := trigger.GetTriggerPayload().(*pb.MistTrigger_PlayRewrite).PlayRewrite
-	playbackID := defaultStream.GetRequestedStream() // This is the stream name / playback ID
+	defaultStream := trigger.GetTriggerPayload().(*pb.MistTrigger_PlayRewrite).PlayRewrite //nolint:errcheck
+	playbackID := defaultStream.GetRequestedStream()                                       // This is the stream name / playback ID
 
 	p.logger.WithFields(logging.Fields{
 		"requested_stream": defaultStream.GetRequestedStream(), // playback ID
@@ -881,7 +881,7 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 
 // handleStreamSource processes STREAM_SOURCE trigger (blocking)
 func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, error) {
-	streamSource := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamSource).StreamSource
+	streamSource := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamSource).StreamSource //nolint:errcheck
 	streamName := streamSource.GetStreamName()
 
 	p.logger.WithFields(logging.Fields{
@@ -979,7 +979,7 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 
 // handlePushEnd processes PUSH_END trigger (non-blocking)
 func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error) {
-	pushEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_PushEnd).PushEnd
+	pushEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_PushEnd).PushEnd //nolint:errcheck
 	internalName := mist.ExtractInternalName(pushEnd.GetStreamName())
 
 	p.applyStreamContext(trigger, internalName)
@@ -1002,7 +1002,7 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 
 // handlePushOutStart processes PUSH_OUT_START trigger (blocking)
 func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, error) {
-	pushOutStart := trigger.GetTriggerPayload().(*pb.MistTrigger_PushOutStart).PushOutStart
+	pushOutStart := trigger.GetTriggerPayload().(*pb.MistTrigger_PushOutStart).PushOutStart //nolint:errcheck
 	// nodeID is available via trigger.GetNodeId() and flows to Decklog with the full trigger
 	internalName := mist.ExtractInternalName(pushOutStart.GetStreamName())
 
@@ -1028,7 +1028,7 @@ func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, e
 
 // handleUserNew processes USER_NEW trigger (blocking)
 func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error) {
-	userNew := trigger.GetTriggerPayload().(*pb.MistTrigger_ViewerConnect).ViewerConnect
+	userNew := trigger.GetTriggerPayload().(*pb.MistTrigger_ViewerConnect).ViewerConnect //nolint:errcheck
 	internalName := mist.ExtractInternalName(userNew.GetStreamName())
 	p.logger.WithFields(logging.Fields{
 		"session_id":      userNew.GetSessionId(),
@@ -1113,7 +1113,7 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 // Forwards the original StreamBufferTrigger to Decklog with full track data and health metrics.
 func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, error) {
 	// Extract StreamBuffer payload from protobuf
-	streamBuffer := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamBuffer).StreamBuffer
+	streamBuffer := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamBuffer).StreamBuffer //nolint:errcheck
 
 	p.logger.WithFields(logging.Fields{
 		"internal_name":    streamBuffer.GetStreamName(),
@@ -1162,7 +1162,7 @@ func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, e
 // handleStreamEnd processes STREAM_END trigger (non-blocking)
 func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, error) {
 	// Extract StreamEnd payload from protobuf
-	streamEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamEnd).StreamEnd
+	streamEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamEnd).StreamEnd //nolint:errcheck
 	// CRITICAL: Extract internal name to match state keys
 	internalName := mist.ExtractInternalName(streamEnd.GetStreamName())
 	nodeID := trigger.GetNodeId()
@@ -1201,7 +1201,7 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 
 // handleUserEnd processes USER_END trigger (non-blocking)
 func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error) {
-	userEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_ViewerDisconnect).ViewerDisconnect
+	userEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_ViewerDisconnect).ViewerDisconnect //nolint:errcheck
 	p.logger.WithFields(logging.Fields{
 		"session_id":        userEnd.GetSessionId(),
 		"internal_name":     userEnd.GetStreamName(),
@@ -1280,7 +1280,7 @@ func extractCorrelationID(requestURL string) string {
 // handleLiveTrackList processes LIVE_TRACK_LIST trigger (non-blocking)
 func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, error) {
 	// Extract LiveTrackList payload from protobuf
-	liveTrackList := trigger.GetTriggerPayload().(*pb.MistTrigger_TrackList).TrackList
+	liveTrackList := trigger.GetTriggerPayload().(*pb.MistTrigger_TrackList).TrackList //nolint:errcheck
 	// CRITICAL: Extract internal name to match state keys
 	internalName := mist.ExtractInternalName(liveTrackList.GetStreamName())
 	nodeID := trigger.GetNodeId()
@@ -1323,7 +1323,7 @@ func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, 
 // handleRecordingEnd processes RECORDING_END trigger (non-blocking)
 func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, error) {
 	// Extract RecordingEnd payload from protobuf
-	recordingEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_RecordingComplete).RecordingComplete
+	recordingEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_RecordingComplete).RecordingComplete //nolint:errcheck
 	internalName := mist.ExtractInternalName(recordingEnd.GetStreamName())
 	nodeID := trigger.GetNodeId()
 
@@ -1362,7 +1362,7 @@ func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, e
 // handleRecordingSegment processes RECORDING_SEGMENT trigger (non-blocking)
 func (p *Processor) handleRecordingSegment(trigger *pb.MistTrigger) (string, bool, error) {
 	// Extract RecordingSegment payload from protobuf
-	seg := trigger.GetTriggerPayload().(*pb.MistTrigger_RecordingSegment).RecordingSegment
+	seg := trigger.GetTriggerPayload().(*pb.MistTrigger_RecordingSegment).RecordingSegment //nolint:errcheck
 	internalName := mist.ExtractInternalName(seg.GetStreamName())
 
 	// Enrich tenant context before forwarding
@@ -1392,7 +1392,7 @@ func (p *Processor) handleRecordingSegment(trigger *pb.MistTrigger) (string, boo
 
 // handleStreamLifecycleUpdate forwards StreamLifecycleUpdate to Decklog and updates state
 func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
-	slu := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate).StreamLifecycleUpdate
+	slu := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate).StreamLifecycleUpdate //nolint:errcheck
 	internal := mist.ExtractInternalName(slu.GetInternalName())
 	nodeID := slu.GetNodeId()
 
@@ -1448,7 +1448,7 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 
 // handleClientLifecycleUpdate forwards ClientLifecycleUpdate to Decklog
 func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
-	clu := trigger.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleUpdate).ClientLifecycleUpdate
+	clu := trigger.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleUpdate).ClientLifecycleUpdate //nolint:errcheck
 	internal := clu.GetInternalName()
 
 	// Enrich tenant context before forwarding (same pattern as handleUserNew/handleUserEnd)
@@ -1481,7 +1481,7 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string
 
 // handleNodeLifecycleUpdate processes NODE_LIFECYCLE_UPDATE triggers using protobuf directly
 func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
-	nu := trigger.GetTriggerPayload().(*pb.MistTrigger_NodeLifecycleUpdate).NodeLifecycleUpdate
+	nu := trigger.GetTriggerPayload().(*pb.MistTrigger_NodeLifecycleUpdate).NodeLifecycleUpdate //nolint:errcheck
 
 	p.logger.WithFields(logging.Fields{
 		"node_id":    nu.GetNodeId(),
