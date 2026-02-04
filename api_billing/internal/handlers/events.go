@@ -16,6 +16,10 @@ const (
 	eventX402SettlementPending = "x402_settlement_pending"
 	eventX402SettlementFailed  = "x402_settlement_failed"
 	eventX402SettlementConfirm = "x402_settlement_confirmed"
+	eventX402RPCError          = "x402_rpc_error"
+	eventX402LateRecovery      = "x402_late_recovery"
+	eventX402AccountingAnomaly = "x402_accounting_anomaly"
+	eventX402ReorgDetected     = "x402_reorg_detected"
 )
 
 func emitBillingEvent(eventType, tenantID, resourceType, resourceID string, payload *pb.BillingEvent) {

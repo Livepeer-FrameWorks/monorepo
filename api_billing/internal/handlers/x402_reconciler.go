@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,10 +25,15 @@ import (
 // X402Reconciler monitors pending x402 settlements and confirms or fails them
 // based on on-chain transaction receipts.
 type X402Reconciler struct {
-	db              *sql.DB
-	logger          logging.Logger
-	stopCh          chan struct{}
-	includeTestnets bool
+	db                  *sql.DB
+	logger              logging.Logger
+	stopCh              chan struct{}
+	includeTestnets     bool
+	recoveryWindowHours int
+	reorgDepthBlocks    int
+	rpcErrorLimit       int
+	rpcErrorCounts      map[string]int
+	rpcErrorMu          sync.Mutex
 }
 
 // PendingSettlement represents an x402 settlement awaiting confirmation
@@ -36,6 +44,7 @@ type PendingSettlement struct {
 	TenantID    string
 	AmountCents int64
 	SettledAt   time.Time
+	BlockNumber sql.NullInt64
 }
 
 // TransactionReceipt represents an Ethereum transaction receipt
@@ -48,10 +57,14 @@ type TransactionReceipt struct {
 // NewX402Reconciler creates a new x402 settlement reconciler
 func NewX402Reconciler(database *sql.DB, log logging.Logger, includeTestnets bool) *X402Reconciler {
 	return &X402Reconciler{
-		db:              database,
-		logger:          log,
-		stopCh:          make(chan struct{}),
-		includeTestnets: includeTestnets,
+		db:                  database,
+		logger:              log,
+		stopCh:              make(chan struct{}),
+		includeTestnets:     includeTestnets,
+		recoveryWindowHours: readEnvInt("X402_RECOVERY_WINDOW_HOURS", 168),
+		reorgDepthBlocks:    readEnvInt("X402_REORG_DEPTH_BLOCKS", 50),
+		rpcErrorLimit:       readEnvInt("X402_RPC_ERROR_LIMIT", 5),
+		rpcErrorCounts:      make(map[string]int),
 	}
 }
 
@@ -137,6 +150,7 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 
 	receipt, err := r.getTransactionReceipt(ctx, network, s.TxHash)
 	if err != nil {
+		r.trackRPCError(s.Network, err, s.TxHash, s.TenantID)
 		r.logger.WithError(err).WithFields(logging.Fields{
 			"tx_hash": s.TxHash,
 			"network": s.Network,
@@ -154,6 +168,8 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 		}
 		return
 	}
+
+	r.clearRPCError(s.Network)
 
 	if receipt == nil {
 		// Transaction still pending
@@ -216,11 +232,11 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at
 		FROM purser.x402_nonces
 		WHERE status = 'failed'
-		AND failure_reason LIKE 'timeout%'
-		AND settled_at > NOW() - INTERVAL '1 hour'
+		AND (failure_reason LIKE 'timeout%' OR failure_reason = 'transaction reorged or missing')
+		AND settled_at > NOW() - ($1 * INTERVAL '1 hour')
 		ORDER BY settled_at ASC
 		LIMIT 50
-	`)
+	`, r.recoveryWindowHours)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to query failed x402 settlements")
 		return
@@ -242,8 +258,13 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 
 		receipt, err := r.getTransactionReceipt(ctx, network, s.TxHash)
 		if err != nil || receipt == nil || receipt.Status != "0x1" {
+			if err != nil {
+				r.trackRPCError(s.Network, err, s.TxHash, s.TenantID)
+			}
 			continue
 		}
+
+		r.clearRPCError(s.Network)
 
 		blockNum := parseHexInt64(receipt.BlockNumber)
 		gasUsed := parseHexInt64(receipt.GasUsed)
@@ -274,10 +295,25 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 				"tenant_id": s.TenantID,
 				"tx_hash":   s.TxHash,
 			}).Warn("Skipping late-settlement re-credit: no prior reversal recorded")
-		} else if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.TxHash); err != nil {
+			emitBillingEvent(eventX402AccountingAnomaly, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
+				Amount:   float64(s.AmountCents) / 100,
+				Currency: "EUR",
+				Status:   "missing reversal for late-settlement credit",
+				Provider: s.Network,
+			})
+			continue
+		}
+		if err := r.creditBalance(ctx, s.TenantID, s.AmountCents, s.TxHash); err != nil {
 			r.logger.WithError(err).WithField("tenant_id", s.TenantID).Error("Failed to re-credit balance after late settlement")
 			continue
 		}
+
+		emitBillingEvent(eventX402LateRecovery, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
+			Amount:   float64(s.AmountCents) / 100,
+			Currency: "EUR",
+			Status:   "late settlement recovered",
+			Provider: s.Network,
+		})
 
 		r.markConfirmed(ctx, s.ID, blockNum, gasUsed)
 		emitBillingEvent(eventX402SettlementConfirm, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
@@ -290,7 +326,7 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 
 func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at
+		SELECT id, network, tx_hash, tenant_id, amount_cents, settled_at, block_number
 		FROM purser.x402_nonces
 		WHERE status = 'confirmed'
 		AND confirmed_at > NOW() - INTERVAL '1 hour'
@@ -305,7 +341,7 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 
 	for rows.Next() {
 		var s PendingSettlement
-		if err := rows.Scan(&s.ID, &s.Network, &s.TxHash, &s.TenantID, &s.AmountCents, &s.SettledAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Network, &s.TxHash, &s.TenantID, &s.AmountCents, &s.SettledAt, &s.BlockNumber); err != nil {
 			r.logger.WithError(err).Error("Failed to scan confirmed settlement")
 			continue
 		}
@@ -315,10 +351,50 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 			continue
 		}
 
+		if !s.BlockNumber.Valid || s.BlockNumber.Int64 == 0 {
+			r.logger.WithFields(logging.Fields{
+				"tx_hash":   s.TxHash,
+				"tenant_id": s.TenantID,
+			}).Warn("Confirmed settlement missing block number, skipping reorg check")
+			continue
+		}
+
 		receipt, err := r.getTransactionReceipt(ctx, network, s.TxHash)
-		if err != nil || receipt == nil || receipt.Status != "0x1" {
+		if err != nil {
+			r.trackRPCError(s.Network, err, s.TxHash, s.TenantID)
+			continue
+		}
+
+		r.clearRPCError(s.Network)
+
+		if receipt == nil {
+			latest, err := r.getLatestBlockNumber(ctx, network)
+			if err != nil {
+				r.trackRPCError(s.Network, err, s.TxHash, s.TenantID)
+				continue
+			}
+			if latest-s.BlockNumber.Int64 < int64(r.reorgDepthBlocks) {
+				continue
+			}
 			r.markFailed(ctx, s.ID, "transaction reorged or missing")
 			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+			emitBillingEvent(eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
+				Amount:   float64(s.AmountCents) / 100,
+				Currency: "EUR",
+				Status:   "receipt missing after reorg depth",
+				Provider: s.Network,
+			})
+			continue
+		}
+		if receipt.Status != "0x1" {
+			r.markFailed(ctx, s.ID, "transaction reverted on-chain")
+			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
+			emitBillingEvent(eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
+				Amount:   float64(s.AmountCents) / 100,
+				Currency: "EUR",
+				Status:   "transaction reverted on-chain",
+				Provider: s.Network,
+			})
 		}
 	}
 }
@@ -617,4 +693,43 @@ func truncateTxHash(txHash string) string {
 		return txHash[:16] + "..."
 	}
 	return txHash
+}
+
+func readEnvInt(key string, defaultValue int) int {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return defaultValue
+	}
+	return parsed
+}
+
+func (r *X402Reconciler) trackRPCError(network string, err error, txHash, tenantID string) {
+	if r.rpcErrorLimit <= 0 {
+		return
+	}
+	r.rpcErrorMu.Lock()
+	r.rpcErrorCounts[network]++
+	count := r.rpcErrorCounts[network]
+	r.rpcErrorMu.Unlock()
+
+	if count == r.rpcErrorLimit {
+		r.logger.WithError(err).WithFields(logging.Fields{
+			"network": network,
+			"tx_hash": txHash,
+		}).Warn("X402 RPC error limit reached")
+		emitBillingEvent(eventX402RPCError, tenantID, "x402_network", network, &pb.BillingEvent{
+			Status:   "rpc error limit reached",
+			Provider: network,
+		})
+	}
+}
+
+func (r *X402Reconciler) clearRPCError(network string) {
+	r.rpcErrorMu.Lock()
+	r.rpcErrorCounts[network] = 0
+	r.rpcErrorMu.Unlock()
 }
