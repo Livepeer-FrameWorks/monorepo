@@ -12,29 +12,55 @@ import (
 	"frameworks/pkg/logging"
 )
 
+// MonitorConfig holds Cloudflare health monitor settings
+type MonitorConfig struct {
+	Interval int // Health check interval in seconds
+	Timeout  int // Health check timeout in seconds
+	Retries  int // Number of retries before marking unhealthy
+}
+
 // DNSManager handles DNS synchronization logic
 type DNSManager struct {
-	cfClient  *cloudflare.Client
-	qmClient  *quartermaster.GRPCClient
-	logger    logging.Logger
-	domain    string // Root domain e.g. frameworks.network
-	proxy     map[string]bool
-	recordTTL int
-	lbTTL     int
-	staleAge  time.Duration
+	cfClient      *cloudflare.Client
+	qmClient      *quartermaster.GRPCClient
+	logger        logging.Logger
+	domain        string // Root domain e.g. frameworks.network
+	proxy         map[string]bool
+	recordTTL     int
+	lbTTL         int
+	staleAge      time.Duration
+	monitorConfig MonitorConfig
+	servicePorts  map[string]int // Service type -> HTTP health check port
 }
 
 // NewDNSManager creates a new DNSManager
-func NewDNSManager(cf *cloudflare.Client, qm *quartermaster.GRPCClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration) *DNSManager {
+func NewDNSManager(cf *cloudflare.Client, qm *quartermaster.GRPCClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration, monitorConfig MonitorConfig) *DNSManager {
 	return &DNSManager{
-		cfClient:  cf,
-		qmClient:  qm,
-		logger:    logger,
-		domain:    rootDomain,
-		proxy:     loadProxyServices(),
-		recordTTL: recordTTL,
-		lbTTL:     lbTTL,
-		staleAge:  staleAge,
+		cfClient:      cf,
+		qmClient:      qm,
+		logger:        logger,
+		domain:        rootDomain,
+		proxy:         loadProxyServices(),
+		recordTTL:     recordTTL,
+		lbTTL:         lbTTL,
+		staleAge:      staleAge,
+		monitorConfig: monitorConfig,
+		servicePorts:  defaultServicePorts(),
+	}
+}
+
+// defaultServicePorts returns the default HTTP health check port for each service type
+func defaultServicePorts() map[string]int {
+	return map[string]int{
+		"edge":    18008, // Foghorn HTTP port
+		"ingest":  18008, // Foghorn HTTP port
+		"play":    18008, // Foghorn HTTP port
+		"gateway": 18001, // Bridge HTTP port
+		"api":     18001, // Bridge HTTP port (alias)
+		"app":     3000,  // SvelteKit
+		"website": 4321,  // Astro
+		"docs":    4321,  // Astro
+		"forms":   18032, // Forms HTTP port
 	}
 }
 
@@ -372,8 +398,55 @@ func (m *DNSManager) clearDNSConfig(_ context.Context, fqdn string) (map[string]
 	return nil, nil
 }
 
-// ensurePool finds a pool by name or creates it
+// ensureMonitor finds or creates a health check monitor for a service type
+func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
+	monitors, err := m.cfClient.ListMonitors()
+	if err != nil {
+		return "", fmt.Errorf("failed to list monitors: %w", err)
+	}
+
+	monitorName := fmt.Sprintf("nav-%s-health", serviceType)
+	for _, mon := range monitors {
+		if mon.Description == monitorName {
+			return mon.ID, nil
+		}
+	}
+
+	// Determine port for this service type
+	port := m.servicePorts[serviceType]
+	if port == 0 {
+		port = 80 // Default fallback
+	}
+
+	// Create new monitor
+	m.logger.WithFields(logging.Fields{"name": monitorName, "port": port}).Info("Creating health check monitor")
+	monitor := cloudflare.Monitor{
+		Type:          "http",
+		Description:   monitorName,
+		Method:        "GET",
+		Path:          "/health",
+		Port:          port,
+		Timeout:       m.monitorConfig.Timeout,
+		Interval:      m.monitorConfig.Interval,
+		Retries:       m.monitorConfig.Retries,
+		ExpectedCodes: "200",
+	}
+	created, err := m.cfClient.CreateMonitor(monitor)
+	if err != nil {
+		return "", fmt.Errorf("failed to create monitor: %w", err)
+	}
+	return created.ID, nil
+}
+
+// ensurePool finds a pool by name or creates it, attaching a health monitor
 func (m *DNSManager) ensurePool(name string, ips []string) (string, error) {
+	// First, ensure we have a monitor for this service type
+	monitorID, err := m.ensureMonitor(name)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to ensure monitor, pool will have no health checks")
+		monitorID = "" // Continue without monitor
+	}
+
 	pools, err := m.cfClient.ListPools()
 	if err != nil {
 		return "", fmt.Errorf("failed to list pools: %w", err)
@@ -381,6 +454,14 @@ func (m *DNSManager) ensurePool(name string, ips []string) (string, error) {
 
 	for _, p := range pools {
 		if p.Name == name {
+			// Pool exists - ensure monitor is attached if we have one
+			if monitorID != "" && p.Monitor != monitorID {
+				m.logger.WithFields(logging.Fields{"pool": name, "monitor": monitorID}).Info("Attaching monitor to existing pool")
+				p.Monitor = monitorID
+				if _, updateErr := m.cfClient.UpdatePool(p.ID, p); updateErr != nil {
+					m.logger.WithError(updateErr).Warn("Failed to attach monitor to pool")
+				}
+			}
 			return p.ID, nil
 		}
 	}
@@ -403,6 +484,7 @@ func (m *DNSManager) ensurePool(name string, ips []string) (string, error) {
 		Enabled:        true,
 		MinimumOrigins: 1,
 		Origins:        origins,
+		Monitor:        monitorID,
 	}
 	created, err := m.cfClient.CreatePool(newPool)
 	if err != nil {

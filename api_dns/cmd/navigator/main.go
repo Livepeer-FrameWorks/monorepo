@@ -97,7 +97,12 @@ func main() {
 	recordTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_A_RECORD", 60)
 	lbTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_LB", 60)
 	staleSeconds := config.GetEnvInt("NAVIGATOR_DNS_HEALTH_STALE_SECONDS", 300)
-	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second)
+	monitorConfig := logic.MonitorConfig{
+		Interval: config.GetEnvInt("NAVIGATOR_CF_MONITOR_INTERVAL", 60),
+		Timeout:  config.GetEnvInt("NAVIGATOR_CF_MONITOR_TIMEOUT", 5),
+		Retries:  config.GetEnvInt("NAVIGATOR_CF_MONITOR_RETRIES", 2),
+	}
+	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second, monitorConfig)
 	certManager := logic.NewCertManager(certStore)
 
 	// === Background Workers ===
