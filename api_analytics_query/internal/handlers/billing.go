@@ -134,7 +134,11 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 			WHERE timestamp >= NOW() - INTERVAL 7 DAY
 		)
 		WHERE tenant_id IS NOT NULL
-		AND tenant_id != '00000000-0000-0000-0000-000000000000'
+		AND tenant_id NOT IN (
+			'00000000-0000-0000-0000-000000000000',
+			'00000000-0000-0000-0000-000000000001',
+			'00000000-0000-0000-0000-000000000002'
+		)
 		ORDER BY tenant_id
 	`)
 
