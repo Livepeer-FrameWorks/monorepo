@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -381,9 +382,12 @@ func loadOrGenerateNodeID(path string, logger logging.Logger) string {
 
 	newID := fmt.Sprintf("%s-%s", hostname, uuid.New().String())
 
-	// Ensure directory exists
-	if err := os.MkdirAll("/etc/privateer", 0700); err != nil {
-		logger.WithError(err).Fatal("Failed to create /etc/privateer; node identity cannot persist")
+	// Ensure directory exists for the configured NodeID path.
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			logger.WithError(err).Fatal("Failed to create node_id directory; node identity cannot persist")
+		}
 	}
 
 	if err := os.WriteFile(path, []byte(newID), 0600); err != nil {
