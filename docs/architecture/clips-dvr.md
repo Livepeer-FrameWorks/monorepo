@@ -440,6 +440,22 @@ if fallbackTenantID.Valid {
 }
 ```
 
+## Local Storage Management
+
+### Edge Node Disk Pressure Eviction
+
+Helmsman nodes manage local storage pressure independently to avoid disk exhaustion:
+
+| Parameter           | Default | Description                                 |
+| ------------------- | ------- | ------------------------------------------- |
+| `cleanupThreshold`  | 90%     | Start eviction when disk usage exceeds this |
+| `targetThreshold`   | 80%     | Evict until disk usage falls below this     |
+| `minRetentionHours` | 1 hour  | Never evict artifacts younger than this     |
+
+> **Important:** Local storage retention is **best-effort**. Under disk pressure,
+> artifacts may be evicted from edge nodes before the 30-day retention window.
+> This does not change S3-backed copies or central database records.
+
 ## Retention and Cleanup Jobs
 
 Three background jobs manage artifact lifecycle:
@@ -452,7 +468,9 @@ Three background jobs manage artifact lifecycle:
 
 ### RetentionJob
 
-Uses `retention_until` field (set to 30 days from creation by default):
+Uses `retention_until` field (set to 30 days from creation by default). This
+controls when artifacts are soft-deleted in the registry, but does not prevent
+early eviction on edge nodes under disk pressure (see above):
 
 ```sql
 UPDATE foghorn.artifacts
@@ -478,7 +496,9 @@ WHERE a.status = 'deleted' AND NOT n.is_orphaned
 
 ### PurgeDeletedJob
 
-Final cleanup after local files are confirmed deleted:
+Final cleanup after local files are confirmed deleted. Runs every 24 hours.
+
+**Database cleanup** (always performed):
 
 ```sql
 DELETE FROM foghorn.artifacts
@@ -490,6 +510,14 @@ WHERE status = 'deleted'
   )
   AND updated_at < NOW() - INTERVAL '30 days'
 ```
+
+**S3 cleanup** (conditional):
+
+- Requires S3 client configured in Foghorn
+- Requires tenant context resolvable via Commodore
+
+If either condition is not met, S3 cleanup is skipped and only the database
+records are deleted.
 
 ## Error Handling Patterns
 
