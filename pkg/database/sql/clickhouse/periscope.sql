@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS stream_event_log (
     event_data String
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (tenant_id, stream_id, timestamp)
+ORDER BY (tenant_id, stream_id, timestamp, event_id)
 TTL timestamp + INTERVAL 90 DAY;
 
 -- ============================================================================
@@ -279,7 +279,7 @@ CREATE TABLE IF NOT EXISTS track_list_events (
     primary_audio_bitrate Nullable(UInt32)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (tenant_id, stream_id, timestamp)
+ORDER BY (tenant_id, stream_id, timestamp, event_id)
 TTL timestamp + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS quality_tier_daily (
@@ -358,7 +358,7 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     bytes_transferred UInt64
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (tenant_id, stream_id, timestamp)
+ORDER BY (tenant_id, stream_id, timestamp, event_id)
 TTL timestamp + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS viewer_sessions_current (

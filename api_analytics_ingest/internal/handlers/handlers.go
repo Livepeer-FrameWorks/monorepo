@@ -576,20 +576,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
 		return err
 	}
-	if eventID := parseUUID(event.EventID); eventID != uuid.Nil {
-		rows, err := h.clickhouse.Query(ctx, "SELECT 1 FROM viewer_connection_events WHERE event_id = ? LIMIT 1", eventID)
-		if err != nil {
-			h.logger.WithError(err).WithField("event_id", event.EventID).Warn("Failed to check for duplicate viewer connection event")
-		} else {
-			defer rows.Close()
-			if rows.Next() {
-				h.logger.WithField("event_id", event.EventID).Debug("Skipping duplicate viewer connection event")
-				if h.metrics != nil && h.metrics.DuplicateEvents != nil {
-					h.metrics.DuplicateEvents.WithLabelValues(event.EventType).Inc()
-				}
-				return nil
-			}
-		}
+	if h.isDuplicateEvent(ctx, "viewer_connection_events", parseUUID(event.EventID), event.EventType) {
+		return nil
 	}
 
 	var streamName, sessionID, connector, nodeID, host, requestURL string
@@ -783,6 +771,26 @@ func parseUUID(value string) uuid.UUID {
 		return uuid.Nil
 	}
 	return parsed
+}
+
+func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, eventID uuid.UUID, eventType string) bool {
+	if eventID == uuid.Nil {
+		return false
+	}
+	rows, err := h.clickhouse.Query(ctx, fmt.Sprintf("SELECT 1 FROM %s WHERE event_id = ? LIMIT 1", table), eventID)
+	if err != nil {
+		h.logger.WithError(err).WithField("event_id", eventID).Warn("Failed to check for duplicate event")
+		return false
+	}
+	defer rows.Close()
+	if rows.Next() {
+		h.logger.WithField("event_id", eventID).WithField("table", table).Debug("Skipping duplicate event")
+		if h.metrics != nil && h.metrics.DuplicateEvents != nil {
+			h.metrics.DuplicateEvents.WithLabelValues(eventType).Inc()
+		}
+		return true
+	}
+	return false
 }
 
 func isValidUUIDString(value string) bool {
@@ -1483,6 +1491,9 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
 		return err
 	}
+	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
+		return nil
+	}
 	payload, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamBuffer)
 	if !ok || payload == nil {
 		return fmt.Errorf("unexpected payload for stream_buffer")
@@ -1737,6 +1748,9 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
 		return err
 	}
+	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
+		return nil
+	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamEnd)
 	if !ok || tp == nil {
 		return fmt.Errorf("unexpected payload for stream_end")
@@ -1817,6 +1831,11 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	}
 	if err := h.requireStreamID(ctx, event, mt.GetStreamId()); err != nil {
 		return err
+	}
+	eventID := parseUUID(event.EventID)
+	if h.isDuplicateEvent(ctx, "track_list_events", eventID, event.EventType) ||
+		h.isDuplicateEvent(ctx, "stream_event_log", eventID, event.EventType) {
+		return nil
 	}
 	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_TrackList)
 	if !ok || tp == nil {

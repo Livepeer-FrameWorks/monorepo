@@ -7,6 +7,7 @@ type Metrics struct {
 	AnalyticsQueries  *prometheus.CounterVec
 	QueryDuration     *prometheus.HistogramVec
 	ClickHouseQueries *prometheus.CounterVec
+	CursorCollisions  *prometheus.CounterVec
 	PostgresQueries   *prometheus.CounterVec
 	DBDuration        *prometheus.HistogramVec
 	DBConnections     *prometheus.GaugeVec
