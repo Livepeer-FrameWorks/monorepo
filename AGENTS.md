@@ -52,6 +52,19 @@ Common targets:
 - `make test` - run all tests
 - `make verify` - full verification (tidy, fmt, vet, test, build)
 
+## Prefer Scripts Over Manual Commands
+
+**Always check for existing Makefile targets or `./scripts/` first.** Don't run raw tool invocations when a wrapper exists.
+
+If a command requires multiple flags or is run repeatedly (e.g., `gremlins unleash ./pkg/auth --timeout-coefficient 5 --workers 4`), suggest creating a script:
+
+```bash
+# ./scripts/mutation-test.sh
+./scripts/mutation-test.sh pkg/auth
+```
+
+Scripts provide: discoverable defaults, consistent flags, and documentation via code.
+
 ## Code Generation
 
 - `make proto` - safe to run
