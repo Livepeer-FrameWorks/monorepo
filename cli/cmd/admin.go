@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,11 +68,31 @@ func validateDuration(d string) error {
 	if d == "" {
 		return nil // empty is ok, uses default
 	}
-	_, err := time.ParseDuration(d)
-	if err != nil {
-		return fmt.Errorf("invalid duration %q: %w", d, err)
+	_, err := normalizeDuration(d)
+	return err
+}
+
+func normalizeDuration(d string) (string, error) {
+	if d == "" {
+		return "", nil
 	}
-	return nil
+	normalized := d
+	if strings.HasSuffix(d, "d") {
+		daysStr := strings.TrimSuffix(d, "d")
+		days, err := strconv.Atoi(daysStr)
+		if err != nil {
+			return "", fmt.Errorf("invalid duration %q: %w", d, err)
+		}
+		if days <= 0 {
+			return "", fmt.Errorf("invalid duration %q: must be greater than 0", d)
+		}
+		normalized = fmt.Sprintf("%dh", days*24)
+	}
+	_, err := time.ParseDuration(normalized)
+	if err != nil {
+		return "", fmt.Errorf("invalid duration %q: %w", d, err)
+	}
+	return normalized, nil
 }
 
 func parseCommaList(value string) []string {
@@ -206,7 +227,8 @@ func newAdminTokensCreateCmd() *cobra.Command {
 		if err := validateTokenName(name); err != nil {
 			return fmt.Errorf("--name: %w", err)
 		}
-		if err := validateDuration(expires); err != nil {
+		normalizedExpires, err := normalizeDuration(expires)
+		if err != nil {
 			return fmt.Errorf("--expires: %w", err)
 		}
 
@@ -220,8 +242,8 @@ func newAdminTokensCreateCmd() *cobra.Command {
 		if strings.TrimSpace(perms) != "" {
 			req.Permissions = strings.Split(perms, ",")
 		}
-		if strings.TrimSpace(expires) != "" {
-			d, _ := time.ParseDuration(expires) // already validated above
+		if strings.TrimSpace(normalizedExpires) != "" {
+			d, _ := time.ParseDuration(normalizedExpires) // already validated above
 			expiresAt := timestamppb.New(time.Now().Add(d))
 			req.ExpiresAt = expiresAt
 		}
@@ -244,7 +266,7 @@ func newAdminTokensCreateCmd() *cobra.Command {
 		return nil
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "token name (label)")
-	cmd.Flags().StringVar(&expires, "expires", "", "expiry duration (e.g., 720h)")
+	cmd.Flags().StringVar(&expires, "expires", "", "expiry duration (e.g., 24h, 7d, 720h)")
 	cmd.Flags().StringVar(&perms, "perms", "", "comma-separated permissions")
 	return cmd
 }
@@ -390,7 +412,8 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		if err := validateBootstrapTokenKind(kind); err != nil {
 			return fmt.Errorf("--kind: %w", err)
 		}
-		if err := validateDuration(ttl); err != nil {
+		normalizedTTL, err := normalizeDuration(ttl)
+		if err != nil {
 			return fmt.Errorf("--ttl: %w", err)
 		}
 		// edge_node requires tenant-id and cluster-id
@@ -428,7 +451,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		req := &pb.CreateBootstrapTokenRequest{
 			Name: name,
 			Kind: kind,
-			Ttl:  ttl,
+			Ttl:  normalizedTTL,
 		}
 		if tenantID != "" {
 			req.TenantId = &tenantID
@@ -464,7 +487,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required for edge_node)")
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required for edge_node, binds token to cluster)")
 	cmd.Flags().StringVar(&expectedIP, "expected-ip", "", "expected client IP (optional)")
-	cmd.Flags().StringVar(&ttl, "ttl", "24h", "time-to-live (e.g., 24h)")
+	cmd.Flags().StringVar(&ttl, "ttl", "24h", "time-to-live (e.g., 24h, 7d)")
 	cmd.Flags().StringVar(&name, "name", "Bootstrap Token", "display name for the token")
 	cmd.Flags().IntVar(&usageLimit, "usage-limit", 0, "maximum allowed uses (default 0 = single use)")
 	return cmd
