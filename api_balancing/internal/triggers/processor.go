@@ -1492,19 +1492,17 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	// Update node info in state manager
 	state.DefaultManager().SetNodeInfo(nu.GetNodeId(), nu.GetBaseUrl(), nu.GetIsHealthy(), latitude, longitude, nu.GetLocation(), nu.GetOutputsJson(), nil)
 
-	if operationalMode, ok := mapOperationalMode(nu.GetOperationalMode()); ok {
-		currentMode := state.DefaultManager().GetNodeOperationalMode(nu.GetNodeId())
-		if currentMode != operationalMode {
-			if err := state.DefaultManager().SetNodeOperationalMode(context.Background(), nu.GetNodeId(), operationalMode, "helmsman"); err != nil {
-				p.logger.WithError(err).WithFields(logging.Fields{
-					"node_id":    nu.GetNodeId(),
-					"mode":       operationalMode,
-					"source":     "helmsman",
-					"current":    currentMode,
-					"node_name":  nu.GetNodeId(),
-					"trigger_id": trigger.GetRequestId(),
-				}).Warn("Failed to apply node operational mode from Helmsman")
-			}
+	// Log mismatch between Helmsman-reported mode and Foghorn-authoritative mode.
+	// Foghorn owns operational mode; Helmsman's heartbeat is confirmation only.
+	if reportedMode, ok := mapOperationalMode(nu.GetOperationalMode()); ok {
+		authoritativeMode := state.DefaultManager().GetNodeOperationalMode(nu.GetNodeId())
+		if authoritativeMode != reportedMode {
+			p.logger.WithFields(logging.Fields{
+				"node_id":            nu.GetNodeId(),
+				"reported_mode":      reportedMode,
+				"authoritative_mode": authoritativeMode,
+				"trigger_id":         trigger.GetRequestId(),
+			}).Warn("Helmsman reported mode differs from Foghorn authoritative mode (may need ConfigSeed push)")
 		}
 	}
 

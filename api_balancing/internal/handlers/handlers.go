@@ -1075,6 +1075,18 @@ type nodeOperationalModeRequest struct {
 	SetBy string `json:"set_by"`
 }
 
+// stateToProtoMode converts internal state mode to protobuf enum
+func stateToProtoMode(mode state.NodeOperationalMode) pb.NodeOperationalMode {
+	switch mode {
+	case state.NodeModeDraining:
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+	case state.NodeModeMaintenance:
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+	default:
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	}
+}
+
 func HandleSetNodeMaintenanceMode(c *gin.Context) {
 	nodeID := strings.TrimSpace(c.Param("node_id"))
 	if nodeID == "" {
@@ -1092,6 +1104,17 @@ func HandleSetNodeMaintenanceMode(c *gin.Context) {
 	if err := state.DefaultManager().SetNodeOperationalMode(c.Request.Context(), nodeID, mode, strings.TrimSpace(req.SetBy)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Push mode to connected Helmsman via ConfigSeed
+	protoMode := stateToProtoMode(mode)
+	if err := control.PushOperationalMode(nodeID, protoMode); err != nil {
+		// Log but don't fail - node might not be connected, will get mode on next connect
+		logger.WithFields(logging.Fields{
+			"node_id": nodeID,
+			"mode":    mode,
+			"error":   err,
+		}).Warn("Failed to push operational mode to node (may not be connected)")
 	}
 
 	c.JSON(http.StatusOK, gin.H{

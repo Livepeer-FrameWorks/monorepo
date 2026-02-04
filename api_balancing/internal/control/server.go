@@ -312,7 +312,9 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}
 			}
 
-			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr)
+			// Determine operational mode: DB-persisted wins over Helmsman's request
+			operationalMode := resolveOperationalMode(canonicalNodeID, x.Register.GetRequestedMode())
+			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode)
 			if tenantID != "" {
 				seed.TenantId = tenantID
 			}
@@ -1405,11 +1407,34 @@ func sendMistTriggerResponse(stream pb.HelmsmanControl_ConnectServer, response *
 	}
 }
 
+// resolveOperationalMode determines the authoritative mode for a node.
+// Priority: DB-persisted mode > Helmsman's requested mode > default (NORMAL).
+func resolveOperationalMode(nodeID string, requestedMode pb.NodeOperationalMode) pb.NodeOperationalMode {
+	// Check if we have a persisted mode in state (loaded from DB on startup or set by admin)
+	persistedMode := state.DefaultManager().GetNodeOperationalMode(nodeID)
+	if persistedMode != "" && persistedMode != state.NodeModeNormal {
+		// Non-normal mode is persisted (admin set it), use that
+		switch persistedMode {
+		case state.NodeModeDraining:
+			return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+		case state.NodeModeMaintenance:
+			return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+		}
+	}
+
+	// No persisted override, honor Helmsman's request if valid
+	if requestedMode != pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
+		return requestedMode
+	}
+
+	return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+}
+
 // Config seed composition and sending
 var geoOnce sync.Once
 var geoipReader *geoip.Reader
 
-func composeConfigSeed(nodeID string, _ []string, peerAddr string) *pb.ConfigSeed {
+func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode pb.NodeOperationalMode) *pb.ConfigSeed {
 	var lat, lon float64
 	var loc string
 
@@ -1453,12 +1478,13 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string) *pb.ConfigSee
 	}
 
 	return &pb.ConfigSeed{
-		NodeId:       nodeID,
-		Latitude:     lat,
-		Longitude:    lon,
-		LocationName: loc,
-		Templates:    templates,
-		Processing:   processingConfig,
+		NodeId:          nodeID,
+		Latitude:        lat,
+		Longitude:       lon,
+		LocationName:    loc,
+		Templates:       templates,
+		Processing:      processingConfig,
+		OperationalMode: operationalMode,
 	}
 }
 
@@ -1471,6 +1497,29 @@ func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// PushOperationalMode sends a ConfigSeed with the specified operational mode to the node.
+// Used when admin sets mode via API to notify the connected Helmsman.
+func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+
+	// Send a minimal ConfigSeed with just the mode update.
+	// Helmsman should merge this with its existing config.
+	seed := &pb.ConfigSeed{
+		NodeId:          nodeID,
+		OperationalMode: mode,
 	}
 	msg := &pb.ControlMessage{
 		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},

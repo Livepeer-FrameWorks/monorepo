@@ -203,6 +203,9 @@ message Register {
   optional int32 cpu_cores = 12;      // Detected CPU cores (runtime.NumCPU)
   optional int32 memory_gb = 13;      // Total RAM in GB
   optional int32 disk_gb = 14;        // Total disk capacity in GB
+  // Requested operational mode (hybrid operators can request drain/maintenance on connect).
+  // Foghorn may honor or override based on DB-persisted state.
+  NodeOperationalMode requested_mode = 15;
 }
 
 // NodeFingerprint carries stable identity hints from Helmsman.
@@ -1339,6 +1342,8 @@ message ConfigSeed {
   repeated StreamTemplate templates = 10;
   // Processing configuration (Gateway availability, codec support)
   ProcessingConfig processing = 11;
+  // Authoritative operational mode set by Foghorn. Helmsman must apply this.
+  NodeOperationalMode operational_mode = 12;
 }
 
 // ==================== Transcode Job Messages ====================

@@ -338,6 +338,7 @@ func runClient(addr string, logger logging.Logger) error {
 		CpuCores:        &hwSpecs.CPUCores,
 		MemoryGb:        &hwSpecs.MemoryGB,
 		DiskGb:          &hwSpecs.DiskGB,
+		RequestedMode:   parseRequestedMode(cfg.RequestedMode),
 	}}}
 	if err := stream.Send(reg); err != nil {
 		return err
@@ -1287,4 +1288,18 @@ func handleStopSessions(logger logging.Logger, req *pb.StopSessionsRequest) {
 		"tenant_id":    req.TenantId,
 		"stream_names": req.StreamNames,
 	}).Info("Successfully stopped sessions for suspended tenant")
+}
+
+// parseRequestedMode converts a string mode to protobuf enum for Register message.
+func parseRequestedMode(mode string) pb.NodeOperationalMode {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "draining", "drain":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+	case "maintenance", "maint":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+	case "", "normal":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	default:
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED
+	}
 }
