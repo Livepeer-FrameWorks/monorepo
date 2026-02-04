@@ -118,6 +118,7 @@ func TestReconcileVirtualViewers_TimeoutsPendingViewers(t *testing.T) {
 
 func TestGetViewerDrift(t *testing.T) {
 	sm := NewStreamStateManager()
+	defer sm.Shutdown()
 
 	nodeID := "test-node-1"
 	streamName := "test-stream"
@@ -149,5 +150,175 @@ func TestGetViewerDrift(t *testing.T) {
 	drift = sm.GetViewerDrift()
 	if drift[nodeID] != -1 {
 		t.Fatalf("expected drift of -1 (1 virtual, 2 real), got %v", drift[nodeID])
+	}
+}
+
+func TestTouchNodeUpdatesLastHeartbeat(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	nodeID := "heartbeat-node"
+	sm.TouchNode(nodeID, true)
+
+	node := sm.GetNodeState(nodeID)
+	if node == nil {
+		t.Fatal("expected node state to exist")
+	}
+	if node.LastHeartbeat.IsZero() {
+		t.Fatal("expected LastHeartbeat to be set")
+	}
+}
+
+func TestCheckStaleNodesUsesLastHeartbeat(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	nodeID := "stale-node"
+	sm.TouchNode(nodeID, true)
+
+	now := time.Now()
+	sm.mu.Lock()
+	node := sm.nodes[nodeID]
+	node.LastHeartbeat = now.Add(-2 * time.Minute)
+	node.LastUpdate = now
+	node.IsHealthy = true
+	node.IsStale = false
+	sm.mu.Unlock()
+
+	sm.checkStaleNodes()
+
+	node = sm.GetNodeState(nodeID)
+	if node == nil {
+		t.Fatal("expected node state to exist")
+	}
+	if !node.IsStale {
+		t.Fatal("expected node to be stale based on heartbeat")
+	}
+	if node.IsHealthy {
+		t.Fatal("expected node to be unhealthy when stale")
+	}
+}
+
+func TestMetricsUpdateDoesNotPreventStaleness(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	nodeID := "metrics-node"
+	sm.TouchNode(nodeID, true)
+
+	sm.mu.Lock()
+	node := sm.nodes[nodeID]
+	node.LastHeartbeat = time.Now().Add(-2 * time.Minute)
+	node.IsHealthy = true
+	node.IsStale = false
+	sm.mu.Unlock()
+
+	sm.UpdateNodeMetrics(nodeID, struct {
+		CPU                  float64
+		RAMMax               float64
+		RAMCurrent           float64
+		UpSpeed              float64
+		DownSpeed            float64
+		BWLimit              float64
+		CapIngest            bool
+		CapEdge              bool
+		CapStorage           bool
+		CapProcessing        bool
+		Roles                []string
+		StorageCapacityBytes uint64
+		StorageUsedBytes     uint64
+		MaxTranscodes        int
+		CurrentTranscodes    int
+	}{
+		CPU:                  10,
+		RAMMax:               1024,
+		RAMCurrent:           512,
+		UpSpeed:              100,
+		DownSpeed:            100,
+		BWLimit:              1000,
+		CapIngest:            true,
+		CapEdge:              true,
+		CapStorage:           false,
+		CapProcessing:        false,
+		Roles:                []string{"edge"},
+		StorageCapacityBytes: 1024,
+		StorageUsedBytes:     256,
+		MaxTranscodes:        1,
+		CurrentTranscodes:    0,
+	})
+
+	sm.checkStaleNodes()
+
+	node = sm.GetNodeState(nodeID)
+	if node == nil {
+		t.Fatal("expected node state to exist")
+	}
+	if !node.IsStale {
+		t.Fatal("expected node to remain stale after metrics update")
+	}
+}
+
+func TestMarkNodeDisconnected(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	nodeID := "disconnect-node"
+	sm.TouchNode(nodeID, true)
+
+	sm.MarkNodeDisconnected(nodeID)
+
+	node := sm.GetNodeState(nodeID)
+	if node == nil {
+		t.Fatal("expected node state to exist")
+	}
+	if node.IsHealthy {
+		t.Fatal("expected node to be unhealthy after disconnect")
+	}
+	if !node.IsStale {
+		t.Fatal("expected node to be stale after disconnect")
+	}
+}
+
+func TestSetNodeInfoDoesNotReviveStaleNode(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	nodeID := "rehydrate-node"
+	sm.TouchNode(nodeID, true)
+
+	sm.mu.Lock()
+	node := sm.nodes[nodeID]
+	node.IsStale = true
+	node.IsHealthy = false
+	node.LastHeartbeat = time.Now().Add(-2 * time.Minute)
+	sm.mu.Unlock()
+
+	sm.SetNodeInfo(nodeID, "http://example.com", true, nil, nil, "us-east", "", nil)
+
+	node = sm.GetNodeState(nodeID)
+	if node == nil {
+		t.Fatal("expected node state to exist")
+	}
+	if !node.IsStale {
+		t.Fatal("expected node to remain stale after SetNodeInfo")
+	}
+}
+
+func TestNewNodeStartsStaleUntilHeartbeat(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	nodeID := "new-node"
+	sm.SetNodeInfo(nodeID, "http://example.com", true, nil, nil, "us-west", "", nil)
+
+	node := sm.GetNodeState(nodeID)
+	if node == nil {
+		t.Fatal("expected node state to exist")
+	}
+	if !node.IsStale {
+		t.Fatal("expected new node to start stale before heartbeat")
+	}
+	if node.LastHeartbeat.IsZero() == false {
+		t.Fatal("expected LastHeartbeat to be zero before heartbeat")
 	}
 }

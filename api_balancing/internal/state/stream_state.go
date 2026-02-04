@@ -151,6 +151,7 @@ type NodeState struct {
 	DiskTotalBytes       uint64                 `json:"disk_total_bytes,omitempty"`
 	DiskUsedBytes        uint64                 `json:"disk_used_bytes,omitempty"`
 	LastUpdate           time.Time              `json:"last_update"`
+	LastHeartbeat        time.Time              `json:"last_heartbeat"`
 
 	// GPU information
 	GPUVendor string `json:"gpu_vendor,omitempty"`
@@ -214,6 +215,11 @@ type StreamStateManager struct {
 
 	// Staleness detection
 	stalenessChecker chan bool
+	staleThreshold   time.Duration
+
+	stalenessConfigMu       sync.RWMutex
+	stalenessCheckInterval  time.Duration
+	stalenessConfigRefreshC chan struct{}
 
 	// Policies and repos (new)
 	writePolicies map[EntityType]WritePolicy
@@ -242,6 +248,7 @@ func NewStreamStateManager() *StreamStateManager {
 		streamInstances:  make(map[string]map[string]*StreamInstanceState),
 		nodes:            make(map[string]*NodeState),
 		stalenessChecker: make(chan bool),
+		staleThreshold:   90 * time.Second,
 
 		// Virtual Viewer Tracking
 		virtualViewers: make(map[string]*VirtualViewer),
@@ -259,6 +266,9 @@ func NewStreamStateManager() *StreamStateManager {
 		syncPolicies:  make(map[EntityType]SyncPolicy),
 		cachePolicies: make(map[string]CachePolicy),
 		reconcileStop: make(chan struct{}),
+
+		stalenessCheckInterval:  30 * time.Second,
+		stalenessConfigRefreshC: make(chan struct{}, 1),
 	}
 
 	// Start staleness detection background goroutine
@@ -686,7 +696,9 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	}
 	n.IsHealthy = isHealthy
 	n.IsStale = false
-	n.LastUpdate = time.Now()
+	now := time.Now()
+	n.LastUpdate = now
+	n.LastHeartbeat = now
 }
 
 // SetNodeInfo updates per-node info
@@ -694,13 +706,20 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	n := sm.nodes[nodeID]
+	isNew := false
 	if n == nil {
 		n = newNodeState(nodeID)
 		sm.nodes[nodeID] = n
+		isNew = true
 	}
 	n.BaseURL = baseURL
 	n.IsHealthy = isHealthy
-	n.IsStale = false // Reset staleness on update
+	if !isHealthy {
+		n.IsStale = true
+	}
+	if isNew && n.LastHeartbeat.IsZero() {
+		n.IsStale = true
+	}
 	n.Latitude = lat
 	n.Longitude = lon
 	n.Location = location
@@ -781,6 +800,22 @@ func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, disk
 
 	n.DiskTotalBytes = diskTotal
 	n.DiskUsedBytes = diskUsed
+	n.LastUpdate = time.Now()
+}
+
+// MarkNodeDisconnected immediately flags a node as unhealthy/stale after disconnect.
+func (sm *StreamStateManager) MarkNodeDisconnected(nodeID string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	n := sm.nodes[nodeID]
+	if n == nil {
+		return
+	}
+	n.IsHealthy = false
+	n.IsStale = true
+	// Keep the disconnected state sticky until a new heartbeat arrives.
+	n.LastHeartbeat = time.Time{}
 	n.LastUpdate = time.Now()
 }
 
@@ -1484,6 +1519,7 @@ type EnhancedBalancerNodeSnapshot struct {
 	LocationName    string              `json:"location_name"`
 	IsActive        bool                `json:"is_active"`
 	LastUpdate      time.Time           `json:"last_update"`
+	LastHeartbeat   time.Time           `json:"last_heartbeat"`
 	OperationalMode NodeOperationalMode `json:"operational_mode"`
 
 	// Performance-critical fields
@@ -1635,6 +1671,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			LocationName:    n.Location,
 			IsActive:        isActive,
 			LastUpdate:      n.LastUpdate,
+			LastHeartbeat:   n.LastHeartbeat,
 			OperationalMode: mode,
 
 			// Performance-critical fields
@@ -1759,16 +1796,21 @@ func CompareBinaryHosts(host1, host2 [16]byte) bool {
 
 // runStalenessChecker runs a background goroutine to detect stale nodes
 func (sm *StreamStateManager) runStalenessChecker() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
 	for {
-		select {
-		case <-ticker.C:
-			sm.checkStaleNodes()
-		case <-sm.stalenessChecker:
-			return
+		ticker := time.NewTicker(sm.getStalenessCheckInterval())
+		for {
+			select {
+			case <-ticker.C:
+				sm.checkStaleNodes()
+			case <-sm.stalenessConfigRefreshC:
+				ticker.Stop()
+				goto Restart
+			case <-sm.stalenessChecker:
+				ticker.Stop()
+				return
+			}
 		}
+	Restart:
 	}
 }
 
@@ -1778,17 +1820,26 @@ func (sm *StreamStateManager) checkStaleNodes() {
 	defer sm.mu.Unlock()
 
 	now := time.Now()
-	staleThreshold := 90 * time.Second
+	staleThreshold := sm.getStaleThreshold()
 
 	for _, node := range sm.nodes {
-		if node.LastUpdate.IsZero() {
+		if node.LastHeartbeat.IsZero() {
+			if !node.IsStale {
+				node.IsStale = true
+			}
+			if node.IsHealthy {
+				node.IsHealthy = false
+			}
 			continue
 		}
 
-		timeSinceUpdate := now.Sub(node.LastUpdate)
-		if timeSinceUpdate > staleThreshold {
+		timeSinceHeartbeat := now.Sub(node.LastHeartbeat)
+		if timeSinceHeartbeat > staleThreshold {
 			if !node.IsStale {
 				node.IsStale = true
+			}
+			if node.IsHealthy {
+				node.IsHealthy = false
 			}
 		} else {
 			if node.IsStale {
@@ -1796,6 +1847,35 @@ func (sm *StreamStateManager) checkStaleNodes() {
 			}
 		}
 	}
+}
+
+// SetStalenessConfig overrides staleness thresholds for detection and checks.
+func (sm *StreamStateManager) SetStalenessConfig(staleThreshold, checkInterval time.Duration) {
+	sm.stalenessConfigMu.Lock()
+	if staleThreshold > 0 {
+		sm.staleThreshold = staleThreshold
+	}
+	if checkInterval > 0 {
+		sm.stalenessCheckInterval = checkInterval
+	}
+	sm.stalenessConfigMu.Unlock()
+
+	select {
+	case sm.stalenessConfigRefreshC <- struct{}{}:
+	default:
+	}
+}
+
+func (sm *StreamStateManager) getStaleThreshold() time.Duration {
+	sm.stalenessConfigMu.RLock()
+	defer sm.stalenessConfigMu.RUnlock()
+	return sm.staleThreshold
+}
+
+func (sm *StreamStateManager) getStalenessCheckInterval() time.Duration {
+	sm.stalenessConfigMu.RLock()
+	defer sm.stalenessConfigMu.RUnlock()
+	return sm.stalenessCheckInterval
 }
 
 // Shutdown gracefully shuts down the state manager

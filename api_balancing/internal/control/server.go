@@ -412,6 +412,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 		registry.mu.Lock()
 		delete(registry.conns, nodeID)
 		registry.mu.Unlock()
+		state.DefaultManager().MarkNodeDisconnected(nodeID)
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
 	return nil
