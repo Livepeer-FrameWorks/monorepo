@@ -1860,12 +1860,20 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		// Record that this node now has a warm/local cached copy.
 		// This is intentionally independent from sync_status (S3 remains authoritative once synced).
 		if updatedRows > 0 && artifactRepo != nil && reportingNodeID != "" {
-			if err := artifactRepo.AddCachedNode(context.Background(), assetHash, reportingNodeID); err != nil {
+			if err := artifactRepo.AddCachedNodeWithPath(context.Background(), assetHash, reportingNodeID, localPath, int64(sizeBytes)); err != nil {
 				logger.WithError(err).WithFields(logging.Fields{
 					"asset_hash": assetHash,
 					"node_id":    reportingNodeID,
 				}).Warn("Failed to add cached node after defrost")
 			}
+
+			state.DefaultManager().AddNodeArtifact(reportingNodeID, &pb.StoredArtifact{
+				ClipHash:  assetHash,
+				FilePath:  localPath,
+				SizeBytes: sizeBytes,
+				CreatedAt: time.Now().Unix(),
+				Format:    strings.TrimPrefix(filepath.Ext(localPath), "."),
+			})
 		}
 	} else {
 		// Revert storage_location on failure so future defrosts can retry
@@ -2097,13 +2105,24 @@ func notifyDefrostComplete(assetHash string, ok bool, path string) {
 	}
 }
 
+// Default storage base path when node has no StorageLocal configured.
+// Matches HELMSMAN_STORAGE_LOCAL_PATH default for consistent path reconstruction.
+var defaultStorageBase = "/var/lib/mistserver/recordings"
+
+// SetDefaultStorageBase overrides the default storage base path (FOGHORN_DEFAULT_STORAGE_BASE).
+func SetDefaultStorageBase(path string) {
+	if path != "" {
+		defaultStorageBase = path
+	}
+}
+
 func storageBasePathForNode(nodeID string) string {
 	if nodeID != "" {
 		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil && ns.StorageLocal != "" {
 			return ns.StorageLocal
 		}
 	}
-	return "/data"
+	return defaultStorageBase
 }
 
 // StartDefrost initiates a defrost operation but does not wait for completion.

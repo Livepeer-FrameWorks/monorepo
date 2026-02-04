@@ -9849,16 +9849,17 @@ func (x *StreamTrack) GetKeyframeMsMin() float64 {
 type StoredArtifact struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Security: Use opaque identifiers, never expose tenant_id on edge nodes
-	ClipHash      string `protobuf:"bytes,1,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`               // Opaque identifier for the clip
-	StreamName    string `protobuf:"bytes,2,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`         // Stream name (safe to expose)
-	FilePath      string `protobuf:"bytes,3,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`               // Local file path on storage node
-	S3Url         string `protobuf:"bytes,4,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"`                        // S3 URL if uploaded to cloud storage
-	SizeBytes     uint64 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`           // File size in bytes
-	CreatedAt     int64  `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`           // Creation timestamp (Unix seconds)
-	Format        string `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                   // File format (mp4, webm, etc.)
-	HasDtsh       bool   `protobuf:"varint,8,opt,name=has_dtsh,json=hasDtsh,proto3" json:"has_dtsh,omitempty"`                 // True if .dtsh index file exists locally
-	AccessCount   uint64 `protobuf:"varint,9,opt,name=access_count,json=accessCount,proto3" json:"access_count,omitempty"`     // Local access count (best-effort, per node)
-	LastAccessed  int64  `protobuf:"varint,10,opt,name=last_accessed,json=lastAccessed,proto3" json:"last_accessed,omitempty"` // Last access timestamp (Unix seconds)
+	ClipHash      string                     `protobuf:"bytes,1,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`                                                               // Opaque identifier for the clip
+	StreamName    string                     `protobuf:"bytes,2,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`                                                         // Stream name (safe to expose)
+	FilePath      string                     `protobuf:"bytes,3,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`                                                               // Local file path on storage node
+	S3Url         string                     `protobuf:"bytes,4,opt,name=s3_url,json=s3Url,proto3" json:"s3_url,omitempty"`                                                                        // S3 URL if uploaded to cloud storage
+	SizeBytes     uint64                     `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`                                                           // File size in bytes
+	CreatedAt     int64                      `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`                                                           // Creation timestamp (Unix seconds)
+	Format        string                     `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                                                                   // File format (mp4, webm, etc.)
+	HasDtsh       bool                       `protobuf:"varint,8,opt,name=has_dtsh,json=hasDtsh,proto3" json:"has_dtsh,omitempty"`                                                                 // True if .dtsh index file exists locally
+	AccessCount   uint64                     `protobuf:"varint,9,opt,name=access_count,json=accessCount,proto3" json:"access_count,omitempty"`                                                     // Local access count (best-effort, per node)
+	LastAccessed  int64                      `protobuf:"varint,10,opt,name=last_accessed,json=lastAccessed,proto3" json:"last_accessed,omitempty"`                                                 // Last access timestamp (Unix seconds)
+	ArtifactType  ArtifactEvent_ArtifactType `protobuf:"varint,11,opt,name=artifact_type,json=artifactType,proto3,enum=helmsmancontrol.ArtifactEvent_ArtifactType" json:"artifact_type,omitempty"` // Explicit artifact type (clip/dvr/vod)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -9961,6 +9962,13 @@ func (x *StoredArtifact) GetLastAccessed() int64 {
 		return x.LastAccessed
 	}
 	return 0
+}
+
+func (x *StoredArtifact) GetArtifactType() ArtifactEvent_ArtifactType {
+	if x != nil {
+		return x.ArtifactType
+	}
+	return ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED
 }
 
 type StreamProcess struct {
@@ -12272,7 +12280,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\r_frame_ms_maxB\x0f\n" +
 	"\r_frame_ms_minB\x12\n" +
 	"\x10_keyframe_ms_maxB\x12\n" +
-	"\x10_keyframe_ms_min\"\xbb\x02\n" +
+	"\x10_keyframe_ms_min\"\x8d\x03\n" +
 	"\x0eStoredArtifact\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +
@@ -12287,7 +12295,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\bhas_dtsh\x18\b \x01(\bR\ahasDtsh\x12!\n" +
 	"\faccess_count\x18\t \x01(\x04R\vaccessCount\x12#\n" +
 	"\rlast_accessed\x18\n" +
-	" \x01(\x03R\flastAccessed\"\x8a\x03\n" +
+	" \x01(\x03R\flastAccessed\x12P\n" +
+	"\rartifact_type\x18\v \x01(\x0e2+.helmsmancontrol.ArtifactEvent.ArtifactTypeR\fartifactType\"\x8a\x03\n" +
 	"\rStreamProcess\x12\x18\n" +
 	"\aprocess\x18\x01 \x01(\tR\aprocess\x12\x14\n" +
 	"\x05codec\x18\x02 \x01(\tR\x05codec\x12\x18\n" +
@@ -12615,27 +12624,28 @@ var file_ipc_proto_depIdxs = []int32{
 	5,   // 98: helmsmancontrol.DVRLifecycleData.status:type_name -> helmsmancontrol.DVRLifecycleData.Status
 	6,   // 99: helmsmancontrol.VodLifecycleData.status:type_name -> helmsmancontrol.VodLifecycleData.Status
 	7,   // 100: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
-	98,  // 101: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
-	84,  // 102: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
-	85,  // 103: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
-	86,  // 104: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
-	77,  // 105: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
-	88,  // 106: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	93,  // 107: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	81,  // 108: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	17,  // 109: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	31,  // 110: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	27,  // 111: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	9,   // 112: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	17,  // 113: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	32,  // 114: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	100, // 115: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	100, // 116: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	113, // [113:117] is the sub-list for method output_type
-	109, // [109:113] is the sub-list for method input_type
-	109, // [109:109] is the sub-list for extension type_name
-	109, // [109:109] is the sub-list for extension extendee
-	0,   // [0:109] is the sub-list for field type_name
+	2,   // 101: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
+	98,  // 102: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
+	84,  // 103: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
+	85,  // 104: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
+	86,  // 105: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
+	77,  // 106: helmsmancontrol.ConfigSeed.processing:type_name -> helmsmancontrol.ProcessingConfig
+	88,  // 107: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
+	93,  // 108: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
+	81,  // 109: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	17,  // 110: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	31,  // 111: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	27,  // 112: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	9,   // 113: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	17,  // 114: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	32,  // 115: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	100, // 116: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	100, // 117: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	114, // [114:118] is the sub-list for method output_type
+	110, // [110:114] is the sub-list for method input_type
+	110, // [110:110] is the sub-list for extension type_name
+	110, // [110:110] is the sub-list for extension extendee
+	0,   // [0:110] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }
