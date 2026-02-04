@@ -97,8 +97,9 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 		Payload: &pb.ServiceEvent_ArtifactEvent{
 			ArtifactEvent: &pb.ArtifactEvent{
 				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
-				ArtifactId:   resp.UploadId,
-				Status:       "upload_created",
+				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
+				ArtifactId: resp.ArtifactHash,
+				Status:     "upload_created",
 			},
 		},
 	})
@@ -187,8 +188,9 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 		Payload: &pb.ServiceEvent_ArtifactEvent{
 			ArtifactEvent: &pb.ArtifactEvent{
 				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
-				ArtifactId:   input.UploadID,
-				Status:       "upload_completed",
+				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
+				ArtifactId: resp.GetAsset().GetArtifactHash(),
+				Status:     "upload_completed",
 			},
 		},
 	})
@@ -252,8 +254,10 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 		Payload: &pb.ServiceEvent_ArtifactEvent{
 			ArtifactEvent: &pb.ArtifactEvent{
 				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
-				ArtifactId:   uploadID,
-				Status:       "upload_aborted",
+				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
+				// Abort doesn't return the hash, so leave artifact_id empty.
+				ArtifactId: "",
+				Status:     "upload_aborted",
 			},
 		},
 	})
