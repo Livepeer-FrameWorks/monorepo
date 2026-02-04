@@ -376,10 +376,9 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 			if latest-s.BlockNumber.Int64 < int64(r.reorgDepthBlocks) {
 				continue
 			}
-			r.markFailed(ctx, s.ID, "transaction reorged or missing")
 
 			var creditExists bool
-			err = r.db.QueryRowContext(ctx, `
+			qErr := r.db.QueryRowContext(ctx, `
 				SELECT EXISTS(
 					SELECT 1
 					FROM purser.balance_transactions
@@ -389,13 +388,16 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 					  AND transaction_type = 'topup'
 				)
 			`, s.TenantID, s.TxHash).Scan(&creditExists)
-			if err != nil {
-				r.logger.WithError(err).WithFields(logging.Fields{
+			if qErr != nil {
+				r.logger.WithError(qErr).WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
 					"tx_hash":   s.TxHash,
 				}).Error("Failed to verify credit existence before reorg debit")
 				continue
 			}
+
+			r.markFailed(ctx, s.ID, "transaction reorged or missing")
+
 			if !creditExists {
 				r.logger.WithFields(logging.Fields{
 					"tenant_id": s.TenantID,
@@ -413,8 +415,37 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 			})
 			continue
 		}
+
 		if receipt.Status != "0x1" {
+			var creditExists bool
+			qErr := r.db.QueryRowContext(ctx, `
+				SELECT EXISTS(
+					SELECT 1
+					FROM purser.balance_transactions
+					WHERE tenant_id = $1
+					  AND reference_id = $2
+					  AND reference_type = 'x402_payment'
+					  AND transaction_type = 'topup'
+				)
+			`, s.TenantID, s.TxHash).Scan(&creditExists)
+			if qErr != nil {
+				r.logger.WithError(qErr).WithFields(logging.Fields{
+					"tenant_id": s.TenantID,
+					"tx_hash":   s.TxHash,
+				}).Error("Failed to verify credit existence before reorg debit")
+				continue
+			}
+
 			r.markFailed(ctx, s.ID, "transaction reverted on-chain")
+
+			if !creditExists {
+				r.logger.WithFields(logging.Fields{
+					"tenant_id": s.TenantID,
+					"tx_hash":   s.TxHash,
+				}).Warn("Skipping reorg debit: no original credit found")
+				continue
+			}
+
 			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
 			emitBillingEvent(eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
 				Amount:   float64(s.AmountCents) / 100,
