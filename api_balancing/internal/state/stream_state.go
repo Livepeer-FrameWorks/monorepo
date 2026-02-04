@@ -814,6 +814,8 @@ func (sm *StreamStateManager) MarkNodeDisconnected(nodeID string) {
 	}
 	n.IsHealthy = false
 	n.IsStale = true
+	// Keep the disconnected state sticky until a new heartbeat arrives.
+	n.LastHeartbeat = time.Time{}
 	n.LastUpdate = time.Now()
 }
 
