@@ -64,6 +64,7 @@ func main() {
 	serviceEventsTopic := config.GetEnv("SERVICE_EVENTS_KAFKA_TOPIC", "service_events")
 	dlqTopic := config.GetEnv("DECKLOG_DLQ_KAFKA_TOPIC", "decklog_events_dlq")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 
 	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger)
@@ -266,6 +267,7 @@ func main() {
 		// Auth interceptor for service-to-service calls
 		authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
 			ServiceToken: serviceToken,
+			JWTSecret:    jwtSecret,
 			Logger:       logger,
 			SkipMethods: []string{
 				"/grpc.health.v1.Health/Check",
@@ -275,6 +277,7 @@ func main() {
 
 		streamAuthInterceptor := middleware.GRPCStreamAuthInterceptor(middleware.GRPCAuthConfig{
 			ServiceToken: serviceToken,
+			JWTSecret:    jwtSecret,
 			Logger:       logger,
 			SkipMethods: []string{
 				"/grpc.health.v1.Health/Check",
@@ -283,8 +286,8 @@ func main() {
 		})
 
 		grpcSrv := grpc.NewServer(
-			grpc.UnaryInterceptor(authInterceptor),
-			grpc.StreamInterceptor(streamAuthInterceptor),
+			grpc.ChainUnaryInterceptor(authInterceptor),
+			grpc.ChainStreamInterceptor(streamAuthInterceptor),
 		)
 		pb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
 

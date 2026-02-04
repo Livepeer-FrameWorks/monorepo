@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_realtime/internal/metrics"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -261,9 +262,12 @@ func (c *Client) shouldReceive(event *pb.SignalmanEvent) bool {
 
 // Subscribe implements bidirectional streaming for realtime events
 func (s *SignalmanServer) Subscribe(stream pb.SignalmanService_SubscribeServer) error {
+	ctx := stream.Context()
 	client := &Client{
 		stream:   stream,
 		channels: []pb.Channel{},
+		userID:   ctxkeys.GetUserID(ctx),
+		tenantID: ctxkeys.GetTenantID(ctx),
 		send:     make(chan *pb.ServerMessage, 256),
 		done:     make(chan struct{}),
 		logger:   s.logger,
@@ -321,20 +325,14 @@ func (c *Client) sendLoop() {
 func (c *Client) handleSubscribe(req *pb.SubscribeRequest) {
 	c.mutex.Lock()
 	c.channels = append(c.channels, req.Channels...)
-	if req.UserId != nil {
-		c.userID = *req.UserId
-	}
-	if req.TenantId != nil {
-		c.tenantID = *req.TenantId
-	}
 	currentChannels := make([]pb.Channel, len(c.channels))
 	copy(currentChannels, c.channels)
 	c.mutex.Unlock()
 
 	c.logger.WithFields(logging.Fields{
 		"channels":  req.Channels,
-		"user_id":   req.UserId,
-		"tenant_id": req.TenantId,
+		"user_id":   c.userID,
+		"tenant_id": c.tenantID,
 	}).Info("Client subscribed to channels")
 
 	// Send confirmation
