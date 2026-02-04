@@ -1,0 +1,96 @@
+---
+title: "PostgreSQL Schema Migrations"
+description: "Versioned migrations for upgrading PostgreSQL schemas."
+sidebar:
+  order: 9
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Rolling deploy safety">
+  Apply migrations **before** deploying service versions that depend on new columns/tables.
+</Aside>
+
+## Overview
+
+PostgreSQL schema changes are managed through versioned migrations:
+
+| Scenario      | What to use                                          |
+| ------------- | ---------------------------------------------------- |
+| Fresh install | Bootstrap schemas via `frameworks cluster init`      |
+| Upgrading     | Apply migrations from `pkg/database/sql/migrations/` |
+
+## Migration structure
+
+Migrations are organized by release version:
+
+```
+pkg/database/sql/migrations/
+└── v1.1.0/
+    ├── 001_purser_add_invoice_field.sql
+    └── 002_commodore_add_stream_metadata.sql
+```
+
+## Upgrade procedure
+
+1. **Check release notes** for required migrations
+2. **Apply migrations** in order:
+
+```bash
+psql -h <host> -d frameworks -f pkg/database/sql/migrations/v1.1.0/001_purser_add_invoice_field.sql
+```
+
+3. **Verify** the changes:
+
+```bash
+psql -h <host> -d frameworks -c "\d purser.billing_invoices"
+```
+
+4. **Deploy** new service versions:
+
+```bash
+frameworks cluster upgrade purser --version v1.1.0
+```
+
+## Writing migrations
+
+Guidelines for contributors:
+
+1. **Use `IF NOT EXISTS` guards** - migrations must be idempotent
+2. **Prefer expand-only changes** - add columns/tables, avoid drops
+3. **Use defaults or NULL for new columns** - safe for rollback
+4. **Update bootstrap schema** - corresponding file in `pkg/database/sql/schema/` must reflect final state
+5. **One migration per logical change** - easier to track and debug
+
+Example migration file:
+
+```sql
+-- Migration: v1.1.0/001_purser_add_invoice_field.sql
+-- Required before: purser v1.1.0
+
+ALTER TABLE purser.billing_invoices
+  ADD COLUMN IF NOT EXISTS payment_intent_id TEXT;
+```
+
+## Rollback
+
+- **Nullable columns are safe to leave** - older service versions simply won't populate them
+- **Don't drop columns during rollback** unless explicitly required
+- Re-deploying an older service version is usually sufficient
+
+## Troubleshooting
+
+**"column does not exist" errors:**
+
+```
+ERROR: column "payment_intent_id" of relation "billing_invoices" does not exist
+```
+
+Cause: Service deployed before migration was applied.
+Fix: Apply the migration, then restart the service.
+
+**Check table structure:**
+
+```sql
+\d purser.billing_invoices
+```

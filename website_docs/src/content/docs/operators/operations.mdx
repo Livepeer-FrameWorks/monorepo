@@ -177,6 +177,11 @@ psql -h <db-host> -p <db-port> -U frameworks_user -d frameworks -c "SELECT 1;"
 clickhouse-client -h <clickhouse-host> -q "SELECT 1;"
 ```
 
+<Aside type="tip" title="Schema migrations">
+  For ClickHouse schema upgrades during rolling deploys, see [ClickHouse
+  Migrations](/operators/clickhouse-migrations).
+</Aside>
+
 **Inter-service communication:**
 
 ```bash

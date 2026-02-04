@@ -1,0 +1,113 @@
+---
+title: "ClickHouse Schema Migrations"
+description: "Versioned migrations for upgrading ClickHouse schemas."
+sidebar:
+  order: 8
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Rolling deploy safety">
+  Apply migrations **before** deploying service versions that depend on new columns/tables.
+</Aside>
+
+## Overview
+
+ClickHouse schema changes are managed through versioned migrations:
+
+| Scenario      | What to use                                                     |
+| ------------- | --------------------------------------------------------------- |
+| Fresh install | Bootstrap schema via `frameworks cluster init`                  |
+| Upgrading     | Apply migrations from `pkg/database/sql/clickhouse/migrations/` |
+
+## Migration structure
+
+Migrations are organized by release version:
+
+```
+pkg/database/sql/clickhouse/migrations/
+└── v1.1.0/
+    ├── 001_add_filename_to_artifacts.sql
+    └── 002_add_viewer_node_tracking.sql
+```
+
+## Upgrade procedure
+
+1. **Check release notes** for required migrations
+2. **Apply migrations** in order:
+
+```bash
+clickhouse-client -h <host> < pkg/database/sql/clickhouse/migrations/v1.1.0/001_add_filename_to_artifacts.sql
+```
+
+3. **Verify** the changes:
+
+```bash
+clickhouse-client --query "DESCRIBE TABLE periscope.artifact_events" | grep filename
+```
+
+4. **Deploy** new service versions:
+
+```bash
+frameworks cluster upgrade periscope-ingest --version v1.1.0
+```
+
+## ON CLUSTER / Replicated setups
+
+<Aside type="note">
+  For Replicated tables or multi-shard deployments, migrations must use `ON CLUSTER`:
+</Aside>
+
+```sql
+ALTER TABLE periscope.artifact_events ON CLUSTER '{cluster}'
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+```
+
+Consult your ClickHouse topology - some setups require applying DDL on each node directly.
+
+## Writing migrations
+
+Guidelines for contributors:
+
+1. **Use `IF NOT EXISTS` guards** - migrations must be idempotent
+2. **Prefer expand-only changes** - add columns/tables, avoid drops
+3. **Use Nullable for new columns** - safe for rollback (old code ignores them)
+4. **Update bootstrap schema** - `periscope.sql` must reflect final state
+5. **One migration per logical change** - easier to track and debug
+
+Example migration file:
+
+```sql
+-- Migration: v1.1.0/001_add_filename_to_artifacts.sql
+-- Required before: periscope-ingest v1.1.0
+
+ALTER TABLE periscope.artifact_events
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+
+ALTER TABLE periscope.artifact_state_current
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+```
+
+## Rollback
+
+- **Nullable columns are safe to leave** - older service versions simply won't populate them
+- **Don't drop columns during rollback** unless explicitly required
+- Re-deploying an older service version is usually sufficient
+
+## Troubleshooting
+
+**"Unknown column" errors:**
+
+```
+Code: 16. DB::Exception: Unknown column 'filename' in column list
+```
+
+Cause: Service deployed before migration was applied.
+Fix: Apply the migration, then restart the service.
+
+**Check if column exists:**
+
+```sql
+SELECT name, type FROM system.columns
+WHERE database = 'periscope' AND table = 'artifact_events' AND name = 'filename';
+```

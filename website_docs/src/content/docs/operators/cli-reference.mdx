@@ -370,6 +370,12 @@ frameworks cluster upgrade signalman --version stable --dry-run
 frameworks cluster upgrade decklog --version stable --skip-validation
 ```
 
+<Aside type="caution" title="Database schema changes">
+  Service upgrades may require schema migrations. For ClickHouse changes, apply `ALTER TABLE`
+  statements **before** upgrading services. See [ClickHouse
+  Migrations](/operators/clickhouse-migrations).
+</Aside>
+
 ---
 
 ## Backup & Restore Commands
