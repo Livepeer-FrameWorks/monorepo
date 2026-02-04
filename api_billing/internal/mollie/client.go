@@ -52,6 +52,11 @@ func NewClient(config Config) (*Client, error) {
 	}, nil
 }
 
+// HasWebhookSecret returns true when webhook signature verification is configured.
+func (c *Client) HasWebhookSecret() bool {
+	return c.webhookSecret != ""
+}
+
 // CustomerInfo for Mollie customer creation
 type CustomerInfo struct {
 	TenantID string

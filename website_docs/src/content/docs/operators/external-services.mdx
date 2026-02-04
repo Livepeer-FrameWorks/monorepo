@@ -175,13 +175,14 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
    export STRIPE_SECRET_KEY="sk_live_..."
    export STRIPE_WEBHOOK_SECRET="whsec_..."
    export MOLLIE_API_KEY="live_xxx" # optional
+   export MOLLIE_WEBHOOK_SECRET="mollie_secret" # optional
    ```
 
 **Used By:** Purser (billing API)
 
 **Optional:** Not required for basic platform operation
 
-**Dev only:** If `STRIPE_WEBHOOK_SECRET` is not set, Stripe webhooks are rejected unless `ALLOW_INSECURE_WEBHOOKS=true` (not safe for production).
+**Note:** Stripe webhooks require `STRIPE_WEBHOOK_SECRET` in all environments.
 
 ---
 
@@ -229,10 +230,10 @@ export TO_EMAIL="ops@yourdomain.com"
 # Stripe (Optional - only if using billing)
 export STRIPE_SECRET_KEY="sk_live_..."
 export STRIPE_WEBHOOK_SECRET="whsec_..."
-export ALLOW_INSECURE_WEBHOOKS="false" # dev-only: set true to bypass signature checks
 
 # Mollie (Optional)
 export MOLLIE_API_KEY="live_xxx"
+export MOLLIE_WEBHOOK_SECRET="mollie_secret"
 ```
 
 Store these securely using:

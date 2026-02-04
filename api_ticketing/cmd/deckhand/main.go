@@ -22,6 +22,7 @@ import (
 	"frameworks/pkg/version"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 )
 
@@ -119,6 +120,18 @@ func main() {
 		InboxID:   chatwootInboxID,
 	})
 
+	redisAddr := config.GetEnv("REDIS_ADDR", "")
+	var redisClient *redis.Client
+	if redisAddr != "" {
+		redisClient = redis.NewClient(&redis.Options{Addr: redisAddr})
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			logger.WithError(err).Warn("Failed to connect to Redis; webhook deduplication disabled")
+			redisClient = nil
+		}
+		cancel()
+	}
+
 	// Initialize HTTP handlers
 	deps := handlers.Dependencies{
 		Logger:          logger,
@@ -126,6 +139,7 @@ func main() {
 		Quartermaster:   qmClient,
 		Purser:          purserClient,
 		Decklog:         decklogClient,
+		Redis:           redisClient,
 		ChatwootBaseURL: chatwootBaseURL,
 		ChatwootToken:   chatwootAPIToken,
 	}

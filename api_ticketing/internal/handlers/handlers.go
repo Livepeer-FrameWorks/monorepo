@@ -7,6 +7,7 @@ import (
 	"frameworks/pkg/logging"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/redis/go-redis/v9"
 )
 
 // Metrics holds Prometheus metrics for the handlers
@@ -25,6 +26,7 @@ type Dependencies struct {
 	Quartermaster   *qmclient.GRPCClient
 	Purser          *purserclient.GRPCClient
 	Decklog         *decklogclient.BatchedClient
+	Redis           *redis.Client
 	ChatwootBaseURL string
 	ChatwootToken   string
 }
