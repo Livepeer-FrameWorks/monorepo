@@ -1492,6 +1492,20 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	// Update node info in state manager
 	state.DefaultManager().SetNodeInfo(nu.GetNodeId(), nu.GetBaseUrl(), nu.GetIsHealthy(), latitude, longitude, nu.GetLocation(), nu.GetOutputsJson(), nil)
 
+	// Log mismatch between Helmsman-reported mode and Foghorn-authoritative mode.
+	// Foghorn owns operational mode; Helmsman's heartbeat is confirmation only.
+	if reportedMode, ok := mapOperationalMode(nu.GetOperationalMode()); ok {
+		authoritativeMode := state.DefaultManager().GetNodeOperationalMode(nu.GetNodeId())
+		if authoritativeMode != reportedMode {
+			p.logger.WithFields(logging.Fields{
+				"node_id":            nu.GetNodeId(),
+				"reported_mode":      reportedMode,
+				"authoritative_mode": authoritativeMode,
+				"trigger_id":         trigger.GetRequestId(),
+			}).Warn("Helmsman reported mode differs from Foghorn authoritative mode (may need ConfigSeed push)")
+		}
+	}
+
 	// Update node metrics using protobuf data directly
 	state.DefaultManager().UpdateNodeMetrics(nu.GetNodeId(), struct {
 		CPU                  float64
@@ -1607,6 +1621,19 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	}
 
 	return "", false, nil
+}
+
+func mapOperationalMode(mode pb.NodeOperationalMode) (state.NodeOperationalMode, bool) {
+	switch mode {
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL:
+		return state.NodeModeNormal, true
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
+		return state.NodeModeDraining, true
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
+		return state.NodeModeMaintenance, true
+	default:
+		return "", false
+	}
 }
 
 // resolveNodeUUID resolves a node's logical name (e.g., "edge-node-1") to its database UUID.

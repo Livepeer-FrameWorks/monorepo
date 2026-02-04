@@ -70,6 +70,10 @@ type HelmsmanConfig struct {
 	// BlockingGraceMs waits for reconnection before failing blocking triggers.
 	// Default 0 = fail immediately.
 	BlockingGraceMs int
+
+	// RequestedMode is the operational mode this node requests on registration.
+	// Foghorn is authoritative and may override this based on DB-persisted state.
+	RequestedMode string
 }
 
 // LoadHelmsmanConfig loads configuration from environment variables.
@@ -122,6 +126,8 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		GRPCTLSKeyPath:  config.GetEnv("GRPC_TLS_KEY_PATH", ""),
 
 		BlockingGraceMs: config.GetEnvInt("HELMSMAN_BLOCKING_GRACE_MS", 0),
+
+		RequestedMode: config.GetEnv("HELMSMAN_OPERATIONAL_MODE", "normal"),
 	}
 }
 

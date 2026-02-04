@@ -1789,6 +1789,9 @@ func getDiskUsage(path string) (total, used uint64, err error) {
 // enrichNodeLifecycleTrigger enriches node lifecycle trigger with Helmsman-specific data
 func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge, capStorage, capProcessing string, roles []string) {
 	if nodeUpdate := mistTrigger.GetNodeLifecycleUpdate(); nodeUpdate != nil {
+		// Report the authoritative mode from ConfigSeed (set by Foghorn), not the env var
+		nodeUpdate.OperationalMode = sidecarcfg.GetOperationalMode()
+
 		// Add capabilities
 		nodeUpdate.Capabilities = &pb.NodeCapabilities{
 			Ingest:     capIngest == "" || capIngest == "1" || strings.ToLower(capIngest) == "true",
@@ -1829,6 +1832,8 @@ func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge,
 		}
 	}
 }
+
+// parseOperationalMode removed (unused); see control.parseRequestedMode for mode parsing.
 
 func rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing string) []string {
 	var roles []string

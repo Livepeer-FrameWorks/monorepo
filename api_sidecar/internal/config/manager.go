@@ -74,6 +74,24 @@ func GetProcessingConfig() *pb.ProcessingConfig {
 	return manager.lastSeed.GetProcessing()
 }
 
+// GetOperationalMode returns the authoritative operational mode from the last applied ConfigSeed.
+// Foghorn is the authority; this is what Helmsman should report in heartbeats.
+func GetOperationalMode() pb.NodeOperationalMode {
+	if manager == nil {
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.lastSeed == nil {
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	}
+	mode := manager.lastSeed.GetOperationalMode()
+	if mode == pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED {
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	}
+	return mode
+}
+
 // IsLivepeerGatewayAvailable returns true if Livepeer Gateway is configured and available
 func IsLivepeerGatewayAvailable() bool {
 	cfg := GetProcessingConfig()
