@@ -125,3 +125,16 @@ func (l *ArtifactLifecycleLoader) PrimeMany(tenantID string, states []*pb.Artifa
 		l.cache[key] = state
 	}
 }
+
+// PrimeNil marks request IDs as missing lifecycle data to avoid redundant retries.
+func (l *ArtifactLifecycleLoader) PrimeNil(tenantID string, requestIDs []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, id := range requestIDs {
+		if id == "" {
+			continue
+		}
+		key := tenantID + ":" + id
+		l.cache[key] = nil
+	}
+}

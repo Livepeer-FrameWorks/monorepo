@@ -1364,6 +1364,7 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 		states, err := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
 		if err != nil {
 			r.Logger.WithError(err).Warn("Failed to load clip lifecycle data")
+			l.ArtifactLifecycle.PrimeNil(tenantID, hashes)
 		} else {
 			for _, clip := range clipsResp.Clips {
 				if state, ok := states[clip.ClipHash]; ok && state != nil {
@@ -1471,6 +1472,7 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 		states, err := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
 		if err != nil {
 			r.Logger.WithError(err).Warn("Failed to load DVR lifecycle data")
+			l.ArtifactLifecycle.PrimeNil(tenantID, hashes)
 		} else {
 			for _, dvr := range response.DvrRecordings {
 				if state, ok := states[dvr.DvrHash]; ok && state != nil {
