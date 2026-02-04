@@ -1,0 +1,97 @@
+---
+title: "ClickHouse Schema Migrations"
+description: "Safe procedures for upgrading ClickHouse schemas during rolling deploys."
+sidebar:
+  order: 8
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Rolling deploy safety">
+  ClickHouse schema changes must be applied **before** deploying service versions that depend on
+  them.
+</Aside>
+
+## Migration strategy
+
+ClickHouse schemas use `CREATE TABLE IF NOT EXISTS`, which is idempotent for new installs but does **not** add
+columns to existing tables. When upgrading, apply the required `ALTER TABLE` statements first.
+
+## Finding required migrations
+
+Schema files include upgrade notes as SQL comments:
+
+```bash
+grep -n "NOTE: for upgrades" pkg/database/sql/clickhouse/periscope.sql
+```
+
+## Rolling deploy procedure
+
+1. Identify required `ALTER TABLE` statements from the schema notes.
+2. Apply the `ALTER TABLE` statements before deploying new services:
+
+```bash
+clickhouse-client -h <clickhouse-host> --query "
+  ALTER TABLE periscope.artifact_events
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+"
+
+clickhouse-client -h <clickhouse-host> --query "
+  ALTER TABLE periscope.artifact_state_current
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+"
+```
+
+3. Verify columns exist:
+
+```bash
+clickhouse-client -h <clickhouse-host> --query "
+  DESCRIBE TABLE periscope.artifact_events FORMAT Vertical;
+" | grep filename
+```
+
+4. Deploy new service versions:
+
+```bash
+frameworks cluster upgrade periscope-ingest --version stable
+```
+
+## Rollback considerations
+
+- New columns with nullable types are safe to leave during rollback.
+- Older service versions will simply not populate new columns.
+- Do not drop columns unless explicitly required.
+
+## Common migrations
+
+**Artifact tables (filename column)**
+
+```sql
+ALTER TABLE periscope.artifact_events
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+
+ALTER TABLE periscope.artifact_state_current
+  ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
+```
+
+## Troubleshooting
+
+**Insert fails with "Unknown column":**
+
+```
+Code: 16. DB::Exception: Unknown column 'filename' in column list
+```
+
+**Solution:** Apply the `ALTER TABLE` statement before restarting the service.
+
+**Check if column exists:**
+
+```bash
+clickhouse-client --query "
+  SELECT name, type
+  FROM system.columns
+  WHERE database = 'periscope'
+    AND table = 'artifact_events'
+    AND name = 'filename';
+"
+```
