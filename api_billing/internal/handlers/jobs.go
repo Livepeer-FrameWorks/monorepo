@@ -1638,7 +1638,8 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		).String()
 
 		// Deduct from prepaid balance (idempotent via referenceID)
-		_, duplicate, err := jm.deductPrepaidBalanceForCredit(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")), &referenceID)
+		var duplicate bool
+		_, duplicate, err = jm.deductPrepaidBalanceForCredit(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")), &referenceID)
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to deduct prepaid balance for invoice credit")
 		} else if duplicate {
