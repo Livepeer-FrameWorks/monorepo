@@ -195,6 +195,8 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 
 // checkWalletForPayments checks a specific wallet address for payments
 func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
+	ctx := context.Background()
+
 	// Get network config
 	network, ok := Networks[wallet.Network]
 	if !ok {
