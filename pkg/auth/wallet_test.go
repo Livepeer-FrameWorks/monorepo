@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 )
 
 func TestIsValidChainType(t *testing.T) {
@@ -255,4 +258,123 @@ func TestValidChainTypesContainsExpected(t *testing.T) {
 			t.Errorf("ValidChainTypes missing %q", exp)
 		}
 	}
+}
+
+func TestVerifyEthSignature(t *testing.T) {
+	privKey := mustTestPrivateKey()
+	address := pubKeyToEthAddress(privKey.PubKey())
+	message := "Sign this message"
+	sig := signPersonalMessage(privKey, message)
+
+	t.Run("valid signature", func(t *testing.T) {
+		ok, err := VerifyEthSignature(address, message, sig)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected signature to be valid")
+		}
+	})
+
+	t.Run("wrong address", func(t *testing.T) {
+		ok, err := VerifyEthSignature("0x0000000000000000000000000000000000000000", message, sig)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatal("expected signature to be invalid")
+		}
+	})
+
+	t.Run("invalid hex signature", func(t *testing.T) {
+		_, err := VerifyEthSignature(address, message, "0xzzzz")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("invalid length", func(t *testing.T) {
+		_, err := VerifyEthSignature(address, message, "0x1234")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestVerifyWalletAuth(t *testing.T) {
+	privKey := mustTestPrivateKey()
+	address := pubKeyToEthAddress(privKey.PubKey())
+	message := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", time.Now().UTC().Format(time.RFC3339))
+	sig := signPersonalMessage(privKey, message)
+
+	t.Run("valid wallet auth", func(t *testing.T) {
+		ok, err := VerifyWalletAuth(WalletMessage{
+			Address:   address,
+			Message:   message,
+			Signature: sig,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected wallet auth to be valid")
+		}
+	})
+
+	t.Run("invalid signature", func(t *testing.T) {
+		ok, err := VerifyWalletAuth(WalletMessage{
+			Address:   address,
+			Message:   message,
+			Signature: signPersonalMessage(privKey, "different message"),
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatal("expected wallet auth to be invalid")
+		}
+	})
+
+	t.Run("invalid timestamp", func(t *testing.T) {
+		badMsg := "FrameWorks Login\nTimestamp: not-a-date\nNonce: abc123"
+		ok, err := VerifyWalletAuth(WalletMessage{
+			Address:   address,
+			Message:   badMsg,
+			Signature: signPersonalMessage(privKey, badMsg),
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if ok {
+			t.Fatal("expected wallet auth to be invalid")
+		}
+	})
+}
+
+func mustTestPrivateKey() *btcec.PrivateKey {
+	privKey, _ := btcec.PrivKeyFromBytes([]byte{
+		0x1b, 0x7e, 0x9d, 0x2a, 0x3c, 0x55, 0xa2, 0x14,
+		0x88, 0x91, 0x02, 0x6f, 0x43, 0xaf, 0xbe, 0x03,
+		0x2d, 0x19, 0x7f, 0x6a, 0x10, 0x73, 0xe8, 0x1d,
+		0x5c, 0x09, 0xad, 0x8f, 0x44, 0x9a, 0x62, 0x11,
+	})
+	return privKey
+}
+
+func signPersonalMessage(privKey *btcec.PrivateKey, message string) string {
+	prefixed := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(message), message)
+	hash := keccak256([]byte(prefixed))
+	compactSig := ecdsa.SignCompact(privKey, hash, false)
+	if len(compactSig) != 65 {
+		panic("unexpected compact signature length")
+	}
+	recoveryID := compactSig[0] - 27
+	r := compactSig[1:33]
+	s := compactSig[33:65]
+
+	standardSig := make([]byte, 65)
+	copy(standardSig[:32], r)
+	copy(standardSig[32:64], s)
+	standardSig[64] = recoveryID + 27
+	return "0x" + fmt.Sprintf("%x", standardSig)
 }
