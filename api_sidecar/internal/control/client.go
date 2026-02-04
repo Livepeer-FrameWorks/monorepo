@@ -58,6 +58,9 @@ var (
 
 	disconnectNotify   = make(chan struct{})
 	disconnectNotifyMu sync.Mutex
+
+	jitterRandMu sync.Mutex
+	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
 
 const (
@@ -95,7 +98,6 @@ func SetDeleteVodHandler(fn DeleteVodFunc) {
 func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 	currentConfig = cfg
 	blockingGraceMs = cfg.BlockingGraceMs
-	rand.Seed(time.Now().UnixNano())
 	if blockingGraceMs > 0 {
 		logger.WithField("grace_ms", blockingGraceMs).Info("Blocking trigger grace period enabled")
 	}
@@ -154,7 +156,18 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 
 		stream := currentStream
 		if stream == nil && blockingGraceMs > 0 {
-			stream = waitForReconnection(time.Duration(blockingGraceMs) * time.Millisecond)
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				break
+			}
+			grace := time.Duration(blockingGraceMs) * time.Millisecond
+			if grace > remaining {
+				grace = remaining
+			}
+			stream = waitForReconnection(grace)
+		}
+		if time.Now().After(deadline) {
+			break
 		}
 		if stream == nil {
 			TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
@@ -222,42 +235,6 @@ func sendMistTriggerOnce(triggerType string, mistTrigger *pb.MistTrigger) error 
 }
 
 // waitForMistTriggerResponse waits for a MistTriggerResponse with matching requestID
-func waitForMistTriggerResponse(requestID string, timeout time.Duration) (*MistTriggerResult, error) {
-	// Create response channel
-	responseChan := make(chan *pb.MistTriggerResponse, 1)
-
-	// Acquire mutex
-	pendingMutex <- struct{}{}
-	pendingMistTriggers[requestID] = responseChan
-	<-pendingMutex // Release mutex
-
-	// Wait for response or timeout
-	select {
-	case response := <-responseChan:
-		// Clean up
-		pendingMutex <- struct{}{}
-		delete(pendingMistTriggers, requestID)
-		<-pendingMutex
-
-		return &MistTriggerResult{
-			Response:  response.Response,
-			Abort:     response.Abort,
-			ErrorCode: response.ErrorCode,
-		}, nil
-
-	case <-time.After(timeout):
-		// Clean up on timeout
-		pendingMutex <- struct{}{}
-		delete(pendingMistTriggers, requestID)
-		<-pendingMutex
-
-		return &MistTriggerResult{
-			Abort:     true,
-			ErrorCode: pb.IngestErrorCode_INGEST_ERROR_TIMEOUT,
-		}, fmt.Errorf("timeout waiting for MistTrigger response")
-	}
-}
-
 func waitForMistTriggerResponseWithDisconnect(requestID string, timeout time.Duration) (*MistTriggerResult, error) {
 	// Create response channel
 	responseChan := make(chan *pb.MistTriggerResponse, 1)
@@ -349,7 +326,9 @@ func applyJitter(backoff time.Duration, jitterPct int) time.Duration {
 	if jitterRange <= 0 {
 		return backoff
 	}
-	jitter := rand.Int63n(jitterRange*2+1) - jitterRange
+	jitterRandMu.Lock()
+	jitter := jitterRand.Int63n(jitterRange*2+1) - jitterRange
+	jitterRandMu.Unlock()
 	return time.Duration(int64(backoff) + jitter)
 }
 
