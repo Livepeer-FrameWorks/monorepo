@@ -10,6 +10,8 @@ import (
 
 var ErrInsufficientSpace = errors.New("insufficient disk space")
 
+const MinFreeBytes = 1 << 30
+
 type DiskSpace struct {
 	TotalBytes     uint64
 	AvailableBytes uint64
@@ -59,9 +61,17 @@ func HasSpaceFor(path string, requiredBytes uint64) error {
 
 	// Keep 5% of total disk free as headroom.
 	headroom := space.TotalBytes / 20
-	if requiredBytes+headroom > space.AvailableBytes {
-		return fmt.Errorf("%w: need=%dB headroom=%dB available=%dB path=%s", ErrInsufficientSpace, requiredBytes, headroom, space.AvailableBytes, path)
+	needed := requiredBytes
+	if needed < MinFreeBytes {
+		needed = MinFreeBytes
+	}
+	if needed+headroom > space.AvailableBytes {
+		return fmt.Errorf("%w: need=%dB headroom=%dB available=%dB path=%s", ErrInsufficientSpace, needed, headroom, space.AvailableBytes, path)
 	}
 
 	return nil
+}
+
+func IsInsufficientSpace(err error) bool {
+	return errors.Is(err, ErrInsufficientSpace)
 }

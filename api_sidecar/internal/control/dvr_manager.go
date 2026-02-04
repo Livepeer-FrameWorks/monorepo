@@ -372,6 +372,21 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 				return // Job completed or stopped
 			}
 
+			if err := storage.HasSpaceFor(dm.storagePath, 0); err != nil {
+				job.Logger.WithError(err).Error("Stopping DVR recording due to insufficient disk space")
+				if job.PushID > 0 {
+					if stopErr := dm.mistClient.PushStop(job.PushID); stopErr != nil {
+						job.Logger.WithError(stopErr).Warn("Failed to stop MistServer push during disk-full shutdown")
+					}
+				}
+				job.Status = "failed"
+				dm.sendCompletion(job, "failed", sanitizeDvrStorageError(err))
+				dm.mutex.Lock()
+				delete(dm.jobs, job.DVRHash)
+				dm.mutex.Unlock()
+				return
+			}
+
 			// Update progress and send notifications
 			dm.updateProgress(job)
 
@@ -622,6 +637,13 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 		Payload: &pb.ControlMessage_DvrStopped{DvrStopped: stopped},
 	}
 	job.SendFunc(msg)
+}
+
+func sanitizeDvrStorageError(err error) string {
+	if storage.IsInsufficientSpace(err) {
+		return "Recording stopped: storage node out of space"
+	}
+	return "Recording stopped: storage error"
 }
 
 // GetActiveJobs returns information about active DVR jobs
