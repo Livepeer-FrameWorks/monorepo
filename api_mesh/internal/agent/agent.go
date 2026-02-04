@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -379,20 +380,18 @@ func loadOrGenerateNodeID(path string, logger logging.Logger) string {
 		hostname = "node"
 	}
 
-	// If we can't write to the file (e.g. permissions), we just log a warning and return ephemeral ID
-	// But in production, this should be fatal or we should ensure we have permissions.
-
 	newID := fmt.Sprintf("%s-%s", hostname, uuid.New().String())
 
-	// Ensure directory exists
-	if err := os.MkdirAll("/etc/privateer", 0755); err != nil {
-		// If we can't write to /etc (dev mode?), try /tmp or local dir
-		logger.WithError(err).Warn("Failed to create /etc/privateer, trying local .privateer directory")
-		path = ".privateer_node_id"
+	// Ensure directory exists for the configured NodeID path.
+	dir := filepath.Dir(path)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			logger.WithError(err).Fatal("Failed to create node_id directory; node identity cannot persist")
+		}
 	}
 
-	if err := os.WriteFile(path, []byte(newID), 0644); err != nil {
-		logger.WithError(err).Warn("Failed to persist Node ID. Agent identity will change on restart!")
+	if err := os.WriteFile(path, []byte(newID), 0600); err != nil {
+		logger.WithError(err).Fatal("Failed to persist Node ID; agent cannot maintain stable identity")
 	} else {
 		logger.WithField("node_id", newID).Info("Generated and persisted new Node ID")
 	}
