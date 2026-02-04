@@ -228,10 +228,11 @@ func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
 	if wallet.Purpose == "invoice" && wallet.InvoiceCurrency != nil {
 		currency := strings.ToUpper(*wallet.InvoiceCurrency)
 		if currency != "USD" {
+			// Legacy safety: don't get stuck forever on existing non-USD invoice wallets.
 			cm.logger.WithFields(logging.Fields{
 				"wallet_id": wallet.ID,
 				"currency":  currency,
-			}).Error("Unsupported invoice currency for crypto payment")
+			}).Warn("Unsupported invoice currency for crypto payment (skipping wallet)")
 			return
 		}
 		if wallet.Asset != "USDC" {
@@ -324,7 +325,10 @@ func (cm *CryptoMonitor) isValidPaymentForNetwork(tx CryptoTransaction, expected
 		minAmount := expectedAmount * 0.999
 		isAmountValid = txAmount >= minAmount
 	} else {
-		isAmountValid = txAmount > 0
+		// Prepaid topups should also match the requested amount to avoid dust/underpayment
+		// permanently consuming a wallet address.
+		minAmount := expectedAmount * 0.999
+		isAmountValid = txAmount >= minAmount
 	}
 
 	// Use network-specific confirmations requirement
