@@ -1828,18 +1828,7 @@ func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge,
 	}
 }
 
-func parseOperationalMode(value string) pb.NodeOperationalMode {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "normal":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
-	case "draining", "drain":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
-	case "maintenance", "maint":
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
-	default:
-		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED
-	}
-}
+// parseOperationalMode removed (unused); see control.parseRequestedMode for mode parsing.
 
 func rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing string) []string {
 	var roles []string
