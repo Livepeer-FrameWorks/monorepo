@@ -1,0 +1,31 @@
+# Gremlins mutation testing configuration
+# Documentation: https://gremlins.dev/
+
+# Global settings
+silent: false
+workers: 4
+timeout-coefficient: 5
+
+# Mutation operators to enable
+mutants:
+  arithmetic-base:
+    enabled: true
+  conditionals-boundary:
+    enabled: true
+  conditionals-negation:
+    enabled: true
+  increment-decrement:
+    enabled: true
+  invert-negatives:
+    enabled: true
+  invert-logical:
+    enabled: true
+  invert-loopctrl:
+    enabled: true
+  invert-assignments:
+    enabled: true
+  remove-self-assignments:
+    enabled: false # Often false positives
+
+# Output format
+output: colored

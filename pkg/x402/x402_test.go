@@ -189,4 +189,71 @@ func TestParsePaymentHeader(t *testing.T) {
 			t.Error("expected error for invalid JSON")
 		}
 	})
+
+	t.Run("empty json object", func(t *testing.T) {
+		encoded := base64.StdEncoding.EncodeToString([]byte("{}"))
+		result, err := ParsePaymentHeader(encoded)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.X402Version != 0 {
+			t.Errorf("X402Version = %d, want 0 for empty JSON", result.X402Version)
+		}
+		if result.Scheme != "" {
+			t.Errorf("Scheme = %q, want empty for empty JSON", result.Scheme)
+		}
+		if result.Payload == nil {
+			t.Fatal("Payload should not be nil even for empty JSON")
+		}
+		if result.Payload.Authorization == nil {
+			t.Fatal("Authorization should not be nil even for empty JSON")
+		}
+	})
+
+	t.Run("missing authorization fields", func(t *testing.T) {
+		payload := map[string]interface{}{
+			"x402Version": 1,
+			"scheme":      "exact",
+			"network":     "base-mainnet",
+			"payload": map[string]interface{}{
+				"signature":     "0xabc123",
+				"authorization": map[string]interface{}{},
+			},
+		}
+		payloadJSON, _ := json.Marshal(payload)
+		encoded := base64.StdEncoding.EncodeToString(payloadJSON)
+		result, err := ParsePaymentHeader(encoded)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Payload.Authorization.From != "" {
+			t.Errorf("From = %q, want empty for missing field", result.Payload.Authorization.From)
+		}
+		if result.Payload.Authorization.Value != "" {
+			t.Errorf("Value = %q, want empty for missing field", result.Payload.Authorization.Value)
+		}
+	})
+
+	t.Run("version zero is accepted", func(t *testing.T) {
+		payload := map[string]interface{}{
+			"x402Version": 0,
+			"scheme":      "test",
+		}
+		payloadJSON, _ := json.Marshal(payload)
+		encoded := base64.StdEncoding.EncodeToString(payloadJSON)
+		result, err := ParsePaymentHeader(encoded)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.X402Version != 0 {
+			t.Errorf("X402Version = %d, want 0", result.X402Version)
+		}
+	})
+
+	t.Run("empty string header", func(t *testing.T) {
+		_, err := ParsePaymentHeader("")
+		if err == nil {
+			t.Error("expected error for empty header")
+		}
+	})
 }

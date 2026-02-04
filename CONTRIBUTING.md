@@ -79,7 +79,10 @@ make test                              # All Go tests
 cd api_control && go test ./... -v     # Specific service
 cd website_application && pnpm test    # Frontend
 make verify                            # Pre-commit verification
+./scripts/mutation-test.sh pkg/auth/   # Mutation testing (validates test quality)
 ```
+
+See `docs/standards/testing.md` for testing philosophy and best practices.
 
 ## Common Workflows
 

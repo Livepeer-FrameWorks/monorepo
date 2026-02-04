@@ -2,7 +2,6 @@ package monitoring
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -30,11 +29,14 @@ func TestHTTPServiceHealthCheck(t *testing.T) {
 	}
 }
 
-func TestDatabaseHealthCheck(t *testing.T) {
-	// Use a nil db to ensure unhealthy
-	db := &sql.DB{}
-	// We cannot force ping to fail reliably; just ensure it returns a result
-	_ = db
+func TestClickHouseHealthCheck_NilDB(t *testing.T) {
+	res := ClickHouseHealthCheck(nil)()
+	if res.Status != "unhealthy" {
+		t.Fatalf("expected unhealthy for nil db, got %q", res.Status)
+	}
+	if res.Message != "ClickHouse connection is nil" {
+		t.Errorf("unexpected message: %q", res.Message)
+	}
 }
 
 func TestKafkaHealthChecks(t *testing.T) {
