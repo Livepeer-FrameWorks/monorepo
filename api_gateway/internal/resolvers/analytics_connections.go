@@ -47,6 +47,9 @@ func cursorTimeFromProto(ts *timestamppb.Timestamp) time.Time {
 
 // DoGetRoutingEventsConnection returns a connection-style payload for routing events.
 func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, first *int, after *string, last *int, before *string, noCache *bool) (*model.RoutingEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateRoutingEventsConnection(), nil
 	}
@@ -155,6 +158,9 @@ func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *str
 
 // DoGetConnectionEventsConnection returns a connection-style payload for connection events.
 func (r *Resolver) DoGetConnectionEventsConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ConnectionEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateConnectionEventsConnection(), nil
 	}
@@ -245,6 +251,9 @@ func (r *Resolver) DoGetConnectionEventsConnection(ctx context.Context, stream *
 // DoGetArtifactEventsConnection returns a connection-style payload for artifact events (clip/dvr/vod).
 // NOTE: Filters already working - handler and client support streamId, stage, contentType
 func (r *Resolver) DoGetArtifactEventsConnection(ctx context.Context, streamId *string, stage *string, contentType *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ArtifactEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateArtifactEventsConnection(), nil
 	}
@@ -346,6 +355,9 @@ func (r *Resolver) DoGetArtifactEventsConnection(ctx context.Context, streamId *
 
 // DoGetNodeMetricsConnection returns a connection-style payload for node metrics.
 func (r *Resolver) DoGetNodeMetricsConnection(ctx context.Context, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.NodeMetricsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodeMetricsConnection(), nil
 	}
@@ -425,6 +437,9 @@ func (r *Resolver) DoGetNodeMetricsConnection(ctx context.Context, nodeID *strin
 
 // DoGetNodeMetrics1hConnection returns a connection-style payload for 1h node metrics.
 func (r *Resolver) DoGetNodeMetrics1hConnection(ctx context.Context, timeRange *model.TimeRangeInput, nodeID *string, first *int, after *string, last *int, before *string, noCache *bool) (*model.NodeMetrics1hConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodeMetrics1hConnection(), nil
 	}
@@ -504,6 +519,9 @@ func (r *Resolver) DoGetNodeMetrics1hConnection(ctx context.Context, timeRange *
 
 // DoGetNodeMetricsAggregated returns per-node aggregates for a time range.
 func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *model.TimeRangeInput, nodeID *string, noCache *bool) ([]*pb.NodeMetricsAggregated, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodeMetricsAggregated(), nil
 	}
@@ -538,6 +556,9 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 
 // DoGetStreamHealthMetricsConnection returns a connection-style payload for stream health metrics.
 func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, stream string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamHealthMetricsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamHealthMetricsConnection(), nil
 	}
@@ -628,6 +649,9 @@ func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, strea
 
 // DoGetTrackListEventsConnection returns a connection-style payload for track list events.
 func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.TrackListEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateTrackListEventsConnection(), nil
 	}
@@ -714,6 +738,9 @@ func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream st
 // DoGetStreamEventsConnection returns a connection-style payload for stream events.
 // NOTE: stream filter already supported by client method
 func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamEventsConnection(), nil
 	}
@@ -812,6 +839,9 @@ func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId str
 
 // DoGetBufferEventsConnection returns a connection-style payload for stream buffer events.
 func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.BufferEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamId)
 	if err != nil {
 		return nil, err
@@ -931,6 +961,9 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 
 // DoGetStreamHealthConnection returns a connection-style payload for stream health metrics.
 func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *pb.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamHealthMetricsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamHealthMetricsConnection(), nil
 	}
@@ -1008,6 +1041,9 @@ func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *pb.Stre
 
 // DoGetNodeMetricsConnectionForNode returns a connection-style payload for node metrics (for node resolver).
 func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *pb.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetricsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodeMetricsConnection(), nil
 	}
@@ -1079,6 +1115,9 @@ func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *p
 
 // DoGetNodeMetrics1hConnectionForNode returns a connection-style payload for 1h node metrics (for node resolver).
 func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj *pb.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetrics1hConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodeMetrics1hConnection(), nil
 	}
@@ -1151,6 +1190,9 @@ func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj 
 // DoGetLiveNodeState returns the real-time state of a node from live_nodes.
 // Supports multi-tenant access for subscribed clusters.
 func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*pb.LiveNode, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	user := middleware.GetUserFromContext(ctx)
 	if user == nil || user.TenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -1186,6 +1228,9 @@ func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*pb.L
 
 // DoGetArtifactState returns the current state of a single artifact (clip/DVR).
 func (r *Resolver) DoGetArtifactState(ctx context.Context, requestID string) (*pb.ArtifactState, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateArtifactState(requestID), nil
 	}
@@ -1205,6 +1250,9 @@ func (r *Resolver) DoGetArtifactState(ctx context.Context, requestID string) (*p
 
 // DoGetArtifactStatesConnection returns a connection-style payload for artifact states.
 func (r *Resolver) DoGetArtifactStatesConnection(ctx context.Context, streamId *string, contentType *string, stage *string, first *int, after *string, last *int, before *string) (*model.ArtifactStatesConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateArtifactStatesConnection(), nil
 	}
@@ -1291,6 +1339,9 @@ func (r *Resolver) DoGetArtifactStatesConnection(ctx context.Context, streamId *
 
 // DoGetStreamConnectionHourlyConnection returns a connection-style payload for hourly connection aggregates.
 func (r *Resolver) DoGetStreamConnectionHourlyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamConnectionHourlyConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamConnectionHourlyConnection(), nil
 	}
@@ -1377,6 +1428,9 @@ func (r *Resolver) DoGetStreamConnectionHourlyConnection(ctx context.Context, st
 
 // DoGetClientMetrics5mConnection returns a connection-style payload for 5-minute client metrics.
 func (r *Resolver) DoGetClientMetrics5mConnection(ctx context.Context, stream *string, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ClientMetrics5mConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateClientMetrics5mConnection(), nil
 	}
@@ -1463,6 +1517,9 @@ func (r *Resolver) DoGetClientMetrics5mConnection(ctx context.Context, stream *s
 
 // DoGetQualityTierDailyConnection returns a connection-style payload for daily quality tier distribution.
 func (r *Resolver) DoGetQualityTierDailyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.QualityTierDailyConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateQualityTierDailyConnection(), nil
 	}
@@ -1549,6 +1606,9 @@ func (r *Resolver) DoGetQualityTierDailyConnection(ctx context.Context, stream *
 
 // DoGetStorageUsageConnection returns a connection-style payload for storage usage records.
 func (r *Resolver) DoGetStorageUsageConnection(ctx context.Context, nodeID *string, storageScope *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StorageUsageConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStorageUsageConnection(), nil
 	}
@@ -1629,6 +1689,9 @@ func (r *Resolver) DoGetStorageUsageConnection(ctx context.Context, nodeID *stri
 
 // DoGetStorageEventsConnection returns a connection-style payload for storage lifecycle events.
 func (r *Resolver) DoGetStorageEventsConnection(ctx context.Context, streamId *string, assetType *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StorageEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedStreamID, err := normalizeStreamIDPtr(streamId)
 	if err != nil {
 		return nil, err
@@ -1719,6 +1782,9 @@ func (r *Resolver) DoGetStorageEventsConnection(ctx context.Context, streamId *s
 
 // DoGetNodePerformance5mConnection returns 5-minute node performance aggregates with cursor pagination.
 func (r *Resolver) DoGetNodePerformance5mConnection(ctx context.Context, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.NodePerformance5mConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateNodePerformance5mConnection(nodeID), nil
 	}
@@ -1799,6 +1865,9 @@ func (r *Resolver) DoGetNodePerformance5mConnection(ctx context.Context, nodeID 
 
 // DoGetViewerHoursHourlyConnection returns hourly viewer-hours aggregates with cursor pagination.
 func (r *Resolver) DoGetViewerHoursHourlyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ViewerHoursHourlyConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
 	if err != nil {
 		return nil, err
@@ -1885,6 +1954,9 @@ func (r *Resolver) DoGetViewerHoursHourlyConnection(ctx context.Context, stream 
 
 // DoGetViewerGeoHourlyConnection returns hourly geographic viewer distribution with cursor pagination.
 func (r *Resolver) DoGetViewerGeoHourlyConnection(ctx context.Context, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ViewerGeoHourlyConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateViewerGeoHourlyConnection(), nil
 	}
@@ -1965,6 +2037,9 @@ func (r *Resolver) DoGetViewerGeoHourlyConnection(ctx context.Context, timeRange
 
 // DoGetStreamHealth5mConnection returns 5-minute stream health aggregates with cursor pagination.
 func (r *Resolver) DoGetStreamHealth5mConnection(ctx context.Context, streamId string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamHealth5mConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamId)
 	if err != nil {
 		return nil, err
@@ -2056,6 +2131,9 @@ func (r *Resolver) DoGetStreamHealth5mConnection(ctx context.Context, streamId s
 // DoGetViewerSessionsConnection returns viewer sessions with cursor pagination.
 // This exposes ClickHouse viewer_sessions data through GraphQL.
 func (r *Resolver) DoGetViewerSessionsConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ViewerSessionsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
 	if err != nil {
 		return nil, err
@@ -2143,6 +2221,9 @@ func (r *Resolver) DoGetViewerSessionsConnection(ctx context.Context, stream *st
 // DoGetViewerGeographicsConnection returns connection-style payload for viewer geographic events.
 // This wraps individual connection events with location data for map visualizations.
 func (r *Resolver) DoGetViewerGeographicsConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string) (*model.ViewerGeographicsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		events := demo.GenerateViewerGeographics()
 		edges := make([]*model.ViewerGeographicEdge, len(events))
@@ -2261,6 +2342,9 @@ func (r *Resolver) DoGetViewerGeographicsConnection(ctx context.Context, stream 
 // DoGetViewerTimeSeriesConnection returns connection-style payload for viewer count time series.
 // This is used for charting viewer counts over time intervals (5m, 15m, 1h, 1d).
 func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId string, timeRange *model.TimeRangeInput, interval *string, first *int, after *string, last *int, before *string) (*model.ViewerTimeSeriesConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		buckets := demo.GenerateViewerTimeSeries()
 		edges := make([]*model.ViewerCountBucketEdge, len(buckets))
@@ -2413,6 +2497,9 @@ func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId
 // DoGetProcessingUsageConnection returns transcoding/processing usage records with cursor pagination.
 // This exposes data from the process_billing table (Livepeer Gateway and MistProcAV events).
 func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamName *string, processType *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ProcessingUsageConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedStreamID, err := normalizeStreamIDPtr(streamName)
 	if err != nil {
 		return nil, err
@@ -2506,6 +2593,9 @@ func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamNam
 
 // DoGetRebufferingEventsConnection returns rebuffering events with cursor pagination.
 func (r *Resolver) DoGetRebufferingEventsConnection(ctx context.Context, streamId *string, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.RebufferingEventsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedStreamID, err := normalizeStreamIDPtr(streamId)
 	if err != nil {
 		return nil, err
@@ -2596,6 +2686,9 @@ func (r *Resolver) DoGetRebufferingEventsConnection(ctx context.Context, streamI
 
 // DoGetTenantAnalyticsDailyConnection returns daily tenant analytics with cursor pagination.
 func (r *Resolver) DoGetTenantAnalyticsDailyConnection(ctx context.Context, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.TenantAnalyticsDailyConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateTenantAnalyticsDailyConnection(), nil
 	}
@@ -2676,6 +2769,9 @@ func (r *Resolver) DoGetTenantAnalyticsDailyConnection(ctx context.Context, time
 
 // DoGetStreamAnalyticsDailyConnection returns daily stream analytics with cursor pagination.
 func (r *Resolver) DoGetStreamAnalyticsDailyConnection(ctx context.Context, streamId *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamAnalyticsDailyConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedStreamID, err := normalizeStreamIDPtr(streamId)
 	if err != nil {
 		return nil, err
@@ -2762,6 +2858,9 @@ func (r *Resolver) DoGetStreamAnalyticsDailyConnection(ctx context.Context, stre
 
 // DoGetAPIUsageConnection returns API usage records and daily summaries
 func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string, operationType *string, operationName *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.APIUsageConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateAPIUsageConnection(authType, operationType, operationName), nil
 	}
@@ -2850,6 +2949,9 @@ func (r *Resolver) DoGetAPIUsageConnection(ctx context.Context, authType *string
 
 // DoGetStreamAnalyticsSummariesConnection returns pre-aggregated summaries for multiple streams.
 func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, page *model.ConnectionInput, timeRange *model.TimeRangeInput, sortBy *pb.StreamSummarySortField, sortOrder *pb.SortOrder) (*model.StreamAnalyticsSummaryConnection, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamAnalyticsSummariesConnection(), nil
 	}

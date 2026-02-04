@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"frameworks/api_gateway/internal/clients"
@@ -14,11 +16,12 @@ import (
 
 // UserContext represents authenticated user information for GraphQL resolvers
 type UserContext struct {
-	UserID   string
-	TenantID string
-	Email    string
-	Role     string
-	TokenID  string
+	UserID      string
+	TenantID    string
+	Email       string
+	Role        string
+	TokenID     string
+	Permissions []string
 }
 
 // GraphQLContextMiddleware transfers user info from Gin context to request context
@@ -44,6 +47,7 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 		// Get user info from Gin context (set by PublicOrJWTAuth)
 		// or from request context (for WebSocket connections)
 		var userIDStr, tenantIDStr, emailStr, roleStr string
+		var permissions []string
 		var authenticated bool
 
 		// Try Gin context first (HTTP requests)
@@ -58,6 +62,9 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 				if v, ok := c.Get("role"); ok {
 					roleStr, _ = v.(string)
 				}
+				if v, ok := c.Get("permissions"); ok {
+					permissions, _ = v.([]string)
+				}
 			}
 		}
 
@@ -68,6 +75,7 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 					tenantIDStr = ctxkeys.GetTenantID(ctx)
 					emailStr = ctxkeys.GetEmail(ctx)
 					roleStr = ctxkeys.GetRole(ctx)
+					permissions = ctxkeys.GetPermissions(ctx)
 				}
 			}
 		}
@@ -75,10 +83,11 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 		// Build user context for GraphQL resolvers
 		if authenticated && userIDStr != "" && tenantIDStr != "" {
 			user := &UserContext{
-				UserID:   userIDStr,
-				TenantID: tenantIDStr,
-				Email:    emailStr,
-				Role:     roleStr,
+				UserID:      userIDStr,
+				TenantID:    tenantIDStr,
+				Email:       emailStr,
+				Role:        roleStr,
+				Permissions: permissions,
 			}
 			ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 			ctx = context.WithValue(ctx, ctxkeys.KeyUserID, userIDStr)
@@ -120,6 +129,42 @@ func RequireAuth(ctx context.Context) (*UserContext, error) {
 		return nil, auth.ErrUnauthenticated
 	}
 	return user, nil
+}
+
+var ErrForbidden = errors.New("insufficient permissions")
+
+// RequirePermission checks if the current request has a specific permission.
+func RequirePermission(ctx context.Context, permission string) error {
+	if permission == "" {
+		return nil
+	}
+
+	if HasServiceToken(ctx) {
+		return nil
+	}
+
+	if ctxkeys.IsPublicAllowlisted(ctx) {
+		return nil
+	}
+
+	switch ctxkeys.GetAuthType(ctx) {
+	case "jwt", "wallet", "x402":
+		return nil
+	case "api_token":
+		for _, perm := range ctxkeys.GetPermissions(ctx) {
+			if perm == permission {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: requires %s scope", ErrForbidden, permission)
+	default:
+		return auth.ErrUnauthenticated
+	}
+}
+
+// HasPermission returns true if the current context has the permission.
+func HasPermission(ctx context.Context, permission string) bool {
+	return RequirePermission(ctx, permission) == nil
 }
 
 // HasServiceToken checks if the current context has a service token

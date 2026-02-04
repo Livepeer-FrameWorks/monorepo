@@ -40,6 +40,9 @@ func timePtrsToTimeRangeOpts(startTime, endTime *time.Time) *periscopeclient.Tim
 
 // DoGetStreamAnalyticsSummary returns MV-backed range aggregates for a stream.
 func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) (*pb.StreamAnalyticsSummary, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -82,6 +85,9 @@ func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID str
 
 // DoGetPlatformOverview returns platform-wide metrics
 func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*pb.GetPlatformOverviewResponse, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic platform overview")
 		return demo.GeneratePlatformOverview(), nil
@@ -117,6 +123,9 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 // DoGetViewerCountTimeSeries returns time-bucketed viewer counts for charts
 // interval should be "5m", "15m", "1h", or "1d"
 func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, interval *string) ([]*pb.ViewerCountBucket, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic viewer count time series")
 		return demo.GenerateViewerCountTimeSeries(), nil
@@ -173,6 +182,9 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 
 // DoGetStreamHealthMetrics returns stream health metrics
 func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*pb.StreamHealthMetric, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamId)
 	if err != nil {
 		return nil, err
@@ -249,6 +261,9 @@ func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string
 
 // DoGetViewerGeographics returns geographic data for individual viewer/connection events
 func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*pb.ConnectionEvent, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic viewer geographics")
 		return demo.GenerateViewerGeographics(), nil
@@ -299,6 +314,9 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 // DoGetGeographicDistribution returns aggregated geographic distribution analytics
 // Uses server-side ClickHouse aggregation for scalability
 func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, topN *int) (*model.GeographicDistribution, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic geographic distribution")
 		return demo.GenerateGeographicDistribution(), nil

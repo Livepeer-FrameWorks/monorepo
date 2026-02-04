@@ -225,6 +225,44 @@ func main() {
 				}
 			}
 
+			// 3. Wallet auth via original HTTP request headers
+			if token == "" {
+				if req, ok := ctx.Value(ctxkeys.KeyHTTPRequest).(*http.Request); ok && req != nil {
+					walletAddress := req.Header.Get("X-Wallet-Address")
+					if walletAddress != "" {
+						signature := req.Header.Get("X-Wallet-Signature")
+						message := req.Header.Get("X-Wallet-Message")
+						if signature != "" && message != "" {
+							resp, err := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature)
+							if err == nil && resp != nil && resp.User != nil {
+								email := ""
+								if resp.User.Email != nil {
+									email = *resp.User.Email
+								}
+								ctx = context.WithValue(ctx, ctxkeys.KeyUserID, resp.User.Id)
+								ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, resp.User.TenantId)
+								ctx = context.WithValue(ctx, ctxkeys.KeyEmail, email)
+								ctx = context.WithValue(ctx, ctxkeys.KeyRole, resp.User.Role)
+								ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "wallet")
+								ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, walletAddress)
+								if resp.Token != "" {
+									ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, resp.Token)
+								}
+
+								user := &middleware.UserContext{
+									UserID:   resp.User.Id,
+									TenantID: resp.User.TenantId,
+									Email:    email,
+									Role:     resp.User.Role,
+								}
+								ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
+								return ctx, &initPayload, nil
+							}
+						}
+					}
+				}
+			}
+
 			if token != "" {
 				// Try JWT validation
 				claims, err := pkgauth.ValidateJWT(token, []byte(jwtSecret))
@@ -252,17 +290,22 @@ func main() {
 						ctx = context.WithValue(ctx, ctxkeys.KeyEmail, resp.Email)
 						ctx = context.WithValue(ctx, ctxkeys.KeyRole, resp.Role)
 						ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "api_token")
+						ctx = context.WithValue(ctx, ctxkeys.KeyAPIToken, token)
 						if resp.TokenId != "" {
 							ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, middleware.HashIdentifier(resp.TokenId))
 						} else {
 							ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, middleware.HashIdentifier(token))
 						}
+						if len(resp.Permissions) > 0 {
+							ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, resp.Permissions)
+						}
 
 						user := &middleware.UserContext{
-							UserID:   resp.UserId,
-							TenantID: resp.TenantId,
-							Email:    resp.Email,
-							Role:     resp.Role,
+							UserID:      resp.UserId,
+							TenantID:    resp.TenantId,
+							Email:       resp.Email,
+							Role:        resp.Role,
+							Permissions: resp.Permissions,
 						}
 						ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 					}
@@ -350,15 +393,29 @@ func main() {
 
 	// GraphQL endpoint (single route group)
 	graphqlGroup := app.Group("/graphql")
-	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients))                                                                                                         // Allowlist public queries or require auth
-	graphqlGroup.Use(middleware.DemoModePostAuth(logger))                                                                                                                                   // Demo mode detection (after auth)
-	graphqlGroup.Use(middleware.ViewerX402Middleware(serviceClients, logger))                                                                                                               // Resolve viewer x402 before GraphQL executes
-	graphqlGroup.Use(middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore)) // Rate limiting + 402 for prepaid with x402 support (after auth, needs tenant_id)
-	graphqlGroup.Use(middleware.GraphQLContextMiddleware())                                                                                                                                 // Bridge user context to GraphQL
-	graphqlGroup.Use(middleware.GraphQLAttachLoaders(serviceClients))
-	graphqlGroup.Use(middleware.UsageTrackerMiddleware(usageTracker)) // API usage analytics (after auth, records after response)
+	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients)) // Allowlist public queries or require auth
+	graphqlGroup.Use(middleware.DemoModePostAuth(logger))                           // Demo mode detection (after auth)
+	graphqlGroup.Use(middleware.ViewerX402Middleware(serviceClients, logger))       // Resolve viewer x402 before GraphQL executes
+
+	// IMPORTANT: WebSocket upgrades may authenticate in the GraphQL WS InitFunc (connectionParams),
+	// so rate limiting must not run before that auth has a chance to set tenant context.
+	graphqlHTTP := graphqlGroup.Group("/")
+	graphqlHTTP.Use(middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore))
+	graphqlHTTP.Use(middleware.GraphQLContextMiddleware())
+	graphqlHTTP.Use(middleware.GraphQLAttachLoaders(serviceClients))
+	graphqlHTTP.Use(middleware.UsageTrackerMiddleware(usageTracker))
+
 	{
-		graphqlGroup.POST("/", gin.WrapH(gqlHandler))
+		graphqlHTTP.POST("/", gin.WrapH(gqlHandler))
+		graphqlGroup.GET("/ws", func(c *gin.Context) {
+			ctx := c.Request.Context()
+			if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
+				ctx = context.WithValue(ctx, ctxkeys.KeyWSCookieToken, cookieToken)
+			}
+			ctx = context.WithValue(ctx, ctxkeys.KeyHTTPRequest, c.Request)
+			c.Request = c.Request.WithContext(ctx)
+			gqlHandler.ServeHTTP(c.Writer, c.Request)
+		})
 		// Enable playground based on explicit config or GIN_MODE (default: enabled in non-release mode)
 		playgroundEnabled := config.GetEnvBool("GRAPHQL_PLAYGROUND_ENABLED", config.GetEnv("GIN_MODE", "debug") != "release")
 		if playgroundEnabled {
@@ -368,18 +425,6 @@ func main() {
 	}
 
 	// No separate public route; PublicOrJWTAuth handles allowlisted unauthenticated queries
-
-	// Dedicated WebSocket endpoint for GraphQL subscriptions
-	// Authentication is handled in the WebSocket InitFunc via connection params,
-	// but we also pass the cookie token via context for browser clients
-	app.GET("/graphql/ws", func(c *gin.Context) {
-		// Read access_token cookie and pass it to the WebSocket InitFunc via context
-		if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
-			ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyWSCookieToken, cookieToken)
-			c.Request = c.Request.WithContext(ctx)
-		}
-		gqlHandler.ServeHTTP(c.Writer, c.Request)
-	})
 
 	// MCP (Model Context Protocol) endpoint for AI agent access
 	// Auth is handled inside the MCP server via request headers

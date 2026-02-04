@@ -119,6 +119,8 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			// If allowlisted, proceed anonymously (ignore any tokens sent)
 			if isAllowlistedQuery(body) {
 				c.Set("public_allowlisted", true)
+				ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyPublicAllowlisted, true)
+				c.Request = c.Request.WithContext(ctx)
 				c.Next()
 				return
 			}
@@ -129,12 +131,14 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			AllowWallet:  true,
 			AllowX402:    true,
 		}, nil)
-		if err != nil && authResult == nil {
-			c.Next()
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication failed"})
+			c.Abort()
 			return
 		}
 		if authResult == nil {
-			c.Next()
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			c.Abort()
 			return
 		}
 
@@ -170,6 +174,7 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 				tokenID = authResult.APIToken
 			}
 			c.Set("api_token_hash", hashIdentifier(tokenID))
+			c.Set("permissions", authResult.Permissions)
 		}
 
 		ctx := ApplyAuthToContext(c.Request.Context(), authResult)

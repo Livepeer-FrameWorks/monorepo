@@ -527,6 +527,9 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 
 // DoUpdateStream updates stream settings
 func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*pb.Stream, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream update")
 		streams := demo.GenerateStreams()

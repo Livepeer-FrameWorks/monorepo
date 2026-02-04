@@ -23,6 +23,7 @@ const (
 	KeyAuthType     Key = "auth_type"
 	KeySessionToken Key = "session_token"
 	KeyWalletAddr   Key = "wallet_address"
+	KeyPermissions  Key = "permissions"
 )
 
 // X402 context keys
@@ -201,4 +202,12 @@ func GetCapability(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// GetPermissions extracts permissions from context.
+func GetPermissions(ctx context.Context) []string {
+	if v, ok := ctx.Value(KeyPermissions).([]string); ok {
+		return v
+	}
+	return nil
 }

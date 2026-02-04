@@ -25,6 +25,9 @@ import (
 
 // DoCreateVodUpload initiates a multipart upload and returns presigned URLs
 func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodUploadInput) (model.CreateVodUploadResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo VOD upload session")
 		return demo.GenerateVodUploadSession(input.Filename, input.SizeBytes), nil
@@ -117,6 +120,9 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 
 // DoCompleteVodUpload finalizes a multipart upload after all parts are uploaded
 func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.CompleteVodUploadInput) (model.CompleteVodUploadResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo VOD upload completion")
 		return demo.GenerateVodAsset(), nil
@@ -200,6 +206,9 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 
 // DoAbortVodUpload cancels an in-progress multipart upload
 func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model.AbortVodUploadResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo VOD upload abort")
 		return &model.DeleteSuccess{Success: true, DeletedID: uploadID}, nil
@@ -267,6 +276,9 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 
 // DoDeleteVodAsset deletes a VOD asset
 func (r *Resolver) DoDeleteVodAsset(ctx context.Context, id string) (model.DeleteVodAssetResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo VOD asset deletion")
 		return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
