@@ -111,9 +111,14 @@ func buildCursorResponse(resultsLen, limit int, direction pagination.Direction, 
 // buildKeysetConditionN returns a WHERE clause fragment for keyset pagination with N columns.
 // Forward: (ts, cols...) < (cursor_ts, cursor_cols...) - fetches older items
 // Backward: (ts, cols...) > (cursor_ts, cursor_cols...) - fetches newer items
-func buildKeysetConditionN(params *pagination.Params, tsCol string, cols []string, cursorParts []string) (string, []interface{}) {
-	if params.Cursor == nil || len(cols) == 0 || len(cols) != len(cursorParts) {
-		return "", nil
+func buildKeysetConditionN(params *pagination.Params, tsCol string, cols []string, cursorParts []string) (string, []interface{}, error) {
+	if params.Cursor == nil || len(cols) == 0 {
+		return "", nil, nil
+	}
+	// If a cursor is provided, it must match the expected tuple length.
+	// Otherwise pagination would silently restart from the beginning.
+	if len(cols) != len(cursorParts) {
+		return "", nil, status.Errorf(codes.InvalidArgument, "invalid cursor tuple: expected %d parts, got %d", len(cols), len(cursorParts))
 	}
 
 	allCols := append([]string{tsCol}, cols...)
@@ -127,9 +132,9 @@ func buildKeysetConditionN(params *pagination.Params, tsCol string, cols []strin
 	}
 
 	if params.Direction == pagination.Backward {
-		return fmt.Sprintf(" AND %s > (%s)", tuple, placeholders), args
+		return fmt.Sprintf(" AND %s > (%s)", tuple, placeholders), args, nil
 	}
-	return fmt.Sprintf(" AND %s < (%s)", tuple, placeholders), args
+	return fmt.Sprintf(" AND %s < (%s)", tuple, placeholders), args, nil
 }
 
 // buildOrderByN returns an ORDER BY clause for keyset pagination with N columns.
@@ -159,7 +164,11 @@ func buildKeysetCondition(params *pagination.Params, tsCol, idCol string) (strin
 	if params.Cursor == nil {
 		return "", nil
 	}
-	return buildKeysetConditionN(params, tsCol, []string{idCol}, []string{params.Cursor.ID})
+	cond, args, err := buildKeysetConditionN(params, tsCol, []string{idCol}, []string{params.Cursor.ID})
+	if err != nil {
+		return "", nil
+	}
+	return cond, args
 }
 
 // buildOrderBy returns an ORDER BY clause for keyset pagination.
@@ -1890,11 +1899,16 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 		// Cursor ID contains "tenant_id|stream_id|selected_node"
 		parts := strings.SplitN(params.Cursor.ID, "|", 3)
 		if len(parts) == 3 {
-			keysetCond, keysetArgs := buildKeysetConditionN(params, "timestamp", []string{"tenant_id", "stream_id", "selected_node"}, parts)
+			keysetCond, keysetArgs, keysetErr := buildKeysetConditionN(params, "timestamp", []string{"tenant_id", "stream_id", "selected_node"}, parts)
+			if keysetErr != nil {
+				return nil, keysetErr
+			}
 			if keysetCond != "" {
 				query += keysetCond
 				args = append(args, keysetArgs...)
 			}
+		} else {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid cursor")
 		}
 	}
 
@@ -4296,7 +4310,10 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 	if params.Cursor != nil {
 		cursorParts = strings.SplitN(params.Cursor.ID, "|", 3)
 	}
-	keysetCond, keysetArgs := buildKeysetConditionN(params, "timestamp", []string{"stream_id", "node_id", "process_type"}, cursorParts)
+	keysetCond, keysetArgs, err := buildKeysetConditionN(params, "timestamp", []string{"stream_id", "node_id", "process_type"}, cursorParts)
+	if err != nil {
+		return nil, err
+	}
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
@@ -4787,7 +4804,10 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 	if params.Cursor != nil {
 		cursorParts = strings.SplitN(params.Cursor.ID, "|", 2)
 	}
-	keysetCond, keysetArgs := buildKeysetConditionN(params, "timestamp", []string{"stream_id", "node_id"}, cursorParts)
+	keysetCond, keysetArgs, err := buildKeysetConditionN(params, "timestamp", []string{"stream_id", "node_id"}, cursorParts)
+	if err != nil {
+		return nil, err
+	}
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
