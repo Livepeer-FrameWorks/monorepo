@@ -1806,6 +1806,14 @@ func (s *PurserServer) createCryptoPayment(invoiceID, tenantID, asset string, am
 		return "", fmt.Errorf("unsupported crypto asset: %s (only ETH, USDC, LPT supported)", asset)
 	}
 
+	normalizedCurrency := strings.ToUpper(currency)
+	if normalizedCurrency != "USD" {
+		return "", fmt.Errorf("unsupported invoice currency for crypto payment: %s", normalizedCurrency)
+	}
+	if asset != "USDC" {
+		return "", fmt.Errorf("unsupported crypto asset for fiat invoice: %s", asset)
+	}
+
 	// Use HD wallet to generate deposit address for this invoice
 	// This derives a unique address from the xpub and stores the mapping in crypto_wallets
 	walletID, walletAddress, err := s.hdwallet.GenerateDepositAddress(
@@ -4137,6 +4145,14 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		assetSymbol = "LPT"
 	default:
 		return nil, status.Error(codes.InvalidArgument, "asset must be ETH, USDC, or LPT")
+	}
+
+	normalizedCurrency := strings.ToUpper(currency)
+	if normalizedCurrency != "USD" {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported prepaid currency for crypto top-up: %s", normalizedCurrency)
+	}
+	if assetStr != "USDC" {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported asset for prepaid top-up without conversion: %s", assetStr)
 	}
 
 	// Generate deposit address using HD wallet

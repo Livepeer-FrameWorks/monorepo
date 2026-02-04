@@ -39,6 +39,7 @@ type CryptoTransaction struct {
 	To            string    `json:"to"`
 	Value         string    `json:"value"`
 	Confirmations int       `json:"confirmations"`
+	BlockNumber   int64     `json:"block_number"`
 	BlockTime     time.Time `json:"block_time"`
 }
 
@@ -224,6 +225,33 @@ func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
 		return
 	}
 
+	if wallet.Purpose == "invoice" && wallet.InvoiceCurrency != nil {
+		currency := strings.ToUpper(*wallet.InvoiceCurrency)
+		if currency != "USD" {
+			cm.logger.WithFields(logging.Fields{
+				"wallet_id": wallet.ID,
+				"currency":  currency,
+			}).Error("Unsupported invoice currency for crypto payment")
+			return
+		}
+		if wallet.Asset != "USDC" {
+			cm.logger.WithFields(logging.Fields{
+				"wallet_id": wallet.ID,
+				"asset":     wallet.Asset,
+				"currency":  currency,
+			}).Error("Unsupported crypto asset for fiat invoice")
+			return
+		}
+	}
+
+	if wallet.Purpose == "prepaid" && wallet.Asset != "USDC" {
+		cm.logger.WithFields(logging.Fields{
+			"wallet_id": wallet.ID,
+			"asset":     wallet.Asset,
+		}).Error("Unsupported prepaid asset without conversion")
+		return
+	}
+
 	cm.logger.WithFields(logging.Fields{
 		"wallet_id":       wallet.ID,
 		"purpose":         wallet.Purpose,
@@ -271,54 +299,65 @@ func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
 
 	// Check if any transaction matches expected payment
 	for _, tx := range transactions {
-		if cm.isValidPaymentForNetwork(tx, expectedAmount, wallet.Asset, network) {
-			cm.confirmPayment(wallet, tx)
+		isValid, txAmount := cm.isValidPaymentForNetwork(tx, expectedAmount, wallet.Asset, network, wallet.Purpose)
+		if isValid {
+			cm.confirmPayment(wallet, tx, txAmount)
 			return
 		}
 	}
 }
 
 // isValidPaymentForNetwork checks if a transaction is a valid payment for a specific network
-func (cm *CryptoMonitor) isValidPaymentForNetwork(tx CryptoTransaction, expectedAmount float64, asset string, network NetworkConfig) bool {
-	var txAmount float64
-	var err error
-
-	switch asset {
-	case "ETH":
-		txAmount, err = cm.parseEthereumAmount(tx.Value)
-	case "USDC":
-		txAmount, err = cm.parseTokenAmount(tx.Value, "USDC")
-	case "LPT":
-		txAmount, err = cm.parseTokenAmount(tx.Value, "LPT")
-	default:
-		return false
-	}
-
+func (cm *CryptoMonitor) isValidPaymentForNetwork(tx CryptoTransaction, expectedAmount float64, asset string, network NetworkConfig, purpose string) (bool, float64) {
+	txAmount, err := cm.parseTransactionAmount(tx.Value, asset)
 	if err != nil {
 		cm.logger.WithFields(logging.Fields{
 			"error":    err,
 			"tx_value": tx.Value,
 			"asset":    asset,
 		}).Error("Failed to parse transaction amount")
-		return false
+		return false, 0
 	}
 
-	// Allow 1% variance for fees/rounding
-	variance := 0.01
-	minAmount := expectedAmount * (1 - variance)
-	maxAmount := expectedAmount * (1 + variance)
-	isAmountValid := txAmount >= minAmount && txAmount <= maxAmount
+	var isAmountValid bool
+	if purpose == "invoice" {
+		minAmount := expectedAmount * 0.999
+		isAmountValid = txAmount >= minAmount
+	} else {
+		isAmountValid = txAmount > 0
+	}
 
 	// Use network-specific confirmations requirement
 	hasEnoughConfirmations := tx.Confirmations >= network.Confirmations
 
-	return isAmountValid && hasEnoughConfirmations
+	return isAmountValid && hasEnoughConfirmations, txAmount
 }
 
 // confirmPayment processes a confirmed crypto payment.
 // For invoice: marks invoice as paid
 // For prepaid: credits tenant's prepaid balance
-func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransaction) {
+func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransaction, txAmount float64) {
+	if tx.Hash != "" {
+		var exists bool
+		err := cm.db.QueryRow(`
+			SELECT EXISTS(
+				SELECT 1 FROM purser.crypto_wallets
+				WHERE network = $1 AND confirmed_tx_hash = $2
+			)
+		`, wallet.Network, tx.Hash).Scan(&exists)
+		if err != nil {
+			cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to check crypto transaction deduplication")
+			return
+		}
+		if exists {
+			cm.logger.WithFields(logging.Fields{
+				"wallet_id": wallet.ID,
+				"tx_hash":   tx.Hash,
+			}).Warn("Duplicate crypto transaction detected")
+			return
+		}
+	}
+
 	cm.logger.WithFields(logging.Fields{
 		"wallet_id":     wallet.ID,
 		"purpose":       wallet.Purpose,
@@ -336,9 +375,9 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	now := time.Now()
 
 	if wallet.Purpose == "invoice" {
-		err = cm.confirmInvoicePayment(dbTx, wallet, tx, now)
+		err = cm.confirmInvoicePayment(dbTx, wallet, tx, txAmount, now)
 	} else if wallet.Purpose == "prepaid" {
-		err = cm.confirmPrepaidTopup(dbTx, wallet, tx, now)
+		err = cm.confirmPrepaidTopup(dbTx, wallet, tx, txAmount, now)
 	} else {
 		err = fmt.Errorf("unknown wallet purpose: %s", wallet.Purpose)
 	}
@@ -355,9 +394,14 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	// Mark wallet as used
 	_, err = dbTx.Exec(`
 		UPDATE purser.crypto_wallets
-		SET status = 'used', updated_at = NOW()
+		SET status = 'used',
+			confirmed_tx_hash = $2,
+			actual_amount_received = $3,
+			block_number = $4,
+			confirmed_at = $5,
+			updated_at = NOW()
 		WHERE id = $1
-	`, wallet.ID)
+	`, wallet.ID, tx.Hash, txAmount, tx.BlockNumber, now)
 	if err != nil {
 		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to update wallet status")
 		return
@@ -401,10 +445,11 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 				Status:    "paid",
 			})
 		}
-	} else if wallet.Purpose == "prepaid" && wallet.ExpectedAmountCents != nil {
+	} else if wallet.Purpose == "prepaid" {
+		amount := float64(int64(math.Round(txAmount*100))) / 100
 		emitBillingEvent(eventTopupCredited, wallet.TenantID, "topup", wallet.ID, &pb.BillingEvent{
 			TopupId:  wallet.ID,
-			Amount:   float64(*wallet.ExpectedAmountCents) / 100.0,
+			Amount:   amount,
 			Currency: billing.DefaultCurrency(),
 			Provider: "crypto",
 			Status:   "credited",
@@ -413,7 +458,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 }
 
 // confirmInvoicePayment marks an invoice as paid
-func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, now time.Time) error {
+func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
 	if wallet.InvoiceID == nil {
 		return fmt.Errorf("invoice_id is nil for invoice wallet")
 	}
@@ -423,7 +468,8 @@ func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWalle
 	// Create payment record
 	_, err := dbTx.Exec(`
 		INSERT INTO purser.billing_payments (
-			id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at
+			id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at,
+			actual_tx_amount, asset_type, network, block_number
 		)
 		SELECT $1, $2,
 			   CASE
@@ -431,10 +477,11 @@ func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWalle
 				   WHEN $6 = 'USDC' THEN 'crypto_usdc'
 				   WHEN $6 = 'LPT' THEN 'crypto_lpt'
 			   END,
-			   bi.amount, bi.currency, $3, 'confirmed', $4, NOW(), NOW()
+			   bi.amount, bi.currency, $3, 'confirmed', $4, NOW(), NOW(),
+			   $7, $6, $8, $9
 		FROM purser.billing_invoices bi
 		WHERE bi.id = $5
-	`, paymentID, *wallet.InvoiceID, tx.Hash, now, *wallet.InvoiceID, wallet.Asset)
+	`, paymentID, *wallet.InvoiceID, tx.Hash, now, *wallet.InvoiceID, wallet.Asset, txAmount, wallet.Network, tx.BlockNumber)
 
 	if err != nil {
 		return fmt.Errorf("failed to create payment record: %w", err)
@@ -455,12 +502,19 @@ func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWalle
 }
 
 // confirmPrepaidTopup credits a tenant's prepaid balance
-func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, now time.Time) error {
+func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
 	if wallet.ExpectedAmountCents == nil {
 		return fmt.Errorf("expected_amount_cents is nil for prepaid wallet")
 	}
 
-	amountCents := *wallet.ExpectedAmountCents
+	if wallet.Asset != "USDC" {
+		return fmt.Errorf("unsupported prepaid asset without conversion: %s", wallet.Asset)
+	}
+
+	amountCents := int64(math.Round(txAmount * 100))
+	if amountCents <= 0 {
+		return fmt.Errorf("invalid prepaid amount from transaction: %f", txAmount)
+	}
 	currency := billing.DefaultCurrency()
 
 	// Get current balance (or 0 if not exists)
@@ -558,6 +612,7 @@ func (cm *CryptoMonitor) getETHTransactions(network NetworkConfig, address strin
 			To            string `json:"to"`
 			Value         string `json:"value"`
 			Confirmations string `json:"confirmations"`
+			BlockNumber   string `json:"blockNumber"`
 			TimeStamp     string `json:"timeStamp"`
 		} `json:"result"`
 	}
@@ -570,12 +625,14 @@ func (cm *CryptoMonitor) getETHTransactions(network NetworkConfig, address strin
 	for _, tx := range result.Result {
 		if strings.EqualFold(tx.To, address) && tx.Value != "0" {
 			confirmations, _ := strconv.Atoi(tx.Confirmations)
+			blockNumber, _ := strconv.ParseInt(tx.BlockNumber, 10, 64)
 			timestamp, _ := strconv.ParseInt(tx.TimeStamp, 10, 64)
 			transactions = append(transactions, CryptoTransaction{
 				Hash:          tx.Hash,
 				To:            tx.To,
 				Value:         tx.Value,
 				Confirmations: confirmations,
+				BlockNumber:   blockNumber,
 				BlockTime:     time.Unix(timestamp, 0),
 			})
 		}
@@ -628,6 +685,7 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(network NetworkConfig, a
 			To            string `json:"to"`
 			Value         string `json:"value"`
 			Confirmations string `json:"confirmations"`
+			BlockNumber   string `json:"blockNumber"`
 			TimeStamp     string `json:"timeStamp"`
 		} `json:"result"`
 	}
@@ -640,6 +698,7 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(network NetworkConfig, a
 	for _, tx := range result.Result {
 		if strings.EqualFold(tx.To, address) && tx.Value != "0" {
 			confirmations, _ := strconv.Atoi(tx.Confirmations)
+			blockNumber, _ := strconv.ParseInt(tx.BlockNumber, 10, 64)
 			timestamp, _ := strconv.ParseInt(tx.TimeStamp, 10, 64)
 			transactions = append(transactions, CryptoTransaction{
 				Hash:          tx.Hash,
@@ -647,6 +706,7 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(network NetworkConfig, a
 				To:            tx.To,
 				Value:         tx.Value,
 				Confirmations: confirmations,
+				BlockNumber:   blockNumber,
 				BlockTime:     time.Unix(timestamp, 0),
 			})
 		}
@@ -656,6 +716,19 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(network NetworkConfig, a
 }
 
 // Amount parsing
+
+func (cm *CryptoMonitor) parseTransactionAmount(value string, asset string) (float64, error) {
+	switch asset {
+	case "ETH":
+		return cm.parseEthereumAmount(value)
+	case "USDC":
+		return cm.parseTokenAmount(value, "USDC")
+	case "LPT":
+		return cm.parseTokenAmount(value, "LPT")
+	default:
+		return 0, fmt.Errorf("unknown asset: %s", asset)
+	}
+}
 
 func (cm *CryptoMonitor) parseEthereumAmount(value string) (float64, error) {
 	wei := new(big.Int)
