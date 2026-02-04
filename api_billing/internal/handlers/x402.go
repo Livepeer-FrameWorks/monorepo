@@ -148,11 +148,18 @@ func (h *X402Handler) GetPlatformX402Address() (string, error) {
 // Unlike x402 (which uses the platform address), direct deposits go to tenant-specific addresses.
 // These use HD indexes 1+ (index 0 is reserved for platform x402).
 func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, derivationIndex int32, newlyCreated bool, err error) {
+	tx, err := h.db.Begin()
+	if err != nil {
+		return "", 0, false, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
 	// First check if tenant already has a deposit address index
 	var existingIndex sql.NullInt32
-	err = h.db.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT x402_address_index FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1
+		FOR UPDATE
 	`, tenantID).Scan(&existingIndex)
 
 	if err != nil && err != sql.ErrNoRows {
@@ -169,23 +176,17 @@ func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, 
 		if err != nil {
 			return "", 0, false, fmt.Errorf("failed to derive address: %w", err)
 		}
+		if err := tx.Commit(); err != nil {
+			return "", 0, false, fmt.Errorf("failed to commit: %w", err)
+		}
 		return strings.ToLower(addr), existingIndex.Int32, false, nil
 	}
 
 	// Create new address - get next derivation index atomically
 	// The HD wallet starts at index 1 (index 0 is reserved for platform x402)
-	index, xpub, err := h.hdwallet.GetNextDerivationIndex()
+	index, xpub, err := h.hdwallet.GetNextNonZeroDerivationIndexTx(tx)
 	if err != nil {
 		return "", 0, false, fmt.Errorf("failed to get derivation index: %w", err)
-	}
-
-	// Ensure we never use index 0 for tenant deposits
-	if index == PlatformX402Index {
-		// Skip index 0, get the next one
-		index, xpub, err = h.hdwallet.GetNextDerivationIndex()
-		if err != nil {
-			return "", 0, false, fmt.Errorf("failed to get derivation index: %w", err)
-		}
 	}
 
 	address, err = DeriveAddressFromXpub(xpub, index)
@@ -195,7 +196,7 @@ func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, 
 	address = strings.ToLower(address)
 
 	// Store the index on the tenant subscription
-	_, err = h.db.Exec(`
+	_, err = tx.Exec(`
 		UPDATE purser.tenant_subscriptions
 		SET x402_address_index = $1, updated_at = NOW()
 		WHERE tenant_id = $2
@@ -203,6 +204,10 @@ func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, 
 
 	if err != nil {
 		return "", 0, false, fmt.Errorf("failed to store deposit address index: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", 0, false, fmt.Errorf("failed to commit: %w", err)
 	}
 
 	h.logger.WithFields(logging.Fields{
