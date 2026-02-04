@@ -60,13 +60,9 @@
   $effect(() => {
     const newMsg = $messageSubscription.data?.liveMessageReceived;
     if (newMsg && newMsg.conversationId === conversationId) {
-      // Check if message already exists
-      const exists = localMessages.some((m) => m.id === newMsg.id);
-      if (!exists) {
-        localMessages = [...localMessages, newMsg as MessageNode];
-        // Scroll to bottom after adding new message
+      loadMessages().then(() => {
         tick().then(scrollToBottom);
-      }
+      });
     }
   });
 

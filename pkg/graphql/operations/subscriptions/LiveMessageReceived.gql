@@ -2,7 +2,6 @@ subscription LiveMessageReceived($conversationId: ID!) {
   liveMessageReceived(conversationId: $conversationId) {
     id
     conversationId
-    content
     sender
     createdAt
   }

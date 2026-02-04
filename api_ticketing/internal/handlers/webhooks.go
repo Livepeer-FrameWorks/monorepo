@@ -307,13 +307,11 @@ func handleMessageCreated(c *gin.Context, payload ChatwootWebhookPayload) {
 	if tenantID != "" && deps.Decklog != nil {
 		conversationID := payload.GetConversationID()
 		msgID := strconv.FormatInt(payload.ID, 10)
-		content := payload.Content
 
 		ml := &pb.MessageLifecycleData{
 			EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_CREATED,
 			ConversationId: strconv.FormatInt(conversationID, 10),
 			MessageId:      &msgID,
-			Content:        &content,
 			Sender:         &sender,
 			Timestamp:      time.Now().Unix(),
 		}
@@ -352,13 +350,11 @@ func handleConversationUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 	}
 
 	conversationID := payload.GetConversationID()
-	subject := payload.Subject
 	status := payload.Status
 	ml := &pb.MessageLifecycleData{
 		EventType:      pb.MessageLifecycleData_EVENT_TYPE_CONVERSATION_UPDATED,
 		ConversationId: strconv.FormatInt(conversationID, 10),
 		Status:         &status,
-		Subject:        &subject,
 		Timestamp:      time.Now().Unix(),
 	}
 	ml.TenantId = &tenantID
@@ -402,13 +398,11 @@ func handleMessageUpdated(c *gin.Context, payload ChatwootWebhookPayload) {
 	if tenantID != "" && deps.Decklog != nil {
 		conversationID := payload.GetConversationID()
 		msgID := strconv.FormatInt(payload.ID, 10)
-		content := payload.Content
 
 		ml := &pb.MessageLifecycleData{
 			EventType:      pb.MessageLifecycleData_EVENT_TYPE_MESSAGE_UPDATED,
 			ConversationId: strconv.FormatInt(conversationID, 10),
 			MessageId:      &msgID,
-			Content:        &content,
 			Sender:         &sender,
 			Timestamp:      time.Now().Unix(),
 		}

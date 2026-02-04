@@ -7,7 +7,6 @@ subscription LiveConversationUpdates($conversationId: ID) {
     lastMessage {
       id
       conversationId
-      content
       sender
       createdAt
     }
