@@ -1206,6 +1206,15 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 						// Try to determine stream name from symlink target
 						streamName := "unknown"
 						if target, err := os.Readlink(filePath); err == nil {
+							absTarget := target
+							if !filepath.IsAbs(target) {
+								absTarget = filepath.Join(filepath.Dir(filePath), target)
+							}
+							if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
+								if strings.Contains(resolved, string(filepath.Separator)+"vod"+string(filepath.Separator)) {
+									continue
+								}
+							}
 							parts := strings.Split(target, "/")
 							for i, part := range parts {
 								if part == "clips" && i+1 < len(parts) {
