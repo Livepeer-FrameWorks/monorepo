@@ -13,6 +13,11 @@ import (
 // This should be set during application initialization (e.g. in handlers.Init).
 var CommodoreClient *commodore.GRPCClient
 
+// SetCommodoreClient updates the Commodore client reference for resolution.
+func SetCommodoreClient(client *commodore.GRPCClient) {
+	CommodoreClient = client
+}
+
 // StreamTarget describes the resolution result.
 type StreamTarget struct {
 	InternalName string

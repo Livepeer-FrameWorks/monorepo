@@ -2643,3 +2643,25 @@ func findProtocolURL(outputs map[string]*pb.OutputEndpoint, protocol string) str
 
 	return ""
 }
+
+// SetQuartermasterClient injects a Quartermaster client after initialization.
+func SetQuartermasterClient(client *qmclient.GRPCClient) {
+	quartermasterClient = client
+	control.SetQuartermasterClient(client)
+	if client == nil || logger == nil {
+		return
+	}
+	go func() {
+		bootstrapCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := bootstrapClusterInfo(bootstrapCtx); err != nil {
+			logger.WithError(err).Warn("Async bootstrap failed after Quartermaster reconnect")
+		}
+	}()
+}
+
+// SetCommodoreClient injects a Commodore client after initialization.
+func SetCommodoreClient(client *commodore.GRPCClient) {
+	commodoreClient = client
+	control.SetCommodoreClient(client)
+}

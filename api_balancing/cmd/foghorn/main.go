@@ -22,10 +22,46 @@ import (
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"github.com/prometheus/client_golang/prometheus"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 )
+
+type clientState struct {
+	mu               sync.RWMutex
+	quartermasterOK  bool
+	quartermasterErr error
+	commodoreOK      bool
+	commodoreErr     error
+}
+
+func (cs *clientState) setQuartermaster(ok bool, err error) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.quartermasterOK = ok
+	cs.quartermasterErr = err
+}
+
+func (cs *clientState) setCommodore(ok bool, err error) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.commodoreOK = ok
+	cs.commodoreErr = err
+}
+
+func (cs *clientState) quartermasterStatus() (bool, error) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.quartermasterOK, cs.quartermasterErr
+}
+
+func (cs *clientState) commodoreStatus() (bool, error) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return cs.commodoreOK, cs.commodoreErr
+}
 
 func main() {
 	// Initialize logger
@@ -74,6 +110,17 @@ func main() {
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("foghorn", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("foghorn", version.Version, version.GitCommit)
+	clients := &clientState{}
+	clientStatusGauge := metricsCollector.NewGauge(
+		"control_plane_client_status",
+		"Control plane client availability (1=ok, 0=unavailable)",
+		[]string{"client"},
+	)
+	clientReconnects := metricsCollector.NewCounter(
+		"control_plane_client_reconnect_total",
+		"Control plane client reconnect attempts",
+		[]string{"client", "status"},
+	)
 
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
@@ -100,6 +147,34 @@ func main() {
 			Message: "rehydrate ok",
 			Latency: time.Since(at).String(),
 		}
+	})
+	healthChecker.AddCheck("quartermaster", func() monitoring.CheckResult {
+		ok, err := clients.quartermasterStatus()
+		if !ok {
+			msg := "Quartermaster unavailable"
+			if err != nil {
+				msg = fmt.Sprintf("Quartermaster unavailable: %v", err)
+			}
+			return monitoring.CheckResult{
+				Status:  monitoring.StatusDegraded,
+				Message: msg,
+			}
+		}
+		return monitoring.CheckResult{Status: monitoring.StatusHealthy}
+	})
+	healthChecker.AddCheck("commodore", func() monitoring.CheckResult {
+		ok, err := clients.commodoreStatus()
+		if !ok {
+			msg := "Commodore unavailable"
+			if err != nil {
+				msg = fmt.Sprintf("Commodore unavailable: %v", err)
+			}
+			return monitoring.CheckResult{
+				Status:  monitoring.StatusDegraded,
+				Message: msg,
+			}
+		}
+		return monitoring.CheckResult{Status: monitoring.StatusHealthy}
 	})
 
 	// Create custom load balancing metrics
@@ -174,9 +249,17 @@ func main() {
 		ServiceToken: serviceToken,
 	})
 	if err != nil {
-		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
+		logger.WithError(err).Error("Failed to create Quartermaster gRPC client - starting in degraded mode")
+		clients.setQuartermaster(false, err)
+		clientStatusGauge.WithLabelValues("quartermaster").Set(0)
+		qmClient = nil
+	} else {
+		clients.setQuartermaster(true, nil)
+		clientStatusGauge.WithLabelValues("quartermaster").Set(1)
 	}
-	defer qmClient.Close()
+	if qmClient != nil {
+		defer qmClient.Close()
+	}
 
 	// Commodore (gRPC)
 	commodoreGRPCURL := config.GetEnv("COMMODORE_GRPC_ADDR", "localhost:19001")
@@ -217,9 +300,17 @@ func main() {
 		ServiceToken: serviceToken,
 	})
 	if err != nil {
-		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
+		logger.WithError(err).Error("Failed to create Commodore gRPC client - starting in degraded mode")
+		clients.setCommodore(false, err)
+		clientStatusGauge.WithLabelValues("commodore").Set(0)
+		commodoreClient = nil
+	} else {
+		clients.setCommodore(true, nil)
+		clientStatusGauge.WithLabelValues("commodore").Set(1)
 	}
-	defer commodoreClient.Close()
+	if commodoreClient != nil {
+		defer commodoreClient.Close()
+	}
 
 	// Purser (gRPC) - x402 settlement + billing checks
 	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
@@ -335,6 +426,13 @@ func main() {
 	logger.Info("Initialized trigger processor with Commodore, Decklog and Quartermaster clients")
 	handlers.SetTriggerProcessor(triggerProcessor)
 
+	if qmClient == nil {
+		go reconnectQuartermaster(quartermasterGRPCURL, serviceToken, logger, clients, clientStatusGauge, clientReconnects, triggerProcessor)
+	}
+	if commodoreClient == nil {
+		go reconnectCommodore(commodoreGRPCURL, serviceToken, logger, commodoreCache, clients, clientStatusGauge, clientReconnects, triggerProcessor)
+	}
+
 	// Start Helmsman control gRPC server with injected dependencies
 	control.Init(logger, commodoreClient, triggerProcessor)
 	control.SetGeoIPCache(geoipCache)
@@ -448,6 +546,83 @@ func main() {
 	serverConfig := server.DefaultConfig("foghorn", "18008")
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
+	}
+}
+
+func reconnectQuartermaster(
+	grpcAddr string,
+	serviceToken string,
+	logger logging.Logger,
+	clients *clientState,
+	statusGauge *prometheus.GaugeVec,
+	reconnects *prometheus.CounterVec,
+	triggerProcessor *triggers.Processor,
+) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:     grpcAddr,
+			Timeout:      30 * time.Second,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+		})
+		if err != nil {
+			clients.setQuartermaster(false, err)
+			statusGauge.WithLabelValues("quartermaster").Set(0)
+			reconnects.WithLabelValues("quartermaster", "failure").Inc()
+			logger.WithError(err).Warn("Quartermaster reconnect failed")
+			continue
+		}
+		clients.setQuartermaster(true, nil)
+		statusGauge.WithLabelValues("quartermaster").Set(1)
+		reconnects.WithLabelValues("quartermaster", "success").Inc()
+		handlers.SetQuartermasterClient(client)
+		if triggerProcessor != nil {
+			triggerProcessor.SetQuartermasterClient(client)
+		}
+		logger.Info("Quartermaster reconnected")
+		return
+	}
+}
+
+func reconnectCommodore(
+	grpcAddr string,
+	serviceToken string,
+	logger logging.Logger,
+	commodoreCache *cache.Cache,
+	clients *clientState,
+	statusGauge *prometheus.GaugeVec,
+	reconnects *prometheus.CounterVec,
+	triggerProcessor *triggers.Processor,
+) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
+			GRPCAddr:     grpcAddr,
+			Timeout:      30 * time.Second,
+			Logger:       logger,
+			Cache:        commodoreCache,
+			ServiceToken: serviceToken,
+		})
+		if err != nil {
+			clients.setCommodore(false, err)
+			statusGauge.WithLabelValues("commodore").Set(0)
+			reconnects.WithLabelValues("commodore", "failure").Inc()
+			logger.WithError(err).Warn("Commodore reconnect failed")
+			continue
+		}
+		clients.setCommodore(true, nil)
+		statusGauge.WithLabelValues("commodore").Set(1)
+		reconnects.WithLabelValues("commodore", "success").Inc()
+		handlers.SetCommodoreClient(client)
+		control.SetCommodoreClient(client)
+		if triggerProcessor != nil {
+			triggerProcessor.SetCommodoreClient(client)
+		}
+		logger.Info("Commodore reconnected")
+		return
 	}
 }
 
