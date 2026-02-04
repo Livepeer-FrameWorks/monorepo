@@ -484,13 +484,14 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipProgress{ClipProgress: &pb.ClipProgress{RequestId: requestID, Percent: 0, Message: "starting"}}})
 	}
 	if err := downloadToFile(clipURL, dst); err != nil {
+		userErr := sanitizeStorageError(err)
 		logger.WithError(err).WithFields(logging.Fields{
 			"clip_url":   clipURL,
 			"clip_hash":  clipHash,
 			"request_id": requestID,
 		}).Error("Clip pull failed")
 		if send != nil {
-			send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipDone{ClipDone: &pb.ClipDone{RequestId: requestID, FilePath: dst, SizeBytes: 0, Status: "failed", Error: fmt.Sprintf("%v", err)}}})
+			send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ClipDone{ClipDone: &pb.ClipDone{RequestId: requestID, FilePath: dst, SizeBytes: 0, Status: "failed", Error: userErr}}})
 		}
 		return
 	}
@@ -586,6 +587,13 @@ func downloadToFile(url, dst string) error {
 		return err
 	}
 	return nil
+}
+
+func sanitizeStorageError(err error) string {
+	if storage.IsInsufficientSpace(err) {
+		return "Download failed: storage node out of space"
+	}
+	return "Download failed: please retry or contact support"
 }
 
 func deriveRolesFromConfig(cfg *sidecarcfg.HelmsmanConfig) []string {

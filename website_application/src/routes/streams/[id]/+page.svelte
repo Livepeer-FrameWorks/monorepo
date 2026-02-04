@@ -634,6 +634,28 @@
     }
   }
 
+  function sanitizeLifecycleError(error: string | null | undefined) {
+    if (!error) {
+      return "Operation failed. Please retry or contact support.";
+    }
+
+    const normalized = error.toLowerCase();
+    if (
+      normalized.includes("insufficient") ||
+      normalized.includes("out of space") ||
+      normalized.includes("disk full")
+    ) {
+      return "Storage node is out of space. Please free space or retry later.";
+    }
+    if (normalized.includes("statfs")) {
+      return "Storage unavailable. Please retry.";
+    }
+    if (normalized.includes("path=") || normalized.includes("need=")) {
+      return "Storage error. Please retry or contact support.";
+    }
+    return "Operation failed. Please retry or contact support.";
+  }
+
   function handleClipLifecycleEvent(event: NonNullable<ClipLifecycle$result["liveClipLifecycle"]>) {
     if (event.stage === ClipLifecycleStage.DONE) {
       if (event.s3Url) {
@@ -644,7 +666,11 @@
         addEvent("info", `Clip '${event.clipHash}' created`, "Details restricted (admin/owner)");
       }
     } else if (event.stage === ClipLifecycleStage.FAILED) {
-      addEvent("error", `Clip '${event.clipHash}' failed`, `Error: ${event.error}`);
+      addEvent(
+        "error",
+        `Clip '${event.clipHash}' failed`,
+        `Error: ${sanitizeLifecycleError(event.error)}`
+      );
     } else if (event.stage === ClipLifecycleStage.DELETED) {
       addEvent("info", `Clip '${event.clipHash}' deleted`);
     } else if (event.stage === ClipLifecycleStage.REQUESTED) {
@@ -663,7 +689,11 @@
         `Segments: ${event.segmentCount}`
       );
     } else if (event.status === "FAILED") {
-      addEvent("error", `DVR recording failed for '${displayStreamId}'`, `Error: ${event.error}`);
+      addEvent(
+        "error",
+        `DVR recording failed for '${displayStreamId}'`,
+        `Error: ${sanitizeLifecycleError(event.error)}`
+      );
     } else if (event.status === "DELETED") {
       addEvent("info", `DVR recording deleted for '${displayStreamId}'`);
     }
