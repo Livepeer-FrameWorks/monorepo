@@ -424,7 +424,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "database error: %v", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var cid string
 			if err := rows.Scan(&cid); err != nil {
@@ -671,7 +671,7 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var instances []*pb.ServiceInstance
 	for rows.Next() {
@@ -828,7 +828,7 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenan
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tenants []*pb.Tenant
 	for rows.Next() {
@@ -881,7 +881,7 @@ func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *pb.Lis
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tenantIDs []string
 	for rows.Next() {
@@ -1286,7 +1286,7 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *pb.GetTe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tenants []*pb.Tenant
 	for rows.Next() {
@@ -1352,7 +1352,7 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *pb.G
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tenants []*pb.Tenant
 	for rows.Next() {
@@ -1500,8 +1500,8 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_clusters c %s %s`, baseWhere, countWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition if cursor provided
@@ -1531,7 +1531,7 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var clusters []*pb.InfrastructureCluster
 	for rows.Next() {
@@ -1780,8 +1780,8 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb
 		JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id
 		%s
 	`, baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition
@@ -1806,7 +1806,7 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *pb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var clusters []*pb.ClusterAccessEntry
 	type entryWithCursor struct {
@@ -1875,8 +1875,8 @@ func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_clusters %s`, baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition
@@ -1900,7 +1900,7 @@ func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *pb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type entryWithCursor struct {
 		entry     *pb.AvailableClusterEntry
@@ -2099,9 +2099,9 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_clusters c %s`, baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("ListMySubscriptions: count query failed")
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+		s.logger.WithError(countErr).WithField("tenant_id", tenantID).Error("ListMySubscriptions: count query failed")
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 	s.logger.WithFields(map[string]interface{}{
 		"tenant_id":   tenantID,
@@ -2134,7 +2134,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var clusters []*pb.InfrastructureCluster
 	for rows.Next() {
@@ -2318,8 +2318,8 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_nodes n %s`, countWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition if cursor provided
@@ -2346,7 +2346,7 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var nodes []*pb.InfrastructureNode
 	for rows.Next() {
@@ -2819,8 +2819,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	if machineIDSHA != "" || macsSHA != "" || len(ips) > 0 || hasLabels {
 		attrsJSON := "{}"
 		if hasLabels {
-			if b, err := json.Marshal(labels.AsMap()); err == nil {
-				attrsJSON = string(b)
+			if attrsBytes, marshalErr := json.Marshal(labels.AsMap()); marshalErr == nil {
+				attrsJSON = string(attrsBytes)
 			}
 		}
 
@@ -3169,7 +3169,7 @@ func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *pb.L
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tokens []*pb.BootstrapToken
 	for rows.Next() {
@@ -3305,27 +3305,27 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		wireguardIP = currentWgIP.String
 	} else {
 		// Allocate next IP in 10.200.0.0/16 range (transaction + advisory lock)
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to start allocation tx: %v", err)
+		tx, txErr := s.db.BeginTx(ctx, nil)
+		if txErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to start allocation tx: %v", txErr)
 		}
 		defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "quartermaster_wireguard_ip"); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to acquire allocation lock: %v", err)
+		if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "quartermaster_wireguard_ip"); lockErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to acquire allocation lock: %v", lockErr)
 		}
-		newIP, err := s.allocateWireGuardIPTx(ctx, tx)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to allocate WireGuard IP: %v", err)
+		newIP, allocErr := s.allocateWireGuardIPTx(ctx, tx)
+		if allocErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to allocate WireGuard IP: %v", allocErr)
 		}
-		if _, err = tx.ExecContext(ctx, `
+		if _, execErr := tx.ExecContext(ctx, `
 			UPDATE quartermaster.infrastructure_nodes
 			SET wireguard_ip = $1::inet, updated_at = NOW()
 			WHERE node_id = $2
-		`, newIP, nodeID); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to save WireGuard IP: %v", err)
+		`, newIP, nodeID); execErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to save WireGuard IP: %v", execErr)
 		}
-		if err := tx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit WireGuard IP allocation: %v", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit WireGuard IP allocation: %v", commitErr)
 		}
 		wireguardIP = newIP
 	}
@@ -3343,14 +3343,14 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var peers []*pb.InfrastructurePeer
 	for rows.Next() {
 		var peer pb.InfrastructurePeer
 		var peerExtIP, peerIntIP, peerWgIP sql.NullString
 		var peerListenPort sql.NullInt32
-		if err := rows.Scan(&peer.NodeName, &peer.PublicKey, &peerExtIP, &peerIntIP, &peerWgIP, &peerListenPort); err != nil {
+		if scanErr := rows.Scan(&peer.NodeName, &peer.PublicKey, &peerExtIP, &peerIntIP, &peerWgIP, &peerListenPort); scanErr != nil {
 			continue
 		}
 		// Prefer external IP, fall back to internal IP
@@ -3385,10 +3385,10 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		  AND n.cluster_id = $1
 	`, clusterID)
 	if err == nil {
-		defer svcRows.Close()
+		defer func() { _ = svcRows.Close() }()
 		for svcRows.Next() {
 			var svcName, svcIP string
-			if err := svcRows.Scan(&svcName, &svcIP); err == nil && svcIP != "" {
+			if scanErr := svcRows.Scan(&svcName, &svcIP); scanErr == nil && svcIP != "" {
 				if serviceEndpoints[svcName] == nil {
 					serviceEndpoints[svcName] = &pb.ServiceEndpoints{Ips: []string{}}
 				}
@@ -3463,7 +3463,7 @@ func (s *QuartermasterServer) ListServices(ctx context.Context, req *pb.ListServ
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var services []*pb.Service
 	for rows.Next() {
@@ -3551,7 +3551,7 @@ func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *pb.L
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var services []*pb.ClusterServiceAssignment
 	for rows.Next() {
@@ -3664,8 +3664,8 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.service_instances %s`, countWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition if cursor provided
@@ -3688,7 +3688,7 @@ func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var instances []*pb.ServiceInstance
 	for rows.Next() {
@@ -3817,7 +3817,7 @@ func (s *QuartermasterServer) getServicesHealth(ctx context.Context, serviceID s
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var instances []*pb.ServiceInstanceHealth
 	for rows.Next() {
@@ -4305,8 +4305,8 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 			%s
 		`, baseWhere)
 	}
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition
@@ -4356,7 +4356,7 @@ func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type entryWithCursor struct {
 		entry     *pb.MarketplaceClusterEntry
@@ -4634,7 +4634,7 @@ func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	clusters := make(map[string]*pb.ClusterMetadata)
 	for rows.Next() {
@@ -4979,8 +4979,8 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.cluster_invites i %s`, baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, clusterID).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, clusterID).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition
@@ -5008,7 +5008,7 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var invites []*pb.ClusterInvite
 	for rows.Next() {
@@ -5103,8 +5103,8 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.cluster_invites i %s`, baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition
@@ -5131,7 +5131,7 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var invites []*pb.ClusterInvite
 	for rows.Next() {
@@ -5250,17 +5250,17 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	var inviteResourceLimits sql.NullString
 	if inviteToken != nil && *inviteToken != "" {
 		var inviteID, inviteClusterID, inviteTenantID string
-		err := s.db.QueryRowContext(ctx, `
+		inviteErr := s.db.QueryRowContext(ctx, `
 			SELECT id, cluster_id, invited_tenant_id, access_level, resource_limits
 			FROM quartermaster.cluster_invites
 			WHERE invite_token = $1 AND status = 'pending'
 			  AND (expires_at IS NULL OR expires_at > NOW())
 		`, *inviteToken).Scan(&inviteID, &inviteClusterID, &inviteTenantID, &inviteAccessLevel, &inviteResourceLimits)
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(inviteErr, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "invalid or expired invite token")
 		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		if inviteErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", inviteErr)
 		}
 		if inviteClusterID != clusterID {
 			return nil, status.Error(codes.InvalidArgument, "invite token is for a different cluster")
@@ -5454,8 +5454,8 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 		FROM quartermaster.tenant_cluster_access a
 		%s
 	`, baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, clusterID).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, clusterID).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Add keyset condition
@@ -5484,7 +5484,7 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var subscriptions []*pb.ClusterSubscription
 	for rows.Next() {

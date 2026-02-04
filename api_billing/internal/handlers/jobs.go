@@ -307,7 +307,9 @@ func (jm *JobManager) Stop() {
 	jm.gasWalletMonitor.Stop()
 	jm.x402Reconciler.Stop()
 	if jm.kafkaConsumer != nil {
-		jm.kafkaConsumer.Close()
+		if err := jm.kafkaConsumer.Close(); err != nil {
+			jm.logger.WithError(err).Warn("Failed to close Kafka consumer")
+		}
 	}
 	close(jm.stopCh)
 }
@@ -745,47 +747,9 @@ func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID stri
 			}
 		}
 
-		jm.notifyTenantSuspended(tenantID, balanceCents)
 	}
 
 	return nil
-}
-
-func (jm *JobManager) notifyTenantSuspended(tenantID string, balanceCents int64) {
-	if jm.emailService == nil {
-		return
-	}
-
-	var billingEmail string
-	err := jm.db.QueryRow(`
-		SELECT billing_email FROM purser.tenant_subscriptions
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&billingEmail)
-	if err != nil {
-		jm.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"error":     err,
-		}).Warn("Failed to load billing email for suspension notification")
-		return
-	}
-	if billingEmail == "" {
-		jm.logger.WithField("tenant_id", tenantID).Warn("No billing email for suspension notification")
-		return
-	}
-
-	tenantName := ""
-	if tenantInfo, err := getTenantInfo(tenantID); err == nil && tenantInfo != nil {
-		tenantName = tenantInfo.Name
-	}
-
-	balance := float64(balanceCents) / 100
-	if err := jm.emailService.SendAccountSuspendedEmail(billingEmail, tenantName, balance, billing.DefaultCurrency()); err != nil {
-		jm.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"email":     billingEmail,
-			"error":     err,
-		}).Warn("Failed to send suspension notification email")
-	}
 }
 
 // runInvoiceGeneration generates monthly invoices for active tenants
@@ -836,7 +800,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		}).Error("Failed to fetch tenant subscriptions for invoice generation")
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var invoicesGenerated int
 	for rows.Next() {
@@ -851,7 +815,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		var customAllocations models.AllocationDetails
 		var billingPeriodStart, billingPeriodEnd sql.NullTime
 
-		err := rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
+		err = rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
 			&billingPeriodStart, &billingPeriodEnd,
 			&tierName, &displayName, &basePrice, &currency, &billingPeriod,
 			&meteringEnabled, &overageRates, &storageAllocation, &bandwidthAllocation,
@@ -930,11 +894,11 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch usage data")
 		} else {
-			defer usageRows.Close()
+			defer func() { _ = usageRows.Close() }()
 			for usageRows.Next() {
 				var usageType string
 				var val float64
-				if err := usageRows.Scan(&usageType, &val); err == nil {
+				if scanErr := usageRows.Scan(&usageType, &val); scanErr == nil {
 					usageData[usageType] = val
 				}
 			}
@@ -1297,7 +1261,7 @@ func (jm *JobManager) sendPaymentReminders() {
 		}).Error("Failed to fetch overdue invoices")
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var overdueCount int
 	for rows.Next() {
@@ -1305,7 +1269,7 @@ func (jm *JobManager) sendPaymentReminders() {
 		var amount float64
 		var dueDate time.Time
 
-		err := rows.Scan(&invoiceID, &tenantID, &amount, &currency, &dueDate, &billingEmail, &invoiceStatus)
+		err = rows.Scan(&invoiceID, &tenantID, &amount, &currency, &dueDate, &billingEmail, &invoiceStatus)
 		if err != nil {
 			continue
 		}
@@ -1314,14 +1278,14 @@ func (jm *JobManager) sendPaymentReminders() {
 		daysPastDue := int(time.Since(dueDate).Hours() / 24)
 
 		if invoiceStatus == "pending" {
-			_, err := jm.db.Exec(`
-				UPDATE purser.billing_invoices
-				SET status = 'overdue', updated_at = NOW()
-				WHERE id = $1 AND status = 'pending'
-			`, invoiceID)
-			if err != nil {
+			_, execErr := jm.db.ExecContext(context.Background(), `
+					UPDATE purser.billing_invoices
+					SET status = 'overdue', updated_at = NOW()
+					WHERE id = $1 AND status = 'pending'
+				`, invoiceID)
+			if execErr != nil {
 				jm.logger.WithFields(logging.Fields{
-					"error":      err,
+					"error":      execErr,
 					"invoice_id": invoiceID,
 				}).Warn("Failed to mark invoice overdue")
 			}
@@ -1583,14 +1547,14 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	if err != nil {
 		return fmt.Errorf("failed to query usage: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	usageTotals := make(map[string]float64)
 
 	for rows.Next() {
 		var usageType string
 		var total float64
-		if err := rows.Scan(&usageType, &total); err != nil {
+		if scanErr := rows.Scan(&usageType, &total); scanErr != nil {
 			continue
 		}
 		usageTotals[usageType] = total

@@ -55,7 +55,7 @@ func ConnectClickHouse(cfg ClickHouseConfig, logger logging.Logger) (ClickHouseC
 	})
 
 	// Test the connection
-	if err := conn.Ping(); err != nil {
+	if err := conn.PingContext(context.Background()); err != nil {
 		logger.WithError(err).Error("Failed to ping ClickHouse")
 		return nil, err
 	}

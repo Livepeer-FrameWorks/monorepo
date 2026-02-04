@@ -139,7 +139,7 @@ func (c *Client) callAPI(command map[string]interface{}) (map[string]interface{}
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -494,7 +494,7 @@ func (c *Client) FetchJSON(endpoint string) (map[string]interface{}, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JSON from %s: %w", urlStr, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, urlStr)

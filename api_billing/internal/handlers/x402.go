@@ -170,16 +170,16 @@ func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, 
 
 	if existingIndex.Valid && existingIndex.Int32 > 0 {
 		// Derive address from existing index (must be > 0, index 0 is platform)
-		xpub, err := h.getXpub()
-		if err != nil {
-			return "", 0, false, err
+		xpub, xpubErr := h.getXpub()
+		if xpubErr != nil {
+			return "", 0, false, xpubErr
 		}
-		addr, err := DeriveAddressFromXpub(xpub, uint32(existingIndex.Int32))
-		if err != nil {
-			return "", 0, false, fmt.Errorf("failed to derive address: %w", err)
+		addr, addrErr := DeriveAddressFromXpub(xpub, uint32(existingIndex.Int32))
+		if addrErr != nil {
+			return "", 0, false, fmt.Errorf("failed to derive address: %w", addrErr)
 		}
-		if err := tx.Commit(); err != nil {
-			return "", 0, false, fmt.Errorf("failed to commit: %w", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return "", 0, false, fmt.Errorf("failed to commit: %w", commitErr)
 		}
 		return strings.ToLower(addr), existingIndex.Int32, false, nil
 	}
@@ -330,9 +330,9 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	// For auth-only (zero-value), skip nonce and balance checks since no transfer happens
 	if !isAuthOnly {
 		// Check nonce not already used (on-chain check)
-		nonceUsed, err := h.checkNonceUsed(ctx, network, auth.From, auth.Nonce)
-		if err != nil {
-			h.logger.WithFields(logging.Fields{"error": err, "network": network.Name}).Warn("Failed to check nonce on-chain, continuing")
+		nonceUsed, nonceErr := h.checkNonceUsed(ctx, network, auth.From, auth.Nonce)
+		if nonceErr != nil {
+			h.logger.WithFields(logging.Fields{"error": nonceErr, "network": network.Name}).Warn("Failed to check nonce on-chain, continuing")
 			// Continue - we'll catch replay at settlement
 		} else if nonceUsed {
 			return &VerifyResult{Valid: false, Error: "nonce already used"}, nil
@@ -352,9 +352,9 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 		}
 
 		// Check payer USDC balance on the specified network
-		balance, err := h.getUSDCBalance(ctx, network, auth.From)
-		if err != nil {
-			h.logger.WithFields(logging.Fields{"error": err, "network": network.Name}).Warn("Failed to check USDC balance")
+		balance, balanceErr := h.getUSDCBalance(ctx, network, auth.From)
+		if balanceErr != nil {
+			h.logger.WithFields(logging.Fields{"error": balanceErr, "network": network.Name}).Warn("Failed to check USDC balance")
 			// Continue - settlement will fail if insufficient
 		} else if balance.Cmp(amountBig) < 0 {
 			return &VerifyResult{Valid: false, Error: "insufficient USDC balance"}, nil
@@ -744,8 +744,8 @@ func (h *X402Handler) submitTransferWithAuthorization(ctx context.Context, paylo
 	callData = append(callData, padBytes32Bytes(s)...)
 
 	// Simulate via eth_call before submitting (per x402 spec)
-	if err := h.simulateTransfer(ctx, network, callData); err != nil {
-		return "", fmt.Errorf("simulation failed: %w", err)
+	if simErr := h.simulateTransfer(ctx, network, callData); simErr != nil {
+		return "", fmt.Errorf("simulation failed: %w", simErr)
 	}
 
 	// Send raw transaction via RPC
@@ -792,26 +792,6 @@ func (h *X402Handler) sendRawTransaction(ctx context.Context, network NetworkCon
 	}
 
 	return txHash, nil
-}
-
-// creditPrepaidBalance credits the tenant's prepaid balance
-func (h *X402Handler) creditPrepaidBalance(ctx context.Context, tenantID string, amountCents int64, txHash string) (int64, error) {
-	tx, err := h.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	newBalance, err := h.creditPrepaidBalanceTx(ctx, tx, tenantID, amountCents, txHash, "x402 USDC payment")
-	if err != nil {
-		return 0, err
-	}
-
-	if err = tx.Commit(); err != nil {
-		return 0, err
-	}
-
-	return newBalance, nil
 }
 
 func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, tenantID string, amountCents int64, txHash string, description string) (int64, error) {
@@ -1030,9 +1010,9 @@ func (h *X402Handler) rpcCall(ctx context.Context, network NetworkConfig, method
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", rpcEndpoint, strings.NewReader(string(reqJSON)))
-	if err != nil {
-		return err
+	req, reqErr := http.NewRequestWithContext(ctx, "POST", rpcEndpoint, strings.NewReader(string(reqJSON)))
+	if reqErr != nil {
+		return reqErr
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -1040,7 +1020,7 @@ func (h *X402Handler) rpcCall(ctx context.Context, network NetworkConfig, method
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1051,8 +1031,8 @@ func (h *X402Handler) rpcCall(ctx context.Context, network NetworkConfig, method
 		Result interface{}      `json:"result"`
 		Error  *json.RawMessage `json:"error"`
 	}
-	if err := json.Unmarshal(body, &rpcResp); err != nil {
-		return err
+	if unmarshalErr := json.Unmarshal(body, &rpcResp); unmarshalErr != nil {
+		return unmarshalErr
 	}
 
 	if rpcResp.Error != nil {
@@ -1128,7 +1108,7 @@ func (h *X402Handler) getEurUsdRate() (float64, error) {
 		}
 		return 0, fmt.Errorf("failed to fetch ECB rate: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		if cachedRate > 0 {

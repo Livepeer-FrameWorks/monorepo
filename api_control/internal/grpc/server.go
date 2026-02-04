@@ -202,7 +202,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	}
 
 	// Get billing status via Purser gRPC (not direct DB access)
-	var billingModel = "postpaid"
+	billingModel := "postpaid"
 	var isSuspended, isBalanceNegative bool
 
 	if s.purserClient != nil {
@@ -367,8 +367,8 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
-	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
-		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
+		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
 		// Continue anyway - don't block on suspension check failure
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to start recordings")
@@ -381,25 +381,25 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 			return nil, status.Error(codes.InvalidArgument, "stream_id is required")
 		}
 		// Resolve internal_name from stream_id (public -> internal)
-		if err := s.db.QueryRowContext(ctx, `
+		if rowErr := s.db.QueryRowContext(ctx, `
 			SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2
-		`, streamID, tenantID).Scan(&internalName); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		`, streamID, tenantID).Scan(&internalName); rowErr != nil {
+			if errors.Is(rowErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
 			}
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+			return nil, status.Errorf(codes.Internal, "database error: %v", rowErr)
 		}
 	}
 
 	// Verify stream exists in this tenant (tenant isolation) and resolve stream_id if needed.
 	if streamID == "" {
-		if err := s.db.QueryRowContext(ctx, `
+		if rowErr := s.db.QueryRowContext(ctx, `
 			SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
-		`, internalName, tenantID).Scan(&streamID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
+		`, internalName, tenantID).Scan(&streamID); rowErr != nil {
+			if errors.Is(rowErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
 			}
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+			return nil, status.Errorf(codes.Internal, "database error: %v", rowErr)
 		}
 	}
 
@@ -1314,11 +1314,11 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 		// Get billing info via Purser gRPC (not DB JOIN)
 		billingModel := "postpaid"
 		if s.purserClient != nil {
-			billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
-			if err != nil {
+			billingStatus, billingErr := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+			if billingErr != nil {
 				s.logger.WithFields(logging.Fields{
 					"tenant_id": tenantID,
-					"error":     err,
+					"error":     billingErr,
 				}).Warn("Failed to get billing status from Purser, using default")
 			} else {
 				billingModel = billingStatus.BillingModel
@@ -1628,12 +1628,12 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 	// Create tenant via Quartermaster
 	var tenantID string
 	if s.quartermasterClient != nil {
-		resp, err := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
+		resp, createErr := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
 			Name: email, // Use email as initial tenant name
 		})
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to create tenant via Quartermaster")
-			return nil, status.Errorf(codes.Internal, "failed to create tenant: %v", err)
+		if createErr != nil {
+			s.logger.WithError(createErr).Error("Failed to create tenant via Quartermaster")
+			return nil, status.Errorf(codes.Internal, "failed to create tenant: %v", createErr)
 		}
 		tenantID = resp.GetTenant().GetId()
 	} else {
@@ -1644,9 +1644,9 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 
 	// Check user limit via Purser (if available)
 	if s.purserClient != nil {
-		limitCheck, err := s.purserClient.CheckUserLimit(ctx, tenantID, email)
-		if err != nil {
-			s.logger.WithError(err).Warn("Failed to check user limit with Purser, proceeding anyway")
+		limitCheck, limitErr := s.purserClient.CheckUserLimit(ctx, tenantID, email)
+		if limitErr != nil {
+			s.logger.WithError(limitErr).Warn("Failed to check user limit with Purser, proceeding anyway")
 		} else if !limitCheck.GetAllowed() {
 			return &pb.RegisterResponse{
 				Success: false,
@@ -1788,7 +1788,7 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 		s.logger.WithError(err).Warn("Failed to fetch user wallets")
 		// Don't fail the whole request - just return user without wallets
 	} else {
-		defer walletRows.Close()
+		defer func() { _ = walletRows.Close() }()
 		for walletRows.Next() {
 			var walletID, walletAddr string
 			var walletCreatedAt time.Time
@@ -2749,7 +2749,7 @@ func (s *CommodoreServer) ListWallets(ctx context.Context, req *pb.ListWalletsRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list wallets: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var wallets []*pb.WalletIdentity
 	for rows.Next() {
@@ -2821,8 +2821,8 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *pb.LinkEmailReques
 
 	// Generate verification token
 	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
+	if _, randErr := rand.Read(tokenBytes); randErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", randErr)
 	}
 	verificationToken := hex.EncodeToString(tokenBytes)
 	tokenExpiry := time.Now().Add(24 * time.Hour)
@@ -2866,8 +2866,8 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
-	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
-		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
+		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
 		// Continue anyway - don't block on suspension check failure
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to create new streams")
@@ -2995,7 +2995,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *pb.ListStreamsRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var streams []*pb.Stream
 	for rows.Next() {
@@ -3149,17 +3149,17 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 
 	// Delete related clips (best-effort, don't fail stream deletion)
 	if s.foghornClient != nil {
-		rows, err := s.db.QueryContext(ctx, `
-			SELECT clip_hash FROM commodore.clips
-			WHERE stream_id = $1 AND tenant_id = $2
-		`, streamID, tenantID)
-		if err != nil {
-			s.logger.WithError(err).Warn("Failed to list clips for stream deletion cleanup")
+		rows, queryErr := s.db.QueryContext(ctx, `
+				SELECT clip_hash FROM commodore.clips
+				WHERE stream_id = $1 AND tenant_id = $2
+			`, streamID, tenantID)
+		if queryErr != nil {
+			s.logger.WithError(queryErr).Warn("Failed to list clips for stream deletion cleanup")
 		} else {
-			defer rows.Close()
+			defer func() { _ = rows.Close() }()
 			for rows.Next() {
 				var clipHash string
-				if err := rows.Scan(&clipHash); err != nil {
+				if scanErr := rows.Scan(&clipHash); scanErr != nil {
 					continue
 				}
 				if _, _, delErr := s.foghornClient.DeleteClip(ctx, clipHash, &tenantID); delErr != nil {
@@ -3380,7 +3380,7 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *pb.ListStream
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var keys []*pb.StreamKey
 	for rows.Next() {
@@ -3590,7 +3590,7 @@ func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *pb.ListAPIToke
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tokens []*pb.APITokenInfo
 	for rows.Next() {
@@ -4031,8 +4031,8 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
-	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
-		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
+		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
 		// Continue anyway - don't block on suspension check failure
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to create clips")
@@ -4190,8 +4190,8 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	countQuery := fmt.Sprintf(`
 		SELECT COUNT(*) FROM commodore.clips c
 		WHERE %s`, whereClause)
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Build keyset pagination query
@@ -4222,7 +4222,7 @@ func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var clips []*pb.ClipInfo
 	for rows.Next() {
@@ -4448,11 +4448,11 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 
 	var streamID *string
 	var streamIDValue string
-	if err := s.db.QueryRowContext(ctx, `
+	if streamErr := s.db.QueryRowContext(ctx, `
 		SELECT stream_id::text
 		FROM commodore.dvr_recordings
 		WHERE dvr_hash = $1 AND tenant_id = $2
-	`, req.DvrHash, tenantID).Scan(&streamIDValue); err == nil && streamIDValue != "" {
+	`, req.DvrHash, tenantID).Scan(&streamIDValue); streamErr == nil && streamIDValue != "" {
 		streamID = &streamIDValue
 	}
 
@@ -4532,8 +4532,8 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM commodore.dvr_recordings d WHERE %s", whereClause)
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Build keyset pagination query
@@ -4564,7 +4564,7 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var recordings []*pb.DVRInfo
 	for rows.Next() {
@@ -4943,8 +4943,8 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
-	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
-		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
+		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
 		// Continue anyway - don't block on suspension check failure
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to upload videos")
@@ -5034,8 +5034,8 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
-	if suspended, err := s.isTenantSuspended(ctx, tenantID); err != nil {
-		s.logger.WithError(err).Warn("Failed to check tenant suspension status")
+	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
+		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to complete uploads")
 	}
@@ -5174,8 +5174,8 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	// Get total count
 	var total int32
 	countQuery := `SELECT COUNT(*) FROM commodore.vod_assets WHERE tenant_id = $1`
-	if err := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
 	}
 
 	// Build keyset pagination query
@@ -5207,7 +5207,7 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var assets []*pb.VodAssetInfo
 	for rows.Next() {

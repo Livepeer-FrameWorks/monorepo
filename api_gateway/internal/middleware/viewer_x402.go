@@ -52,7 +52,7 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 		}
 
 		var payload graphqlRequestEnvelope
-		if err := json.Unmarshal(body, &payload); err != nil {
+		if unmarshalErr := json.Unmarshal(body, &payload); unmarshalErr != nil {
 			c.Next()
 			return
 		}

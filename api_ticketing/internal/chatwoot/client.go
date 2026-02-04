@@ -127,7 +127,7 @@ func (c *Client) GetContactBySourceID(ctx context.Context, sourceID string) (*Co
 	if err != nil {
 		return nil, fmt.Errorf("search contacts: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("search contacts: status %d", resp.StatusCode)
@@ -225,7 +225,7 @@ func (c *Client) CreateContact(ctx context.Context, sourceID, name, email string
 	if err != nil {
 		return nil, fmt.Errorf("create contact: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -252,7 +252,7 @@ func (c *Client) ListConversations(ctx context.Context, contactID int64, page, p
 	if err != nil {
 		return nil, 0, fmt.Errorf("list conversations: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, 0, fmt.Errorf("list conversations: status %d", resp.StatusCode)
@@ -287,7 +287,7 @@ func (c *Client) SearchConversations(ctx context.Context, query string, page int
 	if err != nil {
 		return nil, 0, fmt.Errorf("search conversations: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, 0, fmt.Errorf("search conversations: status %d", resp.StatusCode)
@@ -313,7 +313,7 @@ func (c *Client) GetConversation(ctx context.Context, conversationID int64) (*Co
 	if err != nil {
 		return nil, fmt.Errorf("get conversation: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
@@ -353,7 +353,7 @@ func (c *Client) CreateConversation(ctx context.Context, contactID int64, subjec
 	if err != nil {
 		return nil, fmt.Errorf("create conversation: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -376,7 +376,7 @@ func (c *Client) ListMessages(ctx context.Context, conversationID int64) ([]Mess
 	if err != nil {
 		return nil, fmt.Errorf("list messages: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("list messages: status %d", resp.StatusCode)
@@ -407,7 +407,7 @@ func (c *Client) SendMessage(ctx context.Context, conversationID int64, content 
 	if err != nil {
 		return nil, fmt.Errorf("send message: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(resp.Body)
@@ -456,7 +456,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("chatwoot ping: status %d", resp.StatusCode)

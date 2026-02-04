@@ -111,12 +111,14 @@ PersistentKeepalive = {{.KeepAlive}}
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
-	if _, err := tmpFile.Write(buf.Bytes()); err != nil {
-		return err
+	if _, writeErr := tmpFile.Write(buf.Bytes()); writeErr != nil {
+		return writeErr
 	}
-	tmpFile.Close()
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		return closeErr
+	}
 
 	// 2. Apply with wg setconf
 	// setconf replaces the current configuration

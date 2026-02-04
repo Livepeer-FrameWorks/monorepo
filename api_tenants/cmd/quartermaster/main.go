@@ -41,7 +41,7 @@ func main() {
 	dbConfig := database.DefaultConfig()
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("quartermaster", version.Version)
@@ -78,7 +78,7 @@ func main() {
 		if err != nil {
 			logger.WithError(err).Error("Failed to create Navigator client - DNS features will be disabled")
 		} else {
-			defer navigatorClient.Close() // Ensure the client connection is closed
+			defer func() { _ = navigatorClient.Close() }() // Ensure the client connection is closed
 		}
 	} else {
 		logger.Info("NAVIGATOR_URL not set - DNS features will be disabled")
@@ -97,7 +97,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
 		decklogClient = nil
 	} else {
-		defer decklogClient.Close()
+		defer func() { _ = decklogClient.Close() }()
 		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
 	}
 
@@ -114,7 +114,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - billing status lookups will use defaults")
 		purserClient = nil
 	} else {
-		defer purserClient.Close()
+		defer func() { _ = purserClient.Close() }()
 		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
@@ -172,7 +172,7 @@ func main() {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client for self-registration")
 			return
 		}
-		defer qc.Close()
+		defer func() { _ = qc.Close() }()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		healthEndpoint := "/health"

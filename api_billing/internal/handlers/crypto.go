@@ -149,7 +149,7 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 		}).Error("Failed to fetch active crypto wallets")
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var wallet PendingWallet
@@ -608,7 +608,7 @@ func (cm *CryptoMonitor) getETHTransactions(ctx context.Context, network Network
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ETH transactions on %s: %w", network.Name, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("%s API returned status %d", network.DisplayName, resp.StatusCode)
@@ -684,7 +684,7 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(ctx context.Context, net
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ERC20 transactions on %s: %w", network.Name, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("%s API returned status %d", network.DisplayName, resp.StatusCode)

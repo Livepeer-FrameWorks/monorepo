@@ -41,7 +41,7 @@ func main() {
 	dbConfig := database.DefaultConfig()
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("commodore", version.Version)
@@ -79,7 +79,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Foghorn gRPC client - clip/DVR/viewer operations will be unavailable")
 		foghornClient = nil
 	} else {
-		defer foghornClient.Close()
+		defer func() { _ = foghornClient.Close() }()
 		logger.WithField("addr", foghornControlAddr).Info("Connected to Foghorn gRPC")
 	}
 
@@ -95,7 +95,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - tenant creation will use fallback")
 		quartermasterGRPCClient = nil
 	} else {
-		defer quartermasterGRPCClient.Close()
+		defer func() { _ = quartermasterGRPCClient.Close() }()
 		logger.WithField("addr", quartermasterGRPCAddr).Info("Connected to Quartermaster gRPC")
 	}
 
@@ -111,7 +111,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - user limit checks will be skipped")
 		purserGRPCClient = nil
 	} else {
-		defer purserGRPCClient.Close()
+		defer func() { _ = purserGRPCClient.Close() }()
 		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
@@ -128,7 +128,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
 		decklogClient = nil
 	} else {
-		defer decklogClient.Close()
+		defer func() { _ = decklogClient.Close() }()
 		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
 	}
 

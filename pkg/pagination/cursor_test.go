@@ -248,10 +248,6 @@ func strPtr(s string) *string {
 	return &s
 }
 
-func int32Ptr(i int32) *int32 {
-	return &i
-}
-
 func TestParseBidirectional(t *testing.T) {
 	validCursor := EncodeCursor(time.Now(), "test-id")
 

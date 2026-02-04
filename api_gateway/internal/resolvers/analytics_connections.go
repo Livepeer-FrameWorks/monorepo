@@ -92,10 +92,10 @@ func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *str
 		// Note: Pagination handled by Quartermaster, here we just want the list.
 		// If user has >100 subscriptions, we might miss some providers here without paging loop.
 		// For now, assume <100 subscriptions.
-		subs, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+		subs, subsErr := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
 			TenantId: user.TenantID,
 		})
-		if err == nil && subs != nil {
+		if subsErr == nil && subs != nil {
 			for _, cluster := range subs.Clusters {
 				if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" && *cluster.OwnerTenantId != user.TenantID {
 					relatedTenantIDs = append(relatedTenantIDs, *cluster.OwnerTenantId)
@@ -887,17 +887,15 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 	}
 
 	keyParts := []string{tenantID, streamId, timeKey(startTime), timeKey(endTime)}
-	if opts != nil {
-		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
-		if opts.After != nil {
-			keyParts = append(keyParts, *opts.After)
-		}
-		if opts.Last > 0 {
-			keyParts = append(keyParts, fmt.Sprintf("l%d", opts.Last))
-		}
-		if opts.Before != nil {
-			keyParts = append(keyParts, *opts.Before)
-		}
+	keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+	if opts.After != nil {
+		keyParts = append(keyParts, *opts.After)
+	}
+	if opts.Last > 0 {
+		keyParts = append(keyParts, fmt.Sprintf("l%d", opts.Last))
+	}
+	if opts.Before != nil {
+		keyParts = append(keyParts, *opts.Before)
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "buffer_events", keyParts, func(ctx context.Context) (interface{}, error) {

@@ -49,7 +49,11 @@ func (sm *SubscriptionManager) decrementTenantConnection(tenantID string) {
 }
 
 func (sm *SubscriptionManager) removeClientLocked(key string, client *signalmanclient.GRPCClient, tenantID string) {
-	client.Close()
+	if err := client.Close(); err != nil {
+		sm.logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id": tenantID,
+		}).Warn("Failed to close Signalman gRPC client")
+	}
 	delete(sm.clients, key)
 	sm.decrementTenantConnection(tenantID)
 }
@@ -135,7 +139,12 @@ func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config
 
 	// Connect the stream
 	if err := client.Connect(ctx); err != nil {
-		client.Close()
+		if closeErr := client.Close(); closeErr != nil {
+			sm.logger.WithError(closeErr).WithFields(logging.Fields{
+				"user_id":   config.UserID,
+				"tenant_id": config.TenantID,
+			}).Warn("Failed to close Signalman gRPC client after connect failure")
+		}
 		sm.logger.WithError(err).WithFields(logging.Fields{
 			"user_id":   config.UserID,
 			"tenant_id": config.TenantID,

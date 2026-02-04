@@ -387,9 +387,6 @@ func runClient(addr string, logger logging.Logger) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// Configure TLS based on config
 	var creds credentials.TransportCredentials
 	if cfg.GRPCUseTLS {
@@ -413,15 +410,17 @@ func runClient(addr string, logger logging.Logger) error {
 		logger.Info("Connecting to gRPC server with insecure connection")
 	}
 
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(creds), grpc.WithBlock())
+	conn, err := grpc.NewClient(
+		addr,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 10 * time.Second}),
+	)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = conn.Close()
-	}()
+	defer func() { _ = conn.Close() }()
 	client := pb.NewHelmsmanControlClient(conn)
-	stream, err := client.Connect(ctx)
+	stream, err := client.Connect(context.Background())
 	if err != nil {
 		return err
 	}
@@ -682,9 +681,7 @@ func downloadToFile(url, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("mist returned %d", resp.StatusCode)
 	}

@@ -293,7 +293,7 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.StreamEvent
 	for rows.Next() {
@@ -477,7 +477,7 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.BufferEvent
 	for rows.Next() {
@@ -593,13 +593,13 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var metrics []*pb.StreamHealthMetric
 	for rows.Next() {
 		var m pb.StreamHealthMetric
 		var ts time.Time
-		var tenantID string
+		var metricTenantID string
 		var trackMetadata string
 		var hasIssues *uint8
 		var issuesDesc *string
@@ -611,7 +611,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		var framesMax, framesMin *uint32
 
 		err := rows.Scan(
-			&ts, &tenantID, &m.StreamId, &m.NodeId,
+			&ts, &metricTenantID, &m.StreamId, &m.NodeId,
 			&m.Bitrate, &m.Fps, &m.GopSize, &frameMsMax, &frameMsMin, &framesMax, &framesMin, &keyframeMsMax, &keyframeMsMin, &frameJitterMs, &m.Width, &m.Height,
 			&m.BufferSize, &m.BufferHealth, &m.BufferState,
 			&m.Codec, &m.QualityTier, &trackMetadata,
@@ -624,7 +624,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 
 		// Generate composite ID for pagination
 		m.Id = fmt.Sprintf("%s_%s_%s", ts.Format(time.RFC3339), m.StreamId, m.NodeId)
-		m.TenantId = tenantID
+		m.TenantId = metricTenantID
 		m.Timestamp = timestamppb.New(ts)
 		m.TrackMetadata = trackMetadata
 		if frameMsMax != nil {
@@ -845,7 +845,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStrea
 		s.logger.WithError(err).Error("Failed to batch query stream status from ClickHouse")
 		return &pb.StreamsStatusResponse{Statuses: statuses}, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var streamID, streamStatus string
@@ -976,7 +976,7 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []*pb.ViewerSession
 	for rows.Next() {
@@ -1090,7 +1090,7 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var buckets []*pb.ViewerCountBucket
 	for rows.Next() {
@@ -1154,14 +1154,14 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error (countries): %v", err)
 	}
-	defer countryRows.Close()
+	defer func() { _ = countryRows.Close() }()
 
 	var topCountries []*pb.CountryMetric
 	var totalViewers int32
 	for countryRows.Next() {
 		var countryCode string
 		var count int64
-		if err := countryRows.Scan(&countryCode, &count); err != nil {
+		if scanErr := countryRows.Scan(&countryCode, &count); scanErr != nil {
 			continue
 		}
 		totalViewers += int32(count)
@@ -1193,7 +1193,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error (cities): %v", err)
 	}
-	defer cityRows.Close()
+	defer func() { _ = cityRows.Close() }()
 
 	var topCities []*pb.CityMetric
 	for cityRows.Next() {
@@ -1309,7 +1309,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.TrackListEvent
 	for rows.Next() {
@@ -1444,7 +1444,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.ConnectionEvent
 	for rows.Next() {
@@ -1589,7 +1589,7 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var metrics []*pb.NodeMetric
 	for rows.Next() {
@@ -1692,7 +1692,7 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var metrics []*pb.NodeMetricHourly
 	for rows.Next() {
@@ -1772,7 +1772,7 @@ func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var metrics []*pb.NodeMetricsAggregated
 	for rows.Next() {
@@ -1844,7 +1844,7 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 		s.logger.WithError(err).Error("Failed to query node_state_current")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var nodes []*pb.LiveNode
 	for rows.Next() {
@@ -1937,8 +1937,8 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	}
 
 	var total int32
-	if err := s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		s.logger.WithError(err).Warn("Failed to get routing events count")
+	if countErr := s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); countErr != nil {
+		s.logger.WithError(countErr).Warn("Failed to get routing events count")
 	}
 
 	// Main query with all geographic columns from ClickHouse schema
@@ -1997,7 +1997,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.RoutingEvent
 	for rows.Next() {
@@ -2353,7 +2353,7 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.ClipEvent
 	for rows.Next() {
@@ -2562,7 +2562,7 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var artifacts []*pb.ArtifactState
 	for rows.Next() {
@@ -2706,7 +2706,7 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.StreamConnectionHourly
 	for rows.Next() {
@@ -2832,7 +2832,7 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.ClientMetrics5M
 	for rows.Next() {
@@ -2960,7 +2960,7 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.QualityTierDaily
 	for rows.Next() {
@@ -3535,7 +3535,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.StorageUsageRecord
 	for rows.Next() {
@@ -3659,7 +3659,7 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.StorageEvent
 	for rows.Next() {
@@ -3780,7 +3780,7 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.StreamHealth5M
 	for rows.Next() {
@@ -3908,7 +3908,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.NodePerformance5M
 	for rows.Next() {
@@ -4024,7 +4024,7 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.ViewerHoursHourly
 	for rows.Next() {
@@ -4122,7 +4122,7 @@ func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetVie
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.ViewerGeoHourly
 	for rows.Next() {
@@ -4205,7 +4205,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var stats []*pb.TenantDailyStat
 	for rows.Next() {
@@ -4282,7 +4282,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to query processing_daily")
 	} else {
-		defer summaryRows.Close()
+		defer func() { _ = summaryRows.Close() }()
 		for summaryRows.Next() {
 			var day time.Time
 			var tenantIDStr string
@@ -4295,15 +4295,15 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 			var nativeAvAac, nativeAvOpus float64
 			var audioSeconds, videoSeconds float64
 
-			err := summaryRows.Scan(&day, &tenantIDStr,
+			scanErr := summaryRows.Scan(&day, &tenantIDStr,
 				&livepeerSeconds, &livepeerSegmentCount, &livepeerUniqueStreams,
 				&livepeerH264, &livepeerVp9, &livepeerAv1, &livepeerHevc,
 				&nativeAvSeconds, &nativeAvSegmentCount, &nativeAvUniqueStreams,
 				&nativeAvH264, &nativeAvVp9, &nativeAvAv1, &nativeAvHevc,
 				&nativeAvAac, &nativeAvOpus,
 				&audioSeconds, &videoSeconds)
-			if err != nil {
-				s.logger.WithError(err).Error("Failed to scan processing_daily row")
+			if scanErr != nil {
+				s.logger.WithError(scanErr).Error("Failed to scan processing_daily row")
 				continue
 			}
 
@@ -4404,7 +4404,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.ProcessingUsageRecord
 	for rows.Next() {
@@ -4898,7 +4898,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*pb.RebufferingEvent
 	for rows.Next() {
@@ -4992,7 +4992,7 @@ func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.G
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.TenantAnalyticsDaily
 	for rows.Next() {
@@ -5098,7 +5098,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.StreamAnalyticsDaily
 	for rows.Next() {
@@ -5198,21 +5198,21 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 		}
 		summaryQuery += " GROUP BY day, tenant_id, auth_type ORDER BY day DESC"
 
-		summaryRows, err := s.clickhouse.QueryContext(ctx, summaryQuery, summaryArgs...)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to query api_usage_daily")
+		summaryRows, summaryErr := s.clickhouse.QueryContext(ctx, summaryQuery, summaryArgs...)
+		if summaryErr != nil {
+			s.logger.WithError(summaryErr).Error("Failed to query api_usage_daily")
 		} else {
-			defer summaryRows.Close()
+			defer func() { _ = summaryRows.Close() }()
 			for summaryRows.Next() {
 				var day time.Time
 				var tenantIDStr, authTypeStr string
 				var totalRequests, totalErrors, totalDurationMs, totalComplexity, uniqueUsers, uniqueTokens uint64
 
-				err := summaryRows.Scan(&day, &tenantIDStr, &authTypeStr,
+				scanErr := summaryRows.Scan(&day, &tenantIDStr, &authTypeStr,
 					&totalRequests, &totalErrors, &totalDurationMs, &totalComplexity,
 					&uniqueUsers, &uniqueTokens)
-				if err != nil {
-					s.logger.WithError(err).Error("Failed to scan api_usage_daily row")
+				if scanErr != nil {
+					s.logger.WithError(scanErr).Error("Failed to scan api_usage_daily row")
 					continue
 				}
 
@@ -5265,13 +5265,13 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to query api_usage_hourly operation summaries")
 	} else {
-		defer operationRows.Close()
+		defer func() { _ = operationRows.Close() }()
 		for operationRows.Next() {
 			var opTypeStr string
 			var totalRequests, totalErrors, totalDurationMs, totalComplexity, uniqueOperations uint64
 
-			if err := operationRows.Scan(&opTypeStr, &totalRequests, &totalErrors, &totalDurationMs, &totalComplexity, &uniqueOperations); err != nil {
-				s.logger.WithError(err).Error("Failed to scan api_usage_hourly operation summary row")
+			if scanErr := operationRows.Scan(&opTypeStr, &totalRequests, &totalErrors, &totalDurationMs, &totalComplexity, &uniqueOperations); scanErr != nil {
+				s.logger.WithError(scanErr).Error("Failed to scan api_usage_hourly operation summary row")
 				continue
 			}
 
@@ -5369,7 +5369,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.APIUsageRecord
 	for rows.Next() {

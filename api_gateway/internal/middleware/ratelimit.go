@@ -473,10 +473,10 @@ func build402Response(ctx context.Context, tenantID, operationName, resourcePath
 
 	// Include x402 payment requirements if provider is available
 	if x402Provider != nil {
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-		requirements, err := x402Provider.GetPaymentRequirements(ctx, tenantID, resourcePath)
+		requirements, err := x402Provider.GetPaymentRequirements(reqCtx, tenantID, resourcePath)
 		if err != nil {
 			if logger != nil {
 				logger.WithFields(logging.Fields{

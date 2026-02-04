@@ -66,7 +66,7 @@ func (c *Client) Subscribe(ctx context.Context, email, name string, listID int, 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("listmonk returned status: %d", resp.StatusCode)
@@ -101,7 +101,7 @@ func (c *Client) Blocklist(ctx context.Context, email string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("listmonk returned status: %d", resp.StatusCode)

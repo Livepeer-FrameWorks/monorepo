@@ -38,6 +38,7 @@ type ClientConfig struct {
 // NewClient creates a new Decklog gRPC client
 func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 	var opts []grpc.DialOption
+	var connectParams *grpc.ConnectParams
 
 	if cfg.AllowInsecure {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -59,13 +60,14 @@ func NewClient(cfg ClientConfig, logger logging.Logger) (*Client, error) {
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 	}
 
-	// Add timeout
-	if cfg.Timeout > 0 {
-		opts = append(opts, grpc.WithTimeout(cfg.Timeout))
-	}
-
 	// Connect to server
-	conn, err := grpc.Dial(cfg.Target, opts...)
+	if cfg.Timeout > 0 {
+		connectParams = &grpc.ConnectParams{MinConnectTimeout: cfg.Timeout}
+	}
+	if connectParams != nil {
+		opts = append(opts, grpc.WithConnectParams(*connectParams))
+	}
+	conn, err := grpc.NewClient(cfg.Target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial server: %w", err)
 	}
@@ -115,6 +117,7 @@ type BatchedClientConfig struct {
 // NewBatchedClient creates a new Decklog gRPC client
 func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedClient, error) {
 	var opts []grpc.DialOption
+	var connectParams *grpc.ConnectParams
 
 	if cfg.AllowInsecure {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -136,13 +139,14 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 		opts = append(opts, grpc.WithTransportCredentials(creds))
 	}
 
-	// Add timeout
-	if cfg.Timeout > 0 {
-		opts = append(opts, grpc.WithTimeout(cfg.Timeout))
-	}
-
 	// Connect to server
-	conn, err := grpc.Dial(cfg.Target, opts...)
+	if cfg.Timeout > 0 {
+		connectParams = &grpc.ConnectParams{MinConnectTimeout: cfg.Timeout}
+	}
+	if connectParams != nil {
+		opts = append(opts, grpc.WithConnectParams(*connectParams))
+	}
+	conn, err := grpc.NewClient(cfg.Target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial server: %w", err)
 	}
@@ -476,7 +480,7 @@ func int64Ptr(value int64) *int64 {
 // Close gracefully shuts down the client
 func (c *BatchedClient) Close() error {
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 
 	c.logger.WithField("source", c.source).Info("Decklog client closed")

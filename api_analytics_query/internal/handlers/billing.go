@@ -91,9 +91,9 @@ func (bs *BillingSummarizer) SummarizeUsageForPeriod(startTime, endTime time.Tim
 
 	// Generate usage summary for each tenant
 	for _, tenantID := range tenants {
-		summary, err := bs.generateTenantUsageSummary(tenantID, startTime, endTime)
-		if err != nil {
-			bs.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to generate usage summary for tenant")
+		summary, summaryErr := bs.generateTenantUsageSummary(tenantID, startTime, endTime)
+		if summaryErr != nil {
+			bs.logger.WithError(summaryErr).WithField("tenant_id", tenantID).Error("Failed to generate usage summary for tenant")
 			continue
 		}
 
@@ -146,7 +146,7 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tenants []string
 	for rows.Next() {
@@ -299,7 +299,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		bs.logger.WithError(err).Warn("Failed to query API usage aggregates, defaulting to 0")
 	} else if err == nil {
-		defer apiRows.Close()
+		defer func() { _ = apiRows.Close() }()
 		for apiRows.Next() {
 			var breakdown models.APIUsageBreakdown
 			var operationName sql.NullString
@@ -425,7 +425,7 @@ func (bs *BillingSummarizer) getTenantPrimaryCluster(tenantID string) (string, e
 	}
 
 	if tenantResp.GetError() != "" {
-		return "", fmt.Errorf("Quartermaster returned error: %s", tenantResp.GetError())
+		return "", fmt.Errorf("quartermaster returned error: %s", tenantResp.GetError())
 	}
 
 	pbTenant := tenantResp.GetTenant()
@@ -571,8 +571,8 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 	if summary != nil {
 		// Send to Purser
 		// TODO: Switch to Kafka Producer here
-		if err := bs.sendUsageToPurser([]models.UsageSummary{*summary}); err != nil {
-			return fmt.Errorf("failed to send usage to Purser: %w", err)
+		if sendErr := bs.sendUsageToPurser([]models.UsageSummary{*summary}); sendErr != nil {
+			return fmt.Errorf("failed to send usage to Purser: %w", sendErr)
 		}
 
 		// Update cursor ONLY after successful send

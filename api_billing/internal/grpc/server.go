@@ -309,7 +309,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tiers []*pb.BillingTier
 	for rows.Next() {
@@ -586,7 +586,7 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var records []*pb.UsageRecord
 	for rows.Next() {
@@ -725,7 +725,7 @@ func (s *PurserServer) GetUsageAggregates(ctx context.Context, req *pb.GetUsageA
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var aggregates []*pb.UsageAggregate
 	for rows.Next() {
@@ -1363,7 +1363,7 @@ func (s *PurserServer) ListInvoices(ctx context.Context, req *pb.ListInvoicesReq
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var invoices []*pb.Invoice
 	for rows.Next() {
@@ -1520,13 +1520,13 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 			resp.WalletAddress = existingTxID
 			asset := strings.TrimPrefix(method, "crypto_")
 			var expiresAt time.Time
-			if err := s.db.QueryRowContext(ctx, `
-				SELECT expires_at
-				FROM purser.crypto_wallets
-				WHERE invoice_id = $1 AND asset = $2 AND status = 'active'
-				ORDER BY created_at DESC
-				LIMIT 1
-			`, invoiceID, strings.ToUpper(asset)).Scan(&expiresAt); err == nil {
+			if scanErr := s.db.QueryRowContext(ctx, `
+					SELECT expires_at
+					FROM purser.crypto_wallets
+					WHERE invoice_id = $1 AND asset = $2 AND status = 'active'
+					ORDER BY created_at DESC
+					LIMIT 1
+				`, invoiceID, strings.ToUpper(asset)).Scan(&expiresAt); scanErr == nil {
 				resp.ExpiresAt = timestamppb.New(expiresAt)
 			}
 		}
@@ -1560,39 +1560,39 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 	// Route to appropriate payment processor
 	switch method {
 	case "stripe":
-		paymentURL, stripeIntentID, err := s.createStripePayment(invoiceID, invoiceTenantID, invoiceAmount, invoiceCurrency)
-		if err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
+		paymentURL, stripeIntentID, stripeErr := s.createStripePayment(invoiceID, invoiceTenantID, invoiceAmount, invoiceCurrency)
+		if stripeErr != nil {
+			s.logger.WithError(stripeErr).WithFields(logging.Fields{
 				"invoice_id": invoiceID,
 				"method":     method,
 			}).Error("Failed to create Stripe payment")
-			return nil, status.Errorf(codes.Internal, "failed to create Stripe payment: %v", err)
+			return nil, status.Errorf(codes.Internal, "failed to create Stripe payment: %v", stripeErr)
 		}
 		resp.PaymentUrl = paymentURL
 		txID = stripeIntentID
 
 	case "mollie":
-		paymentURL, mollieID, err := s.createMolliePayment(invoiceID, invoiceTenantID, invoiceAmount, invoiceCurrency)
-		if err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
+		paymentURL, mollieID, mollieErr := s.createMolliePayment(invoiceID, invoiceTenantID, invoiceAmount, invoiceCurrency)
+		if mollieErr != nil {
+			s.logger.WithError(mollieErr).WithFields(logging.Fields{
 				"invoice_id": invoiceID,
 				"method":     method,
 			}).Error("Failed to create Mollie payment")
-			return nil, status.Errorf(codes.Internal, "failed to create Mollie payment: %v", err)
+			return nil, status.Errorf(codes.Internal, "failed to create Mollie payment: %v", mollieErr)
 		}
 		resp.PaymentUrl = paymentURL
 		txID = mollieID
 
 	case "crypto_btc", "crypto_eth", "crypto_usdc", "crypto_lpt":
 		asset := strings.TrimPrefix(method, "crypto_")
-		walletAddr, err := s.createCryptoPayment(invoiceID, invoiceTenantID, strings.ToUpper(asset), invoiceAmount, invoiceCurrency, expiresAt)
-		if err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
+		walletAddr, walletErr := s.createCryptoPayment(invoiceID, invoiceTenantID, strings.ToUpper(asset), invoiceAmount, invoiceCurrency, expiresAt)
+		if walletErr != nil {
+			s.logger.WithError(walletErr).WithFields(logging.Fields{
 				"invoice_id": invoiceID,
 				"method":     method,
 				"asset":      asset,
 			}).Error("Failed to create crypto payment")
-			return nil, status.Errorf(codes.Internal, "failed to create crypto payment: %v", err)
+			return nil, status.Errorf(codes.Internal, "failed to create crypto payment: %v", walletErr)
 		}
 		resp.WalletAddress = walletAddr
 		txID = walletAddr // Use wallet address as tx reference for crypto
@@ -1676,7 +1676,7 @@ func hasAnyExplorerKey() bool {
 func (s *PurserServer) createStripePayment(invoiceID, tenantID string, amount float64, currency string) (string, string, error) {
 	stripeKey := os.Getenv("STRIPE_SECRET_KEY")
 	if stripeKey == "" {
-		return "", "", fmt.Errorf("Stripe not configured")
+		return "", "", fmt.Errorf("stripe not configured")
 	}
 
 	// Create Stripe Payment Intent via API
@@ -1701,7 +1701,7 @@ func (s *PurserServer) createStripePayment(invoiceID, tenantID string, amount fl
 	if err != nil {
 		return "", "", fmt.Errorf("stripe API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1733,7 +1733,7 @@ func (s *PurserServer) createStripePayment(invoiceID, tenantID string, amount fl
 func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount float64, currency string) (string, string, error) {
 	mollieKey := os.Getenv("MOLLIE_API_KEY")
 	if mollieKey == "" {
-		return "", "", fmt.Errorf("Mollie not configured")
+		return "", "", fmt.Errorf("mollie not configured")
 	}
 
 	webappURL := strings.TrimSpace(os.Getenv("WEBAPP_PUBLIC_URL"))
@@ -1779,7 +1779,7 @@ func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount fl
 	if err != nil {
 		return "", "", fmt.Errorf("mollie API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 201 {
 		body, _ := io.ReadAll(resp.Body)
@@ -2086,7 +2086,7 @@ func (s *PurserServer) getPendingInvoices(ctx context.Context, tenantID string) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var invoices []*pb.Invoice
 	for rows.Next() {
@@ -2148,7 +2148,7 @@ func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, l
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var payments []*pb.Payment
 	for rows.Next() {
@@ -2355,7 +2355,7 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	usage := make(map[string]float64)
 	costs := make(map[string]float64)
@@ -2574,7 +2574,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[string]*pb.ClusterPricing)
 
@@ -2842,7 +2842,7 @@ func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClus
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var pricings []*pb.ClusterPricing
 	for rows.Next() {
@@ -3150,9 +3150,9 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *pb.Ca
 			return nil, status.Error(codes.Internal, "failed to load cluster subscription")
 		}
 
-		sub, err := s.stripeClient.CancelSubscription(ctx, stripeSubID.String)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to cancel Stripe cluster subscription")
+		sub, cancelErr := s.stripeClient.CancelSubscription(ctx, stripeSubID.String)
+		if cancelErr != nil {
+			s.logger.WithError(cancelErr).Error("Failed to cancel Stripe cluster subscription")
 			return nil, status.Error(codes.Internal, "failed to cancel Stripe subscription")
 		}
 
@@ -3221,8 +3221,8 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 	// Get total count
 	var total int32
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM purser.cluster_pricing %s", baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "count query failed: %v", err)
+	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
+		return nil, status.Errorf(codes.Internal, "count query failed: %v", countErr)
 	}
 
 	// Add keyset pagination condition
@@ -3255,7 +3255,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var pricings []*pb.MarketplaceClusterPricing
 	for rows.Next() {
@@ -3864,7 +3864,7 @@ func (s *PurserServer) ListBalanceTransactions(ctx context.Context, req *pb.List
 		s.logger.WithError(err).Error("Failed to list transactions")
 		return nil, status.Error(codes.Internal, "failed to list transactions")
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var transactions []*pb.BalanceTransaction
 	for rows.Next() {
@@ -4085,7 +4085,7 @@ func (s *PurserServer) ListPendingTopups(ctx context.Context, req *pb.ListPendin
 	if err != nil {
 		return nil, status.Error(codes.Internal, "failed to list topups")
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var topups []*pb.PendingTopup
 	for rows.Next() {
@@ -4701,14 +4701,14 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Get tenant primary user info via Commodore gRPC (not direct DB access)
-		primaryUser, err := s.commodoreClient.GetTenantPrimaryUser(ctx, tenantID)
-		if err != nil {
-			if status.Code(err) == codes.NotFound {
+		primaryUser, primaryErr := s.commodoreClient.GetTenantPrimaryUser(ctx, tenantID)
+		if primaryErr != nil {
+			if status.Code(primaryErr) == codes.NotFound {
 				return nil, status.Error(codes.FailedPrecondition, "no billing email on account")
 			}
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,
-				"error":     err,
+				"error":     primaryErr,
 			}).Error("Failed to get tenant primary user from Commodore")
 			return nil, status.Error(codes.Internal, "failed to get tenant info")
 		}
@@ -4718,13 +4718,13 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 			name = email
 		}
 
-		customer, err := s.mollieClient.CreateOrGetCustomer(ctx, mollie.CustomerInfo{
+		customer, customerErr := s.mollieClient.CreateOrGetCustomer(ctx, mollie.CustomerInfo{
 			TenantID: tenantID,
 			Email:    email,
 			Name:     name,
 		})
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to create Mollie customer")
+		if customerErr != nil {
+			s.logger.WithError(customerErr).Error("Failed to create Mollie customer")
 			return nil, status.Error(codes.Internal, "failed to create Mollie customer")
 		}
 
@@ -4814,9 +4814,9 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 
 	// If no mandate ID provided, find a valid one
 	if mandateID == "" {
-		mandates, err := s.mollieClient.ListMandates(ctx, mollieCustomerID)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to list Mollie mandates")
+		mandates, listErr := s.mollieClient.ListMandates(ctx, mollieCustomerID)
+		if listErr != nil {
+			s.logger.WithError(listErr).Error("Failed to list Mollie mandates")
 			return nil, status.Error(codes.Internal, "failed to list mandates")
 		}
 		for _, m := range mandates {

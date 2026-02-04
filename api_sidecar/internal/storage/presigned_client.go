@@ -65,9 +65,7 @@ func (c *PresignedClient) UploadToPresignedURL(ctx context.Context, presignedURL
 	if err != nil {
 		return fmt.Errorf("upload request failed: %w", err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -88,9 +86,7 @@ func (c *PresignedClient) UploadFileToPresignedURL(ctx context.Context, presigne
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer func() { _ = file.Close() }()
 
 	stat, err := file.Stat()
 	if err != nil {
@@ -112,9 +108,7 @@ func (c *PresignedClient) DownloadFromPresignedURL(ctx context.Context, presigne
 	if err != nil {
 		return 0, fmt.Errorf("download request failed: %w", err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

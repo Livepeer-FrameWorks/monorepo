@@ -267,8 +267,8 @@ func main() {
 
 			if token != "" {
 				// Try JWT validation
-				claims, err := pkgauth.ValidateJWT(token, []byte(jwtSecret))
-				if err == nil {
+				claims, claimsErr := pkgauth.ValidateJWT(token, []byte(jwtSecret))
+				if claimsErr == nil {
 					ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 					ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
 					ctx = context.WithValue(ctx, ctxkeys.KeyEmail, claims.Email)
@@ -285,8 +285,8 @@ func main() {
 					ctx = context.WithValue(ctx, ctxkeys.KeyUser, user)
 				} else {
 					// Try API Token via Commodore
-					resp, err := serviceClients.Commodore.ValidateAPIToken(ctx, token)
-					if err == nil && resp.Valid {
+					resp, apiErr := serviceClients.Commodore.ValidateAPIToken(ctx, token)
+					if apiErr == nil && resp.Valid {
 						ctx = context.WithValue(ctx, ctxkeys.KeyUserID, resp.UserId)
 						ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, resp.TenantId)
 						ctx = context.WithValue(ctx, ctxkeys.KeyEmail, resp.Email)

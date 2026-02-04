@@ -366,7 +366,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		startedAt = time.Unix(*streamLifecycle.StartedAt, 0)
 	}
 
-	if err := stateBatch.Append(
+	if appendErr := stateBatch.Append(
 		event.TenantID,
 		parseUUID(mt.GetStreamId()),
 		internalName,
@@ -392,20 +392,20 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		valueOrNilUint64Ptr(streamLifecycle.PacketsRetransmitted),
 		startedAt,
 		event.Timestamp,
-	); err != nil {
-		h.logger.Errorf("Failed to append to live_streams batch: %v", err)
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to live_streams batch: %v", appendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
 		}
-		return err
+		return appendErr
 	}
 
-	if err := stateBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send live_streams batch: %v", err)
+	if sendErr := stateBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send live_streams batch: %v", sendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
 		}
-		return err
+		return sendErr
 	}
 
 	if h.metrics != nil {
@@ -429,7 +429,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		return err
 	}
 
-	if err := eventBatch.Append(
+	if appendErr := eventBatch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
@@ -453,20 +453,20 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		nilIfZeroUint16(streamLifecycle.GetPrimaryHeight()),
 		nilIfZeroFloat32(streamLifecycle.GetPrimaryFps()),
 		marshalTypedEventData(&streamLifecycle),
-	); err != nil {
-		h.logger.Errorf("Failed to append to stream_events batch: %v", err)
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to stream_events batch: %v", appendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
 		}
-		return err
+		return appendErr
 	}
 
-	if err := eventBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send stream_events batch: %v", err)
+	if sendErr := eventBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send stream_events batch: %v", sendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
 		}
-		return err
+		return sendErr
 	}
 
 	if h.metrics != nil {
@@ -933,7 +933,7 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 		return
 	}
 
-	if err := batch.Append(
+	if appendErr := batch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.EventType,
@@ -942,8 +942,8 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 		streamID,
 		errorMessage,
 		payloadJSON,
-	); err != nil {
-		h.logger.WithError(err).Error("Failed to append ingest_errors batch")
+	); appendErr != nil {
+		h.logger.WithError(appendErr).Error("Failed to append ingest_errors batch")
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("ingest_errors", "error").Inc()
 		}
@@ -1051,7 +1051,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		pubCity = *pr.PublisherCity
 	}
 
-	if err := batch.Append(
+	if appendErr := batch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
@@ -1069,8 +1069,8 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		pubCountry,
 		pubCity,
 		marshalTypedEventData(pr),
-	); err != nil {
-		return err
+	); appendErr != nil {
+		return appendErr
 	}
 	return batch.Send()
 }
@@ -1152,7 +1152,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		clientCountry = "--"
 	}
 
-	if err := batch.Append(
+	if appendErr := batch.Append(
 		event.Timestamp,
 		event.TenantID,
 		parseUUID(mt.GetStreamId()),
@@ -1180,9 +1180,9 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		candidatesCount,
 		nilIfEmptyString(eventType),
 		nilIfEmptyString(source),
-	); err != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
-		return err
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to ClickHouse batch: %v", appendErr)
+		return appendErr
 	}
 
 	if err := batch.Send(); err != nil {
@@ -1238,7 +1238,7 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 		return err
 	}
 
-	if err := batch.Append(
+	if appendErr := batch.Append(
 		event.Timestamp,
 		event.TenantID,
 		parseUUID(mt.GetStreamId()),
@@ -1257,9 +1257,9 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 		uint64(clientLifecycle.GetPacketsLost()),
 		uint64(clientLifecycle.GetPacketsRetransmitted()),
 		connectionQuality,
-	); err != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
-		return err
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to ClickHouse batch: %v", appendErr)
+		return appendErr
 	}
 
 	if err := batch.Send(); err != nil {
@@ -1328,7 +1328,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	metadataJSON, _ := json.Marshal(metadata)
 
 	clusterID := mt.GetClusterId()
-	if err := stateBatch.Append(
+	if appendErr := stateBatch.Append(
 		event.TenantID,
 		clusterID,
 		nodeLifecycle.GetNodeId(),
@@ -1346,20 +1346,20 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		nodeLifecycle.GetLocation(),
 		metadataJSON,
 		event.Timestamp,
-	); err != nil {
-		h.logger.Errorf("Failed to append to live_nodes batch: %v", err)
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to live_nodes batch: %v", appendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
 		}
-		return err
+		return appendErr
 	}
 
-	if err := stateBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send live_nodes batch: %v", err)
+	if sendErr := stateBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send live_nodes batch: %v", sendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
 		}
-		return err
+		return sendErr
 	}
 
 	if h.metrics != nil {
@@ -1624,7 +1624,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		return err
 	}
 
-	if err := streamEventsBatch.Append(
+	if appendErr := streamEventsBatch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
@@ -1642,20 +1642,20 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		height,
 		fps,
 		marshalTypedEventData(&streamBuffer),
-	); err != nil {
-		h.logger.Errorf("Failed to append to stream_events batch: %v", err)
-		return err
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to stream_events batch: %v", appendErr)
+		return appendErr
 	}
 
-	if err := streamEventsBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send stream_events batch: %v", err)
-		return err
+	if sendErr := streamEventsBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send stream_events batch: %v", sendErr)
+		return sendErr
 	}
 
 	// Serialize tracks to JSON for track_metadata column (ClickHouse JSON requires object, not array)
 	trackMetadataJSON := "{}"
 	if tracks := streamBuffer.GetTracks(); len(tracks) > 0 {
-		if jsonBytes, err := json.Marshal(map[string]interface{}{"tracks": tracks}); err == nil {
+		if jsonBytes, marshalErr := json.Marshal(map[string]interface{}{"tracks": tracks}); marshalErr == nil {
 			trackMetadataJSON = string(jsonBytes)
 		}
 	}
@@ -1675,7 +1675,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		return err
 	}
 
-	if err := healthBatch.Append(
+	if appendErr := healthBatch.Append(
 		event.Timestamp,
 		event.TenantID,
 		parseUUID(mt.GetStreamId()),
@@ -1706,14 +1706,14 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		audioSampleRate,
 		audioCodec,
 		audioBitrate,
-	); err != nil {
-		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", err)
-		return err
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", appendErr)
+		return appendErr
 	}
 
-	if err := healthBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send stream_health_metrics batch: %v", err)
-		return err
+	if sendErr := healthBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send stream_health_metrics batch: %v", sendErr)
+		return sendErr
 	}
 
 	h.logger.Debugf("Successfully processed stream buffer event for stream: %s (written to both stream_events and stream_health_metrics)", streamBuffer.GetStreamName())
@@ -1791,7 +1791,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		viewerSeconds = streamEnd.GetViewerSeconds()
 	}
 
-	if err := batch.Append(
+	if appendErr := batch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
@@ -1806,14 +1806,14 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		totalOutputs,
 		viewerSeconds,
 		marshalTypedEventData(&streamEnd),
-	); err != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
-		return err
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to ClickHouse batch: %v", appendErr)
+		return appendErr
 	}
 
-	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
-		return err
+	if sendErr := batch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send ClickHouse batch: %v", sendErr)
+		return sendErr
 	}
 
 	h.logger.Debugf("Successfully processed stream end event for stream: %s", streamEnd.GetStreamName())
@@ -1859,7 +1859,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		return err
 	}
 
-	if err := batch.Append(
+	if appendErr := batch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
@@ -1882,14 +1882,14 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		nilIfZeroUint32(uint32(trackList.GetPrimaryAudioSampleRate())),
 		nilIfEmptyString(trackList.GetPrimaryAudioCodec()),
 		nilIfZeroUint32(uint32(trackList.GetPrimaryAudioBitrate())),
-	); err != nil {
-		h.logger.Errorf("Failed to append track list data: %v", err)
-		return err
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append track list data: %v", appendErr)
+		return appendErr
 	}
 
-	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send track list batch: %v", err)
-		return err
+	if sendErr := batch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send track list batch: %v", sendErr)
+		return sendErr
 	}
 
 	// Also write a canonical stream event for lifecycle timelines
@@ -1903,7 +1903,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		return err
 	}
 
-	if err := eventBatch.Append(
+	if appendErr := eventBatch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
@@ -1913,14 +1913,14 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		"track_list_update",
 		"live",
 		marshalTypedEventData(trackList),
-	); err != nil {
-		h.logger.Errorf("Failed to append stream event (track list): %v", err)
-		return err
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append stream event (track list): %v", appendErr)
+		return appendErr
 	}
 
-	if err := eventBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send stream event (track list): %v", err)
-		return err
+	if sendErr := eventBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send stream event (track list): %v", sendErr)
+		return sendErr
 	}
 
 	h.logger.Debugf("Successfully processed track list for stream: %s", trackList.GetStreamName())
@@ -2027,7 +2027,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	// Map stage string for consistency - convert STAGE_DONE -> done, STAGE_FAILED -> failed, etc.
 	stageStr := strings.ToLower(strings.TrimPrefix(cl.GetStage().String(), "STAGE_"))
 
-	if err := stateBatch.Append(
+	if appendErr := stateBatch.Append(
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		requestID,
@@ -2048,20 +2048,20 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		nilIfEmptyString(cl.GetNodeId()),
 		event.Timestamp,
 		expiresAtTime,
-	); err != nil {
-		h.logger.Errorf("Failed to append to live_artifacts batch: %v", err)
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
 		}
-		return err
+		return appendErr
 	}
 
-	if err := stateBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send live_artifacts batch: %v", err)
+	if sendErr := stateBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send live_artifacts batch: %v", sendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
 		}
-		return err
+		return sendErr
 	}
 
 	if h.metrics != nil {
@@ -2180,7 +2180,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		return err
 	}
 
-	if err := stateBatch.Append(
+	if appendErr := stateBatch.Append(
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		dvrData.GetDvrHash(),
@@ -2200,20 +2200,20 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyString(mt.GetNodeId()),
 		event.Timestamp,
 		expiresAtTime,
-	); err != nil {
-		h.logger.Errorf("Failed to append to live_artifacts batch: %v", err)
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to live_artifacts batch: %v", appendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
 		}
-		return err
+		return appendErr
 	}
 
-	if err := stateBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send live_artifacts batch: %v", err)
+	if sendErr := stateBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send live_artifacts batch: %v", sendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
 		}
-		return err
+		return sendErr
 	}
 
 	if h.metrics != nil {
@@ -2333,7 +2333,7 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		filename = vodData.Filename
 	}
 
-	if err := stateBatch.Append(
+	if appendErr := stateBatch.Append(
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		vodData.GetVodHash(), // request_id = vod_hash
@@ -2352,20 +2352,20 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyStringPtr(vodData.NodeId),    // processing_node_id
 		event.Timestamp,                        // updated_at
 		expiresAtTime,                          // expires_at
-	); err != nil {
-		h.logger.Errorf("Failed to append to live_artifacts batch for VOD: %v", err)
+	); appendErr != nil {
+		h.logger.Errorf("Failed to append to live_artifacts batch for VOD: %v", appendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
 		}
-		return err
+		return appendErr
 	}
 
-	if err := stateBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send live_artifacts batch for VOD: %v", err)
+	if sendErr := stateBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send live_artifacts batch for VOD: %v", sendErr)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
 		}
-		return err
+		return sendErr
 	}
 
 	if h.metrics != nil {

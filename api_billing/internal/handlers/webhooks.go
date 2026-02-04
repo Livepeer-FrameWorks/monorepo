@@ -253,7 +253,8 @@ func sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string,
 	}
 
 	tenantName := ""
-	if tenantInfo, err := getTenantInfo(tenantID); err == nil && tenantInfo != nil {
+	tenantInfo, tenantErr := getTenantInfo(tenantID)
+	if tenantErr == nil && tenantInfo != nil {
 		tenantName = tenantInfo.Name
 	}
 
@@ -1139,7 +1140,7 @@ func getTenantInfo(tenantID string) (*models.Tenant, error) {
 	}
 
 	if response.GetError() != "" {
-		return nil, fmt.Errorf("Quartermaster error: %s", response.GetError())
+		return nil, fmt.Errorf("quartermaster error: %s", response.GetError())
 	}
 
 	pbTenant := response.GetTenant()

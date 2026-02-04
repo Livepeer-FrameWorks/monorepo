@@ -56,7 +56,7 @@ func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) err
 	if err != nil {
 		return fmt.Errorf("dial smtp: %w", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if errMail := c.Mail(s.config.From); errMail != nil {
 		return fmt.Errorf("mail from: %w", errMail)

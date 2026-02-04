@@ -111,7 +111,7 @@ func (r *X402Reconciler) reconcilePendingSettlements(ctx context.Context) {
 		r.logger.WithError(err).Error("Failed to query pending x402 settlements")
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var settlements []PendingSettlement
 	for rows.Next() {
