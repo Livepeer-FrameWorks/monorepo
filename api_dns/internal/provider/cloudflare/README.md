@@ -28,10 +28,10 @@ client := cloudflare.NewClient(
 
 ```go
 // Create CNAME
-record, err := client.CreateCNAME("tenant1", "play.example.com", false)
+record, err := client.CreateCNAME("tenant1", "play.example.com", false, 60)
 
 // Create A record
-record, err := client.CreateARecord("api", "192.0.2.1", true)
+record, err := client.CreateARecord("api", "192.0.2.1", true, 60)
 
 // List records
 records, err := client.ListDNSRecords("CNAME", "")

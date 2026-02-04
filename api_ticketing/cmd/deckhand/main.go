@@ -24,6 +24,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 )
 
 func main() {
@@ -183,6 +185,10 @@ func main() {
 			),
 		)
 		pb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
+
+		// Register gRPC health checking service
+		hs := health.NewServer()
+		grpc_health_v1.RegisterHealthServer(grpcSrv, hs)
 
 		logger.WithField("port", grpcPort).Info("Starting gRPC server")
 		if err := grpcSrv.Serve(grpcLis); err != nil {

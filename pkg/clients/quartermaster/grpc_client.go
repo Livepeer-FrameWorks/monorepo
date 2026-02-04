@@ -337,6 +337,14 @@ func (c *GRPCClient) ListNodes(ctx context.Context, clusterID, nodeType, region 
 	})
 }
 
+// ListHealthyNodesForDNS lists healthy nodes for DNS sync by node type
+func (c *GRPCClient) ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int) (*pb.ListHealthyNodesForDNSResponse, error) {
+	return c.node.ListHealthyNodesForDNS(ctx, &pb.ListHealthyNodesForDNSRequest{
+		NodeType:              nodeType,
+		StaleThresholdSeconds: int32(staleThresholdSeconds),
+	})
+}
+
 // CreateNode creates a new node
 func (c *GRPCClient) CreateNode(ctx context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error) {
 	return c.node.CreateNode(ctx, req)

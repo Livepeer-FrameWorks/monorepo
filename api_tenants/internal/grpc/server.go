@@ -2406,6 +2406,118 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *pb.ListNodesRe
 	return resp, nil
 }
 
+// ListHealthyNodesForDNS returns healthy nodes for DNS sync
+func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *pb.ListHealthyNodesForDNSRequest) (*pb.ListHealthyNodesForDNSResponse, error) {
+	tenantID := middleware.GetTenantID(ctx)
+
+	baseWhere := ""
+	baseArgs := []interface{}{}
+
+	if tenantID != "" {
+		baseWhere = `
+			WHERE n.cluster_id IN (
+				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
+				WHERE c.owner_tenant_id = $1
+				UNION
+				SELECT tca.cluster_id FROM quartermaster.tenant_cluster_access tca
+				WHERE tca.tenant_id = $1 AND tca.is_active = true
+			)
+		`
+		baseArgs = append(baseArgs, tenantID)
+	} else {
+		baseWhere = `
+			WHERE n.cluster_id IN (
+				SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c
+				WHERE c.is_default_cluster = true
+			)
+		`
+	}
+
+	staleThreshold := req.GetStaleThresholdSeconds()
+	if staleThreshold <= 0 {
+		staleThreshold = 300
+	}
+
+	where := baseWhere
+	args := append([]interface{}{}, baseArgs...)
+	argIdx := len(baseArgs) + 1
+
+	if req.GetNodeType() != "" {
+		where += fmt.Sprintf(" AND n.node_type = $%d", argIdx)
+		args = append(args, req.GetNodeType())
+		argIdx++
+	}
+
+	where += " AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
+
+	totalQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_nodes n %s`, where)
+	var totalNodes int32
+	if err := s.db.QueryRowContext(ctx, totalQuery, args...).Scan(&totalNodes); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	healthArgs := append([]interface{}{}, args...)
+	healthArgs = append(healthArgs, staleThreshold)
+	healthArgIdx := argIdx
+	healthWhere := where + fmt.Sprintf(" AND si.health_status = 'healthy' AND si.last_health_check > NOW() - ($%d * INTERVAL '1 second')", healthArgIdx)
+
+	healthyCountQuery := fmt.Sprintf(`
+		SELECT COUNT(DISTINCT n.id)
+		FROM quartermaster.infrastructure_nodes n
+		JOIN quartermaster.service_instances si
+			ON si.cluster_id = n.cluster_id
+			AND (
+				si.node_id = n.node_id
+				OR si.advertise_host = n.external_ip
+				OR si.advertise_host = n.internal_ip
+			)
+		%s
+	`, healthWhere)
+
+	var healthyNodes int32
+	if err := s.db.QueryRowContext(ctx, healthyCountQuery, healthArgs...).Scan(&healthyNodes); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT DISTINCT n.id, n.node_id, n.cluster_id, n.node_name, n.node_type, n.internal_ip, n.external_ip,
+		       n.wireguard_ip, n.wireguard_public_key, n.region, n.availability_zone,
+		       n.latitude, n.longitude, n.cpu_cores, n.memory_gb, n.disk_gb,
+		       n.last_heartbeat, n.created_at, n.updated_at
+		FROM quartermaster.infrastructure_nodes n
+		JOIN quartermaster.service_instances si
+			ON si.cluster_id = n.cluster_id
+			AND (
+				si.node_id = n.node_id
+				OR si.advertise_host = n.external_ip
+				OR si.advertise_host = n.internal_ip
+			)
+		%s
+	`, healthWhere)
+
+	rows, err := s.db.QueryContext(ctx, query, healthArgs...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var nodes []*pb.InfrastructureNode
+	for rows.Next() {
+		node, err := scanNode(rows)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan node")
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+
+	return &pb.ListHealthyNodesForDNSResponse{
+		Nodes:        nodes,
+		TotalNodes:   totalNodes,
+		HealthyNodes: healthyNodes,
+	}, nil
+}
+
 // CreateNode creates a new node
 func (s *QuartermasterServer) CreateNode(ctx context.Context, req *pb.CreateNodeRequest) (*pb.NodeResponse, error) {
 	nodeID := req.GetNodeId()
