@@ -68,7 +68,7 @@ type HelmsmanConfig struct {
 	GRPCTLSKeyPath  string
 
 	// BlockingGraceMs waits for reconnection before failing blocking triggers.
-	// Default 0 = fail immediately.
+	// Default 2000ms = wait briefly for transient disconnects.
 	BlockingGraceMs int
 
 	// RequestedMode is the operational mode this node requests on registration.
@@ -125,7 +125,7 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		GRPCTLSCertPath: config.GetEnv("GRPC_TLS_CERT_PATH", ""),
 		GRPCTLSKeyPath:  config.GetEnv("GRPC_TLS_KEY_PATH", ""),
 
-		BlockingGraceMs: config.GetEnvInt("HELMSMAN_BLOCKING_GRACE_MS", 0),
+		BlockingGraceMs: config.GetEnvInt("HELMSMAN_BLOCKING_GRACE_MS", 2000),
 
 		RequestedMode: config.GetEnv("HELMSMAN_OPERATIONAL_MODE", "normal"),
 	}
