@@ -201,9 +201,10 @@ type BillingStatus struct {
 //
 // Returns nil if status cannot be determined (fail-open).
 func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID string) *BillingStatus {
-	// Try cache first (keyed by internal name)
-	if p.streamCache != nil && internalName != "" {
-		if cached, ok := p.streamCache.Peek(internalName); ok {
+	// Try cache first (keyed by tenant + internal name)
+	if p.streamCache != nil && internalName != "" && tenantID != "" {
+		cacheKey := tenantID + ":" + internalName
+		if cached, ok := p.streamCache.Peek(cacheKey); ok {
 			info := cached.(streamContext)
 			return &BillingStatus{
 				TenantID:          info.TenantID,
@@ -252,6 +253,10 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 	// Get all cache entries and find those belonging to this tenant
 	var keysToEvict []string
 	for _, e := range p.streamCache.Snapshot() {
+		if strings.HasPrefix(e.Key, tenantID+":") {
+			keysToEvict = append(keysToEvict, e.Key)
+			continue
+		}
 		info, ok := e.Value.(streamContext)
 		if ok && info.TenantID == tenantID {
 			keysToEvict = append(keysToEvict, e.Key)
@@ -628,7 +633,10 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		if streamValidation.BillingModel == "prepaid" {
 			cacheTTL = 1 * time.Minute
 		}
-		p.streamCache.Set(streamValidation.InternalName, info, cacheTTL)
+		if streamValidation.TenantId != "" {
+			cacheKey := streamValidation.TenantId + ":" + streamValidation.InternalName
+			p.streamCache.Set(cacheKey, info, cacheTTL)
+		}
 		p.streamCacheMetaMu.Lock()
 		p.streamCacheLastAt = info.UpdatedAt
 		p.streamCacheLastErr = ""
@@ -1861,20 +1869,15 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-// getStreamContext gets tenant and user IDs from cache, with fallback to Commodore
-func (p *Processor) getStreamContext(ctx context.Context, streamName string) streamContext {
-	if streamName == "" || p.streamCache == nil {
-		return streamContext{}
-	}
-
-	internalName := mist.ExtractInternalName(streamName)
-	val, ok, _ := p.streamCache.Get(ctx, internalName, func(ctx context.Context, key string) (interface{}, bool, error) {
-		// For artifact hashes (VOD playback), check in-memory state first.
-		// This avoids Commodore calls for artifacts we already know about.
+func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint string, allowCache bool) (streamContext, bool, error) {
+	// For artifact hashes (VOD playback), check in-memory state first.
+	// This avoids Commodore calls for artifacts we already know about.
+	if tenantIDHint != "" && p.streamCache != nil {
 		_, artifactInfo := state.DefaultManager().FindNodeByArtifactHash(key)
 		if artifactInfo != nil && artifactInfo.GetStreamName() != "" {
-			parentStream := artifactInfo.GetStreamName()
-			if v, ok := p.streamCache.Peek(parentStream); ok {
+			parentInternal := mist.ExtractInternalName(artifactInfo.GetStreamName())
+			cacheKey := tenantIDHint + ":" + parentInternal
+			if v, ok := p.streamCache.Peek(cacheKey); ok {
 				if parentInfo, ok := v.(streamContext); ok && parentInfo.TenantID != "" {
 					info := streamContext{
 						TenantID:  parentInfo.TenantID,
@@ -1891,77 +1894,99 @@ func (p *Processor) getStreamContext(ctx context.Context, streamName string) str
 				}
 			}
 		}
+	}
 
-		// Fallback: call Commodore's unified resolver (single call checks all registries)
-		if p.commodoreClient == nil {
-			err := fmt.Errorf("commodore client not configured")
-			atomic.AddUint64(&p.streamCacheResErr, 1)
-			p.streamCacheMetaMu.Lock()
-			p.streamCacheLastAt = time.Now()
-			p.streamCacheLastErr = err.Error()
-			p.streamCacheMetaMu.Unlock()
-			return nil, false, err
-		}
-
-		resp, err := p.commodoreClient.ResolveIdentifier(ctx, key)
-		if err != nil {
-			atomic.AddUint64(&p.streamCacheResErr, 1)
-			p.streamCacheMetaMu.Lock()
-			p.streamCacheLastAt = time.Now()
-			p.streamCacheLastErr = err.Error()
-			p.streamCacheMetaMu.Unlock()
-			p.logger.WithFields(logging.Fields{
-				"identifier": key,
-				"error":      err,
-			}).Warn("Failed to resolve identifier from Commodore")
-			return nil, false, err
-		}
-
-		if !resp.GetFound() {
-			atomic.AddUint64(&p.streamCacheResErr, 1)
-			p.streamCacheMetaMu.Lock()
-			p.streamCacheLastAt = time.Now()
-			p.streamCacheLastErr = "not found"
-			p.streamCacheMetaMu.Unlock()
-			p.logger.WithFields(logging.Fields{
-				"identifier": key,
-			}).Warn("Identifier not found in any Commodore registry")
-			return nil, false, fmt.Errorf("identifier not found")
-		}
-
-		// Cache the result
-		now := time.Now()
-		info := streamContext{
-			TenantID:  resp.GetTenantId(),
-			UserID:    resp.GetUserId(),
-			StreamID:  resp.GetStreamId(),
-			Source:    "resolve_" + resp.GetIdentifierType(),
-			UpdatedAt: now,
-		}
-
-		if resp.GetIdentifierType() == "playback_id" {
-			atomic.AddUint64(&p.streamCacheResPb, 1)
-		} else {
-			atomic.AddUint64(&p.streamCacheResInt, 1)
-		}
-
+	// Fallback: call Commodore's unified resolver (single call checks all registries)
+	if p.commodoreClient == nil {
+		err := fmt.Errorf("commodore client not configured")
+		atomic.AddUint64(&p.streamCacheResErr, 1)
 		p.streamCacheMetaMu.Lock()
-		p.streamCacheLastAt = now
-		p.streamCacheLastErr = ""
+		p.streamCacheLastAt = time.Now()
+		p.streamCacheLastErr = err.Error()
 		p.streamCacheMetaMu.Unlock()
+		return streamContext{}, false, err
+	}
 
-		// If this was a playback_id, also cache by the canonical internal_name
-		if resp.GetIdentifierType() == "playback_id" && resp.GetInternalName() != "" {
-			p.streamCache.Set(resp.GetInternalName(), info, 10*time.Minute)
-		}
-
+	resp, err := p.commodoreClient.ResolveIdentifier(ctx, key)
+	if err != nil {
+		atomic.AddUint64(&p.streamCacheResErr, 1)
+		p.streamCacheMetaMu.Lock()
+		p.streamCacheLastAt = time.Now()
+		p.streamCacheLastErr = err.Error()
+		p.streamCacheMetaMu.Unlock()
 		p.logger.WithFields(logging.Fields{
-			"identifier":      key,
-			"identifier_type": resp.GetIdentifierType(),
-			"tenant_id":       info.TenantID,
-		}).Debug("Resolved identifier from Commodore")
+			"identifier": key,
+			"error":      err,
+		}).Warn("Failed to resolve identifier from Commodore")
+		return streamContext{}, false, err
+	}
 
-		return info, true, nil
+	if !resp.GetFound() {
+		atomic.AddUint64(&p.streamCacheResErr, 1)
+		p.streamCacheMetaMu.Lock()
+		p.streamCacheLastAt = time.Now()
+		p.streamCacheLastErr = "not found"
+		p.streamCacheMetaMu.Unlock()
+		p.logger.WithFields(logging.Fields{
+			"identifier": key,
+		}).Warn("Identifier not found in any Commodore registry")
+		return streamContext{}, false, fmt.Errorf("identifier not found")
+	}
+
+	// Cache the result
+	now := time.Now()
+	info := streamContext{
+		TenantID:  resp.GetTenantId(),
+		UserID:    resp.GetUserId(),
+		StreamID:  resp.GetStreamId(),
+		Source:    "resolve_" + resp.GetIdentifierType(),
+		UpdatedAt: now,
+	}
+
+	if resp.GetIdentifierType() == "playback_id" {
+		atomic.AddUint64(&p.streamCacheResPb, 1)
+	} else {
+		atomic.AddUint64(&p.streamCacheResInt, 1)
+	}
+
+	p.streamCacheMetaMu.Lock()
+	p.streamCacheLastAt = now
+	p.streamCacheLastErr = ""
+	p.streamCacheMetaMu.Unlock()
+
+	// If this was a playback_id, also cache by the canonical internal_name
+	if allowCache && resp.GetIdentifierType() == "playback_id" && resp.GetInternalName() != "" && p.streamCache != nil && resp.GetTenantId() != "" {
+		cacheKey := resp.GetTenantId() + ":" + resp.GetInternalName()
+		p.streamCache.Set(cacheKey, info, 10*time.Minute)
+	}
+
+	p.logger.WithFields(logging.Fields{
+		"identifier":      key,
+		"identifier_type": resp.GetIdentifierType(),
+		"tenant_id":       info.TenantID,
+	}).Debug("Resolved identifier from Commodore")
+
+	return info, true, nil
+}
+
+// getStreamContext gets tenant and user IDs from cache, with fallback to Commodore
+func (p *Processor) getStreamContext(ctx context.Context, streamName, tenantIDHint string) streamContext {
+	if streamName == "" {
+		return streamContext{}
+	}
+
+	internalName := mist.ExtractInternalName(streamName)
+	if p.streamCache == nil || tenantIDHint == "" {
+		info, ok, _ := p.resolveStreamContext(ctx, internalName, tenantIDHint, false)
+		if !ok {
+			return streamContext{}
+		}
+		return info
+	}
+
+	cacheKey := tenantIDHint + ":" + internalName
+	val, ok, _ := p.streamCache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+		return p.resolveStreamContext(ctx, internalName, tenantIDHint, true)
 	})
 
 	if !ok {
@@ -1975,7 +2000,11 @@ func (p *Processor) getStreamContext(ctx context.Context, streamName string) str
 
 // applyStreamContext enriches trigger with tenant/user/stream IDs if available.
 func (p *Processor) applyStreamContext(trigger *pb.MistTrigger, streamName string) streamContext {
-	info := p.getStreamContext(context.Background(), streamName)
+	tenantHint := ""
+	if trigger != nil && trigger.TenantId != nil {
+		tenantHint = *trigger.TenantId
+	}
+	info := p.getStreamContext(context.Background(), streamName, tenantHint)
 	if trigger == nil {
 		return info
 	}

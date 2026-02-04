@@ -134,6 +134,10 @@ func (c *GRPCClient) InvalidateTenantCacheKeys(tenantID string) {
 		return
 	}
 	for _, entry := range c.cache.Snapshot() {
+		if strings.HasPrefix(entry.Key, tenantID+":") {
+			c.cache.Delete(entry.Key)
+			continue
+		}
 		if !strings.HasPrefix(entry.Key, "commodore:validate:") {
 			continue
 		}
@@ -176,17 +180,19 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string) (*
 func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (*pb.ResolvePlaybackIDResponse, error) {
 	// Check cache first
 	if c.cache != nil {
-		cacheKey := "commodore:resolve:" + playbackID
-		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolvePlaybackID(ctx, &pb.ResolvePlaybackIDRequest{
-				PlaybackId: playbackID,
-			})
-			if err != nil {
-				return nil, false, err
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+			cacheKey := tenantID + ":commodore:resolve:" + playbackID
+			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+				resp, err := c.internal.ResolvePlaybackID(ctx, &pb.ResolvePlaybackIDRequest{
+					PlaybackId: playbackID,
+				})
+				if err != nil {
+					return nil, false, err
+				}
+				return resp, true, nil
+			}); ok {
+				return v.(*pb.ResolvePlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
-			return resp, true, nil
-		}); ok {
-			return v.(*pb.ResolvePlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -198,24 +204,26 @@ func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (
 // ResolveInternalName resolves an internal name to tenant context
 func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName string) (*pb.ResolveInternalNameResponse, error) {
 	if c.cache != nil {
-		cacheKey := "commodore:internal:" + internalName
-		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolveInternalName(ctx, &pb.ResolveInternalNameRequest{
-				InternalName: internalName,
-			})
-			if err != nil {
-				return nil, false, err
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+			cacheKey := tenantID + ":commodore:internal:" + internalName
+			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+				resp, err := c.internal.ResolveInternalName(ctx, &pb.ResolveInternalNameRequest{
+					InternalName: internalName,
+				})
+				if err != nil {
+					return nil, false, err
+				}
+				return resp, true, nil
+			}); ok {
+				if v == nil {
+					return nil, fmt.Errorf("cached ResolveInternalName response is nil")
+				}
+				resp, ok := v.(*pb.ResolveInternalNameResponse)
+				if !ok {
+					return nil, fmt.Errorf("cached ResolveInternalName response has unexpected type %T", v)
+				}
+				return resp, nil
 			}
-			return resp, true, nil
-		}); ok {
-			if v == nil {
-				return nil, fmt.Errorf("cached ResolveInternalName response is nil")
-			}
-			resp, ok := v.(*pb.ResolveInternalNameResponse)
-			if !ok {
-				return nil, fmt.Errorf("cached ResolveInternalName response has unexpected type %T", v)
-			}
-			return resp, nil
 		}
 	}
 
@@ -227,17 +235,19 @@ func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName strin
 // ResolveArtifactPlaybackID resolves an artifact playback ID to artifact identity
 func (c *GRPCClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
 	if c.cache != nil {
-		cacheKey := "commodore:artifact:playback:" + playbackID
-		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{
-				PlaybackId: playbackID,
-			})
-			if err != nil || !resp.Found {
-				return nil, false, err
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+			cacheKey := tenantID + ":commodore:artifact:playback:" + playbackID
+			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+				resp, err := c.internal.ResolveArtifactPlaybackID(ctx, &pb.ResolveArtifactPlaybackIDRequest{
+					PlaybackId: playbackID,
+				})
+				if err != nil || !resp.Found {
+					return nil, false, err
+				}
+				return resp, true, nil
+			}); ok {
+				return v.(*pb.ResolveArtifactPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
-			return resp, true, nil
-		}); ok {
-			return v.(*pb.ResolveArtifactPlaybackIDResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -249,17 +259,19 @@ func (c *GRPCClient) ResolveArtifactPlaybackID(ctx context.Context, playbackID s
 // ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
 func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalName string) (*pb.ResolveArtifactInternalNameResponse, error) {
 	if c.cache != nil {
-		cacheKey := "commodore:artifact:internal:" + internalName
-		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
-				ArtifactInternalName: internalName,
-			})
-			if err != nil || !resp.Found {
-				return nil, false, err
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+			cacheKey := tenantID + ":commodore:artifact:internal:" + internalName
+			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+				resp, err := c.internal.ResolveArtifactInternalName(ctx, &pb.ResolveArtifactInternalNameRequest{
+					ArtifactInternalName: internalName,
+				})
+				if err != nil || !resp.Found {
+					return nil, false, err
+				}
+				return resp, true, nil
+			}); ok {
+				return v.(*pb.ResolveArtifactInternalNameResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
-			return resp, true, nil
-		}); ok {
-			return v.(*pb.ResolveArtifactInternalNameResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
@@ -352,17 +364,19 @@ func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.Re
 func (c *GRPCClient) ResolveIdentifier(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
 	// Use cache for context lookups (high frequency during playback/events)
 	if c.cache != nil {
-		cacheKey := "commodore:id:" + identifier
-		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-			resp, err := c.internal.ResolveIdentifier(ctx, &pb.ResolveIdentifierRequest{
-				Identifier: identifier,
-			})
-			if err != nil || !resp.Found {
-				return nil, false, err
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+			cacheKey := tenantID + ":commodore:id:" + identifier
+			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+				resp, err := c.internal.ResolveIdentifier(ctx, &pb.ResolveIdentifierRequest{
+					Identifier: identifier,
+				})
+				if err != nil || !resp.Found {
+					return nil, false, err
+				}
+				return resp, true, nil
+			}); ok {
+				return v.(*pb.ResolveIdentifierResponse), nil //nolint:errcheck // type guaranteed by cache
 			}
-			return resp, true, nil
-		}); ok {
-			return v.(*pb.ResolveIdentifierResponse), nil //nolint:errcheck // type guaranteed by cache
 		}
 	}
 
