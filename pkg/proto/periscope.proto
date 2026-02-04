@@ -675,12 +675,12 @@ message GetClipEventsResponse {
   repeated ClipEvent events = 2;
 }
 
-// Artifact state (current status of clips/DVR from live_artifacts table)
+// Artifact state (current status of clips/DVR/VOD from live_artifacts table)
 message ArtifactState {
   string tenant_id = 1;
-  string request_id = 2;          // clip_hash or dvr_hash
+  string request_id = 2;          // clip_hash, dvr_hash, or vod_hash
   string stream_id = 3;           // source stream
-  string content_type = 4;        // 'clip' or 'dvr'
+  string content_type = 4;        // 'clip', 'dvr', or 'vod'
   string stage = 5;               // requested, queued, processing, completed, failed, deleted
   uint32 progress_percent = 6;
   optional string error_message = 7;
@@ -701,7 +701,7 @@ message ArtifactState {
 
 message GetArtifactStateRequest {
   string tenant_id = 1;
-  string request_id = 2;          // clip_hash or dvr_hash
+  string request_id = 2;          // clip_hash, dvr_hash, or vod_hash
 }
 
 message GetArtifactStateResponse {
@@ -711,7 +711,7 @@ message GetArtifactStateResponse {
 message GetArtifactStatesRequest {
   string tenant_id = 1;
   optional string stream_id = 2;       // filter by source stream
-  optional string content_type = 3;    // filter by 'clip' or 'dvr'
+  optional string content_type = 3;    // filter by 'clip', 'dvr', or 'vod'
   optional string stage = 4;           // filter by stage
   common.CursorPaginationRequest pagination = 5;
   repeated string request_ids = 6;     // batch lookup by artifact hash (for field resolvers)

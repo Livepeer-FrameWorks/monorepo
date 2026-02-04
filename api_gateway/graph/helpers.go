@@ -6,6 +6,7 @@ import (
 
 	"frameworks/api_gateway/internal/loaders"
 	gwmiddleware "frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	pb "frameworks/pkg/proto"
 )
@@ -67,6 +68,11 @@ func (r *Resolver) resolveArtifactPlaybackID(ctx context.Context, contentType, h
 		return nil
 	}
 
+	var logger logging.Logger
+	if r.Resolver.Logger != nil {
+		logger = r.Resolver.Logger
+	}
+
 	lds := loaders.FromContext(ctx)
 	memo := (*loaders.Memoizer)(nil)
 	if lds != nil {
@@ -79,20 +85,47 @@ func (r *Resolver) resolveArtifactPlaybackID(ctx context.Context, contentType, h
 		switch ct {
 		case "clip":
 			resp, err := r.Resolver.Clients.Commodore.ResolveClipHash(ctx, hash)
-			if err != nil || !resp.Found || resp.PlaybackId == "" {
+			if err != nil {
+				if logger != nil {
+					logger.WithField("content_type", ct).WithField("hash", hash).WithError(err).Debug("Commodore clip hash resolution failed")
+				}
 				return nil, err
+			}
+			if !resp.Found || resp.PlaybackId == "" {
+				if logger != nil {
+					logger.WithField("content_type", ct).WithField("hash", hash).WithField("found", resp.Found).Debug("Commodore clip hash not found")
+				}
+				return nil, nil
 			}
 			return resp.PlaybackId, nil
 		case "dvr":
 			resp, err := r.Resolver.Clients.Commodore.ResolveDVRHash(ctx, hash)
-			if err != nil || !resp.Found || resp.PlaybackId == "" {
+			if err != nil {
+				if logger != nil {
+					logger.WithField("content_type", ct).WithField("hash", hash).WithError(err).Debug("Commodore DVR hash resolution failed")
+				}
 				return nil, err
+			}
+			if !resp.Found || resp.PlaybackId == "" {
+				if logger != nil {
+					logger.WithField("content_type", ct).WithField("hash", hash).WithField("found", resp.Found).Debug("Commodore DVR hash not found")
+				}
+				return nil, nil
 			}
 			return resp.PlaybackId, nil
 		case "vod":
 			resp, err := r.Resolver.Clients.Commodore.ResolveVodHash(ctx, hash)
-			if err != nil || !resp.Found || resp.PlaybackId == "" {
+			if err != nil {
+				if logger != nil {
+					logger.WithField("content_type", ct).WithField("hash", hash).WithError(err).Debug("Commodore VOD hash resolution failed")
+				}
 				return nil, err
+			}
+			if !resp.Found || resp.PlaybackId == "" {
+				if logger != nil {
+					logger.WithField("content_type", ct).WithField("hash", hash).WithField("found", resp.Found).Debug("Commodore VOD hash not found")
+				}
+				return nil, nil
 			}
 			return resp.PlaybackId, nil
 		default:
@@ -104,6 +137,9 @@ func (r *Resolver) resolveArtifactPlaybackID(ctx context.Context, contentType, h
 			}
 			if resp, err := r.Resolver.Clients.Commodore.ResolveVodHash(ctx, hash); err == nil && resp.Found && resp.PlaybackId != "" {
 				return resp.PlaybackId, nil
+			}
+			if logger != nil {
+				logger.WithField("content_type", contentType).WithField("hash", hash).Debug("Commodore hash resolution failed for unknown content type")
 			}
 			return nil, nil
 		}

@@ -2176,11 +2176,12 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 	streamID := req.GetStreamId()
 	stage := req.GetStage()
 	contentType := req.GetContentType()
-	if contentType == "" {
-		contentType = "clip"
+	countQuery := `SELECT count(*) FROM periscope.artifact_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?`
+	countArgs := []interface{}{tenantID, startTime, endTime}
+	if contentType != "" {
+		countQuery += " AND content_type = ?"
+		countArgs = append(countArgs, contentType)
 	}
-	countQuery := `SELECT count(*) FROM periscope.artifact_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND content_type = ?`
-	countArgs := []interface{}{tenantID, startTime, endTime, contentType}
 	if streamID != "" {
 		countQuery += " AND stream_id = ?"
 		countArgs = append(countArgs, streamID)
@@ -2195,9 +2196,14 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 		SELECT request_id, timestamp, stream_id, stage, content_type,
 		       start_unix, stop_unix, ingest_node_id, percent, message, file_path, s3_url, size_bytes, expires_at
 		FROM periscope.artifact_events
-		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND content_type = ?
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
-	args := []interface{}{tenantID, startTime, endTime, contentType}
+	args := []interface{}{tenantID, startTime, endTime}
+
+	if contentType != "" {
+		query += " AND content_type = ?"
+		args = append(args, contentType)
+	}
 
 	if streamID != "" {
 		query += " AND stream_id = ?"
