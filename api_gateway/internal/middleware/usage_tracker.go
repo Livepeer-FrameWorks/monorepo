@@ -24,6 +24,8 @@ type UsageTrackerConfig struct {
 	Logger logging.Logger
 	// FlushInterval is how often to flush aggregates (default: 30 seconds)
 	FlushInterval time.Duration
+	// RetryLimit is how many times to retry a failed batch before dropping (default: 3).
+	RetryLimit int
 	// SourceNode identifies this Gateway instance
 	SourceNode string
 	// ServiceTenantID is the owning tenant for this service's cluster
@@ -37,6 +39,14 @@ type UsageTracker struct {
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
 	serviceTenantID atomic.Value
+	failedMu        sync.Mutex
+	failedBatches   []failedBatch
+}
+
+type failedBatch struct {
+	event          *pb.ServiceEvent
+	aggregateCount int
+	attempts       int
 }
 
 // aggregateKey uniquely identifies an aggregate bucket
@@ -64,6 +74,9 @@ func NewUsageTracker(config UsageTrackerConfig) *UsageTracker {
 	if config.FlushInterval <= 0 {
 		config.FlushInterval = 30 * time.Second
 	}
+	if config.RetryLimit <= 0 {
+		config.RetryLimit = 3
+	}
 	if config.SourceNode == "" {
 		config.SourceNode = "bridge-unknown"
 	}
@@ -83,6 +96,7 @@ func NewUsageTracker(config UsageTrackerConfig) *UsageTracker {
 	if config.Logger != nil {
 		config.Logger.WithFields(logging.Fields{
 			"flush_interval": config.FlushInterval,
+			"retry_limit":    config.RetryLimit,
 			"source_node":    config.SourceNode,
 		}).Info("Usage tracker started")
 	}
@@ -141,6 +155,8 @@ func (ut *UsageTracker) flush() {
 		}
 	}
 
+	ut.retryFailedBatches()
+
 	// Collect all aggregates
 	var aggregates []*pb.APIRequestAggregate
 
@@ -178,7 +194,7 @@ func (ut *UsageTracker) flush() {
 			Timestamp:       agg.FirstSeenAt,
 		}
 
-		// Reset counters
+		// Reset counters after snapshotting so a failed send can be retried.
 		agg.RequestCount = 0
 		agg.ErrorCount = 0
 		agg.TotalDurationMs = 0
@@ -218,21 +234,87 @@ func (ut *UsageTracker) flush() {
 			Payload:   &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
 		}
 
-		if err := ut.config.Decklog.SendServiceEvent(event); err != nil {
-			if ut.config.Logger != nil {
-				ut.config.Logger.WithFields(logging.Fields{
-					"aggregate_count": len(aggregates),
-					"error":           err,
-				}).Error("Failed to flush API usage batch to Decklog (service_events)")
+		if err := ut.sendServiceEvent(event, len(aggregates)); err != nil {
+			ut.enqueueFailedBatch(event, len(aggregates))
+		}
+	}
+}
+
+func (ut *UsageTracker) enqueueFailedBatch(event *pb.ServiceEvent, aggregateCount int) {
+	if ut.config.Decklog == nil || event == nil {
+		return
+	}
+
+	ut.failedMu.Lock()
+	ut.failedBatches = append(ut.failedBatches, failedBatch{
+		event:          event,
+		aggregateCount: aggregateCount,
+		// attempts counts retry attempts already performed (not the initial send)
+		attempts: 0,
+	})
+	ut.failedMu.Unlock()
+}
+
+func (ut *UsageTracker) retryFailedBatches() {
+	if ut.config.Decklog == nil {
+		return
+	}
+
+	ut.failedMu.Lock()
+	pending := ut.failedBatches
+	ut.failedBatches = nil
+	ut.failedMu.Unlock()
+
+	if len(pending) == 0 {
+		return
+	}
+
+	var remaining []failedBatch
+	for _, batch := range pending {
+		if err := ut.sendServiceEvent(batch.event, batch.aggregateCount); err != nil {
+			batch.attempts++
+			if batch.attempts <= ut.config.RetryLimit {
+				remaining = append(remaining, batch)
+				continue
 			}
-		} else {
 			if ut.config.Logger != nil {
 				ut.config.Logger.WithFields(logging.Fields{
-					"aggregate_count": len(aggregates),
-				}).Debug("Flushed API usage batch to Decklog (service_events)")
+					"aggregate_count": batch.aggregateCount,
+					"attempts":        batch.attempts,
+				}).Error("Dropping API usage batch after retries")
 			}
 		}
 	}
+
+	if len(remaining) > 0 {
+		ut.failedMu.Lock()
+		ut.failedBatches = append(ut.failedBatches, remaining...)
+		ut.failedMu.Unlock()
+	}
+}
+
+func (ut *UsageTracker) sendServiceEvent(event *pb.ServiceEvent, aggregateCount int) error {
+	if ut.config.Decklog == nil || event == nil {
+		return nil
+	}
+
+	if err := ut.config.Decklog.SendServiceEvent(event); err != nil {
+		if ut.config.Logger != nil {
+			ut.config.Logger.WithFields(logging.Fields{
+				"aggregate_count": aggregateCount,
+				"error":           err,
+			}).Error("Failed to flush API usage batch to Decklog (service_events)")
+		}
+		return err
+	}
+
+	if ut.config.Logger != nil {
+		ut.config.Logger.WithFields(logging.Fields{
+			"aggregate_count": aggregateCount,
+		}).Debug("Flushed API usage batch to Decklog (service_events)")
+	}
+
+	return nil
 }
 
 // Record records a single API request
