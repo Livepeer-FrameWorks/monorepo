@@ -483,7 +483,7 @@ func (h *X402Handler) SettlePayment(ctx context.Context, tenantID string, payloa
 
 	emitBillingEvent(eventX402SettlementPending, tenantID, "x402_nonce", txHash, &pb.BillingEvent{
 		Amount:   float64(verifyResult.AmountCents) / 100,
-		Currency: "EUR",
+		Currency: billing.DefaultCurrency(),
 		Status:   "pending",
 	})
 
