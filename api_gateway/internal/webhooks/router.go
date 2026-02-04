@@ -23,9 +23,11 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -42,14 +44,27 @@ type ServiceHandler interface {
 type Router struct {
 	handlers map[string]ServiceHandler // service name -> handler
 	logger   logging.Logger
+	limiter  *WebhookRateLimiter
+}
+
+const maxWebhookBodyBytes int64 = 1 << 20
+
+var allowedProviders = map[string][]string{
+	"billing": {"stripe", "mollie"},
 }
 
 // NewRouter creates a new webhook router with the given service handlers.
 // Service names should match the URL path: /webhooks/{service}/{provider}
 func NewRouter(logger logging.Logger) *Router {
+	rateLimitPerMin := config.GetEnvInt("WEBHOOK_RATE_LIMIT_PER_MIN", 300)
+	var limiter *WebhookRateLimiter
+	if rateLimitPerMin > 0 {
+		limiter = NewWebhookRateLimiter(rateLimitPerMin, time.Minute, 10*time.Minute)
+	}
 	return &Router{
 		handlers: make(map[string]ServiceHandler),
 		logger:   logger,
+		limiter:  limiter,
 	}
 }
 
@@ -66,6 +81,22 @@ func (r *Router) Handle(c *gin.Context) {
 	service := c.Param("service")
 	provider := c.Param("provider")
 
+	if !isProviderAllowed(service, provider) {
+		r.logger.WithFields(logging.Fields{
+			"service":  service,
+			"provider": provider,
+		}).Warn("Webhook received for invalid provider")
+		c.JSON(http.StatusNotFound, gin.H{"error": "invalid endpoint"})
+		return
+	}
+
+	if r.limiter != nil {
+		if !r.limiter.Allow(c.ClientIP()) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate limit exceeded"})
+			return
+		}
+	}
+
 	// Find handler for this service
 	handler, ok := r.handlers[service]
 	if !ok {
@@ -77,11 +108,30 @@ func (r *Router) Handle(c *gin.Context) {
 		return
 	}
 
+	if c.Request.ContentLength > maxWebhookBodyBytes {
+		r.logger.WithFields(logging.Fields{
+			"service":  service,
+			"provider": provider,
+			"size":     c.Request.ContentLength,
+		}).Warn("Webhook payload too large")
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "payload too large"})
+		return
+	}
+
 	// Read raw body
-	body, err := io.ReadAll(c.Request.Body)
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxWebhookBodyBytes+1))
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to read webhook body")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read body"})
+		return
+	}
+	if int64(len(body)) > maxWebhookBodyBytes {
+		r.logger.WithFields(logging.Fields{
+			"service":  service,
+			"provider": provider,
+			"size":     len(body),
+		}).Warn("Webhook payload too large")
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "payload too large"})
 		return
 	}
 
@@ -139,6 +189,14 @@ func (r *Router) Handle(c *gin.Context) {
 		}).Warn("Webhook rejected by service")
 		c.JSON(statusCode, gin.H{"error": resp.Error})
 	}
+}
+
+func isProviderAllowed(service, provider string) bool {
+	allowed, ok := allowedProviders[service]
+	if !ok {
+		return false
+	}
+	return slices.Contains(allowed, provider)
 }
 
 // HandleHealth returns a simple health check for the webhook endpoint.

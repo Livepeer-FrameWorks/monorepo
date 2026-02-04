@@ -213,7 +213,8 @@ stripe trigger checkout.session.completed
 ## Security Considerations
 
 1. **No Authentication Middleware**: Webhook routes skip JWT auth (providers can't authenticate)
-2. **Verification Required**: Stripe signatures are verified with `STRIPE_WEBHOOK_SECRET` (unless `ALLOW_INSECURE_WEBHOOKS=true`); Mollie is verified by API fetch
+2. **Verification Required**: Stripe signatures require `STRIPE_WEBHOOK_SECRET`; Mollie signatures are verified when `MOLLIE_WEBHOOK_SECRET` is set, otherwise we confirm by fetching from the Mollie API
 3. **Log Source IP**: Track source IPs for debugging and potential IP allowlisting
-4. **Rate Limiting**: Consider per-provider rate limits to prevent abuse
-5. **Timeout Handling**: Webhooks have short timeouts; process quickly or queue for async
+4. **Rate Limiting**: Gateway enforces per-IP rate limits on webhook routes
+5. **Payload Limits**: Gateway rejects webhook payloads larger than 1MB
+6. **Timeout Handling**: Webhooks have short timeouts; process quickly or queue for async

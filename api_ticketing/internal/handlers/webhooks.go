@@ -118,6 +118,17 @@ func HandleChatwootWebhook(c *gin.Context) {
 		return
 	}
 
+	if isDuplicate, err := isChatwootWebhookDuplicate(c.Request.Context(), payload); err != nil {
+		deps.Logger.WithError(err).Warn("Chatwoot webhook dedup check failed")
+	} else if isDuplicate {
+		deps.Logger.WithFields(map[string]interface{}{
+			"event":           payload.Event,
+			"conversation_id": payload.GetConversationID(),
+		}).Debug("Duplicate Chatwoot webhook ignored")
+		c.JSON(http.StatusOK, gin.H{"status": "duplicate"})
+		return
+	}
+
 	deps.Metrics.WebhooksReceived.WithLabelValues(payload.Event).Inc()
 
 	deps.Logger.WithFields(map[string]interface{}{
@@ -138,6 +149,19 @@ func HandleChatwootWebhook(c *gin.Context) {
 		// Acknowledge but ignore other events
 		c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 	}
+}
+
+func isChatwootWebhookDuplicate(ctx context.Context, payload ChatwootWebhookPayload) (bool, error) {
+	if deps.Redis == nil {
+		return false, nil
+	}
+
+	key := fmt.Sprintf("deckhand:webhooks:chatwoot:%s:%d:%d", payload.Event, payload.ID, payload.GetConversationID())
+	set, err := deps.Redis.SetNX(ctx, key, "1", 5*time.Minute).Result()
+	if err != nil {
+		return false, err
+	}
+	return !set, nil
 }
 
 // handleConversationCreated enriches a new conversation with tenant context

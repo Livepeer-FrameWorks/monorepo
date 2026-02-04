@@ -22,18 +22,22 @@ var (
 
 // PurserMetrics holds all Prometheus metrics for Purser
 type PurserMetrics struct {
-	BillingCalculations *prometheus.CounterVec
-	UsageRecords        *prometheus.CounterVec
-	InvoiceOperations   *prometheus.CounterVec
-	DBQueries           *prometheus.CounterVec
-	DBDuration          *prometheus.HistogramVec
-	DBConnections       *prometheus.GaugeVec
+	BillingCalculations      *prometheus.CounterVec
+	UsageRecords             *prometheus.CounterVec
+	InvoiceOperations        *prometheus.CounterVec
+	DBQueries                *prometheus.CounterVec
+	DBDuration               *prometheus.HistogramVec
+	DBConnections            *prometheus.GaugeVec
+	WebhookSignatureFailures *prometheus.CounterVec
 }
+
+var metrics *PurserMetrics
 
 // Init initializes the handlers with database, logger, and service clients
 func Init(database *sql.DB, log logging.Logger, purserMetrics *PurserMetrics, quartermasterClient *qmclient.GRPCClient, mollieSvc *mollie.Client, decklogSvc *decklogclient.BatchedClient) {
 	db = database
 	logger = log
+	metrics = purserMetrics
 	emailService = NewEmailService(log)
 	qmClient = quartermasterClient
 	mollieClient = mollieSvc

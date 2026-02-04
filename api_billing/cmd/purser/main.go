@@ -44,6 +44,7 @@ func main() {
 	stripeSecretKey := config.GetEnv("STRIPE_SECRET_KEY", "")
 	stripeWebhookSecret := config.GetEnv("STRIPE_WEBHOOK_SECRET", "")
 	mollieAPIKey := config.GetEnv("MOLLIE_API_KEY", "")
+	mollieWebhookSecret := config.GetEnv("MOLLIE_WEBHOOK_SECRET", "")
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -64,9 +65,10 @@ func main() {
 
 	// Create custom billing metrics for HTTP handlers
 	handlerMetrics := &handlers.PurserMetrics{
-		BillingCalculations: metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
-		UsageRecords:        metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
-		InvoiceOperations:   metricsCollector.NewCounter("invoice_operations_total", "Invoice operations", []string{"operation", "status"}),
+		BillingCalculations:      metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
+		UsageRecords:             metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
+		InvoiceOperations:        metricsCollector.NewCounter("invoice_operations_total", "Invoice operations", []string{"operation", "status"}),
+		WebhookSignatureFailures: metricsCollector.NewCounter("webhook_signature_failures_total", "Webhook signature validation failures", []string{"provider"}),
 	}
 
 	// Create database metrics
@@ -156,8 +158,9 @@ func main() {
 	if mollieAPIKey != "" {
 		var err error
 		mollieClient, err = mollie.NewClient(mollie.Config{
-			APIKey: mollieAPIKey,
-			Logger: logger,
+			APIKey:        mollieAPIKey,
+			WebhookSecret: mollieWebhookSecret,
+			Logger:        logger,
 		})
 		if err != nil {
 			logger.WithError(err).Warn("Failed to create Mollie client - Mollie functionality disabled")

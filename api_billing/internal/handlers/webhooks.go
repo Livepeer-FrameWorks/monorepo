@@ -288,20 +288,17 @@ func sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string,
 // Returns (success, error_message, http_status_code).
 func ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, string, int) {
 	// Verify Stripe signature
-	signature := headers["Stripe-Signature"]
+	signature := headerValue(headers, "Stripe-Signature")
 	webhookSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
-	allowInsecure := strings.EqualFold(os.Getenv("ALLOW_INSECURE_WEBHOOKS"), "true")
 
 	if webhookSecret == "" {
-		if !allowInsecure {
-			logger.Warn("STRIPE_WEBHOOK_SECRET not configured; rejecting webhook")
-			return false, "Webhook verification not configured", 401
-		}
-		logger.Warn("STRIPE_WEBHOOK_SECRET not configured; skipping signature verification")
+		logger.Error("STRIPE_WEBHOOK_SECRET not configured; rejecting webhook")
+		return false, "Webhook verification not configured", 503
 	} else if !verifyStripeSignature(body, signature, webhookSecret) {
 		logger.WithFields(logging.Fields{
 			"signature": signature,
 		}).Warn("Invalid Stripe webhook signature")
+		recordWebhookSignatureFailure("stripe")
 		return false, "Invalid signature", 401
 	}
 
@@ -699,6 +696,27 @@ func updateClusterSubscriptionFromStripe(obj StripeSubscriptionObject, ourStatus
 // ProcessMollieWebhookGRPC processes a Mollie webhook received via gRPC from the Gateway.
 // Returns (success, error_message, http_status_code).
 func ProcessMollieWebhookGRPC(body []byte, headers map[string]string) (bool, string, int) {
+	if mollieClient == nil {
+		logger.Warn("Mollie client not configured; rejecting webhook")
+		return false, "Mollie not configured", 503
+	}
+
+	if mollieClient.HasWebhookSecret() {
+		signature := headerValue(headers, "X-Mollie-Signature")
+		if signature == "" {
+			logger.Warn("Mollie webhook signature missing")
+			recordWebhookSignatureFailure("mollie")
+			return false, "Invalid signature", 401
+		}
+		if !mollieClient.VerifyWebhook(body, signature) {
+			logger.Warn("Mollie webhook signature verification failed")
+			recordWebhookSignatureFailure("mollie")
+			return false, "Invalid signature", 401
+		}
+	} else {
+		logger.Debug("Mollie webhook secret not configured; using API fetch verification")
+	}
+
 	var payload MollieWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
 		logger.WithFields(logging.Fields{
@@ -714,11 +732,6 @@ func ProcessMollieWebhookGRPC(body []byte, headers map[string]string) (bool, str
 	if payload.ID == "" {
 		logger.Warn("Mollie webhook payload missing id")
 		return false, "Invalid payload", 400
-	}
-
-	if mollieClient == nil {
-		logger.Warn("Mollie client not configured; rejecting webhook")
-		return false, "Mollie not configured", 503
 	}
 
 	resource := strings.ToLower(payload.Resource)
@@ -750,6 +763,22 @@ func ProcessMollieWebhookGRPC(body []byte, headers map[string]string) (bool, str
 	}
 
 	return true, "", 200
+}
+
+func headerValue(headers map[string]string, key string) string {
+	for headerKey, value := range headers {
+		if strings.EqualFold(headerKey, key) {
+			return value
+		}
+	}
+	return ""
+}
+
+func recordWebhookSignatureFailure(provider string) {
+	if metrics == nil || metrics.WebhookSignatureFailures == nil {
+		return
+	}
+	metrics.WebhookSignatureFailures.WithLabelValues(provider).Inc()
 }
 
 func handleMolliePaymentWebhook(paymentID string) (string, error) {
