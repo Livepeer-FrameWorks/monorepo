@@ -15,6 +15,7 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	commodore "frameworks/pkg/clients/commodore"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 	"github.com/google/uuid"
@@ -469,7 +470,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		resp, err := qm.CreateBootstrapToken(cctx, req)
 		if err != nil {
@@ -503,7 +504,7 @@ func newAdminBootstrapTokensListCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		resp, err := qm.ListBootstrapTokens(cctx, "", "", nil)
 		if err != nil {
@@ -546,7 +547,7 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		var tokenID string
@@ -616,7 +617,7 @@ func newAdminTenantsListCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		resp, err := qm.ListTenants(cctx, nil)
 		if err != nil {
@@ -658,7 +659,7 @@ func newAdminClustersListCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		resp, err := qm.ListClusters(cctx, nil)
 		if err != nil {
@@ -723,7 +724,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		req := &pb.CreateClusterRequest{
@@ -812,7 +813,7 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		req := &pb.UpdateClusterRequest{
@@ -919,7 +920,7 @@ func newAdminClustersAccessListCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		resp, err := qm.ListClustersForTenant(cctx, tenantID, nil)
 		if err != nil {
@@ -977,7 +978,7 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		req := &pb.GrantClusterAccessRequest{
@@ -1049,7 +1050,7 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		req := &pb.CreateClusterInviteRequest{
@@ -1104,7 +1105,7 @@ func newAdminClustersInvitesListCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		resp, err := qm.ListClusterInvites(cctx, &pb.ListClusterInvitesRequest{
@@ -1156,7 +1157,7 @@ func newAdminClustersInvitesRevokeCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		if err := qm.RevokeClusterInvite(cctx, &pb.RevokeClusterInviteRequest{
@@ -1189,7 +1190,7 @@ func newAdminClustersInvitesListMineCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		resp, err := qm.ListMyClusterInvites(cctx, &pb.ListMyClusterInvitesRequest{
@@ -1238,7 +1239,7 @@ func newAdminClustersInvitesAcceptCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		resp, err := qm.AcceptClusterInvite(cctx, &pb.AcceptClusterInviteRequest{
@@ -1284,7 +1285,7 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		resp, err := qm.ListMySubscriptions(cctx, &pb.ListMySubscriptionsRequest{TenantId: tenantID})
 		if err != nil {
@@ -1328,7 +1329,7 @@ func newAdminNodesListCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		resp, err := qm.ListNodes(cctx, clusterID, nodeType, region, nil)
 		if err != nil {
@@ -1419,7 +1420,7 @@ func newAdminNodesCreateCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 
 		req := &pb.CreateNodeRequest{
@@ -1513,7 +1514,7 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
-			cctx = context.WithValue(cctx, "jwt_token", ctxCfg.Auth.JWT)
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
 		}
 		req := &pb.UpdateNodeHardwareRequest{
 			NodeId: nodeID,

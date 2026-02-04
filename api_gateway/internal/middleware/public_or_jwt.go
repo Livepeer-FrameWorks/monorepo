@@ -52,11 +52,11 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 		}
 
 		// Set user context for downstream handlers
-		c.Set("user_id", claims.UserID)
-		c.Set("tenant_id", claims.TenantID)
-		c.Set("email", claims.Email)
-		c.Set("role", claims.Role)
-		c.Set("auth_type", "jwt")
+		c.Set(string(ctxkeys.KeyUserID), claims.UserID)
+		c.Set(string(ctxkeys.KeyTenantID), claims.TenantID)
+		c.Set(string(ctxkeys.KeyEmail), claims.Email)
+		c.Set(string(ctxkeys.KeyRole), claims.Role)
+		c.Set(string(ctxkeys.KeyAuthType), "jwt")
 
 		// Also set in request context for gRPC client interceptor
 		ctx := c.Request.Context()
@@ -118,7 +118,7 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 
 			// If allowlisted, proceed anonymously (ignore any tokens sent)
 			if isAllowlistedQuery(body) {
-				c.Set("public_allowlisted", true)
+				c.Set(string(ctxkeys.KeyPublicAllowlisted), true)
 				ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyPublicAllowlisted, true)
 				c.Request = c.Request.WithContext(ctx)
 				c.Next()
@@ -159,22 +159,22 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 			}
 		}
 
-		c.Set("user_id", authResult.UserID)
-		c.Set("tenant_id", authResult.TenantID)
-		c.Set("email", authResult.Email)
-		c.Set("role", authResult.Role)
-		c.Set("auth_type", authResult.AuthType)
+		c.Set(string(ctxkeys.KeyUserID), authResult.UserID)
+		c.Set(string(ctxkeys.KeyTenantID), authResult.TenantID)
+		c.Set(string(ctxkeys.KeyEmail), authResult.Email)
+		c.Set(string(ctxkeys.KeyRole), authResult.Role)
+		c.Set(string(ctxkeys.KeyAuthType), authResult.AuthType)
 		if authResult.AuthType == "x402" {
-			c.Set("x402_processed", authResult.X402Processed)
-			c.Set("x402_auth_only", authResult.X402AuthOnly)
+			c.Set(string(ctxkeys.KeyX402Processed), authResult.X402Processed)
+			c.Set(string(ctxkeys.KeyX402AuthOnly), authResult.X402AuthOnly)
 		}
 		if authResult.AuthType == "api_token" {
 			tokenID := authResult.TokenID
 			if tokenID == "" {
 				tokenID = authResult.APIToken
 			}
-			c.Set("api_token_hash", hashIdentifier(tokenID))
-			c.Set("permissions", authResult.Permissions)
+			c.Set(string(ctxkeys.KeyAPITokenHash), hashIdentifier(tokenID))
+			c.Set(string(ctxkeys.KeyPermissions), authResult.Permissions)
 		}
 
 		ctx := ApplyAuthToContext(c.Request.Context(), authResult)

@@ -158,15 +158,15 @@ func main() {
 		resp := next(ctx)
 		if resp != nil {
 			if ginCtx, ok := ctx.Value(ctxkeys.KeyGinContext).(*gin.Context); ok && ginCtx != nil {
-				ginCtx.Set("graphql_error_count", len(resp.Errors))
+				ginCtx.Set(string(ctxkeys.KeyGraphQLErrorCount), len(resp.Errors))
 				if graphql.HasOperationContext(ctx) {
 					if opCtx := graphql.GetOperationContext(ctx); opCtx.Operation != nil {
-						ginCtx.Set("graphql_operation_type", string(opCtx.Operation.Operation))
-						ginCtx.Set("graphql_operation_name", opCtx.Operation.Name)
+						ginCtx.Set(string(ctxkeys.KeyGraphQLOperationType), string(opCtx.Operation.Operation))
+						ginCtx.Set(string(ctxkeys.KeyGraphQLOperationName), opCtx.Operation.Name)
 					}
 				}
 				if stats := extension.GetComplexityStats(ctx); stats != nil {
-					ginCtx.Set("graphql_complexity", stats.Complexity)
+					ginCtx.Set(string(ctxkeys.KeyGraphQLComplexity), stats.Complexity)
 				}
 			}
 		}

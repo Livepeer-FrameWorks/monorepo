@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"frameworks/pkg/ctxkeys"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
@@ -28,8 +29,8 @@ func LoggingMiddleware(logger logging.Logger) gin.HandlerFunc {
 			"latency":    time.Since(start),
 			"client_ip":  c.ClientIP(),
 			"user_agent": c.Request.UserAgent(),
-			"tenant_id":  c.GetString("tenant_id"),
-			"user_id":    c.GetString("user_id"),
+			"tenant_id":  c.GetString(string(ctxkeys.KeyTenantID)),
+			"user_id":    c.GetString(string(ctxkeys.KeyUserID)),
 		}).Info("HTTP request")
 	}
 }

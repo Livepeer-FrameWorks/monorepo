@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/pkg/clients/decklog"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/tenants"
@@ -384,7 +385,7 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 
 		// Get tenant ID from context
 		tenantID := ""
-		if tid, exists := c.Get("tenant_id"); exists {
+		if tid, exists := c.Get(string(ctxkeys.KeyTenantID)); exists {
 			if s, ok := tid.(string); ok {
 				tenantID = s
 			}
@@ -395,26 +396,26 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 
 		// Determine auth type
 		authType := "anonymous"
-		if v, ok := c.Get("auth_type"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyAuthType)); ok {
 			if s, ok := v.(string); ok && s != "" {
 				authType = s
 			}
-		} else if _, exists := c.Get("jwt_token"); exists {
+		} else if _, exists := c.Get(string(ctxkeys.KeyJWTToken)); exists {
 			authType = "jwt"
-		} else if _, exists := c.Get("api_token"); exists {
+		} else if _, exists := c.Get(string(ctxkeys.KeyAPIToken)); exists {
 			authType = "api_token"
-		} else if _, exists := c.Get("wallet_address"); exists {
+		} else if _, exists := c.Get(string(ctxkeys.KeyWalletAddr)); exists {
 			authType = "wallet"
 		}
 
 		userID := ""
-		if v, ok := c.Get("user_id"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyUserID)); ok {
 			if s, ok := v.(string); ok {
 				userID = s
 			}
 		}
 		var tokenHash uint64
-		if v, ok := c.Get("api_token_hash"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyAPITokenHash)); ok {
 			switch t := v.(type) {
 			case uint64:
 				tokenHash = t
@@ -436,12 +437,12 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 		opName := ""
 		complexity := uint32(0)
 
-		if v, ok := c.Get("graphql_operation_type"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyGraphQLOperationType)); ok {
 			if s, ok := v.(string); ok && s != "" {
 				opType = s
 			}
 		}
-		if v, ok := c.Get("graphql_operation_name"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyGraphQLOperationName)); ok {
 			if s, ok := v.(string); ok {
 				opName = s
 			}
@@ -458,7 +459,7 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 			}
 		}
 
-		if v, ok := c.Get("graphql_complexity"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyGraphQLComplexity)); ok {
 			switch t := v.(type) {
 			case int:
 				if t > 0 {
@@ -484,7 +485,7 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 		}
 
 		var errorCount uint32
-		if v, ok := c.Get("graphql_error_count"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyGraphQLErrorCount)); ok {
 			switch t := v.(type) {
 			case int:
 				if t > 0 {

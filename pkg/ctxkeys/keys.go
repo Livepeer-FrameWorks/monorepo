@@ -31,6 +31,7 @@ const (
 	KeyX402Processed Key = "x402_processed"
 	KeyX402AuthOnly  Key = "x402_auth_only"
 	KeyXPayment      Key = "x_payment"
+	KeyX402Paid      Key = "x402_paid"
 )
 
 // Request context keys
@@ -52,12 +53,16 @@ const (
 
 // Misc context keys
 const (
-	KeyGinContext        Key = "GinContext"
-	KeyPublicAllowlisted Key = "public_allowlisted"
-	KeyLoaders           Key = "loaders"
-	KeyWSCookieToken     Key = "ws_cookie_token"
-	KeyHTTPRequest       Key = "http_request"
-	KeyCapability        Key = "cap"
+	KeyGinContext           Key = "GinContext"
+	KeyPublicAllowlisted    Key = "public_allowlisted"
+	KeyLoaders              Key = "loaders"
+	KeyWSCookieToken        Key = "ws_cookie_token"
+	KeyHTTPRequest          Key = "http_request"
+	KeyCapability           Key = "cap"
+	KeyGraphQLOperationType Key = "graphql_operation_type"
+	KeyGraphQLOperationName Key = "graphql_operation_name"
+	KeyGraphQLComplexity    Key = "graphql_complexity"
+	KeyGraphQLErrorCount    Key = "graphql_error_count"
 )
 
 // GetTenantID extracts tenant_id from context.
