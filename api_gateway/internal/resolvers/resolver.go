@@ -98,7 +98,7 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 	x402Paid := false
 	if ginCtx, ok := ctx.Value(ctxkeys.KeyGinContext).(*gin.Context); ok && ginCtx != nil {
 		httpReq = ginCtx.Request
-		if v, ok := ginCtx.Get("x402_paid"); ok {
+		if v, ok := ginCtx.Get(string(ctxkeys.KeyX402Paid)); ok {
 			if paid, ok := v.(bool); ok {
 				x402Paid = paid
 			}

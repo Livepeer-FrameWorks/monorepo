@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"frameworks/pkg/ctxkeys"
 	"github.com/gin-gonic/gin"
 )
 
@@ -69,10 +70,10 @@ func JWTAuthMiddleware(secret []byte) gin.HandlerFunc {
 		claims, err := ValidateJWT(token, secret)
 		if err == nil {
 			// JWT is valid - set user claims in context
-			c.Set("user_id", claims.UserID)
-			c.Set("tenant_id", claims.TenantID)
-			c.Set("email", claims.Email)
-			c.Set("role", claims.Role)
+			c.Set(string(ctxkeys.KeyUserID), claims.UserID)
+			c.Set(string(ctxkeys.KeyTenantID), claims.TenantID)
+			c.Set(string(ctxkeys.KeyEmail), claims.Email)
+			c.Set(string(ctxkeys.KeyRole), claims.Role)
 			c.Next()
 			return
 		}
@@ -81,10 +82,10 @@ func JWTAuthMiddleware(secret []byte) gin.HandlerFunc {
 		serviceToken := GetServiceToken()
 		if serviceToken != "" && ValidateServiceToken(token, serviceToken) == nil {
 			// Service token is valid - set service account claims in context
-			c.Set("user_id", "00000000-0000-0000-0000-000000000000")   // Service account UUID
-			c.Set("tenant_id", "00000000-0000-0000-0000-000000000001") // System tenant
-			c.Set("email", "service@internal")
-			c.Set("role", "service")
+			c.Set(string(ctxkeys.KeyUserID), "00000000-0000-0000-0000-000000000000")   // Service account UUID
+			c.Set(string(ctxkeys.KeyTenantID), "00000000-0000-0000-0000-000000000001") // System tenant
+			c.Set(string(ctxkeys.KeyEmail), "service@internal")
+			c.Set(string(ctxkeys.KeyRole), "service")
 			c.Next()
 			return
 		}

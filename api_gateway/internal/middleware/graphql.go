@@ -51,18 +51,18 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 		var authenticated bool
 
 		// Try Gin context first (HTTP requests)
-		if userIDVal, exists := c.Get("user_id"); exists {
+		if userIDVal, exists := c.Get(string(ctxkeys.KeyUserID)); exists {
 			if userIDStr, authenticated = userIDVal.(string); authenticated {
-				if v, ok := c.Get("tenant_id"); ok {
+				if v, ok := c.Get(string(ctxkeys.KeyTenantID)); ok {
 					tenantIDStr, _ = v.(string)
 				}
-				if v, ok := c.Get("email"); ok {
+				if v, ok := c.Get(string(ctxkeys.KeyEmail)); ok {
 					emailStr, _ = v.(string)
 				}
-				if v, ok := c.Get("role"); ok {
+				if v, ok := c.Get(string(ctxkeys.KeyRole)); ok {
 					roleStr, _ = v.(string)
 				}
-				if v, ok := c.Get("permissions"); ok {
+				if v, ok := c.Get(string(ctxkeys.KeyPermissions)); ok {
 					permissions, _ = v.([]string)
 				}
 			}

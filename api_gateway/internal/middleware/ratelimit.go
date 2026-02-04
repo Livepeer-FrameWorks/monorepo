@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -266,22 +267,22 @@ type graphqlRequest struct {
 // rateLimitMiddlewareInternal is the internal implementation with optional x402 support
 func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tenantID, _ := c.Get("tenant_id")
+		tenantID, _ := c.Get(string(ctxkeys.KeyTenantID))
 		tenantIDStr, _ := tenantID.(string)
 		publicAllowlisted := false
 		x402Processed := false
 		x402AuthOnly := false
-		if v, ok := c.Get("public_allowlisted"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyPublicAllowlisted)); ok {
 			if allowed, ok := v.(bool); ok {
 				publicAllowlisted = allowed
 			}
 		}
-		if v, ok := c.Get("x402_processed"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyX402Processed)); ok {
 			if processed, ok := v.(bool); ok {
 				x402Processed = processed
 			}
 		}
-		if v, ok := c.Get("x402_auth_only"); ok {
+		if v, ok := c.Get(string(ctxkeys.KeyX402AuthOnly)); ok {
 			if authOnly, ok := v.(bool); ok {
 				x402AuthOnly = authOnly
 			}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	x402 "frameworks/pkg/x402"
 
@@ -101,7 +102,7 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 				return
 			}
 			if settleResult != nil {
-				c.Set("x402_paid", true)
+				c.Set(string(ctxkeys.KeyX402Paid), true)
 				x402Paid = true
 			}
 		}

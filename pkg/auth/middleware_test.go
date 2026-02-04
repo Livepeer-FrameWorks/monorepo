@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"frameworks/pkg/ctxkeys"
 	"github.com/gin-gonic/gin"
 )
 
@@ -50,7 +51,7 @@ func TestJWTAuthMiddleware(t *testing.T) {
 	r := gin.New()
 	r.Use(JWTAuthMiddleware(secret))
 	r.GET("/ok", func(c *gin.Context) {
-		if c.GetString("user_id") != "u1" || c.GetString("tenant_id") != "t1" {
+		if c.GetString(string(ctxkeys.KeyUserID)) != "u1" || c.GetString(string(ctxkeys.KeyTenantID)) != "t1" {
 			t.Fatalf("claims not set")
 		}
 		c.String(200, "ok")
