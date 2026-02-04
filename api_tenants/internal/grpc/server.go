@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -94,13 +95,13 @@ func validateExpectedIP(expectedIP string, requestIPs []string) error {
 	if strings.Contains(expectedIP, "/") {
 		_, cidr, err := net.ParseCIDR(expectedIP)
 		if err != nil {
-			return nil
+			return fmt.Errorf("invalid expected IP CIDR %q: %w", expectedIP, err)
 		}
 		expectedNet = cidr
 	} else {
 		ip := net.ParseIP(expectedIP)
 		if ip == nil {
-			return nil
+			return fmt.Errorf("invalid expected IP %q", expectedIP)
 		}
 		maskBits := 128
 		if ip.To4() != nil {
@@ -417,7 +418,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "database error: %v", err)
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 
 		var expiresAt time.Time
 		var usedAt sql.NullTime
@@ -430,7 +431,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			WHERE token = $1 AND kind = 'service'
 			FOR UPDATE
 		`, token).Scan(&tokenBoundClusterID, &expiresAt, &usedAt, &usageLimit, &usageCount)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
 		}
 		if err != nil {
@@ -2656,7 +2657,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip, used_at
@@ -2665,7 +2666,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		FOR UPDATE
 	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP, &usedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2682,8 +2683,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	}
 
 	if expectedIP.Valid && expectedIP.String != "" {
-		if err := validateExpectedIP(expectedIP.String, req.GetIps()); err != nil {
-			return nil, status.Error(codes.PermissionDenied, "request IP not allowed for this token")
+		if validateErr := validateExpectedIP(expectedIP.String, req.GetIps()); validateErr != nil {
+			return nil, status.Errorf(codes.PermissionDenied, "request IP not allowed for this token: %v", validateErr)
 		}
 	}
 
@@ -2807,7 +2808,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	err = tx.QueryRowContext(ctx, `
 		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip, used_at
@@ -2815,7 +2816,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		WHERE token = $1 AND kind = 'infrastructure_node'
 		FOR UPDATE
 	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP, &usedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2838,8 +2839,8 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		requestIPs = append(requestIPs, req.GetInternalIp())
 	}
 	if expectedIP.Valid && expectedIP.String != "" {
-		if err := validateExpectedIP(expectedIP.String, requestIPs); err != nil {
-			return nil, status.Error(codes.PermissionDenied, "request IP not allowed for this token")
+		if validateErr := validateExpectedIP(expectedIP.String, requestIPs); validateErr != nil {
+			return nil, status.Errorf(codes.PermissionDenied, "request IP not allowed for this token: %v", validateErr)
 		}
 	}
 
