@@ -19,6 +19,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/tenants"
 	"frameworks/pkg/version"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -323,7 +324,7 @@ func (s *Server) registerAccessMiddleware() {
 				userID := ctxkeys.GetUserID(ctx)
 				tenantID := ctxkeys.GetTenantID(ctx)
 				if tenantID == "" {
-					tenantID = "anonymous"
+					tenantID = tenants.AnonymousTenantID.String()
 				}
 				errorCount := uint32(0)
 				if err != nil {

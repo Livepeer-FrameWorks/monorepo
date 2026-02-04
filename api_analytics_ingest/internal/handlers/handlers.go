@@ -2917,8 +2917,97 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		"aggregate_count": len(aggregatesSlice),
 	}).Debug("Successfully processed service API request batch")
 
-	// Also insert into api_events for audit when tenant_id is provided (batch is multi-tenant, so skip).
-	_ = h.processServiceEventAudit(ctx, event)
+	_ = h.processServiceAPIRequestBatchAudit(ctx, event, aggregatesSlice, sourceNode, timestamp)
+
+	return nil
+}
+
+func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Context, event kafka.ServiceEvent, aggregates []interface{}, sourceNode string, batchTimestamp time.Time) error {
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "attempt").Inc()
+	}
+
+	chBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO api_events (
+			tenant_id, event_type, source, user_id, resource_type, resource_id, details, timestamp
+		)`)
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+		}
+		return err
+	}
+
+	rowCount := 0
+	for _, rawAgg := range aggregates {
+		aggMap, ok := rawAgg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		tenantID := parseUUID(getStringFromMap(aggMap, "tenant_id"))
+		if tenantID == uuid.Nil {
+			continue
+		}
+
+		aggTimestamp := batchTimestamp
+		if ts, ok := getInt64FromMap(aggMap, "timestamp"); ok {
+			aggTimestamp = time.Unix(ts, 0)
+		}
+
+		details := map[string]interface{}{
+			"source_node":       sourceNode,
+			"auth_type":         getStringFromMap(aggMap, "auth_type"),
+			"operation_name":    getStringFromMap(aggMap, "operation_name"),
+			"operation_type":    getStringFromMap(aggMap, "operation_type"),
+			"request_count":     getUint64FromMap(aggMap, "request_count"),
+			"error_count":       getUint64FromMap(aggMap, "error_count"),
+			"total_duration_ms": getUint64FromMap(aggMap, "total_duration_ms"),
+			"total_complexity":  getUint64FromMap(aggMap, "total_complexity"),
+			"user_hashes":       getUint64SliceFromMap(aggMap, "user_hashes"),
+			"token_hashes":      getUint64SliceFromMap(aggMap, "token_hashes"),
+		}
+
+		detailsJSON, err := json.Marshal(details)
+		if err != nil {
+			if h.metrics != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+			}
+			return fmt.Errorf("failed to marshal api_request_batch audit details: %w", err)
+		}
+
+		if err := chBatch.Append(
+			tenantID,
+			event.EventType,
+			event.Source,
+			nil,
+			nil,
+			nil,
+			string(detailsJSON),
+			aggTimestamp,
+		); err != nil {
+			if h.metrics != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+			}
+			return err
+		}
+		rowCount++
+	}
+
+	if rowCount == 0 {
+		return nil
+	}
+
+	if err := chBatch.Send(); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_events", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("api_events", "success").Inc()
+	}
 
 	return nil
 }

@@ -220,10 +220,17 @@ func (ut *UsageTracker) flush() {
 	}
 
 	if ut.config.Decklog != nil {
-		var tenantID string
+		tenantID := ""
 		if v := ut.serviceTenantID.Load(); v != nil {
-			if s, ok := v.(string); ok {
+			if s, ok := v.(string); ok && s != "" {
 				tenantID = s
+			}
+		}
+		if tenantID == "" {
+			tenantID = tenants.SystemTenantID.String()
+			if ut.config.Logger != nil {
+				ut.config.Logger.WithField("tenant_id", tenantID).
+					Debug("Usage tracker using system tenant for service event batch")
 			}
 		}
 		event := &pb.ServiceEvent{
