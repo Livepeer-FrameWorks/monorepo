@@ -102,6 +102,9 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*pb.Stream, erro
 
 // DoCreateStream creates a new stream
 func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (*pb.Stream, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream creation")
 		now := time.Now()
@@ -179,6 +182,9 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 
 // DoDeleteStream deletes a stream
 func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteStreamResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream deletion")
 		return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
@@ -216,6 +222,9 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 
 // DoRefreshStreamKey refreshes the stream key for a stream
 func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*pb.Stream, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream refresh")
 		streams := demo.GenerateStreams()
@@ -309,6 +318,9 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 
 // DoCreateClip creates a new clip
 func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*pb.ClipInfo, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	streamID, err := normalizeStreamID(input.StreamID)
 	if err != nil {
 		return nil, err
@@ -689,6 +701,9 @@ func (r *Resolver) buildStreamKeysConnectionFromSlice(keys []*pb.StreamKey, firs
 
 // DoCreateStreamKey creates a new stream key for a specific stream
 func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*pb.StreamKey, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -737,6 +752,9 @@ func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input
 
 // DoDeleteStreamKey deactivates a stream key
 func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string) (model.DeleteStreamKeyResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -840,6 +858,9 @@ func (r *Resolver) DoGetClip(ctx context.Context, id string) (*pb.ClipInfo, erro
 
 // DoDeleteClip deletes a clip by ID
 func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (model.DeleteClipResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: simulating clip deletion")
 		return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
@@ -877,6 +898,9 @@ func stringPtr(s string) *string {
 
 // DoStartDVR starts a DVR recording
 func (r *Resolver) DoStartDVR(ctx context.Context, streamID string, expiresAt *int) (*pb.StartDVRResponse, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -906,6 +930,9 @@ func (r *Resolver) DoStartDVR(ctx context.Context, streamID string, expiresAt *i
 
 // DoStopDVR stops an ongoing DVR recording
 func (r *Resolver) DoStopDVR(ctx context.Context, dvrHash string) (model.StopDVRResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: stop DVR")
 		return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
@@ -929,6 +956,9 @@ func (r *Resolver) DoStopDVR(ctx context.Context, dvrHash string) (model.StopDVR
 
 // DoDeleteDVR deletes a DVR recording and its files
 func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.DeleteDVRResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: delete DVR")
 		return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil

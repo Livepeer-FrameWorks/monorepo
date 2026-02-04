@@ -26,6 +26,7 @@ type AuthResult struct {
 	ExpiresAt     *time.Time
 	X402Processed bool
 	X402AuthOnly  bool
+	Permissions   []string
 }
 
 type AuthOptions struct {
@@ -159,13 +160,14 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 	resp, err := clients.Commodore.ValidateAPIToken(ctx, token)
 	if err == nil && resp != nil && resp.Valid {
 		return &AuthResult{
-			UserID:   resp.UserId,
-			TenantID: resp.TenantId,
-			Email:    resp.Email,
-			Role:     resp.Role,
-			TokenID:  resp.TokenId,
-			AuthType: "api_token",
-			APIToken: token,
+			UserID:      resp.UserId,
+			TenantID:    resp.TenantId,
+			Email:       resp.Email,
+			Role:        resp.Role,
+			TokenID:     resp.TokenId,
+			AuthType:    "api_token",
+			APIToken:    token,
+			Permissions: resp.Permissions,
 		}, nil
 	}
 
@@ -207,14 +209,18 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 			tokenID = auth.APIToken
 		}
 		ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, hashIdentifier(tokenID))
+		if len(auth.Permissions) > 0 {
+			ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, auth.Permissions)
+		}
 	}
 	if auth.UserID != "" && auth.TenantID != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyUser, &UserContext{
-			UserID:   auth.UserID,
-			TenantID: auth.TenantID,
-			Email:    auth.Email,
-			Role:     auth.Role,
-			TokenID:  auth.TokenID,
+			UserID:      auth.UserID,
+			TenantID:    auth.TenantID,
+			Email:       auth.Email,
+			Role:        auth.Role,
+			TokenID:     auth.TokenID,
+			Permissions: auth.Permissions,
 		})
 	}
 	return ctx
