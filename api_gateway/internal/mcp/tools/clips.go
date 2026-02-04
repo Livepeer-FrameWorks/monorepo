@@ -20,7 +20,7 @@ func RegisterClipTools(server *mcp.Server, clients *clients.ServiceClients, reso
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "create_clip",
-			Description: "Create a clip from a live or recorded stream. Requires billing details and balance.",
+			Description: "Create a clip from a live or recorded stream. Requires positive balance.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args CreateClipInput) (*mcp.CallToolResult, any, error) {
 			return handleCreateClip(ctx, args, clients, checker, logger)
@@ -59,14 +59,6 @@ func handleCreateClip(ctx context.Context, args CreateClipInput, clients *client
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Pre-flight: require positive balance

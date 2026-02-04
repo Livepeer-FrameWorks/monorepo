@@ -17,7 +17,7 @@ import (
 
 // RegisterVODTools registers VOD upload-related MCP tools.
 func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	// create_vod_upload - Initiate multipart upload (requires billing + balance)
+	// create_vod_upload - Initiate multipart upload (requires balance)
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "create_vod_upload",
@@ -92,14 +92,6 @@ type VodUploadPart struct {
 func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Pre-flight: require positive balance
@@ -192,14 +184,6 @@ type CompleteVodUploadResult struct {
 func handleCompleteVodUpload(ctx context.Context, args CompleteVodUploadInput, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Pre-flight: require positive balance
@@ -324,14 +308,6 @@ type DeleteVodAssetResult struct {
 func handleDeleteVodAsset(ctx context.Context, args DeleteVodAssetInput, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Pre-flight: require positive balance

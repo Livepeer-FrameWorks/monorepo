@@ -17,7 +17,7 @@ import (
 
 // RegisterStreamTools registers stream-related MCP tools.
 func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	// create_stream - Create a new stream (requires billing details + balance)
+	// create_stream - Create a new stream (requires balance)
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "create_stream",
@@ -85,14 +85,6 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
-	}
-
 	// Pre-flight: require positive balance
 	if err := checker.RequireBalance(ctx); err != nil {
 		if pfe, ok := preflight.IsPreflightError(err); ok {
@@ -151,14 +143,6 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 		return nil, nil, fmt.Errorf("not authenticated")
 	}
 
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
-	}
-
 	// Pre-flight: require positive balance
 	if err := checker.RequireBalance(ctx); err != nil {
 		if pfe, ok := preflight.IsPreflightError(err); ok {
@@ -213,14 +197,6 @@ type DeleteStreamResult struct {
 func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Pre-flight: require positive balance

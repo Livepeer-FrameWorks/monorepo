@@ -20,7 +20,7 @@ func RegisterDVRTools(server *mcp.Server, clients *clients.ServiceClients, resol
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "start_dvr",
-			Description: "Start DVR (catch-up/time-shift) recording for a stream. Requires billing details and balance.",
+			Description: "Start DVR (catch-up/time-shift) recording for a stream. Requires positive balance.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args StartDVRInput) (*mcp.CallToolResult, any, error) {
 			return handleStartDVR(ctx, args, clients, checker, logger)
@@ -55,14 +55,6 @@ func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.Se
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Pre-flight: require positive balance
