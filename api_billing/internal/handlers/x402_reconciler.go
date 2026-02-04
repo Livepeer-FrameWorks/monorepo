@@ -212,7 +212,7 @@ func (r *X402Reconciler) reconcileSettlement(ctx context.Context, s PendingSettl
 
 		emitBillingEvent(eventX402SettlementConfirm, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
 			Amount:   float64(s.AmountCents) / 100,
-			Currency: "EUR",
+			Currency: billing.DefaultCurrency(),
 			Status:   "confirmed",
 		})
 	} else {
@@ -318,7 +318,7 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 		r.markConfirmed(ctx, s.ID, blockNum, gasUsed)
 		emitBillingEvent(eventX402SettlementConfirm, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
 			Amount:   float64(s.AmountCents) / 100,
-			Currency: "EUR",
+			Currency: billing.DefaultCurrency(),
 			Status:   "confirmed",
 		})
 	}
@@ -377,6 +377,33 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 				continue
 			}
 			r.markFailed(ctx, s.ID, "transaction reorged or missing")
+
+			var creditExists bool
+			err = r.db.QueryRowContext(ctx, `
+				SELECT EXISTS(
+					SELECT 1
+					FROM purser.balance_transactions
+					WHERE tenant_id = $1
+					  AND reference_id = $2
+					  AND reference_type = 'x402_payment'
+					  AND transaction_type = 'topup'
+				)
+			`, s.TenantID, s.TxHash).Scan(&creditExists)
+			if err != nil {
+				r.logger.WithError(err).WithFields(logging.Fields{
+					"tenant_id": s.TenantID,
+					"tx_hash":   s.TxHash,
+				}).Error("Failed to verify credit existence before reorg debit")
+				continue
+			}
+			if !creditExists {
+				r.logger.WithFields(logging.Fields{
+					"tenant_id": s.TenantID,
+					"tx_hash":   s.TxHash,
+				}).Warn("Skipping reorg debit: no original credit found")
+				continue
+			}
+
 			r.debitBalance(ctx, s.TenantID, s.AmountCents, s.TxHash)
 			emitBillingEvent(eventX402ReorgDetected, s.TenantID, "x402_nonce", s.TxHash, &pb.BillingEvent{
 				Amount:   float64(s.AmountCents) / 100,
@@ -604,12 +631,14 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
+	currency := billing.DefaultCurrency()
+
 	// Get current balance
 	var balance int64
 	err = tx.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
-		WHERE tenant_id = $1 AND currency = 'EUR'
-	`, tenantID).Scan(&balance)
+		WHERE tenant_id = $1 AND currency = $2
+	`, tenantID, currency).Scan(&balance)
 	if err != nil && err != sql.ErrNoRows {
 		r.logger.WithError(err).Error("Failed to get current balance for debit")
 		return
@@ -620,10 +649,11 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 
 	// Update balance
 	_, err = tx.ExecContext(ctx, `
-		UPDATE purser.prepaid_balances
-		SET balance_cents = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND currency = 'EUR'
-	`, newBalance, tenantID)
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (tenant_id, currency)
+		DO UPDATE SET balance_cents = $2, updated_at = NOW()
+	`, tenantID, newBalance, currency)
 	if err != nil {
 		r.logger.WithError(err).Error("Failed to update balance for debit")
 		return
@@ -657,7 +687,7 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 	// Emit billing event for failed settlement
 	emitBillingEvent(eventX402SettlementFailed, tenantID, "x402_nonce", txHash, &pb.BillingEvent{
 		Amount:   float64(amountCents) / 100,
-		Currency: "EUR",
+		Currency: billing.DefaultCurrency(),
 		Status:   "failed",
 	})
 }
