@@ -108,6 +108,50 @@ func buildCursorResponse(resultsLen, limit int, direction pagination.Direction, 
 	return pagination.BuildResponse(resultsLen, limit, direction, totalCount, startCursor, endCursor)
 }
 
+// buildKeysetConditionN returns a WHERE clause fragment for keyset pagination with N columns.
+// Forward: (ts, cols...) < (cursor_ts, cursor_cols...) - fetches older items
+// Backward: (ts, cols...) > (cursor_ts, cursor_cols...) - fetches newer items
+func buildKeysetConditionN(params *pagination.Params, tsCol string, cols []string, cursorParts []string) (string, []interface{}) {
+	if params.Cursor == nil || len(cols) == 0 || len(cols) != len(cursorParts) {
+		return "", nil
+	}
+
+	allCols := append([]string{tsCol}, cols...)
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(allCols)), ", ")
+	tuple := fmt.Sprintf("(%s)", strings.Join(allCols, ", "))
+
+	args := make([]interface{}, 0, len(allCols))
+	args = append(args, params.Cursor.Timestamp)
+	for _, part := range cursorParts {
+		args = append(args, part)
+	}
+
+	if params.Direction == pagination.Backward {
+		return fmt.Sprintf(" AND %s > (%s)", tuple, placeholders), args
+	}
+	return fmt.Sprintf(" AND %s < (%s)", tuple, placeholders), args
+}
+
+// buildOrderByN returns an ORDER BY clause for keyset pagination with N columns.
+// Forward: DESC (newest first), Backward: ASC (oldest first, then reverse in Go)
+func buildOrderByN(params *pagination.Params, tsCol string, cols []string) string {
+	if len(cols) == 0 {
+		return ""
+	}
+
+	allCols := append([]string{tsCol}, cols...)
+	dir := "DESC"
+	if params.Direction == pagination.Backward {
+		dir = "ASC"
+	}
+
+	parts := make([]string, 0, len(allCols))
+	for _, col := range allCols {
+		parts = append(parts, fmt.Sprintf("%s %s", col, dir))
+	}
+	return " ORDER BY " + strings.Join(parts, ", ")
+}
+
 // buildKeysetCondition returns a WHERE clause fragment for keyset pagination.
 // Forward: (ts, id) < (cursor_ts, cursor_id) - fetches older items
 // Backward: (ts, id) > (cursor_ts, cursor_id) - fetches newer items
@@ -115,19 +159,13 @@ func buildKeysetCondition(params *pagination.Params, tsCol, idCol string) (strin
 	if params.Cursor == nil {
 		return "", nil
 	}
-	if params.Direction == pagination.Backward {
-		return fmt.Sprintf(" AND (%s, %s) > (?, ?)", tsCol, idCol), []interface{}{params.Cursor.Timestamp, params.Cursor.ID}
-	}
-	return fmt.Sprintf(" AND (%s, %s) < (?, ?)", tsCol, idCol), []interface{}{params.Cursor.Timestamp, params.Cursor.ID}
+	return buildKeysetConditionN(params, tsCol, []string{idCol}, []string{params.Cursor.ID})
 }
 
 // buildOrderBy returns an ORDER BY clause for keyset pagination.
 // Forward: DESC (newest first), Backward: ASC (oldest first, then reverse in Go)
 func buildOrderBy(params *pagination.Params, tsCol, idCol string) string {
-	if params.Direction == pagination.Backward {
-		return fmt.Sprintf(" ORDER BY %s ASC, %s ASC", tsCol, idCol)
-	}
-	return fmt.Sprintf(" ORDER BY %s DESC, %s DESC", tsCol, idCol)
+	return buildOrderByN(params, tsCol, []string{idCol})
 }
 
 // buildKeysetConditionSingle returns a WHERE clause fragment for single-column keyset pagination.
@@ -1849,23 +1887,18 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	}
 
 	if params.Cursor != nil {
-		// Cursor ID contains "stream_id|selected_node"
-		parts := strings.SplitN(params.Cursor.ID, "|", 2)
-		if len(parts) == 2 {
-			if params.Direction == pagination.Backward {
-				query += " AND (timestamp, stream_id, selected_node) > (?, ?, ?)"
-			} else {
-				query += " AND (timestamp, stream_id, selected_node) < (?, ?, ?)"
+		// Cursor ID contains "tenant_id|stream_id|selected_node"
+		parts := strings.SplitN(params.Cursor.ID, "|", 3)
+		if len(parts) == 3 {
+			keysetCond, keysetArgs := buildKeysetConditionN(params, "timestamp", []string{"tenant_id", "stream_id", "selected_node"}, parts)
+			if keysetCond != "" {
+				query += keysetCond
+				args = append(args, keysetArgs...)
 			}
-			args = append(args, params.Cursor.Timestamp, parts[0], parts[1])
 		}
 	}
 
-	if params.Direction == pagination.Backward {
-		query += " ORDER BY timestamp ASC, stream_id ASC, selected_node ASC"
-	} else {
-		query += " ORDER BY timestamp DESC, stream_id DESC, selected_node DESC"
-	}
+	query += buildOrderByN(params, "timestamp", []string{"tenant_id", "stream_id", "selected_node"})
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -2002,8 +2035,8 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	if len(events) > 0 {
 		first := events[0]
 		last := events[len(events)-1]
-		startCursor = pagination.EncodeCursor(first.Timestamp.AsTime(), first.StreamId+"|"+first.SelectedNode)
-		endCursor = pagination.EncodeCursor(last.Timestamp.AsTime(), last.StreamId+"|"+last.SelectedNode)
+		startCursor = pagination.EncodeCursor(first.Timestamp.AsTime(), first.TenantId+"|"+first.StreamId+"|"+first.SelectedNode)
+		endCursor = pagination.EncodeCursor(last.Timestamp.AsTime(), last.TenantId+"|"+last.StreamId+"|"+last.SelectedNode)
 	}
 
 	return &pb.GetRoutingEventsResponse{
@@ -4259,13 +4292,17 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 		args = append(args, processType)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "stream_id")
+	var cursorParts []string
+	if params.Cursor != nil {
+		cursorParts = strings.SplitN(params.Cursor.ID, "|", 3)
+	}
+	keysetCond, keysetArgs := buildKeysetConditionN(params, "timestamp", []string{"stream_id", "node_id", "process_type"}, cursorParts)
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp", "stream_id")
+	query += buildOrderByN(params, "timestamp", []string{"stream_id", "node_id", "process_type"})
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -4407,8 +4444,8 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].StreamId)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].StreamId)
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].StreamId+"|"+records[0].NodeId+"|"+records[0].ProcessType)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].StreamId+"|"+records[len(records)-1].NodeId+"|"+records[len(records)-1].ProcessType)
 	}
 
 	response.Pagination = buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor)
@@ -4746,13 +4783,17 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 		args = append(args, *req.NodeId)
 	}
 
-	keysetCond, keysetArgs := buildKeysetCondition(params, "timestamp", "stream_id")
+	var cursorParts []string
+	if params.Cursor != nil {
+		cursorParts = strings.SplitN(params.Cursor.ID, "|", 2)
+	}
+	keysetCond, keysetArgs := buildKeysetConditionN(params, "timestamp", []string{"stream_id", "node_id"}, cursorParts)
 	if keysetCond != "" {
 		query += keysetCond
 		args = append(args, keysetArgs...)
 	}
 
-	query += buildOrderBy(params, "timestamp", "stream_id")
+	query += buildOrderByN(params, "timestamp", []string{"stream_id", "node_id"})
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
 	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
@@ -4798,8 +4839,8 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 
 	var startCursor, endCursor string
 	if len(events) > 0 {
-		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), events[0].StreamId)
-		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].StreamId)
+		startCursor = pagination.EncodeCursor(events[0].Timestamp.AsTime(), events[0].StreamId+"|"+events[0].NodeId)
+		endCursor = pagination.EncodeCursor(events[len(events)-1].Timestamp.AsTime(), events[len(events)-1].StreamId+"|"+events[len(events)-1].NodeId)
 	}
 
 	return &pb.GetRebufferingEventsResponse{
