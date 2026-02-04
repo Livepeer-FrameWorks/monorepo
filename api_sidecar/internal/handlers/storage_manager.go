@@ -727,7 +727,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		durationMs := duration.Milliseconds()
 		errStr := uploadErr.Error()
 		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:     pb.StorageLifecycleData_ACTION_SYNCED, // Sync finished with error
+			Action:     pb.StorageLifecycleData_ACTION_SYNC_STARTED, // Sync started but failed
 			AssetType:  string(asset.AssetType),
 			AssetHash:  asset.AssetHash,
 			Error:      &errStr,
@@ -947,7 +947,7 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 		var totalBytes uint64
 		_ = filepath.Walk(req.LocalPath, func(_ string, info os.FileInfo, walkErr error) error {
 			if walkErr != nil {
-				return nil
+				return walkErr
 			}
 			if info.IsDir() {
 				return nil
