@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -93,6 +94,33 @@ func TestGetPaymentHeaderFromContext(t *testing.T) {
 		ctx := metadata.NewIncomingContext(context.Background(), md)
 		if got := GetPaymentHeaderFromContext(ctx); got != "grpc-sig" {
 			t.Errorf("got %q, want %q", got, "grpc-sig")
+		}
+	})
+
+	t.Run("empty x-payment values are ignored", func(t *testing.T) {
+		md := metadata.MD{"x-payment": []string{}}
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+		if got := GetPaymentHeaderFromContext(ctx); got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("whitespace x-payment value is ignored", func(t *testing.T) {
+		md := metadata.MD{"x-payment": []string{"   "}}
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+		if got := GetPaymentHeaderFromContext(ctx); got != "" {
+			t.Errorf("expected empty string, got %q", got)
+		}
+	})
+
+	t.Run("payment-signature used when x-payment empty", func(t *testing.T) {
+		md := metadata.MD{
+			"x-payment":         []string{""},
+			"payment-signature": []string{"fallback-sig"},
+		}
+		ctx := metadata.NewIncomingContext(context.Background(), md)
+		if got := GetPaymentHeaderFromContext(ctx); got != "fallback-sig" {
+			t.Errorf("got %q, want %q", got, "fallback-sig")
 		}
 	})
 
@@ -254,6 +282,30 @@ func TestParsePaymentHeader(t *testing.T) {
 		_, err := ParsePaymentHeader("")
 		if err == nil {
 			t.Error("expected error for empty header")
+		}
+	})
+}
+
+func TestBase64DecodeFallbackOrder(t *testing.T) {
+	t.Run("standard base64 is used before fallbacks", func(t *testing.T) {
+		encoded := base64.StdEncoding.EncodeToString([]byte{0xfb})
+		decoded, err := base64Decode(encoded)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(decoded, []byte{0xfb}) {
+			t.Fatalf("unexpected decoded bytes: %x", decoded)
+		}
+	})
+
+	t.Run("raw std base64 is accepted after fallbacks", func(t *testing.T) {
+		encoded := base64.RawStdEncoding.EncodeToString([]byte{0xfb})
+		decoded, err := base64Decode(encoded)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !bytes.Equal(decoded, []byte{0xfb}) {
+			t.Fatalf("unexpected decoded bytes: %x", decoded)
 		}
 	})
 }

@@ -31,15 +31,16 @@ type APIToken struct {
 // ValidateAPIToken validates a developer API token
 func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 	var token APIToken
+	var permissions pq.StringArray
 	// Get token from database
 	err := db.QueryRow(`
 		SELECT id, tenant_id, user_id, token_name,
 		       permissions, is_active, expires_at, created_at
-		FROM commodore.api_tokens 
+		FROM commodore.api_tokens
 		WHERE token_value = $1 AND is_active = true
 	`, hashToken(tokenValue)).Scan(
 		&token.ID, &token.TenantID, &token.UserID,
-		&token.TokenName, pq.Array(&token.Permissions), &token.IsActive,
+		&token.TokenName, &permissions, &token.IsActive,
 		&token.ExpiresAt, &token.CreatedAt,
 	)
 
@@ -49,6 +50,11 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 
 	if err != nil {
 		return nil, err
+	}
+
+	token.Permissions = []string(permissions)
+	if !token.IsActive {
+		return nil, ErrInvalidAPIToken
 	}
 
 	// Check expiry
