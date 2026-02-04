@@ -456,7 +456,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	})
 
 	// Add interceptors for logging, metrics, etc.
-	opts = append(opts, grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)))
+	opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor))
 	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(cfg.Logger)))
 
 	server := grpc.NewServer(opts...)

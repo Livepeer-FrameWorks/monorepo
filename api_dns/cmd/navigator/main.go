@@ -157,8 +157,8 @@ func main() {
 		grpcServer := grpc.NewServer(
 			grpc.Creds(insecure.NewCredentials()),
 			grpc.ChainUnaryInterceptor(
-				authInterceptor,
 				grpcutil.SanitizeUnaryServerInterceptor(),
+				authInterceptor,
 			),
 		)
 		pb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)

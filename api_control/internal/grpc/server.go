@@ -4783,7 +4783,7 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	})
 
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)),
+		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
 	}
 
 	server := grpc.NewServer(opts...)

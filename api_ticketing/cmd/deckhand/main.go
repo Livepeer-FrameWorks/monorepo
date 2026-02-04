@@ -163,9 +163,9 @@ func main() {
 
 		grpcSrv := grpc.NewServer(
 			grpc.ChainUnaryInterceptor(
+				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
 				middleware.GRPCLoggingInterceptor(logger),
-				grpcutil.SanitizeUnaryServerInterceptor(),
 			),
 		)
 		pb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
