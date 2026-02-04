@@ -24,6 +24,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -497,7 +498,7 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 		ts := req.GetRetentionUntil().AsTime().Unix()
 		expiresAt = &ts
 	}
-	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", expiresAt)
+	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, clipHash, streamID, "registered", expiresAt)
 
 	return &pb.RegisterClipResponse{
 		ClipHash:             clipHash,
@@ -577,7 +578,7 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 		ts := req.GetRetentionUntil().AsTime().Unix()
 		expiresAt = &ts
 	}
-	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt)
+	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, streamID, "registered", expiresAt)
 
 	return &pb.RegisterDVRResponse{
 		DvrHash:              dvrHash,
@@ -739,7 +740,7 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 	}).Info("Registered VOD in business registry")
 
 	expiresAt := retentionUntil.Unix()
-	s.emitArtifactEvent(eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, vodHash, "", "registered", &expiresAt)
+	s.emitArtifactEvent(ctx, eventArtifactRegistered, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, vodHash, "", "registered", &expiresAt)
 
 	return &pb.RegisterVodResponse{
 		VodHash:              vodHash,
@@ -1506,17 +1507,17 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 
 	// Check account status
 	if !user.IsActive {
-		s.emitAuthEvent(eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "account_inactive")
+		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "account_inactive")
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
 	}
 	if !user.IsVerified {
-		s.emitAuthEvent(eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "email_not_verified")
+		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "email_not_verified")
 		return nil, status.Error(codes.Unauthenticated, "email not verified")
 	}
 
 	// Verify password
 	if !auth.CheckPassword(password, user.PasswordHash) {
-		s.emitAuthEvent(eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "invalid_credentials")
+		s.emitAuthEvent(ctx, eventAuthLoginFailed, user.ID, user.TenantID, "password", "", "", "invalid_credentials")
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 
@@ -1546,7 +1547,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
-	s.emitAuthEvent(eventAuthLoginSucceeded, user.ID, user.TenantID, "password", "", "", "")
+	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, user.ID, user.TenantID, "password", "", "", "")
 
 	return &pb.AuthResponse{
 		Token:        token,
@@ -1715,7 +1716,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 		"role":      role,
 	}).Info("User registered successfully via gRPC")
 
-	s.emitAuthEvent(eventAuthRegistered, userID, tenantID, "password", "", "", "")
+	s.emitAuthEvent(ctx, eventAuthRegistered, userID, tenantID, "password", "", "", "")
 
 	return &pb.RegisterResponse{
 		Success: true,
@@ -1929,7 +1930,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 	}
 
 	expiresAt := time.Now().Add(15 * time.Minute)
-	s.emitAuthEvent(eventAuthTokenRefreshed, userID, tenantID, "refresh_token", "", "", "")
+	s.emitAuthEvent(ctx, eventAuthTokenRefreshed, userID, tenantID, "refresh_token", "", "", "")
 
 	return &pb.AuthResponse{
 		Token:        token,
@@ -2465,7 +2466,7 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRe
 		user.LastLoginAt = timestamppb.New(lastLoginAt.Time)
 	}
 
-	s.emitAuthEvent(eventAuthLoginSucceeded, userID, tenantID, "wallet", "", "", "")
+	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "wallet", "", "", "")
 
 	return &pb.AuthResponse{
 		Token:     token,
@@ -2571,7 +2572,7 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 		user.LastLoginAt = timestamppb.New(lastLoginAt.Time)
 	}
 
-	s.emitAuthEvent(eventAuthLoginSucceeded, userID, tenantID, "x402", "", "", "")
+	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "x402", "", "", "")
 
 	authResp := &pb.AuthResponse{
 		Token:     token,
@@ -2689,7 +2690,7 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *pb.LinkWalletRequ
 		return nil, status.Errorf(codes.Internal, "failed to link wallet: %v", err)
 	}
 
-	s.emitAuthEvent(eventWalletLinked, userID, tenantID, "wallet", walletID, "", "")
+	s.emitAuthEvent(ctx, eventWalletLinked, userID, tenantID, "wallet", walletID, "", "")
 
 	return &pb.WalletIdentity{
 		Id:            walletID,
@@ -2724,7 +2725,7 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *pb.UnlinkWallet
 		return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
 	}
 
-	s.emitAuthEvent(eventWalletUnlinked, userID, tenantID, "wallet", walletID, "", "")
+	s.emitAuthEvent(ctx, eventWalletUnlinked, userID, tenantID, "wallet", walletID, "", "")
 
 	return &pb.UnlinkWalletResponse{
 		Success: true,
@@ -2916,7 +2917,7 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 	if req.GetIsRecording() {
 		changedFields = append(changedFields, "is_recording_enabled")
 	}
-	s.emitStreamChangeEvent(eventStreamCreated, tenantID, userID, streamID, changedFields)
+	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, streamID, changedFields)
 
 	return &pb.CreateStreamResponse{
 		Id:          streamID,
@@ -3114,7 +3115,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 	}
 
 	if len(changedFields) > 0 {
-		s.emitStreamChangeEvent(eventStreamUpdated, tenantID, userID, streamID, changedFields)
+		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, changedFields)
 	}
 
 	return s.queryStream(ctx, streamID, userID, tenantID)
@@ -3191,7 +3192,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
 
-	s.emitStreamChangeEvent(eventStreamDeleted, tenantID, userID, streamID, nil)
+	s.emitStreamChangeEvent(ctx, eventStreamDeleted, tenantID, userID, streamID, nil)
 
 	return &pb.DeleteStreamResponse{
 		Message:     "Stream deleted successfully",
@@ -3237,7 +3238,7 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *pb.RefreshS
 		s.logger.WithError(err).Warn("Failed to get playback ID for refreshed stream key")
 	}
 
-	s.emitStreamChangeEvent(eventStreamUpdated, tenantID, userID, streamID, []string{"stream_key"})
+	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, []string{"stream_key"})
 
 	return &pb.RefreshStreamKeyResponse{
 		Message:           "Stream key refreshed successfully",
@@ -3295,7 +3296,7 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStr
 		return nil, status.Errorf(codes.Internal, "failed to create stream key: %v", err)
 	}
 
-	s.emitStreamKeyEvent(eventStreamKeyCreated, tenantID, userID, streamID, keyID)
+	s.emitStreamKeyEvent(ctx, eventStreamKeyCreated, tenantID, userID, streamID, keyID)
 
 	return &pb.StreamKeyResponse{
 		StreamKey: &pb.StreamKey{
@@ -3479,7 +3480,7 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *pb.Deact
 		return nil, status.Error(codes.NotFound, "stream key not found")
 	}
 
-	s.emitStreamKeyEvent(eventStreamKeyDeleted, tenantID, userID, req.GetStreamId(), req.GetKeyId())
+	s.emitStreamKeyEvent(ctx, eventStreamKeyDeleted, tenantID, userID, req.GetStreamId(), req.GetKeyId())
 
 	return &emptypb.Empty{}, nil
 }
@@ -3521,7 +3522,7 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *pb.CreateAPIT
 		return nil, status.Errorf(codes.Internal, "failed to create API token: %v", err)
 	}
 
-	s.emitAuthEvent(eventTokenCreated, userID, tenantID, "api_token", "", tokenID, "")
+	s.emitAuthEvent(ctx, eventTokenCreated, userID, tenantID, "api_token", "", tokenID, "")
 
 	resp := &pb.CreateAPITokenResponse{
 		Id:          tokenID,
@@ -3688,7 +3689,7 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 		return nil, status.Errorf(codes.Internal, "failed to revoke token: %v", err)
 	}
 
-	s.emitAuthEvent(eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), "")
+	s.emitAuthEvent(ctx, eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), "")
 
 	return &pb.RevokeAPITokenResponse{
 		Message:   "Token revoked successfully",
@@ -3720,8 +3721,11 @@ const (
 	eventArtifactDeleted    = "artifact_deleted"
 )
 
-func (s *CommodoreServer) emitServiceEvent(event *pb.ServiceEvent) {
+func (s *CommodoreServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
 	if s.decklogClient == nil || event == nil {
+		return
+	}
+	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
 
@@ -3732,7 +3736,7 @@ func (s *CommodoreServer) emitServiceEvent(event *pb.ServiceEvent) {
 	}(event)
 }
 
-func (s *CommodoreServer) emitAuthEvent(eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) {
+func (s *CommodoreServer) emitAuthEvent(ctx context.Context, eventType, userID, tenantID, authType, walletID, tokenID, errMsg string) {
 	payload := &pb.AuthEvent{
 		UserId:   userID,
 		TenantId: tenantID,
@@ -3751,10 +3755,10 @@ func (s *CommodoreServer) emitAuthEvent(eventType, userID, tenantID, authType, w
 		ResourceId:   userID,
 		Payload:      &pb.ServiceEvent_AuthEvent{AuthEvent: payload},
 	}
-	s.emitServiceEvent(event)
+	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitStreamChangeEvent(eventType, tenantID, userID, streamID string, changedFields []string) {
+func (s *CommodoreServer) emitStreamChangeEvent(ctx context.Context, eventType, tenantID, userID, streamID string, changedFields []string) {
 	payload := &pb.StreamChangeEvent{
 		StreamId:      streamID,
 		ChangedFields: changedFields,
@@ -3769,10 +3773,10 @@ func (s *CommodoreServer) emitStreamChangeEvent(eventType, tenantID, userID, str
 		ResourceId:   streamID,
 		Payload:      &pb.ServiceEvent_StreamChangeEvent{StreamChangeEvent: payload},
 	}
-	s.emitServiceEvent(event)
+	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitArtifactEvent(eventType, tenantID, userID string, artifactType pb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) {
+func (s *CommodoreServer) emitArtifactEvent(ctx context.Context, eventType, tenantID, userID string, artifactType pb.ArtifactEvent_ArtifactType, artifactID, streamID, status string, expiresAt *int64) {
 	if artifactID == "" || tenantID == "" {
 		return
 	}
@@ -3797,10 +3801,10 @@ func (s *CommodoreServer) emitArtifactEvent(eventType, tenantID, userID string, 
 		ResourceId:   artifactID,
 		Payload:      &pb.ServiceEvent_ArtifactEvent{ArtifactEvent: payload},
 	}
-	s.emitServiceEvent(event)
+	s.emitServiceEvent(ctx, event)
 }
 
-func (s *CommodoreServer) emitStreamKeyEvent(eventType, tenantID, userID, streamID, keyID string) {
+func (s *CommodoreServer) emitStreamKeyEvent(ctx context.Context, eventType, tenantID, userID, streamID, keyID string) {
 	payload := &pb.StreamKeyEvent{
 		StreamId: streamID,
 		KeyId:    keyID,
@@ -3815,7 +3819,7 @@ func (s *CommodoreServer) emitStreamKeyEvent(eventType, tenantID, userID, stream
 		ResourceId:   keyID,
 		Payload:      &pb.ServiceEvent_StreamKeyEvent{StreamKeyEvent: payload},
 	}
-	s.emitServiceEvent(event)
+	s.emitServiceEvent(ctx, event)
 }
 
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
@@ -4421,7 +4425,7 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 			s.logger.WithError(delErr).WithField("clip_hash", req.ClipHash).Warn("Failed to delete clip from business registry")
 		}
 
-		s.emitArtifactEvent(eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, streamID, "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, streamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -4495,7 +4499,7 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRReques
 			s.logger.WithError(delErr).WithField("dvr_hash", req.DvrHash).Warn("Failed to delete DVR from business registry")
 		}
 
-		s.emitArtifactEvent(eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, streamID, "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, streamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -5328,7 +5332,7 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodA
 
 	// Emit deletion event
 	if resp.Success {
-		s.emitArtifactEvent(eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "", "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, pb.ArtifactEvent_ARTIFACT_TYPE_VOD, req.ArtifactHash, "", "deleted", nil)
 	}
 
 	s.logger.WithFields(logging.Fields{

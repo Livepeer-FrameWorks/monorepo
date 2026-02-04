@@ -989,9 +989,9 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		changedFields = append(changedFields, "deployment_model")
 	}
 
-	s.emitTenantEvent(eventTenantCreated, tenantID, userID, changedFields)
+	s.emitTenantEvent(ctx, eventTenantCreated, tenantID, userID, changedFields)
 	if defaultClusterID.Valid {
-		s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", "")
+		s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", "")
 	}
 
 	tenant := &pb.Tenant{
@@ -1098,14 +1098,14 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	}
 
 	if len(changedFields) > 0 {
-		s.emitTenantEvent(eventTenantUpdated, tenantID, userID, changedFields)
+		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields)
 	}
 	if req.PrimaryClusterId != nil {
 		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
 		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
-			s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
+			s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
 		} else if newCluster == "" && previousClusterID.Valid {
-			s.emitClusterEvent(eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
+			s.emitClusterEvent(ctx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
 		}
 	}
 
@@ -1140,7 +1140,7 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 	}
 
 	s.logger.WithField("tenant_id", tenantID).Info("Deleted tenant successfully")
-	s.emitTenantEvent(eventTenantDeleted, tenantID, userID, nil)
+	s.emitTenantEvent(ctx, eventTenantDeleted, tenantID, userID, nil)
 	return &emptypb.Empty{}, nil
 }
 
@@ -1253,14 +1253,14 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 
 	s.logger.WithField("tenant_id", tenantID).Info("Updated tenant cluster successfully")
 	if len(changedFields) > 0 {
-		s.emitTenantEvent(eventTenantUpdated, tenantID, userID, changedFields)
+		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields)
 	}
 	if req.PrimaryClusterId != nil {
 		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
 		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
-			s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
+			s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", "")
 		} else if newCluster == "" && previousClusterID.Valid {
-			s.emitClusterEvent(eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
+			s.emitClusterEvent(ctx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", "")
 		}
 	}
 	return &emptypb.Empty{}, nil
@@ -1644,7 +1644,7 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 	if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" {
 		tenantID = *cluster.OwnerTenantId
 	}
-	s.emitClusterEvent(eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(ctx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &pb.ClusterResponse{Cluster: cluster}, nil
 }
@@ -1743,7 +1743,7 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" {
 		tenantID = *cluster.OwnerTenantId
 	}
-	s.emitClusterEvent(eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(ctx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &pb.ClusterResponse{Cluster: cluster}, nil
 }
@@ -3633,8 +3633,11 @@ const (
 	eventClusterSubscriptionRejected  = "cluster_subscription_rejected"
 )
 
-func (s *QuartermasterServer) emitServiceEvent(event *pb.ServiceEvent) {
+func (s *QuartermasterServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
 	if s.decklogClient == nil || event == nil {
+		return
+	}
+	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
 
@@ -3645,7 +3648,7 @@ func (s *QuartermasterServer) emitServiceEvent(event *pb.ServiceEvent) {
 	}(event)
 }
 
-func (s *QuartermasterServer) emitTenantEvent(eventType, tenantID, userID string, changedFields []string) {
+func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string) {
 	payload := &pb.TenantEvent{
 		TenantId:      tenantID,
 		ChangedFields: changedFields,
@@ -3660,10 +3663,10 @@ func (s *QuartermasterServer) emitTenantEvent(eventType, tenantID, userID string
 		ResourceId:   tenantID,
 		Payload:      &pb.ServiceEvent_TenantEvent{TenantEvent: payload},
 	}
-	s.emitServiceEvent(event)
+	s.emitServiceEvent(ctx, event)
 }
 
-func (s *QuartermasterServer) emitClusterEvent(eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) {
+func (s *QuartermasterServer) emitClusterEvent(ctx context.Context, eventType, tenantID, userID, clusterID, resourceType, resourceID, inviteID, subscriptionID, reason string) {
 	payload := &pb.ClusterEvent{
 		ClusterId:      clusterID,
 		TenantId:       tenantID,
@@ -3681,7 +3684,7 @@ func (s *QuartermasterServer) emitClusterEvent(eventType, tenantID, userID, clus
 		ResourceId:   resourceID,
 		Payload:      &pb.ServiceEvent_ClusterEvent{ClusterEvent: payload},
 	}
-	s.emitServiceEvent(event)
+	s.emitServiceEvent(ctx, event)
 }
 
 func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
@@ -4365,7 +4368,7 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 		return nil, err
 	}
 
-	s.emitClusterEvent(eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(ctx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &pb.ClusterResponse{Cluster: cluster}, nil
 }
@@ -4539,8 +4542,8 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		return nil, err
 	}
 
-	s.emitClusterEvent(eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
-	s.emitClusterEvent(eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(ctx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &pb.CreatePrivateClusterResponse{
 		Cluster: cluster,
@@ -4641,7 +4644,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 		return nil, status.Errorf(codes.Internal, "failed to create invite: %v", err)
 	}
 
-	s.emitClusterEvent(eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", "")
+	s.emitClusterEvent(ctx, eventClusterInviteCreated, ownerTenantID, userID, clusterID, "cluster_invite", id, id, "", "")
 
 	return &pb.ClusterInvite{
 		Id:                id,
@@ -4695,7 +4698,7 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *pb.R
 		return nil, status.Errorf(codes.Internal, "failed to revoke invite: %v", err)
 	}
 
-	s.emitClusterEvent(eventClusterInviteRevoked, ownerTenantID, userID, clusterID, "cluster_invite", inviteID, inviteID, "", "")
+	s.emitClusterEvent(ctx, eventClusterInviteRevoked, ownerTenantID, userID, clusterID, "cluster_invite", inviteID, inviteID, "", "")
 
 	return &emptypb.Empty{}, nil
 }
@@ -5090,7 +5093,7 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	if sub.SubscriptionStatus == pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE {
 		eventType = eventClusterSubscriptionApproved
 	}
-	s.emitClusterEvent(eventType, tenantID, userID, clusterID, "cluster_subscription", sub.Id, "", sub.Id, "")
+	s.emitClusterEvent(ctx, eventType, tenantID, userID, clusterID, "cluster_subscription", sub.Id, "", sub.Id, "")
 
 	return sub, nil
 }
@@ -5166,7 +5169,7 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 		return nil, err
 	}
 
-	s.emitClusterEvent(eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", sub.Id, inviteID, sub.Id, "")
+	s.emitClusterEvent(ctx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", sub.Id, inviteID, sub.Id, "")
 
 	return sub, nil
 }
@@ -5327,7 +5330,7 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 		return nil, err
 	}
 
-	s.emitClusterEvent(eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, "")
+	s.emitClusterEvent(ctx, eventClusterSubscriptionApproved, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, "")
 
 	return sub, nil
 }
@@ -5379,7 +5382,7 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 		return nil, err
 	}
 
-	s.emitClusterEvent(eventClusterSubscriptionRejected, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason)
+	s.emitClusterEvent(ctx, eventClusterSubscriptionRejected, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason)
 
 	return sub, nil
 }
