@@ -381,7 +381,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		}
 	}
 
-	if isPublic && !req.PublicAllowlisted {
+	if isPublic && !req.PublicAllowlisted && !x402Paid {
 		response := build402Response(ctx, "", req.OperationName, req.Path, x402Provider, logger)
 		return AccessDecision{
 			Allowed: false,
