@@ -177,6 +177,14 @@ CREATE TABLE IF NOT EXISTS foghorn.node_maintenance (
 -- ============================================================================
 -- NODE LIFECYCLE SNAPSHOTS
 -- ============================================================================
+-- NOTE: This table is currently WRITTEN but NOT READ. The same NodeLifecycleUpdate
+-- data is also sent to ClickHouse (node_state_current, node_metrics_samples) where
+-- it IS queried. This PostgreSQL copy may be useful for:
+--   - Disaster recovery (rehydrating Foghorn state if ClickHouse is unavailable)
+--   - Audit trail in PostgreSQL (queryable via standard SQL tools)
+--   - Future features requiring control-plane access to node state
+-- Until a read path is added, this table accumulates data but serves no active purpose.
+-- See: UpsertNodeLifecycle in api_balancing/internal/control/repos.go
 
 -- Full node lifecycle snapshot storage for readiness and audit
 CREATE TABLE IF NOT EXISTS foghorn.node_lifecycle (

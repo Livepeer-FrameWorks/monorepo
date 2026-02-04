@@ -821,8 +821,8 @@ services:
       TO_EMAIL: ${TO_EMAIL}
       # Listmonk Integration
       LISTMONK_URL: http://listmonk:9000
-      LISTMONK_USERNAME: ${LISTMONK_ADMIN_USER:-admin}
-      LISTMONK_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-admin}
+      LISTMONK_USERNAME: ${LISTMONK_USERNAME:-admin}
+      LISTMONK_PASSWORD: ${LISTMONK_PASSWORD:-admin}
       DEFAULT_MAILING_LIST_ID: ${DEFAULT_MAILING_LIST_ID:-1}
     restart: unless-stopped
     networks:

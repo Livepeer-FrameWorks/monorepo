@@ -459,6 +459,92 @@ ON CONFLICT (id) DO UPDATE SET
     paid_at = EXCLUDED.paid_at;
 
 -- ============================================================================
+-- PURSER: Demo Billing Payments (Payment Transactions)
+-- ============================================================================
+-- Payment records linked to paid invoices
+
+INSERT INTO purser.billing_payments (
+    id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at
+) VALUES
+-- Payment for previous month invoice
+(
+    '5eedba1d-fee5-da7a-ba1d-fee5da7a0001',
+    '5eedb111-fee5-da7a-b111-fee5da7a0002',  -- Previous month paid invoice
+    'directdebit',
+    249.00,
+    'EUR',
+    'tr_demo_sepa_001',
+    'confirmed',
+    DATE_TRUNC('month', NOW()) + INTERVAL '5 days',
+    DATE_TRUNC('month', NOW()) + INTERVAL '5 days'
+),
+-- Payment for two months ago invoice
+(
+    '5eedba1d-fee5-da7a-ba1d-fee5da7a0002',
+    '5eedb111-fee5-da7a-b111-fee5da7a0003',  -- Two months ago paid invoice
+    'directdebit',
+    249.00,
+    'EUR',
+    'tr_demo_sepa_002',
+    'confirmed',
+    DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days',
+    DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days'
+)
+ON CONFLICT (id) DO UPDATE SET
+    status = EXCLUDED.status,
+    confirmed_at = EXCLUDED.confirmed_at;
+
+-- ============================================================================
+-- PURSER: Demo Balance Transactions (Prepaid Audit Trail)
+-- ============================================================================
+-- Transaction history explaining the $50 prepaid balance
+
+INSERT INTO purser.balance_transactions (
+    id, tenant_id, amount_cents, balance_after_cents, transaction_type, description,
+    reference_id, reference_type, created_at
+) VALUES
+(
+    '5eedba1a-5ce5-da7a-ba1a-5ce5da7a0001',
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    5000,       -- +$50.00 topup
+    5000,       -- Balance after: $50.00
+    'topup',
+    'Initial demo balance - card payment',
+    '5eedba1a-5ce5-da7a-ba1a-5ce5da7a0002',  -- Reference to a notional card payment
+    'card_payment',
+    NOW() - INTERVAL '7 days'
+)
+ON CONFLICT (tenant_id, reference_type, reference_id)
+WHERE reference_type IS NOT NULL AND reference_id IS NOT NULL
+DO UPDATE SET
+    balance_after_cents = EXCLUDED.balance_after_cents;
+
+-- ============================================================================
+-- PURSER: Demo Tenant Balance Rollups (Statistics)
+-- ============================================================================
+-- Pre-aggregated lifetime stats matching balance_transactions
+
+INSERT INTO purser.tenant_balance_rollups (
+    tenant_id, total_topup_cents, total_topup_eur_cents, total_usage_cents,
+    topup_count, first_topup_at, last_topup_at, created_at, updated_at
+) VALUES (
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
+    5000,       -- $50.00 total topups
+    4600,       -- ~€46.00 EUR equivalent
+    0,          -- No usage deductions yet
+    1,          -- 1 topup
+    NOW() - INTERVAL '7 days',
+    NOW() - INTERVAL '7 days',
+    NOW() - INTERVAL '7 days',
+    NOW()
+)
+ON CONFLICT (tenant_id) DO UPDATE SET
+    total_topup_cents = EXCLUDED.total_topup_cents,
+    total_usage_cents = EXCLUDED.total_usage_cents,
+    topup_count = EXCLUDED.topup_count,
+    updated_at = NOW();
+
+-- ============================================================================
 -- COMMODORE: Demo Clips (Business Registry)
 -- ============================================================================
 -- Clip business metadata owned by control plane

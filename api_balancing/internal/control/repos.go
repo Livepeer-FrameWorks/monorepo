@@ -296,6 +296,11 @@ func (r *nodeRepositoryDB) UpsertNodeOutputs(ctx context.Context, nodeID string,
 	return err
 }
 
+// UpsertNodeLifecycle persists the full NodeLifecycleUpdate to PostgreSQL.
+// NOTE: This data is also sent to ClickHouse (node_state_current, node_metrics_samples)
+// where it is actively queried. The PostgreSQL foghorn.node_lifecycle table currently
+// has NO read path - it's written but never read. Keeping this write for potential
+// disaster recovery or future features. See schema comment in foghorn.sql.
 func (r *nodeRepositoryDB) UpsertNodeLifecycle(ctx context.Context, update *pb.NodeLifecycleUpdate) error {
 	if db == nil {
 		return sql.ErrConnDone

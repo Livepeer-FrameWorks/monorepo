@@ -646,6 +646,87 @@ SELECT
 FROM numbers(0, 2016);
 
 -- =================================================================================================
+-- 9A. Client QoE Samples (client_qoe_samples) - 7 days of 5-minute samples
+-- =================================================================================================
+-- Client-side quality of experience metrics from viewers
+INSERT INTO periscope.client_qoe_samples (
+    timestamp, tenant_id, stream_id, internal_name, session_id, node_id,
+    protocol, host, connection_time, position,
+    bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
+    packets_sent, packets_lost, packets_retransmitted, connection_quality
+)
+SELECT
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    '5eedfeed-11fe-ca57-feed-11feca570001' as stream_id,
+    'demo_live_stream_001' as internal_name,
+    concat('session-', toString(number % 200)) as session_id,
+    arrayElement(['edge-leiden', 'edge-ashburn', 'edge-singapore'], 1 + rand()%3) as node_id,
+    arrayElement(['HLS', 'WebRTC', 'DASH'], 1 + rand()%3) as protocol,
+    concat(toString(10 + rand()%240), '.', toString(rand()%255), '.', toString(rand()%255), '.', toString(number%255)) as host,
+    toFloat32(0.5 + rand()%100 / 100.0) as connection_time,
+    toFloat32(number * 5 * 60.0 % 3600) as position,
+    -- Bandwidth varies with time of day (sine wave pattern)
+    toUInt64(5000000 + 3000000 * sin(number / 144.0) + rand()%1000000) as bandwidth_in,
+    toUInt64(50000 + 30000 * sin(number / 144.0) + rand()%10000) as bandwidth_out,
+    toUInt64((number * 5 % 1000) * 1000000 + rand()%500000) as bytes_downloaded,
+    toUInt64((number * 5 % 100) * 10000 + rand()%5000) as bytes_uploaded,
+    toUInt64(1000 + rand()%500) as packets_sent,
+    toUInt64(rand()%20) as packets_lost,
+    toUInt64(rand()%10) as packets_retransmitted,
+    toFloat32(0.85 + rand()%15 / 100.0) as connection_quality
+FROM numbers(0, 2016);
+
+-- =================================================================================================
+-- 9B. API Requests (api_requests) - 7 days of 5-minute aggregated batches
+-- =================================================================================================
+-- GraphQL API request tracking for usage analytics
+INSERT INTO periscope.api_requests (
+    timestamp, tenant_id, source_node, auth_type,
+    operation_name, operation_type, user_hashes, token_hashes,
+    request_count, error_count, total_duration_ms, total_complexity
+)
+SELECT
+    toDateTime(now() - INTERVAL (number * 5) MINUTE) as timestamp,
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    'gateway-1' as source_node,
+    arrayElement(['jwt', 'jwt', 'jwt', 'api_token', 'api_token', 'wallet'], 1 + rand()%6) as auth_type,
+    arrayElement([
+        'StreamsConnection', 'Stream', 'Analytics', 'BillingStatus',
+        'ClipsConnection', 'CreateClip', 'UpdateStream', 'ValidateStreamKey'
+    ], 1 + rand()%8) as operation_name,
+    arrayElement(['query', 'query', 'query', 'mutation'], 1 + rand()%4) as operation_type,
+    if(rand()%3 = 0, [cityHash64('demo@frameworks.dev')], []) as user_hashes,
+    if(rand()%2 = 0, [cityHash64('fw_demo_token')], []) as token_hashes,
+    toUInt32(5 + rand()%50) as request_count,
+    toUInt32(rand()%3) as error_count,
+    toUInt64((5 + rand()%50) * (20 + rand()%100)) as total_duration_ms,
+    toUInt32((5 + rand()%50) * (1 + rand()%5)) as total_complexity
+FROM numbers(0, 2016);
+
+-- =================================================================================================
+-- 9C. API Events (api_events) - Service audit log events
+-- =================================================================================================
+-- Cross-service audit events from the service_events Kafka topic
+INSERT INTO periscope.api_events (
+    tenant_id, event_type, source, user_id, resource_type, resource_id, details, timestamp
+)
+SELECT
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001' as tenant_id,
+    arrayElement([
+        'stream.created', 'stream.updated', 'stream.started', 'stream.ended',
+        'clip.created', 'clip.ready', 'dvr.started', 'dvr.completed',
+        'user.login', 'user.logout', 'api_token.created', 'api_token.used'
+    ], 1 + number % 12) as event_type,
+    arrayElement(['commodore', 'commodore', 'foghorn', 'foghorn', 'api_gateway'], 1 + rand()%5) as source,
+    if(rand()%3 != 0, toUUID('5eedface-5e1f-da7a-face-5e1fda7a0001'), toUUID('00000000-0000-0000-0000-000000000000')) as user_id,
+    arrayElement(['stream', 'stream', 'clip', 'dvr', 'user', 'api_token'], 1 + rand()%6) as resource_type,
+    if(rand()%2 = 0, '5eedfeed-11fe-ca57-feed-11feca570001', NULL) as resource_id,
+    concat('{"action":"', arrayElement(['create', 'update', 'delete', 'access'], 1 + rand()%4), '","source_ip":"', toString(10 + rand()%240), '.', toString(rand()%255), '.0.1"}') as details,
+    toDateTime64(now() - INTERVAL (number * 30) MINUTE, 3) as timestamp
+FROM numbers(0, 336);
+
+-- =================================================================================================
 -- 10. Backfill Aggregation Tables (MVs may not process bulk-inserted historical data)
 -- =================================================================================================
 
@@ -755,6 +836,157 @@ SELECT
 FROM periscope.processing_events
 GROUP BY hour, tenant_id, process_type, output_codec, track_type;
 
+-- Backfill client_qoe_5m from client_qoe_samples
+INSERT INTO periscope.client_qoe_5m
+SELECT
+    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
+    tenant_id,
+    stream_id,
+    internal_name,
+    node_id,
+    count(DISTINCT session_id) as active_sessions,
+    avg(bandwidth_in) AS avg_bw_in,
+    avg(bandwidth_out) AS avg_bw_out,
+    avg(connection_time) AS avg_connection_time,
+    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate
+FROM periscope.client_qoe_samples
+GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
+
+-- Backfill tenant_usage_5m from viewer_connection_events
+INSERT INTO periscope.tenant_usage_5m
+SELECT
+    toStartOfFiveMinute(timestamp) AS timestamp_5m,
+    tenant_id,
+    uniqState(session_id) AS unique_viewers,
+    sumState(toUInt64(session_duration)) AS total_session_seconds,
+    sumState(bytes_transferred) AS total_bytes
+FROM periscope.viewer_connection_events
+WHERE event_type = 'disconnect'
+GROUP BY timestamp_5m, tenant_id;
+
+-- Backfill viewer_city_hourly from viewer_connection_events
+INSERT INTO periscope.viewer_city_hourly
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    stream_id,
+    internal_name,
+    country_code,
+    city,
+    anyState(latitude) AS latitude,
+    anyState(longitude) AS longitude,
+    uniqState(session_id) AS unique_viewers,
+    sumState(toUInt64(session_duration)) AS total_session_seconds,
+    sumState(bytes_transferred) AS total_bytes
+FROM periscope.viewer_connection_events
+WHERE event_type = 'disconnect' AND city != ''
+GROUP BY hour, tenant_id, stream_id, internal_name, country_code, city;
+
+-- Backfill tenant_analytics_daily from viewer_connection_events
+INSERT INTO periscope.tenant_analytics_daily
+SELECT
+    toDate(timestamp) AS day,
+    tenant_id,
+    uniq(stream_id) AS total_streams,
+    countIf(event_type = 'connect') AS total_views,
+    uniq(session_id) AS unique_viewers,
+    sum(bytes_transferred) AS egress_bytes
+FROM periscope.viewer_connection_events
+GROUP BY day, tenant_id;
+
+-- Backfill node_metrics_1h from node_metrics_samples
+INSERT INTO periscope.node_metrics_1h
+SELECT
+    toStartOfHour(timestamp) AS timestamp_1h,
+    tenant_id,
+    cluster_id,
+    node_id,
+    avg(cpu_usage) AS avg_cpu,
+    max(cpu_usage) AS peak_cpu,
+    avg(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS avg_memory,
+    max(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS peak_memory,
+    avg(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS avg_disk,
+    max(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS peak_disk,
+    avg(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS avg_shm,
+    max(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS peak_shm,
+    max(bandwidth_in) - min(bandwidth_in) AS total_bandwidth_in,
+    max(bandwidth_out) - min(bandwidth_out) AS total_bandwidth_out,
+    if(avg(is_healthy) >= 0.5, 1, 0) AS was_healthy
+FROM periscope.node_metrics_samples
+GROUP BY timestamp_1h, tenant_id, cluster_id, node_id;
+
+-- Backfill storage_usage_hourly from storage_snapshots
+INSERT INTO periscope.storage_usage_hourly
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    avgState(total_bytes) AS avg_total_bytes,
+    avgState(clip_bytes) AS avg_clip_bytes,
+    avgState(dvr_bytes) AS avg_dvr_bytes,
+    avgState(vod_bytes) AS avg_vod_bytes
+FROM periscope.storage_snapshots
+GROUP BY hour, tenant_id;
+
+-- Backfill processing_daily from processing_hourly
+INSERT INTO periscope.processing_daily
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'h264') / 1000.0 AS livepeer_h264_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'vp9') / 1000.0 AS livepeer_vp9_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'av1') / 1000.0 AS livepeer_av1_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS livepeer_hevc_seconds,
+    toUInt64(countMergeIf(segment_count, process_type = 'Livepeer')) AS livepeer_segment_count,
+    toUInt32(uniqMergeIf(unique_streams, process_type = 'Livepeer')) AS livepeer_unique_streams,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'h264') / 1000.0 AS native_av_h264_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'vp9') / 1000.0 AS native_av_vp9_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'av1') / 1000.0 AS native_av_av1_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS native_av_hevc_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'aac') / 1000.0 AS native_av_aac_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'opus') / 1000.0 AS native_av_opus_seconds,
+    toUInt64(countMergeIf(segment_count, process_type = 'AV')) AS native_av_segment_count,
+    toUInt32(uniqMergeIf(unique_streams, process_type = 'AV')) AS native_av_unique_streams,
+    sumMergeIf(total_duration_ms, track_type = 'audio') / 1000.0 AS audio_seconds,
+    sumMergeIf(total_duration_ms, track_type = 'video') / 1000.0 AS video_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer') / 1000.0 AS livepeer_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV') / 1000.0 AS native_av_seconds
+FROM periscope.processing_hourly
+GROUP BY day, tenant_id;
+
+-- Backfill api_usage_hourly from api_requests
+INSERT INTO periscope.api_usage_hourly
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    auth_type,
+    operation_type,
+    coalesce(operation_name, '') AS operation_name,
+    sumState(toUInt64(request_count)) AS total_requests,
+    sumState(toUInt64(error_count)) AS total_errors,
+    sumState(toUInt64(total_duration_ms)) AS total_duration_ms,
+    sumState(toUInt64(total_complexity)) AS total_complexity,
+    uniqCombinedArrayState(user_hashes) AS unique_users,
+    uniqCombinedArrayState(token_hashes) AS unique_tokens
+FROM periscope.api_requests
+GROUP BY hour, tenant_id, auth_type, operation_type, operation_name;
+
+-- Backfill api_usage_daily from api_usage_hourly
+INSERT INTO periscope.api_usage_daily
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    auth_type,
+    operation_type,
+    operation_name,
+    sumMergeState(total_requests) AS total_requests,
+    sumMergeState(total_errors) AS total_errors,
+    sumMergeState(total_duration_ms) AS total_duration_ms,
+    sumMergeState(total_complexity) AS total_complexity,
+    uniqCombinedMergeState(unique_users) AS unique_users,
+    uniqCombinedMergeState(unique_tokens) AS unique_tokens
+FROM periscope.api_usage_hourly
+GROUP BY day, tenant_id, auth_type, operation_type, operation_name;
+
 -- =================================================================================================
 -- 11. Materialized View Finalization (compact aggregated data)
 -- =================================================================================================
@@ -770,3 +1002,10 @@ OPTIMIZE TABLE periscope.stream_connection_hourly FINAL;
 OPTIMIZE TABLE periscope.processing_hourly FINAL;
 OPTIMIZE TABLE periscope.node_performance_5m FINAL;
 OPTIMIZE TABLE periscope.tenant_viewer_daily FINAL;
+OPTIMIZE TABLE periscope.tenant_usage_5m FINAL;
+OPTIMIZE TABLE periscope.tenant_analytics_daily FINAL;
+OPTIMIZE TABLE periscope.node_metrics_1h FINAL;
+OPTIMIZE TABLE periscope.storage_usage_hourly FINAL;
+OPTIMIZE TABLE periscope.processing_daily FINAL;
+OPTIMIZE TABLE periscope.api_usage_hourly FINAL;
+OPTIMIZE TABLE periscope.api_usage_daily FINAL;
