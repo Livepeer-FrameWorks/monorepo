@@ -225,6 +225,10 @@ func resolveVodIdentifier(ctx context.Context, input string, clients *clients.Se
 		if resp == nil || !resp.Found {
 			return "", fmt.Errorf("VOD asset not found")
 		}
+		callerTenant := ctxkeys.GetTenantID(ctx)
+		if callerTenant != "" && resp.TenantId != "" && resp.TenantId != callerTenant {
+			return "", fmt.Errorf("VOD asset not found")
+		}
 		return resp.VodHash, nil
 	}
 	return input, nil

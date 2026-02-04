@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
 
 	"github.com/google/uuid"
@@ -40,6 +41,10 @@ func resolveVodIdentifier(ctx context.Context, input string, clients *clients.Se
 				return "", fmt.Errorf("failed to resolve VOD relay ID: %w", err)
 			}
 			if resp == nil || !resp.Found {
+				return "", fmt.Errorf("VOD asset not found")
+			}
+			callerTenant := ctxkeys.GetTenantID(ctx)
+			if callerTenant != "" && resp.TenantId != "" && resp.TenantId != callerTenant {
 				return "", fmt.Errorf("VOD asset not found")
 			}
 			return resp.VodHash, nil
