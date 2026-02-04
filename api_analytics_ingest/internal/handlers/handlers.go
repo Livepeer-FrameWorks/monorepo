@@ -79,8 +79,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 	}
 
 	// Strict enforcement: drop + DLQ missing/invalid tenant_id
-	if !h.requireTenantID(ctx, event) {
-		return nil
+	if err := h.requireTenantID(ctx, event); err != nil {
+		return err
 	}
 
 	// Process based on event type using direct protobuf parsing
@@ -147,6 +147,9 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 	if err != nil {
 		if errors.Is(err, errDropped) {
 			return nil
+		}
+		if errors.Is(err, errMissingTenantID) {
+			return err
 		}
 		h.logger.WithError(err).WithFields(logging.Fields{
 			"event_type": event.EventType,
@@ -885,7 +888,10 @@ func getUint64FromMap(data map[string]interface{}, key string) uint64 {
 	}
 }
 
-var errDropped = errors.New("dropped")
+var (
+	errDropped         = errors.New("dropped")
+	errMissingTenantID = errors.New("missing_or_invalid_tenant_id")
+)
 
 func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.AnalyticsEvent, streamID string, reason string, cause error) {
 	if h.metrics != nil {
@@ -949,9 +955,9 @@ func (h *AnalyticsHandler) writeIngestError(ctx context.Context, event kafka.Ana
 	}
 }
 
-func (h *AnalyticsHandler) requireTenantID(ctx context.Context, event kafka.AnalyticsEvent) bool {
+func (h *AnalyticsHandler) requireTenantID(ctx context.Context, event kafka.AnalyticsEvent) error {
 	if isValidUUIDString(event.TenantID) {
-		return true
+		return nil
 	}
 
 	h.writeIngestError(ctx, event, "", "missing_or_invalid_tenant_id", nil)
@@ -963,7 +969,7 @@ func (h *AnalyticsHandler) requireTenantID(ctx context.Context, event kafka.Anal
 	if h.metrics != nil {
 		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "dropped").Inc()
 	}
-	return false
+	return errMissingTenantID
 }
 
 func (h *AnalyticsHandler) requireStreamID(ctx context.Context, event kafka.AnalyticsEvent, streamID string) error {

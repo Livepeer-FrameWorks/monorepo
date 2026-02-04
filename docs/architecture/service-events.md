@@ -180,6 +180,13 @@ Event types are string constants emitted by services. The list below reflects cu
 **DLQ**
 
 - Periscope Ingest and Signalman wrap Kafka handlers and publish failures to `decklog_events_dlq`.
+- DLQ payloads are JSON with base64-encoded keys/values and the original headers for replay.
+- Include `tenant_id` and `event_type` headers on DLQ messages to keep tenant-aware replay filters and routing intact.
+
+**Replay**
+
+- There is no dedicated replay service. Use Kafka tooling to consume from `decklog_events_dlq`, decode the payload, and re-publish to the original topic.
+- Preserve headers (`tenant_id`, `event_type`, etc.) when replaying so downstream enrichment behaves consistently.
 
 ---
 

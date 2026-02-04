@@ -107,6 +107,12 @@ func main() {
 					"source":         consumerName,
 					"original_topic": msg.Topic,
 				}
+				if tenantID, ok := msg.Headers["tenant_id"]; ok {
+					headers["tenant_id"] = tenantID
+				}
+				if eventType, ok := msg.Headers["event_type"]; ok {
+					headers["event_type"] = eventType
+				}
 
 				if produceErr := dlqProducer.ProduceMessage(dlqTopic, key, payload, headers); produceErr != nil {
 					logger.WithError(produceErr).WithFields(logging.Fields{
