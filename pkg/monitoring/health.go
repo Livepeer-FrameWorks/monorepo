@@ -214,7 +214,19 @@ func HTTPServiceHealthCheck(serviceName, url string) HealthCheck {
 			Timeout: 5 * time.Second,
 		}
 
-		resp, err := client.Get(url)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return CheckResult{
+				Status:  "unhealthy",
+				Message: fmt.Sprintf("%s service request failed: %v", serviceName, err),
+				Latency: time.Since(start).String(),
+			}
+		}
+
+		resp, err := client.Do(req)
 		duration := time.Since(start)
 
 		if err != nil {

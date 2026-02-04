@@ -142,11 +142,11 @@ func (c *Client) GetSchemaWithContext(ctx context.Context) (*Schema, error) {
 	}
 	c.mu.RUnlock()
 
-	return c.refreshSchema(authHeader)
+	return c.refreshSchema(ctx, authHeader)
 }
 
 // refreshSchema fetches a fresh schema from the GraphQL endpoint.
-func (c *Client) refreshSchema(authHeader string) (*Schema, error) {
+func (c *Client) refreshSchema(ctx context.Context, authHeader string) (*Schema, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -163,7 +163,7 @@ func (c *Client) refreshSchema(authHeader string) (*Schema, error) {
 		return nil, fmt.Errorf("failed to marshal introspection query: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.graphqlURL, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.graphqlURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

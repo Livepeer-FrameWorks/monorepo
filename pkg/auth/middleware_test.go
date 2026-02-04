@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,7 +16,7 @@ func TestServiceAuthMiddleware(t *testing.T) {
 
 	// Missing header
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/ok", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -23,7 +24,7 @@ func TestServiceAuthMiddleware(t *testing.T) {
 
 	// Invalid header
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/ok", nil)
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
 	req.Header.Set("Authorization", "Bearer wrong")
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
@@ -32,7 +33,7 @@ func TestServiceAuthMiddleware(t *testing.T) {
 
 	// Valid header
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/ok", nil)
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
 	req.Header.Set("Authorization", "Bearer token123")
 	r.ServeHTTP(w, req)
 	if w.Code != 200 {
@@ -58,7 +59,7 @@ func TestJWTAuthMiddleware(t *testing.T) {
 
 	// Missing header -> 401
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/ok", nil)
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
@@ -66,7 +67,7 @@ func TestJWTAuthMiddleware(t *testing.T) {
 
 	// Valid token -> 200
 	w = httptest.NewRecorder()
-	req, _ = http.NewRequest("GET", "/ok", nil)
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	r.ServeHTTP(w, req)
 	if w.Code != 200 {

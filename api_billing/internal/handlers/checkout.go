@@ -227,7 +227,7 @@ func (s *CheckoutService) createMollieCheckout(ctx context.Context, req Checkout
 	}
 
 	// Use the existing Mollie HTTP client pattern
-	resp, err := makeMollieAPICall("POST", "https://api.mollie.com/v2/payments", body, mollieKey)
+	resp, err := makeMollieAPICall(ctx, "POST", "https://api.mollie.com/v2/payments", body, mollieKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Mollie payment: %w", err)
 	}
@@ -262,7 +262,7 @@ type MolliePaymentResponse struct {
 }
 
 // makeMollieAPICall makes an authenticated request to Mollie API
-func makeMollieAPICall(method, url string, body []byte, apiKey string) (*MolliePaymentResponse, error) {
+func makeMollieAPICall(ctx context.Context, method, url string, body []byte, apiKey string) (*MolliePaymentResponse, error) {
 	var reqBody *string
 	if body != nil {
 		s := string(body)
@@ -270,7 +270,7 @@ func makeMollieAPICall(method, url string, body []byte, apiKey string) (*MollieP
 	}
 
 	client := &httpClient{}
-	resp, err := client.doRequest(method, url, reqBody, map[string]string{
+	resp, err := client.doRequest(ctx, method, url, reqBody, map[string]string{
 		"Authorization": "Bearer " + apiKey,
 		"Content-Type":  "application/json",
 	})
@@ -308,13 +308,13 @@ func makeMollieAPICall(method, url string, body []byte, apiKey string) (*MollieP
 // httpClient is a simple HTTP client wrapper for Mollie
 type httpClient struct{}
 
-func (c *httpClient) doRequest(method, url string, body *string, headers map[string]string) (string, error) {
+func (c *httpClient) doRequest(ctx context.Context, method, url string, body *string, headers map[string]string) (string, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = strings.NewReader(*body)
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return "", err
 	}

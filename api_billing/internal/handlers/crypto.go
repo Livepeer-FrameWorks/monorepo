@@ -101,7 +101,7 @@ func (cm *CryptoMonitor) Start(ctx context.Context) {
 			cm.logger.Info("Crypto monitor stopping")
 			return
 		case <-ticker.C:
-			cm.checkPendingPayments()
+			cm.checkPendingPayments(ctx)
 		}
 	}
 }
@@ -113,7 +113,7 @@ func (cm *CryptoMonitor) Stop() {
 
 // checkPendingPayments checks all active crypto wallets for payments.
 // Handles both invoice payments and prepaid top-ups across all supported networks.
-func (cm *CryptoMonitor) checkPendingPayments() {
+func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 	// Query all active wallets - both invoice and prepaid
 	// For invoice: join with billing_invoices to get expected amount
 	// For prepaid: use expected_amount_cents directly
@@ -268,9 +268,9 @@ func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
 	// Fetch transactions based on asset type and network
 	switch wallet.Asset {
 	case "ETH":
-		transactions, err = cm.getETHTransactions(network, wallet.WalletAddress)
+		transactions, err = cm.getETHTransactions(ctx, network, wallet.WalletAddress)
 	case "USDC":
-		transactions, err = cm.getUSDCTransactionsForNetwork(network, wallet.WalletAddress)
+		transactions, err = cm.getUSDCTransactionsForNetwork(ctx, network, wallet.WalletAddress)
 	case "LPT":
 		// LPT only exists on Ethereum mainnet
 		if network.LPTContract == "" {
@@ -280,7 +280,7 @@ func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
 			}).Debug("LPT not available on this network")
 			return
 		}
-		transactions, err = cm.getERC20TransactionsForNetwork(network, wallet.WalletAddress, network.LPTContract)
+		transactions, err = cm.getERC20TransactionsForNetwork(ctx, network, wallet.WalletAddress, network.LPTContract)
 	default:
 		cm.logger.WithFields(logging.Fields{
 			"asset": wallet.Asset,
@@ -583,7 +583,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet,
 // Block explorer API transaction fetching (multi-chain support)
 
 // getETHTransactions fetches native ETH transactions for any supported network
-func (cm *CryptoMonitor) getETHTransactions(network NetworkConfig, address string) ([]CryptoTransaction, error) {
+func (cm *CryptoMonitor) getETHTransactions(ctx context.Context, network NetworkConfig, address string) ([]CryptoTransaction, error) {
 	apiKey := network.GetExplorerAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s API key not configured", network.ExplorerAPIEnv)
@@ -594,7 +594,12 @@ func (cm *CryptoMonitor) getETHTransactions(network NetworkConfig, address strin
 		network.ExplorerAPIURL, address, apiKey,
 	)
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ETH explorer request for %s: %w", network.Name, err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ETH transactions on %s: %w", network.Name, err)
 	}
@@ -646,15 +651,15 @@ func (cm *CryptoMonitor) getETHTransactions(network NetworkConfig, address strin
 }
 
 // getUSDCTransactionsForNetwork fetches USDC token transactions for a specific network
-func (cm *CryptoMonitor) getUSDCTransactionsForNetwork(network NetworkConfig, address string) ([]CryptoTransaction, error) {
+func (cm *CryptoMonitor) getUSDCTransactionsForNetwork(ctx context.Context, network NetworkConfig, address string) ([]CryptoTransaction, error) {
 	if network.USDCContract == "" {
 		return nil, fmt.Errorf("USDC not available on %s", network.Name)
 	}
-	return cm.getERC20TransactionsForNetwork(network, address, network.USDCContract)
+	return cm.getERC20TransactionsForNetwork(ctx, network, address, network.USDCContract)
 }
 
 // getERC20TransactionsForNetwork fetches ERC20 token transactions for a specific network
-func (cm *CryptoMonitor) getERC20TransactionsForNetwork(network NetworkConfig, address, contractAddress string) ([]CryptoTransaction, error) {
+func (cm *CryptoMonitor) getERC20TransactionsForNetwork(ctx context.Context, network NetworkConfig, address, contractAddress string) ([]CryptoTransaction, error) {
 	apiKey := network.GetExplorerAPIKey()
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s API key not configured", network.ExplorerAPIEnv)
@@ -665,7 +670,12 @@ func (cm *CryptoMonitor) getERC20TransactionsForNetwork(network NetworkConfig, a
 		network.ExplorerAPIURL, contractAddress, address, apiKey,
 	)
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create %s explorer request: %w", network.Name, err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ERC20 transactions on %s: %w", network.Name, err)
 	}
