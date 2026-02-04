@@ -22,7 +22,7 @@ func RegisterAccountTools(server *mcp.Server, clients *clients.ServiceClients, r
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "update_billing_details",
-			Description: "Update billing details (company, address, VAT). Required before any payments or billable operations.",
+			Description: "Update billing details (company, address, VAT). Required for payments over €100 and for proper invoicing.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args UpdateBillingDetailsInput) (*mcp.CallToolResult, any, error) {
 			return handleUpdateBillingDetails(ctx, args, clients, logger)
@@ -97,7 +97,7 @@ func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsIn
 	result := BillingDetailsResult{
 		Success:         true,
 		DetailsComplete: updated.IsComplete,
-		Message:         "Billing details updated successfully. You can now top up your balance and perform billable operations.",
+		Message:         "Billing details updated successfully.",
 	}
 
 	return toolSuccess(result)

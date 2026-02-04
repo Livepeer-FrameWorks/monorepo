@@ -5,6 +5,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -52,7 +53,15 @@ type Config struct {
 }
 
 // NewServer creates a new MCP server with all resources, tools, and prompts registered.
-func NewServer(cfg Config) *Server {
+// Returns error if required dependencies (RateLimiter, TenantCache) are missing.
+func NewServer(cfg Config) (*Server, error) {
+	if cfg.RateLimiter == nil {
+		return nil, fmt.Errorf("MCP server requires RateLimiter for access control")
+	}
+	if cfg.TenantCache == nil {
+		return nil, fmt.Errorf("MCP server requires TenantCache for billing checks")
+	}
+
 	// Create the MCP server
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "frameworks",
@@ -84,7 +93,7 @@ func NewServer(cfg Config) *Server {
 	// Register access controls (auth + x402 + rate limiting + usage)
 	s.registerAccessMiddleware()
 
-	return s
+	return s, nil
 }
 
 // registerResources registers all MCP resources.
@@ -255,14 +264,8 @@ func (s *Server) sendOnConnectNotification(ctx context.Context) {
 }
 
 // registerAccessMiddleware enforces auth, x402 settlement, rate limits, and usage tracking.
+// Dependencies (rateLimiter, tenantCache) are validated by NewServer.
 func (s *Server) registerAccessMiddleware() {
-	if s.rateLimiter == nil || s.tenantCache == nil {
-		if s.logger != nil {
-			s.logger.Warn("MCP access middleware disabled (missing rate limiter or tenant cache)")
-		}
-		return
-	}
-
 	s.mcpServer.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if strings.HasPrefix(method, "notifications/") {

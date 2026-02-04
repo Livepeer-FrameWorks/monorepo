@@ -17,7 +17,7 @@ import (
 
 // RegisterStreamTools registers stream-related MCP tools.
 func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	// create_stream - Create a new stream (requires billing details + balance)
+	// create_stream - Create a new stream (requires balance)
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "create_stream",
@@ -35,7 +35,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 			Description: "Update stream settings (name, description, recording).",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args UpdateStreamInput) (*mcp.CallToolResult, any, error) {
-			return handleUpdateStream(ctx, args, clients, logger)
+			return handleUpdateStream(ctx, args, clients, checker, logger)
 		},
 	)
 
@@ -46,7 +46,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 			Description: "Delete a stream. This action cannot be undone.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DeleteStreamInput) (*mcp.CallToolResult, any, error) {
-			return handleDeleteStream(ctx, args, clients, logger)
+			return handleDeleteStream(ctx, args, clients, checker, logger)
 		},
 	)
 
@@ -83,14 +83,6 @@ type CreateStreamResult struct {
 func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Pre-flight: require positive balance
@@ -146,9 +138,17 @@ type UpdateStreamResult struct {
 	Message  string `json:"message"`
 }
 
-func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
+	}
+
+	// Pre-flight: require positive balance
+	if err := checker.RequireBalance(ctx); err != nil {
+		if pfe, ok := preflight.IsPreflightError(err); ok {
+			return toolErrorWithResolution(pfe.Blocker)
+		}
+		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
 	}
 
 	if args.StreamID == "" {
@@ -194,9 +194,17 @@ type DeleteStreamResult struct {
 	Message  string `json:"message"`
 }
 
-func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
+	}
+
+	// Pre-flight: require positive balance
+	if err := checker.RequireBalance(ctx); err != nil {
+		if pfe, ok := preflight.IsPreflightError(err); ok {
+			return toolErrorWithResolution(pfe.Blocker)
+		}
+		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
 	}
 
 	if args.StreamID == "" {

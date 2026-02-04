@@ -18,11 +18,11 @@ import (
 
 // RegisterBillingTools registers billing-related MCP tools.
 func RegisterBillingTools(server *mcp.Server, clients *clients.ServiceClients, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
-	// topup_balance - Request crypto top-up address (requires billing details)
+	// topup_balance - Request crypto top-up address
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "topup_balance",
-			Description: "Request a crypto payment address to top up your prepaid balance. Requires billing details to be set first.",
+			Description: "Request a crypto payment address to top up your prepaid balance.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args TopupBalanceInput) (*mcp.CallToolResult, any, error) {
 			return handleTopupBalance(ctx, args, clients, checker, logger)
@@ -51,14 +51,6 @@ func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *cl
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, nil, fmt.Errorf("not authenticated")
-	}
-
-	// Pre-flight: require billing details
-	if err := checker.RequireBillingDetails(ctx); err != nil {
-		if pfe, ok := preflight.IsPreflightError(err); ok {
-			return toolErrorWithResolution(pfe.Blocker)
-		}
-		return toolError(fmt.Sprintf("Failed to check billing details: %v", err))
 	}
 
 	// Validate amount (must be positive)

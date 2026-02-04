@@ -235,8 +235,8 @@ func main() {
 						signature := req.Header.Get("X-Wallet-Signature")
 						message := req.Header.Get("X-Wallet-Message")
 						if signature != "" && message != "" {
-							resp, err := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature)
-							if err == nil && resp != nil && resp.User != nil {
+							resp, walletErr := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature)
+							if walletErr == nil && resp != nil && resp.User != nil {
 								email := ""
 								if resp.User.Email != nil {
 									email = *resp.User.Email
@@ -411,7 +411,7 @@ func main() {
 		graphqlHTTP.POST("/", gin.WrapH(gqlHandler))
 		graphqlGroup.GET("/ws", func(c *gin.Context) {
 			ctx := c.Request.Context()
-			if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
+			if cookieToken, cookieErr := c.Cookie("access_token"); cookieErr == nil && cookieToken != "" {
 				ctx = context.WithValue(ctx, ctxkeys.KeyWSCookieToken, cookieToken)
 			}
 			ctx = context.WithValue(ctx, ctxkeys.KeyHTTPRequest, c.Request)
@@ -430,7 +430,7 @@ func main() {
 
 	// MCP (Model Context Protocol) endpoint for AI agent access
 	// Auth is handled inside the MCP server via request headers
-	mcpServer := mcpserver.NewServer(mcpserver.Config{
+	mcpServer, err := mcpserver.NewServer(mcpserver.Config{
 		ServiceClients: serviceClients,
 		Resolver:       resolver.Resolver,
 		Logger:         logger,
@@ -441,6 +441,9 @@ func main() {
 		UsageTracker:   usageTracker,
 		TrustedProxies: trustedProxies,
 	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize MCP server")
+	}
 	app.Any("/mcp", gin.WrapH(mcpServer.HTTPHandler()))
 	app.Any("/mcp/*path", gin.WrapH(mcpServer.HTTPHandler()))
 	logger.Info("MCP endpoint enabled at /mcp")

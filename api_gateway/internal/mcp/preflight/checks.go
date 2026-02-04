@@ -230,10 +230,11 @@ func (c *Checker) GetCapabilities(ctx context.Context) map[string]bool {
 		"read_streams":              true, // Free reads always work
 		"read_analytics":            true,
 		"read_billing":              true,
-		"read_vod":                  true, // Free reads
+		"read_vod":                  true,
 		"update_billing_details":    true, // Always allowed
 		"resolve_playback_endpoint": true, // Free
 		"validate_stream_key":       true, // Free
+		"topup_balance":             true, // Always allowed - need it to get balance
 		"create_stream":             false,
 		"update_stream":             false,
 		"delete_stream":             false,
@@ -242,22 +243,12 @@ func (c *Checker) GetCapabilities(ctx context.Context) map[string]bool {
 		"create_vod_upload":         false,
 		"complete_vod_upload":       false,
 		"delete_vod_asset":          false,
-		"topup_balance":             false,
 	}
 
-	// Check billing details
-	billingBlocker, err := c.CheckBillingDetails(ctx)
-	if err != nil || billingBlocker != nil {
-		return caps // Billing required for all billable ops
-	}
-
-	// Billing details complete - enable topup
-	caps["topup_balance"] = true
-
-	// Check balance
+	// Check balance only - billing details enforced at payment time, not here
 	balanceBlocker, err := c.CheckBalance(ctx)
 	if err != nil || balanceBlocker != nil {
-		return caps // Balance required for stream/clip/dvr
+		return caps // Balance required for billable ops
 	}
 
 	// Balance OK - enable all operations
