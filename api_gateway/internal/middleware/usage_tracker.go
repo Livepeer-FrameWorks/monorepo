@@ -8,6 +8,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/tenants"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler/extension"
@@ -55,6 +56,7 @@ type aggregate struct {
 	TotalComplexity uint32
 	UserHashes      map[uint64]struct{}
 	TokenHashes     map[uint64]struct{}
+	FirstSeenAt     int64
 }
 
 // NewUsageTracker creates a new usage tracker
@@ -173,6 +175,7 @@ func (ut *UsageTracker) flush() {
 			TotalComplexity: agg.TotalComplexity,
 			UserHashes:      userHashes,
 			TokenHashes:     tokenHashes,
+			Timestamp:       agg.FirstSeenAt,
 		}
 
 		// Reset counters
@@ -182,6 +185,7 @@ func (ut *UsageTracker) flush() {
 		agg.TotalComplexity = 0
 		agg.UserHashes = nil
 		agg.TokenHashes = nil
+		agg.FirstSeenAt = 0
 		agg.mu.Unlock()
 
 		aggregates = append(aggregates, protoAgg)
@@ -232,7 +236,7 @@ func (ut *UsageTracker) flush() {
 }
 
 // Record records a single API request
-func (ut *UsageTracker) Record(tenantID, authType, opType, opName, userID string, tokenHash uint64, durationMs uint64, complexity uint32, errorCount uint32) {
+func (ut *UsageTracker) Record(startedAt time.Time, tenantID, authType, opType, opName, userID string, tokenHash uint64, durationMs uint64, complexity uint32, errorCount uint32) {
 	key := aggregateKey{
 		TenantID:      tenantID,
 		AuthType:      authType,
@@ -245,6 +249,9 @@ func (ut *UsageTracker) Record(tenantID, authType, opType, opName, userID string
 	agg := aggI.(*aggregate) //nolint:errcheck // type guaranteed by sync.Map usage
 
 	agg.mu.Lock()
+	if agg.RequestCount == 0 {
+		agg.FirstSeenAt = startedAt.Unix()
+	}
 	agg.RequestCount++
 	agg.TotalDurationMs += durationMs
 	agg.TotalComplexity += complexity
@@ -294,7 +301,7 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 			}
 		}
 		if tenantID == "" {
-			tenantID = "anonymous"
+			tenantID = tenants.AnonymousTenantID.String()
 		}
 
 		// Determine auth type
@@ -415,6 +422,6 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 		}
 
 		// Record the request
-		tracker.Record(tenantID, authType, opType, opName, userID, tokenHash, uint64(duration), complexity, errorCount)
+		tracker.Record(start, tenantID, authType, opType, opName, userID, tokenHash, uint64(duration), complexity, errorCount)
 	}
 }

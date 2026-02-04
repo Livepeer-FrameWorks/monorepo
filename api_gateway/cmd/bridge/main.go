@@ -23,6 +23,7 @@ import (
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
+	"frameworks/pkg/tenants"
 	"frameworks/pkg/version"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -65,6 +66,12 @@ func main() {
 	defer rateLimiter.Stop()
 
 	tenantCache := middleware.NewTenantCache(serviceClients.Quartermaster, logger)
+
+	usageHashSecret := config.GetEnv("USAGE_HASH_SECRET", "")
+	middleware.InitHasher(usageHashSecret)
+	if usageHashSecret == "" {
+		logger.Warn("USAGE_HASH_SECRET not set; using legacy FNV-1a hashing for usage identifiers")
+	}
 
 	// Initialize usage tracker for API request analytics
 	usageTracker := middleware.NewUsageTracker(middleware.UsageTrackerConfig{
@@ -181,7 +188,7 @@ func main() {
 			go func(subCtx context.Context) {
 				<-subCtx.Done()
 				durationMs := time.Since(start).Milliseconds()
-				usageTracker.Record(tenantID, authType, opType, opName, userID, tokenHash, uint64(durationMs), complexity, 0)
+				usageTracker.Record(start, tenantID, authType, opType, opName, userID, tokenHash, uint64(durationMs), complexity, 0)
 			}(ctx)
 		}
 		return next(ctx)
@@ -440,7 +447,7 @@ func main() {
 func extractUsageContext(ctx context.Context) (tenantID, authType, userID string, tokenHash uint64) {
 	tenantID = ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		tenantID = "anonymous"
+		tenantID = tenants.AnonymousTenantID.String()
 	}
 	authType = ctxkeys.GetAuthType(ctx)
 	if authType == "" {

@@ -1407,4 +1407,5 @@ message APIRequestAggregate {
   uint32 total_complexity = 8;      // Sum of GraphQL complexity scores
   repeated uint64 user_hashes = 9;  // Hashed user IDs observed in the aggregate window
   repeated uint64 token_hashes = 10; // Hashed API token IDs observed in the aggregate window
+  int64 timestamp = 11;             // First request timestamp (Unix seconds)
 }

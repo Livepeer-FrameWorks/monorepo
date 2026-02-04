@@ -2713,10 +2713,14 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 		return err
 	}
 
-	timestamp := time.Unix(batch.GetTimestamp(), 0)
+	batchTimestamp := time.Unix(batch.GetTimestamp(), 0)
 	sourceNode := batch.GetSourceNode()
 
 	for _, agg := range batch.GetAggregates() {
+		timestamp := batchTimestamp
+		if aggTimestamp := agg.GetTimestamp(); aggTimestamp > 0 {
+			timestamp = time.Unix(aggTimestamp, 0)
+		}
 		tenantID := parseUUID(agg.GetTenantId())
 		if tenantID == uuid.Nil {
 			// Skip invalid tenant IDs
@@ -2824,6 +2828,10 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		if !ok {
 			continue
 		}
+		aggTimestamp := timestamp
+		if ts, ok := getInt64FromMap(aggMap, "timestamp"); ok {
+			aggTimestamp = time.Unix(ts, 0)
+		}
 
 		tenantID := parseUUID(getStringFromMap(aggMap, "tenant_id"))
 		if tenantID == uuid.Nil {
@@ -2846,7 +2854,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		}
 
 		if err := chBatch.Append(
-			timestamp,
+			aggTimestamp,
 			tenantID,
 			sourceNode,
 			getStringFromMap(aggMap, "auth_type"),
