@@ -108,6 +108,22 @@ func GetDVRManager() *DVRManager {
 	return dvrManager
 }
 
+// GetActiveDVRHashes returns DVR hashes that are currently recording.
+func GetActiveDVRHashes() map[string]bool {
+	if dvrManager == nil {
+		return map[string]bool{}
+	}
+
+	dvrManager.mutex.RLock()
+	defer dvrManager.mutex.RUnlock()
+
+	hashes := make(map[string]bool, len(dvrManager.jobs))
+	for hash := range dvrManager.jobs {
+		hashes[hash] = true
+	}
+	return hashes
+}
+
 // HandleNewSegment handles a RECORDING_SEGMENT trigger for immediate sync
 func (dm *DVRManager) HandleNewSegment(streamName, filePath string) {
 	dm.mutex.RLock()

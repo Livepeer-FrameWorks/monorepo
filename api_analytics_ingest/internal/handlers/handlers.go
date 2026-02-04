@@ -253,6 +253,11 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 		storageScope = "hot"
 	}
 
+	snapshotTimestamp := event.Timestamp
+	if ts := storageSnapshot.GetTimestamp(); ts > 0 {
+		snapshotTimestamp = time.Unix(ts, 0)
+	}
+
 	for _, usage := range storageSnapshot.GetUsage() {
 		if !isValidUUIDString(usage.GetTenantId()) {
 			h.logger.WithFields(logging.Fields{
@@ -263,7 +268,7 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 			continue
 		}
 		if err := batch.Append(
-			event.Timestamp,
+			snapshotTimestamp,
 			storageSnapshot.GetNodeId(),
 			usage.GetTenantId(),
 			storageScope,

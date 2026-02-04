@@ -743,6 +743,15 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 	// Old model deleted here; new model only evicts during cleanup when disk pressure requires it
 
 	// Notify completion via lifecycle event (synced, not frozen - local copy retained)
+	actualSizeBytes := asset.SizeBytes
+	if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
+		if info, err := os.Stat(asset.FilePath); err == nil {
+			actualSizeBytes = uint64(info.Size())
+		}
+	} else if asset.AssetType == AssetTypeDVR {
+		actualSizeBytes = sm.calculateDirSize(asset.FilePath)
+	}
+
 	durationMs := duration.Milliseconds()
 	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:     pb.StorageLifecycleData_ACTION_SYNCED,
@@ -750,12 +759,12 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		AssetHash:  asset.AssetHash,
 		TenantId:   &asset.TenantID,
 		StreamId:   &asset.StreamID,
-		SizeBytes:  asset.SizeBytes,
+		SizeBytes:  actualSizeBytes,
 		DurationMs: &durationMs,
 	})
 
 	// Send SyncComplete to Foghorn (it will mark asset as synced and track this node as cached)
-	_ = control.SendSyncComplete(requestID, asset.AssetHash, "success", "", asset.SizeBytes, "", dtshIncluded)
+	_ = control.SendSyncComplete(requestID, asset.AssetHash, "success", "", actualSizeBytes, "", dtshIncluded)
 
 	sm.logger.WithFields(logging.Fields{
 		"asset_hash": asset.AssetHash,
