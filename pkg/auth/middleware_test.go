@@ -74,4 +74,33 @@ func TestJWTAuthMiddleware(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
+
+}
+
+func TestJWTAuthMiddleware_WebSocketUpgrade(t *testing.T) {
+	secret := []byte("secret")
+	r := gin.New()
+	r.Use(JWTAuthMiddleware(secret))
+	r.GET("/ws", func(c *gin.Context) {
+		c.String(200, "ws-ok")
+	})
+
+	// WebSocket upgrade request -> allowed through without auth
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ws", nil)
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("WebSocket upgrade should pass without auth, got %d", w.Code)
+	}
+
+	// Only Upgrade header without Connection -> 401
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/ws", nil)
+	req.Header.Set("Upgrade", "websocket")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("Upgrade without Connection should require auth, got %d", w.Code)
+	}
 }

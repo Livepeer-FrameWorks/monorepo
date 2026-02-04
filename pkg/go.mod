@@ -4,6 +4,7 @@ go 1.24.1
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.43.0
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/btcsuite/btcd/btcec/v2 v2.3.6
 	github.com/failsafe-go/failsafe-go v0.9.5
 	github.com/gin-gonic/gin v1.11.0
