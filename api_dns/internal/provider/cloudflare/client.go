@@ -2,12 +2,17 @@ package cloudflare
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"frameworks/pkg/clients"
+
+	"github.com/failsafe-go/failsafe-go"
 )
 
 const (
@@ -22,10 +27,12 @@ type Client struct {
 	accountID  string
 	baseURL    string
 	httpClient *http.Client
+	executor   failsafe.Executor[*http.Response]
 }
 
 // NewClient creates a new CloudFlare API client
 func NewClient(apiToken, zoneID, accountID string) *Client {
+	executor := clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig())
 	return &Client{
 		apiToken:  apiToken,
 		zoneID:    zoneID,
@@ -34,6 +41,7 @@ func NewClient(apiToken, zoneID, accountID string) *Client {
 		httpClient: &http.Client{
 			Timeout: defaultTimeout,
 		},
+		executor: executor,
 	}
 }
 
@@ -44,27 +52,40 @@ func (c *Client) SetTimeout(timeout time.Duration) {
 
 // doRequest performs an HTTP request with CloudFlare API authentication
 func (c *Client) doRequest(method, path string, body interface{}) (*APIResponse, error) {
-	var reqBody io.Reader
+	var reqBodyBytes []byte
 	if body != nil {
 		jsonData, err := json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		reqBody = bytes.NewReader(jsonData)
+		reqBodyBytes = jsonData
 	}
 
 	url := c.baseURL + path
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	execute := func() (*http.Response, error) {
+		var reqBody io.Reader
+		if reqBodyBytes != nil {
+			reqBody = bytes.NewReader(reqBodyBytes)
+		}
+
+		req, err := http.NewRequest(method, url, reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		return c.httpClient.Do(req)
 	}
 
-	// Set headers
-	req.Header.Set("Authorization", "Bearer "+c.apiToken)
-	req.Header.Set("Content-Type", "application/json")
+	ctx := context.Background()
+	executor := c.executor
+	if executor == nil {
+		executor = clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig())
+	}
 
-	// Execute request
-	resp, err := c.httpClient.Do(req)
+	resp, err := clients.ExecuteHTTP(ctx, executor, execute)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

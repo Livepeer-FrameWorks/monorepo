@@ -60,7 +60,7 @@ func (m *DNSManager) shouldProxy(serviceType string) bool {
 // It implements the "Smart Record" logic:
 // - 1 healthy node -> A record (Direct IP)
 // - >1 healthy nodes -> Load Balancer Pool + CNAME
-func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain string) error {
+func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain string) (map[string]string, error) {
 	log := m.logger.WithField("service", serviceType)
 	log.Info("Starting DNS sync")
 
@@ -68,7 +68,7 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	// Filter by node_type which maps to our service types
 	nodesResp, err := m.qmClient.ListNodes(ctx, "", serviceType, "", nil)
 	if err != nil {
-		return fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
+		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
 
 	// 2. Filter for Nodes with External IPs
@@ -103,7 +103,7 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	case "forms":
 		subdomain = "forms"
 	default:
-		return fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
+		return nil, fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
 	}
 
 	domain := m.domain
@@ -120,13 +120,13 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	if len(activeIPs) == 0 {
 		log.Warn("No active nodes found, skipping DNS update (safety safety)")
 		// We purposely don't delete records if 0 nodes found to prevent total outage during a blip
-		return nil
+		return nil, nil
 	}
 
 	if len(activeIPs) == 1 {
 		// === Single Node: Direct A Record ===
 		log.Info("Single node detected, using A record")
-		return m.applySingleNodeConfig(ctx, fqdn, activeIPs[0], m.shouldProxy(serviceType))
+		return nil, m.applySingleNodeConfig(ctx, fqdn, activeIPs[0], m.shouldProxy(serviceType))
 	}
 
 	// === Multi Node: Load Balancer Pool ===
@@ -184,19 +184,21 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string,
 }
 
 // applyLoadBalancerConfig ensures an LB Pool exists and updates origins
-func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName string, ips []string, proxied bool) error {
+func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName string, ips []string, proxied bool) (map[string]string, error) {
+	partialErrors := make(map[string]string)
+
 	// 1. Find or Create Pool
 	// We use the serviceType (e.g. "edge") as the pool name
 	poolID, err := m.ensurePool(poolName, ips)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// 2. Sync Origins (The hardest part)
 	// We need to get current origins, find diff, add/remove.
 	currentPool, err := m.cfClient.GetPool(poolID)
 	if err != nil {
-		return fmt.Errorf("failed to get pool details: %w", err)
+		return nil, fmt.Errorf("failed to get pool details: %w", err)
 	}
 
 	// Build map of desired IPs
@@ -215,6 +217,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			m.logger.WithField("ip", origin.Address).Info("Removing stale origin from pool")
 			if _, err := m.cfClient.RemoveOriginFromPool(poolID, origin.Address); err != nil {
 				m.logger.WithError(err).Error("Failed to remove origin")
+				partialErrors[fmt.Sprintf("%s:%s", fqdn, origin.Address)] = err.Error()
 			}
 		}
 	}
@@ -231,6 +234,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			}
 			if _, err := m.cfClient.AddOriginToPool(poolID, origin); err != nil {
 				m.logger.WithError(err).Error("Failed to add origin")
+				partialErrors[fmt.Sprintf("%s:%s", fqdn, ip)] = err.Error()
 			}
 		}
 	}
@@ -239,7 +243,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 	// Check if LB exists for this hostname
 	lbs, err := m.cfClient.ListLoadBalancers()
 	if err != nil {
-		return fmt.Errorf("failed to list LBs: %w", err)
+		return nil, fmt.Errorf("failed to list LBs: %w", err)
 	}
 
 	var lbID string
@@ -273,7 +277,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 		}
 		_, err = m.cfClient.CreateLoadBalancer(lb)
 		if err != nil {
-			return fmt.Errorf("failed to create LB: %w", err)
+			return nil, fmt.Errorf("failed to create LB: %w", err)
 		}
 	} else {
 		// Update LB (Ensure it points to our pool)
@@ -291,11 +295,15 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			m.logger.WithField("record_id", rec.ID).Info("Deleting conflicting A record for LB mode")
 			if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
 				m.logger.WithError(err).WithField("record_id", rec.ID).Warn("Failed to delete conflicting A record")
+				partialErrors[fmt.Sprintf("%s:%s", fqdn, rec.ID)] = err.Error()
 			}
 		}
 	}
 
-	return nil
+	if len(partialErrors) == 0 {
+		return nil, nil
+	}
+	return partialErrors, nil
 }
 
 // ensurePool finds a pool by name or creates it

@@ -192,11 +192,21 @@ func main() {
 func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (*pb.SyncDNSResponse, error) {
 	s.Logger.WithField("service_type", req.GetServiceType()).Info("Received SyncDNS request")
 
-	if err := s.DNSManager.SyncService(ctx, req.GetServiceType(), req.GetRootDomain()); err != nil {
+	partialErrors, err := s.DNSManager.SyncService(ctx, req.GetServiceType(), req.GetRootDomain())
+	if err != nil {
 		s.Logger.WithError(err).Error("DNS sync failed")
 		return &pb.SyncDNSResponse{
 			Success: false,
 			Message: fmt.Sprintf("Sync failed: %v", err),
+			Errors:  partialErrors,
+		}, nil
+	}
+
+	if len(partialErrors) > 0 {
+		return &pb.SyncDNSResponse{
+			Success: false,
+			Message: "Sync completed with errors",
+			Errors:  partialErrors,
 		}, nil
 	}
 
