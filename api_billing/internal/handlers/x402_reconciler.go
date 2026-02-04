@@ -670,7 +670,7 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, tenantID, currency).Scan(&balance)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		r.logger.WithError(err).Error("Failed to get current balance for debit")
 		return
 	}

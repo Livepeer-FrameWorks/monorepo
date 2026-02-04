@@ -64,7 +64,7 @@ func (s *Store) GetCertificate(ctx context.Context, tenantID, domain string) (*C
 		&cert.ID, &cert.TenantID, &cert.Domain, &cert.CertPEM, &cert.KeyPEM,
 		&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
@@ -117,7 +117,7 @@ func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email string) (*AC
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(
 		&acc.ID, &acc.TenantID, &acc.Email, &acc.Registration, &acc.PrivateKeyPEM, &acc.CreatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

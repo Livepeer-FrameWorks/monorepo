@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 
 	"frameworks/api_balancing/internal/state"
 	pb "frameworks/pkg/proto"
@@ -62,7 +63,7 @@ func (r *clipRepositoryDB) ResolveInternalNameByRequestID(ctx context.Context, r
 		SELECT COALESCE(internal_name,'') FROM foghorn.artifacts
 		WHERE request_id = $1 AND artifact_type = 'clip'
 	`, requestID).Scan(&internalName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	return internalName, err
@@ -165,7 +166,7 @@ func (r *dvrRepositoryDB) ResolveInternalNameByHash(ctx context.Context, dvrHash
 		SELECT COALESCE(internal_name,'') FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
 	`, dvrHash).Scan(&internalName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
 	return internalName, err
@@ -445,7 +446,7 @@ func (r *artifactRepositoryDB) GetArtifactSyncInfo(ctx context.Context, artifact
 	`, artifactHash).Scan(&info.ArtifactHash, &info.ArtifactType, &info.SyncStatus,
 		&s3URL, &lastSyncAttempt, &syncError)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

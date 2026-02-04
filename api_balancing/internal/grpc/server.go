@@ -633,7 +633,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 		WHERE artifact_hash = $1 AND artifact_type = 'clip'
 	`, req.ClipHash).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "clip not found")
 	} else if err != nil {
 		return nil, status.Error(codes.Internal, "failed to check clip existence")
@@ -1042,7 +1042,7 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
 	`, req.DvrHash).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch DVR artifact")
@@ -1118,7 +1118,7 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
 	`, req.DvrHash).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch DVR artifact")
@@ -1683,7 +1683,7 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *pb.Compl
 		WHERE v.s3_upload_id = $1 AND a.status = 'uploading' AND a.tenant_id = $2
 	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &sizeBytes, &userID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch upload info")
@@ -1820,7 +1820,7 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 		WHERE v.s3_upload_id = $1 AND a.status = 'uploading' AND a.tenant_id = $2
 	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &userID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
 	} else if err != nil {
 		s.logger.WithError(err).Error("Failed to fetch upload info")
@@ -1882,7 +1882,7 @@ func (s *FoghornGRPCServer) GetVodAsset(ctx context.Context, req *pb.GetVodAsset
 
 	asset, err := s.getVodAssetInfo(ctx, req.ArtifactHash)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "VOD asset not found")
 		}
 		s.logger.WithError(err).Error("Failed to fetch VOD asset")

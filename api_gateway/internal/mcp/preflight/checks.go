@@ -4,6 +4,7 @@ package preflight
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
@@ -218,7 +219,8 @@ func (e *PreflightError) Error() string {
 
 // IsPreflightError checks if an error is a preflight error.
 func IsPreflightError(err error) (*PreflightError, bool) {
-	if pfe, ok := err.(*PreflightError); ok {
+	var pfe *PreflightError
+	if errors.As(err, &pfe) {
 		return pfe, true
 	}
 	return nil, false

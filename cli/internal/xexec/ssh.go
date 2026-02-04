@@ -2,6 +2,7 @@ package xexec
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -41,7 +42,8 @@ func RunSSHWithKey(target, keyPath string, cmd string, args []string, workdir st
 	err := c.Run()
 	exit := 0
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			exit = ee.ExitCode()
 		} else {
 			exit = -1

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"frameworks/pkg/billing"
@@ -68,7 +69,7 @@ func (e *ThresholdEnforcer) isPrepaidTenant(ctx context.Context, tenantID string
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, tenantID).Scan(&billingModel)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -98,7 +99,7 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *pb.Valida
 		WHERE id = $1
 	`, tenantID).Scan(&name, &isActive, &rateLimitPerMinute, &rateLimitBurst)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateTenantResponse{
 			Valid: false,
 			Error: "Tenant not found",
@@ -178,7 +179,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 		&tenant.RateLimitPerMinute, &tenant.RateLimitBurst,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.GetTenantResponse{Error: "Tenant not found"}, nil
 	}
 
@@ -232,7 +233,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		WHERE id = $1 AND is_active = true
 	`, tenantID).Scan(&primaryClusterID, &deploymentTier)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Tenant not found")
 	}
 
@@ -280,7 +281,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		&resp.MaxStreams, &resp.CurrentStreams, &resp.HealthStatus,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "No suitable cluster found (capacity exceeded or inactive)")
 	}
 
@@ -377,7 +378,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			FROM quartermaster.bootstrap_tokens
 			WHERE token = $1 AND used_at IS NULL
 		`, token).Scan(&kind, &tokenBoundClusterID, &expiresAt)
-		if err == sql.ErrNoRows || kind != "service" || time.Now().After(expiresAt) {
+		if errors.Is(err, sql.ErrNoRows) || kind != "service" || time.Now().After(expiresAt) {
 			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
 		}
 		// Mark token used
@@ -403,7 +404,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		err := s.db.QueryRowContext(ctx, `
 			SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
 		`, requestClusterID).Scan(&isActive)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Errorf(codes.NotFound, "cluster '%s' not found", requestClusterID)
 		}
 		if err != nil {
@@ -448,7 +449,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1
 	`, serviceType).Scan(&serviceID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		serviceID = serviceType
 		defaultProtocol := strings.ToLower(strings.TrimSpace(req.GetProtocol()))
 		if defaultProtocol == "" {
@@ -575,7 +576,7 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *pb.GetNodeO
 		WHERE n.node_id = $1
 	`, nodeID).Scan(&resp.NodeId, &resp.ClusterId, &resp.ClusterName, &ownerTenantID, &tenantName)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Node not found")
 	}
 
@@ -762,7 +763,7 @@ func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *pb.Resolve
 	}
 
 	err := s.db.QueryRowContext(ctx, query, arg).Scan(&tenantID, &tenantName, &primaryClusterID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveTenantResponse{Found: false, Error: "Tenant not found"}, nil
 	}
 	if err != nil {
@@ -938,7 +939,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		WHERE is_default_cluster = true AND is_active = true LIMIT 1
 	`).Scan(&defaultClusterID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithField("tenant_id", tenantID).Warn("No default cluster found for auto-subscription. Tenant created without default cluster access.")
 		// This is not a fatal error for tenant creation, just a warning. Continue without subscription.
 	} else if err != nil {
@@ -1172,7 +1173,7 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *pb.GetT
 		pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &createdAt, &updatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 	if err != nil {
@@ -2003,7 +2004,7 @@ func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *pb.Su
 	// Verify cluster exists and is 'shared'
 	var deploymentModel string
 	err := s.db.QueryRowContext(ctx, `SELECT deployment_model FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1`, clusterID).Scan(&deploymentModel)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -2743,7 +2744,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		FOR UPDATE
 	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2918,7 +2919,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		  )
 		FOR UPDATE
 	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2986,7 +2987,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 			ClusterId: resolvedClusterID,
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -3276,7 +3277,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
 	`, nodeID).Scan(&currentWgIP, &externalIP, &internalIP, &clusterID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found - please register the node first")
 	}
 	if err != nil {
@@ -3422,7 +3423,7 @@ func (s *QuartermasterServer) allocateWireGuardIPTx(ctx context.Context, tx *sql
 		LIMIT 1
 	`).Scan(&maxIP)
 
-	if err == sql.ErrNoRows || !maxIP.Valid || maxIP.String == "" {
+	if errors.Is(err, sql.ErrNoRows) || !maxIP.Valid || maxIP.String == "" {
 		return "10.200.0.1", nil
 	}
 	if err != nil {
@@ -4088,7 +4089,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		&createdAt, &updatedAt,
 		&visibility, &requiresApproval, &shortDescription,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -4187,7 +4188,7 @@ func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb
 		&latitude, &longitude, &cpuCores, &memoryGB, &diskGB,
 		&lastHeartbeat, &createdAt, &updatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found")
 	}
 	if err != nil {
@@ -4493,7 +4494,7 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb
 		&ownerName, &subscriptionStatus, &entry.IsSubscribed,
 		&createdAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -4544,7 +4545,7 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 		LEFT JOIN quartermaster.tenants t ON t.id = $2
 		WHERE c.cluster_id = $1
 	`, clusterID, tenantID).Scan(&ownerTenantID, &isProvider)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -4699,7 +4700,7 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.
 		       (SELECT COUNT(*) FROM quartermaster.infrastructure_clusters WHERE owner_tenant_id = $1)
 		FROM quartermaster.tenants WHERE id = $1
 	`, tenantID).Scan(&maxOwnedClusters, &isProvider, &currentOwnedClusters)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "tenant not found")
 	}
 	if err != nil {
@@ -4810,7 +4811,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 	err := s.db.QueryRowContext(ctx,
 		"SELECT owner_tenant_id, cluster_name FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1",
 		clusterID).Scan(&dbOwnerID, &clusterName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -4825,7 +4826,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 	err = s.db.QueryRowContext(ctx,
 		"SELECT name FROM quartermaster.tenants WHERE id = $1",
 		invitedTenantID).Scan(&invitedTenantName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invited tenant not found")
 	}
 	if err != nil {
@@ -4841,7 +4842,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.C
 	if err == nil {
 		return nil, status.Error(codes.AlreadyExists, "pending invite already exists for this tenant")
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -4914,7 +4915,7 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *pb.R
 		JOIN quartermaster.infrastructure_clusters c ON i.cluster_id = c.cluster_id
 		WHERE i.id = $1
 	`, inviteID).Scan(&clusterID, &dbOwnerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invite not found")
 	}
 	if err != nil {
@@ -4950,7 +4951,7 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.Li
 	err := s.db.QueryRowContext(ctx,
 		"SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1",
 		clusterID).Scan(&dbOwnerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -5219,7 +5220,7 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1 AND is_active = true
 	`, clusterID).Scan(&visibility, &pricingModel, &requiresApproval, &ownerTenantID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -5255,7 +5256,7 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 			WHERE invite_token = $1 AND status = 'pending'
 			  AND (expires_at IS NULL OR expires_at > NOW())
 		`, *inviteToken).Scan(&inviteID, &inviteClusterID, &inviteTenantID, &inviteAccessLevel, &inviteResourceLimits)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "invalid or expired invite token")
 		}
 		if err != nil {
@@ -5356,7 +5357,7 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.A
 		WHERE invite_token = $1 AND status = 'pending'
 		  AND (expires_at IS NULL OR expires_at > NOW())
 	`, inviteToken).Scan(&inviteID, &clusterID, &invitedTenantID, &accessLevel, &resourceLimits)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invalid or expired invite token")
 	}
 	if err != nil {
@@ -5421,7 +5422,7 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 	err := s.db.QueryRowContext(ctx,
 		"SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1",
 		clusterID).Scan(&dbOwnerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
 	if err != nil {
@@ -5539,7 +5540,7 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
 		WHERE a.id = $1
 	`, subscriptionID).Scan(&tenantID, &clusterID, &dbOwnerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "subscription not found")
 	}
 	if err != nil {
@@ -5587,7 +5588,7 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
 		WHERE a.id = $1
 	`, subscriptionID).Scan(&tenantID, &clusterID, &dbOwnerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "subscription not found")
 	}
 	if err != nil {
@@ -5705,7 +5706,7 @@ func scanClusterSubscriptionRow(row *sql.Row) (*pb.ClusterSubscription, error) {
 		&rejectionReason, &expiresAt, &createdAt, &updatedAt,
 		&clusterName, &tenantName,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "subscription not found")
 	}
 	if err != nil {

@@ -909,7 +909,7 @@ func handleMollieSubscriptionWebhook(subscriptionID string) (string, error) {
 	err := db.QueryRow(`
 		SELECT tenant_id FROM purser.tenant_subscriptions WHERE mollie_subscription_id = $1
 	`, subscriptionID).Scan(&tenantID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", errMollieResourceNotFound
 	}
 	if err != nil {
@@ -1043,7 +1043,7 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) err
 		SELECT id, invoice_id FROM purser.billing_payments
 		WHERE tx_id = $1 AND method = $2
 	`, txID, provider).Scan(&paymentID, &foundInvoiceID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {

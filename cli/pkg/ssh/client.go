@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -164,7 +165,8 @@ func isKeyNotFoundError(err error) bool {
 
 // isKeyError checks if err is a KeyError and assigns it
 func isKeyError(err error, target **knownhosts.KeyError) bool {
-	if ke, ok := err.(*knownhosts.KeyError); ok {
+	var ke *knownhosts.KeyError
+	if errors.As(err, &ke) {
 		*target = ke
 		return true
 	}
@@ -349,7 +351,8 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 
 		if out.err != nil {
 			// Extract exit code from error
-			if exitErr, ok := out.err.(*ssh.ExitError); ok {
+			var exitErr *ssh.ExitError
+			if errors.As(out.err, &exitErr) {
 				result.ExitCode = exitErr.ExitStatus()
 			} else {
 				result.ExitCode = -1

@@ -179,7 +179,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		WHERE s.stream_key = $1
 	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateStreamKeyResponse{
 			Valid: false,
 			Error: "Invalid stream key",
@@ -245,7 +245,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 		SELECT id, internal_name, tenant_id FROM commodore.streams WHERE playback_id = $1
 	`, playbackID).Scan(&streamID, &internalName, &tenantID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
 	}
 
@@ -281,7 +281,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		SELECT id, tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
 	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
 	}
 
@@ -319,7 +319,7 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 		  AND (expires_at IS NULL OR expires_at > NOW())
 	`, hashToken(token)).Scan(&tokenID, &userID, &tenantID, pq.Array(&permissions))
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateAPITokenResponse{Valid: false}, nil
 	}
 
@@ -336,7 +336,7 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 	// Look up user email and role for context
 	var email, role string
 	err = s.db.QueryRowContext(ctx, `SELECT email, role FROM commodore.users WHERE id = $1`, userID).Scan(&email, &role)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"user_id": userID,
 			"error":   err,
@@ -384,7 +384,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		if err := s.db.QueryRowContext(ctx, `
 			SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2
 		`, streamID, tenantID).Scan(&internalName); err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
 			}
 			return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -396,7 +396,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		if err := s.db.QueryRowContext(ctx, `
 			SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
 		`, internalName, tenantID).Scan(&streamID); err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
 			}
 			return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -612,7 +612,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 	`, clipHash).Scan(&tenantID, &userID, &streamID, &title, &description,
 		&startTime, &duration, &clipMode, &internalName, &playbackID, &artifactInternalName)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveClipHashResponse{
 			Found: false,
 		}, nil
@@ -660,7 +660,7 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 		WHERE dvr_hash = $1
 	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveDVRHashResponse{
 			Found: false,
 		}, nil
@@ -768,7 +768,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 		WHERE vod_hash = $1
 	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveVodHashResponse{
 			Found: false,
 		}, nil
@@ -808,7 +808,7 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *pb.ResolveVodID
 		WHERE id = $1
 	`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveVodIDResponse{
 			Found: false,
 		}, nil
@@ -862,7 +862,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			ContentType:          "clip",
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"playback_id": playbackID,
 			"error":       err,
@@ -887,7 +887,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			ContentType:          "dvr",
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"playback_id": playbackID,
 			"error":       err,
@@ -912,7 +912,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			ContentType:          "vod",
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"playback_id": playbackID,
 			"error":       err,
@@ -954,7 +954,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			ContentType:          "clip",
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"artifact_internal_name": internalName,
 			"error":                  err,
@@ -979,7 +979,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			ContentType:          "dvr",
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"artifact_internal_name": internalName,
 			"error":                  err,
@@ -1004,7 +1004,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			ContentType:          "vod",
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"artifact_internal_name": internalName,
 			"error":                  err,
@@ -1041,7 +1041,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 				IsRecordingEnabled: isRecordingEnabled,
 				StreamId:           streamID,
 			}, nil
-		} else if err != sql.ErrNoRows {
+		} else if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Error("Database error checking streams by stream_id")
 		}
 
@@ -1057,7 +1057,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 				UserId:         vodUserID,
 				IdentifierType: "vod_id",
 			}, nil
-		} else if err != sql.ErrNoRows {
+		} else if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Error("Database error checking VOD by id")
 		}
 	}
@@ -1078,7 +1078,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IsRecordingEnabled: isRecordingEnabled,
 			StreamId:           streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking streams by internal_name")
 	}
 
@@ -1098,7 +1098,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IsRecordingEnabled: isRecordingEnabled,
 			StreamId:           streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking streams by playback_id")
 	}
 
@@ -1119,7 +1119,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IdentifierType: "clip_playback_id",
 			StreamId:       streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking clips by playback_id")
 	}
 
@@ -1138,7 +1138,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IdentifierType: "dvr_playback_id",
 			StreamId:       streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking DVR by playback_id")
 	}
 
@@ -1155,7 +1155,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			UserId:         userID,
 			IdentifierType: "vod_playback_id",
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking VOD by playback_id")
 	}
 
@@ -1175,7 +1175,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IdentifierType: "clip_internal_name",
 			StreamId:       streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking clips by artifact_internal_name")
 	}
 
@@ -1194,7 +1194,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IdentifierType: "dvr_internal_name",
 			StreamId:       streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking DVR by artifact_internal_name")
 	}
 
@@ -1211,7 +1211,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			UserId:         userID,
 			IdentifierType: "vod_internal_name",
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking VOD by artifact_internal_name")
 	}
 
@@ -1231,7 +1231,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IdentifierType: "clip",
 			StreamId:       streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking clips")
 	}
 
@@ -1248,7 +1248,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			IdentifierType: "dvr",
 			StreamId:       streamID,
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking DVR")
 	}
 
@@ -1263,7 +1263,7 @@ func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.Resolve
 			UserId:         userID,
 			IdentifierType: "vod",
 		}, nil
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Database error checking VOD")
 	}
 
@@ -1341,7 +1341,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 		}, nil
 	}
 
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("Failed to lookup wallet identity")
 		return nil, status.Error(codes.Internal, "failed to lookup wallet identity")
 	}
@@ -1497,7 +1497,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 		&user.FirstName, &user.LastName, &user.Role, pq.Array(&user.Permissions),
 		&user.IsActive, &user.IsVerified, &user.CreatedAt, &user.UpdatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 	if err != nil {
@@ -1621,7 +1621,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 			Message: "user already exists",
 		}, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -1753,7 +1753,7 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *pb.GetMeRequest) (*pb.
 		&user.Role, pq.Array(&user.Permissions), &user.IsActive, &user.IsVerified, &user.LastLoginAt,
 		&user.CreatedAt, &user.UpdatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "user not found")
 	}
 	if err != nil {
@@ -1855,7 +1855,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *pb.RefreshToken
 		WHERE token_hash = $1 AND expires_at > NOW()
 	`, tokenHash).Scan(&tokenID, &userID, &tenantID, &revoked)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
 	}
 	if err != nil {
@@ -1969,7 +1969,7 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *pb.VerifyEmailRe
 		WHERE verification_token = $1 AND verified = false AND token_expires_at > NOW()
 	`, tokenHash).Scan(&userID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.VerifyEmailResponse{
 			Success: false,
 			Message: "invalid or expired verification token",
@@ -2032,7 +2032,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *pb.Resend
 		SELECT id, verified, token_expires_at FROM commodore.users WHERE email = $1
 	`, email).Scan(&userID, &isVerified, &tokenExpiresAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Don't reveal if email exists - return success anyway
 		return &pb.ResendVerificationResponse{
 			Success: true,
@@ -2113,7 +2113,7 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *pb.ForgotPass
 	// Check if user exists
 	var userID string
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM commodore.users WHERE email = $1`, email).Scan(&userID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Don't reveal whether email exists - always return success
 		return &pb.ForgotPasswordResponse{
 			Success: true,
@@ -2179,7 +2179,7 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *pb.ResetPasswo
 		WHERE reset_token = $1 AND reset_token_expires > NOW()
 	`, tokenHash).Scan(&userID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResetPasswordResponse{
 			Success: false,
 			Message: "invalid or expired reset token",
@@ -2674,7 +2674,7 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *pb.LinkWalletRequ
 			return nil, status.Error(codes.AlreadyExists, "wallet already linked to your account")
 		}
 		return nil, status.Error(codes.AlreadyExists, "wallet already linked to another account")
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "failed to check wallet: %v", err)
 	}
 
@@ -2809,7 +2809,7 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *pb.LinkEmailReques
 	`, email, userID).Scan(&otherUserID)
 	if err == nil {
 		return nil, status.Error(codes.AlreadyExists, "email already in use by another account")
-	} else if err != sql.ErrNoRows {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "failed to check email: %v", err)
 	}
 
@@ -3070,7 +3070,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 	err = s.db.QueryRowContext(ctx, `
 		SELECT internal_name FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&internalName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
@@ -3140,7 +3140,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
 	`, streamID, userID, tenantID).Scan(&internalName, &title)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
@@ -3270,7 +3270,7 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *pb.CreateStr
 	err = s.db.QueryRowContext(ctx, `
 		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3)
 	`, streamID, userID, tenantID).Scan(&exists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
@@ -3674,7 +3674,7 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 	err = s.db.QueryRowContext(ctx, `
 		SELECT token_name FROM commodore.api_tokens WHERE id = $1 AND user_id = $2 AND tenant_id = $3
 	`, req.GetTokenId(), userID, tenantID).Scan(&tokenName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "token not found")
 	}
 	if err != nil {
@@ -3836,7 +3836,7 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
 		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
@@ -4048,7 +4048,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	err = s.db.QueryRowContext(ctx, `
 		SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2
 	`, streamID, tenantID).Scan(&internalName)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
@@ -4354,7 +4354,7 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 		&startTime, &duration, &clipMode, &requestedParams,
 		&retentionUntil, &createdAt, &updatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "clip not found")
 	} else if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -5122,7 +5122,7 @@ func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRe
 		&sizeBytes, &retentionUntil, &createdAt, &updatedAt,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "VOD asset not found")
 		}
 		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to get VOD asset")
@@ -5471,7 +5471,7 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *pb.GetT
 		LIMIT 1
 	`, tenantID).Scan(&userID, &email, &firstName, &lastName)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no users found for tenant")
 	}
 
