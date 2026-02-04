@@ -273,7 +273,19 @@ func main() {
 			},
 		})
 
-		grpcSrv := grpc.NewServer(grpc.UnaryInterceptor(authInterceptor))
+		streamAuthInterceptor := middleware.GRPCStreamAuthInterceptor(middleware.GRPCAuthConfig{
+			ServiceToken: serviceToken,
+			Logger:       logger,
+			SkipMethods: []string{
+				"/grpc.health.v1.Health/Check",
+				"/grpc.health.v1.Health/Watch",
+			},
+		})
+
+		grpcSrv := grpc.NewServer(
+			grpc.UnaryInterceptor(authInterceptor),
+			grpc.StreamInterceptor(streamAuthInterceptor),
+		)
 		pb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
 
 		// gRPC health service so Quartermaster's gRPC probe passes
