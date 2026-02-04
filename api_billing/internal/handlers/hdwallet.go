@@ -92,17 +92,31 @@ func DeriveAddressFromXpub(xpub string, index uint32) (string, error) {
 // GetNextDerivationIndex atomically gets and increments the next derivation index.
 // Returns the index to use and the xpub.
 func (hw *HDWallet) GetNextDerivationIndex() (uint32, string, error) {
-	var index int
-	var xpub string
-
 	tx, err := hw.db.Begin()
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	// Get current state and increment atomically
-	err = tx.QueryRow(`
+	index, xpub, err := hw.GetNextDerivationIndexTx(tx)
+	if err != nil {
+		return 0, "", err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return 0, "", fmt.Errorf("failed to commit: %w", err)
+	}
+
+	return uint32(index), xpub, nil
+}
+
+// GetNextDerivationIndexTx atomically gets and increments the next derivation index within a transaction.
+// Returns the index to use and the xpub.
+func (hw *HDWallet) GetNextDerivationIndexTx(tx *sql.Tx) (uint32, string, error) {
+	var index int
+	var xpub string
+
+	err := tx.QueryRow(`
 		UPDATE purser.hd_wallet_state
 		SET next_index = next_index + 1, updated_at = NOW()
 		WHERE id = 1
@@ -116,11 +130,20 @@ func (hw *HDWallet) GetNextDerivationIndex() (uint32, string, error) {
 		return 0, "", fmt.Errorf("failed to get next derivation index: %w", err)
 	}
 
-	if err = tx.Commit(); err != nil {
-		return 0, "", fmt.Errorf("failed to commit: %w", err)
-	}
-
 	return uint32(index), xpub, nil
+}
+
+// GetNextNonZeroDerivationIndexTx allocates a derivation index within a transaction, skipping index 0.
+func (hw *HDWallet) GetNextNonZeroDerivationIndexTx(tx *sql.Tx) (uint32, string, error) {
+	for {
+		index, xpub, err := hw.GetNextDerivationIndexTx(tx)
+		if err != nil {
+			return 0, "", err
+		}
+		if index != 0 {
+			return index, xpub, nil
+		}
+	}
 }
 
 // EnsureState ensures the HD wallet state row exists.
@@ -175,8 +198,14 @@ func (hw *HDWallet) GenerateDepositAddress(
 		return "", "", fmt.Errorf("expected_amount_cents required for prepaid purpose")
 	}
 
+	tx, err := hw.db.Begin()
+	if err != nil {
+		return "", "", fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
 	// Get next index and xpub
-	derivationIndex, xpub, err := hw.GetNextDerivationIndex()
+	derivationIndex, xpub, err := hw.GetNextNonZeroDerivationIndexTx(tx)
 	if err != nil {
 		return "", "", err
 	}
@@ -201,7 +230,7 @@ func (hw *HDWallet) GenerateDepositAddress(
 		expectedAmountValue = *expectedAmountCents
 	}
 
-	_, err = hw.db.Exec(`
+	_, err = tx.Exec(`
 		INSERT INTO purser.crypto_wallets (
 			id, tenant_id, purpose, invoice_id, expected_amount_cents,
 			asset, wallet_address, derivation_index, status, expires_at
@@ -212,6 +241,10 @@ func (hw *HDWallet) GenerateDepositAddress(
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to insert crypto wallet: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return "", "", fmt.Errorf("failed to commit: %w", err)
 	}
 
 	hw.logger.WithFields(logging.Fields{

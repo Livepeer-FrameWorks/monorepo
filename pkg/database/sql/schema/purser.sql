@@ -582,6 +582,9 @@ CREATE INDEX IF NOT EXISTS idx_purser_webhook_events_provider ON purser.webhook_
 
 -- Per-tenant x402 address index (reuse same address across payments)
 ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS x402_address_index INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_subscriptions_x402_address_index
+    ON purser.tenant_subscriptions(x402_address_index)
+    WHERE x402_address_index IS NOT NULL;
 
 -- Nonce tracking to prevent replay attacks
 -- Each EIP-3009 authorization has a unique nonce that can only be used once
