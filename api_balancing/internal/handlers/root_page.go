@@ -26,8 +26,7 @@ func formatBytes(bytes uint64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-func formatBitsPerSec(bytesPerSec uint64) string {
-	bps := bytesPerSec * 8
+func formatBitsPerSec(bps uint64) string {
 	const unit = 1000
 	if bps < unit {
 		return fmt.Sprintf("%d bps", bps)
