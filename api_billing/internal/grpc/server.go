@@ -223,6 +223,7 @@ type PurserServer struct {
 	hdwallet            *handlers.HDWallet
 	x402handler         *handlers.X402Handler
 	decklogClient       *decklogclient.BatchedClient
+	thresholdEnforcer   *handlers.ThresholdEnforcer
 }
 
 // NewPurserServer creates a new Purser gRPC server
@@ -244,6 +245,7 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		hdwallet:            hdwallet,
 		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, commodoreClient),
 		decklogClient:       decklogClient,
+		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil),
 	}
 }
 
@@ -3720,6 +3722,7 @@ func (s *PurserServer) recordBalanceTransaction(
 		s.logger.WithError(err).Error("Failed to update balance")
 		return nil, status.Error(codes.Internal, "failed to update balance")
 	}
+	previousBalance := newBalance - amountCents
 
 	// Insert transaction record
 	txID := uuid.New().String()
@@ -3737,6 +3740,12 @@ func (s *PurserServer) recordBalanceTransaction(
 
 	if err := tx.Commit(); err != nil {
 		return nil, status.Error(codes.Internal, "failed to commit transaction")
+	}
+
+	if s.thresholdEnforcer != nil {
+		if err := s.thresholdEnforcer.EnforcePrepaidThresholds(ctx, tenantID, previousBalance, newBalance); err != nil {
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to enforce prepaid thresholds after balance update")
+		}
 	}
 
 	if txType == "topup" && amountCents > 0 {
