@@ -267,25 +267,25 @@ func main() {
 	// Commodore Cache
 	ttl := 60 * time.Second
 	if v := config.GetEnv("COMMODORE_CACHE_TTL", ""); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
+		if d, errParse := time.ParseDuration(v); errParse == nil {
 			ttl = d
 		}
 	}
 	swr := 30 * time.Second
 	if v := config.GetEnv("COMMODORE_CACHE_SWR", ""); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
+		if d, errParse := time.ParseDuration(v); errParse == nil {
 			swr = d
 		}
 	}
 	neg := 10 * time.Second
 	if v := config.GetEnv("COMMODORE_CACHE_NEG_TTL", ""); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
+		if d, errParse := time.ParseDuration(v); errParse == nil {
 			neg = d
 		}
 	}
 	maxEntries := 10000
 	if v := config.GetEnv("COMMODORE_CACHE_MAX", ""); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, errParse := strconv.Atoi(v); errParse == nil && n > 0 {
 			maxEntries = n
 		}
 	}

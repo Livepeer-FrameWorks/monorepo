@@ -64,15 +64,6 @@ func validateBootstrapTokenKind(kind string) error {
 	return nil
 }
 
-// validateDuration ensures duration string is valid
-func validateDuration(d string) error {
-	if d == "" {
-		return nil // empty is ok, uses default
-	}
-	_, err := normalizeDuration(d)
-	return err
-}
-
 func normalizeDuration(d string) (string, error) {
 	if d == "" {
 		return "", nil
@@ -317,14 +308,14 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 		if len(args) > 0 {
 			tokenID = args[0]
 			// Validate token ID format
-			if err := validateUUID(tokenID); err != nil {
-				return fmt.Errorf("token ID: %w", err)
+			if errValidate := validateUUID(tokenID); errValidate != nil {
+				return fmt.Errorf("token ID: %w", errValidate)
 			}
 		} else if name != "" {
 			// Look up token ID by name
-			resp, err := cli.ListAPITokens(cctx, nil)
-			if err != nil {
-				return fmt.Errorf("failed to list tokens: %w", err)
+			resp, errList := cli.ListAPITokens(cctx, nil)
+			if errList != nil {
+				return fmt.Errorf("failed to list tokens: %w", errList)
 			}
 			for _, t := range resp.Tokens {
 				if t.TokenName == name {
@@ -426,15 +417,15 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		}
 		// Validate optional UUIDs if provided
 		if tenantID != "" {
-			if err := validateUUID(tenantID); err != nil {
-				return fmt.Errorf("--tenant-id: %w", err)
+			if errValidate := validateUUID(tenantID); errValidate != nil {
+				return fmt.Errorf("--tenant-id: %w", errValidate)
 			}
 		}
 		// cluster_id is a string identifier; do not enforce UUID format
 		// Validate expected IP if provided
 		if expectedIP != "" {
-			if err := validateIP(expectedIP); err != nil {
-				return fmt.Errorf("--expected-ip: %w", err)
+			if errValidate := validateIP(expectedIP); errValidate != nil {
+				return fmt.Errorf("--expected-ip: %w", errValidate)
 			}
 		}
 		if usageLimit < 0 {

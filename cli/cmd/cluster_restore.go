@@ -133,8 +133,8 @@ func restorePostgres(ctx context.Context, cmd *cobra.Command, manifest *inventor
 
 	// Stop Postgres
 	stopCmd := "cd /opt/frameworks/postgres && docker compose stop"
-	if result, err := runner.Run(ctx, stopCmd); err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to stop postgres: %w", err)
+	if result, errRun := runner.Run(ctx, stopCmd); errRun != nil || result.ExitCode != 0 {
+		return fmt.Errorf("failed to stop postgres: %w", errRun)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Postgres stopped\n")
 
@@ -199,8 +199,8 @@ func restoreClickHouse(ctx context.Context, cmd *cobra.Command, manifest *invent
 
 	// Stop ClickHouse
 	stopCmd := "cd /opt/frameworks/clickhouse && docker compose stop"
-	if result, err := runner.Run(ctx, stopCmd); err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to stop clickhouse: %w", err)
+	if result, errRun := runner.Run(ctx, stopCmd); errRun != nil || result.ExitCode != 0 {
+		return fmt.Errorf("failed to stop clickhouse: %w", errRun)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ ClickHouse stopped\n")
 
@@ -270,8 +270,8 @@ func restoreVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory
 
 	// Stop all services
 	stopCmd := "cd /opt/frameworks && for dir in */; do (cd $dir && docker compose down 2>/dev/null || true); done"
-	if result, err := runner.Run(ctx, stopCmd); err != nil || result.ExitCode != 0 {
-		fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Some services may not have stopped: %v\n", err)
+	if result, errRun := runner.Run(ctx, stopCmd); errRun != nil || result.ExitCode != 0 {
+		fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Some services may not have stopped: %v\n", errRun)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Services stopped\n")
 
@@ -282,9 +282,9 @@ func restoreVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory
 docker run --rm -v /var/lib/docker/volumes:/volumes -v $(dirname %s):/backup alpine tar xzf /backup/$(basename %s) -C /volumes
 `, backupPath, backupPath)
 
-	result, err := runner.Run(ctx, restoreCmd)
-	if err != nil {
-		return fmt.Errorf("restore failed: %w", err)
+	result, errRun := runner.Run(ctx, restoreCmd)
+	if errRun != nil {
+		return fmt.Errorf("restore failed: %w", errRun)
 	}
 
 	if result.ExitCode != 0 {

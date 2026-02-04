@@ -86,9 +86,9 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 		}
 		endpoint := u.String()
 		r := checkResult{Service: name, Endpoint: endpoint}
-		reqCtx, cancel := contextWithTimeout(timeout)
+		ctx, cancel := contextWithTimeout(timeout)
 		defer cancel()
-		req, err := http.NewRequestWithContext(reqCtx, "GET", endpoint, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			r.OK = false
 			r.Status = "invalid request"
@@ -102,7 +102,9 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 			r.Error = err.Error()
 			return r
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 		r.OK = resp.StatusCode == 200
 		r.Status = fmt.Sprintf("http %d", resp.StatusCode)
 		return r
@@ -117,14 +119,16 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 		}
 		ctx, cancel := contextWithTimeout(timeout)
 		defer cancel()
-		conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			r.OK = false
 			r.Status = "dial error"
 			r.Error = err.Error()
 			return r
 		}
-		defer conn.Close()
+		defer func() {
+			_ = conn.Close()
+		}()
 		hc := healthpb.NewHealthClient(conn)
 		if _, err := hc.Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
 			r.OK = false

@@ -434,9 +434,9 @@ func newServicesDownCmd() *cobra.Command {
 			fmt.Fprintf(os.Stderr, "\nThis will stop the following services: %s\n", strings.Join(servicesToStop, ", "))
 			fmt.Fprintf(os.Stderr, "Continue? [y/N]: ")
 			reader := bufio.NewReader(os.Stdin)
-			response, err := reader.ReadString('\n')
-			if err != nil {
-				return fmt.Errorf("failed to read confirmation: %w", err)
+			response, errRead := reader.ReadString('\n')
+			if errRead != nil {
+				return fmt.Errorf("failed to read confirmation: %w", errRead)
 			}
 			response = strings.TrimSpace(strings.ToLower(response))
 			if response != "y" && response != "yes" {

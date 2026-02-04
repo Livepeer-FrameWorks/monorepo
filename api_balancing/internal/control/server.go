@@ -2281,15 +2281,15 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	if tenantID == "" {
 		if CommodoreClient != nil {
 			if artifactType == "clip" {
-				if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
+				if resp, errResolve := CommodoreClient.ResolveClipHash(ctx, assetHash); errResolve == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
 			} else if artifactType == "dvr" {
-				if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+				if resp, errResolve := CommodoreClient.ResolveDVRHash(ctx, assetHash); errResolve == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
 			} else if artifactType == "vod" {
-				if resp, err := CommodoreClient.ResolveVodHash(ctx, assetHash); err == nil && resp.Found {
+				if resp, errResolve := CommodoreClient.ResolveVodHash(ctx, assetHash); errResolve == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
 			}

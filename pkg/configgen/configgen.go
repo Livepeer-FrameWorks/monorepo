@@ -258,32 +258,32 @@ func computeDerived(env map[string]string) error {
 	env["CLICKHOUSE_HOST"] = fmt.Sprintf("%s:%s", chHost, chNativePort)
 	env["CLICKHOUSE_PORT"] = chHTTPPort
 
-	if err := setHTTPURL(env, "COMMODORE_URL", "COMMODORE_HOST", "COMMODORE_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "COMMODORE_URL", "COMMODORE_HOST", "COMMODORE_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setHTTPURL(env, "QUARTERMASTER_URL", "QUARTERMASTER_HOST", "QUARTERMASTER_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "QUARTERMASTER_URL", "QUARTERMASTER_HOST", "QUARTERMASTER_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setHTTPURL(env, "PURSER_URL", "PURSER_HOST", "PURSER_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "PURSER_URL", "PURSER_HOST", "PURSER_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setHTTPURL(env, "PERISCOPE_QUERY_URL", "PERISCOPE_QUERY_HOST", "PERISCOPE_QUERY_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "PERISCOPE_QUERY_URL", "PERISCOPE_QUERY_HOST", "PERISCOPE_QUERY_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setHTTPURL(env, "PERISCOPE_INGEST_URL", "PERISCOPE_INGEST_HOST", "PERISCOPE_INGEST_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "PERISCOPE_INGEST_URL", "PERISCOPE_INGEST_HOST", "PERISCOPE_INGEST_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setGRPCAddr(env, "DECKLOG_GRPC_ADDR", "DECKLOG_HOST", "DECKLOG_PORT"); err != nil {
-		return err
+	if errSet := setGRPCAddr(env, "DECKLOG_GRPC_ADDR", "DECKLOG_HOST", "DECKLOG_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setHTTPURL(env, "HELMSMAN_WEBHOOK_URL", "HELMSMAN_HOST", "HELMSMAN_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "HELMSMAN_WEBHOOK_URL", "HELMSMAN_HOST", "HELMSMAN_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setHTTPURL(env, "FOGHORN_URL", "FOGHORN_HOST", "FOGHORN_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "FOGHORN_URL", "FOGHORN_HOST", "FOGHORN_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setHTTPURL(env, "MISTSERVER_URL", "MISTSERVER_HOST", "MISTSERVER_PORT"); err != nil {
-		return err
+	if errSet := setHTTPURL(env, "MISTSERVER_URL", "MISTSERVER_HOST", "MISTSERVER_PORT"); errSet != nil {
+		return errSet
 	}
 
 	// Navigator gRPC URL (no scheme, just host:port)
@@ -299,23 +299,23 @@ func computeDerived(env map[string]string) error {
 
 	// Control Plane gRPC addresses (host:port, no scheme)
 	// These are used for internal service-to-service communication
-	if err := setGRPCAddr(env, "COMMODORE_GRPC_ADDR", "COMMODORE_HOST", "COMMODORE_GRPC_PORT"); err != nil {
-		return err
+	if errSet := setGRPCAddr(env, "COMMODORE_GRPC_ADDR", "COMMODORE_HOST", "COMMODORE_GRPC_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setGRPCAddr(env, "QUARTERMASTER_GRPC_ADDR", "QUARTERMASTER_HOST", "QUARTERMASTER_GRPC_PORT"); err != nil {
-		return err
+	if errSet := setGRPCAddr(env, "QUARTERMASTER_GRPC_ADDR", "QUARTERMASTER_HOST", "QUARTERMASTER_GRPC_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setGRPCAddr(env, "PURSER_GRPC_ADDR", "PURSER_HOST", "PURSER_GRPC_PORT"); err != nil {
-		return err
+	if errSet := setGRPCAddr(env, "PURSER_GRPC_ADDR", "PURSER_HOST", "PURSER_GRPC_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setGRPCAddr(env, "PERISCOPE_GRPC_ADDR", "PERISCOPE_QUERY_HOST", "PERISCOPE_QUERY_GRPC_PORT"); err != nil {
-		return err
+	if errSet := setGRPCAddr(env, "PERISCOPE_GRPC_ADDR", "PERISCOPE_QUERY_HOST", "PERISCOPE_QUERY_GRPC_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setGRPCAddr(env, "SIGNALMAN_GRPC_ADDR", "SIGNALMAN_HOST", "SIGNALMAN_GRPC_PORT"); err != nil {
-		return err
+	if errSet := setGRPCAddr(env, "SIGNALMAN_GRPC_ADDR", "SIGNALMAN_HOST", "SIGNALMAN_GRPC_PORT"); errSet != nil {
+		return errSet
 	}
-	if err := setGRPCAddr(env, "DECKHAND_GRPC_ADDR", "DECKHAND_HOST", "DECKHAND_GRPC_PORT"); err != nil {
-		return err
+	if errSet := setGRPCAddr(env, "DECKHAND_GRPC_ADDR", "DECKHAND_HOST", "DECKHAND_GRPC_PORT"); errSet != nil {
+		return errSet
 	}
 
 	foghornControlPort, err := require(env, "FOGHORN_CONTROL_PORT")

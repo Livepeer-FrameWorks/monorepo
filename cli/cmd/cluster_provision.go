@@ -460,9 +460,9 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 			PrimaryColor:   "#6366f1",
 			SecondaryColor: "#f59e0b",
 		}
-		createTenantResp, err := client.CreateTenant(ctx, createTenantReq)
-		if err != nil {
-			return "", "", "", fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", err)
+		createTenantResp, errCreate := client.CreateTenant(ctx, createTenantReq)
+		if errCreate != nil {
+			return "", "", "", fmt.Errorf("failed to create 'FrameWorks' System Tenant: %w", errCreate)
 		}
 		systemTenantID = createTenantResp.Tenant.Id
 		fmt.Printf("    ✓ Created System Tenant with ID: %s\n", systemTenantID)
@@ -523,17 +523,17 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		if hostInfo.ExternalIP != "" {
 			externalIP = hostInfo.ExternalIP
 		}
-		_, err := client.CreateNode(ctx, &pb.CreateNodeRequest{
+		_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
 			NodeId:     hostName,
 			ClusterId:  clusterID,
 			NodeName:   hostName,
 			NodeType:   nodeType,
 			ExternalIp: &externalIP,
 		})
-		if err != nil {
+		if errCreate != nil {
 			// Ignore duplicate errors (node already exists)
-			if !strings.Contains(err.Error(), "duplicate") && !strings.Contains(err.Error(), "already exists") {
-				return "", "", "", fmt.Errorf("failed to register node %s: %w", hostName, err)
+			if !strings.Contains(errCreate.Error(), "duplicate") && !strings.Contains(errCreate.Error(), "already exists") {
+				return "", "", "", fmt.Errorf("failed to register node %s: %w", hostName, errCreate)
 			}
 			fmt.Printf("    ✓ Node already exists: %s\n", hostName)
 		} else {
@@ -568,16 +568,16 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		}
 		nodeID := fmt.Sprintf("%s-%s", hostName, serviceType)
 		nodeName := fmt.Sprintf("%s-%s", hostName, serviceType)
-		_, err := client.CreateNode(ctx, &pb.CreateNodeRequest{
+		_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
 			NodeId:     nodeID,
 			ClusterId:  clusterID,
 			NodeName:   nodeName,
 			NodeType:   serviceType,
 			ExternalIp: &externalIP,
 		})
-		if err != nil {
-			if !strings.Contains(err.Error(), "duplicate") && !strings.Contains(err.Error(), "already exists") {
-				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, err)
+		if errCreate != nil {
+			if !strings.Contains(errCreate.Error(), "duplicate") && !strings.Contains(errCreate.Error(), "already exists") {
+				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, errCreate)
 			}
 			fmt.Printf("    ✓ Public node already exists: %s\n", nodeID)
 		} else {
@@ -609,16 +609,16 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		}
 		nodeID := fmt.Sprintf("%s-%s", hostName, serviceType)
 		nodeName := fmt.Sprintf("%s-%s", hostName, serviceType)
-		_, err := client.CreateNode(ctx, &pb.CreateNodeRequest{
+		_, errCreate := client.CreateNode(ctx, &pb.CreateNodeRequest{
 			NodeId:     nodeID,
 			ClusterId:  clusterID,
 			NodeName:   nodeName,
 			NodeType:   serviceType,
 			ExternalIp: &externalIP,
 		})
-		if err != nil {
-			if !strings.Contains(err.Error(), "duplicate") && !strings.Contains(err.Error(), "already exists") {
-				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, err)
+		if errCreate != nil {
+			if !strings.Contains(errCreate.Error(), "duplicate") && !strings.Contains(errCreate.Error(), "already exists") {
+				return "", "", "", fmt.Errorf("failed to register public node %s: %w", nodeID, errCreate)
 			}
 			fmt.Printf("    ✓ Public node already exists: %s\n", nodeID)
 		} else {
@@ -636,9 +636,9 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 		ClusterId: &clusterID,
 	}
 
-	resp, err := client.CreateBootstrapToken(ctx, infrastructureTokenReq)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to create infrastructure bootstrap token: %w", err)
+	resp, errToken := client.CreateBootstrapToken(ctx, infrastructureTokenReq)
+	if errToken != nil {
+		return "", "", "", fmt.Errorf("failed to create infrastructure bootstrap token: %w", errToken)
 	}
 
 	fmt.Printf("    ✓ Generated Infrastructure Token: %s\n", resp.Token.Id)

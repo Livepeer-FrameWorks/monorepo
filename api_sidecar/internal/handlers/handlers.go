@@ -296,31 +296,6 @@ func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 	return totalSize, nil
 }
 
-// parseManifestSegments reads an HLS manifest and extracts segment file paths
-func (h *Handlers) parseManifestSegments(manifestPath, baseDir string) []string {
-	var segments []string
-
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		logger.WithError(err).WithField("path", manifestPath).Warn("Failed to read manifest for segment parsing")
-		return segments
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// Skip empty lines and tags
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// This is a segment reference (relative path like "segments/1234_0.ts")
-		segPath := filepath.Join(baseDir, line)
-		segments = append(segments, segPath)
-	}
-
-	return segments
-}
-
 // removeEmptyDir removes a directory only if it's empty
 func (h *Handlers) removeEmptyDir(dir string) {
 	entries, err := os.ReadDir(dir)
@@ -328,7 +303,7 @@ func (h *Handlers) removeEmptyDir(dir string) {
 		return
 	}
 	if len(entries) == 0 {
-		os.Remove(dir)
+		_ = os.Remove(dir)
 	}
 }
 
@@ -1254,9 +1229,10 @@ func enrichLiveTrackListTrigger(trigger *pb.StreamTrackListTrigger) {
 
 	var videoTracks, audioTracks []*pb.StreamTrack
 	for _, track := range tracks {
-		if track.TrackType == "video" {
+		switch track.TrackType {
+		case "video":
 			videoTracks = append(videoTracks, track)
-		} else if track.TrackType == "audio" {
+		case "audio":
 			audioTracks = append(audioTracks, track)
 		}
 	}
