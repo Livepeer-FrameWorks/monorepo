@@ -1687,7 +1687,9 @@ func (s *PurserServer) createStripePayment(invoiceID, tenantID string, amount fl
 		amountCents, normalizedCurrency, invoiceID, tenantID,
 	))
 
-	req, err := http.NewRequest("POST", "https://api.stripe.com/v1/payment_intents", data)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.stripe.com/v1/payment_intents", data)
 	if err != nil {
 		return "", "", err
 	}
@@ -1763,7 +1765,9 @@ func (s *PurserServer) createMolliePayment(invoiceID, tenantID string, amount fl
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", "https://api.mollie.com/v2/payments", bytes.NewReader(payloadBytes))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.mollie.com/v2/payments", bytes.NewReader(payloadBytes))
 	if err != nil {
 		return "", "", err
 	}

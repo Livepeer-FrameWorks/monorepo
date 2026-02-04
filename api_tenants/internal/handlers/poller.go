@@ -153,7 +153,16 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				defer func() { <-sem }()
 				url := fmt.Sprintf("http://%s:%d%s", ii.host, ii.port, ii.path)
 				status := "healthy"
-				resp, err := client.Get(url)
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+				if err != nil {
+					status = "unhealthy"
+					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check request failed")
+					_, _ = db.Exec(`UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+					return
+				}
+				resp, err := client.Do(req)
 				if err != nil {
 					status = "unhealthy"
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check failed")

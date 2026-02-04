@@ -86,7 +86,15 @@ func runReachabilityChecks(c fwcfg.Context, timeout time.Duration) []checkResult
 		}
 		endpoint := u.String()
 		r := checkResult{Service: name, Endpoint: endpoint}
-		req, _ := http.NewRequest("GET", endpoint, nil)
+		reqCtx, cancel := contextWithTimeout(timeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, "GET", endpoint, nil)
+		if err != nil {
+			r.OK = false
+			r.Status = "invalid request"
+			r.Error = err.Error()
+			return r
+		}
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			r.OK = false

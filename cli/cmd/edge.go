@@ -187,14 +187,23 @@ func newEdgeEnrollCmd() *cobra.Command {
 		httpClient := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 		deadline := time.Now().Add(timeout)
 		for {
-			req, _ := http.NewRequest("GET", url, nil)
+			reqCtx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
+			req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+			if err != nil {
+				cancel()
+				return err
+			}
 			resp, err := httpClient.Do(req)
+			cancel()
 			if err == nil && resp != nil && resp.StatusCode == 200 {
 				if resp.Body != nil {
 					resp.Body.Close()
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "HTTPS ready at %s\n", url)
 				break
+			}
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
 			}
 			if time.Now().After(deadline) {
 				if err != nil {
@@ -758,8 +767,14 @@ func waitForHTTPS(cmd *cobra.Command, domain string, timeout time.Duration) erro
 	deadline := time.Now().Add(timeout)
 
 	for {
-		req, _ := http.NewRequest("GET", url, nil)
+		reqCtx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
+		req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+		if err != nil {
+			cancel()
+			return err
+		}
 		resp, err := httpClient.Do(req)
+		cancel()
 		if err == nil && resp != nil && resp.StatusCode == 200 {
 			if resp.Body != nil {
 				resp.Body.Close()

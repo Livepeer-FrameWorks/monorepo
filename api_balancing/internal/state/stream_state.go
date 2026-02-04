@@ -2455,7 +2455,6 @@ type NodeRepository interface {
 	ListAllNodes(ctx context.Context) ([]NodeRecord, error)
 	ListNodeMaintenance(ctx context.Context) ([]NodeMaintenanceRecord, error)
 	UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error
-	UpsertNodeLifecycle(ctx context.Context, update *pb.NodeLifecycleUpdate) error
 	UpsertNodeLifecycles(ctx context.Context, updates []*pb.NodeLifecycleUpdate) error
 	UpsertNodeMaintenance(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error
 }
@@ -2464,8 +2463,6 @@ type NodeRepository interface {
 type ArtifactRepository interface {
 	// UpsertArtifacts inserts or updates artifacts for a node, and marks stale artifacts as orphaned
 	UpsertArtifacts(ctx context.Context, nodeID string, artifacts []ArtifactRecord) error
-	// DeleteArtifact removes a specific artifact from the registry
-	DeleteArtifact(ctx context.Context, nodeID string, artifactHash string) error
 
 	// Sync tracking methods for dual-storage architecture
 	// GetArtifactSyncInfo retrieves sync status for an artifact (across all nodes)
@@ -2476,14 +2473,8 @@ type ArtifactRepository interface {
 	AddCachedNode(ctx context.Context, artifactHash, nodeID string) error
 	// AddCachedNodeWithPath updates cache tracking with file path and size info.
 	AddCachedNodeWithPath(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64) error
-	// RemoveCachedNode removes a node from the cached_nodes array
-	RemoveCachedNode(ctx context.Context, artifactHash, nodeID string) error
 	// IsSynced returns true if the artifact is synced to S3
 	IsSynced(ctx context.Context, artifactHash string) (bool, error)
-	// GetArtifactNodes returns all node IDs that have a local copy of the artifact
-	GetArtifactNodes(ctx context.Context, artifactHash string) ([]string, error)
-	// SetCachedAt updates the cached_at timestamp (for warm duration tracking)
-	SetCachedAt(ctx context.Context, artifactHash string) error
 	// GetCachedAt retrieves the cached_at timestamp (Unix ms) for calculating warm duration
 	GetCachedAt(ctx context.Context, artifactHash string) (int64, error)
 	// ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)
