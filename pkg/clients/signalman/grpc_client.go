@@ -56,31 +56,40 @@ type GRPCConfig struct {
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		// Extract user context from Go context and add to gRPC metadata
-		md := metadata.MD{}
-
-		if userID := ctxkeys.GetUserID(ctx); userID != "" {
-			md.Set("x-user-id", userID)
-		}
-		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
-			md.Set("x-tenant-id", tenantID)
-		}
-
-		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
-			md.Set("authorization", "Bearer "+jwtToken)
-		} else if serviceToken != "" {
-			md.Set("authorization", "Bearer "+serviceToken)
-		}
-
-		// Merge with existing outgoing metadata if any
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
-		}
-
-		ctx = metadata.NewOutgoingContext(ctx, md)
+		ctx = attachAuthMetadata(ctx, serviceToken)
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
+}
+
+func streamAuthInterceptor(serviceToken string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		ctx = attachAuthMetadata(ctx, serviceToken)
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+}
+
+func attachAuthMetadata(ctx context.Context, serviceToken string) context.Context {
+	md := metadata.MD{}
+
+	if userID := ctxkeys.GetUserID(ctx); userID != "" {
+		md.Set("x-user-id", userID)
+	}
+	if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+		md.Set("x-tenant-id", tenantID)
+	}
+
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
+		md.Set("authorization", "Bearer "+jwtToken)
+	} else if serviceToken != "" {
+		md.Set("authorization", "Bearer "+serviceToken)
+	}
+
+	if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+		md = metadata.Join(existingMD, md)
+	}
+
+	return metadata.NewOutgoingContext(ctx, md)
 }
 
 // EventHandler is a function that handles incoming events
@@ -97,6 +106,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
+		grpc.WithStreamInterceptor(streamAuthInterceptor(config.ServiceToken)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Signalman gRPC: %w", err)
