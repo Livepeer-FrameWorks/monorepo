@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"frameworks/api_dns/internal/provider/cloudflare"
 	"frameworks/pkg/clients/quartermaster"
@@ -13,21 +14,27 @@ import (
 
 // DNSManager handles DNS synchronization logic
 type DNSManager struct {
-	cfClient *cloudflare.Client
-	qmClient *quartermaster.GRPCClient
-	logger   logging.Logger
-	domain   string // Root domain e.g. frameworks.network
-	proxy    map[string]bool
+	cfClient  *cloudflare.Client
+	qmClient  *quartermaster.GRPCClient
+	logger    logging.Logger
+	domain    string // Root domain e.g. frameworks.network
+	proxy     map[string]bool
+	recordTTL int
+	lbTTL     int
+	staleAge  time.Duration
 }
 
 // NewDNSManager creates a new DNSManager
-func NewDNSManager(cf *cloudflare.Client, qm *quartermaster.GRPCClient, logger logging.Logger, rootDomain string) *DNSManager {
+func NewDNSManager(cf *cloudflare.Client, qm *quartermaster.GRPCClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration) *DNSManager {
 	return &DNSManager{
-		cfClient: cf,
-		qmClient: qm,
-		logger:   logger,
-		domain:   rootDomain,
-		proxy:    loadProxyServices(),
+		cfClient:  cf,
+		qmClient:  qm,
+		logger:    logger,
+		domain:    rootDomain,
+		proxy:     loadProxyServices(),
+		recordTTL: recordTTL,
+		lbTTL:     lbTTL,
+		staleAge:  staleAge,
 	}
 }
 
@@ -66,7 +73,7 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 
 	// 1. Fetch Inventory from Quartermaster via gRPC
 	// Filter by node_type which maps to our service types
-	nodesResp, err := m.qmClient.ListNodes(ctx, "", serviceType, "", nil)
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, serviceType, int(m.staleAge.Seconds()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
 	}
@@ -118,9 +125,8 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 
 	// 4. Apply "Smart Record" Logic
 	if len(activeIPs) == 0 {
-		log.Warn("No active nodes found, skipping DNS update (safety safety)")
-		// We purposely don't delete records if 0 nodes found to prevent total outage during a blip
-		return nil, nil
+		log.Warn("No active nodes found, removing DNS records")
+		return m.clearDNSConfig(ctx, fqdn)
 	}
 
 	if len(activeIPs) == 1 {
@@ -164,18 +170,25 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string,
 	if len(records) > 0 {
 		// Update existing
 		record := records[0]
-		if record.Content != ip || record.Proxied != proxied {
+		if record.Content != ip || record.Proxied != proxied || record.TTL != m.recordTTL {
 			m.logger.WithFields(logging.Fields{"fqdn": fqdn, "old_ip": record.Content, "new_ip": ip}).Info("Updating A record")
 			record.Content = ip
 			record.Proxied = proxied
+			record.TTL = m.recordTTL
 			if _, err := m.cfClient.UpdateDNSRecord(record.ID, record); err != nil {
 				return fmt.Errorf("failed to update A record: %w", err)
+			}
+		}
+		for _, extra := range records[1:] {
+			m.logger.WithField("record_id", extra.ID).Info("Deleting extra A record for Single Node mode")
+			if err := m.cfClient.DeleteDNSRecord(extra.ID); err != nil {
+				m.logger.WithError(err).WithField("record_id", extra.ID).Warn("Failed to delete extra A record")
 			}
 		}
 	} else {
 		// Create new
 		m.logger.WithFields(logging.Fields{"fqdn": fqdn, "ip": ip}).Info("Creating A record")
-		if _, err := m.cfClient.CreateARecord(fqdn, ip, proxied); err != nil {
+		if _, err := m.cfClient.CreateARecord(fqdn, ip, proxied, m.recordTTL); err != nil {
 			return fmt.Errorf("failed to create A record: %w", err)
 		}
 	}
@@ -267,7 +280,7 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 		lb := cloudflare.LoadBalancer{
 			Name:           fqdn, // This acts as the hostname
 			Description:    fmt.Sprintf("Auto-managed by Navigator for %s", poolName),
-			TTL:            60,
+			TTL:            m.lbTTL,
 			FallbackPool:   poolID,
 			DefaultPools:   []string{poolID},
 			RegionPools:    make(map[string][]string), // Empty for now
@@ -280,12 +293,21 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			return nil, fmt.Errorf("failed to create LB: %w", err)
 		}
 	} else {
-		// Update LB (Ensure it points to our pool)
-		// This is tricky if we don't have full details.
-		// For now, we assume if it exists, it's correct OR we just leave it.
-		// A robust implementation would Fetch -> Diff -> Update.
-		// Let's verify the DefaultPools contains our poolID.
-		// ... skipping deep verification for MVP to avoid extra API calls ...
+		currentLB, getLBErr := m.cfClient.GetLoadBalancer(lbID)
+		if getLBErr != nil {
+			return nil, fmt.Errorf("failed to get LB details: %w", getLBErr)
+		}
+
+		needsUpdate := currentLB.FallbackPool != poolID || len(currentLB.DefaultPools) != 1 || currentLB.DefaultPools[0] != poolID
+		if needsUpdate || currentLB.TTL != m.lbTTL || currentLB.Proxied != proxied {
+			currentLB.FallbackPool = poolID
+			currentLB.DefaultPools = []string{poolID}
+			currentLB.TTL = m.lbTTL
+			currentLB.Proxied = proxied
+			if _, updateErr := m.cfClient.UpdateLoadBalancer(lbID, *currentLB); updateErr != nil {
+				return nil, fmt.Errorf("failed to update LB: %w", updateErr)
+			}
+		}
 	}
 
 	// Also ensure A records are gone (cleanup Single Node config)
@@ -300,10 +322,54 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 		}
 	}
 
+	// Also clean up any conflicting CNAME records
+	cnameRecords, err := m.cfClient.ListDNSRecords("CNAME", fqdn)
+	if err == nil {
+		for _, rec := range cnameRecords {
+			m.logger.WithField("record_id", rec.ID).Info("Deleting conflicting CNAME record for LB mode")
+			if delErr := m.cfClient.DeleteDNSRecord(rec.ID); delErr != nil {
+				m.logger.WithError(delErr).WithField("record_id", rec.ID).Warn("Failed to delete conflicting CNAME record")
+				partialErrors[fmt.Sprintf("%s:cname:%s", fqdn, rec.ID)] = delErr.Error()
+			}
+		}
+	}
+
 	if len(partialErrors) == 0 {
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+// clearDNSConfig removes all DNS configuration for a given FQDN (LB, A, CNAME records)
+func (m *DNSManager) clearDNSConfig(_ context.Context, fqdn string) (map[string]string, error) {
+	lbs, err := m.cfClient.ListLoadBalancers()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list LBs: %w", err)
+	}
+
+	for _, lb := range lbs {
+		if lb.Name == fqdn {
+			m.logger.WithField("lb_id", lb.ID).Info("Deleting Load Balancer for empty node set")
+			if err := m.cfClient.DeleteLoadBalancer(lb.ID); err != nil {
+				return nil, fmt.Errorf("failed to delete LB: %w", err)
+			}
+		}
+	}
+
+	for _, recordType := range []string{"A", "CNAME"} {
+		records, err := m.cfClient.ListDNSRecords(recordType, fqdn)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list %s records: %w", recordType, err)
+		}
+		for _, rec := range records {
+			m.logger.WithField("record_id", rec.ID).Info("Deleting DNS record for empty node set")
+			if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
+				return nil, fmt.Errorf("failed to delete DNS record: %w", err)
+			}
+		}
+	}
+
+	return nil, nil
 }
 
 // ensurePool finds a pool by name or creates it

@@ -54,11 +54,11 @@ func (c *Client) SetTimeout(timeout time.Duration) {
 func (c *Client) doRequest(method, path string, body interface{}) (*APIResponse, error) {
 	var reqBodyBytes []byte
 	if body != nil {
-		jsonData, err := json.Marshal(body)
+		var err error
+		reqBodyBytes, err = json.Marshal(body)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal request body: %w", err)
 		}
-		reqBodyBytes = jsonData
 	}
 
 	url := c.baseURL + path
@@ -355,6 +355,27 @@ func (c *Client) UpdateLoadBalancer(lbID string, lb LoadBalancer) (*LoadBalancer
 	return &updated, nil
 }
 
+// GetLoadBalancer retrieves a specific load balancer by ID
+func (c *Client) GetLoadBalancer(lbID string) (*LoadBalancer, error) {
+	path := fmt.Sprintf("/zones/%s/load_balancers/%s", c.zoneID, lbID)
+	resp, err := c.doRequest("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resultJSON, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal result: %w", err)
+	}
+
+	var lb LoadBalancer
+	if err := json.Unmarshal(resultJSON, &lb); err != nil {
+		return nil, fmt.Errorf("failed to parse load balancer: %w", err)
+	}
+
+	return &lb, nil
+}
+
 // ListLoadBalancers lists all load balancers in the zone
 func (c *Client) ListLoadBalancers() ([]LoadBalancer, error) {
 	basePath := fmt.Sprintf("/zones/%s/load_balancers", c.zoneID)
@@ -512,24 +533,24 @@ func (c *Client) FindDNSRecordByName(name, recordType string) (*DNSRecord, error
 }
 
 // CreateCNAME is a helper to create a CNAME record
-func (c *Client) CreateCNAME(name, target string, proxied bool) (*DNSRecord, error) {
+func (c *Client) CreateCNAME(name, target string, proxied bool, ttl int) (*DNSRecord, error) {
 	record := DNSRecord{
 		Type:    "CNAME",
 		Name:    name,
 		Content: target,
-		TTL:     1, // Auto
+		TTL:     ttl,
 		Proxied: proxied,
 	}
 	return c.CreateDNSRecord(record)
 }
 
 // CreateARecord is a helper to create an A record
-func (c *Client) CreateARecord(name, ip string, proxied bool) (*DNSRecord, error) {
+func (c *Client) CreateARecord(name, ip string, proxied bool, ttl int) (*DNSRecord, error) {
 	record := DNSRecord{
 		Type:    "A",
 		Name:    name,
 		Content: ip,
-		TTL:     1, // Auto
+		TTL:     ttl,
 		Proxied: proxied,
 	}
 	return c.CreateDNSRecord(record)

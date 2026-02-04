@@ -94,12 +94,27 @@ func main() {
 	// === Logic Initialization ===
 	rootDomain := config.RequireEnv("NAVIGATOR_ROOT_DOMAIN")
 
-	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain)
+	recordTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_A_RECORD", 60)
+	lbTTL := config.GetEnvInt("NAVIGATOR_DNS_TTL_LB", 60)
+	staleSeconds := config.GetEnvInt("NAVIGATOR_DNS_HEALTH_STALE_SECONDS", 300)
+	dnsManager := logic.NewDNSManager(cfClient, qmClient, logger, rootDomain, recordTTL, lbTTL, time.Duration(staleSeconds)*time.Second)
 	certManager := logic.NewCertManager(certStore)
 
 	// === Background Workers ===
 	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger)
 	go renewalWorker.Start(context.Background())
+	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
+	reconciler := worker.NewDNSReconciler(dnsManager, logger, time.Duration(reconcileIntervalSeconds)*time.Second, []string{
+		"edge",
+		"ingest",
+		"play",
+		"gateway",
+		"app",
+		"website",
+		"docs",
+		"forms",
+	})
+	go reconciler.Start(context.Background())
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("navigator", version.Version)

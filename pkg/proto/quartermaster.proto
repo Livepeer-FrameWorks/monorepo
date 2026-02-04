@@ -133,6 +133,7 @@ service ClusterService {
 service NodeService {
   rpc GetNode(GetNodeRequest) returns (NodeResponse);
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc ListHealthyNodesForDNS(ListHealthyNodesForDNSRequest) returns (ListHealthyNodesForDNSResponse);
   rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
   // UpdateNodeHealth RPC removed - health tracking moved to Lookout
 
@@ -800,6 +801,17 @@ message ListNodesResponse {
   string node_type = 3;                 // applied filter
   string region = 4;                    // applied filter
   common.CursorPaginationResponse pagination = 5;
+}
+
+message ListHealthyNodesForDNSRequest {
+  string node_type = 1;
+  int32 stale_threshold_seconds = 2;
+}
+
+message ListHealthyNodesForDNSResponse {
+  repeated InfrastructureNode nodes = 1;
+  int32 total_nodes = 2;
+  int32 healthy_nodes = 3;
 }
 
 // Matches pkg/api/quartermaster/types.go:CreateNodeRequest (lines 394-412)
