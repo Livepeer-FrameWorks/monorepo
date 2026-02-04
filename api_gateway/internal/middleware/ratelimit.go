@@ -334,7 +334,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	isPublic := isPublicTenant(tenantIDStr)
 	x402Paid := req.X402Processed && !req.X402AuthOnly
 
-	if req.XPayment != "" && x402Settler != nil && !isPublic && !req.X402Processed {
+	if req.XPayment != "" && x402Settler != nil && !req.X402Processed {
 		settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
 			PaymentHeader:          req.XPayment,
 			Resource:               req.Path,

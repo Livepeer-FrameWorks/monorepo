@@ -280,7 +280,11 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 	// Convert to USD cents (USDC 6 decimals → cents)
 	// 1 USDC = 100 cents = 1_000_000 base units
 	// So: usd_cents = amount_base_units / 10_000
-	amountUsdCents := new(big.Int).Div(amountBig, big.NewInt(10_000)).Int64()
+	centsDivisor := big.NewInt(10_000)
+	if new(big.Int).Mod(amountBig, centsDivisor).Sign() != 0 {
+		return &VerifyResult{Valid: false, Error: "amount must be in cent increments (multiple of 10000 base units)"}, nil
+	}
+	amountUsdCents := new(big.Int).Div(amountBig, centsDivisor).Int64()
 
 	// Zero-value is allowed for auth-only mode (proves wallet ownership without payment)
 	isAuthOnly := amountUsdCents == 0

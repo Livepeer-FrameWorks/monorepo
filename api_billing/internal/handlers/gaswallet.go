@@ -30,7 +30,8 @@ type GasWalletMonitor struct {
 	balances map[string]*GasWalletBalance
 
 	// Prometheus metrics
-	balanceGauge *prometheus.GaugeVec
+	balanceGauge    *prometheus.GaugeVec
+	lowBalanceGauge *prometheus.GaugeVec
 }
 
 // GasWalletBalance represents the balance on a specific network
@@ -73,6 +74,14 @@ func NewGasWalletMonitor(log logging.Logger) *GasWalletMonitor {
 	)
 	// Register metric (ignore if already registered)
 	prometheus.Register(balanceGauge) //nolint:errcheck // duplicate registration is fine
+	lowBalanceGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "gas_wallet_balance_low",
+			Help: "Gas wallet low balance indicator (1=low, 0=ok)",
+		},
+		[]string{"network", "chain_id"},
+	)
+	prometheus.Register(lowBalanceGauge) //nolint:errcheck // duplicate registration is fine
 
 	return &GasWalletMonitor{
 		logger:          log,
@@ -81,6 +90,7 @@ func NewGasWalletMonitor(log logging.Logger) *GasWalletMonitor {
 		stopCh:          make(chan struct{}),
 		balances:        make(map[string]*GasWalletBalance),
 		balanceGauge:    balanceGauge,
+		lowBalanceGauge: lowBalanceGauge,
 	}
 }
 
@@ -176,6 +186,11 @@ func (m *GasWalletMonitor) checkAllBalances() {
 
 		// Update Prometheus metric
 		m.balanceGauge.WithLabelValues(network.Name, fmt.Sprintf("%d", network.ChainID)).Set(balance.BalanceETH)
+		lowValue := 0.0
+		if balance.IsLow {
+			lowValue = 1.0
+		}
+		m.lowBalanceGauge.WithLabelValues(network.Name, fmt.Sprintf("%d", network.ChainID)).Set(lowValue)
 
 		// Log warning if balance is low
 		if balance.IsLow {
