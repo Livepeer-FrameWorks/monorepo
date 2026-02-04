@@ -28,6 +28,7 @@ import (
 	"frameworks/pkg/clips"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/geoip"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
@@ -334,7 +335,7 @@ func StartGRPCServer(addr string, server *FoghornGRPCServer) error {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(grpcutil.SanitizeUnaryServerInterceptor()))
 	server.RegisterServices(grpcServer)
 
 	// gRPC health service for Foghorn control APIs

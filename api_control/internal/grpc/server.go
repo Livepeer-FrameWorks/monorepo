@@ -4818,7 +4818,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC request processed")
-		return resp, err
+		return resp, grpcutil.SanitizeError(err)
 	}
 }
 

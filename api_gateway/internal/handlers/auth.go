@@ -6,12 +6,12 @@ import (
 	"os"
 	"strings"
 
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"github.com/gin-gonic/gin"
-	"google.golang.org/grpc/status"
 )
 
 const (
@@ -20,6 +20,14 @@ const (
 	tenantIDCookie     = "tenant_id"
 	refreshTokenMaxAge = 30 * 24 * 60 * 60 // 30 days in seconds
 	accessTokenMaxAge  = 15 * 60           // 15 minutes in seconds (matches JWT expiry)
+)
+
+var (
+	loginAllowedErrors         = []string{"not verified", "deactivated"}
+	walletLoginAllowedErrors   = []string{"signature", "expired"}
+	registerAllowedErrors      = []string{"already exists", "user limit", "bot verification"}
+	verifyEmailAllowedErrors   = []string{"invalid or expired", "already verified"}
+	resetPasswordAllowedErrors = []string{"invalid or expired", "password too weak"}
 )
 
 // behaviorJSON represents client-side behavioral signals sent as JSON
@@ -87,15 +95,7 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 		})
 		if err != nil {
 			h.logger.WithError(err).Debug("Login failed")
-			// Extract gRPC error message to preserve specific errors like "email not verified"
-			errMsg := "invalid credentials"
-			if st, ok := status.FromError(err); ok {
-				grpcMsg := st.Message()
-				// Preserve user-friendly messages about verification status
-				if strings.Contains(grpcMsg, "not verified") || strings.Contains(grpcMsg, "deactivated") {
-					errMsg = grpcMsg
-				}
-			}
+			errMsg := gatewayerrors.SanitizeGRPCError(err, "invalid credentials", loginAllowedErrors)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
 			return
 		}
@@ -150,13 +150,7 @@ func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature)
 		if err != nil {
 			h.logger.WithError(err).Debug("Wallet login failed")
-			errMsg := "wallet authentication failed"
-			if st, ok := status.FromError(err); ok {
-				grpcMsg := st.Message()
-				if strings.Contains(grpcMsg, "signature") || strings.Contains(grpcMsg, "expired") {
-					errMsg = grpcMsg
-				}
-			}
+			errMsg := gatewayerrors.SanitizeGRPCError(err, "wallet authentication failed", walletLoginAllowedErrors)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
 			return
 		}
@@ -229,7 +223,8 @@ func (h *AuthHandlers) Register() gin.HandlerFunc {
 		}
 
 		if !resp.Success {
-			c.JSON(http.StatusBadRequest, gin.H{"error": resp.Message})
+			message := gatewayerrors.SanitizeMessage(resp.Message, "registration failed", registerAllowedErrors)
+			c.JSON(http.StatusBadRequest, gin.H{"error": message})
 			return
 		}
 
@@ -340,7 +335,8 @@ func (h *AuthHandlers) VerifyEmail() gin.HandlerFunc {
 		}
 
 		if !resp.Success {
-			c.JSON(http.StatusBadRequest, gin.H{"error": resp.Message})
+			message := gatewayerrors.SanitizeMessage(resp.Message, "verification failed", verifyEmailAllowedErrors)
+			c.JSON(http.StatusBadRequest, gin.H{"error": message})
 			return
 		}
 
@@ -430,7 +426,8 @@ func (h *AuthHandlers) ResetPassword() gin.HandlerFunc {
 		}
 
 		if !resp.Success {
-			c.JSON(http.StatusBadRequest, gin.H{"error": resp.Message})
+			message := gatewayerrors.SanitizeMessage(resp.Message, "password reset failed", resetPasswordAllowedErrors)
+			c.JSON(http.StatusBadRequest, gin.H{"error": message})
 			return
 		}
 

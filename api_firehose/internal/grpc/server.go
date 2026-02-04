@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 
@@ -476,7 +477,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC request processed")
-		return resp, err
+		return resp, grpcutil.SanitizeError(err)
 	}
 }
 
@@ -489,6 +490,6 @@ func streamInterceptor(logger logging.Logger) grpc.StreamServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC stream processed")
-		return err
+		return grpcutil.SanitizeError(err)
 	}
 }

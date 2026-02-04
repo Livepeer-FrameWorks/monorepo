@@ -13,6 +13,7 @@ import (
 	"frameworks/api_realtime/internal/metrics"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -286,7 +287,10 @@ func main() {
 		})
 
 		grpcSrv := grpc.NewServer(
-			grpc.ChainUnaryInterceptor(authInterceptor),
+			grpc.ChainUnaryInterceptor(
+				grpcutil.SanitizeUnaryServerInterceptor(),
+				authInterceptor,
+			),
 			grpc.ChainStreamInterceptor(streamAuthInterceptor),
 		)
 		pb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)

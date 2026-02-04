@@ -17,6 +17,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/pagination"
@@ -5584,6 +5585,6 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC request processed")
-		return resp, err
+		return resp, grpcutil.SanitizeError(err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"frameworks/api_gateway/graph"
 	"frameworks/api_gateway/graph/generated"
 	"frameworks/api_gateway/internal/clients"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/handlers"
 	mcpserver "frameworks/api_gateway/internal/mcp"
 	"frameworks/api_gateway/internal/middleware"
@@ -118,6 +119,7 @@ func main() {
 		Resolvers:  resolver,
 		Complexity: complexity,
 	}))
+	gqlHandler.SetErrorPresenter(gatewayerrors.ErrorPresenter(logger))
 
 	// Enable introspection for developer API explorer
 	gqlHandler.Use(extension.Introspection{})
