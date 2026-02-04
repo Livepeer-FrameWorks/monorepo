@@ -68,6 +68,7 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 		if !ok {
 			return nil, status.Error(codes.Unauthenticated, "missing metadata")
 		}
+		ctx = applyDemoModeMetadata(ctx, md)
 
 		// Get authorization header
 		authHeaders := md.Get("authorization")
@@ -144,6 +145,13 @@ func extractMetadataToContext(ctx context.Context, md metadata.MD, policy Servic
 	}
 	if tenantID != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
+	}
+	return ctx
+}
+
+func applyDemoModeMetadata(ctx context.Context, md metadata.MD) context.Context {
+	if value := firstMetadataValue(md.Get("x-demo-mode")); strings.EqualFold(value, "true") {
+		return context.WithValue(ctx, ctxkeys.KeyDemoMode, true)
 	}
 	return ctx
 }

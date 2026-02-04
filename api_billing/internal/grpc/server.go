@@ -21,6 +21,7 @@ import (
 	decklogclient "frameworks/pkg/clients/decklog"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/countries"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 
 	"frameworks/pkg/middleware"
@@ -1009,7 +1010,7 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 		sub.PaymentMethod = &pm
 	}
 
-	s.emitBillingEvent(eventSubscriptionCreated, tenantID, userID, "subscription", subID, &pb.BillingEvent{
+	s.emitBillingEvent(ctx, eventSubscriptionCreated, tenantID, userID, "subscription", subID, &pb.BillingEvent{
 		SubscriptionId: subID,
 		Status:         "active",
 		Provider:       req.GetPaymentMethod(),
@@ -1162,7 +1163,7 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 		if resp.Subscription.PaymentMethod != nil {
 			paymentMethod = *resp.Subscription.PaymentMethod
 		}
-		s.emitBillingEvent(eventSubscriptionUpdated, tenantID, userID, "subscription", resp.Subscription.Id, &pb.BillingEvent{
+		s.emitBillingEvent(ctx, eventSubscriptionUpdated, tenantID, userID, "subscription", resp.Subscription.Id, &pb.BillingEvent{
 			SubscriptionId: resp.Subscription.Id,
 			Status:         resp.Subscription.Status,
 			Provider:       paymentMethod,
@@ -1199,7 +1200,7 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *pb.CancelSub
 	}
 
 	if subscriptionID != "" {
-		s.emitBillingEvent(eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionID, &pb.BillingEvent{
+		s.emitBillingEvent(ctx, eventSubscriptionCanceled, tenantID, userID, "subscription", subscriptionID, &pb.BillingEvent{
 			SubscriptionId: subscriptionID,
 			Status:         "cancelled",
 		})
@@ -1609,7 +1610,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 		return nil, status.Errorf(codes.Internal, "failed to create payment: %v", err)
 	}
 
-	s.emitBillingEvent(eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
+	s.emitBillingEvent(ctx, eventPaymentCreated, invoiceTenantID, userID, "payment", paymentID, &pb.BillingEvent{
 		PaymentId: paymentID,
 		InvoiceId: invoiceID,
 		Amount:    invoiceAmount,
@@ -3319,8 +3320,11 @@ const (
 	eventTopupFailed          = "topup_failed"
 )
 
-func (s *PurserServer) emitServiceEvent(event *pb.ServiceEvent) {
+func (s *PurserServer) emitServiceEvent(ctx context.Context, event *pb.ServiceEvent) {
 	if s.decklogClient == nil || event == nil {
+		return
+	}
+	if ctxkeys.IsDemoMode(ctx) {
 		return
 	}
 
@@ -3331,7 +3335,7 @@ func (s *PurserServer) emitServiceEvent(event *pb.ServiceEvent) {
 	}(event)
 }
 
-func (s *PurserServer) emitBillingEvent(eventType, tenantID, userID, resourceType, resourceID string, payload *pb.BillingEvent) {
+func (s *PurserServer) emitBillingEvent(ctx context.Context, eventType, tenantID, userID, resourceType, resourceID string, payload *pb.BillingEvent) {
 	if payload == nil {
 		payload = &pb.BillingEvent{}
 	}
@@ -3347,7 +3351,7 @@ func (s *PurserServer) emitBillingEvent(eventType, tenantID, userID, resourceTyp
 		ResourceId:   resourceID,
 		Payload:      &pb.ServiceEvent_BillingEvent{BillingEvent: payload},
 	}
-	s.emitServiceEvent(event)
+	s.emitServiceEvent(ctx, event)
 }
 
 // ============================================================================
@@ -3740,7 +3744,7 @@ func (s *PurserServer) recordBalanceTransaction(
 		if referenceID != nil {
 			topupID = *referenceID
 		}
-		s.emitBillingEvent(eventTopupCredited, tenantID, userID, "topup", txID, &pb.BillingEvent{
+		s.emitBillingEvent(ctx, eventTopupCredited, tenantID, userID, "topup", txID, &pb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
 			Currency: currency,
@@ -3925,7 +3929,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		return nil, status.Error(codes.Internal, "failed to create topup record")
 	}
 
-	s.emitBillingEvent(eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
+	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", topupID, &pb.BillingEvent{
 		TopupId:  topupID,
 		Amount:   float64(amountCents) / 100.0,
 		Currency: currency,
@@ -3955,7 +3959,7 @@ func (s *PurserServer) CreateCardTopup(ctx context.Context, req *pb.CreateCardTo
 		if _, dbErr := s.db.ExecContext(ctx, `UPDATE purser.pending_topups SET status = 'failed', updated_at = NOW() WHERE id = $1`, topupID); dbErr != nil {
 			s.logger.WithError(dbErr).Warn("Failed to update topup status to failed")
 		}
-		s.emitBillingEvent(eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
+		s.emitBillingEvent(ctx, eventTopupFailed, tenantID, userID, "topup", topupID, &pb.BillingEvent{
 			TopupId:  topupID,
 			Amount:   float64(amountCents) / 100.0,
 			Currency: currency,
@@ -4158,7 +4162,7 @@ func (s *PurserServer) CreateCryptoTopup(ctx context.Context, req *pb.CreateCryp
 		"expected_cents": expectedAmountCents,
 	}).Info("Created crypto top-up deposit address")
 
-	s.emitBillingEvent(eventTopupCreated, tenantID, userID, "topup", walletID, &pb.BillingEvent{
+	s.emitBillingEvent(ctx, eventTopupCreated, tenantID, userID, "topup", walletID, &pb.BillingEvent{
 		TopupId:  walletID,
 		Amount:   float64(expectedAmountCents) / 100.0,
 		Currency: currency,

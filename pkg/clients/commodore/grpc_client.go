@@ -61,6 +61,9 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
 			md.Set("x-tenant-id", tenantID)
 		}
+		if ctxkeys.IsDemoMode(ctx) {
+			md.Set("x-demo-mode", "true")
+		}
 
 		// Use user's JWT from context if available, otherwise fall back to service token
 		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
