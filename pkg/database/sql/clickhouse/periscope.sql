@@ -907,10 +907,6 @@ ORDER BY (tenant_id, stream_id, timestamp, request_id)
 TTL timestamp + INTERVAL 90 DAY;
 
 
--- NOTE: for upgrades, ensure the new filename column exists on existing tables:
--- ALTER TABLE periscope.artifact_events ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
--- NOTE: for upgrades, ensure the new filename column exists on existing tables:
--- ALTER TABLE periscope.artifact_state_current ADD COLUMN IF NOT EXISTS filename Nullable(String) AFTER internal_name;
 CREATE TABLE IF NOT EXISTS artifact_state_current (
     tenant_id UUID,
     stream_id UUID,
