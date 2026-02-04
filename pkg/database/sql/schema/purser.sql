@@ -298,6 +298,9 @@ CREATE TABLE IF NOT EXISTS purser.balance_transactions (
 CREATE INDEX IF NOT EXISTS idx_prepaid_balances_tenant ON purser.prepaid_balances(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_balance_transactions_tenant ON purser.balance_transactions(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_balance_transactions_type ON purser.balance_transactions(transaction_type, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_balance_transactions_usage_summary
+    ON purser.balance_transactions(tenant_id, reference_type, reference_id)
+    WHERE reference_type = 'usage_summary';
 
 -- ============================================================================
 -- PENDING TOP-UPS (Card Payments)
