@@ -45,8 +45,9 @@ type Registry struct {
 }
 
 type conn struct {
-	stream pb.HelmsmanControl_ConnectServer
-	last   time.Time
+	stream   pb.HelmsmanControl_ConnectServer
+	last     time.Time
+	peerAddr string
 }
 
 var registry *Registry
@@ -186,16 +187,16 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}()).Warn("Register without node_id")
 				continue
 			}
-			registry.mu.Lock()
-			registry.conns[nodeID] = &conn{stream: stream, last: time.Now()}
-			registry.mu.Unlock()
-			registry.log.WithField("node_id", nodeID).Info("Helmsman registered")
-			// Mark node healthy in unified state (baseURL unknown at register)
-			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 			var peerAddr string
 			if p, _ := peer.FromContext(stream.Context()); p != nil {
 				peerAddr = p.Addr.String()
 			}
+			registry.mu.Lock()
+			registry.conns[nodeID] = &conn{stream: stream, last: time.Now(), peerAddr: peerAddr}
+			registry.mu.Unlock()
+			registry.log.WithField("node_id", nodeID).Info("Helmsman registered")
+			// Mark node healthy in unified state (baseURL unknown at register)
+			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 
 			// Fingerprint-based tenant resolution (pre-provisioned mappings only; no creation here)
 			tenantID := ""
@@ -1515,12 +1516,9 @@ func PushOperationalMode(nodeID string, mode pb.NodeOperationalMode) error {
 		return ErrNotConnected
 	}
 
-	// Send a minimal ConfigSeed with just the mode update.
-	// Helmsman should merge this with its existing config.
-	seed := &pb.ConfigSeed{
-		NodeId:          nodeID,
-		OperationalMode: mode,
-	}
+	// Helmsan sidecar does NOT merge ConfigSeeds; ApplySeed overwrites lastSeed.
+	// Send a full seed to avoid wiping previously seeded fields.
+	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode)
 	msg := &pb.ControlMessage{
 		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},
 		SentAt:  timestamppb.Now(),
