@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS rebuffering_events (
     rebuffer_end UInt8
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (tenant_id, stream_id, timestamp, event_id)
+ORDER BY (tenant_id, stream_id, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS rebuffering_events_mv TO rebuffering_events AS
