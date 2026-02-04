@@ -592,6 +592,9 @@ message StorageLifecycleData {
     ACTION_CACHE_STARTED = 4; // Download from S3 started (refilling local cache)
     ACTION_CACHED = 5;        // Downloaded from S3 to local cache (S3 copy retained)
     ACTION_DELETED = 6;       // Asset deleted from both S3 and local (permanent removal)
+    ACTION_SYNC_FAILED = 7;   // Upload to S3 failed (local copy retained)
+    ACTION_EVICT_FAILED = 8;  // Local cache eviction failed
+    ACTION_CACHE_FAILED = 9;  // Download from S3 failed (defrost failure)
   }
   Action action = 1;
   string asset_type = 2;         // "clip" or "dvr"

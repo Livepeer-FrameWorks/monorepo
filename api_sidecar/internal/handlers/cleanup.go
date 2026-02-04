@@ -422,7 +422,7 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 		if err := os.RemoveAll(dvrDir); err != nil {
 			errStr := err.Error()
 			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-				Action:    pb.StorageLifecycleData_ACTION_EVICTED,
+				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
 				AssetType: assetType,
 				AssetHash: artifact.ClipHash,
 				SizeBytes: artifact.SizeBytes,
@@ -435,7 +435,7 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 		if err := os.Remove(artifact.FilePath); err != nil {
 			errStr := err.Error()
 			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-				Action:    pb.StorageLifecycleData_ACTION_EVICTED,
+				Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
 				AssetType: assetType,
 				AssetHash: artifact.ClipHash,
 				SizeBytes: artifact.SizeBytes,
