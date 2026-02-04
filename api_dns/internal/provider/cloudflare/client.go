@@ -32,7 +32,7 @@ type Client struct {
 
 // NewClient creates a new CloudFlare API client
 func NewClient(apiToken, zoneID, accountID string) *Client {
-	executor := clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig())
+	executor := clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig()) //nolint:bodyclose
 	return &Client{
 		apiToken:  apiToken,
 		zoneID:    zoneID,
@@ -62,13 +62,14 @@ func (c *Client) doRequest(method, path string, body interface{}) (*APIResponse,
 	}
 
 	url := c.baseURL + path
+	ctx := context.Background()
 	execute := func() (*http.Response, error) {
 		var reqBody io.Reader
 		if reqBodyBytes != nil {
 			reqBody = bytes.NewReader(reqBodyBytes)
 		}
 
-		req, err := http.NewRequest(method, url, reqBody)
+		req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
@@ -79,10 +80,15 @@ func (c *Client) doRequest(method, path string, body interface{}) (*APIResponse,
 		return c.httpClient.Do(req)
 	}
 
-	ctx := context.Background()
 	executor := c.executor
 	if executor == nil {
-		executor = clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig())
+		cfg := clients.DefaultHTTPExecutorConfig()
+		// Avoid retrying non-idempotent writes (POST/PUT/PATCH) to prevent duplicate resources.
+		// Retries are only enabled for idempotent methods.
+		if method != http.MethodGet && method != http.MethodHead && method != http.MethodDelete {
+			cfg.MaxRetries = 0
+		}
+		executor = clients.NewHTTPExecutor(cfg) //nolint:bodyclose
 	}
 
 	resp, err := clients.ExecuteHTTP(ctx, executor, execute)

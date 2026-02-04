@@ -6,6 +6,7 @@ toolchain go1.24.12
 
 require (
 	frameworks/pkg v0.0.0
+	github.com/failsafe-go/failsafe-go v0.9.5
 	github.com/gin-gonic/gin v1.11.0
 	google.golang.org/grpc v1.78.0
 )
@@ -14,6 +15,7 @@ require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect
 	github.com/ClickHouse/clickhouse-go/v2 v2.43.0 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.3.6 // indirect
 	github.com/bytedance/sonic/loader v0.3.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
