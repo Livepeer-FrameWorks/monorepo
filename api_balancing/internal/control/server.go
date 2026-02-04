@@ -251,15 +251,17 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 						fpReq.MachineIdSha256 = &s
 					}
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				if resp, err := quartermasterClient.ResolveNodeFingerprint(ctx, fpReq); err == nil && resp != nil {
-					tenantID = resp.TenantId
-					if resp.CanonicalNodeId != "" {
-						canonicalNodeID = resp.CanonicalNodeId
+				if quartermasterClient != nil {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					if resp, err := quartermasterClient.ResolveNodeFingerprint(ctx, fpReq); err == nil && resp != nil {
+						tenantID = resp.TenantId
+						if resp.CanonicalNodeId != "" {
+							canonicalNodeID = resp.CanonicalNodeId
+						}
+						registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Resolved tenant via fingerprint")
 					}
-					registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Resolved tenant via fingerprint")
+					cancel()
 				}
-				cancel()
 			}
 
 			// Edge enrollment handshake: if enrollment token provided, register this node in Quartermaster
