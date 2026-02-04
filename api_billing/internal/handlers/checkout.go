@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -591,7 +592,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 		FOR UPDATE
 	`, tenantID, currency).Scan(&balanceID, &currentBalance)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Create balance if doesn't exist
 		err = tx.QueryRow(`
 			INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)

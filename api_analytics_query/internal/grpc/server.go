@@ -4602,7 +4602,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		  AND timestamp_5m >= ?
 		  AND timestamp_5m <= ?
 	`, tenantID, startTime, endTime).Scan(&totalSessionSeconds, &totalBytes, &uniqueViewers)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query tenant_usage_5m for live usage")
 	}
 	summary.ViewerHours = float64(totalSessionSeconds) / 3600.0
@@ -4632,7 +4632,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		  AND hour >= ?
 		  AND hour <= ?
 	`, tenantID, startTime, endTime).Scan(&avgTotalBytes)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query storage_usage_hourly")
 	}
 	summary.AverageStorageGb = float64(avgTotalBytes) / (1024 * 1024 * 1024)
@@ -4718,7 +4718,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 		ORDER BY viewer_hours DESC
 		LIMIT 20
 	`, tenantID, startTime, endTime)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query viewer_geo_hourly for geo breakdown")
 	} else if rows != nil {
 		defer rows.Close()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -186,7 +187,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	`, tenantID, startTime, endTime).Scan(
 		&maxViewers, &totalStreams, &streamHours,
 	)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query viewer metrics from ClickHouse: %w", err)
 	}
 
@@ -203,7 +204,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		WHERE tenant_id = ?
 		AND day BETWEEN toDate(?) AND toDate(?)
 	`, tenantID, startTime, endTime).Scan(&egressGB, &viewerHours, &uniqueViewers)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query egress/viewer metrics from ClickHouse: %w", err)
 	}
 
@@ -215,7 +216,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		WHERE tenant_id = ?
 		AND timestamp_5m BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&peakBandwidth)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		bs.logger.WithError(err).Info("Failed to query peak bandwidth from client_qoe_5m, defaulting to 0")
 		peakBandwidth = 0
 	}
@@ -229,7 +230,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		WHERE tenant_id = ?
 		AND timestamp BETWEEN ? AND ?
 	`, tenantID, firstOfMonth, endTime).Scan(&uniqueUsers)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		bs.logger.WithError(err).Warn("Failed to query unique users (MTD) from ClickHouse, defaulting to 0")
 		uniqueUsers = 0
 	}
@@ -242,7 +243,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		WHERE tenant_id = ?
 		AND hour BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&avgStorageGB)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		bs.logger.WithError(err).Info("Failed to query storage_usage_hourly, defaulting to 0")
 		avgStorageGB = 0
 	}
@@ -271,7 +272,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		&livepeerH264Seconds, &livepeerVP9Seconds, &livepeerAV1Seconds, &livepeerHEVCSeconds,
 		&nativeAvH264Seconds, &nativeAvVP9Seconds, &nativeAvAV1Seconds, &nativeAvHEVCSeconds,
 		&nativeAvAACSeconds, &nativeAvOpusSeconds)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		bs.logger.WithError(err).Info("Failed to query processing usage, defaulting to 0")
 	}
 
@@ -295,7 +296,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		AND hour BETWEEN ? AND ?
 		GROUP BY auth_type, operation_type, operation_name
 	`, tenantID, startTime, endTime)
-	if err != nil && err != database.ErrNoRows {
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		bs.logger.WithError(err).Warn("Failed to query API usage aggregates, defaulting to 0")
 	} else if err == nil {
 		defer apiRows.Close()
@@ -537,7 +538,7 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 		SELECT last_processed_at FROM periscope.billing_cursors WHERE tenant_id = $1
 	`, tenantID).Scan(&lastProcessed)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Default to 24 hours ago for new tenants/first run
 		// This avoids reprocessing history forever if we add a new tenant
 		lastProcessed = time.Now().Add(-24 * time.Hour)

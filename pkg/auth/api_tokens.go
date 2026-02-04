@@ -41,7 +41,7 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 		&token.ExpiresAt, &token.CreatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrInvalidAPIToken
 	}
 

@@ -2,6 +2,7 @@ package xexec
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 )
@@ -18,7 +19,8 @@ func Run(cmd string, args []string, workdir string) (int, string, string, error)
 	err := c.Run()
 	exit := 0
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			exit = ee.ExitCode()
 		} else {
 			exit = -1

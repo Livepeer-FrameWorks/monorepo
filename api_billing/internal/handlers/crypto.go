@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -528,7 +529,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet,
 		WHERE tenant_id = $1 AND currency = $2
 	`, wallet.TenantID, currency).Scan(&currentBalance)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		currentBalance = 0
 	} else if err != nil {
 		return fmt.Errorf("failed to get current balance: %w", err)

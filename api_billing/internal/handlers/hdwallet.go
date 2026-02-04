@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -123,7 +124,7 @@ func (hw *HDWallet) GetNextDerivationIndexTx(tx *sql.Tx) (uint32, string, error)
 		RETURNING next_index - 1, xpub
 	`).Scan(&index, &xpub)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, "", fmt.Errorf("hd_wallet_state not initialized - run: INSERT INTO purser.hd_wallet_state (xpub) VALUES ('your-xpub')")
 	}
 	if err != nil {
@@ -151,7 +152,7 @@ func (hw *HDWallet) GetNextNonZeroDerivationIndexTx(tx *sql.Tx) (uint32, string,
 func (hw *HDWallet) EnsureState(xpub string) (bool, error) {
 	var existing string
 	err := hw.db.QueryRow(`SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&existing)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		if strings.TrimSpace(xpub) == "" {
 			return false, fmt.Errorf("hd_wallet_state not initialized and HD_WALLET_XPUB not set")
 		}
@@ -312,7 +313,7 @@ func (hw *HDWallet) InitializeHDWallet(xpub string, network string) error {
 func (hw *HDWallet) ValidateXpub() error {
 	var xpub string
 	err := hw.db.QueryRow(`SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("hd_wallet_state not initialized")
 	}
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -400,7 +401,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		&createdAt, &updatedAt,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Billing tier not found")
 	}
 
@@ -452,7 +453,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *pb.GetTe
 		LIMIT 1
 	`, tenantID, currency).Scan(&billingModel, &subscriptionStatus, &balanceCents)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription = assume postpaid, not suspended, not negative
 		return &pb.GetTenantBillingStatusResponse{
 			BillingModel:      "postpaid",
@@ -799,7 +800,7 @@ func (s *PurserServer) CheckUserLimit(ctx context.Context, req *pb.CheckUserLimi
 		LIMIT 1
 	`, tenantID).Scan(&maxUsers)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No subscription, use default limit (10 for free tier)
 		maxUsers = sql.NullInt32{Int32: 10, Valid: true}
 	} else if err != nil {
@@ -877,7 +878,7 @@ func (s *PurserServer) GetSubscription(ctx context.Context, req *pb.GetSubscript
 		&mollieSubscriptionID,
 		&createdAt, &updatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.GetSubscriptionResponse{
 			Error: "No active subscription found",
 		}, nil
@@ -1256,7 +1257,7 @@ func (s *PurserServer) GetInvoice(ctx context.Context, req *pb.GetInvoiceRequest
 		&dueDate, &paidAt, &usageDetailsBytes, &createdAt, &updatedAt, &tierID,
 		&periodStart, &periodEnd)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invoice not found")
 	}
 	if err != nil {
@@ -1489,7 +1490,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 	}
 
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(&invoiceTenantID, &invoiceAmount, &invoiceCurrency, &invoiceStatus)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "invoice not found or already paid")
 	}
 	if err != nil {
@@ -1536,7 +1537,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *pb.PaymentRequest
 		}).Info("Returning existing pending payment")
 		return resp, nil
 	}
-	if err != sql.ErrNoRows {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -1973,7 +1974,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		&tier.MeteringEnabled, &overageRates, &tier.IsActive,
 		&tier.TierLevel, &tier.IsEnterprise, &tierCreatedAt, &tierUpdatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: NO SUBSCRIPTION FOUND - returning free tier fallback")
 		// Return default free tier
 		return &pb.TenantSubscription{
@@ -2474,7 +2475,7 @@ func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetCluster
 		&pricing.RequiredTierLevel, &pricing.IsPlatformOfficial, &pricing.AllowFreeTier,
 		&defaultQuotasJSON, &createdAt, &updatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Return default pricing for clusters without explicit config
 		return &pb.ClusterPricing{
 			ClusterId:          clusterID,
@@ -2542,7 +2543,7 @@ func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetC
 			JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 			WHERE ts.tenant_id = $1 AND ts.status = 'active'
 		`, tenantID).Scan(&tenantTierLevel)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Warn("Failed to get tenant tier level for batch pricing")
 		}
 	}
@@ -2916,7 +2917,7 @@ func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *pb.CheckClus
 			JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 			WHERE ts.tenant_id = $1 AND ts.status = 'active'
 		`, tenantID).Scan(&tenantTierLevel)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No active subscription = free tier (level 0)
 		tenantTierLevel = 0
 	} else if err != nil {
@@ -3138,7 +3139,7 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *pb.Ca
 			FROM purser.cluster_subscriptions
 			WHERE tenant_id = $1 AND cluster_id = $2
 		`, tenantID, clusterID).Scan(&stripeSubID)
-		if err == sql.ErrNoRows || !stripeSubID.Valid {
+		if errors.Is(err, sql.ErrNoRows) || !stripeSubID.Valid {
 			return nil, status.Error(codes.NotFound, "no Stripe subscription found for cluster")
 		}
 		if err != nil {
@@ -3197,7 +3198,7 @@ func (s *PurserServer) ListMarketplaceClusterPricings(ctx context.Context, req *
 			JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 			WHERE ts.tenant_id = $1 AND ts.status = 'active'
 		`, tenantID).Scan(&tenantTierLevel)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).Warn("Failed to get tenant tier level")
 		}
 	}
@@ -3469,7 +3470,7 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *pb.GetPrepaid
 		&createdAt,
 		&updatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
 	}
 	if err != nil {
@@ -3491,7 +3492,7 @@ func (s *PurserServer) GetPrepaidBalance(ctx context.Context, req *pb.GetPrepaid
 		  AND amount_cents < 0
 		  AND created_at >= NOW() - INTERVAL '1 hour'
 	`, tenantID).Scan(&usageLastHour)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to calculate drain rate, defaulting to 0")
 		usageLastHour = 0
 	}
@@ -3571,7 +3572,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 		ORDER BY created_at ASC
 		LIMIT 1
 	`).Scan(&tierID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		err = tx.QueryRowContext(ctx, `
 			SELECT id
 			FROM purser.billing_tiers
@@ -3579,7 +3580,7 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 			ORDER BY tier_level ASC, base_price ASC, created_at ASC
 			LIMIT 1
 		`).Scan(&tierID)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.FailedPrecondition, "no active billing tiers available")
 		}
 		if err != nil {
@@ -3724,7 +3725,7 @@ func (s *PurserServer) recordBalanceTransaction(
 		WHERE tenant_id = $2 AND currency = $3
 		RETURNING balance_cents
 	`, amountCents, tenantID, currency).Scan(&newBalance)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "no prepaid balance found for tenant %s", tenantID)
 	}
 	if err != nil {
@@ -4037,7 +4038,7 @@ func (s *PurserServer) GetPendingTopup(ctx context.Context, req *pb.GetPendingTo
 		&topup.AmountCents, &topup.Currency, &topup.Status,
 		&expiresAt, &completedAt, &balanceTxID, &createdAt, &updatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "topup not found")
 	}
 	if err != nil {
@@ -4251,7 +4252,7 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 		&receivedAmountWei, &creditedAmountCents, &expiresAt, &detectedAt,
 		&completedAt, &createdAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "crypto topup not found")
 	}
 	if err != nil {
@@ -4312,7 +4313,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 	err := s.db.QueryRowContext(ctx, `
 		SELECT billing_model FROM purser.tenant_subscriptions WHERE tenant_id = $1
 	`, tenantID).Scan(&currentModel)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
 	}
 	if err != nil {
@@ -4329,7 +4330,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 	err = s.db.QueryRowContext(ctx, `
 		SELECT name, is_enterprise FROM purser.billing_tiers WHERE id = $1
 	`, tierID).Scan(&tierName, &isEnterprise)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "billing tier not found")
 	}
 	if err != nil {
@@ -4344,7 +4345,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 	err = s.db.QueryRowContext(ctx, `
 		SELECT COALESCE(balance_cents, 0) FROM purser.prepaid_balances WHERE tenant_id = $1
 	`, tenantID).Scan(&creditBalanceCents)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "failed to get prepaid balance: %v", err)
 	}
 
@@ -4485,7 +4486,7 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *pb.Create
 	err := s.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT tier_name, %s FROM purser.billing_tiers WHERE id = $1
 	`, priceCol), tierID).Scan(&tierName, &priceID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
 	if err != nil {
@@ -4575,7 +4576,7 @@ func (s *PurserServer) CreateBillingPortalSession(ctx context.Context, req *pb.C
 		SELECT stripe_customer_id FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1
 	`, tenantID).Scan(&stripeCustomerID)
-	if err == sql.ErrNoRows || !stripeCustomerID.Valid {
+	if errors.Is(err, sql.ErrNoRows) || !stripeCustomerID.Valid {
 		return nil, status.Error(codes.NotFound, "no Stripe subscription found for tenant")
 	}
 	if err != nil {
@@ -4611,7 +4612,7 @@ func (s *PurserServer) SyncSubscription(ctx context.Context, req *pb.SyncStripeS
 		SELECT stripe_subscription_id FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1
 	`, tenantID).Scan(&stripeSubID)
-	if err == sql.ErrNoRows || !stripeSubID.Valid {
+	if errors.Is(err, sql.ErrNoRows) || !stripeSubID.Valid {
 		return nil, status.Error(codes.NotFound, "no Stripe subscription found for tenant")
 	}
 	if err != nil {
@@ -4680,7 +4681,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 	err := s.db.QueryRowContext(ctx, `
 		SELECT tier_name, base_price, currency FROM purser.billing_tiers WHERE id = $1
 	`, tierID).Scan(&tierName, &basePrice, &currency)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
 	if err != nil {
@@ -4694,7 +4695,7 @@ func (s *PurserServer) CreateFirstPayment(ctx context.Context, req *pb.CreateMol
 		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
 	`, tenantID).Scan(&mollieCustomerID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Get tenant primary user info via Commodore gRPC (not direct DB access)
 		primaryUser, err := s.commodoreClient.GetTenantPrimaryUser(ctx, tenantID)
 		if err != nil {
@@ -4799,7 +4800,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 	err := s.db.QueryRowContext(ctx, `
 		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
 	`, tenantID).Scan(&mollieCustomerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.FailedPrecondition, "no Mollie customer found - complete first payment first")
 	}
 	if err != nil {
@@ -4831,7 +4832,7 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *pb.Cre
 	err = s.db.QueryRowContext(ctx, `
 		SELECT tier_name, base_price, currency FROM purser.billing_tiers WHERE id = $1
 	`, tierID).Scan(&tierName, &basePrice, &currency)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "tier not found: %s", tierID)
 	}
 	if err != nil {
@@ -4908,7 +4909,7 @@ func (s *PurserServer) ListMandates(ctx context.Context, req *pb.ListMollieManda
 	err := s.db.QueryRowContext(ctx, `
 		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
 	`, tenantID).Scan(&mollieCustomerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ListMollieMandatesResponse{Mandates: []*pb.MollieMandate{}}, nil
 	}
 	if err != nil {
@@ -4957,7 +4958,7 @@ func (s *PurserServer) CancelMollieSubscription(ctx context.Context, req *pb.Can
 	err := s.db.QueryRowContext(ctx, `
 		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
 	`, tenantID).Scan(&mollieCustomerID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no Mollie customer found")
 	}
 	if err != nil {
@@ -5024,7 +5025,7 @@ func (s *PurserServer) GetBillingDetails(ctx context.Context, req *pb.GetBilling
 		LIMIT 1
 	`, tenantID).Scan(&billingEmail, &billingCompany, &taxID, &billingAddress, &updatedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no subscription found for tenant")
 	}
 	if err != nil {

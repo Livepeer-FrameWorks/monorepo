@@ -370,7 +370,7 @@ func (jm *JobManager) getTenantBillingModel(tenantID string) (string, error) {
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, tenantID).Scan(&billingModel)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "postpaid", nil // Default for tenants without subscription
 	}
 	return billingModel, err
@@ -441,7 +441,7 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 		&overageRates, &storageAllocation, &bandwidthAllocation,
 		&customPricing, &customAllocations)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		jm.logger.WithField("tenant_id", summary.TenantID).Debug("No active subscription for prepaid usage")
 		return nil
 	}
@@ -665,7 +665,7 @@ func (jm *JobManager) getPrepaidBalance(tenantID string) (int64, error) {
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, tenantID, currency).Scan(&balanceCents)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	if err != nil {
@@ -683,7 +683,7 @@ func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tena
 		ORDER BY created_at DESC
 		LIMIT 1
 	`, tenantID, referenceType, referenceID).Scan(&amountCents)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
 	if err != nil {
@@ -1552,7 +1552,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	`, tenantID).Scan(&tierID, &subscriptionStatus, &tierName, &displayName, &basePrice, &currency, &meteringEnabled,
 		&overageRates, &storageAllocation, &bandwidthAllocation, &customPricing, &customAllocations)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		jm.logger.WithField("tenant_id", tenantID).Info("No active subscription, skipping invoice draft")
 		return nil
 	}

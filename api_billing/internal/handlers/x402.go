@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -162,7 +163,7 @@ func (h *X402Handler) GetTenantDepositAddress(tenantID string) (address string, 
 		FOR UPDATE
 	`, tenantID).Scan(&existingIndex)
 
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", 0, false, fmt.Errorf("failed to check existing deposit address: %w", err)
 	}
 
@@ -230,7 +231,7 @@ func (h *X402Handler) GetOrCreateTenantX402Address(tenantID string) (address str
 func (h *X402Handler) getXpub() (string, error) {
 	var xpub string
 	err := h.db.QueryRow(`SELECT xpub FROM purser.hd_wallet_state WHERE id = 1`).Scan(&xpub)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("hd_wallet_state not initialized")
 	}
 	if err != nil {
@@ -381,7 +382,7 @@ func (h *X402Handler) VerifyPayment(ctx context.Context, tenantID string, payloa
 			ORDER BY created_at DESC
 			LIMIT 1
 		`, tenantID).Scan(&billingEmail, &billingAddress)
-		if err != nil && err != sql.ErrNoRows {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			h.logger.WithFields(logging.Fields{"error": err}).Warn("Failed to check billing details")
 		}
 		isComplete := isBillingDetailsComplete(billingEmail, billingAddress)
@@ -821,7 +822,7 @@ func (h *X402Handler) creditPrepaidBalanceTx(ctx context.Context, tx *sql.Tx, te
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, tenantID, currency).Scan(&currentBalance)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		currentBalance = 0
 	} else if err != nil {
 		return 0, err
@@ -867,7 +868,7 @@ func (h *X402Handler) getCurrentBalance(ctx context.Context, tenantID, currency 
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, tenantID, currency).Scan(&balance)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	if err != nil {
