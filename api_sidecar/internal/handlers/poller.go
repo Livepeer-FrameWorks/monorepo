@@ -1178,6 +1178,8 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 		return 0, 0
 	}
 
+	vodDir := filepath.Clean(filepath.Join(filepath.Dir(clipsDir), "vod"))
+
 	var totalSize uint64
 	artifactCount := 0
 
@@ -1211,7 +1213,9 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 								absTarget = filepath.Join(filepath.Dir(filePath), target)
 							}
 							if resolved, err := filepath.EvalSymlinks(absTarget); err == nil {
-								if strings.Contains(resolved, string(filepath.Separator)+"vod"+string(filepath.Separator)) {
+								resolved = filepath.Clean(resolved)
+								// Skip direct VOD symlinks (clips/* -> <base>/vod/*). Avoid false positives like clips/vod/... when stream name is "vod".
+								if strings.HasPrefix(resolved, vodDir+string(filepath.Separator)) || resolved == vodDir {
 									continue
 								}
 							}
