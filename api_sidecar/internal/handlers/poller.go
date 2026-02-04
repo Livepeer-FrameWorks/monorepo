@@ -1637,21 +1637,26 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 
 	// Get Disk Usage from OS
-	// Default to /var/lib/mistserver or / if env not set
+	// Default to /var/lib/mistserver if env not set
 	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
 	if storagePath == "" {
 		storagePath = "/var/lib/mistserver"
 	}
-	// Ensure path exists or fallback to root
-	if _, err := os.Stat(storagePath); os.IsNotExist(err) {
-		storagePath = "/"
-	}
 
-	if total, used, err := getDiskUsage(storagePath); err == nil {
+	info, err := os.Stat(storagePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.WithField("path", storagePath).Warn("Disk metrics path does not exist; set HELMSMAN_STORAGE_LOCAL_PATH to a valid mount point")
+		} else {
+			logger.WithError(err).WithField("path", storagePath).Warn("Failed to stat disk metrics path")
+		}
+	} else if !info.IsDir() {
+		logger.WithField("path", storagePath).Warn("Disk metrics path is not a directory")
+	} else if total, used, err := getDiskUsage(storagePath); err == nil {
 		nodeUpdate.DiskTotalBytes = total
 		nodeUpdate.DiskUsedBytes = used
 	} else {
-		logger.WithError(err).Warn("Failed to get disk usage")
+		logger.WithError(err).WithField("path", storagePath).Warn("Failed to get disk usage")
 	}
 
 	// Determine node health based on resource utilization thresholds

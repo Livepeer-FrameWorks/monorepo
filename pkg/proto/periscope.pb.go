@@ -5559,13 +5559,13 @@ func (x *GetClipEventsResponse) GetEvents() []*ClipEvent {
 	return nil
 }
 
-// Artifact state (current status of clips/DVR from live_artifacts table)
+// Artifact state (current status of clips/DVR/VOD from live_artifacts table)
 type ArtifactState struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	TenantId         string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	RequestId        string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`       // clip_hash or dvr_hash
+	RequestId        string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`       // clip_hash, dvr_hash, or vod_hash
 	StreamId         string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`          // source stream
-	ContentType      string                 `protobuf:"bytes,4,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // 'clip' or 'dvr'
+	ContentType      string                 `protobuf:"bytes,4,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // 'clip', 'dvr', or 'vod'
 	Stage            string                 `protobuf:"bytes,5,opt,name=stage,proto3" json:"stage,omitempty"`                                // requested, queued, processing, completed, failed, deleted
 	ProgressPercent  uint32                 `protobuf:"varint,6,opt,name=progress_percent,json=progressPercent,proto3" json:"progress_percent,omitempty"`
 	ErrorMessage     *string                `protobuf:"bytes,7,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"`
@@ -5759,7 +5759,7 @@ func (x *ArtifactState) GetExpiresAt() *timestamppb.Timestamp {
 type GetArtifactStateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	RequestId     string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // clip_hash or dvr_hash
+	RequestId     string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // clip_hash, dvr_hash, or vod_hash
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5856,7 +5856,7 @@ type GetArtifactStatesRequest struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	TenantId      string                   `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	StreamId      *string                  `protobuf:"bytes,2,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`          // filter by source stream
-	ContentType   *string                  `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"` // filter by 'clip' or 'dvr'
+	ContentType   *string                  `protobuf:"bytes,3,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"` // filter by 'clip', 'dvr', or 'vod'
 	Stage         *string                  `protobuf:"bytes,4,opt,name=stage,proto3,oneof" json:"stage,omitempty"`                                // filter by stage
 	Pagination    *CursorPaginationRequest `protobuf:"bytes,5,opt,name=pagination,proto3" json:"pagination,omitempty"`
 	RequestIds    []string                 `protobuf:"bytes,6,rep,name=request_ids,json=requestIds,proto3" json:"request_ids,omitempty"` // batch lookup by artifact hash (for field resolvers)

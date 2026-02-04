@@ -905,8 +905,8 @@ message NodeLifecycleUpdate {
   string node_id = 1;
   // Resource metrics
   uint32 cpu_tenths = 2;         // 0-1000
-  uint64 ram_max = 3;            // MiB
-  uint64 ram_current = 4;        // MiB
+  uint64 ram_max = 3;            // bytes
+  uint64 ram_current = 4;        // bytes
   uint64 shm_total_bytes = 5;
   uint64 shm_used_bytes = 6;
   uint64 disk_total_bytes = 7;

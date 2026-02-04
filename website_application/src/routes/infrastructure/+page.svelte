@@ -256,12 +256,8 @@
           if (initialHealth[nodeId]) continue; // Skip if we have liveState
 
           const metric = edge.node!;
-          // Convert historical percentages to approximate absolute values
+          // Historical metrics only provide percentages; keep absolute values unset.
           const cpuTenths = Math.round((metric.avgCpu ?? 0) * 10);
-          const ramMax = 100 * 1024 * 1024 * 1024; // 100GB reference
-          const ramCurrent = Math.round(((metric.avgMemory ?? 0) / 100) * ramMax);
-          const diskTotalBytes = 500 * 1024 * 1024 * 1024; // 500GB reference
-          const diskUsedBytes = Math.round(((metric.avgDisk ?? 0) / 100) * diskTotalBytes);
 
           initialHealth[nodeId] = {
             event: {
@@ -270,12 +266,13 @@
               status: (metric.wasHealthy ?? true) ? "HEALTHY" : "UNHEALTHY",
               cpuTenths,
               isHealthy: metric.wasHealthy ?? true,
-              ramMax,
-              ramCurrent,
-              diskTotalBytes,
-              diskUsedBytes,
-              shmTotalBytes: null,
-              shmUsedBytes: null,
+              // Historical metrics are percentages (0-100). Use a synthetic max so UI percent calcs work.
+              ramMax: 100,
+              ramCurrent: metric.avgMemory ?? 0,
+              diskTotalBytes: 100,
+              diskUsedBytes: metric.avgDisk ?? 0,
+              shmTotalBytes: 100,
+              shmUsedBytes: metric.avgShm ?? 0,
               timestamp: metric.timestamp,
             } as SystemHealthEvent,
             ts: new Date(metric.timestamp),
