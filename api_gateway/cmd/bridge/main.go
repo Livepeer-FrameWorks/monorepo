@@ -233,8 +233,8 @@ func main() {
 						signature := req.Header.Get("X-Wallet-Signature")
 						message := req.Header.Get("X-Wallet-Message")
 						if signature != "" && message != "" {
-							resp, err := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature)
-							if err == nil && resp != nil && resp.User != nil {
+							resp, walletErr := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature)
+							if walletErr == nil && resp != nil && resp.User != nil {
 								email := ""
 								if resp.User.Email != nil {
 									email = *resp.User.Email
@@ -409,7 +409,7 @@ func main() {
 		graphqlHTTP.POST("/", gin.WrapH(gqlHandler))
 		graphqlGroup.GET("/ws", func(c *gin.Context) {
 			ctx := c.Request.Context()
-			if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
+			if cookieToken, cookieErr := c.Cookie("access_token"); cookieErr == nil && cookieToken != "" {
 				ctx = context.WithValue(ctx, ctxkeys.KeyWSCookieToken, cookieToken)
 			}
 			ctx = context.WithValue(ctx, ctxkeys.KeyHTTPRequest, c.Request)
