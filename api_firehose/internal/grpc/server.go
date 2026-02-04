@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 
@@ -455,7 +456,7 @@ func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	})
 
 	// Add interceptors for logging, metrics, etc.
-	opts = append(opts, grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)))
+	opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor))
 	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(cfg.Logger)))
 
 	server := grpc.NewServer(opts...)
@@ -476,7 +477,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC request processed")
-		return resp, err
+		return resp, grpcutil.SanitizeError(err)
 	}
 }
 
@@ -489,6 +490,6 @@ func streamInterceptor(logger logging.Logger) grpc.StreamServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC stream processed")
-		return err
+		return grpcutil.SanitizeError(err)
 	}
 }

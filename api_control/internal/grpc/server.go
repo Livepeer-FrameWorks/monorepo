@@ -4783,7 +4783,7 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	})
 
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)),
+		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
 	}
 
 	server := grpc.NewServer(opts...)
@@ -4818,7 +4818,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC request processed")
-		return resp, err
+		return resp, grpcutil.SanitizeError(err)
 	}
 }
 

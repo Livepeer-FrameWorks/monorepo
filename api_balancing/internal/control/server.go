@@ -20,6 +20,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/geoip"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	pb "frameworks/pkg/proto"
@@ -626,6 +627,10 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 		cfg.Logger.Info("Starting gRPC server with insecure connection")
 	}
 
+	unaryInterceptors := []grpc.UnaryServerInterceptor{
+		grpcutil.SanitizeUnaryServerInterceptor(),
+	}
+
 	// Add auth interceptor if SERVICE_TOKEN is configured
 	if cfg.ServiceToken != "" {
 		authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
@@ -638,9 +643,10 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 				"/proto.HelmsmanControl/Connect",
 			},
 		})
-		opts = append(opts, grpc.UnaryInterceptor(authInterceptor))
+		unaryInterceptors = append([]grpc.UnaryServerInterceptor{authInterceptor}, unaryInterceptors...)
 	}
 
+	opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptors...))
 	srv := grpc.NewServer(opts...)
 	pb.RegisterHelmsmanControlServer(srv, &Server{})
 

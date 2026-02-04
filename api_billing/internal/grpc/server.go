@@ -22,6 +22,7 @@ import (
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/countries"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 
 	"frameworks/pkg/middleware"
@@ -3386,7 +3387,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	})
 
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)),
+		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
 	}
 
 	server := grpc.NewServer(opts...)
@@ -3422,7 +3423,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Info("gRPC request processed")
-		return resp, err
+		return resp, grpcutil.SanitizeError(err)
 	}
 }
 

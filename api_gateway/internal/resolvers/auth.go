@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
@@ -28,7 +29,7 @@ func (r *Resolver) DoLogin(ctx context.Context, req *pb.LoginRequest) (*pb.AuthR
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("login", "error").Inc()
 		}
-		return nil, fmt.Errorf("authentication failed: %w", err)
+		return nil, fmt.Errorf("authentication failed")
 	}
 
 	if r.Metrics != nil {
@@ -58,7 +59,7 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("register", "error").Inc()
 		}
-		return nil, fmt.Errorf("registration failed: %w", err)
+		return nil, fmt.Errorf("registration failed")
 	}
 
 	if r.Metrics != nil {
@@ -106,7 +107,7 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "error").Inc()
 		}
-		return nil, fmt.Errorf("failed to get user info: %w", err)
+		return nil, fmt.Errorf("failed to get user info")
 	}
 
 	if r.Metrics != nil {
@@ -131,8 +132,9 @@ func (r *Resolver) DoWalletLogin(ctx context.Context, input model.WalletLoginInp
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("walletLogin", "error").Inc()
 		}
+		message := gatewayerrors.SanitizeGRPCError(err, "wallet authentication failed", []string{"signature", "expired"})
 		return &model.ValidationError{
-			Message: err.Error(),
+			Message: message,
 			Code:    ptrString("WALLET_AUTH_FAILED"),
 		}, nil
 	}
@@ -181,8 +183,9 @@ func (r *Resolver) DoLinkWallet(ctx context.Context, input model.WalletLoginInpu
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("linkWallet", "error").Inc()
 		}
+		message := gatewayerrors.SanitizeGRPCError(err, "link wallet failed", []string{"already linked", "signature"})
 		return &model.ValidationError{
-			Message: err.Error(),
+			Message: message,
 			Code:    ptrString("LINK_WALLET_FAILED"),
 		}, nil
 	}
@@ -223,8 +226,9 @@ func (r *Resolver) DoUnlinkWallet(ctx context.Context, walletID string) (model.U
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("unlinkWallet", "error").Inc()
 		}
+		message := gatewayerrors.SanitizeGRPCError(err, "wallet not found", []string{"not found"})
 		return &model.NotFoundError{
-			Message:      err.Error(),
+			Message:      message,
 			Code:         ptrString("WALLET_NOT_FOUND"),
 			ResourceType: "WalletIdentity",
 		}, nil
@@ -267,8 +271,9 @@ func (r *Resolver) DoLinkEmail(ctx context.Context, input model.LinkEmailInput) 
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("linkEmail", "error").Inc()
 		}
+		message := gatewayerrors.SanitizeGRPCError(err, "email link failed", []string{"already linked", "invalid"})
 		return &model.ValidationError{
-			Message: err.Error(),
+			Message: message,
 			Code:    ptrString("EMAIL_LINK_FAILED"),
 			Field:   ptrString("email"),
 		}, nil

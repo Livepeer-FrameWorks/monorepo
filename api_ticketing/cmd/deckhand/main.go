@@ -13,6 +13,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
@@ -162,6 +163,7 @@ func main() {
 
 		grpcSrv := grpc.NewServer(
 			grpc.ChainUnaryInterceptor(
+				grpcutil.SanitizeUnaryServerInterceptor(),
 				authInterceptor,
 				middleware.GRPCLoggingInterceptor(logger),
 			),

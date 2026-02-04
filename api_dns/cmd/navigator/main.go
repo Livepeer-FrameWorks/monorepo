@@ -14,6 +14,7 @@ import (
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
+	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
@@ -155,7 +156,10 @@ func main() {
 
 		grpcServer := grpc.NewServer(
 			grpc.Creds(insecure.NewCredentials()),
-			grpc.UnaryInterceptor(authInterceptor),
+			grpc.ChainUnaryInterceptor(
+				grpcutil.SanitizeUnaryServerInterceptor(),
+				authInterceptor,
+			),
 		)
 		pb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)
 
