@@ -2,6 +2,7 @@ package resolvers
 
 import (
 	"context"
+	"strings"
 
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/ctxkeys"
@@ -17,11 +18,19 @@ const (
 	apiEventStreamKeyCreated             = "api_stream_key_created"
 	apiEventStreamKeyDeleted             = "api_stream_key_deleted"
 	apiEventStreamKeyRotated             = "api_stream_key_rotated"
+	apiEventClipCreated                  = "api_clip_created"
+	apiEventClipDeleted                  = "api_clip_deleted"
+	apiEventDVRDeleted                   = "api_dvr_deleted"
+	apiEventVodUploadCreated             = "api_vod_upload_created"
+	apiEventVodUploadCompleted           = "api_vod_upload_completed"
+	apiEventVodUploadAborted             = "api_vod_upload_aborted"
+	apiEventVodAssetDeleted              = "api_vod_asset_deleted"
 	apiEventTokenCreated                 = "api_token_created"
 	apiEventTokenRevoked                 = "api_token_revoked"
 	apiEventPaymentCreated               = "api_payment_created"
 	apiEventSubscriptionCreated          = "api_subscription_created"
 	apiEventSubscriptionUpdated          = "api_subscription_updated"
+	apiEventBillingDetailsUpdated        = "api_billing_details_updated"
 	apiEventTopupCreated                 = "api_topup_created"
 	apiEventTenantUpdated                = "api_tenant_updated"
 	apiEventTenantClusterAssigned        = "api_tenant_cluster_assigned"
@@ -47,6 +56,34 @@ func userIDFromContext(ctx context.Context) string {
 		return user.UserID
 	}
 	return ctxkeys.GetUserID(ctx)
+}
+
+const maxEventReasonLength = 128
+
+func truncateReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > maxEventReasonLength {
+		return reason[:maxEventReasonLength] + "..."
+	}
+	return reason
+}
+
+func parseRejectReasonCode(reason string) pb.ClusterRejectReason {
+	lower := strings.ToLower(reason)
+	switch {
+	case strings.Contains(lower, "capacity") || strings.Contains(lower, "full"):
+		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_CAPACITY
+	case strings.Contains(lower, "policy") || strings.Contains(lower, "terms") || strings.Contains(lower, "violation"):
+		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_POLICY
+	case strings.Contains(lower, "eligib") || strings.Contains(lower, "qualify"):
+		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_ELIGIBILITY
+	case strings.Contains(lower, "duplicate") || strings.Contains(lower, "already"):
+		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_DUPLICATE
+	case strings.Contains(lower, "withdraw") || strings.Contains(lower, "cancel"):
+		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_WITHDRAWN
+	default:
+		return pb.ClusterRejectReason_CLUSTER_REJECT_REASON_OTHER
+	}
 }
 
 func (r *Resolver) sendServiceEvent(ctx context.Context, event *pb.ServiceEvent) {

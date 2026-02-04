@@ -90,6 +90,20 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	}
 
 	// Convert to GraphQL model
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventVodUploadCreated,
+		ResourceType: "vod_upload",
+		ResourceId:   resp.UploadId,
+		Payload: &pb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &pb.ArtifactEvent{
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
+				ArtifactId: resp.ArtifactHash,
+				Status:     "upload_created",
+			},
+		},
+	})
+
 	return &model.VodUploadSession{
 		ID:           resp.UploadId,
 		ArtifactID:   resp.ArtifactId,
@@ -167,6 +181,20 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	}
 
 	// Convert to GraphQL model
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventVodUploadCompleted,
+		ResourceType: "vod_upload",
+		ResourceId:   input.UploadID,
+		Payload: &pb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &pb.ArtifactEvent{
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
+				ArtifactId: resp.GetAsset().GetArtifactHash(),
+				Status:     "upload_completed",
+			},
+		},
+	})
+
 	return protoToVodAsset(resp.Asset), nil
 }
 
@@ -219,6 +247,21 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 		return nil, fmt.Errorf("failed to abort VOD upload: %w", err)
 	}
 
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventVodUploadAborted,
+		ResourceType: "vod_upload",
+		ResourceId:   uploadID,
+		Payload: &pb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &pb.ArtifactEvent{
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+				// artifact_id is the stable VOD hash; keep upload_id in ResourceId.
+				// Abort doesn't return the hash, so leave artifact_id empty.
+				ArtifactId: "",
+				Status:     "upload_aborted",
+			},
+		},
+	})
+
 	return &model.DeleteSuccess{Success: true, DeletedID: uploadID}, nil
 }
 
@@ -249,6 +292,19 @@ func (r *Resolver) DoDeleteVodAsset(ctx context.Context, id string) (model.Delet
 		}
 		return nil, fmt.Errorf("failed to delete VOD asset: %w", err)
 	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventVodAssetDeleted,
+		ResourceType: "vod_asset",
+		ResourceId:   id,
+		Payload: &pb.ServiceEvent_ArtifactEvent{
+			ArtifactEvent: &pb.ArtifactEvent{
+				ArtifactType: pb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+				ArtifactId:   id,
+				Status:       "deleted",
+			},
+		},
+	})
 
 	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }
