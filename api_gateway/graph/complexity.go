@@ -12,8 +12,9 @@ const DefaultPageSize = 50
 // ConnectionBaseCost is the fixed cost for any connection field (Shopify uses 2).
 const ConnectionBaseCost = 2
 
-// MaxPageSize is the maximum page size allowed by the schema.
-const MaxPageSize = 100
+// MaxPageSize is the maximum page size used for complexity estimation.
+// Must match real pagination enforcement (see pkg/pagination.ClampLimit).
+const MaxPageSize = 500
 
 // HeavyFieldCost is the fixed cost for analytics roots that fan out to aggregations.
 const HeavyFieldCost = 10
