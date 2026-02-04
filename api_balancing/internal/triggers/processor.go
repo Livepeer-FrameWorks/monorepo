@@ -1657,6 +1657,7 @@ func (p *Processor) resolveNodeUUID(nodeID string) string {
 // GenerateAndSendStorageSnapshots generates and sends an hourly storage snapshot to Decklog
 func (p *Processor) GenerateAndSendStorageSnapshots() error {
 	p.logger.Info("Starting GenerateAndSendStorageSnapshots")
+	ctx := context.Background()
 	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
 	if snapshot == nil {
 		p.logger.Warn("Balancer snapshot is empty, skipping storage snapshot generation")
@@ -1698,7 +1699,7 @@ func (p *Processor) GenerateAndSendStorageSnapshots() error {
 			var contentType string
 
 			// Resolve tenant and content type from artifact hash using unified resolver
-			if target, err := control.ResolveArtifactByHash(context.Background(), artifact.GetClipHash()); err == nil {
+			if target, err := control.ResolveArtifactByHash(ctx, artifact.GetClipHash()); err == nil {
 				tenantID = target.TenantID
 				contentType = target.ContentType
 			} else {

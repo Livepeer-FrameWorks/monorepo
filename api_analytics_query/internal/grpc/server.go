@@ -4633,31 +4633,42 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	summary.VodDeleted = vodDeleted
 
 	// Storage breakdown from latest snapshot (hot + cold)
-	var clipBytes, dvrBytes, vodBytes uint64
-	var frozenClipBytes, frozenDvrBytes, frozenVodBytes uint64
+	var hotClipBytes, hotDvrBytes, hotVodBytes uint64
 	err = s.clickhouse.QueryRowContext(ctx, `
 		SELECT
 			COALESCE(argMax(clip_bytes, timestamp), 0),
 			COALESCE(argMax(dvr_bytes, timestamp), 0),
-			COALESCE(argMax(vod_bytes, timestamp), 0),
+			COALESCE(argMax(vod_bytes, timestamp), 0)
+		FROM storage_snapshots
+		WHERE tenant_id = ? AND storage_scope = 'hot' AND timestamp <= ?
+	`, tenantID, endTime).Scan(
+		&hotClipBytes, &hotDvrBytes, &hotVodBytes,
+	)
+	if err != nil && !errors.Is(err, database.ErrNoRows) {
+		s.logger.WithError(err).Warn("Failed to query hot storage_snapshots for storage breakdown")
+	}
+
+	var coldFrozenClipBytes, coldFrozenDvrBytes, coldFrozenVodBytes uint64
+	err = s.clickhouse.QueryRowContext(ctx, `
+		SELECT
 			COALESCE(argMax(frozen_clip_bytes, timestamp), 0),
 			COALESCE(argMax(frozen_dvr_bytes, timestamp), 0),
 			COALESCE(argMax(frozen_vod_bytes, timestamp), 0)
 		FROM storage_snapshots
-		WHERE tenant_id = ? AND timestamp <= ?
+		WHERE tenant_id = ? AND storage_scope = 'cold' AND timestamp <= ?
 	`, tenantID, endTime).Scan(
-		&clipBytes, &dvrBytes, &vodBytes,
-		&frozenClipBytes, &frozenDvrBytes, &frozenVodBytes,
+		&coldFrozenClipBytes, &coldFrozenDvrBytes, &coldFrozenVodBytes,
 	)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
-		s.logger.WithError(err).Warn("Failed to query storage_snapshots for storage breakdown")
+		s.logger.WithError(err).Warn("Failed to query cold storage_snapshots for storage breakdown")
 	}
-	summary.ClipBytes = clipBytes
-	summary.DvrBytes = dvrBytes
-	summary.VodBytes = vodBytes
-	summary.FrozenClipBytes = frozenClipBytes
-	summary.FrozenDvrBytes = frozenDvrBytes
-	summary.FrozenVodBytes = frozenVodBytes
+
+	summary.ClipBytes = hotClipBytes
+	summary.DvrBytes = hotDvrBytes
+	summary.VodBytes = hotVodBytes
+	summary.FrozenClipBytes = coldFrozenClipBytes
+	summary.FrozenDvrBytes = coldFrozenDvrBytes
+	summary.FrozenVodBytes = coldFrozenVodBytes
 
 	// Sync/cache operations (from storage_events)
 	var freezeCount, defrostCount uint32

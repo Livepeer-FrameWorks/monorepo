@@ -76,6 +76,7 @@ type PrometheusMonitor struct {
 
 var prometheusMonitor *PrometheusMonitor
 var monitorLogger logging.Logger
+var fileStabilityThreshold = 10 * time.Second
 
 var (
 	streamViewers = promauto.NewGaugeVec(
@@ -1139,6 +1140,9 @@ func scanVODDirectory(vodDir string, artifactIndex map[string]*ClipInfo) (uint64
 		if err != nil {
 			continue
 		}
+		if time.Since(info.ModTime()) < fileStabilityThreshold {
+			continue
+		}
 
 		filePath := fmt.Sprintf("%s/%s", vodDir, name)
 		vodInfo := &ClipInfo{
@@ -1196,6 +1200,9 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 
 					// Get file info
 					if fileInfo, err := os.Stat(filePath); err == nil {
+						if time.Since(fileInfo.ModTime()) < fileStabilityThreshold {
+							continue
+						}
 						// Try to determine stream name from symlink target
 						streamName := "unknown"
 						if target, err := os.Readlink(filePath); err == nil {
@@ -1263,6 +1270,9 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 
 			// Get file info
 			if fileInfo, err := os.Stat(filePath); err == nil {
+				if time.Since(fileInfo.ModTime()) < fileStabilityThreshold {
+					continue
+				}
 				// Check if .dtsh index file exists
 				hasDtsh := false
 				if _, err := os.Stat(filePath + ".dtsh"); err == nil {
@@ -1311,8 +1321,10 @@ func calculateDVRSegmentSize(manifestPath, baseDir string) (uint64, int) {
 		// This is a segment reference (relative path like "segments/1234_0.ts")
 		segPath := filepath.Join(baseDir, line)
 		if info, err := os.Stat(segPath); err == nil && !info.IsDir() {
-			totalSize += uint64(info.Size())
-			segmentCount++
+			if time.Since(info.ModTime()) >= fileStabilityThreshold {
+				totalSize += uint64(info.Size())
+				segmentCount++
+			}
 		}
 	}
 
@@ -1336,6 +1348,8 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 		return 0, 0
 	}
 
+	activeDVRs := control.GetActiveDVRHashes()
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue // Skip files in the DVR root directory
@@ -1358,6 +1372,9 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 			dvrHash := dvrHashDir.Name()
 			if len(dvrHash) < 18 {
 				continue // Not a valid DVR hash
+			}
+			if activeDVRs[dvrHash] {
+				continue
 			}
 
 			// DVR directory: /dvr/{stream_id}/{dvr_hash}/
