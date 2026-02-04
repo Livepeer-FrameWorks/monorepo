@@ -125,6 +125,94 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 	}
 }
 
+type wrappedServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (w *wrappedServerStream) Context() context.Context {
+	return w.ctx
+}
+
+// GRPCStreamAuthInterceptor returns a streaming server interceptor that validates authentication.
+// It accepts either:
+//   - A valid SERVICE_TOKEN (for service-to-service calls)
+//   - A valid JWT token (for user-initiated calls)
+//
+// The interceptor extracts tenant_id and user_id from validated tokens and adds them
+// to the context for downstream handlers.
+func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor {
+	skipMap := make(map[string]bool)
+	for _, m := range cfg.SkipMethods {
+		skipMap[m] = true
+	}
+
+	policy := cfg.MetadataPolicy
+	if policy == MetadataPolicyUnset {
+		policy = parseMetadataPolicy(os.Getenv("GRPC_METADATA_POLICY"))
+	}
+
+	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if skipMap[info.FullMethod] {
+			return handler(srv, stream)
+		}
+
+		md, ok := metadata.FromIncomingContext(stream.Context())
+		if !ok {
+			return status.Error(codes.Unauthenticated, "missing metadata")
+		}
+
+		ctx := applyDemoModeMetadata(stream.Context(), md)
+
+		authHeaders := md.Get("authorization")
+		if len(authHeaders) == 0 {
+			return status.Error(codes.Unauthenticated, "missing authorization")
+		}
+
+		authHeader := authHeaders[0]
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			return status.Error(codes.Unauthenticated, "invalid authorization format")
+		}
+
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+
+		if cfg.ServiceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(cfg.ServiceToken)) == 1 {
+			ctx = extractMetadataToContext(ctx, md, policy, cfg.Logger, info.FullMethod)
+			if cfg.Logger != nil {
+				cfg.Logger.WithFields(logging.Fields{
+					"method":    info.FullMethod,
+					"auth_type": "service_token",
+				}).Debug("gRPC auth: service token validated")
+			}
+
+			return handler(srv, &wrappedServerStream{ServerStream: stream, ctx: ctx})
+		}
+
+		if len(cfg.JWTSecret) > 0 {
+			claims, err := auth.ValidateJWT(token, cfg.JWTSecret)
+			if err == nil {
+				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
+				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
+				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
+				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
+
+				if cfg.Logger != nil {
+					cfg.Logger.WithFields(logging.Fields{
+						"method":    info.FullMethod,
+						"auth_type": "jwt",
+						"user_id":   claims.UserID,
+						"tenant_id": claims.TenantID,
+					}).Debug("gRPC auth: JWT validated")
+				}
+
+				return handler(srv, &wrappedServerStream{ServerStream: stream, ctx: ctx})
+			}
+		}
+
+		return status.Error(codes.Unauthenticated, "invalid token")
+	}
+}
+
 // extractMetadataToContext extracts tenant_id and user_id from gRPC metadata
 // and adds them to the Go context (for service-to-service calls where
 // the upstream service already validated the user).
