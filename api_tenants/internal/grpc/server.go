@@ -2533,7 +2533,13 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	healthyCountQuery := fmt.Sprintf(`
 		SELECT COUNT(DISTINCT n.id)
 		FROM quartermaster.infrastructure_nodes n
-		JOIN quartermaster.service_instances si ON si.node_id = n.node_id
+		JOIN quartermaster.service_instances si
+			ON si.cluster_id = n.cluster_id
+			AND (
+				si.node_id = n.node_id
+				OR si.advertise_host = n.external_ip
+				OR si.advertise_host = n.internal_ip
+			)
 		%s
 	`, healthWhere)
 
@@ -2548,7 +2554,13 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 		       n.latitude, n.longitude, n.cpu_cores, n.memory_gb, n.disk_gb,
 		       n.last_heartbeat, n.created_at, n.updated_at
 		FROM quartermaster.infrastructure_nodes n
-		JOIN quartermaster.service_instances si ON si.node_id = n.node_id
+		JOIN quartermaster.service_instances si
+			ON si.cluster_id = n.cluster_id
+			AND (
+				si.node_id = n.node_id
+				OR si.advertise_host = n.external_ip
+				OR si.advertise_host = n.internal_ip
+			)
 		%s
 	`, healthWhere)
 
