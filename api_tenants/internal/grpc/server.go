@@ -2517,7 +2517,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 		argIdx++
 	}
 
-	where += fmt.Sprintf(" AND n.external_ip IS NOT NULL AND n.external_ip <> ''")
+	where += " AND n.external_ip IS NOT NULL AND n.external_ip <> ''"
 
 	totalQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_nodes n %s`, where)
 	var totalNodes int32

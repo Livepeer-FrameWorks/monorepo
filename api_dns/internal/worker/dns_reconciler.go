@@ -44,8 +44,12 @@ func (r *DNSReconciler) Start(ctx context.Context) {
 
 func (r *DNSReconciler) reconcile(ctx context.Context) {
 	for _, serviceType := range r.serviceTypes {
-		if err := r.dnsManager.SyncService(ctx, serviceType, ""); err != nil {
+		partialErrors, err := r.dnsManager.SyncService(ctx, serviceType, "")
+		if err != nil {
 			r.logger.WithError(err).WithField("service_type", serviceType).Error("DNS reconciliation failed")
+		}
+		if len(partialErrors) > 0 {
+			r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
 		}
 	}
 }

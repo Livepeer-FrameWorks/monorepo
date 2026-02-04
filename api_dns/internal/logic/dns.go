@@ -330,32 +330,32 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 			currentLB.DefaultPools = []string{poolID}
 			currentLB.TTL = m.lbTTL
 			currentLB.Proxied = proxied
-			if _, updateErr := m.cfClient.UpdateLoadBalancer(lbID, *currentLB); updateErr != nil {
-				return nil, fmt.Errorf("failed to update LB: %w", updateErr)
+			if _, updateLBErr := m.cfClient.UpdateLoadBalancer(lbID, *currentLB); updateLBErr != nil {
+				return nil, fmt.Errorf("failed to update LB: %w", updateLBErr)
 			}
 		}
 	}
 
 	// Also ensure A records are gone (cleanup Single Node config)
-	records, err := m.cfClient.ListDNSRecords("A", fqdn)
-	if err == nil {
-		for _, rec := range records {
+	aRecords, listAErr := m.cfClient.ListDNSRecords("A", fqdn)
+	if listAErr == nil {
+		for _, rec := range aRecords {
 			m.logger.WithField("record_id", rec.ID).Info("Deleting conflicting A record for LB mode")
-			if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
-				m.logger.WithError(err).WithField("record_id", rec.ID).Warn("Failed to delete conflicting A record")
-				partialErrors[fmt.Sprintf("%s:%s", fqdn, rec.ID)] = err.Error()
+			if delAErr := m.cfClient.DeleteDNSRecord(rec.ID); delAErr != nil {
+				m.logger.WithError(delAErr).WithField("record_id", rec.ID).Warn("Failed to delete conflicting A record")
+				partialErrors[fmt.Sprintf("%s:%s", fqdn, rec.ID)] = delAErr.Error()
 			}
 		}
 	}
 
 	// Also clean up any conflicting CNAME records
-	cnameRecords, err := m.cfClient.ListDNSRecords("CNAME", fqdn)
-	if err == nil {
+	cnameRecords, listCNAMEErr := m.cfClient.ListDNSRecords("CNAME", fqdn)
+	if listCNAMEErr == nil {
 		for _, rec := range cnameRecords {
 			m.logger.WithField("record_id", rec.ID).Info("Deleting conflicting CNAME record for LB mode")
-			if delErr := m.cfClient.DeleteDNSRecord(rec.ID); delErr != nil {
-				m.logger.WithError(delErr).WithField("record_id", rec.ID).Warn("Failed to delete conflicting CNAME record")
-				partialErrors[fmt.Sprintf("%s:cname:%s", fqdn, rec.ID)] = delErr.Error()
+			if delCNAMEErr := m.cfClient.DeleteDNSRecord(rec.ID); delCNAMEErr != nil {
+				m.logger.WithError(delCNAMEErr).WithField("record_id", rec.ID).Warn("Failed to delete conflicting CNAME record")
+				partialErrors[fmt.Sprintf("%s:cname:%s", fqdn, rec.ID)] = delCNAMEErr.Error()
 			}
 		}
 	}
