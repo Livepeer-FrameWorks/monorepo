@@ -178,7 +178,7 @@ func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config Co
 	}
 
 	updates := make(chan *model.StreamEvent, 10)
-	go sm.processStreamMessages(ctx, client, updates, streamID)
+	go sm.processStreamMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -195,7 +195,7 @@ func (sm *SubscriptionManager) SubscribeToAnalytics(ctx context.Context, config 
 	}
 
 	updates := make(chan *pb.ClientLifecycleUpdate, 10)
-	go sm.processAnalyticsMessages(ctx, client, updates, streamID)
+	go sm.processAnalyticsMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -212,7 +212,7 @@ func (sm *SubscriptionManager) SubscribeToConnections(ctx context.Context, confi
 	}
 
 	updates := make(chan *pb.ConnectionEvent, 10)
-	go sm.processConnectionMessages(ctx, client, updates, streamID)
+	go sm.processConnectionMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -229,7 +229,7 @@ func (sm *SubscriptionManager) SubscribeToStorageEvents(ctx context.Context, con
 	}
 
 	updates := make(chan *pb.StorageEvent, 10)
-	go sm.processStorageMessages(ctx, client, updates, streamID)
+	go sm.processStorageMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -246,7 +246,7 @@ func (sm *SubscriptionManager) SubscribeToProcessingEvents(ctx context.Context, 
 	}
 
 	updates := make(chan *pb.ProcessingUsageRecord, 10)
-	go sm.processProcessingMessages(ctx, client, updates, streamID)
+	go sm.processProcessingMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -263,7 +263,7 @@ func (sm *SubscriptionManager) SubscribeToSystem(ctx context.Context, config Con
 	}
 
 	updates := make(chan *pb.NodeLifecycleUpdate, 10)
-	go sm.processSystemMessages(ctx, client, updates)
+	go sm.processSystemMessages(ctx, client, updates, config.TenantID)
 	return updates, nil
 }
 
@@ -280,7 +280,7 @@ func (sm *SubscriptionManager) SubscribeToTrackList(ctx context.Context, config 
 	}
 
 	updates := make(chan *pb.StreamTrackListTrigger, 10)
-	go sm.processTrackListMessages(ctx, client, updates, streamID)
+	go sm.processTrackListMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -295,7 +295,7 @@ func (sm *SubscriptionManager) SubscribeToLifecycle(ctx context.Context, config 
 		return nil, fmt.Errorf("failed to subscribe to lifecycle: %w", err)
 	}
 	updates := make(chan *pb.ClipLifecycleData, 10)
-	go sm.processLifecycleMessages(ctx, client, updates, streamID)
+	go sm.processLifecycleMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -310,7 +310,7 @@ func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, conf
 		return nil, fmt.Errorf("failed to subscribe to DVR lifecycle: %w", err)
 	}
 	updates := make(chan *pb.DVRLifecycleData, 10)
-	go sm.processDVRLifecycleMessages(ctx, client, updates, streamID)
+	go sm.processDVRLifecycleMessages(ctx, client, updates, streamID, config.TenantID)
 	return updates, nil
 }
 
@@ -326,7 +326,7 @@ func (sm *SubscriptionManager) SubscribeToVodLifecycle(ctx context.Context, conf
 		return nil, fmt.Errorf("failed to subscribe to VOD lifecycle: %w", err)
 	}
 	updates := make(chan *pb.VodLifecycleData, 10)
-	go sm.processVodLifecycleMessages(ctx, client, updates)
+	go sm.processVodLifecycleMessages(ctx, client, updates, config.TenantID)
 	return updates, nil
 }
 
@@ -380,12 +380,12 @@ func (sm *SubscriptionManager) SubscribeToFirehose(ctx context.Context, config C
 	}
 
 	updates := make(chan *model.TenantEvent, 50) // Larger buffer for firehose
-	go sm.processFirehoseMessages(ctx, client, updates)
+	go sm.processFirehoseMessages(ctx, client, updates, config.TenantID)
 	return updates, nil
 }
 
 // processFirehoseMessages processes ALL events from Signalman and converts them to TenantEvent
-func (sm *SubscriptionManager) processFirehoseMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *model.TenantEvent) {
+func (sm *SubscriptionManager) processFirehoseMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *model.TenantEvent, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -396,6 +396,10 @@ func (sm *SubscriptionManager) processFirehoseMessages(ctx context.Context, clie
 		case event, ok := <-events:
 			if !ok {
 				return
+			}
+
+			if tenantMismatch(tenantID, event) {
+				continue
 			}
 
 			tenantEvent := sm.convertProtoToTenantEvent(event)
@@ -535,9 +539,16 @@ func channelToTenantChannel(channel pb.Channel) string {
 	}
 }
 
+func tenantMismatch(tenantID string, event *pb.SignalmanEvent) bool {
+	if tenantID == "" || event == nil || event.TenantId == nil {
+		return false
+	}
+	return *event.TenantId != tenantID
+}
+
 // processStreamMessages processes stream messages from Signalman gRPC
 // Maps proto payloads into canonical StreamEvent for live subscriptions
-func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *model.StreamEvent, streamID *string) {
+func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *model.StreamEvent, streamID *string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -558,6 +569,10 @@ func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client
 				event.EventType != pb.EventType_EVENT_TYPE_PUSH_REWRITE &&
 				event.EventType != pb.EventType_EVENT_TYPE_STREAM_SOURCE &&
 				event.EventType != pb.EventType_EVENT_TYPE_PLAY_REWRITE {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -585,7 +600,7 @@ func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client
 
 // processAnalyticsMessages processes analytics messages from Signalman gRPC
 // Passes proto.ClientLifecycleUpdate directly without conversion
-func (sm *SubscriptionManager) processAnalyticsMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ClientLifecycleUpdate, streamID *string) {
+func (sm *SubscriptionManager) processAnalyticsMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ClientLifecycleUpdate, streamID *string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -600,6 +615,10 @@ func (sm *SubscriptionManager) processAnalyticsMessages(ctx context.Context, cli
 
 			// Filter for client lifecycle events
 			if event.EventType != pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -625,7 +644,7 @@ func (sm *SubscriptionManager) processAnalyticsMessages(ctx context.Context, cli
 
 // processConnectionMessages processes viewer connect/disconnect messages from Signalman gRPC
 // Maps proto viewer events into ConnectionEvent for GraphQL consumption
-func (sm *SubscriptionManager) processConnectionMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ConnectionEvent, streamID *string) {
+func (sm *SubscriptionManager) processConnectionMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ConnectionEvent, streamID *string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -640,6 +659,10 @@ func (sm *SubscriptionManager) processConnectionMessages(ctx context.Context, cl
 
 			if event.EventType != pb.EventType_EVENT_TYPE_VIEWER_CONNECT &&
 				event.EventType != pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -666,7 +689,7 @@ func (sm *SubscriptionManager) processConnectionMessages(ctx context.Context, cl
 
 // processStorageMessages processes storage lifecycle messages from Signalman gRPC
 // Maps proto storage lifecycle data into StorageEvent for GraphQL consumption
-func (sm *SubscriptionManager) processStorageMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.StorageEvent, streamID *string) {
+func (sm *SubscriptionManager) processStorageMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.StorageEvent, streamID *string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -680,6 +703,10 @@ func (sm *SubscriptionManager) processStorageMessages(ctx context.Context, clien
 			}
 
 			if event.EventType != pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -706,7 +733,7 @@ func (sm *SubscriptionManager) processStorageMessages(ctx context.Context, clien
 
 // processProcessingMessages processes process billing messages from Signalman gRPC
 // Maps proto process billing data into ProcessingUsageRecord for GraphQL consumption
-func (sm *SubscriptionManager) processProcessingMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ProcessingUsageRecord, streamID *string) {
+func (sm *SubscriptionManager) processProcessingMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ProcessingUsageRecord, streamID *string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -720,6 +747,10 @@ func (sm *SubscriptionManager) processProcessingMessages(ctx context.Context, cl
 			}
 
 			if event.EventType != pb.EventType_EVENT_TYPE_PROCESS_BILLING {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -746,7 +777,7 @@ func (sm *SubscriptionManager) processProcessingMessages(ctx context.Context, cl
 
 // processSystemMessages processes system messages from Signalman gRPC
 // Passes proto.NodeLifecycleUpdate directly without conversion
-func (sm *SubscriptionManager) processSystemMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.NodeLifecycleUpdate) {
+func (sm *SubscriptionManager) processSystemMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.NodeLifecycleUpdate, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -761,6 +792,10 @@ func (sm *SubscriptionManager) processSystemMessages(ctx context.Context, client
 
 			// Filter for node lifecycle events
 			if event.EventType != pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -780,7 +815,7 @@ func (sm *SubscriptionManager) processSystemMessages(ctx context.Context, client
 
 // processTrackListMessages processes track list messages from Signalman gRPC
 // Passes proto.StreamTrackListTrigger directly without conversion
-func (sm *SubscriptionManager) processTrackListMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.StreamTrackListTrigger, streamID string) {
+func (sm *SubscriptionManager) processTrackListMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.StreamTrackListTrigger, streamID string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -794,6 +829,10 @@ func (sm *SubscriptionManager) processTrackListMessages(ctx context.Context, cli
 			}
 
 			if event.EventType != pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -821,7 +860,7 @@ func (sm *SubscriptionManager) processTrackListMessages(ctx context.Context, cli
 
 // processLifecycleMessages processes clip/dvr lifecycle messages from Signalman gRPC
 // Passes proto.ClipLifecycleData directly without conversion
-func (sm *SubscriptionManager) processLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ClipLifecycleData, streamID string) {
+func (sm *SubscriptionManager) processLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.ClipLifecycleData, streamID string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -836,6 +875,10 @@ func (sm *SubscriptionManager) processLifecycleMessages(ctx context.Context, cli
 
 			// Filter for clip lifecycle events
 			if event.EventType != pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -857,7 +900,7 @@ func (sm *SubscriptionManager) processLifecycleMessages(ctx context.Context, cli
 	}
 }
 
-func (sm *SubscriptionManager) processDVRLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.DVRLifecycleData, streamID string) {
+func (sm *SubscriptionManager) processDVRLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.DVRLifecycleData, streamID string, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -872,6 +915,10 @@ func (sm *SubscriptionManager) processDVRLifecycleMessages(ctx context.Context, 
 
 			// Filter for DVR lifecycle events
 			if event.EventType != pb.EventType_EVENT_TYPE_DVR_LIFECYCLE {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
@@ -895,7 +942,7 @@ func (sm *SubscriptionManager) processDVRLifecycleMessages(ctx context.Context, 
 
 // processVodLifecycleMessages processes VOD lifecycle messages from Signalman gRPC
 // Passes proto.VodLifecycleData directly (bound via gqlgen.yml, no conversion needed)
-func (sm *SubscriptionManager) processVodLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.VodLifecycleData) {
+func (sm *SubscriptionManager) processVodLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.VodLifecycleData, tenantID string) {
 	defer close(output)
 
 	events := client.Events()
@@ -910,6 +957,10 @@ func (sm *SubscriptionManager) processVodLifecycleMessages(ctx context.Context, 
 
 			// Filter for VOD lifecycle events
 			if event.EventType != pb.EventType_EVENT_TYPE_VOD_LIFECYCLE {
+				continue
+			}
+
+			if tenantMismatch(tenantID, event) {
 				continue
 			}
 
