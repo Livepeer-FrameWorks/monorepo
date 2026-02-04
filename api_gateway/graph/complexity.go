@@ -12,6 +12,13 @@ const DefaultPageSize = 50
 // ConnectionBaseCost is the fixed cost for any connection field (Shopify uses 2).
 const ConnectionBaseCost = 2
 
+// MaxPageSize is the maximum page size used for complexity estimation.
+// Must match real pagination enforcement (see pkg/pagination.ClampLimit).
+const MaxPageSize = 500
+
+// HeavyFieldCost is the fixed cost for analytics roots that fan out to aggregations.
+const HeavyFieldCost = 10
+
 // getPageMultiplier extracts the pagination size from ConnectionInput.
 // Returns DefaultPageSize if page is nil or neither first/last is set.
 func getPageMultiplier(page *model.ConnectionInput) int {
@@ -19,22 +26,25 @@ func getPageMultiplier(page *model.ConnectionInput) int {
 		return DefaultPageSize
 	}
 	if page.First != nil && *page.First > 0 {
+		if *page.First > MaxPageSize {
+			return MaxPageSize
+		}
 		return *page.First
 	}
 	if page.Last != nil && *page.Last > 0 {
+		if *page.Last > MaxPageSize {
+			return MaxPageSize
+		}
 		return *page.Last
 	}
 	return DefaultPageSize
 }
 
 // connectionComplexity calculates Shopify-style complexity for connection fields.
-// Formula: ConnectionBaseCost + pageSize + childComplexity
-// This is additive (not multiplicative) because childComplexity includes both
-// per-item fields AND fixed fields (pageInfo, totalCount). Multiplying would
-// over-count the fixed fields.
+// Formula: ConnectionBaseCost + (pageSize * childComplexity)
 func connectionComplexity(childComplexity int, page *model.ConnectionInput) int {
 	multiplier := getPageMultiplier(page)
-	return ConnectionBaseCost + multiplier + childComplexity
+	return ConnectionBaseCost + (multiplier * childComplexity)
 }
 
 // SetupComplexity configures pagination-aware complexity functions on the given
@@ -96,6 +106,26 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 	}
 	c.AnalyticsHealth.StreamHealthConnection = func(childComplexity int, page *model.ConnectionInput, _ *string, _ *model.TimeRangeInput, _ *bool) int {
 		return connectionComplexity(childComplexity, page)
+	}
+
+	// Analytics root costs
+	c.Query.Analytics = func(childComplexity int) int {
+		return HeavyFieldCost + childComplexity
+	}
+	c.Analytics.Health = func(childComplexity int) int {
+		return HeavyFieldCost + childComplexity
+	}
+	c.Analytics.Infra = func(childComplexity int) int {
+		return HeavyFieldCost + childComplexity
+	}
+	c.Analytics.Lifecycle = func(childComplexity int) int {
+		return HeavyFieldCost + childComplexity
+	}
+	c.Analytics.Usage = func(childComplexity int) int {
+		return HeavyFieldCost + childComplexity
+	}
+	c.Analytics.Overview = func(childComplexity int, _ *model.TimeRangeInput) int {
+		return HeavyFieldCost + childComplexity
 	}
 
 	// AnalyticsInfra connections
