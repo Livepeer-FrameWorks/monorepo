@@ -1492,6 +1492,22 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	// Update node info in state manager
 	state.DefaultManager().SetNodeInfo(nu.GetNodeId(), nu.GetBaseUrl(), nu.GetIsHealthy(), latitude, longitude, nu.GetLocation(), nu.GetOutputsJson(), nil)
 
+	if operationalMode, ok := mapOperationalMode(nu.GetOperationalMode()); ok {
+		currentMode := state.DefaultManager().GetNodeOperationalMode(nu.GetNodeId())
+		if currentMode != operationalMode {
+			if err := state.DefaultManager().SetNodeOperationalMode(context.Background(), nu.GetNodeId(), operationalMode, "helmsman"); err != nil {
+				p.logger.WithError(err).WithFields(logging.Fields{
+					"node_id":    nu.GetNodeId(),
+					"mode":       operationalMode,
+					"source":     "helmsman",
+					"current":    currentMode,
+					"node_name":  nu.GetNodeId(),
+					"trigger_id": trigger.GetRequestId(),
+				}).Warn("Failed to apply node operational mode from Helmsman")
+			}
+		}
+	}
+
 	// Update node metrics using protobuf data directly
 	state.DefaultManager().UpdateNodeMetrics(nu.GetNodeId(), struct {
 		CPU                  float64
@@ -1607,6 +1623,19 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *pb.MistTrigger) (string, 
 	}
 
 	return "", false, nil
+}
+
+func mapOperationalMode(mode pb.NodeOperationalMode) (state.NodeOperationalMode, bool) {
+	switch mode {
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL:
+		return state.NodeModeNormal, true
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING:
+		return state.NodeModeDraining, true
+	case pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE:
+		return state.NodeModeMaintenance, true
+	default:
+		return "", false
+	}
 }
 
 // resolveNodeUUID resolves a node's logical name (e.g., "edge-node-1") to its database UUID.

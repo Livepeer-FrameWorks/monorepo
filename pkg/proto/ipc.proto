@@ -901,6 +901,13 @@ message ClientLifecycleUpdate {
   optional string stream_id = 23;       // Enriched by Foghorn (UUID); REQUIRED for analytics joins
 }
 
+enum NodeOperationalMode {
+  NODE_OPERATIONAL_MODE_UNSPECIFIED = 0;
+  NODE_OPERATIONAL_MODE_NORMAL = 1;
+  NODE_OPERATIONAL_MODE_DRAINING = 2;
+  NODE_OPERATIONAL_MODE_MAINTENANCE = 3;
+}
+
 message NodeLifecycleUpdate {
   string node_id = 1;
   // Resource metrics
@@ -964,6 +971,10 @@ message NodeLifecycleUpdate {
   // Extended connection breakdown from MistServer curr array
   uint32 connections_inputs = 41;    // curr[1] - input connections
   uint32 connections_outgoing = 42;  // curr[2] - outgoing connections
+
+  // Operational mode (maintenance/draining) provided by Helmsman.
+  NodeOperationalMode operational_mode = 43;
+
   uint32 connections_cached = 44;    // curr[4] - cached connections
 }
 

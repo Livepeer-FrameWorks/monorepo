@@ -1784,6 +1784,8 @@ func getDiskUsage(path string) (total, used uint64, err error) {
 // enrichNodeLifecycleTrigger enriches node lifecycle trigger with Helmsman-specific data
 func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge, capStorage, capProcessing string, roles []string) {
 	if nodeUpdate := mistTrigger.GetNodeLifecycleUpdate(); nodeUpdate != nil {
+		nodeUpdate.OperationalMode = parseOperationalMode(os.Getenv("HELMSMAN_OPERATIONAL_MODE"))
+
 		// Add capabilities
 		nodeUpdate.Capabilities = &pb.NodeCapabilities{
 			Ingest:     capIngest == "" || capIngest == "1" || strings.ToLower(capIngest) == "true",
@@ -1822,6 +1824,19 @@ func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge,
 		if t := sidecarcfg.GetTenantID(); t != "" {
 			nodeUpdate.TenantId = &t
 		}
+	}
+}
+
+func parseOperationalMode(value string) pb.NodeOperationalMode {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "normal":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	case "draining", "drain":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+	case "maintenance", "maint":
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+	default:
+		return pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED
 	}
 }
 
