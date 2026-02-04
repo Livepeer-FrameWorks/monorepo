@@ -7,44 +7,40 @@ import (
 
 func TestNewWebhookRateLimiter(t *testing.T) {
 	tests := []struct {
-		name   string
-		limit  int
-		window time.Duration
-		ttl    time.Duration
-		want   WebhookRateLimiter
+		name       string
+		limit      int
+		window     time.Duration
+		ttl        time.Duration
+		wantLimit  int
+		wantWindow time.Duration
+		wantTTL    time.Duration
 	}{
 		{
-			name:   "valid parameters",
-			limit:  5,
-			window: 2 * time.Second,
-			ttl:    4 * time.Second,
-			want: WebhookRateLimiter{
-				limit:  5,
-				window: 2 * time.Second,
-				ttl:    4 * time.Second,
-			},
+			name:       "valid parameters",
+			limit:      5,
+			window:     2 * time.Second,
+			ttl:        4 * time.Second,
+			wantLimit:  5,
+			wantWindow: 2 * time.Second,
+			wantTTL:    4 * time.Second,
 		},
 		{
-			name:   "defaults for zero values",
-			limit:  0,
-			window: 0,
-			ttl:    0,
-			want: WebhookRateLimiter{
-				limit:  1,
-				window: time.Minute,
-				ttl:    10 * time.Minute,
-			},
+			name:       "defaults for zero values",
+			limit:      0,
+			window:     0,
+			ttl:        0,
+			wantLimit:  1,
+			wantWindow: time.Minute,
+			wantTTL:    10 * time.Minute,
 		},
 		{
-			name:   "defaults for negative values",
-			limit:  -3,
-			window: -1 * time.Second,
-			ttl:    -1 * time.Minute,
-			want: WebhookRateLimiter{
-				limit:  1,
-				window: time.Minute,
-				ttl:    10 * time.Minute,
-			},
+			name:       "defaults for negative values",
+			limit:      -3,
+			window:     -1 * time.Second,
+			ttl:        -1 * time.Minute,
+			wantLimit:  1,
+			wantWindow: time.Minute,
+			wantTTL:    10 * time.Minute,
 		},
 	}
 
@@ -52,14 +48,14 @@ func TestNewWebhookRateLimiter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rl := NewWebhookRateLimiter(tt.limit, tt.window, tt.ttl)
 
-			if rl.limit != tt.want.limit {
-				t.Fatalf("limit mismatch: got %d want %d", rl.limit, tt.want.limit)
+			if rl.limit != tt.wantLimit {
+				t.Fatalf("limit mismatch: got %d want %d", rl.limit, tt.wantLimit)
 			}
-			if rl.window != tt.want.window {
-				t.Fatalf("window mismatch: got %s want %s", rl.window, tt.want.window)
+			if rl.window != tt.wantWindow {
+				t.Fatalf("window mismatch: got %s want %s", rl.window, tt.wantWindow)
 			}
-			if rl.ttl != tt.want.ttl {
-				t.Fatalf("ttl mismatch: got %s want %s", rl.ttl, tt.want.ttl)
+			if rl.ttl != tt.wantTTL {
+				t.Fatalf("ttl mismatch: got %s want %s", rl.ttl, tt.wantTTL)
 			}
 			if rl.buckets == nil {
 				t.Fatal("expected buckets map to be initialized")
