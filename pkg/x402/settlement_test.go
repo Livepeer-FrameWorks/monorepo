@@ -110,6 +110,11 @@ func TestIsAuthOnlyPayment(t *testing.T) {
 			want:    false,
 		},
 		{
+			name:    "nil authorization",
+			payload: &pb.X402PaymentPayload{Payload: &pb.X402ExactPayload{}},
+			want:    false,
+		},
+		{
 			name:    "empty value",
 			payload: &pb.X402PaymentPayload{Payload: &pb.X402ExactPayload{Authorization: &pb.X402Authorization{Value: ""}}},
 			want:    false,
@@ -142,6 +147,13 @@ func TestIsAuthOnlyPayment(t *testing.T) {
 
 func TestResolveResource(t *testing.T) {
 	ctx := context.Background()
+
+	t.Run("empty resource", func(t *testing.T) {
+		_, err := ResolveResource(ctx, "", nil)
+		if err == nil || err.Code != ErrInvalidResource {
+			t.Fatalf("expected ErrInvalidResource, got %v", err)
+		}
+	})
 
 	t.Run("graphql resource", func(t *testing.T) {
 		resolution, err := ResolveResource(ctx, "graphql://viewer", nil)
@@ -198,6 +210,18 @@ func TestResolveResource(t *testing.T) {
 		}
 	})
 
+	t.Run("ingest stream key invalid", func(t *testing.T) {
+		commodore := &mockCommodore{
+			validateStreamKeyFn: func(_ context.Context, key string) (*pb.ValidateStreamKeyResponse, error) {
+				return &pb.ValidateStreamKeyResponse{Valid: false}, nil
+			},
+		}
+		_, err := ResolveResource(ctx, "ingest:bad-key", commodore)
+		if err == nil || err.Code != ErrResourceNotFound {
+			t.Fatalf("expected ErrResourceNotFound, got %v", err)
+		}
+	})
+
 	t.Run("ingest stream key with empty tenant", func(t *testing.T) {
 		commodore := &mockCommodore{
 			validateStreamKeyFn: func(_ context.Context, key string) (*pb.ValidateStreamKeyResponse, error) {
@@ -228,6 +252,13 @@ func TestResolveResource(t *testing.T) {
 		}
 	})
 
+	t.Run("viewer without commodore", func(t *testing.T) {
+		_, err := ResolveResource(ctx, "viewer://playback", nil)
+		if err == nil || err.Code != ErrResolverUnavailable {
+			t.Fatalf("expected ErrResolverUnavailable, got %v", err)
+		}
+	})
+
 	t.Run("clip relay id resolves", func(t *testing.T) {
 		clipID := globalid.Encode(globalid.TypeClip, "clip-hash")
 		commodore := &mockCommodore{
@@ -243,6 +274,21 @@ func TestResolveResource(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if resolution.Kind != ResourceKindClip || !resolution.Resolved {
+			t.Fatalf("unexpected resolution: %+v", resolution)
+		}
+	})
+
+	t.Run("dvr resource", func(t *testing.T) {
+		commodore := &mockCommodore{
+			resolveDVRHashFn: func(_ context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error) {
+				return &pb.ResolveDVRHashResponse{TenantId: "tenant-5"}, nil
+			},
+		}
+		resolution, err := ResolveResource(ctx, "dvr://dvr-hash", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resolution.Kind != ResourceKindDVR || resolution.TenantID != "tenant-5" {
 			t.Fatalf("unexpected resolution: %+v", resolution)
 		}
 	})
@@ -787,6 +833,58 @@ func TestSettleX402Payment(t *testing.T) {
 			t.Fatalf("unexpected payer: %s", result.PayerAddress)
 		}
 	})
+
+	t.Run("stream resource with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			IdentifierResponse: &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "stream://stream-id", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
+
+	t.Run("ingest key with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			StreamKeyResponse: &pb.ValidateStreamKeyResponse{Valid: true, StreamId: "stream-id", TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "ingest:stream-key", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
+
+	t.Run("vod resource with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			VodResponse: &pb.ResolveVodIDResponse{Found: true, TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "vod://4c0883a6-9102-4937-9d62-31471b5dbb62", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
+
+	t.Run("vod hash with empty tenant returns unresolved", func(t *testing.T) {
+		commodore := &MockCommodoreClient{
+			IdentifierResponse: &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "vod_hash", TenantId: ""},
+		}
+		res, err := ResolveResource(context.Background(), "vod://some-hash", commodore)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Resolved {
+			t.Fatal("expected unresolved when tenant is empty")
+		}
+	})
 }
 
 func paymentPayload(value string) *pb.X402PaymentPayload {
@@ -812,4 +910,21 @@ func validPaymentHeader() string {
 	payload := paymentPayload("10")
 	jsonBytes, _ := json.Marshal(payload)
 	return base64.StdEncoding.EncodeToString(jsonBytes)
+}
+
+func makePaymentHeader(value string) string {
+	payload := map[string]interface{}{
+		"x402Version": 1,
+		"scheme":      "exact",
+		"network":     "base-sepolia",
+		"payload": map[string]interface{}{
+			"authorization": map[string]interface{}{
+				"from":  "0xfrom",
+				"to":    "0xto",
+				"value": value,
+			},
+		},
+	}
+	data, _ := json.Marshal(payload)
+	return base64.StdEncoding.EncodeToString(data)
 }

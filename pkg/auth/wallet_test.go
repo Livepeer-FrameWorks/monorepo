@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/hex"
 	"fmt"
 	"testing"
 	"time"
@@ -220,6 +221,40 @@ func TestValidateWalletMessageTimestamp(t *testing.T) {
 	})
 }
 
+func TestValidateWalletMessageTimestampBoundaries(t *testing.T) {
+	t.Run("just under 1 minute in the future is allowed", func(t *testing.T) {
+		future := time.Now().UTC().Add(59 * time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", future.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("one minute and a second in the future is rejected", func(t *testing.T) {
+		future := time.Now().UTC().Add(1*time.Minute + time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", future.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("expected error for future timestamp beyond 1 minute")
+		}
+	})
+
+	t.Run("just under 5 minutes old is allowed", func(t *testing.T) {
+		past := time.Now().UTC().Add(-5*time.Minute + time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("five minutes and one second old is rejected", func(t *testing.T) {
+		past := time.Now().UTC().Add(-5*time.Minute - time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("expected error for expired timestamp beyond 5 minutes")
+		}
+	})
+}
+
 func TestGenerateWalletAuthMessage(t *testing.T) {
 	nonce := "test-nonce-123"
 	msg := GenerateWalletAuthMessage(nonce)
@@ -247,6 +282,114 @@ func TestGenerateWalletAuthMessage(t *testing.T) {
 	if err := ValidateWalletMessageTimestamp(msg); err != nil {
 		t.Errorf("generated message failed validation: %v", err)
 	}
+}
+
+func TestVerifyEthSignature(t *testing.T) {
+	privateKeyHex := "4c0883a69102937d6231471b5dbb6204fe51296170827922b7a56c91b8b56d09"
+
+	t.Run("valid signature with v=27", func(t *testing.T) {
+		address, message, signature := signatureForRecoveryID(t, privateKeyHex, 27)
+		ok, err := VerifyEthSignature(address, message, signature)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected signature to verify")
+		}
+	})
+
+	t.Run("valid signature with v=28", func(t *testing.T) {
+		address, message, signature := signatureForRecoveryID(t, privateKeyHex, 28)
+		ok, err := VerifyEthSignature(address, message, signature)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected signature to verify")
+		}
+	})
+
+	t.Run("signature from wrong address", func(t *testing.T) {
+		_, message, signature := signatureForRecoveryID(t, privateKeyHex, 27)
+		otherAddress, _, _ := signatureForRecoveryID(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 27)
+		ok, err := VerifyEthSignature(otherAddress, message, signature)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatal("expected signature mismatch")
+		}
+	})
+
+	t.Run("invalid signature length", func(t *testing.T) {
+		_, err := VerifyEthSignature("0x0000000000000000000000000000000000000000", "msg", "0xdeadbeef")
+		if err == nil {
+			t.Fatal("expected error for invalid signature length")
+		}
+	})
+
+	t.Run("invalid V value", func(t *testing.T) {
+		sig := make([]byte, 65)
+		sig[64] = 29
+		_, err := VerifyEthSignature("0x0000000000000000000000000000000000000000", "msg", "0x"+hex.EncodeToString(sig))
+		if err == nil {
+			t.Fatal("expected error for invalid recovery id")
+		}
+	})
+
+	t.Run("malformed hex signature", func(t *testing.T) {
+		_, err := VerifyEthSignature("0x0000000000000000000000000000000000000000", "msg", "0xnot-hex")
+		if err == nil {
+			t.Fatal("expected error for malformed signature")
+		}
+	})
+}
+
+func TestVerifyWalletAuth(t *testing.T) {
+	privateKeyHex := "4c0883a69102937d6231471b5dbb6204fe51296170827922b7a56c91b8b56d09"
+
+	t.Run("invalid address format", func(t *testing.T) {
+		msg := WalletMessage{
+			Address:   "not-an-address",
+			Message:   "FrameWorks Login\nTimestamp: 2025-01-01T00:00:00Z\nNonce: abc123",
+			Signature: "0x",
+		}
+		if _, err := VerifyWalletAuth(msg); err == nil {
+			t.Fatal("expected error for invalid address")
+		}
+	})
+
+	t.Run("expired message", func(t *testing.T) {
+		address, _, _ := signatureForRecoveryID(t, privateKeyHex, 27)
+		expired := time.Now().UTC().Add(-10 * time.Minute)
+		message := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", expired.Format(time.RFC3339))
+		_, signature := signWalletMessage(t, privateKeyHex, message)
+		msg := WalletMessage{
+			Address:   address,
+			Message:   message,
+			Signature: signature,
+		}
+		if _, err := VerifyWalletAuth(msg); err == nil {
+			t.Fatal("expected error for expired message")
+		}
+	})
+
+	t.Run("valid auth flow", func(t *testing.T) {
+		message := messageWithTimestamp(time.Now().UTC())
+		address, signature := signWalletMessage(t, privateKeyHex, message)
+		msg := WalletMessage{
+			Address:   address,
+			Message:   message,
+			Signature: signature,
+		}
+		ok, err := VerifyWalletAuth(msg)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !ok {
+			t.Fatal("expected wallet auth to verify")
+		}
+	})
 }
 
 func containsLine(msg, prefix string) bool {
@@ -292,121 +435,54 @@ func TestValidChainTypesContainsExpected(t *testing.T) {
 	}
 }
 
-func TestVerifyEthSignature(t *testing.T) {
-	privKey := mustTestPrivateKey()
-	address := pubKeyToEthAddress(privKey.PubKey())
-	message := "Sign this message"
-	sig := signPersonalMessage(privKey, message)
-
-	t.Run("valid signature", func(t *testing.T) {
-		ok, err := VerifyEthSignature(address, message, sig)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !ok {
-			t.Fatal("expected signature to be valid")
-		}
-	})
-
-	t.Run("wrong address", func(t *testing.T) {
-		ok, err := VerifyEthSignature("0x0000000000000000000000000000000000000000", message, sig)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if ok {
-			t.Fatal("expected signature to be invalid")
-		}
-	})
-
-	t.Run("invalid hex signature", func(t *testing.T) {
-		_, err := VerifyEthSignature(address, message, "0xzzzz")
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	})
-
-	t.Run("invalid length", func(t *testing.T) {
-		_, err := VerifyEthSignature(address, message, "0x1234")
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	})
+func messageWithTimestamp(ts time.Time) string {
+	return fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", ts.Format(time.RFC3339))
 }
 
-func TestVerifyWalletAuth(t *testing.T) {
-	privKey := mustTestPrivateKey()
-	address := pubKeyToEthAddress(privKey.PubKey())
-	message := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", time.Now().UTC().Format(time.RFC3339))
-	sig := signPersonalMessage(privKey, message)
+func signatureForRecoveryID(t *testing.T, privateKeyHex string, want byte) (string, string, string) {
+	t.Helper()
 
-	t.Run("valid wallet auth", func(t *testing.T) {
-		ok, err := VerifyWalletAuth(WalletMessage{
-			Address:   address,
-			Message:   message,
-			Signature: sig,
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+	const maxAttempts = 200
+	for i := 0; i < maxAttempts; i++ {
+		message := fmt.Sprintf("FrameWorks Login\nTimestamp: 2025-01-01T00:00:00Z\nNonce: %d", i)
+		address, signature, recovery := signMessage(t, privateKeyHex, message)
+		if recovery == want {
+			return address, message, signature
 		}
-		if !ok {
-			t.Fatal("expected wallet auth to be valid")
-		}
-	})
+	}
 
-	t.Run("invalid signature", func(t *testing.T) {
-		ok, err := VerifyWalletAuth(WalletMessage{
-			Address:   address,
-			Message:   message,
-			Signature: signPersonalMessage(privKey, "different message"),
-		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if ok {
-			t.Fatal("expected wallet auth to be invalid")
-		}
-	})
-
-	t.Run("invalid timestamp", func(t *testing.T) {
-		badMsg := "FrameWorks Login\nTimestamp: not-a-date\nNonce: abc123"
-		ok, err := VerifyWalletAuth(WalletMessage{
-			Address:   address,
-			Message:   badMsg,
-			Signature: signPersonalMessage(privKey, badMsg),
-		})
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if ok {
-			t.Fatal("expected wallet auth to be invalid")
-		}
-	})
+	t.Fatalf("unable to produce signature with recovery id %d", want)
+	return "", "", ""
 }
 
-func mustTestPrivateKey() *btcec.PrivateKey {
-	privKey, _ := btcec.PrivKeyFromBytes([]byte{
-		0x1b, 0x7e, 0x9d, 0x2a, 0x3c, 0x55, 0xa2, 0x14,
-		0x88, 0x91, 0x02, 0x6f, 0x43, 0xaf, 0xbe, 0x03,
-		0x2d, 0x19, 0x7f, 0x6a, 0x10, 0x73, 0xe8, 0x1d,
-		0x5c, 0x09, 0xad, 0x8f, 0x44, 0x9a, 0x62, 0x11,
-	})
-	return privKey
+func signWalletMessage(t *testing.T, privateKeyHex, message string) (string, string) {
+	address, signature, _ := signMessage(t, privateKeyHex, message)
+	return address, signature
 }
 
-func signPersonalMessage(privKey *btcec.PrivateKey, message string) string {
-	prefixed := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(message), message)
-	hash := keccak256([]byte(prefixed))
+func signMessage(t *testing.T, privateKeyHex, message string) (string, string, byte) {
+	t.Helper()
+
+	keyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		t.Fatalf("failed to decode private key: %v", err)
+	}
+	privKey, _ := btcec.PrivKeyFromBytes(keyBytes)
+
+	prefixedMessage := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(message), message)
+	hash := keccak256([]byte(prefixedMessage))
+
 	compactSig := ecdsa.SignCompact(privKey, hash, false)
 	if len(compactSig) != 65 {
-		panic("unexpected compact signature length")
+		t.Fatalf("unexpected compact signature length: %d", len(compactSig))
 	}
-	recoveryID := compactSig[0] - 27
+
 	r := compactSig[1:33]
 	s := compactSig[33:65]
+	recoveryID := compactSig[0]
+	signature := append(append([]byte{}, r...), s...)
+	signature = append(signature, recoveryID)
 
-	standardSig := make([]byte, 65)
-	copy(standardSig[:32], r)
-	copy(standardSig[32:64], s)
-	standardSig[64] = recoveryID + 27
-	return "0x" + fmt.Sprintf("%x", standardSig)
+	address := pubKeyToEthAddress(privKey.PubKey())
+	return address, "0x" + hex.EncodeToString(signature), recoveryID
 }

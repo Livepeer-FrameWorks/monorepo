@@ -16,7 +16,7 @@ func TestValidateAPIToken(t *testing.T) {
 	query := regexp.QuoteMeta(`
 		SELECT id, tenant_id, user_id, token_name,
 		       permissions, is_active, expires_at, created_at
-		FROM commodore.api_tokens 
+		FROM commodore.api_tokens
 		WHERE token_value = $1 AND is_active = true
 	`)
 	baseTime := time.Now()
@@ -74,6 +74,26 @@ func TestValidateAPIToken(t *testing.T) {
 			tokenValue: "missing-token",
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(query).WithArgs(hashToken("missing-token")).WillReturnError(sql.ErrNoRows)
+			},
+			wantErr: ErrInvalidAPIToken,
+		},
+		{
+			name:       "inactive token",
+			tokenValue: "inactive-token",
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{
+					"id", "tenant_id", "user_id", "token_name", "permissions", "is_active", "expires_at", "created_at",
+				}).AddRow(
+					"token-id",
+					"tenant-id",
+					"user-id",
+					"token-name",
+					pq.Array([]string{"read"}),
+					false,
+					baseTime.Add(10*time.Minute),
+					baseTime,
+				)
+				mock.ExpectQuery(query).WithArgs(hashToken("inactive-token")).WillReturnRows(rows)
 			},
 			wantErr: ErrInvalidAPIToken,
 		},
@@ -147,5 +167,21 @@ func TestHasPermission(t *testing.T) {
 	}
 	if (&APIToken{}).HasPermission("read") {
 		t.Error("empty permissions should not match")
+	}
+}
+
+func TestHashToken(t *testing.T) {
+	first := hashToken("token-a")
+	second := hashToken("token-a")
+	third := hashToken("token-b")
+
+	if first != second {
+		t.Fatal("expected hash to be deterministic")
+	}
+	if first == third {
+		t.Fatal("expected different inputs to hash differently")
+	}
+	if len(first) != 64 {
+		t.Fatalf("expected 64 hex characters, got %d", len(first))
 	}
 }

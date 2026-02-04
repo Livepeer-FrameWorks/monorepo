@@ -104,3 +104,59 @@ func TestJWTAuthMiddleware_WebSocketUpgrade(t *testing.T) {
 		t.Fatalf("Upgrade without Connection should require auth, got %d", w.Code)
 	}
 }
+
+func TestJWTAuthMiddleware_WebSocketBypass(t *testing.T) {
+	secret := []byte("secret")
+	r := gin.New()
+	r.Use(JWTAuthMiddleware(secret))
+	r.GET("/ok", func(c *gin.Context) { c.String(200, "ok") })
+
+	tests := []struct {
+		name    string
+		upgrade string
+		conn    string
+		want    int
+	}{
+		{
+			name:    "websocket upgrade bypasses auth",
+			upgrade: "websocket",
+			conn:    "Upgrade",
+			want:    http.StatusOK,
+		},
+		{
+			name:    "upgrade header only",
+			upgrade: "websocket",
+			conn:    "",
+			want:    http.StatusUnauthorized,
+		},
+		{
+			name:    "connection header only",
+			upgrade: "",
+			conn:    "Upgrade",
+			want:    http.StatusUnauthorized,
+		},
+		{
+			name:    "http2 upgrade not allowed",
+			upgrade: "h2c",
+			conn:    "Upgrade",
+			want:    http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+			if tt.upgrade != "" {
+				req.Header.Set("Upgrade", tt.upgrade)
+			}
+			if tt.conn != "" {
+				req.Header.Set("Connection", tt.conn)
+			}
+			r.ServeHTTP(w, req)
+			if w.Code != tt.want {
+				t.Fatalf("expected %d, got %d", tt.want, w.Code)
+			}
+		})
+	}
+}
