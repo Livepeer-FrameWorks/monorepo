@@ -122,10 +122,10 @@ func (h *Hub) run() {
 	}
 }
 
-// redactClientIPs removes client IP addresses from event data for privacy.
-// Only redacts client-facing events (viewer connect/disconnect, client lifecycle).
+// redactSensitiveData removes sensitive fields from event data before broadcast.
+// Only redacts client-facing events (viewer connect/disconnect, client lifecycle, messaging content).
 // Infrastructure IPs (nodes, load balancing) are NOT redacted.
-func redactClientIPs(event *pb.SignalmanEvent) {
+func redactSensitiveData(event *pb.SignalmanEvent) {
 	if event == nil || event.Data == nil {
 		return
 	}
@@ -144,13 +144,18 @@ func redactClientIPs(event *pb.SignalmanEvent) {
 			p.ClientLifecycle.Host = "" // Redact client IP
 		}
 		// LoadBalancingData, NodeLifecycleUpdate - do NOT redact (infrastructure IPs)
+	case *pb.EventData_MessageLifecycle:
+		if p.MessageLifecycle != nil {
+			p.MessageLifecycle.Content = nil
+			p.MessageLifecycle.Subject = nil
+		}
 	}
 }
 
 // broadcastEvent sends an event to all relevant clients
 func (h *Hub) broadcastEvent(event *pb.SignalmanEvent) {
-	// Redact client IPs before broadcasting
-	redactClientIPs(event)
+	// Redact sensitive fields before broadcasting
+	redactSensitiveData(event)
 
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()

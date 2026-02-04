@@ -306,7 +306,9 @@
                               {:else}
                                 <span class="text-foreground">You:</span>
                               {/if}
-                              {truncateMessage(conv.lastMessage.content)}
+                              {conv.lastMessage.content
+                                ? truncateMessage(conv.lastMessage.content)
+                                : "New message"}
                             </p>
                           {/if}
                           <p class="text-xs text-muted-foreground mt-1">

@@ -514,17 +514,11 @@ func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *p
 			ml.MessageId = &msgID
 		}
 
-		if content := getString(event.Data, "content"); content != "" {
-			ml.Content = &content
-		}
 		if sender := getString(event.Data, "sender"); sender != "" {
 			ml.Sender = &sender
 		}
 		if status := getString(event.Data, "status"); status != "" {
 			ml.Status = &status
-		}
-		if subject := getString(event.Data, "subject"); subject != "" {
-			ml.Subject = &subject
 		}
 
 		ts := event.Timestamp
