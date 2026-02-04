@@ -188,7 +188,7 @@ func main() {
 			go func(subCtx context.Context) {
 				<-subCtx.Done()
 				durationMs := time.Since(start).Milliseconds()
-				usageTracker.Record(tenantID, authType, opType, opName, userID, tokenHash, uint64(durationMs), complexity, 0)
+				usageTracker.Record(start, tenantID, authType, opType, opName, userID, tokenHash, uint64(durationMs), complexity, 0)
 			}(ctx)
 		}
 		return next(ctx)

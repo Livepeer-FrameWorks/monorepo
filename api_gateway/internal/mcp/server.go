@@ -328,7 +328,7 @@ func (s *Server) registerAccessMiddleware() {
 				} else if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil && toolResult.IsError {
 					errorCount = 1
 				}
-				s.usageTracker.Record(tenantID, authType, "mcp", opName, userID, getContextTokenHash(ctx), durationMs, 0, errorCount)
+				s.usageTracker.Record(start, tenantID, authType, "mcp", opName, userID, getContextTokenHash(ctx), durationMs, 0, errorCount)
 			}
 
 			return result, err

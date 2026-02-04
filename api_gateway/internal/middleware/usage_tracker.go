@@ -236,7 +236,7 @@ func (ut *UsageTracker) flush() {
 }
 
 // Record records a single API request
-func (ut *UsageTracker) Record(tenantID, authType, opType, opName, userID string, tokenHash uint64, durationMs uint64, complexity uint32, errorCount uint32) {
+func (ut *UsageTracker) Record(startedAt time.Time, tenantID, authType, opType, opName, userID string, tokenHash uint64, durationMs uint64, complexity uint32, errorCount uint32) {
 	key := aggregateKey{
 		TenantID:      tenantID,
 		AuthType:      authType,
@@ -250,7 +250,7 @@ func (ut *UsageTracker) Record(tenantID, authType, opType, opName, userID string
 
 	agg.mu.Lock()
 	if agg.RequestCount == 0 {
-		agg.FirstSeenAt = time.Now().Unix()
+		agg.FirstSeenAt = startedAt.Unix()
 	}
 	agg.RequestCount++
 	agg.TotalDurationMs += durationMs
@@ -422,6 +422,6 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 		}
 
 		// Record the request
-		tracker.Record(tenantID, authType, opType, opName, userID, tokenHash, uint64(duration), complexity, errorCount)
+		tracker.Record(start, tenantID, authType, opType, opName, userID, tokenHash, uint64(duration), complexity, errorCount)
 	}
 }
