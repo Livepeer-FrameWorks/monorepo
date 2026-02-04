@@ -76,8 +76,9 @@ query GetClips($streamId: ID, $first: Int, $after: String) {
 Gateway handles this as:
 
 1. **Parent resolver** calls Commodore `GetClips` → returns business metadata
-2. **Lifecycle field resolvers** call `ArtifactLifecycleLoader`, which batch-calls Periscope `GetArtifactStates(request_ids: [artifact hashes])`
-3. Gateway merges results and returns unified response
+2. **Parent resolver** prefetches lifecycle data via `ArtifactLifecycleLoader.LoadMany`, which batch-calls Periscope `GetArtifactStates(request_ids: [clip_hash/dvr_hash])`
+3. **Lifecycle field resolvers** read from the request-scoped loader cache (`Load`) to avoid duplicate lookups
+4. Gateway merges results and returns unified response
 
 ### Subscriptions (Live Updates)
 
