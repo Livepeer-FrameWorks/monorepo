@@ -428,7 +428,7 @@ func main() {
 
 	// MCP (Model Context Protocol) endpoint for AI agent access
 	// Auth is handled inside the MCP server via request headers
-	mcpServer := mcpserver.NewServer(mcpserver.Config{
+	mcpServer, err := mcpserver.NewServer(mcpserver.Config{
 		ServiceClients: serviceClients,
 		Resolver:       resolver.Resolver,
 		Logger:         logger,
@@ -439,6 +439,9 @@ func main() {
 		UsageTracker:   usageTracker,
 		TrustedProxies: trustedProxies,
 	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize MCP server")
+	}
 	app.Any("/mcp", gin.WrapH(mcpServer.HTTPHandler()))
 	app.Any("/mcp/*path", gin.WrapH(mcpServer.HTTPHandler()))
 	logger.Info("MCP endpoint enabled at /mcp")
