@@ -157,6 +157,14 @@ It is recommended to point it to a local MMDB file, which ensures all events are
 
 To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If neither headers nor MMDB are available, Foghorn operates without geo routing data.
 
+### Storage
+
+Foghorn reconstructs local file paths when defrosting artifacts from S3. It uses the node's registered `StorageLocal` path when available; if not, it falls back to `FOGHORN_DEFAULT_STORAGE_BASE`:
+
+| Variable                       | Default                          | Description                                                                                                                                       |
+| ------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FOGHORN_DEFAULT_STORAGE_BASE` | `/var/lib/mistserver/recordings` | Fallback storage path for artifact defrost when node's StorageLocal is unavailable. Must be absolute. Should match `HELMSMAN_STORAGE_LOCAL_PATH`. |
+
 ## Docs
 
 See `website_docs/` for full documentation (Astro Starlight site):

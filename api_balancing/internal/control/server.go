@@ -2027,16 +2027,24 @@ func notifyDefrostComplete(assetHash string, ok bool, path string) {
 	}
 }
 
+// Default storage base path when node has no StorageLocal configured.
+// Matches HELMSMAN_STORAGE_LOCAL_PATH default for consistent path reconstruction.
+var defaultStorageBase = "/var/lib/mistserver/recordings"
+
+// SetDefaultStorageBase overrides the default storage base path (FOGHORN_DEFAULT_STORAGE_BASE).
+func SetDefaultStorageBase(path string) {
+	if path != "" {
+		defaultStorageBase = path
+	}
+}
+
 func storageBasePathForNode(nodeID string) string {
 	if nodeID != "" {
 		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil && ns.StorageLocal != "" {
 			return ns.StorageLocal
 		}
 	}
-	if base := os.Getenv("FOGHORN_DEFAULT_STORAGE_BASE"); base != "" {
-		return base
-	}
-	return "/data"
+	return defaultStorageBase
 }
 
 // StartDefrost initiates a defrost operation but does not wait for completion.

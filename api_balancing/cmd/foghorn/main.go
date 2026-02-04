@@ -22,6 +22,7 @@ import (
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -33,6 +34,16 @@ func main() {
 
 	// Load environment variables
 	config.LoadEnv(logger)
+
+	// Storage base path for defrost operations when node has no StorageLocal.
+	// Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH for path reconstruction.
+	if storageBase := config.GetEnv("FOGHORN_DEFAULT_STORAGE_BASE", ""); storageBase != "" {
+		if !filepath.IsAbs(storageBase) {
+			logger.WithField("path", storageBase).Fatal("FOGHORN_DEFAULT_STORAGE_BASE must be absolute path")
+		}
+		control.SetDefaultStorageBase(storageBase)
+		logger.WithField("storage_base", storageBase).Info("Using custom default storage base")
+	}
 
 	logger.WithField("service", "foghorn").Info("Starting Foghorn Load Balancer")
 
