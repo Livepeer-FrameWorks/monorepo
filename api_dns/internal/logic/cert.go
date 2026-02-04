@@ -213,6 +213,9 @@ func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email strin
 			key:          key,
 		}, nil
 	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("failed to check ACME account: %w", err)
+	}
 
 	// Generate new
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

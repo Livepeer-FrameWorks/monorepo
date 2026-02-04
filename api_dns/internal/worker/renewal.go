@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"frameworks/api_dns/internal/logic"
@@ -86,11 +87,58 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 		}
 
 		// Attempt renewal with tenant context
-		_, _, _, err := w.certManager.IssueCertificate(ctx, tenantID, cert.Domain, email)
-		if err != nil {
-			log.WithError(err).Error("Failed to renew certificate")
+		var lastErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			_, _, _, err := w.certManager.IssueCertificate(ctx, tenantID, cert.Domain, email)
+			if err == nil {
+				lastErr = nil
+				break
+			}
+
+			lastErr = err
+			if !isRetryableACMEError(err) {
+				break
+			}
+
+			backoff := time.Duration(30<<uint(attempt-1)) * time.Second
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				log.WithError(ctx.Err()).Warn("Renewal interrupted")
+				return
+			case <-timer.C:
+			}
+		}
+
+		if lastErr != nil {
+			log.WithError(lastErr).Error("Failed to renew certificate")
 			continue
 		}
 		log.Info("Certificate renewed successfully")
 	}
+}
+
+func isRetryableACMEError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	retrySignals := []string{
+		"timeout",
+		"temporar",
+		"rate limit",
+		"429",
+		"connection reset",
+		"connection refused",
+		"service unavailable",
+		"server error",
+	}
+	for _, signal := range retrySignals {
+		if strings.Contains(msg, signal) {
+			return true
+		}
+	}
+	return false
 }
