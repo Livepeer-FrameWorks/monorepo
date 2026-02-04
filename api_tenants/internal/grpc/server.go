@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -74,6 +75,49 @@ func mapToStruct(m map[string]interface{}) *structpb.Struct {
 		return nil
 	}
 	return s
+}
+
+func bootstrapTokenUsable(usageLimit sql.NullInt32, usageCount int32, usedAt sql.NullTime) bool {
+	if usageLimit.Valid {
+		return usageCount < usageLimit.Int32
+	}
+	return !usedAt.Valid
+}
+
+func validateExpectedIP(expectedIP string, requestIPs []string) error {
+	if expectedIP == "" {
+		return nil
+	}
+	if len(requestIPs) == 0 {
+		return fmt.Errorf("no request IPs provided")
+	}
+	var expectedNet *net.IPNet
+	if strings.Contains(expectedIP, "/") {
+		_, cidr, err := net.ParseCIDR(expectedIP)
+		if err != nil {
+			return fmt.Errorf("invalid expected IP CIDR %q: %w", expectedIP, err)
+		}
+		expectedNet = cidr
+	} else {
+		ip := net.ParseIP(expectedIP)
+		if ip == nil {
+			return fmt.Errorf("invalid expected IP %q", expectedIP)
+		}
+		maskBits := 128
+		if ip.To4() != nil {
+			maskBits = 32
+		}
+		expectedNet = &net.IPNet{IP: ip, Mask: net.CIDRMask(maskBits, maskBits)}
+	}
+
+	for _, ipStr := range requestIPs {
+		ip := net.ParseIP(strings.TrimSpace(ipStr))
+		if ip != nil && expectedNet.Contains(ip) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("request IP does not match expected constraint")
 }
 
 // ValidateTenant validates a tenant and returns its features/limits
@@ -370,22 +414,47 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	token := req.GetToken()
 	if token != "" {
-		var kind string
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
 		var expiresAt time.Time
-		err := s.db.QueryRowContext(ctx, `
-			SELECT kind, COALESCE(cluster_id, ''), expires_at
+		var usedAt sql.NullTime
+		var usageLimit sql.NullInt32
+		var usageCount int32
+
+		err = tx.QueryRowContext(ctx, `
+			SELECT COALESCE(cluster_id, ''), expires_at, used_at, usage_limit, usage_count
 			FROM quartermaster.bootstrap_tokens
-			WHERE token = $1 AND used_at IS NULL
-		`, token).Scan(&kind, &tokenBoundClusterID, &expiresAt)
-		if err == sql.ErrNoRows || kind != "service" || time.Now().After(expiresAt) {
+			WHERE token = $1 AND kind = 'service'
+			FOR UPDATE
+		`, token).Scan(&tokenBoundClusterID, &expiresAt, &usedAt, &usageLimit, &usageCount)
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
 		}
-		// Mark token used
-		_, _ = s.db.ExecContext(ctx, `
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		if time.Now().After(expiresAt) {
+			return nil, status.Error(codes.Unauthenticated, "token expired")
+		}
+		if !bootstrapTokenUsable(usageLimit, usageCount, usedAt) {
+			return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
+		}
+
+		_, err = tx.ExecContext(ctx, `
 			UPDATE quartermaster.bootstrap_tokens
 			SET used_at = NOW(), usage_count = usage_count + 1
 			WHERE token = $1
 		`, token)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
 	}
 
 	// Priority: token-bound cluster > request cluster_id > single active cluster fallback
@@ -2581,18 +2650,23 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	var usageLimit sql.NullInt32
 	var usageCount int32
 	var expiresAt time.Time
+	var expectedIP sql.NullString
+	var usedAt sql.NullTime
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip, used_at
 		FROM quartermaster.bootstrap_tokens
 		WHERE token = $1 AND kind = 'edge_node'
-		  AND (
-		    (usage_limit IS NULL AND used_at IS NULL) OR
-		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
-		  )
-	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt)
+		FOR UPDATE
+	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP, &usedAt)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2602,6 +2676,16 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	// Check expiration
 	if time.Now().After(expiresAt) {
 		return nil, status.Error(codes.Unauthenticated, "token expired")
+	}
+
+	if !bootstrapTokenUsable(usageLimit, usageCount, usedAt) {
+		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
+	}
+
+	if expectedIP.Valid && expectedIP.String != "" {
+		if validateErr := validateExpectedIP(expectedIP.String, req.GetIps()); validateErr != nil {
+			return nil, status.Errorf(codes.PermissionDenied, "request IP not allowed for this token: %v", validateErr)
+		}
 	}
 
 	// Validate tenant ID is present for edge_node tokens
@@ -2682,11 +2766,17 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	}
 
 	// Update token usage
-	_, _ = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE quartermaster.bootstrap_tokens
 		SET usage_count = usage_count + 1, used_at = NOW()
 		WHERE id = $1
 	`, tokenID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update token usage: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit token usage: %v", err)
+	}
 
 	return &pb.BootstrapEdgeNodeResponse{
 		NodeId:    nodeID,
@@ -2711,17 +2801,22 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	var usageLimit sql.NullInt32
 	var usageCount int32
 	var expiresAt time.Time
+	var expectedIP sql.NullString
+	var usedAt sql.NullTime
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip, used_at
 		FROM quartermaster.bootstrap_tokens
 		WHERE token = $1 AND kind = 'infrastructure_node'
-		  AND (
-		    (usage_limit IS NULL AND used_at IS NULL) OR
-		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
-		  )
-	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt)
-	if err == sql.ErrNoRows {
+		FOR UPDATE
+	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP, &usedAt)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2730,6 +2825,23 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 
 	if time.Now().After(expiresAt) {
 		return nil, status.Error(codes.Unauthenticated, "token expired")
+	}
+
+	if !bootstrapTokenUsable(usageLimit, usageCount, usedAt) {
+		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
+	}
+
+	requestIPs := make([]string, 0, 2)
+	if req.GetExternalIp() != "" {
+		requestIPs = append(requestIPs, req.GetExternalIp())
+	}
+	if req.GetInternalIp() != "" {
+		requestIPs = append(requestIPs, req.GetInternalIp())
+	}
+	if expectedIP.Valid && expectedIP.String != "" {
+		if validateErr := validateExpectedIP(expectedIP.String, requestIPs); validateErr != nil {
+			return nil, status.Errorf(codes.PermissionDenied, "request IP not allowed for this token: %v", validateErr)
+		}
 	}
 
 	// Cluster enforcement: if token has a cluster_id binding, validate against target
@@ -2807,11 +2919,17 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	}
 
 	// Update token usage
-	_, _ = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE quartermaster.bootstrap_tokens
 		SET usage_count = usage_count + 1, used_at = NOW()
 		WHERE id = $1
 	`, tokenID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update token usage: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to commit token usage: %v", err)
+	}
 
 	var tenantResp *string
 	if tenantID.Valid && tenantID.String != "" {

@@ -391,6 +391,20 @@ func runClient(addr string, logger logging.Logger) error {
 			case *pb.ControlMessage_MistTriggerResponse:
 				// Handle response from Foghorn for blocking triggers
 				go handleMistTriggerResponse(x.MistTriggerResponse)
+			case *pb.ControlMessage_Error:
+				if errMsg := x.Error; errMsg != nil {
+					code := errMsg.GetCode()
+					message := errMsg.GetMessage()
+					logger.WithFields(logging.Fields{
+						"code":    code,
+						"message": message,
+					}).Error("Received control error from Foghorn")
+					switch code {
+					case "ENROLLMENT_REQUIRED", "ENROLLMENT_FAILED", "ENROLLMENT_UNAVAILABLE":
+						errCh <- fmt.Errorf("control error %s: %s", code, message)
+						return
+					}
+				}
 			case *pb.ControlMessage_MistTrigger:
 				// Foghorn-initiated command: seed immediate JSON poll/upload
 				if x.MistTrigger != nil {
