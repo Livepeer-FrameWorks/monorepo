@@ -30,12 +30,7 @@ func main() {
 	enrollmentToken := os.Getenv("ENROLLMENT_TOKEN")
 
 	if serviceToken == "" {
-		if enrollmentToken != "" {
-			logger.Warn("SERVICE_TOKEN missing; falling back to ENROLLMENT_TOKEN for auth (not recommended)")
-			serviceToken = enrollmentToken
-		} else {
-			logger.Fatal("SERVICE_TOKEN is required")
-		}
+		logger.Fatal("SERVICE_TOKEN is required for steady-state operation")
 	}
 
 	dnsPort := 5353

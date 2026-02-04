@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -18,7 +17,6 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/pagination"
@@ -31,6 +29,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -75,49 +74,6 @@ func mapToStruct(m map[string]interface{}) *structpb.Struct {
 		return nil
 	}
 	return s
-}
-
-func bootstrapTokenUsable(usageLimit sql.NullInt32, usageCount int32, usedAt sql.NullTime) bool {
-	if usageLimit.Valid {
-		return usageCount < usageLimit.Int32
-	}
-	return !usedAt.Valid
-}
-
-func validateExpectedIP(expectedIP string, requestIPs []string) error {
-	if expectedIP == "" {
-		return nil
-	}
-	if len(requestIPs) == 0 {
-		return fmt.Errorf("no request IPs provided")
-	}
-	var expectedNet *net.IPNet
-	if strings.Contains(expectedIP, "/") {
-		_, cidr, err := net.ParseCIDR(expectedIP)
-		if err != nil {
-			return fmt.Errorf("invalid expected IP CIDR %q: %w", expectedIP, err)
-		}
-		expectedNet = cidr
-	} else {
-		ip := net.ParseIP(expectedIP)
-		if ip == nil {
-			return fmt.Errorf("invalid expected IP %q", expectedIP)
-		}
-		maskBits := 128
-		if ip.To4() != nil {
-			maskBits = 32
-		}
-		expectedNet = &net.IPNet{IP: ip, Mask: net.CIDRMask(maskBits, maskBits)}
-	}
-
-	for _, ipStr := range requestIPs {
-		ip := net.ParseIP(strings.TrimSpace(ipStr))
-		if ip != nil && expectedNet.Contains(ip) {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("request IP does not match expected constraint")
 }
 
 // ValidateTenant validates a tenant and returns its features/limits
@@ -414,47 +370,22 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	token := req.GetToken()
 	if token != "" {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		defer func() { _ = tx.Rollback() }()
-
+		var kind string
 		var expiresAt time.Time
-		var usedAt sql.NullTime
-		var usageLimit sql.NullInt32
-		var usageCount int32
-
-		err = tx.QueryRowContext(ctx, `
-			SELECT COALESCE(cluster_id, ''), expires_at, used_at, usage_limit, usage_count
+		err := s.db.QueryRowContext(ctx, `
+			SELECT kind, COALESCE(cluster_id, ''), expires_at
 			FROM quartermaster.bootstrap_tokens
-			WHERE token = $1 AND kind = 'service'
-			FOR UPDATE
-		`, token).Scan(&tokenBoundClusterID, &expiresAt, &usedAt, &usageLimit, &usageCount)
-		if errors.Is(err, sql.ErrNoRows) {
+			WHERE token = $1 AND used_at IS NULL
+		`, token).Scan(&kind, &tokenBoundClusterID, &expiresAt)
+		if err == sql.ErrNoRows || kind != "service" || time.Now().After(expiresAt) {
 			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
 		}
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		if time.Now().After(expiresAt) {
-			return nil, status.Error(codes.Unauthenticated, "token expired")
-		}
-		if !bootstrapTokenUsable(usageLimit, usageCount, usedAt) {
-			return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
-		}
-
-		_, err = tx.ExecContext(ctx, `
+		// Mark token used
+		_, _ = s.db.ExecContext(ctx, `
 			UPDATE quartermaster.bootstrap_tokens
 			SET used_at = NOW(), usage_count = usage_count + 1
 			WHERE token = $1
 		`, token)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "database error: %v", err)
-		}
 	}
 
 	// Priority: token-bound cluster > request cluster_id > single active cluster fallback
@@ -2633,6 +2564,37 @@ func (s *QuartermasterServer) upsertSeenIP(ctx context.Context, nodeID, peerIP s
 	return err
 }
 
+func extractClientIP(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(p.Addr.String())
+	if err != nil {
+		return p.Addr.String()
+	}
+	return host
+}
+
+func validateExpectedIP(expectedIP sql.NullString, clientIP string) bool {
+	if !expectedIP.Valid || expectedIP.String == "" {
+		return true
+	}
+	clientAddr := net.ParseIP(clientIP)
+	if clientAddr == nil {
+		return false
+	}
+	if strings.Contains(expectedIP.String, "/") {
+		_, network, err := net.ParseCIDR(expectedIP.String)
+		if err != nil {
+			return false
+		}
+		return network.Contains(clientAddr)
+	}
+	expectedAddr := net.ParseIP(expectedIP.String)
+	return expectedAddr != nil && expectedAddr.Equal(clientAddr)
+}
+
 // ============================================================================
 // BOOTSTRAP SERVICE - Additional Methods
 // ============================================================================
@@ -2644,29 +2606,32 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Error(codes.InvalidArgument, "token required")
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
+
 	// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
 	var tokenID string
 	var tenantID, clusterID sql.NullString
+	var expectedIP sql.NullString
 	var usageLimit sql.NullInt32
 	var usageCount int32
 	var expiresAt time.Time
-	var expectedIP sql.NullString
-	var usedAt sql.NullTime
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip, used_at
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
 		WHERE token = $1 AND kind = 'edge_node'
+		  AND (
+		    (usage_limit IS NULL AND used_at IS NULL) OR
+		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
+		  )
 		FOR UPDATE
-	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP, &usedAt)
+	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
 
-	if errors.Is(err, sql.ErrNoRows) {
+	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2678,14 +2643,9 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Error(codes.Unauthenticated, "token expired")
 	}
 
-	if !bootstrapTokenUsable(usageLimit, usageCount, usedAt) {
-		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
-	}
-
-	if expectedIP.Valid && expectedIP.String != "" {
-		if validateErr := validateExpectedIP(expectedIP.String, req.GetIps()); validateErr != nil {
-			return nil, status.Errorf(codes.PermissionDenied, "request IP not allowed for this token: %v", validateErr)
-		}
+	clientIP := extractClientIP(ctx)
+	if !validateExpectedIP(expectedIP, clientIP) {
+		return nil, status.Error(codes.PermissionDenied, "client IP does not match token expected_ip")
 	}
 
 	// Validate tenant ID is present for edge_node tokens
@@ -2709,7 +2669,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	}
 	if resolvedClusterID == "" {
 		// Fallback: pick any active cluster
-		err = s.db.QueryRowContext(ctx, `
+		err = tx.QueryRowContext(ctx, `
 			SELECT cluster_id FROM quartermaster.infrastructure_clusters
 			WHERE is_active = true
 			ORDER BY cluster_name LIMIT 1
@@ -2719,15 +2679,15 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		}
 	}
 
-	// Generate node ID with timestamp for uniqueness
-	nodeID := "edge-" + strings.ToLower(time.Now().Format("060102150405"))
+	// Generate node ID with UUID suffix for uniqueness
+	nodeID := "edge-" + uuid.New().String()[:12]
 	hostname := req.GetHostname()
 	if hostname == "" {
 		hostname = nodeID
 	}
 
 	// Create node
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, tags, metadata, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, 'edge', '{}', '{}', NOW(), NOW())
 	`, uuid.New().String(), nodeID, resolvedClusterID, hostname)
@@ -2756,13 +2716,16 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 			ipsLiteral = "{" + strings.Join(ips, ",") + "}"
 		}
 
-		_, _ = s.db.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO quartermaster.node_fingerprints (tenant_id, node_id, fingerprint_machine_sha256, fingerprint_macs_sha256, seen_ips, attrs)
 			VALUES ($1, $2, NULLIF($3,''), NULLIF($4,''), $5::inet[], $6)
 			ON CONFLICT (node_id) DO UPDATE SET
 				last_seen = NOW(),
 				seen_ips = quartermaster.node_fingerprints.seen_ips || EXCLUDED.seen_ips
 		`, tenantID.String, nodeID, machineIDSHA, macsSHA, ipsLiteral, attrsJSON)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to upsert node fingerprint: %v", err)
+		}
 	}
 
 	// Update token usage
@@ -2774,8 +2737,32 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update token usage: %v", err)
 	}
+
 	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit token usage: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to commit bootstrap: %v", err)
+	}
+
+	nodeType := "edge"
+	if s.navigatorClient != nil {
+		syncReq := &pb.SyncDNSRequest{
+			ServiceType: nodeType,
+			RootDomain:  config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
+		}
+		go func() {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if resp, err := s.navigatorClient.SyncDNS(syncCtx, syncReq); err != nil {
+				s.logger.WithError(err).WithField("service_type", nodeType).Error("Failed to trigger DNS sync after bootstrap")
+			} else if !resp.GetSuccess() {
+				s.logger.WithFields(logging.Fields{
+					"service_type": nodeType,
+					"message":      resp.GetMessage(),
+					"errors":       resp.GetErrors(),
+				}).Error("DNS sync failed via Navigator after bootstrap")
+			} else {
+				s.logger.WithField("service_type", nodeType).Info("DNS sync triggered successfully after bootstrap")
+			}
+		}()
 	}
 
 	return &pb.BootstrapEdgeNodeResponse{
@@ -2795,28 +2782,31 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		return nil, status.Error(codes.InvalidArgument, "node_type required")
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit
+
 	// Validate token - check for single-use (used_at IS NULL) OR multi-use (usage_count < usage_limit)
 	var tokenID string
 	var tenantID, clusterID sql.NullString
+	var expectedIP sql.NullString
 	var usageLimit sql.NullInt32
 	var usageCount int32
 	var expiresAt time.Time
-	var expectedIP sql.NullString
-	var usedAt sql.NullTime
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	err = tx.QueryRowContext(ctx, `
-		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip, used_at
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
 		FROM quartermaster.bootstrap_tokens
 		WHERE token = $1 AND kind = 'infrastructure_node'
+		  AND (
+		    (usage_limit IS NULL AND used_at IS NULL) OR
+		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
+		  )
 		FOR UPDATE
-	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP, &usedAt)
-	if errors.Is(err, sql.ErrNoRows) {
+	`, token).Scan(&tokenID, &tenantID, &clusterID, &usageLimit, &usageCount, &expiresAt, &expectedIP)
+	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
 	}
 	if err != nil {
@@ -2827,21 +2817,9 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		return nil, status.Error(codes.Unauthenticated, "token expired")
 	}
 
-	if !bootstrapTokenUsable(usageLimit, usageCount, usedAt) {
-		return nil, status.Error(codes.Unauthenticated, "invalid or already used token")
-	}
-
-	requestIPs := make([]string, 0, 2)
-	if req.GetExternalIp() != "" {
-		requestIPs = append(requestIPs, req.GetExternalIp())
-	}
-	if req.GetInternalIp() != "" {
-		requestIPs = append(requestIPs, req.GetInternalIp())
-	}
-	if expectedIP.Valid && expectedIP.String != "" {
-		if validateErr := validateExpectedIP(expectedIP.String, requestIPs); validateErr != nil {
-			return nil, status.Errorf(codes.PermissionDenied, "request IP not allowed for this token: %v", validateErr)
-		}
+	clientIP := extractClientIP(ctx)
+	if !validateExpectedIP(expectedIP, clientIP) {
+		return nil, status.Error(codes.PermissionDenied, "client IP does not match token expected_ip")
 	}
 
 	// Cluster enforcement: if token has a cluster_id binding, validate against target
@@ -2858,7 +2836,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		resolvedClusterID = targetClusterID
 	}
 	if resolvedClusterID == "" {
-		err = s.db.QueryRowContext(ctx, `
+		err = tx.QueryRowContext(ctx, `
 			SELECT cluster_id FROM quartermaster.infrastructure_clusters
 			WHERE is_active = true
 			ORDER BY cluster_name LIMIT 1
@@ -2870,7 +2848,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 
 	nodeID := req.GetNodeId()
 	if nodeID == "" {
-		nodeID = "node-" + strings.ToLower(time.Now().Format("060102150405"))
+		nodeID = "node-" + uuid.New().String()[:12]
 	}
 	hostname := req.GetHostname()
 	if hostname == "" {
@@ -2879,7 +2857,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 
 	// Idempotent: if node already exists, return existing cluster binding
 	var existingClusterID string
-	err = s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1
 	`, nodeID).Scan(&existingClusterID)
 	if err == nil {
@@ -2910,7 +2888,7 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 		intIP = *req.InternalIp
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, internal_ip, tags, metadata, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, '{}', '{}', NOW(), NOW())
 	`, uuid.New().String(), nodeID, resolvedClusterID, hostname, req.GetNodeType(), extIP, intIP)
@@ -2927,13 +2905,37 @@ func (s *QuartermasterServer) BootstrapInfrastructureNode(ctx context.Context, r
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update token usage: %v", err)
 	}
+
 	if err := tx.Commit(); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to commit token usage: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to commit bootstrap: %v", err)
 	}
 
 	var tenantResp *string
 	if tenantID.Valid && tenantID.String != "" {
 		tenantResp = &tenantID.String
+	}
+
+	nodeType := req.GetNodeType()
+	if s.navigatorClient != nil && nodeType != "" {
+		syncReq := &pb.SyncDNSRequest{
+			ServiceType: nodeType,
+			RootDomain:  config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
+		}
+		go func() {
+			syncCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if resp, err := s.navigatorClient.SyncDNS(syncCtx, syncReq); err != nil {
+				s.logger.WithError(err).WithField("service_type", nodeType).Error("Failed to trigger DNS sync after bootstrap")
+			} else if !resp.GetSuccess() {
+				s.logger.WithFields(logging.Fields{
+					"service_type": nodeType,
+					"message":      resp.GetMessage(),
+					"errors":       resp.GetErrors(),
+				}).Error("DNS sync failed via Navigator after bootstrap")
+			} else {
+				s.logger.WithField("service_type", nodeType).Info("DNS sync triggered successfully after bootstrap")
+			}
+		}()
 	}
 
 	return &pb.BootstrapInfrastructureNodeResponse{
@@ -5672,7 +5674,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	})
 
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor),
+		grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)),
 	}
 
 	server := grpc.NewServer(opts...)
@@ -5703,6 +5705,6 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"duration": time.Since(start),
 			"error":    err,
 		}).Debug("gRPC request processed")
-		return resp, grpcutil.SanitizeError(err)
+		return resp, err
 	}
 }
