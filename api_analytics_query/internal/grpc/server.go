@@ -196,6 +196,35 @@ func buildOrderBySingle(params *pagination.Params, col string) string {
 	return fmt.Sprintf(" ORDER BY %s DESC", col)
 }
 
+type cursorCollisionKey struct {
+	Timestamp time.Time
+	ID        string
+}
+
+func (s *PeriscopeServer) logCursorCollisions(label string, keys []cursorCollisionKey) {
+	if len(keys) < 2 {
+		return
+	}
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key.ID == "" || key.Timestamp.IsZero() {
+			continue
+		}
+		cursorKey := fmt.Sprintf("%d:%s", key.Timestamp.UnixMilli(), key.ID)
+		if _, ok := seen[cursorKey]; ok {
+			s.logger.WithFields(logging.Fields{
+				"cursor_key": cursorKey,
+				"query":      label,
+			}).Warn("Cursor collision detected")
+			if s.metrics != nil && s.metrics.CursorCollisions != nil {
+				s.metrics.CursorCollisions.WithLabelValues(label).Inc()
+			}
+			continue
+		}
+		seen[cursorKey] = struct{}{}
+	}
+}
+
 // countAsync runs a COUNT query in a goroutine and returns the result via channel.
 // This allows the count query to run in parallel with the main data query,
 // cutting total latency roughly in half for paginated queries.
@@ -371,6 +400,18 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 		slices.Reverse(events)
 	}
 
+	collisionKeys := make([]cursorCollisionKey, 0, len(events))
+	for _, event := range events {
+		if event.Timestamp == nil {
+			continue
+		}
+		collisionKeys = append(collisionKeys, cursorCollisionKey{
+			Timestamp: event.Timestamp.AsTime(),
+			ID:        event.EventId,
+		})
+	}
+	s.logCursorCollisions("stream_events", collisionKeys)
+
 	var total int32
 	if err := s.clickhouse.QueryRowContext(ctx, `
 		SELECT count(*) FROM periscope.stream_event_log
@@ -471,6 +512,18 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 	if params.Direction == pagination.Backward {
 		slices.Reverse(events)
 	}
+
+	collisionKeys := make([]cursorCollisionKey, 0, len(events))
+	for _, event := range events {
+		if event.Timestamp == nil {
+			continue
+		}
+		collisionKeys = append(collisionKeys, cursorCollisionKey{
+			Timestamp: event.Timestamp.AsTime(),
+			ID:        event.EventId,
+		})
+	}
+	s.logCursorCollisions("buffer_events", collisionKeys)
 
 	var total int32
 	if err := s.clickhouse.QueryRowContext(ctx, `
@@ -1304,6 +1357,18 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 		slices.Reverse(events)
 	}
 
+	collisionKeys := make([]cursorCollisionKey, 0, len(events))
+	for _, event := range events {
+		if event.Timestamp == nil {
+			continue
+		}
+		collisionKeys = append(collisionKeys, cursorCollisionKey{
+			Timestamp: event.Timestamp.AsTime(),
+			ID:        event.Id,
+		})
+	}
+	s.logCursorCollisions("track_list_events", collisionKeys)
+
 	// Wait for parallel count query
 	total := <-countCh
 
@@ -1436,6 +1501,18 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 	if params.Direction == pagination.Backward {
 		slices.Reverse(events)
 	}
+
+	collisionKeys := make([]cursorCollisionKey, 0, len(events))
+	for _, event := range events {
+		if event.Timestamp == nil {
+			continue
+		}
+		collisionKeys = append(collisionKeys, cursorCollisionKey{
+			Timestamp: event.Timestamp.AsTime(),
+			ID:        event.EventId,
+		})
+	}
+	s.logCursorCollisions("connection_events", collisionKeys)
 
 	// Wait for parallel count query
 	total := <-countCh

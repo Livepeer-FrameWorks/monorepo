@@ -74,6 +74,7 @@ func main() {
 		AnalyticsQueries:  metricsCollector.NewCounter("analytics_queries_total", "Analytics queries executed", []string{"query_type", "status"}),
 		QueryDuration:     metricsCollector.NewHistogram("analytics_query_duration_seconds", "Analytics query duration", []string{"query_type"}, nil),
 		ClickHouseQueries: metricsCollector.NewCounter("clickhouse_queries_total", "ClickHouse queries executed", []string{"table", "status"}),
+		CursorCollisions:  metricsCollector.NewCounter("analytics_cursor_collisions_total", "Cursor collisions detected during pagination", []string{"query"}),
 	}
 
 	// Initialize and start scheduler for billing summarization (uses yugaDB for cursors)
