@@ -401,6 +401,15 @@ func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
 	}
 }
 
+func usageSummaryReferenceID(summary models.UsageSummary) uuid.UUID {
+	clusterID := summary.ClusterID
+	if clusterID == "" {
+		clusterID = "unknown"
+	}
+	raw := fmt.Sprintf("%s:%s:%s", summary.TenantID, clusterID, summary.Period)
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(raw))
+}
+
 // processPrepaidUsage calculates usage cost and deducts from prepaid balance
 func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.UsageSummary) error {
 	// Get subscription tier info for pricing
@@ -449,9 +458,18 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	deductCents := int64(meteredAmount * 100)
 
 	// Deduct from prepaid balance
-	newBalanceCents, err := jm.deductPrepaidBalance(ctx, summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period))
+	referenceID := usageSummaryReferenceID(summary)
+	newBalanceCents, applied, err := jm.deductPrepaidBalanceForUsage(ctx, summary.TenantID, deductCents, fmt.Sprintf("Usage: %s", summary.Period), referenceID)
 	if err != nil {
 		return fmt.Errorf("failed to deduct prepaid balance: %w", err)
+	}
+	if !applied {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id":  summary.TenantID,
+			"period":     summary.Period,
+			"summary_id": referenceID.String(),
+		}).Info("Skipped prepaid usage deduction for duplicate usage summary")
+		return nil
 	}
 
 	jm.logger.WithFields(logging.Fields{
@@ -472,8 +490,32 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	return nil
 }
 
-// deductPrepaidBalance deducts amount from prepaid balance and returns new balance
-func (jm *JobManager) deductPrepaidBalance(ctx context.Context, tenantID string, amountCents int64, description string) (int64, error) {
+func (jm *JobManager) handleBalanceCrossedZero(ctx context.Context, tenantID string, previousBalance, newBalance int64) {
+	if previousBalance > 0 && newBalance <= 0 {
+		if jm.commodoreClient != nil {
+			invalidateCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			_, err := jm.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "balance_crossed_zero")
+			if err != nil {
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":        tenantID,
+					"previous_balance": previousBalance,
+					"new_balance":      newBalance,
+					"error":            err,
+				}).Warn("Failed to invalidate tenant cache after balance crossed zero")
+			} else {
+				jm.logger.WithFields(logging.Fields{
+					"tenant_id":        tenantID,
+					"previous_balance": previousBalance,
+					"new_balance":      newBalance,
+				}).Info("Invalidated tenant cache: balance crossed zero")
+			}
+		}
+	}
+}
+
+// deductPrepaidBalanceForCredit deducts amount from prepaid balance for non-usage adjustments.
+func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantID string, amountCents int64, description string) (int64, error) {
 	var newBalance int64
 	currency := billing.DefaultCurrency()
 
@@ -533,29 +575,81 @@ func (jm *JobManager) deductPrepaidBalance(ctx context.Context, tenantID string,
 
 	// If balance crossed zero (positive → non-positive), invalidate Foghorn cache
 	// This triggers soft gate for prepaid tenants with depleted balance
-	if currentBalance > 0 && newBalance <= 0 {
-		if jm.commodoreClient != nil {
-			invalidateCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-			_, err := jm.commodoreClient.InvalidateTenantCache(invalidateCtx, tenantID, "balance_crossed_zero")
-			if err != nil {
-				jm.logger.WithFields(logging.Fields{
-					"tenant_id":        tenantID,
-					"previous_balance": currentBalance,
-					"new_balance":      newBalance,
-					"error":            err,
-				}).Warn("Failed to invalidate tenant cache after balance crossed zero")
-			} else {
-				jm.logger.WithFields(logging.Fields{
-					"tenant_id":        tenantID,
-					"previous_balance": currentBalance,
-					"new_balance":      newBalance,
-				}).Info("Invalidated tenant cache: balance crossed zero")
-			}
-		}
-	}
+	jm.handleBalanceCrossedZero(ctx, tenantID, currentBalance, newBalance)
 
 	return newBalance, nil
+}
+
+// deductPrepaidBalanceForUsage deducts prepaid usage once per usage summary reference.
+func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID string, amountCents int64, description string, referenceID uuid.UUID) (int64, bool, error) {
+	var newBalance int64
+	currency := billing.DefaultCurrency()
+
+	tx, err := jm.db.Begin()
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	_, err = tx.Exec(`
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
+		VALUES ($1, 0, $2)
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, tenantID, currency)
+	if err != nil {
+		return 0, false, err
+	}
+
+	var currentBalance int64
+	err = tx.QueryRow(`
+		SELECT balance_cents
+		FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2
+		FOR UPDATE
+	`, tenantID, currency).Scan(&currentBalance)
+	if err != nil {
+		return 0, false, err
+	}
+
+	newBalance = currentBalance - amountCents
+	result, err := tx.Exec(`
+		INSERT INTO purser.balance_transactions (
+			tenant_id, amount_cents, balance_after_cents,
+			transaction_type, description, reference_id, reference_type, created_at
+		) VALUES ($1, $2, $3, 'usage', $4, $5, 'usage_summary', NOW())
+		ON CONFLICT (tenant_id, reference_type, reference_id) DO NOTHING
+	`, tenantID, -amountCents, newBalance, description, referenceID)
+	if err != nil {
+		return 0, false, err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, false, err
+	}
+	if rowsAffected == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, false, err
+		}
+		return currentBalance, false, nil
+	}
+
+	_, err = tx.Exec(`
+		UPDATE purser.prepaid_balances
+		SET balance_cents = $1, updated_at = NOW()
+		WHERE tenant_id = $2 AND currency = $3
+	`, newBalance, tenantID, currency)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+
+	jm.handleBalanceCrossedZero(ctx, tenantID, currentBalance, newBalance)
+
+	return newBalance, true, nil
 }
 
 // getPrepaidBalance returns the current prepaid balance in cents for a tenant (0 if none exists)
@@ -1495,7 +1589,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 			creditToApplyCents = grossAmountCents
 		}
 		// Deduct from prepaid balance
-		_, err = jm.deductPrepaidBalance(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
+		_, err = jm.deductPrepaidBalanceForCredit(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to deduct prepaid balance for invoice credit")
 		} else {
