@@ -727,7 +727,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		durationMs := duration.Milliseconds()
 		errStr := uploadErr.Error()
 		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-			Action:     pb.StorageLifecycleData_ACTION_SYNC_STARTED, // Sync started but failed
+			Action:     pb.StorageLifecycleData_ACTION_SYNC_FAILED,
 			AssetType:  string(asset.AssetType),
 			AssetHash:  asset.AssetHash,
 			Error:      &errStr,
@@ -829,12 +829,28 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 	if presignedURL == "" {
 		err := fmt.Errorf("no presigned GET URL provided for defrost")
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(assetType),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
+		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, err
 	}
 
 	// Ensure destination directory exists
 	if err := os.MkdirAll(filepath.Dir(req.LocalPath), 0755); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(assetType),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
+		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
@@ -869,6 +885,13 @@ func (sm *StorageManager) defrostSingleFile(ctx context.Context, req *pb.Defrost
 
 	if err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(assetType),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
 		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, fmt.Errorf("failed to download from S3: %w", err)
 	}
@@ -987,6 +1010,14 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	if len(segmentURLs) == 0 {
 		err := fmt.Errorf("no segment URLs provided for DVR defrost")
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(AssetTypeDVR),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
+		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, err
 	}
 
@@ -996,6 +1027,14 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	if !hasManifest {
 		err := fmt.Errorf("no manifest URL provided for DVR defrost")
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(AssetTypeDVR),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
+		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, err
 	}
 
@@ -1003,6 +1042,14 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	_, err := sm.presignedClient.DownloadFromPresignedURL(ctx, manifestURL, &manifestBuf, nil)
 	if err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(AssetTypeDVR),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
+		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, errStr)
 		return nil, fmt.Errorf("failed to download original manifest: %w", err)
 	}
 
@@ -1030,6 +1077,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	// Create local directory
 	if err := os.MkdirAll(req.LocalPath, 0755); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(AssetTypeDVR),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
 		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -1085,6 +1139,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	localSegmentsDir := filepath.Join(req.LocalPath, "segments")
 	if err := os.MkdirAll(localSegmentsDir, 0755); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(AssetTypeDVR),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
 		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, err
 	}
@@ -1093,6 +1154,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 	manifest := sm.createLiveManifest(req.AssetHash, parsedManifest.TargetDuration)
 	if err := os.WriteFile(manifestPath, []byte(manifest), 0644); err != nil {
 		sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+		errStr := err.Error()
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+			AssetType: string(AssetTypeDVR),
+			AssetHash: req.AssetHash,
+			Error:     &errStr,
+		})
 		_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 		return nil, err
 	}
@@ -1120,6 +1188,13 @@ func (sm *StorageManager) DefrostDVR(ctx context.Context, req *pb.DefrostRequest
 			// Save progress for resume
 			sm.saveDefrostProgress(progress, req.LocalPath)
 			sm.markDefrostJobDone(req.AssetHash, err, "", 0)
+			errStr := err.Error()
+			_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+				Action:    pb.StorageLifecycleData_ACTION_CACHE_FAILED,
+				AssetType: string(AssetTypeDVR),
+				AssetHash: req.AssetHash,
+				Error:     &errStr,
+			})
 			_ = control.SendDefrostComplete(req.RequestId, req.AssetHash, "failed", "", 0, err.Error())
 			return nil, fmt.Errorf("failed to download segment %s: %w", segName, err)
 		}
@@ -1469,7 +1544,7 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 				sm.logger.WithError(deleteErr).WithField("asset_hash", candidate.AssetHash).Warn("Failed to delete local copy")
 				errStr := deleteErr.Error()
 				_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
-					Action:    pb.StorageLifecycleData_ACTION_EVICTED,
+					Action:    pb.StorageLifecycleData_ACTION_EVICT_FAILED,
 					AssetType: string(candidate.AssetType),
 					AssetHash: candidate.AssetHash,
 					SizeBytes: candidate.SizeBytes,
