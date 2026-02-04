@@ -78,6 +78,8 @@ jobs:
         run: make coverage
       - name: Upload Go test results to Codecov
         if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -100,6 +102,8 @@ jobs:
           path: coverage/
           if-no-files-found: warn
       - name: Upload to Codecov
+        timeout-minutes: 5
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -200,6 +204,8 @@ jobs:
             **/lcov.info
           if-no-files-found: warn
       - name: Upload to Codecov
+        timeout-minutes: 5
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -209,6 +215,8 @@ jobs:
           fail_ci_if_error: false
       - name: Upload frontend test results to Codecov
         if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
