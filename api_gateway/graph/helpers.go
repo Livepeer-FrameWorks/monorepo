@@ -6,6 +6,7 @@ import (
 
 	"frameworks/api_gateway/internal/loaders"
 	gwmiddleware "frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/clips"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	pb "frameworks/pkg/proto"
@@ -65,6 +66,12 @@ func (r *dVRRequestResolver) getLifecycleData(ctx context.Context, requestID str
 // Best-effort: returns nil on lookup errors or missing mappings.
 func (r *Resolver) resolveArtifactPlaybackID(ctx context.Context, contentType, hash string) *string {
 	if hash == "" || gwmiddleware.IsDemoMode(ctx) || r == nil || r.Resolver == nil || r.Resolver.Clients == nil || r.Resolver.Clients.Commodore == nil {
+		return nil
+	}
+	if !clips.ValidateClipHash(hash) {
+		if r.Resolver.Logger != nil {
+			r.Resolver.Logger.WithField("content_type", contentType).WithField("hash", hash).Debug("Skipping artifact playback resolution: invalid hash format")
+		}
 		return nil
 	}
 
