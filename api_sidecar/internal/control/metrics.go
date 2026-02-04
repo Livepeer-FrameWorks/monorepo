@@ -9,7 +9,7 @@ import (
 var (
 	// TriggersSent tracks all MistTrigger events sent to Foghorn
 	// Labels: trigger_type (e.g., "PUSH_REWRITE", "USER_NEW", "process_billing")
-	//         status: "success", "error", "stream_disconnected"
+	//         status: "sent", "send_error", "stream_disconnected", "exhausted"
 	TriggersSent = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "helmsman",
@@ -17,6 +17,17 @@ var (
 			Help:      "Total MistTrigger events sent to Foghorn",
 		},
 		[]string{"trigger_type", "status"},
+	)
+
+	// BlockingTriggerRetries tracks retry attempts for blocking triggers
+	// Labels: trigger_type, reason: "stream_disconnected", "send_error"
+	BlockingTriggerRetries = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "helmsman",
+			Name:      "blocking_trigger_retries_total",
+			Help:      "Total retry attempts for blocking triggers",
+		},
+		[]string{"trigger_type", "reason"},
 	)
 
 	// TriggersDropped tracks events that were dropped without being sent

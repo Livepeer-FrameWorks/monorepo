@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -53,6 +55,18 @@ var (
 	blockingGraceMs    int
 	streamReconnected  = make(chan struct{})
 	streamReconnectedM sync.Mutex
+
+	disconnectNotify   = make(chan struct{})
+	disconnectNotifyMu sync.Mutex
+
+	jitterRandMu sync.Mutex
+	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
+)
+
+const (
+	blockingTriggerTimeout = 5 * time.Second
+	maxBlockingAttempts    = 3
+	reconnectJitterPct     = 25
 )
 
 // SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
@@ -98,7 +112,7 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 			if time.Since(connStart) > maxBackoff {
 				backoff = time.Second
 			}
-			time.Sleep(backoff)
+			time.Sleep(applyJitter(backoff, reconnectJitterPct))
 			if backoff < maxBackoff {
 				backoff *= 2
 			}
@@ -121,34 +135,74 @@ type MistTriggerResult struct {
 // SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
 func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
 	triggerType := mistTrigger.TriggerType
-	stream := currentStream
-	if stream == nil && mistTrigger.Blocking && blockingGraceMs > 0 {
-		stream = waitForReconnection(time.Duration(blockingGraceMs) * time.Millisecond)
-	}
-	if stream == nil {
-		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
-		return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL}, fmt.Errorf("gRPC control stream not connected")
-	}
-
-	msg := &pb.ControlMessage{
-		SentAt:  timestamppb.Now(),
-		Payload: &pb.ControlMessage_MistTrigger{MistTrigger: mistTrigger},
-	}
-
-	if err := stream.Send(msg); err != nil {
-		TriggersSent.WithLabelValues(triggerType, "error").Inc()
-		return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL}, fmt.Errorf("failed to send MistTrigger: %w", err)
-	}
-
-	TriggersSent.WithLabelValues(triggerType, "success").Inc()
-
-	// For non-blocking triggers, return immediately
 	if !mistTrigger.Blocking {
+		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
+			return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL}, err
+		}
 		return &MistTriggerResult{}, nil
 	}
 
-	// For blocking triggers, wait for response
-	return waitForMistTriggerResponse(mistTrigger.RequestId, 5*time.Second)
+	attempts := maxBlockingAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	deadline := time.Now().Add(blockingTriggerTimeout)
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if time.Now().After(deadline) {
+			break
+		}
+
+		stream := currentStream
+		if stream == nil && blockingGraceMs > 0 {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				break
+			}
+			grace := time.Duration(blockingGraceMs) * time.Millisecond
+			if grace > remaining {
+				grace = remaining
+			}
+			stream = waitForReconnection(grace)
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		if stream == nil {
+			TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
+			BlockingTriggerRetries.WithLabelValues(triggerType, "stream_disconnected").Inc()
+			lastErr = fmt.Errorf("gRPC control stream not connected")
+			continue
+		}
+
+		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
+			BlockingTriggerRetries.WithLabelValues(triggerType, "send_error").Inc()
+			lastErr = err
+			continue
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		result, err := waitForMistTriggerResponseWithDisconnect(mistTrigger.RequestId, remaining)
+		if err == nil {
+			return result, nil
+		}
+		if errors.Is(err, errStreamDisconnected) {
+			BlockingTriggerRetries.WithLabelValues(triggerType, "stream_disconnected").Inc()
+			lastErr = err
+			continue
+		}
+		return result, err
+	}
+
+	TriggersSent.WithLabelValues(triggerType, "exhausted").Inc()
+	if lastErr == nil {
+		lastErr = fmt.Errorf("blocking trigger attempts exhausted")
+	}
+	return &MistTriggerResult{Abort: true, ErrorCode: pb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, lastErr
 }
 
 // pendingMistTriggers tracks blocking trigger requests waiting for responses
@@ -157,8 +211,31 @@ var (
 	pendingMutex        = make(chan struct{}, 1) // Simple mutex using buffered channel
 )
 
+var errStreamDisconnected = errors.New("gRPC control stream disconnected")
+
+func sendMistTriggerOnce(triggerType string, mistTrigger *pb.MistTrigger) error {
+	stream := currentStream
+	if stream == nil {
+		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	msg := &pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_MistTrigger{MistTrigger: mistTrigger},
+	}
+
+	if err := stream.Send(msg); err != nil {
+		TriggersSent.WithLabelValues(triggerType, "send_error").Inc()
+		return fmt.Errorf("failed to send MistTrigger: %w", err)
+	}
+
+	TriggersSent.WithLabelValues(triggerType, "sent").Inc()
+	return nil
+}
+
 // waitForMistTriggerResponse waits for a MistTriggerResponse with matching requestID
-func waitForMistTriggerResponse(requestID string, timeout time.Duration) (*MistTriggerResult, error) {
+func waitForMistTriggerResponseWithDisconnect(requestID string, timeout time.Duration) (*MistTriggerResult, error) {
 	// Create response channel
 	responseChan := make(chan *pb.MistTriggerResponse, 1)
 
@@ -167,10 +244,13 @@ func waitForMistTriggerResponse(requestID string, timeout time.Duration) (*MistT
 	pendingMistTriggers[requestID] = responseChan
 	<-pendingMutex // Release mutex
 
-	// Wait for response or timeout
+	disconnectNotifyMu.Lock()
+	disconnectCh := disconnectNotify
+	disconnectNotifyMu.Unlock()
+
+	// Wait for response, disconnect, or timeout
 	select {
 	case response := <-responseChan:
-		// Clean up
 		pendingMutex <- struct{}{}
 		delete(pendingMistTriggers, requestID)
 		<-pendingMutex
@@ -180,9 +260,16 @@ func waitForMistTriggerResponse(requestID string, timeout time.Duration) (*MistT
 			Abort:     response.Abort,
 			ErrorCode: response.ErrorCode,
 		}, nil
+	case <-disconnectCh:
+		pendingMutex <- struct{}{}
+		delete(pendingMistTriggers, requestID)
+		<-pendingMutex
 
+		return &MistTriggerResult{
+			Abort:     true,
+			ErrorCode: pb.IngestErrorCode_INGEST_ERROR_INTERNAL,
+		}, errStreamDisconnected
 	case <-time.After(timeout):
-		// Clean up on timeout
 		pendingMutex <- struct{}{}
 		delete(pendingMistTriggers, requestID)
 		<-pendingMutex
@@ -205,6 +292,13 @@ func handleMistTriggerResponse(response *pb.MistTriggerResponse) {
 	}
 }
 
+func notifyDisconnect() {
+	disconnectNotifyMu.Lock()
+	close(disconnectNotify)
+	disconnectNotify = make(chan struct{})
+	disconnectNotifyMu.Unlock()
+}
+
 func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient {
 	streamReconnectedM.Lock()
 	reconnectCh := streamReconnected
@@ -222,6 +316,20 @@ func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient
 	case <-time.After(timeout):
 		return nil
 	}
+}
+
+func applyJitter(backoff time.Duration, jitterPct int) time.Duration {
+	if jitterPct <= 0 {
+		return backoff
+	}
+	jitterRange := int64(backoff) * int64(jitterPct) / 100
+	if jitterRange <= 0 {
+		return backoff
+	}
+	jitterRandMu.Lock()
+	jitter := jitterRand.Int63n(jitterRange*2+1) - jitterRange
+	jitterRandMu.Unlock()
+	return time.Duration(int64(backoff) + jitter)
 }
 
 // SendDVRStartRequest sends a DVR start notification to Foghorn via the gRPC control stream
@@ -356,6 +464,7 @@ func runClient(addr string, logger logging.Logger) error {
 		currentStream = nil
 		currentNodeID = ""
 		ControlStreamStatus.Set(0)
+		notifyDisconnect()
 	}()
 
 	// Heartbeat ticker
