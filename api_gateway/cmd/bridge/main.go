@@ -141,7 +141,7 @@ func main() {
 			if opCtx.Doc == nil {
 				return next(ctx)
 			}
-			depth := calculateQueryDepth(opCtx.Doc.Operations)
+			depth := calculateQueryDepth(opCtx.Doc.Operations, opCtx.Doc.Fragments)
 			if depth > maxDepth {
 				return func(ctx context.Context) *graphql.Response {
 					return graphql.ErrorResponse(ctx, "query exceeds maximum depth of %d (got %d)", maxDepth, depth)
@@ -475,32 +475,46 @@ func extractUsageContext(ctx context.Context) (tenantID, authType, userID string
 
 // calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.
 // Depth is counted from field selections (not from operation root).
-func calculateQueryDepth(operations ast.OperationList) int {
+func calculateQueryDepth(operations ast.OperationList, fragments ast.FragmentDefinitionList) int {
 	maxDepth := 0
+	fragmentIndex := map[string]*ast.FragmentDefinition{}
+	for _, fragment := range fragments {
+		fragmentIndex[fragment.Name] = fragment
+	}
 	for _, op := range operations {
-		if d := selectionSetDepth(op.SelectionSet); d > maxDepth {
+		if d := selectionSetDepth(op.SelectionSet, fragmentIndex, map[string]bool{}); d > maxDepth {
 			maxDepth = d
 		}
 	}
 	return maxDepth
 }
 
-func selectionSetDepth(set ast.SelectionSet) int {
+func selectionSetDepth(set ast.SelectionSet, fragments map[string]*ast.FragmentDefinition, visited map[string]bool) int {
 	maxDepth := 0
 	for _, sel := range set {
 		var childDepth int
 		switch s := sel.(type) {
 		case *ast.Field:
 			if s.SelectionSet != nil {
-				childDepth = 1 + selectionSetDepth(s.SelectionSet)
+				childDepth = 1 + selectionSetDepth(s.SelectionSet, fragments, visited)
 			} else {
 				childDepth = 1
 			}
 		case *ast.InlineFragment:
-			childDepth = selectionSetDepth(s.SelectionSet)
+			childDepth = selectionSetDepth(s.SelectionSet, fragments, visited)
 		case *ast.FragmentSpread:
-			// Fragment spreads are resolved during execution; count as 0 additional depth
-			childDepth = 0
+			if visited[s.Name] {
+				childDepth = 0
+				break
+			}
+			fragment, ok := fragments[s.Name]
+			if !ok {
+				childDepth = 0
+				break
+			}
+			visited[s.Name] = true
+			childDepth = selectionSetDepth(fragment.SelectionSet, fragments, visited)
+			delete(visited, s.Name)
 		}
 		if childDepth > maxDepth {
 			maxDepth = childDepth
