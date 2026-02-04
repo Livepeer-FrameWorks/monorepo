@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 
 	"frameworks/pkg/billing"
@@ -515,69 +517,91 @@ func (jm *JobManager) handleBalanceCrossedZero(ctx context.Context, tenantID str
 }
 
 // deductPrepaidBalanceForCredit deducts amount from prepaid balance for non-usage adjustments.
-func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantID string, amountCents int64, description string) (int64, error) {
+// If referenceID is provided, the deduction is idempotent (duplicate calls are no-ops).
+func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantID string, amountCents int64, description string, referenceID *string) (int64, bool, error) {
 	var newBalance int64
 	currency := billing.DefaultCurrency()
+	referenceType := "invoice_credit"
 
-	// Use transaction to atomically update balance and record transaction
-	tx, err := jm.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
-
-	// Get or create prepaid balance record
-	var currentBalance int64
-	err = tx.QueryRow(`
-		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
-		VALUES ($1, 0, $2)
-		ON CONFLICT (tenant_id, currency) DO NOTHING
-		RETURNING balance_cents
-	`, tenantID, currency).Scan(&currentBalance)
-	if err != nil && err != sql.ErrNoRows {
-		// Conflict means it exists, fetch current balance
-		err = tx.QueryRow(`
-			SELECT balance_cents FROM purser.prepaid_balances
-			WHERE tenant_id = $1 AND currency = $2
-		`, tenantID, currency).Scan(&currentBalance)
-		if err != nil {
-			return 0, err
+	if referenceID != nil {
+		if _, found, err := jm.getBalanceTransactionByReference(ctx, tenantID, referenceType, *referenceID); err != nil {
+			return 0, false, err
+		} else if found {
+			balance, err := jm.getPrepaidBalance(tenantID)
+			if err != nil {
+				return 0, false, err
+			}
+			return balance, true, nil
 		}
 	}
 
-	// Deduct from balance (can go negative - accumulate debt)
+	tx, err := jm.db.Begin()
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	_, err = tx.Exec(`
+		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
+		VALUES ($1, 0, $2)
+		ON CONFLICT (tenant_id, currency) DO NOTHING
+	`, tenantID, currency)
+	if err != nil {
+		return 0, false, err
+	}
+
+	var currentBalance int64
+	err = tx.QueryRow(`
+		SELECT balance_cents
+		FROM purser.prepaid_balances
+		WHERE tenant_id = $1 AND currency = $2
+		FOR UPDATE
+	`, tenantID, currency).Scan(&currentBalance)
+	if err != nil {
+		return 0, false, err
+	}
+
 	newBalance = currentBalance - amountCents
 
-	// Update balance
 	_, err = tx.Exec(`
 		UPDATE purser.prepaid_balances
 		SET balance_cents = $1, updated_at = NOW()
 		WHERE tenant_id = $2 AND currency = $3
 	`, newBalance, tenantID, currency)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
-	// Record transaction
 	_, err = tx.Exec(`
 		INSERT INTO purser.balance_transactions (
 			tenant_id, amount_cents, balance_after_cents,
-			transaction_type, description, created_at
-		) VALUES ($1, $2, $3, 'usage', $4, NOW())
-	`, tenantID, -amountCents, newBalance, description)
+			transaction_type, description, reference_id, reference_type, created_at
+		) VALUES ($1, $2, $3, 'credit', $4, $5, $6, NOW())
+	`, tenantID, -amountCents, newBalance, description, referenceID, referenceType)
 	if err != nil {
-		return 0, err
+		if referenceID != nil {
+			var pqErr *pq.Error
+			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+				if rollbackErr := tx.Rollback(); rollbackErr != nil {
+					jm.logger.WithError(rollbackErr).Warn("Failed to rollback duplicate credit deduction")
+				}
+				balance, balanceErr := jm.getPrepaidBalance(tenantID)
+				if balanceErr != nil {
+					return 0, false, balanceErr
+				}
+				return balance, true, nil
+			}
+		}
+		return 0, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
-	// If balance crossed zero (positive → non-positive), invalidate Foghorn cache
-	// This triggers soft gate for prepaid tenants with depleted balance
 	jm.handleBalanceCrossedZero(ctx, tenantID, currentBalance, newBalance)
 
-	return newBalance, nil
+	return newBalance, false, nil
 }
 
 // deductPrepaidBalanceForUsage deducts prepaid usage once per usage summary reference.
@@ -669,6 +693,24 @@ func (jm *JobManager) getPrepaidBalance(tenantID string) (int64, error) {
 		return 0, err
 	}
 	return balanceCents, nil
+}
+
+func (jm *JobManager) getBalanceTransactionByReference(ctx context.Context, tenantID, referenceType, referenceID string) (int64, bool, error) {
+	var amountCents int64
+	err := jm.db.QueryRowContext(ctx, `
+		SELECT amount_cents
+		FROM purser.balance_transactions
+		WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, tenantID, referenceType, referenceID).Scan(&amountCents)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return amountCents, true, nil
 }
 
 // suspendTenantForBalance suspends a tenant due to negative prepaid balance
@@ -1590,10 +1632,23 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		if creditToApplyCents > grossAmountCents {
 			creditToApplyCents = grossAmountCents
 		}
-		// Deduct from prepaid balance
-		_, err = jm.deductPrepaidBalanceForCredit(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")))
+		referenceID := uuid.NewSHA1(
+			uuid.NameSpaceOID,
+			[]byte(fmt.Sprintf("invoice_credit:%s:%s", tenantID, periodStart.Format("2006-01-02"))),
+		).String()
+
+		// Deduct from prepaid balance (idempotent via referenceID)
+		var duplicate bool
+		_, duplicate, err = jm.deductPrepaidBalanceForCredit(ctx, tenantID, creditToApplyCents, fmt.Sprintf("Invoice credit: %s", periodStart.Format("2006-01")), &referenceID)
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to deduct prepaid balance for invoice credit")
+		} else if duplicate {
+			amountCents, found, lookupErr := jm.getBalanceTransactionByReference(ctx, tenantID, "invoice_credit", referenceID)
+			if lookupErr != nil {
+				jm.logger.WithError(lookupErr).WithField("tenant_id", tenantID).Warn("Failed to fetch prior invoice credit transaction")
+			} else if found && amountCents < 0 {
+				prepaidCreditApplied = float64(-amountCents) / 100.0
+			}
 		} else {
 			prepaidCreditApplied = float64(creditToApplyCents) / 100.0
 			jm.logger.WithFields(logging.Fields{
