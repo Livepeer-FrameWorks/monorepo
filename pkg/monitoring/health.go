@@ -20,6 +20,12 @@ type HealthStatus struct {
 	Checks    map[string]CheckResult `json:"checks"`
 }
 
+const (
+	StatusHealthy   = "healthy"
+	StatusDegraded  = "degraded"
+	StatusUnhealthy = "unhealthy"
+)
+
 // CheckResult represents the result of an individual health check
 type CheckResult struct {
 	Status  string `json:"status"`
@@ -60,19 +66,29 @@ func (hc *HealthChecker) CheckHealth() HealthStatus {
 		Checks:    make(map[string]CheckResult),
 	}
 
-	allHealthy := true
+	anyUnhealthy := false
+	anyDegraded := false
 	for name, check := range hc.checks {
 		result := check()
 		status.Checks[name] = result
-		if result.Status != "healthy" {
-			allHealthy = false
+		switch result.Status {
+		case StatusHealthy:
+		case StatusDegraded:
+			anyDegraded = true
+		case StatusUnhealthy:
+			anyUnhealthy = true
+		default:
+			anyUnhealthy = true
 		}
 	}
 
-	if allHealthy {
-		status.Status = "healthy"
-	} else {
-		status.Status = "unhealthy"
+	switch {
+	case anyUnhealthy:
+		status.Status = StatusUnhealthy
+	case anyDegraded:
+		status.Status = StatusDegraded
+	default:
+		status.Status = StatusHealthy
 	}
 
 	return status
@@ -83,7 +99,7 @@ func (hc *HealthChecker) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		health := hc.CheckHealth()
 		statusCode := http.StatusOK
-		if health.Status == "unhealthy" {
+		if health.Status == StatusUnhealthy {
 			statusCode = http.StatusServiceUnavailable
 		}
 		c.JSON(statusCode, health)

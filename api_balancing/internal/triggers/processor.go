@@ -287,6 +287,11 @@ func (p *Processor) SetQuartermasterClient(c *qmclient.GRPCClient) {
 	p.quartermasterClient = c
 }
 
+// SetCommodoreClient configures the Commodore client for stream resolution.
+func (p *Processor) SetCommodoreClient(c *commodore.GRPCClient) {
+	p.commodoreClient = c
+}
+
 // SetGeoIPCache configures a cache for GeoIP lookups
 func (p *Processor) SetGeoIPCache(c *cache.Cache) {
 	p.geoipCache = c
