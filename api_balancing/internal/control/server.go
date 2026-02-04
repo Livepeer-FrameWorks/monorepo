@@ -518,15 +518,15 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 		return
 	}
 	// Query foghorn.artifacts for active DVR, join with artifact_nodes for node_id
-	var dvrHash, storageNodeID, tenantID, userID, streamID string
+	var dvrHash, storageNodeID string
 	err := db.QueryRow(`
-        SELECT a.artifact_hash, COALESCE(an.node_id,''), COALESCE(a.tenant_id::text, ''), COALESCE(a.user_id::text, ''), COALESCE(a.stream_id::text, '')
+        SELECT a.artifact_hash, COALESCE(an.node_id,'')
         FROM foghorn.artifacts a
         LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
         WHERE a.internal_name = $1 AND a.artifact_type = 'dvr'
               AND a.status IN ('requested','starting','recording')
         ORDER BY a.created_at DESC
-        LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID, &tenantID, &userID, &streamID)
+        LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) && dvrStopRegistry != nil {
 			dvrStopRegistry.RegisterPendingDVRStop(internalName)
@@ -539,45 +539,44 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 		}
 		return
 	}
-	_ = SendDVRStop(storageNodeID, &pb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash})
-	_, _ = db.Exec(`UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash)
-	if decklogClient != nil {
-		stoppedAt := time.Now().Unix()
-		dvrData := &pb.DVRLifecycleData{
-			Status:  pb.DVRLifecycleData_STATUS_STOPPED,
-			DvrHash: dvrHash,
-			EndedAt: &stoppedAt,
-			InternalName: func() *string {
-				if internalName != "" {
-					return &internalName
-				}
-				return nil
-			}(),
-			StreamId: func() *string {
-				if streamID != "" {
-					return &streamID
-				}
-				return nil
-			}(),
-			TenantId: func() *string {
-				if tenantID != "" {
-					return &tenantID
-				}
-				return nil
-			}(),
-			UserId: func() *string {
-				if userID != "" {
-					return &userID
-				}
-				return nil
-			}(),
-		}
-		go func() {
-			if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
-				logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to emit DVR stopped event")
-			}
-		}()
+	if err := SendDVRStop(storageNodeID, &pb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash}); err != nil {
+		logger.WithError(err).WithFields(logging.Fields{
+			"dvr_hash": dvrHash,
+			"node_id":  storageNodeID,
+		}).Warn("Failed to send DVR stop command")
+		return
 	}
+	_, _ = db.Exec(`UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash)
+}
+
+func emitIngestDVRFailure(dvrHash, streamID, errorMsg string, req *pb.DVRStartRequest, logger logging.Logger) {
+	if decklogClient == nil {
+		return
+	}
+
+	dvrData := &pb.DVRLifecycleData{
+		Status:  pb.DVRLifecycleData_STATUS_FAILED,
+		DvrHash: dvrHash,
+		Error:   &errorMsg,
+	}
+	if internalName := req.GetInternalName(); internalName != "" {
+		dvrData.InternalName = &internalName
+	}
+	if tenantID := req.GetTenantId(); tenantID != "" {
+		dvrData.TenantId = &tenantID
+	}
+	if userID := req.GetUserId(); userID != "" {
+		dvrData.UserId = &userID
+	}
+	if streamID != "" {
+		dvrData.StreamId = &streamID
+	}
+
+	go func() {
+		if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
+			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to emit DVR start failure event")
+		}
+	}()
 }
 
 // ServiceRegistrar is a function that registers additional gRPC services
@@ -800,6 +799,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 			err.Error(), dvrHash); dbErr != nil {
 			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
 		}
+		emitIngestDVRFailure(dvrHash, streamID, err.Error(), req, logger)
 		return
 	}
 
@@ -847,6 +847,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 			err.Error(), dvrHash); dbErr != nil {
 			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
 		}
+		emitIngestDVRFailure(dvrHash, streamID, err.Error(), req, logger)
 		return
 	}
 

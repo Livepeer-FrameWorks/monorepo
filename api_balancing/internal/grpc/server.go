@@ -1049,7 +1049,7 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 		return nil, status.Error(codes.Internal, "failed to fetch DVR artifact")
 	}
 
-	if dvrStatus == "completed" || dvrStatus == "failed" || dvrStatus == "ready" {
+	if dvrStatus == "completed" || dvrStatus == "failed" || dvrStatus == "ready" || dvrStatus == "stopped" {
 		return &pb.StopDVRResponse{
 			Success: false,
 			Message: fmt.Sprintf("DVR recording already finished with status: %s", dvrStatus),
@@ -1836,7 +1836,11 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *pb.AbortVod
 
 	// Delete artifact and metadata
 	_, _ = s.db.ExecContext(ctx, `DELETE FROM foghorn.vod_metadata WHERE artifact_hash = $1`, artifactHash)
-	_, err = s.db.ExecContext(ctx, `DELETE FROM foghorn.artifacts WHERE artifact_hash = $1`, artifactHash)
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE foghorn.artifacts
+		SET status = 'deleted', updated_at = NOW()
+		WHERE artifact_hash = $1
+	`, artifactHash)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete aborted artifact")
 		return nil, status.Error(codes.Internal, "failed to clean up aborted upload")
