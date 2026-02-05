@@ -533,7 +533,7 @@
       error = null;
       const range = resolveTimeRange(timeRange);
       currentRange = range;
-      const hourlyFirst = Math.min(range.days * 24, 720);
+      const hourlyFirst = Math.min(range.days * 24, 150);
 
       const timeRangeInput = { start: range.start, end: range.end };
       const [nodesResult, geoDistResult, routingEventsResult, connectionEventsResult] =

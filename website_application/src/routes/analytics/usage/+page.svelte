@@ -373,7 +373,7 @@
         shouldUseHourly
           ? viewerHoursHourlyStore
               .fetch({
-                variables: { timeRange: { start: range.start, end: range.end }, first: 500 },
+                variables: { timeRange: { start: range.start, end: range.end }, first: 150 },
               })
               .catch(() => null)
           : Promise.resolve(),
