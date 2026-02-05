@@ -18,6 +18,7 @@ ARG VITE_DOMAIN
 ARG VITE_GATEWAY_URL
 ARG VITE_CONTACT_API_URL
 ARG VITE_TURNSTILE_FORMS_SITE_KEY
+ARG VITE_DOCS_SITE_URL
 
 ENV VITE_APP_URL=${VITE_APP_URL}
 ENV VITE_GITHUB_URL=${VITE_GITHUB_URL}
@@ -32,6 +33,7 @@ ENV VITE_DOMAIN=${VITE_DOMAIN}
 ENV VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
 ENV VITE_CONTACT_API_URL=${VITE_CONTACT_API_URL}
 ENV VITE_TURNSTILE_FORMS_SITE_KEY=${VITE_TURNSTILE_FORMS_SITE_KEY}
+ENV VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
 
 WORKDIR /app
 
@@ -40,6 +42,7 @@ RUN apk add --no-cache git ca-certificates tzdata \
 
 # copy workspace manifests first for better layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY npm_player/package.json npm_player/
 COPY npm_player/packages/core/package.json npm_player/packages/core/
 COPY npm_player/packages/react/package.json npm_player/packages/react/
@@ -67,6 +70,7 @@ COPY docs/skills/ docs/skills/
 # build the marketing site
 RUN cp docs/skills/skill.md website_marketing/public/skill.md \
   && cp docs/skills/skill.json website_marketing/public/skill.json \
+  && cp docs/skills/heartbeat.md website_marketing/public/heartbeat.md \
   && cp docs/skills/llms.txt website_marketing/public/llms.txt \
   && cp docs/skills/robots.txt website_marketing/public/robots.txt \
   && mkdir -p website_marketing/public/.well-known \

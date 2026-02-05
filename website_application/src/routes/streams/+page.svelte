@@ -11,7 +11,7 @@
     DeleteStreamStore,
     StreamEventsStore,
     StreamCoreFieldsStore,
-    StreamMetricsFieldsStore,
+    StreamMetricsListFieldsStore,
     PageInfoFieldsStore,
   } from "$houdini";
   import type { StreamEvents$result } from "$houdini";
@@ -45,7 +45,7 @@
 
   // Fragment stores for unmasking nested data
   const streamCoreStore = new StreamCoreFieldsStore();
-  const metricsStore = new StreamMetricsFieldsStore();
+  const metricsStore = new StreamMetricsListFieldsStore();
   const pageInfoStore = new PageInfoFieldsStore();
 
   // Types from Houdini

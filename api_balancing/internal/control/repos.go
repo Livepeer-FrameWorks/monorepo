@@ -377,16 +377,16 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 		// Warm storage sync never creates lifecycle rows — it lacks tenant context.
 		_, _ = tx.ExecContext(ctx, `
 			UPDATE foghorn.artifacts SET
-				internal_name = COALESCE(internal_name, $3),
-				access_count = GREATEST(COALESCE(access_count, 0), $5),
+				internal_name = COALESCE(internal_name, $2),
+				access_count = GREATEST(COALESCE(access_count, 0), $3),
 				last_accessed_at = CASE
-					WHEN $6 = 0 THEN last_accessed_at
-					WHEN last_accessed_at IS NULL THEN to_timestamp($6)
-					ELSE GREATEST(last_accessed_at, to_timestamp($6))
+					WHEN $4 = 0 THEN last_accessed_at
+					WHEN last_accessed_at IS NULL THEN to_timestamp($4)
+					ELSE GREATEST(last_accessed_at, to_timestamp($4))
 				END,
 				updated_at = NOW()
 			WHERE artifact_hash = $1
-		`, a.ArtifactHash, a.ArtifactType, a.StreamName, a.CreatedAt, a.AccessCount, a.LastAccessed)
+		`, a.ArtifactHash, a.StreamName, a.AccessCount, a.LastAccessed)
 
 		// Upsert warm storage tracking — only if the lifecycle row exists (FK guard).
 		_, errExec := tx.ExecContext(ctx, `

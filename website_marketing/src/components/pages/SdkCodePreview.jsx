@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   PlayIcon,
   ArrowUpTrayIcon,
-  CpuChipIcon,
+  CodeBracketIcon,
   ClipboardDocumentCheckIcon,
   ClipboardDocumentIcon,
 } from "@heroicons/react/24/outline";
@@ -39,21 +39,24 @@ export const Broadcaster = () => {
   )
 }`;
 
-const snippetAgent = `// Add to your MCP client config
-{
-  "mcpServers": {
-    "frameworks": {
-      "url": "${config.mcpUrl}",
-      "headers": {
-        "Authorization": "Bearer $API_TOKEN"
+const snippetGraphql = `# Paste this into the API playground at ${config.appUrl}/developer/api
+query StreamsDashboard {
+  streamsConnection(page: { first: 10 }) {
+    edges {
+      node {
+        id
+        name
+        playbackId
+        record
+        metrics {
+          viewerCount
+          qualityScore
+        }
       }
     }
+    pageInfo { hasNextPage endCursor }
   }
-}
-
-// Then ask your AI:
-// "Create a stream called My Broadcast"
-// Agent pays via x402 if balance is low`;
+}`;
 
 export default function SdkCodePreview({ variant = "default", className }) {
   const [activeTab, setActiveTab] = useState("player");
@@ -62,13 +65,13 @@ export default function SdkCodePreview({ variant = "default", className }) {
   const snippets = {
     player: snippetPlayer,
     ingest: snippetIngest,
-    agent: snippetAgent,
+    graphql: snippetGraphql,
   };
 
   const langLabels = {
     player: "React / TSX",
     ingest: "React / TSX",
-    agent: "JSON",
+    graphql: "GraphQL",
   };
 
   const handleCopy = () => {
@@ -80,7 +83,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
   const tabs = [
     { id: "player", label: "Player SDK", icon: PlayIcon },
     { id: "ingest", label: "StreamCrafter", icon: ArrowUpTrayIcon },
-    { id: "agent", label: "AI Agents", icon: CpuChipIcon },
+    { id: "graphql", label: "GraphQL", icon: CodeBracketIcon },
   ];
 
   return (

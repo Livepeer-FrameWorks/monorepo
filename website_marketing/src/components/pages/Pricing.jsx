@@ -40,6 +40,7 @@ import {
   BuildingOfficeIcon,
   ArrowTopRightOnSquareIcon,
   BanknotesIcon,
+  CpuChipIcon,
 } from "@heroicons/react/24/outline";
 
 const freeTier = {
@@ -162,19 +163,23 @@ const payAsYouGo = {
   price: "Usage-based",
   badge: "Agent-Ready",
   description:
-    "Connect your wallet or add a card. Your balance covers storage, transcoding, and delivered minutes at the same rates as subscription tiers.",
+    "Connect a wallet or pay inline with x402. Your balance covers storage, transcoding, and delivered minutes. Designed for AI agents, automation, and usage-based workflows.",
   features: [
-    "Add funds via card or crypto (ETH, USDC, LPT)",
-    "Wallet authentication (no email required)",
+    "Wallet auth via EIP-191 signature — no email, no registration",
+    "Fund via card, crypto (ETH, USDC, LPT), or x402 gasless USDC on Base/Arbitrum",
+    "Full MCP access: streams, clips, DVR, VOD, billing, analytics, QoE diagnostics",
+    "GraphQL as an alternative operational interface (same auth)",
+    "Auto-discovery via skill.json, llms.txt, and .well-known/mcp.json",
+    "W3C DID and OAuth resource metadata for standards-compliant integration",
+    "Public operations (no auth): payment options, payment submission, playback resolution",
     "Same usage rates as subscription tiers",
-    "MCP server for AI agents",
-    "x402 protocol support",
   ],
   howItWorks: [
-    "Connect wallet or create account",
-    "Add funds to your balance",
-    "Usage deducted automatically",
-    "Top up again when low",
+    "Agent discovers FrameWorks via skill.json, llms.txt, or .well-known/mcp.json",
+    "Wallet signature auto-provisions a prepaid tenant (no email, no form)",
+    "Agent funds balance via x402 (USDC on Base/Arbitrum), crypto deposit, or card",
+    "Usage (delivery minutes, storage, processing) deducted automatically",
+    "Preflight system guides agents through any blockers before billable operations",
   ],
 };
 
@@ -336,7 +341,17 @@ const faqs = [
   {
     question: "How do AI agents access FrameWorks?",
     answer:
-      "Agents authenticate via wallet signature or API token, then use the MCP server or GraphQL API. Usage is charged to your account balance automatically.",
+      "Agents discover the platform via skill.json (compatible with OpenClaw, Claude Code, Cursor, Gemini CLI), llms.txt, or .well-known/mcp.json. They authenticate with an EVM wallet signature which auto-provisions a prepaid tenant — no email or registration. They fund their balance via x402 gasless USDC on Base or Arbitrum, then use MCP tools or GraphQL to manage streams, recordings, analytics, and QoE diagnostics. Three operations work without any auth: payment options, payment submission, and playback resolution.",
+  },
+  {
+    question: "What is x402 and how does it work?",
+    answer:
+      "x402 is an open protocol for inline HTTP payments using USDC. When an agent hits a balance wall, the server returns HTTP 402 with payment options. The agent signs an EIP-3009 transfer authorization off-chain, retries with an X-PAYMENT header, and FrameWorks submits the transaction on-chain (paying the gas). Balance credits instantly. Supported on Base and Arbitrum L2s.",
+  },
+  {
+    question: "Which agent frameworks are compatible?",
+    answer:
+      "Any framework that reads skill.json or llms.txt can discover FrameWorks — including OpenClaw, Claude Code, Claude Desktop, Cursor, Gemini CLI, and others. For full operational access, connect via the MCP endpoint or use the GraphQL API directly. The platform also publishes a W3C DID document and OAuth protected resource metadata for standards-based integration.",
   },
 ];
 
@@ -395,11 +410,11 @@ const pricingHeroHighlights = [
     icon: HomeIcon,
   },
   {
-    title: "Developer-first pricing",
+    title: "Agent-native by default",
     description:
-      "Relay-style GraphQL API and typed SDKs included in every tier. Build faster, pay less.",
+      "Open discovery, wallet auth, x402 payments, and full MCP access included in every tier and Pay-As-You-Go.",
     tone: "accent",
-    icon: CloudIcon,
+    icon: CpuChipIcon,
   },
   {
     title: "Deep analytics included",
@@ -634,7 +649,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="No subscription required"
                 title="Pay As You Go"
-                subtitle="Top up your balance and pay for what you use. Perfect for automation, agents, and usage-based workflows."
+                subtitle="Top up your balance and pay for what you use. AI agents can discover, authenticate, fund, and operate the platform end-to-end — no human interaction required."
                 align="left"
                 underlineAlign="start"
               />

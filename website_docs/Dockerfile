@@ -33,6 +33,7 @@ RUN apk add --no-cache git ca-certificates tzdata \
 
 # copy workspace manifests first for better layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 COPY website_docs/package.json website_docs/
 
 # install dependencies for the docs workspace (dev deps required for build)
@@ -50,6 +51,7 @@ COPY docs/skills/ docs/skills/
 # build the docs site
 RUN cp docs/skills/skill.md website_docs/public/skill.md \
   && cp docs/skills/skill.json website_docs/public/skill.json \
+  && cp docs/skills/heartbeat.md website_docs/public/heartbeat.md \
   && cp docs/skills/llms.txt website_docs/public/llms.txt \
   && cp docs/skills/robots.txt website_docs/public/robots.txt \
   && mkdir -p website_docs/public/.well-known \

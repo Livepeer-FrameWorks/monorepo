@@ -12,6 +12,10 @@
 
   type Framework = "react" | "svelte" | "vanilla";
 
+  // Break the "import" keyword in code example strings so Vite's dep scanner
+  // doesn't treat them as real imports (the packages aren't installed locally).
+  const _imp = "import";
+
   let selectedFramework = $state<Framework>("react");
 
   const docsSiteUrl = getDocsSiteUrl();
@@ -43,7 +47,7 @@
     ],
     codeExamples: {
       react: `import { FrameworksPlayer } from '@livepeer-frameworks/player-react';
-import '@livepeer-frameworks/player-react/player.css';
+${_imp} '@livepeer-frameworks/player-react/player.css';
 
 function App() {
   return (
@@ -55,7 +59,7 @@ function App() {
 }`,
       svelte: `<script>
   import { FrameworksPlayer } from '@livepeer-frameworks/player-svelte';
-  import '@livepeer-frameworks/player-svelte/player.css';
+  ${_imp} '@livepeer-frameworks/player-svelte/player.css';
 <\/script>
 
 <FrameworksPlayer
@@ -63,7 +67,7 @@ function App() {
   gatewayUrl="${graphqlUrl}"
 />`,
       vanilla: `import { FrameWorksPlayer } from '@livepeer-frameworks/player-core/vanilla';
-import '@livepeer-frameworks/player-core/player.css';
+${_imp} '@livepeer-frameworks/player-core/player.css';
 
 const player = new FrameWorksPlayer('#player-container', {
   playbackId: 'your-playback-id',
@@ -98,7 +102,7 @@ player.destroy();`,
     ],
     codeExamples: {
       react: `import { StreamCrafter, Preview, Controls } from '@livepeer-frameworks/streamcrafter-react';
-import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
+${_imp} '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
 
 function Studio() {
   return (
@@ -113,7 +117,7 @@ function Studio() {
 }`,
       svelte: `<script>
   import { StreamCrafter, Preview, Controls } from '@livepeer-frameworks/streamcrafter-svelte';
-  import '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
+  ${_imp} '@livepeer-frameworks/streamcrafter-svelte/streamcrafter.css';
 <\/script>
 
 <StreamCrafter
@@ -124,7 +128,7 @@ function Studio() {
   <Controls />
 </StreamCrafter>`,
       vanilla: `import { IngestController } from '@livepeer-frameworks/streamcrafter-core/vanilla';
-import '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
+${_imp} '@livepeer-frameworks/streamcrafter-core/streamcrafter.css';
 
 const controller = new IngestController({
   streamKey: 'your-stream-key',

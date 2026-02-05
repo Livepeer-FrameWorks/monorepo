@@ -2,6 +2,7 @@ package mcperrors
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -13,8 +14,8 @@ func TestAuthRequired(t *testing.T) {
 		t.Fatal("expected non-nil error")
 	}
 
-	jErr, ok := err.(*jsonrpc.Error)
-	if !ok {
+	var jErr *jsonrpc.Error
+	if !errors.As(err, &jErr) {
 		t.Fatalf("expected *jsonrpc.Error, got %T", err)
 	}
 

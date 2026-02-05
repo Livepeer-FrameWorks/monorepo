@@ -19,6 +19,11 @@ const MaxPageSize = 500
 // HeavyFieldCost is the fixed cost for analytics roots that fan out to aggregations.
 const HeavyFieldCost = 10
 
+// ConnectionMetaOverhead accounts for per-connection fields (pageInfo, totalCount,
+// __typename) that gqlgen includes in childComplexity but should not be multiplied
+// by the page size. Relay connections always carry these alongside edges.
+const ConnectionMetaOverhead = 8
+
 // getPageMultiplier extracts the pagination size from ConnectionInput.
 // Returns DefaultPageSize if page is nil or neither first/last is set.
 func getPageMultiplier(page *model.ConnectionInput) int {
@@ -41,10 +46,15 @@ func getPageMultiplier(page *model.ConnectionInput) int {
 }
 
 // connectionComplexity calculates Shopify-style complexity for connection fields.
-// Formula: ConnectionBaseCost + (pageSize * childComplexity)
+// Only per-item fields (edges) are multiplied by page size; per-connection fields
+// (pageInfo, totalCount) are added once.
 func connectionComplexity(childComplexity int, page *model.ConnectionInput) int {
 	multiplier := getPageMultiplier(page)
-	return ConnectionBaseCost + (multiplier * childComplexity)
+	perItemCost := childComplexity - ConnectionMetaOverhead
+	if perItemCost < 1 {
+		perItemCost = 1
+	}
+	return ConnectionBaseCost + ConnectionMetaOverhead + (multiplier * perItemCost)
 }
 
 // SetupComplexity configures pagination-aware complexity functions on the given

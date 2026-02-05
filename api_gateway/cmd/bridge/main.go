@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -125,6 +127,13 @@ func main() {
 		Complexity: complexity,
 	}))
 	gqlHandler.SetErrorPresenter(gatewayerrors.ErrorPresenter(logger))
+	gqlHandler.SetRecoverFunc(func(ctx context.Context, err any) error {
+		logger.WithFields(logging.Fields{
+			"panic":      err,
+			"stacktrace": string(debug.Stack()),
+		}).Error("Panic recovered in GraphQL resolver")
+		return errors.New("internal error")
+	})
 
 	// Enable introspection for developer API explorer
 	gqlHandler.Use(extension.Introspection{})
@@ -146,6 +155,9 @@ func main() {
 			}
 			opCtx := graphql.GetOperationContext(ctx)
 			if opCtx.Doc == nil {
+				return next(ctx)
+			}
+			if isIntrospectionOperation(opCtx.Operation) {
 				return next(ctx)
 			}
 			depth := calculateQueryDepth(opCtx.Doc.Operations, opCtx.Doc.Fragments)
@@ -199,6 +211,10 @@ func main() {
 			}(ctx)
 		}
 		return next(ctx)
+	})
+
+	gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+		return recoverOperation(ctx, next, logger)
 	})
 
 	// Add transport options
@@ -343,6 +359,15 @@ func main() {
 			}
 			c.Header("Access-Control-Allow-Origin", "*")
 			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skills.skillMD)
+		})
+
+		app.GET("/heartbeat.md", func(c *gin.Context) {
+			if skills.heartbeatMD == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "heartbeat.md not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skills.heartbeatMD)
 		})
 
 		app.GET("/skill.json", func(c *gin.Context) {
@@ -573,6 +598,7 @@ func extractUsageContext(ctx context.Context) (tenantID, authType, userID string
 type skillFiles struct {
 	skillMD     []byte
 	skillJSON   []byte
+	heartbeatMD []byte
 	mcpJSON     []byte
 	securityTxt []byte
 	llmsTxt     []byte
@@ -615,6 +641,7 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 	sf := skillFiles{
 		skillMD:     readFile("skill.md"),
 		skillJSON:   readFile("skill.json"),
+		heartbeatMD: readFile("heartbeat.md"),
 		mcpJSON:     readFile("mcp.json"),
 		securityTxt: readFile("security.txt"),
 		llmsTxt:     readFile("llms.txt"),
@@ -638,6 +665,34 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 	}
 
 	return sf
+}
+
+func isIntrospectionOperation(op *ast.OperationDefinition) bool {
+	if op == nil || len(op.SelectionSet) == 0 {
+		return false
+	}
+	for _, sel := range op.SelectionSet {
+		field, ok := sel.(*ast.Field)
+		if !ok || !strings.HasPrefix(field.Name, "__") {
+			return false
+		}
+	}
+	return true
+}
+
+func recoverOperation(ctx context.Context, next graphql.OperationHandler, logger logging.Logger) (handler graphql.ResponseHandler) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.WithFields(logging.Fields{
+				"panic":      r,
+				"stacktrace": string(debug.Stack()),
+			}).Error("Panic recovered in GraphQL operation")
+			handler = func(ctx context.Context) *graphql.Response {
+				return graphql.ErrorResponse(ctx, "internal error")
+			}
+		}
+	}()
+	return next(ctx)
 }
 
 // calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.

@@ -11,7 +11,7 @@
     GetStreamAnalyticsSummariesConnectionStore,
     StreamStatus,
     StreamCoreFieldsStore,
-    StreamMetricsFieldsStore,
+    StreamMetricsListFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { getIconComponent } from "$lib/iconUtils";
@@ -30,7 +30,7 @@
 
   // Fragment stores for unmasking nested data
   const streamCoreStore = new StreamCoreFieldsStore();
-  const streamMetricsStore = new StreamMetricsFieldsStore();
+  const streamMetricsStore = new StreamMetricsListFieldsStore();
 
   let isAuthenticated = false;
   let timeRange = $state("7d");

@@ -46,6 +46,7 @@ RUN apk add --no-cache git ca-certificates tzdata \
 
 # workspace manifests
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches/ patches/
 
 # npm_player workspace packages
 COPY npm_player/package.json npm_player/
@@ -83,6 +84,7 @@ COPY pkg/graphql/operations/ pkg/graphql/operations/
 # ensure skill files are present in static assets
 RUN cp docs/skills/skill.md website_application/static/skill.md \
   && cp docs/skills/skill.json website_application/static/skill.json \
+  && cp docs/skills/heartbeat.md website_application/static/heartbeat.md \
   && cp docs/skills/llms.txt website_application/static/llms.txt \
   && cp docs/skills/robots.txt website_application/static/robots.txt \
   && mkdir -p website_application/static/.well-known \

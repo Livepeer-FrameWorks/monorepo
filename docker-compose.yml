@@ -910,6 +910,7 @@ services:
         - VITE_TURNSTILE_FORMS_SITE_KEY=${VITE_TURNSTILE_FORMS_SITE_KEY}
         - VITE_DOMAIN=${VITE_DOMAIN}
         - VITE_CONTACT_API_URL=${VITE_CONTACT_API_URL}
+        - VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
     hostname: website
     environment:
       - NODE_ENV=${NODE_ENV}

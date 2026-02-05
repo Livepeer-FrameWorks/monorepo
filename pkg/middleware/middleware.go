@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"frameworks/pkg/ctxkeys"
@@ -81,12 +82,17 @@ func RecoveryMiddleware(logger logging.Logger) gin.HandlerFunc {
 		defer func() {
 			if err := recover(); err != nil {
 				logger.WithFields(logging.Fields{
-					"error":     err,
-					"client_ip": c.ClientIP(),
-					"method":    c.Request.Method,
-					"path":      c.Request.URL.Path,
+					"error":      err,
+					"stacktrace": string(debug.Stack()),
+					"client_ip":  c.ClientIP(),
+					"method":     c.Request.Method,
+					"path":       c.Request.URL.Path,
 				}).Error("Request handler panic")
 
+				if c.Writer.Written() {
+					c.Abort()
+					return
+				}
 				c.AbortWithStatus(500)
 			}
 		}()

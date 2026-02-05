@@ -236,13 +236,11 @@ Implementation of [x402](https://github.com/coinbase/x402) for gasless USDC paym
 
 ### Supported Networks
 
-| Network          | ChainID | x402 | USDC Contract                                |
-| ---------------- | ------- | ---- | -------------------------------------------- |
-| Base             | 8453    | ✅   | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
-| Arbitrum         | 42161   | ✅   | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
-| Base Sepolia     | 84532   | ✅   | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
-| Arbitrum Sepolia | 421614  | ✅   | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` |
-| Ethereum         | 1       | ❌   | Too expensive (~$2-5/tx)                     |
+| Network  | ChainID | x402 | USDC Contract                                |
+| -------- | ------- | ---- | -------------------------------------------- |
+| Base     | 8453    | ✅   | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Arbitrum | 42161   | ✅   | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+| Ethereum | 1       | ❌   | Too expensive (~$2-5/tx)                     |
 
 **Note**: x402 uses a platform-wide `payTo` address (HD index 0). The payer identity comes from the signed authorization, not the address.
 
@@ -275,14 +273,9 @@ Implementation of [x402](https://github.com/coinbase/x402) for gasless USDC paym
 
 x402 only works with EIP-3009 tokens (USDC). ETH/LPT use the deposit flow.
 
-### Testnet Support
+### Testnet Support (Local Development Only)
 
-When enabled, testnet x402 payments are accepted:
-
-- Base Sepolia (`X402_INCLUDE_TESTNETS=true`)
-- Arbitrum Sepolia (`X402_INCLUDE_TESTNETS=true`)
-
-Use testnets for agent dry-runs without spending mainnet funds.
+`X402_INCLUDE_TESTNETS=true` and `CRYPTO_INCLUDE_TESTNETS=true` add Base Sepolia and Arbitrum Sepolia to accepted networks. These flags exist for local development convenience only. There is no balance isolation — testnet payments credit real tenant balances identically to mainnet payments. Never enable in production.
 
 ### Gas Wallet
 
@@ -291,7 +284,6 @@ Single private key used on all EVM chains (same address everywhere):
 - `X402_GAS_WALLET_PRIVKEY` (optional `X402_GAS_WALLET_ADDRESS` override)
 - Fund with enough ETH on Base/Arbitrum for settlement gas
 - Monitor via `gas_wallet_balance_eth` Prometheus metric
-- Use `X402_INCLUDE_TESTNETS=true` to accept testnet payments
 
 ### Key Files
 
@@ -508,7 +500,7 @@ CREATE TABLE purser.simplified_invoices (
 # Gas wallet (same key = same address on all chains)
 X402_GAS_WALLET_PRIVKEY=0x...
 X402_GAS_WALLET_ADDRESS=0x...   # Optional override
-X402_INCLUDE_TESTNETS=true      # Optional
+X402_INCLUDE_TESTNETS=true      # Dev only — no balance isolation, never use in production
 
 # RPC endpoints
 ETH_RPC_ENDPOINT=https://eth.publicnode.com
@@ -521,7 +513,7 @@ ARBITRUM_SEPOLIA_RPC_ENDPOINT=https://sepolia-rollup.arbitrum.io/rpc
 ETHERSCAN_API_KEY=...
 BASESCAN_API_KEY=...
 ARBISCAN_API_KEY=...
-CRYPTO_INCLUDE_TESTNETS=true    # Optional
+CRYPTO_INCLUDE_TESTNETS=true    # Dev only — no balance isolation, never use in production
 
 # HD Wallet (for deposit addresses)
 HD_WALLET_XPUB=xpub...

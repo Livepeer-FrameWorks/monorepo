@@ -10,7 +10,7 @@
     GetBillingStatusStore,
     GetStreamsConnectionStore,
     StreamCoreFieldsStore,
-    StreamMetricsFieldsStore,
+    StreamMetricsListFieldsStore,
     BillingTierFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -39,7 +39,7 @@
 
   // Fragment stores for unmasking nested data
   const streamCoreStore = new StreamCoreFieldsStore();
-  const streamMetricsStore = new StreamMetricsFieldsStore();
+  const streamMetricsStore = new StreamMetricsListFieldsStore();
   const tierFragmentStore = new BillingTierFieldsStore();
 
   // User type from auth store

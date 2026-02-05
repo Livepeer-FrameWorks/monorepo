@@ -1,0 +1,8 @@
+fragment StreamMetricsListFields on StreamMetrics {
+  status
+  isLive
+  currentViewers
+  bufferState
+  qualityTier
+  startedAt
+}

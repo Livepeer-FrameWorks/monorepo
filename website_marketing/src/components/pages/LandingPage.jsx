@@ -20,7 +20,14 @@ import {
 import { Section, SectionContainer } from "@/components/ui/section";
 import { useState, useEffect, useMemo } from "react";
 import config from "../../config";
-import { ServerStackIcon, CodeBracketIcon, ChartBarIcon } from "@heroicons/react/24/outline";
+import {
+  ServerStackIcon,
+  CodeBracketIcon,
+  ChartBarIcon,
+  GlobeAltIcon,
+  CpuChipIcon,
+  BanknotesIcon,
+} from "@heroicons/react/24/outline";
 
 const generateGlitchStrips = () => {
   const strips = [];
@@ -72,7 +79,7 @@ const LandingPage = () => {
     {
       title: "Developer-First Platform",
       description:
-        "Relay-style GraphQL API with typed SDKs. MCP server for AI agents. x402 for machine-to-machine payments. Build with confidence.",
+        "Relay-style GraphQL API with typed SDKs. Agent-native: skill.json, MCP, wallet auth, and x402 payments. Agents discover, operate, and pay autonomously.",
       icon: CodeBracketIcon,
       tone: "accent",
       badge: "Core",
@@ -107,6 +114,57 @@ const LandingPage = () => {
     flush: true,
   }));
 
+  const agentCards = [
+    {
+      icon: GlobeAltIcon,
+      iconTone: "accent",
+      tone: "accent",
+      badge: "Open Standards",
+      title: "Discover",
+      description:
+        "skill.json, llms.txt, MCP discovery, W3C DID, and OAuth metadata. Compatible with OpenClaw, Claude Code, Cursor, Gemini CLI, and 25+ agent frameworks.",
+      hover: "subtle",
+      stripe: true,
+      flush: true,
+    },
+    {
+      icon: CpuChipIcon,
+      iconTone: "green",
+      tone: "green",
+      badge: "Zero Friction",
+      title: "Authenticate",
+      description:
+        "Wallet signature auto-provisions a prepaid tenant. No email, no registration, no API key application.",
+      hover: "subtle",
+      stripe: true,
+      flush: true,
+    },
+    {
+      icon: BanknotesIcon,
+      iconTone: "purple",
+      tone: "purple",
+      badge: "Inline",
+      title: "Pay",
+      description:
+        "x402 gasless USDC on Base and Arbitrum. FrameWorks pays the gas. Balance credits instantly. Card and crypto deposits also supported.",
+      hover: "subtle",
+      stripe: true,
+      flush: true,
+    },
+    {
+      icon: ServerStackIcon,
+      iconTone: "yellow",
+      tone: "yellow",
+      badge: "Full Stack",
+      title: "Operate",
+      description:
+        "MCP tools for streams, recordings, analytics, and QoE diagnostics. GraphQL as an alternative. Agent-operated edge nodes coming soon.",
+      hover: "subtle",
+      stripe: true,
+      flush: true,
+    },
+  ];
+
   const freeTierFeatures = [
     "All self-hosted features",
     "Shared bandwidth pool",
@@ -138,6 +196,26 @@ const LandingPage = () => {
       ctalabel: "Start Free",
       ctaHref: config.appUrl,
       note: "No credit card required · Deploy in minutes",
+    },
+    {
+      id: "payg",
+      tone: "cyan",
+      badge: "Agent-Ready",
+      name: "Pay As You Go",
+      price: "Usage-based",
+      period: "",
+      description:
+        "Connect a wallet, fund your balance, and go. Wallet auth, x402 payments, and full MCP access. Built for agents and automation.",
+      features: [
+        "Wallet auth (no email required)",
+        "Fund via card, crypto, or x402 USDC",
+        "Full platform access via MCP or GraphQL",
+        "Same usage rates as subscription tiers",
+      ],
+      ctaType: "internal",
+      ctaLabel: "View Details",
+      ctaTo: "/pricing",
+      note: "No subscription · No minimum · Agent-native",
     },
     {
       id: "paid",
@@ -658,6 +736,41 @@ const LandingPage = () => {
 
         <SectionDivider />
 
+        {/* Agent-Native Section */}
+        <Section className="bg-brand-surface-muted">
+          <SectionContainer>
+            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+              <HeadlineStack
+                eyebrow="Agent-Native"
+                title="Built for Autonomous Agents"
+                subtitle="Agents discover the platform via open standards, authenticate with a wallet, pay inline with USDC, and operate the full stack — no human in the loop."
+                align="left"
+                underlineAlign="start"
+                actionsPlacement="inline"
+                actions={
+                  <CTACluster align="end" wrap>
+                    <MarketingCTAButton
+                      intent="primary"
+                      href={`${docsBase}/agents/overview`}
+                      label="Agent Docs"
+                      external
+                    />
+                    <MarketingCTAButton
+                      intent="secondary"
+                      href="https://frameworks.network/skill.json"
+                      label="View skill.json"
+                      external
+                    />
+                  </CTACluster>
+                }
+              />
+              <MarketingFeatureWall columns={4} items={agentCards} />
+            </MarketingBand>
+          </SectionContainer>
+        </Section>
+
+        <SectionDivider />
+
         {/* Pricing Preview */}
         <Section>
           <SectionContainer>
@@ -683,7 +796,7 @@ const LandingPage = () => {
                 }
               />
               <MarketingComparisonGrid
-                columns={2}
+                columns={3}
                 stackAt="md"
                 className="landing-pricing-grid"
                 items={pricingPlans.map((plan, index) => {
@@ -742,7 +855,7 @@ const LandingPage = () => {
             <MarketingFinalCTA
               eyebrow="Next steps"
               title="Ready to get started?"
-              description="Full SaaS when you want it easy. Full self-hosting when you want control. Your call."
+              description="Deploy the full stack yourself, point your agent at skill.json, or let us run everything. Your call."
               variant="band"
               primaryAction={{
                 label: "Start Free",
@@ -757,6 +870,12 @@ const LandingPage = () => {
                 {
                   label: "View Open Source",
                   href: config.githubUrl,
+                  icon: "auto",
+                  external: true,
+                },
+                {
+                  label: "Agent Docs",
+                  href: `${docsBase}/agents/overview`,
                   icon: "auto",
                   external: true,
                 },
