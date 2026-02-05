@@ -98,15 +98,42 @@ FrameWorks uses **keyset pagination** with opaque cursors for stable, efficient 
 
 | Limit                          | Default               | Config Variable                 |
 | ------------------------------ | --------------------- | ------------------------------- |
-| GraphQL complexity             | 200                   | `GRAPHQL_COMPLEXITY_LIMIT`      |
+| GraphQL complexity             | 2000                  | `GRAPHQL_COMPLEXITY_LIMIT`      |
 | WebSocket connections/tenant   | 5                     | `WS_MAX_CONNECTIONS_PER_TENANT` |
 | API requests/tenant            | 100 req/min, burst 20 | Quartermaster tenant limits     |
 | Outbound HTTP connections/host | 100                   | (hardcoded shared HTTP client)  |
 | PostgreSQL pool                | 25 open, 5 idle       | (code config)                   |
 | Health check concurrency       | 8                     | `QM_HEALTH_MAX_CONCURRENCY`     |
 | Max transcodes/node            | 0 (auto)              | `HELMSMAN_MAX_TRANSCODES`       |
+| Blocking trigger grace         | 2000 ms               | `HELMSMAN_BLOCKING_GRACE_MS`    |
 | Max concurrent streams         | Per billing tier      | Database                        |
 | Max concurrent viewers         | Per billing tier      | Database                        |
+
+### Node Operational Modes
+
+Edge nodes report an operational mode to Foghorn. Foghorn is authoritative and may override the requested mode.
+
+| Mode          | Behavior                                                                | Config                      |
+| ------------- | ----------------------------------------------------------------------- | --------------------------- |
+| `normal`      | Node accepts new streams and viewers (default)                          | `HELMSMAN_OPERATIONAL_MODE` |
+| `draining`    | Node stops accepting new streams; existing sessions continue until done | `HELMSMAN_OPERATIONAL_MODE` |
+| `maintenance` | Node is excluded from all routing; use for upgrades or hardware work    | `HELMSMAN_OPERATIONAL_MODE` |
+
+### Query Complexity Model
+
+GraphQL query complexity is calculated using a [Shopify-style](https://shopify.engineering/rate-limiting-graphql-apis-calculating-query-complexity) model where connection fields cost more based on requested page size.
+
+| Constant                 | Value | Purpose                                                      |
+| ------------------------ | ----- | ------------------------------------------------------------ |
+| `ConnectionBaseCost`     | 2     | Fixed cost for any connection field                          |
+| `DefaultPageSize`        | 50    | Assumed page size when `first`/`last` is omitted             |
+| `MaxPageSize`            | 500   | Cap on page size used for complexity estimation              |
+| `ConnectionMetaOverhead` | 8     | Per-connection overhead (pageInfo, totalCount, \_\_typename) |
+| `HeavyFieldCost`         | 10    | Fixed cost for analytics root queries and rollup summaries   |
+
+**Connection cost formula**: `ConnectionBaseCost + ConnectionMetaOverhead + (pageSize × perItemCost)`
+
+**Rollup summary fields** (`StreamHealthSummary`, `ClientQoeSummary`, `RoutingEfficiency`) use `HeavyFieldCost` instead of pagination-based scaling, making them cheaper than equivalent connection queries. Prefer these for dashboard summaries.
 
 ---
 
@@ -120,12 +147,13 @@ The `analytics_events` Kafka topic serves as the central nervous system for plat
 | ------------------------- | -------- | --------------------------------------------------------- | -------------------------------------------------------- |
 | `stream_buffer`           | Helmsman | Buffer state changes (FULL/DRY/RECOVER) and health scores | `stream_event_log`, `stream_health_samples`              |
 | `stream_end`              | Helmsman | Stream session ended                                      | `stream_event_log`                                       |
-| `stream_source`           | Helmsman | VOD source resolution                                     | `stream_event_log`                                       |
+| `stream_source`           | Helmsman | VOD source resolution                                     | Skipped (not stored)                                     |
 | `stream_lifecycle_update` | Helmsman | Aggregated stream state snapshot                          | `stream_state_current` (state), `stream_event_log` (log) |
 | `push_rewrite`            | Helmsman | RTMP push URL rewritten (key validation)                  | `stream_event_log`                                       |
-| `push_end`                | Helmsman | Push session ended                                        | `stream_event_log`                                       |
-| `push_out_start`          | Helmsman | Push output started                                       | `stream_event_log`                                       |
-| `recording_complete`      | Helmsman | Recording segment finished                                | `stream_event_log`                                       |
+| `push_end`                | Helmsman | Push session ended                                        | Skipped (not stored)                                     |
+| `push_out_start`          | Helmsman | Push output started                                       | Skipped (not stored)                                     |
+| `recording_complete`      | Helmsman | Recording segment finished                                | Skipped (not stored)                                     |
+| `recording_segment`       | Helmsman | Recording segment metadata                                | Skipped (not stored)                                     |
 
 ### Viewer Events
 
@@ -133,7 +161,7 @@ The `analytics_events` Kafka topic serves as the central nervous system for plat
 | ------------------------- | -------- | -------------------------------------------- | -------------------------- |
 | `viewer_connect`          | Helmsman | Viewer session started (IP, Geo, User-Agent) | `viewer_connection_events` |
 | `viewer_disconnect`       | Helmsman | Viewer session ended                         | `viewer_connection_events` |
-| `play_rewrite`            | Helmsman | Viewer playback URL resolved                 | `stream_event_log`         |
+| `play_rewrite`            | Helmsman | Viewer playback URL resolved                 | Skipped (not stored)       |
 | `client_lifecycle_update` | Helmsman | Player-side QoE metrics (bandwidth, errors)  | `client_qoe_samples`       |
 
 ### Track Events
@@ -149,6 +177,9 @@ The `analytics_events` Kafka topic serves as the central nervous system for plat
 | `node_lifecycle_update` | Helmsman | Node hardware usage (CPU, RAM, disk, network) | `node_state_current` (state), `node_metrics_samples` (log) |
 | `load_balancing`        | Foghorn  | Load balancer routing decision                | `routing_decisions`                                        |
 | `storage_snapshot`      | Foghorn  | Storage usage snapshot                        | `storage_snapshots`                                        |
+| `storage_lifecycle`     | Foghorn  | Storage freeze/defrost lifecycle events       | `storage_events`                                           |
+| `process_billing`       | Foghorn  | Transcoding/processing usage events           | `processing_events`                                        |
+| `api_request_batch`     | Bridge   | Batched API request metrics                   | `api_requests`                                             |
 
 ### Artifact Events
 
@@ -156,6 +187,7 @@ The `analytics_events` Kafka topic serves as the central nervous system for plat
 | ---------------- | ------- | ------------------------------ | --------------------------------------------------------- |
 | `clip_lifecycle` | Foghorn | Clip generation status updates | `artifact_state_current` (state), `artifact_events` (log) |
 | `dvr_lifecycle`  | Foghorn | DVR recording status updates   | `artifact_state_current` (state), `artifact_events` (log) |
+| `vod_lifecycle`  | Foghorn | VOD upload/processing updates  | `artifact_state_current` (state), `artifact_events` (log) |
 
 ---
 

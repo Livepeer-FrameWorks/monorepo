@@ -24,7 +24,7 @@ const TimelineBand = forwardRef(
       ref={ref}
       surface={variant === "band" ? surface : "none"}
       className={cn("timeline-band", variant === "plain" && "timeline-band--plain", className)}
-      flush={variant === "plain"}
+      flush={true}
       {...props}
     >
       {title || subtitle || eyebrow || actions ? (

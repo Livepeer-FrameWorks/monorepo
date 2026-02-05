@@ -14,6 +14,9 @@
     "type-check": "pnpm -r type-check",
     "lint": "eslint .",
     "check": "pnpm type-check && pnpm lint",
+    "test": "pnpm -r test",
+    "test:coverage": "pnpm -r test:coverage",
+    "format": "prettier --write 'packages/*/src/**'",
     "playground:dev": "pnpm --filter playground run dev",
     "playground:build": "pnpm --filter playground run build",
     "clean": "rm -rf packages/*/dist packages/*/.svelte-kit"

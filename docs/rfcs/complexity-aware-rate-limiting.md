@@ -1,6 +1,6 @@
 # RFC: Complexity-Aware Rate Limiting
 
-**Status:** Proposed
+**Status:** Partially Implemented
 **Author:** @stronk
 **Created:** 2026-02-02
 
@@ -185,6 +185,21 @@ Keep 1-token-per-request. Rejected because:
 1. **Divisor value**: What's the right default? 10 seems reasonable but needs tuning.
 2. **Non-GraphQL endpoints**: Should REST endpoints also have variable costs?
 3. **Subscription handling**: Subscriptions already have separate tracking - integrate?
+
+## Implementation Status
+
+**Done:**
+
+- Pagination-aware complexity calculation (`api_gateway/graph/complexity.go`)
+- `HeavyFieldCost=10` for analytics root queries and rollup summaries
+- Rollup summary fields (`StreamHealthSummary`, `ClientQoeSummary`, `RoutingEfficiency`)
+- `GRAPHQL_COMPLEXITY_LIMIT` raised to 2000 to accommodate the new model
+
+**Not started:**
+
+- `DeductCost()` method on rate limiter
+- `GRAPHQL_COMPLEXITY_COST_DIVISOR` env var
+- Shadow / Warn / Enforce rollout phases
 
 ## References
 

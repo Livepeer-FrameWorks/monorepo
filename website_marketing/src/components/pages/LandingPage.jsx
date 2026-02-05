@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+
 import SdkCodePreview from "./SdkCodePreview";
 // Demo player wrapper with status/health integration
 import { Player as FrameworksPlayer } from "@livepeer-frameworks/player-react";
@@ -531,9 +532,9 @@ const LandingPage = () => {
 
       <div className="flex flex-col">
         {/* Rest of the sections remain the same */}
-        <Section className="bg-brand-surface-muted">
+        <Section className="bg-brand-surface-muted landing-section--platform">
           <SectionContainer>
-            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+            <MarketingBand preset="beam" texture="broadcast">
               <HeadlineStack
                 eyebrow="Platform"
                 title="Built Different"
@@ -554,9 +555,9 @@ const LandingPage = () => {
 
         <SectionDivider />
 
-        <Section className="bg-brand-surface">
+        <Section className="bg-brand-surface landing-section--sdk">
           <SectionContainer>
-            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+            <MarketingBand preset="foundation">
               <MarketingGridSplit align="stretch" stackAt="lg" seam>
                 {/* Left: Text slab with header/body/actions zones */}
                 <div className="slab-zone">
@@ -622,9 +623,15 @@ const LandingPage = () => {
         <SectionDivider />
 
         {/* Agent-Native Section */}
-        <Section className="bg-brand-surface-muted">
+        <Section className="bg-brand-surface-muted landing-section--agents">
           <SectionContainer>
-            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+            <MarketingBand
+              surface="panel"
+              tone="violet"
+              texture="broadcast"
+              density="spacious"
+              flush
+            >
               <HeadlineStack
                 eyebrow="Agent-Native"
                 title="Built for Autonomous Agents"
@@ -657,9 +664,9 @@ const LandingPage = () => {
         <SectionDivider />
 
         {/* Pricing Preview */}
-        <Section>
+        <Section className="landing-section--pricing">
           <SectionContainer>
-            <MarketingBand surface="panel">
+            <MarketingBand preset="quiet">
               <HeadlineStack
                 eyebrow="Pricing"
                 title={

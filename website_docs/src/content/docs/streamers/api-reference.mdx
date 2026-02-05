@@ -261,7 +261,7 @@ const client = new GraphQLClient("%GATEWAY_URL%/graphql", {
 
 const query = gql`
   query {
-    streamsConnection(first: 5) {
+    streamsConnection(page: { first: 5 }) {
       edges {
         node {
           id

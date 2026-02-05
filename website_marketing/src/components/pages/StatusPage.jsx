@@ -3,7 +3,10 @@ import config from "../../config";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  HeadlineStack,
+  MarketingBand,
   MarketingHero,
+  MarketingGridSeam,
   MarketingFinalCTA,
   MarketingScrollProgress,
   SectionDivider,
@@ -171,19 +174,22 @@ const StatusPage = () => {
 
       <Section className="bg-brand-surface">
         <SectionContainer>
-          <div className="space-y-6">
-            <h2 className="text-2xl font-semibold text-foreground">Services</h2>
+          <MarketingBand preset="foundation" texture="broadcast">
+            <HeadlineStack
+              eyebrow="Health"
+              title="Services"
+              subtitle="Live rollup from service instance checks."
+              align="left"
+              underlineAlign="start"
+            />
             {rollups.length === 0 ? (
-              <p className="text-muted-foreground">No health data yet.</p>
+              <div className="px-6 pb-6 text-muted-foreground">No health data yet.</div>
             ) : (
-              <div className="grid md:grid-cols-2 gap-4">
+              <MarketingGridSeam columns={2} stackAt="md" gap="tight" surface="glass">
                 {rollups.map((r) => (
-                  <div
-                    key={r.serviceId}
-                    className="rounded-lg border border-border bg-brand-surface/50 backdrop-blur-sm p-4 transition-colors hover:border-primary/40"
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="font-medium text-foreground">{r.serviceId}</div>
+                  <div key={r.serviceId} className="flex h-full flex-col gap-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="text-base font-semibold text-foreground">{r.serviceId}</div>
                       {r.status === "operational" &&
                         pill("Operational", "bg-green-500/20 text-green-400 border-green-500/40")}
                       {r.status === "degraded" &&
@@ -191,17 +197,17 @@ const StatusPage = () => {
                       {r.status === "down" &&
                         pill("Down", "bg-red-500/20 text-red-400 border-red-500/40")}
                     </div>
-                    <div className="text-muted-foreground text-sm">
+                    <div className="text-sm text-muted-foreground">
                       Instances: {r.healthy}/{r.total} healthy
                     </div>
-                    <div className="text-muted-foreground text-xs mt-1">
+                    <div className="text-xs text-muted-foreground">
                       Last health: {formatTime(r.lastHealthCheck)}
                     </div>
                   </div>
                 ))}
-              </div>
+              </MarketingGridSeam>
             )}
-          </div>
+          </MarketingBand>
         </SectionContainer>
       </Section>
 
@@ -209,10 +215,15 @@ const StatusPage = () => {
 
       <Section className="bg-brand-surface-muted">
         <SectionContainer>
-          <div className="space-y-4">
-            <h2 className="text-2xl font-semibold text-foreground">Recent Incidents</h2>
-            <p className="text-muted-foreground">No incidents reported.</p>
-          </div>
+          <MarketingBand surface="midnight" tone="neutral" texture="none" density="compact" flush>
+            <HeadlineStack
+              eyebrow="Incidents"
+              title="Recent incidents"
+              subtitle="No incidents reported."
+              align="left"
+              underlineAlign="start"
+            />
+          </MarketingBand>
         </SectionContainer>
       </Section>
 

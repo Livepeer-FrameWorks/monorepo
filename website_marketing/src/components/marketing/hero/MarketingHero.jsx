@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import { SectionContainer } from "@/components/ui/section";
 import { renderSlot } from "../utils";
 import MarketingCTAButton from "../buttons/MarketingCTAButton";
+import HeroFrameCarousel from "@/components/pages/HeroFrameCarousel";
 
 const createHeroSurfaceStyle = (seed = "") => {
   if (!seed) {
@@ -174,6 +175,7 @@ const MarketingHero = ({
       data-surface-tone={surfaceTone}
       data-surface-intensity={surfaceIntensity}
     >
+      <HeroFrameCarousel />
       <div className="marketing-hero__surface" aria-hidden="true" />
       {accentElements.length ? (
         <div className="marketing-hero__accents" aria-hidden="true">

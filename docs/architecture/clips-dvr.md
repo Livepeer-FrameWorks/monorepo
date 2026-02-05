@@ -66,7 +66,8 @@ query GetClips($streamId: ID, $first: Int, $after: String) {
         status
         sizeBytes
         storageLocation
-        isFrozen
+        isFrozen # Boolean (nullable — null when lifecycle state unavailable)
+        isExpired # Boolean! (derived from retention_until)
       }
     }
   }
@@ -139,7 +140,7 @@ Gateway queries go to Commodore + Periscope, not Foghorn.
 | **Artifact Operations** | storage_location, node assignments, sync status                    | Foghorn   | PostgreSQL                          | Internal gRPC only      |
 | **Real-time Events**    | Live progress updates, stage changes                               | Signalman | Kafka passthrough                   | GraphQL subscriptions   |
 
-Note: `storageLocation`/`isFrozen` are derived in GraphQL from Periscope `s3_url` (not stored directly in ClickHouse).
+Note: `storageLocation`/`isFrozen` are derived in GraphQL from Periscope `s3_url` (not stored directly in ClickHouse). `isFrozen` is nullable (returns null when lifecycle state is unavailable). `isExpired` is derived from `retention_until`.
 
 ### Data Flow During Processing
 
@@ -166,7 +167,7 @@ foghorn.artifacts (
   artifact_hash VARCHAR(32) PRIMARY KEY,
   internal_name VARCHAR(255),  -- Stream identifier
   artifact_internal_name VARCHAR(64), -- Artifact routing name (vod+<name>)
-  tenant_id UUID,              -- Denormalized fallback
+  tenant_id UUID NOT NULL,     -- Required; denormalized for routing
   user_id UUID,                -- Denormalized fallback
   ...
 )
@@ -224,7 +225,7 @@ foghorn.artifacts (
   -- Denormalized fields (authoritative source: Commodore)
   internal_name VARCHAR(255),             -- Stream identifier for routing
   artifact_internal_name VARCHAR(64),     -- Artifact routing name (vod+<name>)
-  tenant_id UUID,                         -- Fallback when Commodore unavailable
+  tenant_id UUID NOT NULL,                 -- Tenant owning the artifact (required)
   user_id UUID,                           -- Fallback for event emission
 
   -- Lifecycle state
@@ -245,6 +246,10 @@ foghorn.artifacts (
   last_sync_attempt TIMESTAMP,
   frozen_at TIMESTAMP,
   dtsh_synced BOOLEAN DEFAULT FALSE,
+
+  -- Defrost tracking
+  defrost_node_id VARCHAR(100),          -- Node handling active defrost
+  defrost_started_at TIMESTAMP,          -- When defrost was initiated
 
   -- DVR-specific timing
   started_at TIMESTAMP,
@@ -446,11 +451,12 @@ if fallbackTenantID.Valid {
 
 Helmsman nodes manage local storage pressure independently to avoid disk exhaustion:
 
-| Parameter           | Default | Description                                 |
-| ------------------- | ------- | ------------------------------------------- |
-| `cleanupThreshold`  | 90%     | Start eviction when disk usage exceeds this |
-| `targetThreshold`   | 80%     | Evict until disk usage falls below this     |
-| `minRetentionHours` | 1 hour  | Never evict artifacts younger than this     |
+| Parameter           | Default | Description                                                   |
+| ------------------- | ------- | ------------------------------------------------------------- |
+| `cleanupThreshold`  | 90%     | Start eviction when disk usage exceeds this                   |
+| `targetThreshold`   | 80%     | Evict until disk usage falls below this                       |
+| `MinFreeBytes`      | 1 GiB   | Eviction also triggers when free space falls below this floor |
+| `minRetentionHours` | 1 hour  | Never evict artifacts younger than this                       |
 
 > **Important:** Local storage retention is **best-effort**. Under disk pressure,
 > artifacts may be evicted from edge nodes before the 30-day retention window.

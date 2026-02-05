@@ -17,9 +17,10 @@ export function PlayerPreview() {
   const showPlayer = isConnected;
 
   return (
-    <div className="slab flex-1">
+    <div className="slab slab--player flex-1">
       <div className="slab-header">
         <h3 className="slab-title">Player</h3>
+        <p className="slab-subtitle">Multi-protocol playback</p>
       </div>
       <div className="slab-body--flush flex flex-col">
         <div className="relative aspect-video overflow-hidden border-b border-border/30 bg-muted/40">

@@ -27,12 +27,12 @@ import { cn } from "@/lib/utils";
 import {
   MarketingHero,
   MarketingBand,
-  MarketingFeatureWall,
   MarketingSlab,
   MarketingSlabHeader,
+  MarketingGridSplit,
+  MarketingStackedSeam,
   HeadlineStack,
   MarketingCTAButton,
-  MarketingFeatureCard,
   MarketingFinalCTA,
   MarketingScrollProgress,
   SectionDivider,
@@ -285,19 +285,6 @@ const Contact = () => {
         surface="gradient"
         support="Email • Discord • Forum • Enterprise requests"
         accents={contactHeroAccents}
-        primaryAction={{
-          label: `Email`,
-          href: `mailto:${config.contactEmail}`,
-          external: true,
-          icon: ArrowTopRightOnSquareIcon,
-        }}
-        secondaryAction={{
-          label: "Join the Discord",
-          href: config.discordUrl,
-          external: true,
-          icon: ArrowTopRightOnSquareIcon,
-          variant: "secondary",
-        }}
       />
 
       <SectionDivider />
@@ -307,58 +294,244 @@ const Contact = () => {
           <MarketingBand surface="none">
             <HeadlineStack
               eyebrow="Get in touch"
-              title="Choose the channel that fits you"
-              subtitle="Email for longer threads, Discord for real-time chat, or the forum for structured conversations with the team."
+              title="Choose how to reach us"
+              subtitle="Pick a channel for real-time chat, or send us a message directly."
               align="left"
+              underlineAlign="start"
             />
-            <MarketingFeatureWall
-              items={contactMethods}
-              columns={4}
-              stackAt="md"
-              flush
-              renderItem={(method, index) => {
-                const Icon = method.icon;
-                const content = (
-                  <MarketingFeatureCard
-                    tone={method.tone}
-                    icon={Icon}
-                    iconTone={method.tone}
-                    title={method.title}
-                    hover="lift"
-                    flush
-                    metaAlign="end"
-                    className="contact-method-card"
-                    meta={
-                      <ArrowTopRightOnSquareIcon
-                        className="contact-method-chevron"
-                        aria-hidden="true"
-                      />
+            <MarketingGridSplit align="start" stackAt="md" gap="lg">
+              <motion.div
+                className="w-full"
+                initial={{ opacity: 0, x: -26 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.55 }}
+              >
+                <MarketingStackedSeam
+                  items={contactMethods}
+                  className="contact-channels"
+                  renderItem={(method, index) => {
+                    const Icon = method.icon;
+                    const slab = (
+                      <div className="contact-method-slab" data-tone={method.tone}>
+                        <div className="contact-method-slab__icon">
+                          <Icon className="contact-method-slab__icon-symbol" aria-hidden="true" />
+                        </div>
+                        <div className="contact-method-slab__body">
+                          <span className="contact-method-slab__title">{method.title}</span>
+                          <span className="contact-method-slab__subtitle">
+                            {method.subtitle ?? method.link?.label}
+                          </span>
+                          <p className="contact-method-slab__description">{method.description}</p>
+                        </div>
+                        <ArrowTopRightOnSquareIcon
+                          className="contact-method-chevron"
+                          aria-hidden="true"
+                        />
+                      </div>
+                    );
+
+                    if (method.link?.href) {
+                      return (
+                        <a
+                          key={method.title ?? index}
+                          href={method.link.href}
+                          target={method.link.external ? "_blank" : undefined}
+                          rel={method.link.external ? "noreferrer noopener" : undefined}
+                          className="contact-method-link"
+                        >
+                          {slab}
+                        </a>
+                      );
                     }
-                  >
-                    <div className="contact-method-subtitle">
-                      {method.subtitle ?? method.link?.label}
+
+                    return slab;
+                  }}
+                />
+              </motion.div>
+
+              <motion.div
+                className="w-full"
+                initial={{ opacity: 0, x: 26 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.55, delay: 0.1 }}
+              >
+                <div className="contact-form-panel">
+                  <div className="contact-form-panel__header">
+                    <h3 className="contact-form-panel__title">Send us a note</h3>
+                    <p className="contact-form-panel__subtitle">
+                      We usually reply within one business day.
+                    </p>
+                  </div>
+                  <form ref={formRef} onSubmit={handleSubmit} className="contact-form space-y-6">
+                    {!isTurnstileEnabled && (
+                      <input
+                        type="text"
+                        name="phone_number"
+                        value={formData.phone_number}
+                        onChange={handleChange}
+                        style={{ display: "none" }}
+                        tabIndex="-1"
+                        autoComplete="off"
+                      />
+                    )}
+
+                    <div className="grid gap-6 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="name">Name *</Label>
+                        <Input
+                          type="text"
+                          id="name"
+                          name="name"
+                          value={formData.name}
+                          onChange={handleChange}
+                          required
+                          disabled={success}
+                          placeholder="Your name"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="email">Email *</Label>
+                        <Input
+                          type="email"
+                          id="email"
+                          name="email"
+                          value={formData.email}
+                          onChange={handleChange}
+                          required
+                          disabled={success}
+                          placeholder="you@example.com"
+                        />
+                      </div>
                     </div>
-                    <p className="marketing-feature-card__description">{method.description}</p>
-                  </MarketingFeatureCard>
-                );
 
-                if (method.link?.href) {
-                  return (
-                    <a
-                      key={method.title ?? index}
-                      href={method.link.href}
-                      target={method.link.external ? "_blank" : undefined}
-                      rel={method.link.external ? "noreferrer noopener" : undefined}
-                      className="contact-method-link"
-                    >
-                      {content}
-                    </a>
-                  );
-                }
+                    <div className="space-y-2">
+                      <Label htmlFor="company">Company</Label>
+                      <Input
+                        type="text"
+                        id="company"
+                        name="company"
+                        value={formData.company}
+                        onChange={handleChange}
+                        disabled={success}
+                        placeholder="Your company"
+                      />
+                    </div>
 
-                return content;
-              }}
-            />
+                    <div className="space-y-2">
+                      <Label htmlFor="message">Message *</Label>
+                      <Textarea
+                        id="message"
+                        name="message"
+                        value={formData.message}
+                        onChange={handleChange}
+                        required
+                        disabled={success}
+                        placeholder="Tell us about your project or questions..."
+                        rows={6}
+                      />
+                    </div>
+
+                    {isTurnstileEnabled && !success ? (
+                      <div className="contact-turnstile">
+                        <span className="contact-turnstile__label">Security Check *</span>
+                        <div className="contact-turnstile__widget">
+                          <Turnstile
+                            siteKey={config.turnstileSiteKey}
+                            onSuccess={(token) => {
+                              setTurnstileToken(token);
+                              setFormData((prev) => ({ ...prev, human_check: "human" }));
+                              setError("");
+                            }}
+                            onExpire={() => {
+                              setTurnstileToken("");
+                              setFormData((prev) => ({ ...prev, human_check: defaultHumanCheck }));
+                            }}
+                            onError={(err) => {
+                              console.error("Turnstile error:", err);
+                              setTurnstileToken("");
+                              setFormData((prev) => ({ ...prev, human_check: defaultHumanCheck }));
+                              setError(
+                                "There was a problem with the verification challenge. Please try again."
+                              );
+                            }}
+                            options={{ action: "contact_form", theme: "dark" }}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {!isTurnstileEnabled && (
+                      <div className="contact-verification">
+                        <label
+                          className={cn(
+                            "contact-verification__option contact-verification__option--human",
+                            success && "is-disabled"
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            name="human_check"
+                            checked={formData.human_check === "human"}
+                            onChange={(e) =>
+                              setFormData((prev) => ({
+                                ...prev,
+                                human_check: e.target.checked ? "human" : "robot",
+                              }))
+                            }
+                            disabled={success}
+                            className="contact-verification__radio"
+                          />
+                          <UserIcon className="contact-verification__icon" />
+                          <span className="contact-verification__copy">
+                            I confirm I am not a robot
+                          </span>
+                        </label>
+                      </div>
+                    )}
+
+                    {success ? (
+                      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+                        <Alert className="contact-alert contact-alert--success">
+                          <CheckCircleIcon className="h-5 w-5" />
+                          <AlertTitle>Message sent successfully</AlertTitle>
+                          <AlertDescription>
+                            Thank you for reaching out. We will respond shortly.
+                          </AlertDescription>
+                        </Alert>
+                      </motion.div>
+                    ) : (
+                      <MarketingCTAButton
+                        intent="primary"
+                        type="submit"
+                        disabled={loading || (isTurnstileEnabled && !turnstileToken)}
+                        className="w-full justify-center"
+                      >
+                        {loading ? (
+                          <span className="flex items-center justify-center gap-2">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            Sending...
+                          </span>
+                        ) : (
+                          "Send Message"
+                        )}
+                      </MarketingCTAButton>
+                    )}
+
+                    {error && (
+                      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+                        <Alert className="contact-alert contact-alert--error">
+                          <ExclamationCircleIcon className="h-5 w-5" />
+                          <AlertTitle>Error</AlertTitle>
+                          <AlertDescription>{error}</AlertDescription>
+                        </Alert>
+                      </motion.div>
+                    )}
+                  </form>
+                </div>
+              </motion.div>
+            </MarketingGridSplit>
           </MarketingBand>
         </SectionContainer>
       </Section>
@@ -367,202 +540,32 @@ const Contact = () => {
 
       <Section className="bg-brand-surface-muted">
         <SectionContainer>
-          <MarketingSlab className="contact-form-slab">
-            <MarketingSlabHeader
-              eyebrow="Contact"
-              title="Send us a message"
-              subtitle="We usually reply within one business day. Let us know how we can help."
-            />
-            <form ref={formRef} onSubmit={handleSubmit} className="contact-form space-y-6">
-              {!isTurnstileEnabled && (
-                <input
-                  type="text"
-                  name="phone_number"
-                  value={formData.phone_number}
-                  onChange={handleChange}
-                  style={{ display: "none" }}
-                  tabIndex="-1"
-                  autoComplete="off"
-                />
-              )}
-
-              <div className="grid gap-6 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="name">Name *</Label>
-                  <Input
-                    type="text"
-                    id="name"
-                    name="name"
-                    value={formData.name}
-                    onChange={handleChange}
-                    required
-                    disabled={success}
-                    placeholder="Your name"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email *</Label>
-                  <Input
-                    type="email"
-                    id="email"
-                    name="email"
-                    value={formData.email}
-                    onChange={handleChange}
-                    required
-                    disabled={success}
-                    placeholder="you@example.com"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="company">Company</Label>
-                <Input
-                  type="text"
-                  id="company"
-                  name="company"
-                  value={formData.company}
-                  onChange={handleChange}
-                  disabled={success}
-                  placeholder="Your company"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="message">Message *</Label>
-                <Textarea
-                  id="message"
-                  name="message"
-                  value={formData.message}
-                  onChange={handleChange}
-                  required
-                  disabled={success}
-                  placeholder="Tell us about your project or questions..."
-                  rows={6}
-                />
-              </div>
-
-              {isTurnstileEnabled && !success ? (
-                <div className="contact-turnstile">
-                  <span className="contact-turnstile__label">Security Check *</span>
-                  <div className="contact-turnstile__widget">
-                    <Turnstile
-                      siteKey={config.turnstileSiteKey}
-                      onSuccess={(token) => {
-                        setTurnstileToken(token);
-                        setFormData((prev) => ({ ...prev, human_check: "human" }));
-                        setError("");
-                      }}
-                      onExpire={() => {
-                        setTurnstileToken("");
-                        setFormData((prev) => ({ ...prev, human_check: defaultHumanCheck }));
-                      }}
-                      onError={(err) => {
-                        console.error("Turnstile error:", err);
-                        setTurnstileToken("");
-                        setFormData((prev) => ({ ...prev, human_check: defaultHumanCheck }));
-                        setError(
-                          "There was a problem with the verification challenge. Please try again."
-                        );
-                      }}
-                      options={{ action: "contact_form", theme: "dark" }}
-                    />
-                  </div>
-                </div>
-              ) : null}
-
-              {!isTurnstileEnabled && (
-                <div className="contact-verification">
-                  <label
-                    className={cn(
-                      "contact-verification__option contact-verification__option--human",
-                      success && "is-disabled"
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      name="human_check"
-                      checked={formData.human_check === "human"}
-                      onChange={(e) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          human_check: e.target.checked ? "human" : "robot",
-                        }))
-                      }
-                      disabled={success}
-                      className="contact-verification__radio"
-                    />
-                    <UserIcon className="contact-verification__icon" />
-                    <span className="contact-verification__copy">I confirm I am not a robot</span>
-                  </label>
-                </div>
-              )}
-
-              {success ? (
-                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                  <Alert className="contact-alert contact-alert--success">
-                    <CheckCircleIcon className="h-5 w-5" />
-                    <AlertTitle>Message sent successfully</AlertTitle>
-                    <AlertDescription>
-                      Thank you for reaching out. We will respond shortly.
-                    </AlertDescription>
-                  </Alert>
-                </motion.div>
-              ) : (
-                <MarketingCTAButton
-                  intent="primary"
-                  type="submit"
-                  disabled={loading || (isTurnstileEnabled && !turnstileToken)}
-                  className="w-full justify-center"
-                >
-                  {loading ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                      Sending...
-                    </span>
-                  ) : (
-                    "Send Message"
-                  )}
-                </MarketingCTAButton>
-              )}
-
-              {error && (
-                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                  <Alert className="contact-alert contact-alert--error">
-                    <ExclamationCircleIcon className="h-5 w-5" />
-                    <AlertTitle>Error</AlertTitle>
-                    <AlertDescription>{error}</AlertDescription>
-                  </Alert>
-                </motion.div>
-              )}
-            </form>
-          </MarketingSlab>
-        </SectionContainer>
-      </Section>
-
-      <SectionDivider />
-
-      <Section className="bg-brand-surface">
-        <SectionContainer>
-          <MarketingSlab variant="feature-panel">
-            <MarketingSlabHeader
-              eyebrow="FAQ"
-              title="Common questions"
-              subtitle="Quick answers to the questions we hear most often."
-            />
-            <Accordion type="single" collapsible className="marketing-accordion">
-              {faqs.map((faq, index) => (
-                <AccordionItem key={faq.question} value={`faq-${index}`}>
-                  <AccordionTrigger>{faq.question}</AccordionTrigger>
-                  <AccordionContent>
-                    <div className="marketing-accordion__answer">
-                      <p>{faq.answer}</p>
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
-            </Accordion>
-          </MarketingSlab>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingSlab variant="feature-panel">
+              <MarketingSlabHeader
+                eyebrow="FAQ"
+                title="Common questions"
+                subtitle="Quick answers to the questions we hear most often."
+              />
+              <Accordion type="single" collapsible className="marketing-accordion">
+                {faqs.map((faq, index) => (
+                  <AccordionItem key={faq.question} value={`faq-${index}`}>
+                    <AccordionTrigger>{faq.question}</AccordionTrigger>
+                    <AccordionContent>
+                      <div className="marketing-accordion__answer">
+                        <p>{faq.answer}</p>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            </MarketingSlab>
+          </motion.div>
         </SectionContainer>
       </Section>
 

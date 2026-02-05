@@ -20,6 +20,7 @@ type Loaders struct {
 	LiveNodeState             *LiveNodeStateLoader
 	StreamMetrics             *StreamMetricsLoader
 	ArtifactLifecycle         *ArtifactLifecycleLoader
+	Stream                    *StreamLoader
 	Memo                      *Memoizer
 }
 
@@ -33,6 +34,7 @@ func New(serviceClients *clients.ServiceClients) *Loaders {
 		LiveNodeState:             NewLiveNodeStateLoader(serviceClients),
 		StreamMetrics:             NewStreamMetricsLoader(serviceClients.Periscope),
 		ArtifactLifecycle:         NewArtifactLifecycleLoader(serviceClients.Periscope),
+		Stream:                    NewStreamLoader(serviceClients.Commodore),
 		Memo:                      NewMemoizer(),
 	}
 }

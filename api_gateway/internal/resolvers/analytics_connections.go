@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	periscopeclient "frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
@@ -110,6 +111,12 @@ func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *str
 		return nil, err
 	}
 
+	streamIDs := make([]string, len(response.Events))
+	for i, e := range response.Events {
+		streamIDs[i] = e.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
+
 	// Build edges from proto response
 	edges := make([]*model.RoutingEventEdge, len(response.Events))
 	for i, event := range response.Events {
@@ -201,6 +208,12 @@ func (r *Resolver) DoGetConnectionEventsConnection(ctx context.Context, stream *
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Events))
+	for i, e := range response.Events {
+		streamIDs[i] = e.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	// Build edges from proto response
 	edges := make([]*model.ConnectionEventEdge, len(response.Events))
@@ -306,6 +319,12 @@ func (r *Resolver) DoGetArtifactEventsConnection(ctx context.Context, streamId *
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Events))
+	for i, e := range response.Events {
+		streamIDs[i] = e.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	// Build edges from proto response
 	edges := make([]*model.ArtifactEventEdge, len(response.Events))
@@ -605,6 +624,8 @@ func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, strea
 		return nil, err
 	}
 
+	loaders.PreloadStreams(ctx, ctxkeys.GetTenantID(ctx), []string{stream})
+
 	// Build edges from proto response
 	edges := make([]*model.StreamHealthMetricEdge, len(response.Metrics))
 	for i, metric := range response.Metrics {
@@ -688,6 +709,8 @@ func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream st
 	if err != nil {
 		return nil, err
 	}
+
+	loaders.PreloadStreams(ctx, ctxkeys.GetTenantID(ctx), []string{stream})
 
 	// Build edges from proto response
 	edges := make([]*model.TrackListEventEdge, len(response.Events))
@@ -783,6 +806,8 @@ func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId str
 	if err != nil {
 		return nil, err
 	}
+
+	loaders.PreloadStreams(ctx, ctxkeys.GetTenantID(ctx), []string{streamId})
 
 	// Build edges from proto response
 	edges := make([]*model.StreamEventEdge, 0, len(response.Events))
@@ -908,6 +933,8 @@ func (r *Resolver) DoGetBufferEventsConnection(ctx context.Context, streamId str
 	if !ok {
 		return nil, fmt.Errorf("unexpected response type for buffer events: %T", val)
 	}
+
+	loaders.PreloadStreams(ctx, tenantID, []string{streamId})
 
 	edges := make([]*model.BufferEventEdge, len(response.Events))
 	for i, event := range response.Events {
@@ -1289,6 +1316,12 @@ func (r *Resolver) DoGetArtifactStatesConnection(ctx context.Context, streamId *
 		return nil, err
 	}
 
+	streamIDs := make([]string, len(response.Artifacts))
+	for i, a := range response.Artifacts {
+		streamIDs[i] = a.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
+
 	// Build edges from proto response
 	edges := make([]*model.ArtifactStateEdge, len(response.Artifacts))
 	for i, artifact := range response.Artifacts {
@@ -1384,6 +1417,12 @@ func (r *Resolver) DoGetStreamConnectionHourlyConnection(ctx context.Context, st
 		return nil, err
 	}
 
+	streamIDs := make([]string, len(response.Records))
+	for i, r := range response.Records {
+		streamIDs[i] = r.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
+
 	edges := make([]*model.StreamConnectionHourlyEdge, len(response.Records))
 	for i, record := range response.Records {
 		cursor := encodeStableCursor(cursorTimeFromProto(record.Hour), record.StreamId)
@@ -1473,6 +1512,12 @@ func (r *Resolver) DoGetClientMetrics5mConnection(ctx context.Context, stream *s
 		return nil, err
 	}
 
+	streamIDs := make([]string, len(response.Records))
+	for i, r := range response.Records {
+		streamIDs[i] = r.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
+
 	edges := make([]*model.ClientMetrics5mEdge, len(response.Records))
 	for i, record := range response.Records {
 		cursor := encodeStableCursor(cursorTimeFromProto(record.Timestamp), record.Id)
@@ -1561,6 +1606,12 @@ func (r *Resolver) DoGetQualityTierDailyConnection(ctx context.Context, stream *
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Records))
+	for i, r := range response.Records {
+		streamIDs[i] = r.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	edges := make([]*model.QualityTierDailyEdge, len(response.Records))
 	for i, record := range response.Records {
@@ -1733,6 +1784,12 @@ func (r *Resolver) DoGetStorageEventsConnection(ctx context.Context, streamId *s
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Events))
+	for i, e := range response.Events {
+		streamIDs[i] = e.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	edges := make([]*model.StorageEventEdge, len(response.Events))
 	for i, event := range response.Events {
@@ -1910,6 +1967,12 @@ func (r *Resolver) DoGetViewerHoursHourlyConnection(ctx context.Context, stream 
 		return nil, err
 	}
 
+	streamIDs := make([]string, len(response.Records))
+	for i, r := range response.Records {
+		streamIDs[i] = r.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
+
 	edges := make([]*model.ViewerHoursHourlyEdge, len(response.Records))
 	for i, record := range response.Records {
 		cursor := encodeStableCursor(cursorTimeFromProto(record.Hour), record.Id)
@@ -2086,6 +2149,8 @@ func (r *Resolver) DoGetStreamHealth5mConnection(ctx context.Context, streamId s
 		return nil, err
 	}
 
+	loaders.PreloadStreams(ctx, tenantID, []string{streamId})
+
 	edges := make([]*model.StreamHealth5mEdge, len(response.Records))
 	for i, record := range response.Records {
 		cursor := encodeStableCursor(cursorTimeFromProto(record.Timestamp), record.Id)
@@ -2175,6 +2240,12 @@ func (r *Resolver) DoGetViewerSessionsConnection(ctx context.Context, stream *st
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Sessions))
+	for i, s := range response.Sessions {
+		streamIDs[i] = s.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	edges := make([]*model.ViewerSessionEdge, len(response.Sessions))
 	for i, session := range response.Sessions {
@@ -2290,6 +2361,12 @@ func (r *Resolver) DoGetViewerGeographicsConnection(ctx context.Context, stream 
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Events))
+	for i, e := range response.Events {
+		streamIDs[i] = e.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, ctxkeys.GetTenantID(ctx), streamIDs)
 
 	// Build edges from proto response - ConnectionEvent contains geo fields
 	edges := make([]*model.ViewerGeographicEdge, len(response.Events))
@@ -2453,6 +2530,8 @@ func (r *Resolver) DoGetViewerTimeSeriesConnection(ctx context.Context, streamId
 		buckets = buckets[startIdx:endIdx]
 	}
 
+	loaders.PreloadStreams(ctx, tenantID, []string{streamId})
+
 	// Build edges
 	edges := make([]*model.ViewerCountBucketEdge, len(buckets))
 	for i, bucket := range buckets {
@@ -2542,6 +2621,12 @@ func (r *Resolver) DoGetProcessingUsageConnection(ctx context.Context, streamNam
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Records))
+	for i, r := range response.Records {
+		streamIDs[i] = r.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	// Build edges from records (proto → model via binding)
 	edges := make([]*model.ProcessingUsageEdge, len(response.Records))
@@ -2637,6 +2722,12 @@ func (r *Resolver) DoGetRebufferingEventsConnection(ctx context.Context, streamI
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Events))
+	for i, e := range response.Events {
+		streamIDs[i] = e.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	edges := make([]*model.RebufferingEventEdge, len(response.Events))
 	for i, event := range response.Events {
@@ -2813,6 +2904,12 @@ func (r *Resolver) DoGetStreamAnalyticsDailyConnection(ctx context.Context, stre
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Records))
+	for i, r := range response.Records {
+		streamIDs[i] = r.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	edges := make([]*model.StreamAnalyticsDailyEdge, len(response.Records))
 	for i, record := range response.Records {
@@ -3007,6 +3104,12 @@ func (r *Resolver) DoGetStreamAnalyticsSummariesConnection(ctx context.Context, 
 	if err != nil {
 		return nil, err
 	}
+
+	streamIDs := make([]string, len(response.Summaries))
+	for i, s := range response.Summaries {
+		streamIDs[i] = s.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	// Build keyset cursor for each edge using sort field value + stream_id
 	edges := make([]*model.StreamAnalyticsSummaryEdge, len(response.Summaries))

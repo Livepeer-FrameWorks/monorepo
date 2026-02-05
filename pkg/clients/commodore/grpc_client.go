@@ -469,6 +469,11 @@ func (c *GRPCClient) GetStream(ctx context.Context, streamID string) (*pb.Stream
 	})
 }
 
+// GetStreamsBatch fetches multiple streams by IDs in a single batch call
+func (c *GRPCClient) GetStreamsBatch(ctx context.Context, streamIDs []string) (*pb.GetStreamsBatchResponse, error) {
+	return c.stream.GetStreamsBatch(ctx, &pb.GetStreamsBatchRequest{StreamIds: streamIDs})
+}
+
 // ListStreams lists streams with cursor pagination
 func (c *GRPCClient) ListStreams(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListStreamsResponse, error) {
 	return c.stream.ListStreams(ctx, &pb.ListStreamsRequest{

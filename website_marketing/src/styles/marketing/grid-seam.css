@@ -1,9 +1,36 @@
 /* Marketing component styles: grid-seam */
 @layer components {
+  .marketing-grid-seam {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(var(--grid-cols, 1), minmax(0, 1fr));
+    border-radius: inherit;
+    overflow: hidden;
+    --grid-cell-padding: clamp(1.45rem, 1.9vw, 2rem);
+  }
+
+  .marketing-grid-seam--gap-none {
+    --grid-cell-padding: 0;
+  }
+
+  .marketing-grid-seam--gap-tight,
+  .marketing-grid-seam--gap-sm {
+    --grid-cell-padding: clamp(1.1rem, 1.6vw, 1.45rem);
+  }
+
+  .marketing-grid-seam--gap-md {
+    --grid-cell-padding: clamp(1.45rem, 1.9vw, 2rem);
+  }
+
+  .marketing-grid-seam--gap-loose,
+  .marketing-grid-seam--gap-lg {
+    --grid-cell-padding: clamp(1.85rem, 2.6vw, 2.5rem);
+  }
+
   .marketing-grid-seam[data-surface="panel"] {
     background: color-mix(in srgb, hsl(var(--brand-surface)) 82%, rgba(10, 12, 22, 0.15));
     border: 1px solid rgba(var(--accent-rgb) / 0.16);
-    box-shadow: 0 20px 46px rgba(6, 10, 28, 0.36);
+    box-shadow: none;
   }
 
   .marketing-grid-seam[data-surface="glass"] {

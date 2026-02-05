@@ -1680,6 +1680,7 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 const (
 	StreamService_CreateStream_FullMethodName     = "/commodore.StreamService/CreateStream"
 	StreamService_GetStream_FullMethodName        = "/commodore.StreamService/GetStream"
+	StreamService_GetStreamsBatch_FullMethodName  = "/commodore.StreamService/GetStreamsBatch"
 	StreamService_ListStreams_FullMethodName      = "/commodore.StreamService/ListStreams"
 	StreamService_UpdateStream_FullMethodName     = "/commodore.StreamService/UpdateStream"
 	StreamService_DeleteStream_FullMethodName     = "/commodore.StreamService/DeleteStream"
@@ -1692,6 +1693,7 @@ const (
 type StreamServiceClient interface {
 	CreateStream(ctx context.Context, in *CreateStreamRequest, opts ...grpc.CallOption) (*CreateStreamResponse, error)
 	GetStream(ctx context.Context, in *GetStreamRequest, opts ...grpc.CallOption) (*Stream, error)
+	GetStreamsBatch(ctx context.Context, in *GetStreamsBatchRequest, opts ...grpc.CallOption) (*GetStreamsBatchResponse, error)
 	ListStreams(ctx context.Context, in *ListStreamsRequest, opts ...grpc.CallOption) (*ListStreamsResponse, error)
 	UpdateStream(ctx context.Context, in *UpdateStreamRequest, opts ...grpc.CallOption) (*Stream, error)
 	DeleteStream(ctx context.Context, in *DeleteStreamRequest, opts ...grpc.CallOption) (*DeleteStreamResponse, error)
@@ -1720,6 +1722,16 @@ func (c *streamServiceClient) GetStream(ctx context.Context, in *GetStreamReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Stream)
 	err := c.cc.Invoke(ctx, StreamService_GetStream_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *streamServiceClient) GetStreamsBatch(ctx context.Context, in *GetStreamsBatchRequest, opts ...grpc.CallOption) (*GetStreamsBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStreamsBatchResponse)
+	err := c.cc.Invoke(ctx, StreamService_GetStreamsBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1772,6 +1784,7 @@ func (c *streamServiceClient) RefreshStreamKey(ctx context.Context, in *RefreshS
 type StreamServiceServer interface {
 	CreateStream(context.Context, *CreateStreamRequest) (*CreateStreamResponse, error)
 	GetStream(context.Context, *GetStreamRequest) (*Stream, error)
+	GetStreamsBatch(context.Context, *GetStreamsBatchRequest) (*GetStreamsBatchResponse, error)
 	ListStreams(context.Context, *ListStreamsRequest) (*ListStreamsResponse, error)
 	UpdateStream(context.Context, *UpdateStreamRequest) (*Stream, error)
 	DeleteStream(context.Context, *DeleteStreamRequest) (*DeleteStreamResponse, error)
@@ -1791,6 +1804,9 @@ func (UnimplementedStreamServiceServer) CreateStream(context.Context, *CreateStr
 }
 func (UnimplementedStreamServiceServer) GetStream(context.Context, *GetStreamRequest) (*Stream, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStream not implemented")
+}
+func (UnimplementedStreamServiceServer) GetStreamsBatch(context.Context, *GetStreamsBatchRequest) (*GetStreamsBatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStreamsBatch not implemented")
 }
 func (UnimplementedStreamServiceServer) ListStreams(context.Context, *ListStreamsRequest) (*ListStreamsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListStreams not implemented")
@@ -1857,6 +1873,24 @@ func _StreamService_GetStream_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StreamServiceServer).GetStream(ctx, req.(*GetStreamRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StreamService_GetStreamsBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStreamsBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StreamServiceServer).GetStreamsBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StreamService_GetStreamsBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StreamServiceServer).GetStreamsBatch(ctx, req.(*GetStreamsBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1947,6 +1981,10 @@ var StreamService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStream",
 			Handler:    _StreamService_GetStream_Handler,
+		},
+		{
+			MethodName: "GetStreamsBatch",
+			Handler:    _StreamService_GetStreamsBatch_Handler,
 		},
 		{
 			MethodName: "ListStreams",

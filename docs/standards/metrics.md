@@ -9,7 +9,7 @@ This document defines the authoritative units and semantics for all metrics in t
 | `_bytes`          | Cumulative byte count                           | `uploaded_bytes`, `downloaded_bytes` |
 | `_bps`            | Bits per second (rate)                          | `bandwidthInBps`, `bandwidthOutBps`  |
 | `_bytes_per_sec`  | Bytes per second (rate)                         | `up_speed`, `down_speed`             |
-| `_gb`             | **GiB** (bytes / 1024³) for billing rollups     | `egress_gb`, `storage_gb`            |
+| `_gb`             | **GiB** (bytes / 1024³) for billing rollups     | `egress_gb`, `average_storage_gb`    |
 | `_mbps`           | **Mibps** (bps / 1024²) for billing rate fields | `peak_bandwidth_mbps`                |
 | `_ms`             | Milliseconds                                    | `stream_buffer_ms`, `latency_ms`     |
 | `_pct` or `_rate` | Ratio 0.0-1.0                                   | `packet_loss_rate`, `buffer_health`  |
@@ -37,6 +37,7 @@ This document defines the authoritative units and semantics for all metrics in t
 | `disk_total_bytes`                        | bytes     | Gauge   | Total disk capacity                                  |
 | `shm_used_bytes`                          | bytes     | Gauge   | Shared memory usage                                  |
 | `shm_total_bytes`                         | bytes     | Gauge   | Total shared memory                                  |
+| `operational_mode`                        | enum      | Gauge   | Node mode: `normal`, `draining`, or `maintenance`    |
 
 **Note:** RAM fields are currently captured as **bytes** (from MistServer `mem_total`/`mem_used`) and stored as bytes. The proto comments still mention MiB, but the actual data path is bytes.
 

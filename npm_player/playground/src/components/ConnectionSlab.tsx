@@ -7,7 +7,7 @@ export function ConnectionSlab() {
     usePlayground();
 
   return (
-    <div className="slab">
+    <div className="slab slab--shared">
       <div className="slab-header">
         <h3 className="slab-title">Connection</h3>
       </div>

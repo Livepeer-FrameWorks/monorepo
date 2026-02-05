@@ -703,6 +703,7 @@ message User {
 service StreamService {
   rpc CreateStream(CreateStreamRequest) returns (CreateStreamResponse);
   rpc GetStream(GetStreamRequest) returns (Stream);
+  rpc GetStreamsBatch(GetStreamsBatchRequest) returns (GetStreamsBatchResponse);
   rpc ListStreams(ListStreamsRequest) returns (ListStreamsResponse);
   rpc UpdateStream(UpdateStreamRequest) returns (Stream);
   rpc DeleteStream(DeleteStreamRequest) returns (DeleteStreamResponse);
@@ -729,6 +730,14 @@ message CreateStreamResponse {
 
 message GetStreamRequest {
   string stream_id = 1;                 // UUID
+}
+
+message GetStreamsBatchRequest {
+  repeated string stream_ids = 1;       // UUIDs
+}
+
+message GetStreamsBatchResponse {
+  repeated Stream streams = 1;
 }
 
 // Matches pkg/models/streams.go:Stream (lines 117-139)

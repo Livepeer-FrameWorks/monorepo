@@ -39,8 +39,7 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*pb.Stream, error) {
 		return demo.GenerateStreams(), nil
 	}
 
-	// gRPC uses context metadata for auth (set by userContextInterceptor)
-	streamsResp, err := r.getStreamsMemoized(ctx)
+	resp, err := r.Clients.Commodore.ListStreams(ctx, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get streams")
 		if r.Metrics != nil {
@@ -49,11 +48,16 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*pb.Stream, error) {
 		return nil, fmt.Errorf("failed to get streams: %w", err)
 	}
 
+	if l := loaders.FromContext(ctx); l != nil && l.Stream != nil {
+		tenantID := ctxkeys.GetTenantID(ctx)
+		l.Stream.PrimeMany(tenantID, resp.Streams)
+	}
+
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("streams", "success").Inc()
 	}
 
-	return streamsResp, nil
+	return resp.Streams, nil
 }
 
 // DoGetStream retrieves a specific stream by ID
@@ -84,8 +88,15 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*pb.Stream, erro
 		return nil, fmt.Errorf("stream not found")
 	}
 
-	// gRPC uses context metadata for auth
-	stream, err := r.getStreamMemoized(ctx, id)
+	tenantID := ctxkeys.GetTenantID(ctx)
+	l := loaders.FromContext(ctx)
+	var stream *pb.Stream
+	var err error
+	if l != nil && l.Stream != nil && tenantID != "" {
+		stream, err = l.Stream.Load(ctx, tenantID, id)
+	} else {
+		stream, err = r.Clients.Commodore.GetStream(ctx, id)
+	}
 	if err != nil {
 		r.Logger.WithError(err).WithField("stream_id", id).Error("Failed to get stream")
 		if r.Metrics != nil {
@@ -618,6 +629,8 @@ func (r *Resolver) DoGetStreamKeysConnection(ctx context.Context, streamID strin
 		return nil, fmt.Errorf("failed to get stream keys: %w", err)
 	}
 
+	loaders.PreloadStreams(ctx, ctxkeys.GetTenantID(ctx), []string{streamID})
+
 	return r.buildStreamKeysConnectionFromResponse(resp), nil
 }
 
@@ -1086,69 +1099,6 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, streamID *string, pagi
 	return out, nil
 }
 
-func (r *Resolver) getStreamsMemoized(ctx context.Context) ([]*pb.Stream, error) {
-	tenantID := ctxkeys.GetTenantID(ctx)
-
-	var streams []*pb.Stream
-
-	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
-		// Use tenant_id from context for cache key (gRPC uses context metadata for auth)
-		key := fmt.Sprintf("commodore:get_streams:%s", tenantID)
-		val, err := lds.Memo.GetOrLoad(key, func() (interface{}, error) {
-			resp, err := r.Clients.Commodore.ListStreams(ctx, nil)
-			if err != nil {
-				return nil, err
-			}
-			return resp.Streams, nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		var ok bool
-		streams, ok = val.([]*pb.Stream)
-		if !ok {
-			return nil, fmt.Errorf("unexpected cache type for %s", key)
-		}
-	} else {
-		resp, err := r.Clients.Commodore.ListStreams(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		streams = resp.Streams
-	}
-
-	return streams, nil
-}
-
-func (r *Resolver) getStreamMemoized(ctx context.Context, streamID string) (*pb.Stream, error) {
-	tenantID := ctxkeys.GetTenantID(ctx)
-	var stream *pb.Stream
-
-	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
-		// Use tenant_id from context for cache key (gRPC uses context metadata for auth)
-		key := fmt.Sprintf("commodore:get_stream:%s:%s", tenantID, streamID)
-		val, err := lds.Memo.GetOrLoad(key, func() (interface{}, error) {
-			return r.Clients.Commodore.GetStream(ctx, streamID)
-		})
-		if err != nil {
-			return nil, err
-		}
-		var ok bool
-		stream, ok = val.(*pb.Stream)
-		if !ok {
-			return nil, fmt.Errorf("unexpected cache type for %s", key)
-		}
-	} else {
-		var err error
-		stream, err = r.Clients.Commodore.GetStream(ctx, streamID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return stream, nil
-}
-
 // === CONNECTION-BASED PAGINATION ===
 
 // DoGetStreamsConnection retrieves streams with Relay-style cursor pagination
@@ -1184,6 +1134,11 @@ func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after
 
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("streamsConnection", "success").Inc()
+	}
+
+	if l := loaders.FromContext(ctx); l != nil && l.Stream != nil {
+		tenantID := ctxkeys.GetTenantID(ctx)
+		l.Stream.PrimeMany(tenantID, resp.GetStreams())
 	}
 
 	return r.buildStreamsConnectionFromResponse(resp), nil
@@ -1385,6 +1340,12 @@ func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, f
 		}
 	}
 
+	streamIDs := make([]string, len(clipsResp.Clips))
+	for i, c := range clipsResp.Clips {
+		streamIDs[i] = c.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
+
 	return r.buildClipsConnectionFromProto(clipsResp.Clips, clipsResp.Pagination), nil
 }
 
@@ -1498,6 +1459,12 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, streamID *s
 			}
 		}
 	}
+
+	streamIDs := make([]string, len(response.DvrRecordings))
+	for i, d := range response.DvrRecordings {
+		streamIDs[i] = d.GetStreamId()
+	}
+	loaders.PreloadStreams(ctx, tenantID, streamIDs)
 
 	// Build edges from proto response (DVRInfo maps to DVRRequest via autobind)
 	edges := make([]*model.DVRRecordingEdge, len(response.DvrRecordings))

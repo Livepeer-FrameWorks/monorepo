@@ -7,7 +7,7 @@ export function PlaybackSourcesSlab() {
   const { playbackSources, playbackLoading, playbackError, pollSources } = usePlayground();
 
   return (
-    <div className="slab">
+    <div className="slab slab--player">
       <div className="slab-header">
         <h3 className="slab-title">Playback Sources</h3>
       </div>

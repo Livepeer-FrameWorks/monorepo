@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: "What to test"
+        description: "What to test (Go)"
         required: true
         default: "changed"
         type: choice
@@ -14,6 +14,11 @@ on:
           - changed # Only packages changed since last run
           - critical # All critical modules (auth, x402, errors)
           - all # Everything (slow!)
+      run_frontend:
+        description: "Also run frontend mutation tests"
+        required: false
+        default: false
+        type: boolean
       compare_ref:
         description: "Compare changes against (default: HEAD~1 for nightly, main for manual)"
         required: false
@@ -190,3 +195,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "No Go files changed - skipping mutation testing"
+
+  frontend-mutation:
+    name: Frontend mutation (${{ matrix.package }})
+    if: github.event_name == 'schedule' || inputs.run_frontend == true
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: npm_player/packages/core
+            filter: "@livepeer-frameworks/player-core"
+          - package: npm_studio/packages/core
+            filter: "@livepeer-frameworks/streamcrafter-core"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install
+      - name: Run Stryker mutation tests
+        working-directory: ${{ matrix.package }}
+        run: pnpm test:mutation
+      - name: Upload Stryker report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stryker-report-${{ matrix.filter }}
+          path: ${{ matrix.package }}/reports/mutation/
+          retention-days: 30
+          if-no-files-found: ignore

@@ -548,7 +548,7 @@ const Pricing = () => {
 
       <SectionDivider />
 
-      <Section className="panel">
+      <Section className="bg-brand-surface">
         <SectionContainer>
           <motion.div
             initial={{ opacity: 0, y: 30 }}
@@ -603,7 +603,7 @@ const Pricing = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+            <MarketingBand preset="foundation" tone="cool" texture="broadcast">
               <HeadlineStack
                 eyebrow="Paid tiers"
                 title="Upgrade for more"
@@ -741,7 +741,7 @@ const Pricing = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+            <MarketingBand preset="foundation" tone="violet" texture="none">
               <HeadlineStack
                 eyebrow="GPU-powered features"
                 title="Advanced processing across every tier"
@@ -766,7 +766,7 @@ const Pricing = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand surface="panel" contentClassName="marketing-band__inner--flush">
+            <MarketingBand preset="foundation" texture="grid">
               <HeadlineStack
                 eyebrow="Operating models"
                 title="SaaS → Hybrid → Fully self-hosted"

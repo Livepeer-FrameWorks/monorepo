@@ -358,7 +358,7 @@ const About = () => {
                 viewport={{ once: true }}
                 transition={{ duration: 0.55, delay: 0.1 }}
               >
-                <MarketingBand surface="panel" className="mission-pillars">
+                <MarketingBand preset="quiet" className="mission-pillars">
                   <HeadlineStack title="Core Pillars" align="left" underline={false} />
                   <MarketingStackedSeam gap="sm" className="mission-pillars__list">
                     {missionHighlights.map((highlight) => (
@@ -395,7 +395,7 @@ const About = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand surface="panel">
+            <MarketingBand preset="foundation" tone="cool" texture="broadcast">
               <HeadlineStack
                 eyebrow="Pipeline"
                 title="Coming Soon"
@@ -418,7 +418,7 @@ const About = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand surface="panel">
+            <MarketingBand preset="foundation">
               <HeadlineStack
                 eyebrow="Technology"
                 title="Built on proven infrastructure"
@@ -489,6 +489,8 @@ const About = () => {
           >
             <TimelineBand
               surface="panel"
+              tone="violet"
+              texture="beams"
               eyebrow="Timeline"
               title="Our journey"
               subtitle="How we got here and where we're headed."
@@ -514,6 +516,9 @@ const About = () => {
               eyebrow="Partners"
               subtitle="Video infrastructure expertise backed by the Livepeer treasury"
               variant="flush"
+              surfaceTone="cool"
+              surfaceTexture="beams"
+              surfaceDensity="compact"
             />
           </motion.div>
         </SectionContainer>

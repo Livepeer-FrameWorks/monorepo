@@ -150,6 +150,172 @@
   }
 }
 
+/* Section background textures — subtle color zones per section */
+.landing-section--platform {
+  background:
+    linear-gradient(140deg, rgba(122, 162, 247, 0.05), transparent 50%),
+    radial-gradient(ellipse at 20% 0%, rgba(122, 162, 247, 0.08), transparent 50%);
+}
+
+.landing-section--sdk {
+  background:
+    radial-gradient(ellipse at 80% 20%, rgba(125, 207, 255, 0.07), transparent 50%),
+    linear-gradient(160deg, rgba(125, 207, 255, 0.03), transparent 40%);
+}
+
+.landing-section--agents {
+  background:
+    radial-gradient(ellipse at 30% 0%, rgba(187, 154, 247, 0.08), transparent 50%),
+    linear-gradient(150deg, rgba(187, 154, 247, 0.03), transparent 45%);
+}
+
+.landing-section--pricing {
+  background:
+    radial-gradient(ellipse at 60% 0%, rgba(158, 206, 106, 0.06), transparent 50%),
+    linear-gradient(170deg, rgba(158, 206, 106, 0.02), transparent 40%);
+}
+
+/* Hero 3D floating frames — independent orbit + sway */
+
+.hero-frame-scene {
+  position: absolute;
+  inset: 0;
+  perspective: 1400px;
+  transform-style: preserve-3d;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+/* Base frame — 16:9 glass rectangle */
+.hero-frame {
+  position: absolute;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--frame-color), 0.22);
+  background: linear-gradient(
+    145deg,
+    rgba(var(--frame-color), 0.14),
+    rgba(var(--frame-color), 0.05) 60%,
+    rgba(var(--frame-color), 0.02)
+  );
+  box-shadow:
+    0 20px 50px rgba(8, 10, 24, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px rgba(var(--frame-color), 0.06);
+}
+
+/* Extra-large — dramatic cinematic backdrop */
+.hero-frame--xl {
+  width: clamp(380px, 50vw, 620px);
+  height: clamp(214px, 28vw, 349px);
+  border-radius: 16px;
+  opacity: 0.92;
+}
+
+/* Large — cinematic background panels */
+.hero-frame--lg {
+  width: clamp(280px, 38vw, 480px);
+  height: clamp(158px, 21vw, 270px);
+  border-radius: 14px;
+  opacity: 0.88;
+}
+
+/* Medium */
+.hero-frame--md {
+  width: clamp(180px, 24vw, 320px);
+  height: clamp(102px, 13.5vw, 180px);
+  opacity: 0.82;
+}
+
+/* Small */
+.hero-frame--sm {
+  width: clamp(110px, 14vw, 180px);
+  height: clamp(62px, 8vw, 101px);
+  opacity: 0.72;
+}
+
+/* --- Entrance: frames shoot in from behind camera --- */
+
+@keyframes frame-enter {
+  from {
+    translate: var(--enter-x, 0px) var(--enter-y, 0px) -600px;
+    opacity: 0;
+    scale: 0.5;
+  }
+  to {
+    translate: var(--start-x, 0px) var(--start-y, 0px) var(--start-z, 0px);
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* --- Orbit paths (animate `translate`) — offset from center for better spread --- */
+
+@keyframes orbit-wide {
+  0%   { translate: 340px   30px  260px; }
+  25%  { translate: -80px  -25px  400px; }
+  50%  { translate: -380px  30px -260px; }
+  75%  { translate: -80px  -25px -400px; }
+  100% { translate: 340px   30px  260px; }
+}
+
+@keyframes orbit-left {
+  0%   { translate: -280px  20px  200px; }
+  25%  { translate: -480px -20px  100px; }
+  50%  { translate: -280px  20px -200px; }
+  75%  { translate: -100px -20px -100px; }
+  100% { translate: -280px  20px  200px; }
+}
+
+@keyframes orbit-mid {
+  0%   { translate: 200px   20px  200px; }
+  25%  { translate: -60px  -18px  280px; }
+  50%  { translate: -240px  20px -200px; }
+  75%  { translate: -60px  -18px -280px; }
+  100% { translate: 200px   20px  200px; }
+}
+
+@keyframes orbit-tight {
+  0%   { translate: 140px   12px  140px; }
+  25%  { translate: -40px  -12px  200px; }
+  50%  { translate: -180px  12px -140px; }
+  75%  { translate: -40px  -12px -200px; }
+  100% { translate: 140px   12px  140px; }
+}
+
+/* --- Sway patterns (animate `rotate`) — gentle rocking, not full spins --- */
+
+@keyframes sway-a {
+  0%   { rotate: 1 0.3 0   -8deg; }
+  33%  { rotate: 1 0.3 0    6deg; }
+  66%  { rotate: 1 0.3 0   -4deg; }
+  100% { rotate: 1 0.3 0   -8deg; }
+}
+
+@keyframes sway-b {
+  0%   { rotate: 0.2 1 0.3  10deg; }
+  33%  { rotate: 0.2 1 0.3  -6deg; }
+  66%  { rotate: 0.2 1 0.3   4deg; }
+  100% { rotate: 0.2 1 0.3  10deg; }
+}
+
+@keyframes sway-c {
+  0%   { rotate: 0.4 0.5 1  -6deg; }
+  33%  { rotate: 0.4 0.5 1   8deg; }
+  66%  { rotate: 0.4 0.5 1  -3deg; }
+  100% { rotate: 0.4 0.5 1  -6deg; }
+}
+
+/* --- Reduced motion: freeze everything --- */
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-frame {
+    animation: none !important;
+    translate: 0 0 0;
+    rotate: none;
+  }
+}
+
 /* Hero glitch overlay keyframes */
 @keyframes glitch-5 {
   0.00%,

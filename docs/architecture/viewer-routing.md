@@ -68,6 +68,16 @@ Distance is normalized to [0, 1] using haversine formula:
 
 Geographic coordinates use H3 bucketing (resolution 5, ~253 km² cells) for privacy. See `docs/architecture/analytics-pipeline.md` for details.
 
+#### Coordinate Sources
+
+Foghorn resolves viewer coordinates using the following priority order:
+
+1. **Cloudflare headers** (when behind Cloudflare): `CF-IPLatitude` / `CF-IPLongitude` for coordinates, `CF-Connecting-IP` for the real client IP.
+2. **GeoIP MMDB lookup**: MaxMind database configured via `GEOIP_MMDB_PATH`. Resolves IP → lat/lon.
+3. **Disabled**: If neither source is available, geo scoring is skipped (all nodes get equal geo score).
+
+Related source: `pkg/geoip/geoip.go`, `api_balancing/internal/handlers/handlers.go` (Cloudflare header extraction).
+
 ### Stream Bonus
 
 Nodes already serving the requested stream get a +50 bonus (configurable via `STREAM_BONUS` env var). This reduces origin fetches and improves cache efficiency.

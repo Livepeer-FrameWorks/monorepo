@@ -23,9 +23,10 @@ export function WhipPublisher() {
   };
 
   return (
-    <div className="slab flex-1">
+    <div className="slab slab--studio flex-1">
       <div className="slab-header">
         <h3 className="slab-title">StreamCrafter</h3>
+        <p className="slab-subtitle">WHIP browser publisher</p>
         <div className="flex items-center gap-2">
           <span className="text-xs text-tn-fg-dark">Renderer:</span>
           <select

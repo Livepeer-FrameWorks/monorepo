@@ -26,11 +26,10 @@ export {
   createPlayerManager,
   globalPlayerManager,
   globalPlayerManager as globalRegistry,
+  getAvailablePlayerCapabilities,
 } from "./core/PlayerRegistry";
 export { GatewayClient } from "./core/GatewayClient";
 
-// Player implementations (framework-agnostic)
-export * from "./players";
 export { StreamStateClient } from "./core/StreamStateClient";
 export { QualityMonitor } from "./core/QualityMonitor";
 export { ABRController } from "./core/ABRController";

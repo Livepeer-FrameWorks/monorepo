@@ -11,7 +11,9 @@ function ConfigPanel() {
   return (
     <>
       <ConnectionSlab />
+      <div className="slab-section-label slab-section-label--studio">Ingest</div>
       <IngestUrisSlab />
+      <div className="slab-section-label slab-section-label--player">Playback</div>
       <PlaybackSourcesSlab />
     </>
   );

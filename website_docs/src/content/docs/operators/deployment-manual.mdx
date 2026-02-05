@@ -700,7 +700,7 @@ GRPC_METADATA_POLICY=allow
 
 # GraphQL
 GRAPHQL_PLAYGROUND_ENABLED=false
-GRAPHQL_COMPLEXITY_LIMIT=200
+GRAPHQL_COMPLEXITY_LIMIT=2000
 WS_MAX_CONNECTIONS_PER_TENANT=5
 TRUSTED_PROXY_CIDRS=<proxy-cidr-list>
 
@@ -938,6 +938,15 @@ HELMSMAN_CAP_EDGE=true
 HELMSMAN_CAP_STORAGE=true
 HELMSMAN_CAP_PROCESSING=true
 
+# Operational mode: normal, draining, maintenance
+# Foghorn is authoritative and may override; use draining/maintenance
+# to request exclusion from routing
+HELMSMAN_OPERATIONAL_MODE=normal
+
+# Grace period (ms) for reconnects before denying blocking triggers
+# (PUSH_REWRITE, USER_NEW)
+HELMSMAN_BLOCKING_GRACE_MS=2000
+
 # Storage
 HELMSMAN_STORAGE_LOCAL_PATH=/var/lib/mistserver/recordings
 HELMSMAN_STORAGE_CAPACITY_BYTES=1099511627776
@@ -1026,6 +1035,17 @@ CLOUDFLARE_ACCOUNT_ID=<your-account-id>
 
 # DNS Configuration
 NAVIGATOR_ROOT_DOMAIN=your-domain.com
+
+# DNS Tuning
+NAVIGATOR_DNS_TTL_A_RECORD=60
+NAVIGATOR_DNS_TTL_LB=60
+NAVIGATOR_DNS_HEALTH_STALE_SECONDS=90
+NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS=60
+
+# Cloudflare Monitor (health check polling)
+NAVIGATOR_CF_MONITOR_INTERVAL=60
+NAVIGATOR_CF_MONITOR_TIMEOUT=5
+NAVIGATOR_CF_MONITOR_RETRIES=2
 
 # Service Dependencies
 QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002

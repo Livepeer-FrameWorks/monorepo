@@ -136,11 +136,9 @@
     padding: clamp(3.8rem, 4.4vw, 5.4rem) clamp(1.5rem, 5.8vw, 5.6rem);
     border-top: 1px solid rgba(97, 140, 216, 0.32);
     border-bottom: 1px solid rgba(64, 94, 168, 0.28);
-    background: linear-gradient(
-      115deg,
-      hsl(var(--brand-surface-strong)),
-      hsl(var(--brand-surface) / 0.92)
-    );
+    background:
+      linear-gradient(140deg, rgba(122, 162, 247, 0.08), rgba(125, 207, 255, 0.02) 50%),
+      linear-gradient(115deg, hsl(var(--brand-surface-strong)), hsl(var(--brand-surface) / 0.92));
     box-shadow:
       inset 0 1px 0 rgba(109, 167, 255, 0.16),
       0 32px 80px rgba(8, 10, 24, 0.46);
@@ -150,31 +148,47 @@
   .marketing-cta-band::after {
     content: "";
     position: absolute;
+    inset: 0;
     pointer-events: none;
-    opacity: 0.65;
   }
 
+  /* Scrolling horizontal grid lines — faded in the center */
   .marketing-cta-band::before {
-    inset: 0;
-    background: linear-gradient(120deg, rgba(45, 56, 92, 0.9), rgba(25, 30, 50, 0.7));
-    clip-path: polygon(0 0, 8% 0, 3% 100%, 0% 100%);
+    inset: -100% 0;
+    background:
+      repeating-linear-gradient(
+        0deg,
+        rgba(65, 72, 104, 0.12) 0,
+        rgba(65, 72, 104, 0.12) 1px,
+        transparent 1px,
+        transparent 32px
+      );
+    mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, transparent 20%, black 70%);
+    -webkit-mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, transparent 20%, black 70%);
   }
 
+  /* Color accents — blue left, green right */
   .marketing-cta-band::after {
-    inset: 0;
-    background: linear-gradient(300deg, rgba(109, 167, 255, 0.35), rgba(30, 42, 72, 0.78));
-    clip-path: polygon(99.2% 0, 100% 0, 100% 100%, 92% 100%);
+    background:
+      radial-gradient(ellipse at 15% 50%, rgba(122, 162, 247, 0.14), transparent 50%),
+      radial-gradient(ellipse at 85% 50%, rgba(158, 206, 106, 0.10), transparent 50%);
+    opacity: 0.7;
+    mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, transparent 10%, black 60%);
+    -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, transparent 10%, black 60%);
+  }
+
+  @keyframes cta-grid-scroll {
+    from { translate: 0 0; }
+    to   { translate: 0 32px; }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .marketing-cta-band::before {
+      animation: cta-grid-scroll 4s linear infinite;
+    }
   }
 
   @media (max-width: 768px) {
-    .marketing-cta-band::before {
-      clip-path: polygon(0 0, 6% 0, 1% 100%, 0% 100%);
-    }
-
-    .marketing-cta-band::after {
-      clip-path: polygon(99.5% 0, 100% 0, 100% 100%, 94% 100%);
-    }
-
     .marketing-cta__actions {
       flex-direction: column;
     }

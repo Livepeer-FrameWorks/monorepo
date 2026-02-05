@@ -5,7 +5,7 @@ export function IngestUrisSlab() {
   const { ingestUris } = usePlayground();
 
   return (
-    <div className="slab">
+    <div className="slab slab--studio">
       <div className="slab-header">
         <h3 className="slab-title">Ingest URIs</h3>
       </div>

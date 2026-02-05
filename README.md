@@ -112,52 +112,54 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 
 ## Ports
 
-| Plane    | Service                     | Port  | Notes                                                                        |
-| -------- | --------------------------- | ----- | ---------------------------------------------------------------------------- |
-| Gateway  | Bridge                      | 18000 | GraphQL Gateway                                                              |
-| Control  | Commodore                   | 18001 | Health/Metrics                                                               |
-| Control  | Commodore (gRPC)            | 19001 | gRPC API                                                                     |
-| Control  | Quartermaster               | 18002 | Health/Metrics                                                               |
-| Control  | Quartermaster (gRPC)        | 19002 | gRPC API                                                                     |
-| Control  | Purser                      | 18003 | Health/Metrics                                                               |
-| Control  | Purser (gRPC)               | 19003 | gRPC API                                                                     |
-| Data     | Periscope Query             | 18004 | HTTP health/metrics only                                                     |
-| Data     | Periscope Query (gRPC)      | 19004 | gRPC API                                                                     |
-| Data     | Periscope Ingest            | 18005 | Kafka consumer                                                               |
-| Data     | Decklog                     | 18006 | gRPC                                                                         |
-| Data     | Decklog (metrics)           | 18026 | Prometheus metrics                                                           |
-| Data     | Kafka (external)            | 29092 | Host access                                                                  |
-| Data     | Kafka (internal)            | 9092  | Cluster access                                                               |
-| Data     | Zookeeper                   | 2181  | Kafka coordination                                                           |
-| Data     | PostgreSQL                  | 5432  | Primary database                                                             |
-| Data     | ClickHouse (HTTP)           | 8123  | Analytics database                                                           |
-| Data     | ClickHouse (Native)         | 9000  | Analytics database                                                           |
-| Network  | Navigator                   | 18010 | Public DNS management & ACME                                                 |
-| Network  | Navigator (gRPC)            | 18011 | gRPC API                                                                     |
-| Network  | Privateer                   | 18012 | WireGuard mesh agent & Local DNS                                             |
-| Media    | Helmsman                    | 18007 | Edge API                                                                     |
-| Media    | Foghorn                     | 18008 | Balancer                                                                     |
-| Media    | Foghorn (control)           | 18019 | gRPC control API                                                             |
-| Media    | MistServer (control)        | 4242  | Control API                                                                  |
-| Media    | MistServer (RTMP)           | 1935  | Ingest                                                                       |
-| Media    | MistServer (HTTP)           | 8080  | HLS/WebRTC delivery                                                          |
-| Media    | Livepeer Gateway (CLI)      | 18016 | golivepeer control (compute gateway; integration WIP; not in dev compose)    |
-| Media    | Livepeer Gateway (RPC/HTTP) | 18017 | golivepeer public API (compute gateway; integration WIP; not in dev compose) |
-| Realtime | Signalman                   | 18009 | WebSocket hub                                                                |
-| Realtime | Signalman (gRPC)            | 19005 | gRPC API                                                                     |
-| Support  | Nginx                       | 18090 | Reverse proxy                                                                |
-| Support  | Prometheus                  | 9091  | Metrics (CLI deployment only)                                                |
-| Support  | Grafana                     | 3000  | Dashboards (CLI deployment only)                                             |
-| Support  | Metabase                    | 3001  | BI Analytics (CLI deployment only)                                           |
-| Support  | Listmonk                    | 9001  | Newsletter Admin                                                             |
-| Support  | Chatwoot                    | 18092 | Support dashboard (via Nginx: /support)                                      |
-| UI       | Web Console                 | 18030 | Application UI                                                               |
-| UI       | Marketing Site              | 18031 | Public site                                                                  |
-| Support  | Forms API                   | 18032 | Contact forms                                                                |
-| Deferred | Lookout (api_incidents)     | 18013 | Incident management (use Prometheus/Grafana instead)                         |
-| Planned  | Parlor (api_rooms)          | 18014 | Channel rooms for interactive features                                       |
-| Support  | Deckhand (api_ticketing)    | 18015 | Support ticketing                                                            |
-| Support  | Deckhand (gRPC)             | 19006 | Support gRPC API                                                             |
+| Plane    | Service                     | Port     | Notes                                                                        |
+| -------- | --------------------------- | -------- | ---------------------------------------------------------------------------- |
+| Gateway  | Bridge                      | 18000    | GraphQL Gateway                                                              |
+| Control  | Commodore                   | 18001    | Health/Metrics                                                               |
+| Control  | Commodore (gRPC)            | 19001    | gRPC API                                                                     |
+| Control  | Quartermaster               | 18002    | Health/Metrics                                                               |
+| Control  | Quartermaster (gRPC)        | 19002    | gRPC API                                                                     |
+| Control  | Purser                      | 18003    | Health/Metrics                                                               |
+| Control  | Purser (gRPC)               | 19003    | gRPC API                                                                     |
+| Data     | Periscope Query             | 18004    | HTTP health/metrics only                                                     |
+| Data     | Periscope Query (gRPC)      | 19004    | gRPC API                                                                     |
+| Data     | Periscope Ingest            | 18005    | Kafka consumer                                                               |
+| Data     | Decklog                     | 18006    | gRPC                                                                         |
+| Data     | Decklog (metrics)           | 18026    | Prometheus metrics                                                           |
+| Data     | Kafka (external)            | 29092    | Host access                                                                  |
+| Data     | Kafka (internal)            | 9092     | Cluster access                                                               |
+| Data     | Zookeeper                   | 2181     | Kafka coordination                                                           |
+| Data     | PostgreSQL                  | 5432     | Primary database                                                             |
+| Data     | ClickHouse (HTTP)           | 8123     | Analytics database                                                           |
+| Data     | ClickHouse (Native)         | 9000     | Analytics database                                                           |
+| Network  | Navigator                   | 18010    | Public DNS management & ACME                                                 |
+| Network  | Navigator (gRPC)            | 18011    | gRPC API                                                                     |
+| Network  | Privateer                   | 18012    | WireGuard mesh agent & Local DNS                                             |
+| Media    | Helmsman                    | 18007    | Edge API                                                                     |
+| Media    | Foghorn                     | 18008    | Balancer                                                                     |
+| Media    | Foghorn (control)           | 18019    | gRPC control API                                                             |
+| Media    | MistServer (control)        | 4242     | Control API                                                                  |
+| Media    | MistServer (RTMP)           | 1935     | Ingest                                                                       |
+| Media    | MistServer (HTTP)           | 8080     | HLS/WebRTC delivery                                                          |
+| Media    | MistServer (SRT)            | 8889/udp | SRT ingest                                                                   |
+| Media    | Livepeer Gateway (CLI)      | 18016    | golivepeer control (compute gateway; integration WIP; not in dev compose)    |
+| Media    | Livepeer Gateway (RPC/HTTP) | 18017    | golivepeer public API (compute gateway; integration WIP; not in dev compose) |
+| Realtime | Signalman                   | 18009    | WebSocket hub                                                                |
+| Realtime | Signalman (gRPC)            | 19005    | gRPC API                                                                     |
+| Support  | Nginx                       | 18090    | Reverse proxy                                                                |
+| Support  | Prometheus                  | 9091     | Metrics (CLI deployment only)                                                |
+| Support  | Grafana                     | 3000     | Dashboards (CLI deployment only)                                             |
+| Support  | Metabase                    | 3001     | BI Analytics (CLI deployment only)                                           |
+| Support  | Listmonk                    | 9001     | Newsletter Admin                                                             |
+| Support  | Chatwoot                    | 18092    | Support dashboard (via Nginx: /support)                                      |
+| UI       | Web Console                 | 18030    | Application UI                                                               |
+| UI       | Marketing Site              | 18031    | Public site                                                                  |
+| UI       | Documentation               | 18033    | Starlight docs                                                               |
+| Support  | Forms API                   | 18032    | Contact forms                                                                |
+| Deferred | Lookout (api_incidents)     | 18013    | Incident management (use Prometheus/Grafana instead)                         |
+| Planned  | Parlor (api_rooms)          | 18014    | Channel rooms for interactive features                                       |
+| Support  | Deckhand (api_ticketing)    | 18015    | Support ticketing                                                            |
+| Support  | Deckhand (gRPC)             | 19006    | Support gRPC API                                                             |
 
 ## Documentation
 

@@ -3822,6 +3822,42 @@ func (s *CommodoreServer) emitStreamKeyEvent(ctx context.Context, eventType, ten
 	s.emitServiceEvent(ctx, event)
 }
 
+// GetStreamsBatch retrieves multiple streams by IDs in a single query
+func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *pb.GetStreamsBatchRequest) (*pb.GetStreamsBatchResponse, error) {
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	streamIDs := req.GetStreamIds()
+	if len(streamIDs) == 0 {
+		return &pb.GetStreamsBatchResponse{}, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, internal_name, stream_key, playback_id, title, description,
+		       is_recording_enabled, created_at, updated_at
+		FROM commodore.streams
+		WHERE id = ANY($1) AND user_id = $2 AND tenant_id = $3
+	`, pq.Array(streamIDs), userID, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var streams []*pb.Stream
+	for rows.Next() {
+		stream, err := scanStream(rows)
+		if err != nil {
+			s.logger.WithError(err).Warn("Error scanning stream in batch")
+			continue
+		}
+		streams = append(streams, stream)
+	}
+
+	return &pb.GetStreamsBatchResponse{Streams: streams}, nil
+}
+
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*pb.Stream, error) {
 	var stream pb.Stream
 	var description sql.NullString

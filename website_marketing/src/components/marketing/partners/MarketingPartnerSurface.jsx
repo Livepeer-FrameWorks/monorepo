@@ -18,6 +18,9 @@ const MarketingPartnerSurface = forwardRef(
       columns = 2,
       stackAt = "md",
       variant = "card",
+      surfaceTone = "default",
+      surfaceTexture = "default",
+      surfaceDensity = "default",
       className,
       ...props
     },
@@ -26,6 +29,10 @@ const MarketingPartnerSurface = forwardRef(
     <MarketingBand
       ref={ref}
       surface="beam"
+      tone={surfaceTone}
+      texture={surfaceTexture}
+      density={surfaceDensity}
+      flush={true}
       className={cn(
         "marketing-partner-surface",
         variant && `marketing-partner-surface--${variant}`,
