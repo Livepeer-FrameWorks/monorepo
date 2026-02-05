@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,7 +49,7 @@ func main() {
 
 	logger.Info("Starting Bridge GraphQL Gateway")
 
-	skillMarkdown, skillJSON, mcpJSON := loadSkillFiles(logger)
+	skills := loadSkillFiles(logger)
 
 	// Initialize service clients (all gRPC-based)
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
@@ -335,30 +337,64 @@ func main() {
 		})
 
 		app.GET("/skill.md", func(c *gin.Context) {
-			if skillMarkdown == nil {
+			if skills.skillMD == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "skill.md not available"})
 				return
 			}
 			c.Header("Access-Control-Allow-Origin", "*")
-			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skillMarkdown)
+			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skills.skillMD)
 		})
 
 		app.GET("/skill.json", func(c *gin.Context) {
-			if skillJSON == nil {
+			if skills.skillJSON == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "skill.json not available"})
 				return
 			}
 			c.Header("Access-Control-Allow-Origin", "*")
-			c.Data(http.StatusOK, "application/json; charset=utf-8", skillJSON)
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.skillJSON)
+		})
+
+		app.GET("/llms.txt", func(c *gin.Context) {
+			if skills.llmsTxt == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "llms.txt not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.llmsTxt)
+		})
+
+		app.GET("/robots.txt", func(c *gin.Context) {
+			if skills.robotsTxt == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "robots.txt not available"})
+				return
+			}
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.robotsTxt)
 		})
 
 		app.GET("/.well-known/mcp.json", func(c *gin.Context) {
-			if mcpJSON == nil {
+			if skills.mcpJSON == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "mcp.json not available"})
 				return
 			}
 			c.Header("Access-Control-Allow-Origin", "*")
-			c.Data(http.StatusOK, "application/json; charset=utf-8", mcpJSON)
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.mcpJSON)
+		})
+
+		app.GET("/.well-known/security.txt", func(c *gin.Context) {
+			if skills.securityTxt == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "security.txt not available"})
+				return
+			}
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.securityTxt)
+		})
+
+		app.GET("/.well-known/did.json", func(c *gin.Context) {
+			if skills.didJSON == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "did.json not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.didJSON)
 		})
 	}
 
@@ -525,50 +561,72 @@ func extractUsageContext(ctx context.Context) (tenantID, authType, userID string
 	return tenantID, authType, userID, tokenHash
 }
 
-func loadSkillFiles(logger logging.Logger) ([]byte, []byte, []byte) {
+type skillFiles struct {
+	skillMD     []byte
+	skillJSON   []byte
+	mcpJSON     []byte
+	securityTxt []byte
+	llmsTxt     []byte
+	robotsTxt   []byte
+	didJSON     []byte
+}
+
+func loadSkillFiles(logger logging.Logger) skillFiles {
 	candidates := []string{}
 	if envDir := strings.TrimSpace(os.Getenv("SKILL_FILES_DIR")); envDir != "" {
 		candidates = append(candidates, envDir)
 	}
 	candidates = append(candidates, "/app", "docs/skills")
 
-	var markdownPath string
-	var jsonPath string
+	var dir string
 	for _, candidate := range candidates {
-		mdPath := filepath.Join(candidate, "skill.md")
-		jsPath := filepath.Join(candidate, "skill.json")
-		if _, err := os.Stat(mdPath); err == nil {
-			if _, err := os.Stat(jsPath); err == nil {
-				markdownPath = mdPath
-				jsonPath = jsPath
+		if _, err := os.Stat(filepath.Join(candidate, "skill.md")); err == nil {
+			if _, err := os.Stat(filepath.Join(candidate, "skill.json")); err == nil {
+				dir = candidate
 				break
 			}
 		}
 	}
 
-	if markdownPath == "" || jsonPath == "" {
+	if dir == "" {
 		logger.WithField("candidates", strings.Join(candidates, ", ")).Warn("skill files not found in any candidate directory")
-		return nil, nil, nil
+		return skillFiles{}
 	}
 
-	markdown, err := os.ReadFile(markdownPath)
-	if err != nil {
-		logger.WithError(err).WithField("path", markdownPath).Warn("skill.md not found")
+	readFile := func(name string) []byte {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			logger.WithError(err).WithField("path", filepath.Join(dir, name)).Warn(name + " not found")
+			return nil
+		}
+		return data
 	}
 
-	jsonData, err := os.ReadFile(jsonPath)
-	if err != nil {
-		logger.WithError(err).WithField("path", jsonPath).Warn("skill.json not found")
+	sf := skillFiles{
+		skillMD:     readFile("skill.md"),
+		skillJSON:   readFile("skill.json"),
+		mcpJSON:     readFile("mcp.json"),
+		securityTxt: readFile("security.txt"),
+		llmsTxt:     readFile("llms.txt"),
+		robotsTxt:   readFile("robots.txt"),
+		didJSON:     readFile("did.json"),
 	}
 
-	var mcpData []byte
-	mcpPath := filepath.Join(filepath.Dir(markdownPath), "mcp.json")
-	mcpData, err = os.ReadFile(mcpPath)
-	if err != nil {
-		logger.WithError(err).WithField("path", mcpPath).Warn("mcp.json not found")
+	if sf.didJSON != nil {
+		if addr := strings.TrimSpace(os.Getenv("PLATFORM_X402_ADDRESS")); addr != "" {
+			sf.didJSON = bytes.ReplaceAll(sf.didJSON, []byte("{{PLATFORM_X402_ADDRESS}}"), []byte(addr))
+		} else {
+			var doc map[string]interface{}
+			if err := json.Unmarshal(sf.didJSON, &doc); err == nil {
+				delete(doc, "verificationMethod")
+				if stripped, err := json.MarshalIndent(doc, "", "  "); err == nil {
+					sf.didJSON = stripped
+				}
+			}
+		}
 	}
 
-	return markdown, jsonData, mcpData
+	return sf
 }
 
 // calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.

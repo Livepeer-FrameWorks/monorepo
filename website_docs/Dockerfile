@@ -50,8 +50,12 @@ COPY docs/skills/ docs/skills/
 # build the docs site
 RUN cp docs/skills/skill.md website_docs/public/skill.md \
   && cp docs/skills/skill.json website_docs/public/skill.json \
+  && cp docs/skills/llms.txt website_docs/public/llms.txt \
+  && cp docs/skills/robots.txt website_docs/public/robots.txt \
   && mkdir -p website_docs/public/.well-known \
-  && cp docs/skills/mcp.json website_docs/public/.well-known/mcp.json
+  && cp docs/skills/mcp.json website_docs/public/.well-known/mcp.json \
+  && cp docs/skills/security.txt website_docs/public/.well-known/security.txt \
+  && cp docs/skills/did.json website_docs/public/.well-known/did.json
 RUN pnpm --filter website_docs... run build
 
 FROM node:24-alpine AS runner

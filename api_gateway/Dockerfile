@@ -61,6 +61,10 @@ COPY --from=builder /src/frameworks/api_gateway/bridge .
 COPY --from=builder /src/frameworks/docs/skills/skill.md ./skill.md
 COPY --from=builder /src/frameworks/docs/skills/skill.json ./skill.json
 COPY --from=builder /src/frameworks/docs/skills/mcp.json ./mcp.json
+COPY --from=builder /src/frameworks/docs/skills/security.txt ./security.txt
+COPY --from=builder /src/frameworks/docs/skills/llms.txt ./llms.txt
+COPY --from=builder /src/frameworks/docs/skills/robots.txt ./robots.txt
+COPY --from=builder /src/frameworks/docs/skills/did.json ./did.json
 
 # Change ownership
 RUN chown frameworks:frameworks /app/bridge
