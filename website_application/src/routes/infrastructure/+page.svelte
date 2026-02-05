@@ -178,7 +178,7 @@
     try {
       const range = resolveTimeRange(timeRange);
       currentRange = range;
-      const metricsFirst = Math.min(range.days * 24, 720);
+      const metricsFirst = Math.min(range.days * 24, 150);
       const timeRangeInput = { start: range.start, end: range.end };
       // Fetch infrastructure overview and service instances in parallel
       await Promise.all([

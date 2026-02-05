@@ -809,7 +809,7 @@
     } else {
       url.searchParams.set("type", type);
     }
-    goto(resolve(url.toString()), { replaceState: true, noScroll: true });
+    goto(`${url.pathname}${url.search}`, { replaceState: true, noScroll: true });
   }
 
   // Icons

@@ -324,6 +324,7 @@
     return {
       streamHours: buildSeries("stream_hours"),
       egressGb: buildSeries("egress_gb"),
+      recordingGb: buildSeries("average_storage_gb"),
     };
   });
 
@@ -359,6 +360,7 @@
             usageTypes: [
               "stream_hours",
               "egress_gb",
+              "average_storage_gb",
               "peak_bandwidth_mbps",
               "total_streams",
               "total_viewers",

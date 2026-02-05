@@ -567,7 +567,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		SELECT timestamp, tenant_id, stream_id, node_id,
 			bitrate, fps, gop_size, frame_ms_max, frame_ms_min, frames_max, frames_min, keyframe_ms_max, keyframe_ms_min, frame_jitter_ms, width, height,
 			buffer_size, buffer_health, buffer_state,
-			codec, quality_tier, track_metadata,
+			codec, quality_tier, toString(track_metadata) as track_metadata,
 			has_issues, issues_description, track_count,
 			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
 		FROM stream_health_samples
@@ -1823,7 +1823,7 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 		SELECT tenant_id, node_id, cpu_percent, ram_used_bytes, ram_total_bytes,
 		       disk_used_bytes, disk_total_bytes, up_speed, down_speed,
 		       active_streams, is_healthy, latitude, longitude, location,
-		       metadata, updated_at
+		       toString(metadata) as metadata, updated_at
 		FROM periscope.node_state_current FINAL
 		WHERE %s
 	`, inClause)
