@@ -1,10 +1,6 @@
 # Stream health 5-minute aggregates time-series
 # Deferred load on the analytics page
-query GetStreamHealth5mTimeSeries(
-  $streamId: ID!
-  $timeRange: TimeRangeInput
-  $first: Int = 100
-) {
+query GetStreamHealth5mTimeSeries($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 100) {
   analytics {
     health {
       streamHealth5mConnection(

@@ -1,6 +1,11 @@
 # Fetch stream session/analytics data including hourly aggregates, quality metrics, and viewer sessions
 # Trimmed field set and reduced page sizes for lower complexity
-query GetStreamSessions($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 50, $sessionFirst: Int = 25) {
+query GetStreamSessions(
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $sessionFirst: Int = 25
+) {
   analytics {
     usage {
       streaming {
@@ -53,7 +58,11 @@ query GetStreamSessions($streamId: ID!, $timeRange: TimeRangeInput, $first: Int 
       }
     }
     health {
-      clientQoeConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $sessionFirst }) {
+      clientQoeConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $sessionFirst }
+      ) {
         edges {
           cursor
           node {

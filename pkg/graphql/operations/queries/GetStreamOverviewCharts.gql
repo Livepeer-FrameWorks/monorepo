@@ -60,7 +60,11 @@ query GetStreamOverviewCharts(
       }
     }
     health {
-      streamHealthConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $healthFirst }) {
+      streamHealthConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $healthFirst }
+      ) {
         edges {
           node {
             timestamp

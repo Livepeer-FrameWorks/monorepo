@@ -1,10 +1,6 @@
 # Client-side health: rebuffering events and QoE metrics
 # Deferred load on the health page
-query GetStreamHealthClients(
-  $streamId: ID!
-  $timeRange: TimeRangeInput
-  $first: Int = 50
-) {
+query GetStreamHealthClients($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 50) {
   analytics {
     health {
       rebufferingEventsConnection(
@@ -24,11 +20,7 @@ query GetStreamHealthClients(
           }
         }
       }
-      clientQoeConnection(
-        streamId: $streamId
-        timeRange: $timeRange
-        page: { first: $first }
-      ) {
+      clientQoeConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
         edges {
           node {
             timestamp

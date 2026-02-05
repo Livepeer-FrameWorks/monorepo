@@ -108,7 +108,11 @@
     width: 40px;
     height: 40px;
     border-radius: 10px;
-    background: linear-gradient(145deg, rgba(var(--accent-rgb) / 0.5), rgba(var(--accent-rgb) / 0.35));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--accent-rgb) / 0.5),
+      rgba(var(--accent-rgb) / 0.35)
+    );
     border: 1px solid rgba(var(--accent-rgb) / 0.35);
     color: rgba(13, 24, 44, 0.92);
     flex-shrink: 0;
