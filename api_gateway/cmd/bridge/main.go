@@ -388,6 +388,15 @@ func main() {
 			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.securityTxt)
 		})
 
+		app.GET("/.well-known/oauth-protected-resource", func(c *gin.Context) {
+			if skills.oauthPRM == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "oauth-protected-resource not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.oauthPRM)
+		})
+
 		app.GET("/.well-known/did.json", func(c *gin.Context) {
 			if skills.didJSON == nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "did.json not available"})
@@ -569,6 +578,7 @@ type skillFiles struct {
 	llmsTxt     []byte
 	robotsTxt   []byte
 	didJSON     []byte
+	oauthPRM    []byte
 }
 
 func loadSkillFiles(logger logging.Logger) skillFiles {
@@ -610,6 +620,7 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 		llmsTxt:     readFile("llms.txt"),
 		robotsTxt:   readFile("robots.txt"),
 		didJSON:     readFile("did.json"),
+		oauthPRM:    readFile("oauth-protected-resource.json"),
 	}
 
 	if sf.didJSON != nil {

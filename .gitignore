@@ -82,6 +82,11 @@ docker-compose.override.yml
 *.seed
 bin
 
+# Compiled Go binaries inside cmd/ directories
+**/cmd/*/*
+!**/cmd/*/*.go
+!**/cmd/*/
+
 # Security & Sensitive
 *.pem
 *.key

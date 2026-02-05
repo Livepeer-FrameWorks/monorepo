@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/ctxkeys"
@@ -58,7 +59,7 @@ type CreateClipResult struct {
 func handleCreateClip(ctx context.Context, args CreateClipInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	// Pre-flight: require positive balance
@@ -121,7 +122,7 @@ type DeleteClipResult struct {
 func handleDeleteClip(ctx context.Context, args DeleteClipInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	if args.ClipHash == "" {

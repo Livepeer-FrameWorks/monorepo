@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
@@ -55,7 +56,7 @@ type NodesListResponse struct {
 
 func handleNodesList(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	// Build pagination request
@@ -95,7 +96,7 @@ func handleNodesList(ctx context.Context, clients *clients.ServiceClients, logge
 // HandleNodeByID handles requests for nodes://{id} resources.
 func HandleNodeByID(ctx context.Context, uri string, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	// Extract node ID from URI: nodes://{id}

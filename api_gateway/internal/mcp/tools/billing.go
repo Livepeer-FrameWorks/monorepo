@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/billing"
@@ -50,7 +51,7 @@ type TopupBalanceInput struct {
 func handleTopupBalance(ctx context.Context, args TopupBalanceInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	// Validate amount (must be positive)
@@ -117,7 +118,7 @@ type CheckTopupResult struct {
 
 func handleCheckTopup(ctx context.Context, args CheckTopupInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	if args.TopupID == "" {

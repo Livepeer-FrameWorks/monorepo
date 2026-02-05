@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/countries"
@@ -52,7 +53,7 @@ type BillingDetailsResult struct {
 func handleUpdateBillingDetails(ctx context.Context, args UpdateBillingDetailsInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	// Validate required fields

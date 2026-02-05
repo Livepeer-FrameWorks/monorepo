@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
@@ -80,7 +81,7 @@ func RegisterSupportResources(server *mcp.Server, serviceClients *clients.Servic
 func handleListConversations(ctx context.Context, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("authentication required to access support conversations")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	resp, err := serviceClients.Deckhand.ListConversations(ctx, tenantID, 1, 50)
@@ -106,7 +107,7 @@ func handleListConversations(ctx context.Context, serviceClients *clients.Servic
 func handleGetConversation(ctx context.Context, conversationID string, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("authentication required to access support conversations")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	conv, err := serviceClients.Deckhand.GetConversation(ctx, conversationID)

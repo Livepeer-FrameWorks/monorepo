@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/ctxkeys"
@@ -82,7 +83,7 @@ type CreateStreamResult struct {
 
 func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	// Pre-flight: require positive balance
@@ -140,7 +141,7 @@ type UpdateStreamResult struct {
 
 func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	// Pre-flight: require positive balance
@@ -196,7 +197,7 @@ type DeleteStreamResult struct {
 
 func handleDeleteStream(ctx context.Context, args DeleteStreamInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	// Pre-flight: require positive balance
@@ -247,7 +248,7 @@ type RefreshStreamKeyResult struct {
 
 func handleRefreshStreamKey(ctx context.Context, args RefreshStreamKeyInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	if args.StreamID == "" {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/ctxkeys"
@@ -54,7 +55,7 @@ type StartDVRResult struct {
 func handleStartDVR(ctx context.Context, args StartDVRInput, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	// Pre-flight: require positive balance
@@ -116,7 +117,7 @@ type StopDVRResult struct {
 func handleStopDVR(ctx context.Context, args StopDVRInput, clients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, nil, fmt.Errorf("not authenticated")
+		return nil, nil, mcperrors.AuthRequired()
 	}
 
 	if args.DVRHash == "" {

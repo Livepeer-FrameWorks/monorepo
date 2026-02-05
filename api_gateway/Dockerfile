@@ -65,6 +65,7 @@ COPY --from=builder /src/frameworks/docs/skills/security.txt ./security.txt
 COPY --from=builder /src/frameworks/docs/skills/llms.txt ./llms.txt
 COPY --from=builder /src/frameworks/docs/skills/robots.txt ./robots.txt
 COPY --from=builder /src/frameworks/docs/skills/did.json ./did.json
+COPY --from=builder /src/frameworks/docs/skills/oauth-protected-resource.json ./oauth-protected-resource.json
 
 # Change ownership
 RUN chown frameworks:frameworks /app/bridge

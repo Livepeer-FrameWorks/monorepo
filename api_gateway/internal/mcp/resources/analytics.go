@@ -2,10 +2,10 @@ package resources
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
@@ -82,7 +82,7 @@ type ProcessingUsage struct {
 func handleUsageAnalytics(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	now := time.Now()
@@ -139,7 +139,7 @@ type HourlyViewers struct {
 func handleViewerAnalytics(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	analytics := ViewerAnalytics{
@@ -200,7 +200,7 @@ type CountryViewers struct {
 func handleGeographicAnalytics(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	analytics := GeographicAnalytics{
