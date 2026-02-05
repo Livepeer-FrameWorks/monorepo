@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/mcp/preflight"
 	"frameworks/api_gateway/internal/mcp/prompts"
 	"frameworks/api_gateway/internal/mcp/resources"
@@ -352,10 +353,13 @@ func accessDecisionError(decision middleware.AccessDecision) error {
 		message = "rate limit exceeded"
 	case http.StatusUnauthorized:
 		code = -32001
-		message = "unauthorized"
+		message = "not authenticated"
 	}
 
 	payload := map[string]any{}
+	if decision.Status == http.StatusUnauthorized {
+		payload["resource_metadata"] = mcperrors.ResourceMetadataURL
+	}
 	for key, value := range decision.Body {
 		payload[key] = value
 	}

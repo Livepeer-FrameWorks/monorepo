@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
@@ -71,7 +72,7 @@ type StreamsListResponse struct {
 
 func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	// Build pagination request
@@ -117,7 +118,7 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 // This is called when a dynamic resource URI is requested.
 func HandleStreamByID(ctx context.Context, uri string, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	rawID := strings.TrimPrefix(uri, "streams://")

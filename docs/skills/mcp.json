@@ -1,0 +1,53 @@
+{
+  "name": "frameworks",
+  "title": "FrameWorks",
+  "description": "Sovereign SaaS for live video",
+  "mcp_endpoint": "https://api.frameworks.network/mcp",
+  "transports": ["streamable-http"],
+  "auth": {
+    "schemes": ["bearer", "wallet", "x402"],
+    "required": true,
+    "registration_required": false,
+    "public_operations": [
+      "initialize",
+      "tools/list",
+      "resources/list",
+      "resources/templates/list",
+      "prompts/list",
+      "prompts/get",
+      "tools/call:get_payment_options",
+      "tools/call:submit_payment",
+      "tools/call:resolve_playback_endpoint",
+      "resources/read:account://status",
+      "resources/read:billing://pricing"
+    ],
+    "bearer": {
+      "description": "JWT from login or long-lived API token from account settings",
+      "header": "Authorization"
+    },
+    "wallet": {
+      "description": "EIP-191 wallet signature (auto-provisions account on first use)",
+      "headers": ["X-Wallet-Address", "X-Wallet-Signature", "X-Wallet-Message"],
+      "login_endpoint": "https://api.frameworks.network/auth/wallet-login"
+    },
+    "x402": {
+      "description": "EIP-3009 gasless USDC (value=0 authenticates, value>0 tops up balance)",
+      "header": "X-PAYMENT",
+      "bootstrap_tools": ["get_payment_options", "submit_payment"],
+      "chains": ["base", "arbitrum"],
+      "token": "USDC"
+    }
+  },
+  "capabilities": {
+    "tools": true,
+    "resources": true,
+    "prompts": true
+  },
+  "endpoints": {
+    "mcp": "https://api.frameworks.network/mcp",
+    "graphql": "https://api.frameworks.network/graphql",
+    "wallet_login": "https://api.frameworks.network/auth/wallet-login",
+    "skill_md": "https://frameworks.network/skill.md",
+    "skill_json": "https://frameworks.network/skill.json"
+  }
+}

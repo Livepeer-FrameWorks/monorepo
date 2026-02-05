@@ -4,22 +4,21 @@
 
 **Do not open public issues for security vulnerabilities.**
 
-Email **info@frameworks.network** with:
+**Preferred:** Report via [GitHub Private Vulnerability Reporting](https://github.com/livepeer-frameworks/monorepo/security/advisories/new).
+This creates a private advisory where we can collaborate on a fix before public disclosure.
 
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Any suggested fixes (optional)
+**Alternative:** Email **security@frameworks.network** with a description, steps to reproduce, and potential impact.
 
-We'll acknowledge your report within 48 hours and work with you on a fix. Once resolved, we'll credit you in the release notes (unless you prefer to remain anonymous).
+We acknowledge reports within 48 hours. Once resolved, we credit reporters in release notes unless they prefer anonymity.
 
 ## Supported Versions
 
-Only the latest release receives security updates. We recommend always running the most recent version.
+Only the latest release receives security updates.
 
 ## Security Practices
 
-- Dependencies are monitored via Dependabot
-- All PRs require review before merge
-- Secrets are managed via environment variables (Vault in production)
-- No credentials are committed to the repository
+- Dependencies monitored via Dependabot (Go, NPM, GitHub Actions)
+- Docker images built with SBOM and provenance attestation
+- All PRs require code review (CODEOWNERS)
+- Secrets managed via environment variables (Vault in production)
+- No credentials committed to the repository

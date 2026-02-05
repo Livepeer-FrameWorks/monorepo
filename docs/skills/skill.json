@@ -1,0 +1,25 @@
+{
+  "name": "frameworks-network",
+  "version": "1.0.0",
+  "description": "Multi-tenant live streaming SaaS with MCP, wallet auth, and x402 payments.",
+  "homepage": "https://frameworks.network",
+  "metadata": {
+    "emoji": "📡",
+    "category": "streaming",
+    "api_base": "https://api.frameworks.network",
+    "graphql": "https://api.frameworks.network/graphql",
+    "mcp_discovery": "https://api.frameworks.network/.well-known/mcp.json",
+    "chains": ["base", "arbitrum"]
+  },
+  "auth": {
+    "methods": ["wallet", "x402", "bearer"],
+    "wallet_message_format": "FrameWorks Login\nTimestamp: {ISO8601}\nNonce: {random}"
+  },
+  "endpoints": {
+    "mcp": "GET /.well-known/mcp.json",
+    "mcp_rpc": "POST /mcp",
+    "graphql": "POST /graphql",
+    "wallet_login": "POST /auth/wallet-login"
+  },
+  "keywords": ["streaming", "live", "rtmp", "x402", "mcp", "ai-agent", "wallet"]
+}

@@ -62,8 +62,17 @@ RUN if [ "$BUILD_ENV" = "development" ]; then \
 # copy the remaining sources now that deps are cached
 COPY npm_player/ npm_player/
 COPY website_marketing/ website_marketing/
+COPY docs/skills/ docs/skills/
 
 # build the marketing site
+RUN cp docs/skills/skill.md website_marketing/public/skill.md \
+  && cp docs/skills/skill.json website_marketing/public/skill.json \
+  && cp docs/skills/llms.txt website_marketing/public/llms.txt \
+  && cp docs/skills/robots.txt website_marketing/public/robots.txt \
+  && mkdir -p website_marketing/public/.well-known \
+  && cp docs/skills/mcp.json website_marketing/public/.well-known/mcp.json \
+  && cp docs/skills/security.txt website_marketing/public/.well-known/security.txt \
+  && cp docs/skills/did.json website_marketing/public/.well-known/did.json
 RUN pnpm --filter frameworks-website... run build
 
 FROM node:24-alpine AS runner

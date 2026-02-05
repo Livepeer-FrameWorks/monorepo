@@ -34,3 +34,12 @@ pre-commit:
       glob: "*.{js,ts,jsx,tsx,svelte}"
       run: pnpm eslint --fix {staged_files} || true
       stage_fixed: true
+
+    no-binaries:
+      run: |
+        for f in {staged_files}; do
+          if file "$f" | grep -qE 'ELF|Mach-O'; then
+            echo "ERROR: Refusing to commit binary file: $f"
+            exit 1
+          fi
+        done

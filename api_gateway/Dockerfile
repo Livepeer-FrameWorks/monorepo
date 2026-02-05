@@ -24,6 +24,9 @@ COPY pkg/ ../pkg/
 # Copy service source code
 COPY api_gateway/ ./
 
+# Copy skill definitions for runtime serving
+COPY docs/skills/ ../docs/skills/
+
 # Build the application with version and component injection
 ARG VERSION=dev
 ARG GIT_COMMIT=docker
@@ -55,6 +58,14 @@ WORKDIR /app
 
 # Copy binary from builder stage
 COPY --from=builder /src/frameworks/api_gateway/bridge .
+COPY --from=builder /src/frameworks/docs/skills/skill.md ./skill.md
+COPY --from=builder /src/frameworks/docs/skills/skill.json ./skill.json
+COPY --from=builder /src/frameworks/docs/skills/mcp.json ./mcp.json
+COPY --from=builder /src/frameworks/docs/skills/security.txt ./security.txt
+COPY --from=builder /src/frameworks/docs/skills/llms.txt ./llms.txt
+COPY --from=builder /src/frameworks/docs/skills/robots.txt ./robots.txt
+COPY --from=builder /src/frameworks/docs/skills/did.json ./did.json
+COPY --from=builder /src/frameworks/docs/skills/oauth-protected-resource.json ./oauth-protected-resource.json
 
 # Change ownership
 RUN chown frameworks:frameworks /app/bridge

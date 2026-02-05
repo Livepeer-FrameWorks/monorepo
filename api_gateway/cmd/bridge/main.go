@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +48,8 @@ func main() {
 	config.LoadEnv(logger)
 
 	logger.Info("Starting Bridge GraphQL Gateway")
+
+	skills := loadSkillFiles(logger)
 
 	// Initialize service clients (all gRPC-based)
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
@@ -331,32 +336,74 @@ func main() {
 			})
 		})
 
-		// MCP discovery endpoint (SEP-1649)
-		app.GET("/.well-known/mcp.json", func(c *gin.Context) {
-			c.Header("Access-Control-Allow-Origin", "*")
-			docsURL := strings.TrimSpace(os.Getenv("DOCS_PUBLIC_URL"))
-			docsURLValue := ""
-			if docsURL != "" {
-				docsURLValue = docsURL + "/streamers/mcp"
+		app.GET("/skill.md", func(c *gin.Context) {
+			if skills.skillMD == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "skill.md not available"})
+				return
 			}
-			c.JSON(http.StatusOK, gin.H{
-				"name":         "frameworks",
-				"version":      version.Version,
-				"title":        config.GetEnv("BRAND_NAME", "FrameWorks"),
-				"description":  "Sovereign SaaS for live video",
-				"mcp_endpoint": "/mcp",
-				"transports":   []string{"streamable-http"},
-				"auth": gin.H{
-					"schemes":  []string{"bearer", "wallet"},
-					"required": true,
-				},
-				"capabilities": gin.H{
-					"tools":     true,
-					"resources": true,
-					"prompts":   true,
-				},
-				"docs_url": docsURLValue,
-			})
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "text/markdown; charset=utf-8", skills.skillMD)
+		})
+
+		app.GET("/skill.json", func(c *gin.Context) {
+			if skills.skillJSON == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "skill.json not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.skillJSON)
+		})
+
+		app.GET("/llms.txt", func(c *gin.Context) {
+			if skills.llmsTxt == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "llms.txt not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.llmsTxt)
+		})
+
+		app.GET("/robots.txt", func(c *gin.Context) {
+			if skills.robotsTxt == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "robots.txt not available"})
+				return
+			}
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.robotsTxt)
+		})
+
+		app.GET("/.well-known/mcp.json", func(c *gin.Context) {
+			if skills.mcpJSON == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "mcp.json not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.mcpJSON)
+		})
+
+		app.GET("/.well-known/security.txt", func(c *gin.Context) {
+			if skills.securityTxt == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "security.txt not available"})
+				return
+			}
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", skills.securityTxt)
+		})
+
+		app.GET("/.well-known/oauth-protected-resource", func(c *gin.Context) {
+			if skills.oauthPRM == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "oauth-protected-resource not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.oauthPRM)
+		})
+
+		app.GET("/.well-known/did.json", func(c *gin.Context) {
+			if skills.didJSON == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "did.json not available"})
+				return
+			}
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", skills.didJSON)
 		})
 	}
 
@@ -521,6 +568,76 @@ func extractUsageContext(ctx context.Context) (tenantID, authType, userID string
 		}
 	}
 	return tenantID, authType, userID, tokenHash
+}
+
+type skillFiles struct {
+	skillMD     []byte
+	skillJSON   []byte
+	mcpJSON     []byte
+	securityTxt []byte
+	llmsTxt     []byte
+	robotsTxt   []byte
+	didJSON     []byte
+	oauthPRM    []byte
+}
+
+func loadSkillFiles(logger logging.Logger) skillFiles {
+	candidates := []string{}
+	if envDir := strings.TrimSpace(os.Getenv("SKILL_FILES_DIR")); envDir != "" {
+		candidates = append(candidates, envDir)
+	}
+	candidates = append(candidates, "/app", "docs/skills")
+
+	var dir string
+	for _, candidate := range candidates {
+		if _, err := os.Stat(filepath.Join(candidate, "skill.md")); err == nil {
+			if _, err := os.Stat(filepath.Join(candidate, "skill.json")); err == nil {
+				dir = candidate
+				break
+			}
+		}
+	}
+
+	if dir == "" {
+		logger.WithField("candidates", strings.Join(candidates, ", ")).Warn("skill files not found in any candidate directory")
+		return skillFiles{}
+	}
+
+	readFile := func(name string) []byte {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			logger.WithError(err).WithField("path", filepath.Join(dir, name)).Warn(name + " not found")
+			return nil
+		}
+		return data
+	}
+
+	sf := skillFiles{
+		skillMD:     readFile("skill.md"),
+		skillJSON:   readFile("skill.json"),
+		mcpJSON:     readFile("mcp.json"),
+		securityTxt: readFile("security.txt"),
+		llmsTxt:     readFile("llms.txt"),
+		robotsTxt:   readFile("robots.txt"),
+		didJSON:     readFile("did.json"),
+		oauthPRM:    readFile("oauth-protected-resource.json"),
+	}
+
+	if sf.didJSON != nil {
+		if addr := strings.TrimSpace(os.Getenv("PLATFORM_X402_ADDRESS")); addr != "" {
+			sf.didJSON = bytes.ReplaceAll(sf.didJSON, []byte("{{PLATFORM_X402_ADDRESS}}"), []byte(addr))
+		} else {
+			var doc map[string]interface{}
+			if err := json.Unmarshal(sf.didJSON, &doc); err == nil {
+				delete(doc, "verificationMethod")
+				if stripped, err := json.MarshalIndent(doc, "", "  "); err == nil {
+					sf.didJSON = stripped
+				}
+			}
+		}
+	}
+
+	return sf
 }
 
 // calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.

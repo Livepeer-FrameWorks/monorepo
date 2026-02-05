@@ -1,0 +1,20 @@
+{
+  "resource": "https://api.frameworks.network/mcp",
+  "authorization_servers": ["https://api.frameworks.network"],
+  "bearer_methods_supported": ["header"],
+  "scopes_supported": [],
+  "resource_documentation": "https://frameworks.network/skill.md",
+  "x_auth_methods": {
+    "wallet": {
+      "type": "eip191",
+      "login_endpoint": "https://api.frameworks.network/auth/wallet-login",
+      "auto_provision": true
+    },
+    "x402": {
+      "type": "eip3009",
+      "bootstrap_tools": ["get_payment_options", "submit_payment"],
+      "chains": ["base", "arbitrum"],
+      "token": "USDC"
+    }
+  }
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/mcp/mcperrors"
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/billing"
 	"frameworks/pkg/ctxkeys"
@@ -83,7 +84,7 @@ type PricingRates struct {
 func handleBillingBalance(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	// Get billing model from API - fail if API fails
@@ -384,7 +385,7 @@ type TransactionsResponse struct {
 func handleBillingTransactions(ctx context.Context, clients *clients.ServiceClients, logger logging.Logger) (*mcp.ReadResourceResult, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("not authenticated")
+		return nil, mcperrors.AuthRequired()
 	}
 
 	// Build pagination request for last 20 transactions

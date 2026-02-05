@@ -1,0 +1,32 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/suites/secp256k1recovery-2020/v2"
+  ],
+  "id": "did:web:frameworks.network",
+  "verificationMethod": [
+    {
+      "id": "did:web:frameworks.network#x402",
+      "type": "EcdsaSecp256k1RecoveryMethod2020",
+      "controller": "did:web:frameworks.network",
+      "blockchainAccountId": "eip155:8453:{{PLATFORM_X402_ADDRESS}}"
+    }
+  ],
+  "service": [
+    {
+      "id": "did:web:frameworks.network#mcp",
+      "type": "MCPServer",
+      "serviceEndpoint": "https://api.frameworks.network/mcp"
+    },
+    {
+      "id": "did:web:frameworks.network#graphql",
+      "type": "GraphQLAPI",
+      "serviceEndpoint": "https://api.frameworks.network/graphql"
+    },
+    {
+      "id": "did:web:frameworks.network#wallet-login",
+      "type": "WalletLogin",
+      "serviceEndpoint": "https://api.frameworks.network/auth/wallet-login"
+    }
+  ]
+}
