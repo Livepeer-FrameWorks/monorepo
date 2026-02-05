@@ -785,6 +785,7 @@ func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger lo
 
 // processDVRStartRequest handles DVR start requests from ingest Helmsman
 func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger logging.Logger) {
+	ctx := context.Background()
 	// Get DVR hash and stream_id from Commodore registration
 	dvrHash := req.GetDvrHash()
 	streamID := req.GetStreamId()
@@ -793,7 +794,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 			logger.Error("Commodore not available for DVR registration")
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		regCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		regReq := &pb.RegisterDVRRequest{
 			TenantId:     req.GetTenantId(),
@@ -805,7 +806,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 			retentionTime := time.Now().AddDate(0, 0, int(cfg.RetentionDays))
 			regReq.RetentionUntil = timestamppb.New(retentionTime)
 		}
-		resp, err := CommodoreClient.RegisterDVR(ctx, regReq)
+		resp, err := CommodoreClient.RegisterDVR(regCtx, regReq)
 		if err != nil {
 			logger.WithError(err).Error("Failed to register DVR with Commodore")
 			return
@@ -827,7 +828,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	})
 
 	// Store artifact lifecycle state in foghorn.artifacts with context for Decklog events
-	_, err := db.Exec(`
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, internal_name, stream_id, tenant_id, user_id, status, request_id, format, created_at, updated_at
 		) VALUES ($1, 'dvr', $2, NULLIF($3,'')::uuid, NULLIF($4,'')::uuid, NULLIF($5,'')::uuid, 'requested', $6, 'm3u8', NOW(), NOW())
@@ -857,7 +858,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		}).Error("Failed to find storage node for DVR")
 
 		// Update artifact as failed
-		if _, dbErr := db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
+		if _, dbErr := db.ExecContext(ctx, `UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
 			err.Error(), dvrHash); dbErr != nil {
 			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
 		}
@@ -881,7 +882,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 	}
 
 	// Store node assignment in foghorn.artifact_nodes
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, base_url, cached_at)
 		VALUES ($1, $2, $3, NOW())
 		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
@@ -905,7 +906,7 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		}).Error("Failed to send DVR start to storage node")
 
 		// Update artifact as failed
-		if _, dbErr := db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
+		if _, dbErr := db.ExecContext(ctx, `UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
 			err.Error(), dvrHash); dbErr != nil {
 			logger.WithError(dbErr).Warn("Failed to update artifact status to failed")
 		}
@@ -1309,11 +1310,11 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 	hostname = strings.TrimPrefix(hostname, "http://")
 
 	// Replace HOST placeholder with actual hostname
-	dtscURI := strings.Replace(dtscTemplate, "HOST", hostname, -1)
+	dtscURI := strings.ReplaceAll(dtscTemplate, "HOST", hostname)
 
 	// For DVR readiness, we want the base URI without the $ placeholder
 	// The $ will be replaced with the actual stream name later
-	baseDTSCURI := strings.Replace(dtscURI, "$", "", -1)
+	baseDTSCURI := strings.ReplaceAll(dtscURI, "$", "")
 
 	// Remove trailing slash if present
 	baseDTSCURI = strings.TrimSuffix(baseDTSCURI, "/")
@@ -1678,15 +1679,16 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 	if CommodoreClient != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if assetType == "clip" {
+		switch assetType {
+		case "clip":
 			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
-		} else if assetType == "dvr" || assetType == "dvr_segment" || assetType == "dvr_manifest" {
+		case "dvr", "dvr_segment", "dvr_manifest":
 			if resp, err := CommodoreClient.ResolveDVRHash(ctx, dvrHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
-		} else if assetType == "vod" {
+		case "vod":
 			if resp, err := CommodoreClient.ResolveVodHash(ctx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
@@ -1822,7 +1824,7 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 
 	// Update artifact to mark as freezing (skip for incremental segment sync)
 	if assetType != "dvr_segment" && assetType != "dvr_manifest" {
-		_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 'freezing', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+		_, _ = db.ExecContext(context.Background(), `UPDATE foghorn.artifacts SET storage_location = 'freezing', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
 	}
 
 	sendFreezePermissionResponse(stream, response, logger)
@@ -1945,7 +1947,7 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		if reportingNodeID == "" {
 			reportingNodeID = nodeID
 		}
-		result, err := db.Exec(`
+		result, err := db.ExecContext(context.Background(), `
 			UPDATE foghorn.artifacts
 			SET storage_location = 'local',
 			    defrost_node_id = NULL,
@@ -1998,7 +2000,7 @@ func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger 
 		if reportingNodeID == "" {
 			reportingNodeID = nodeID
 		}
-		_, _ = db.Exec(`
+		_, _ = db.ExecContext(context.Background(), `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    defrost_node_id = NULL,
@@ -2094,11 +2096,12 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 	if CommodoreClient != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if assetType == "clip" {
+		switch assetType {
+		case "clip":
 			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
-		} else if assetType == "dvr" {
+		case "dvr":
 			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
@@ -2280,16 +2283,17 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	// Prefer denormalized tenant_id stored in foghorn.artifacts; fall back to Commodore when absent.
 	if tenantID == "" {
 		if CommodoreClient != nil {
-			if artifactType == "clip" {
-				if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
+			switch artifactType {
+			case "clip":
+				if resp, errResolve := CommodoreClient.ResolveClipHash(ctx, assetHash); errResolve == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
-			} else if artifactType == "dvr" {
-				if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+			case "dvr":
+				if resp, errResolve := CommodoreClient.ResolveDVRHash(ctx, assetHash); errResolve == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
-			} else if artifactType == "vod" {
-				if resp, err := CommodoreClient.ResolveVodHash(ctx, assetHash); err == nil && resp.Found {
+			case "vod":
+				if resp, errResolve := CommodoreClient.ResolveVodHash(ctx, assetHash); errResolve == nil && resp.Found {
 					tenantID = resp.TenantId
 				}
 			}
@@ -2317,7 +2321,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 		return "", NewDefrostingError(10, "defrost already in progress")
 	}
 
-	result, err := db.Exec(`
+	result, err := db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET storage_location = 'defrosting',
 		    defrost_node_id = $2,
@@ -2338,7 +2342,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	}
 	if affected == 0 {
 		var currentLocation string
-		err := db.QueryRow(`
+		err := db.QueryRowContext(ctx, `
 			SELECT COALESCE(storage_location, '')
 			FROM foghorn.artifacts
 			WHERE artifact_hash = $1
@@ -2465,7 +2469,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	// Send defrost request to node
 	if err := SendDefrostRequest(nodeID, req); err != nil {
 		// Revert storage location
-		_, _ = db.Exec(`
+		_, _ = db.ExecContext(ctx, `
 			UPDATE foghorn.artifacts
 			SET storage_location = 's3',
 			    defrost_node_id = NULL,

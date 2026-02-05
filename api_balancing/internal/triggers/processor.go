@@ -205,6 +205,7 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 	if p.streamCache != nil && internalName != "" && tenantID != "" {
 		cacheKey := tenantID + ":" + internalName
 		if cached, ok := p.streamCache.Peek(cacheKey); ok {
+			//nolint:errcheck // cache stores streamContext values; enforced on write
 			info := cached.(streamContext)
 			return &BillingStatus{
 				TenantID:          info.TenantID,

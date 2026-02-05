@@ -787,7 +787,9 @@ func (dm *DVRManager) parseManifestSegments(manifestPath string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	var segments []string
 	scanner := bufio.NewScanner(file)
@@ -824,7 +826,9 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 	if err != nil {
 		return fmt.Errorf("failed to open segment file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -843,7 +847,9 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 	if err != nil {
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("S3 upload failed with status %d", resp.StatusCode)
@@ -894,7 +900,9 @@ func (dm *DVRManager) uploadManifestToS3(ctx context.Context, filePath, presigne
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -912,7 +920,9 @@ func (dm *DVRManager) uploadManifestToS3(ctx context.Context, filePath, presigne
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("manifest upload failed with status %d", resp.StatusCode)

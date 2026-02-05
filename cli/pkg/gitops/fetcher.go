@@ -71,9 +71,9 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 
 	// Check if repository is a local path
 	if f.isLocalPath(f.repository) {
-		manifest, err := f.fetchFromLocal(channel, version)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch from local path: %w", err)
+		manifest, errFetch := f.fetchFromLocal(channel, version)
+		if errFetch != nil {
+			return nil, fmt.Errorf("failed to fetch from local path: %w", errFetch)
 		}
 		return manifest, nil
 	}

@@ -88,9 +88,10 @@ func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, 
 	state.Metadata["provisioned_at"] = svc.ProvisionedAt.Format(time.RFC3339)
 
 	// Still need to check if it's actually running
-	if svc.Mode == "docker" {
+	switch svc.Mode {
+	case "docker":
 		d.checkDockerRunning(ctx, serviceName, state)
-	} else if svc.Mode == "native" {
+	case "native":
 		d.checkSystemdRunning(ctx, serviceName, state)
 	}
 

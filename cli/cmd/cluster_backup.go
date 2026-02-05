@@ -178,7 +178,7 @@ func backupPostgres(ctx context.Context, cmd *cobra.Command, manifest *inventory
 	backupFile := filepath.Join(outputDir, fmt.Sprintf("postgres-%s.sql", timestamp))
 
 	// Create backup command (works for both Docker and native)
-	var backupCmd string = fmt.Sprintf("mkdir -p %s && docker compose -f /opt/frameworks/postgres/docker-compose.yml exec -T postgres pg_dumpall -U postgres > %s",
+	var backupCmd = fmt.Sprintf("mkdir -p %s && docker compose -f /opt/frameworks/postgres/docker-compose.yml exec -T postgres pg_dumpall -U postgres > %s",
 		outputDir, backupFile)
 
 	result, err := runner.Run(ctx, backupCmd)

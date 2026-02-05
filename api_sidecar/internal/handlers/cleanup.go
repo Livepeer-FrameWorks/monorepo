@@ -444,8 +444,8 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 			return fmt.Errorf("failed to remove artifact file: %w", err)
 		}
 		// Remove auxiliary files (.dtsh, .gop) after main file succeeds.
-		os.Remove(artifact.FilePath + ".dtsh")
-		os.Remove(artifact.FilePath + ".gop")
+		_ = os.Remove(artifact.FilePath + ".dtsh")
+		_ = os.Remove(artifact.FilePath + ".gop")
 	}
 
 	// Remove from artifact index

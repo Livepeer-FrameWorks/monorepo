@@ -203,9 +203,9 @@ rm /tmp/%s.tar.gz
 echo "Binary installed"
 `, f.serviceName, binaryURL, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName, f.serviceName)
 
-	result, err := f.ExecuteScript(ctx, host, installScript)
-	if err != nil || result.ExitCode != 0 {
-		return fmt.Errorf("failed to install binary: %w\nStderr: %s", err, result.Stderr)
+	result, errExec := f.ExecuteScript(ctx, host, installScript)
+	if errExec != nil || result.ExitCode != 0 {
+		return fmt.Errorf("failed to install binary: %w\nStderr: %s", errExec, result.Stderr)
 	}
 
 	// Generate systemd unit
@@ -226,17 +226,17 @@ echo "Binary installed"
 
 	// Upload systemd unit
 	tmpUnit := filepath.Join(os.TempDir(), f.serviceName+".service")
-	if err := os.WriteFile(tmpUnit, []byte(unitContent), 0644); err != nil {
-		return fmt.Errorf("failed to write systemd unit: %w", err)
+	if errWrite := os.WriteFile(tmpUnit, []byte(unitContent), 0644); errWrite != nil {
+		return fmt.Errorf("failed to write systemd unit: %w", errWrite)
 	}
 
 	unitPath := fmt.Sprintf("/etc/systemd/system/frameworks-%s.service", f.serviceName)
-	if err := f.UploadFile(ctx, host, ssh.UploadOptions{
+	if errUpload := f.UploadFile(ctx, host, ssh.UploadOptions{
 		LocalPath:  tmpUnit,
 		RemotePath: unitPath,
 		Mode:       0644,
-	}); err != nil {
-		return fmt.Errorf("failed to upload systemd unit: %w", err)
+	}); errUpload != nil {
+		return fmt.Errorf("failed to upload systemd unit: %w", errUpload)
 	}
 
 	// Enable and start service

@@ -58,12 +58,12 @@ func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) err
 	}
 	defer c.Close()
 
-	if err := c.Mail(s.config.From); err != nil {
-		return fmt.Errorf("mail from: %w", err)
+	if errMail := c.Mail(s.config.From); errMail != nil {
+		return fmt.Errorf("mail from: %w", errMail)
 	}
 
-	if err := c.Rcpt(to); err != nil {
-		return fmt.Errorf("rcpt to: %w", err)
+	if errRcpt := c.Rcpt(to); errRcpt != nil {
+		return fmt.Errorf("rcpt to: %w", errRcpt)
 	}
 
 	w, err := c.Data()

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -93,13 +94,14 @@ func DeriveAddressFromXpub(xpub string, index uint32) (string, error) {
 // GetNextDerivationIndex atomically gets and increments the next derivation index.
 // Returns the index to use and the xpub.
 func (hw *HDWallet) GetNextDerivationIndex() (uint32, string, error) {
-	tx, err := hw.db.Begin()
+	ctx := context.Background()
+	tx, err := hw.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	index, xpub, err := hw.GetNextDerivationIndexTx(tx)
+	index, xpub, err := hw.GetNextDerivationIndexTx(ctx, tx)
 	if err != nil {
 		return 0, "", err
 	}
@@ -113,11 +115,11 @@ func (hw *HDWallet) GetNextDerivationIndex() (uint32, string, error) {
 
 // GetNextDerivationIndexTx atomically gets and increments the next derivation index within a transaction.
 // Returns the index to use and the xpub.
-func (hw *HDWallet) GetNextDerivationIndexTx(tx *sql.Tx) (uint32, string, error) {
+func (hw *HDWallet) GetNextDerivationIndexTx(ctx context.Context, tx *sql.Tx) (uint32, string, error) {
 	var index int
 	var xpub string
 
-	err := tx.QueryRow(`
+	err := tx.QueryRowContext(ctx, `
 		UPDATE purser.hd_wallet_state
 		SET next_index = next_index + 1, updated_at = NOW()
 		WHERE id = 1
@@ -135,9 +137,9 @@ func (hw *HDWallet) GetNextDerivationIndexTx(tx *sql.Tx) (uint32, string, error)
 }
 
 // GetNextNonZeroDerivationIndexTx allocates a derivation index within a transaction, skipping index 0.
-func (hw *HDWallet) GetNextNonZeroDerivationIndexTx(tx *sql.Tx) (uint32, string, error) {
+func (hw *HDWallet) GetNextNonZeroDerivationIndexTx(ctx context.Context, tx *sql.Tx) (uint32, string, error) {
 	for {
-		index, xpub, err := hw.GetNextDerivationIndexTx(tx)
+		index, xpub, err := hw.GetNextDerivationIndexTx(ctx, tx)
 		if err != nil {
 			return 0, "", err
 		}
@@ -199,14 +201,15 @@ func (hw *HDWallet) GenerateDepositAddress(
 		return "", "", fmt.Errorf("expected_amount_cents required for prepaid purpose")
 	}
 
-	tx, err := hw.db.Begin()
+	ctx := context.Background()
+	tx, err := hw.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	// Get next index and xpub
-	derivationIndex, xpub, err := hw.GetNextNonZeroDerivationIndexTx(tx)
+	derivationIndex, xpub, err := hw.GetNextNonZeroDerivationIndexTx(ctx, tx)
 	if err != nil {
 		return "", "", err
 	}
@@ -231,7 +234,7 @@ func (hw *HDWallet) GenerateDepositAddress(
 		expectedAmountValue = *expectedAmountCents
 	}
 
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.crypto_wallets (
 			id, tenant_id, purpose, invoice_id, expected_amount_cents,
 			asset, wallet_address, derivation_index, status, expires_at

@@ -187,8 +187,8 @@ func newEdgeEnrollCmd() *cobra.Command {
 		httpClient := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 		deadline := time.Now().Add(timeout)
 		for {
-			reqCtx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
-			req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+			ctx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				cancel()
 				return err
@@ -197,13 +197,13 @@ func newEdgeEnrollCmd() *cobra.Command {
 			cancel()
 			if err == nil && resp != nil && resp.StatusCode == 200 {
 				if resp.Body != nil {
-					resp.Body.Close()
+					_ = resp.Body.Close()
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "HTTPS ready at %s\n", url)
 				break
 			}
 			if resp != nil && resp.Body != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			if time.Now().After(deadline) {
 				if err != nil {
@@ -328,8 +328,8 @@ Multi-node manifest example:
 
 			if !skipPreflight {
 				fmt.Fprintln(cmd.OutOrStdout(), "\n[1/7] Running preflight checks...")
-				if err := runRemotePreflight(cmd, sshTarget, sshKey); err != nil {
-					return fmt.Errorf("preflight failed: %w", err)
+				if errPreflight := runRemotePreflight(cmd, sshTarget, sshKey); errPreflight != nil {
+					return fmt.Errorf("preflight failed: %w", errPreflight)
 				}
 			} else {
 				fmt.Fprintln(cmd.OutOrStdout(), "\n[1/7] Skipping preflight checks (--skip-preflight)")
@@ -337,8 +337,8 @@ Multi-node manifest example:
 
 			if applyTuning {
 				fmt.Fprintln(cmd.OutOrStdout(), "\n[2/7] Applying sysctl/limits tuning...")
-				if err := runRemoteTuning(cmd, sshTarget, sshKey); err != nil {
-					return fmt.Errorf("tuning failed: %w", err)
+				if errTune := runRemoteTuning(cmd, sshTarget, sshKey); errTune != nil {
+					return fmt.Errorf("tuning failed: %w", errTune)
 				}
 			} else {
 				fmt.Fprintln(cmd.OutOrStdout(), "\n[2/7] Skipping sysctl tuning (use --tune to apply)")
@@ -355,8 +355,8 @@ Multi-node manifest example:
 					fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Detected external IP: %s\n", externalIP)
 				}
 
-				if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
-					return fmt.Errorf("node registration failed: %w", err)
+				if errRegister := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); errRegister != nil {
+					return fmt.Errorf("node registration failed: %w", errRegister)
 				}
 			} else {
 				fmt.Fprintln(cmd.OutOrStdout(), "\n[3/7] Skipping node registration (use --register to enable)")
@@ -701,8 +701,8 @@ func uploadEdgeTemplates(cmd *cobra.Command, sshTarget, sshKey string, vars temp
 	defer os.RemoveAll(tmpDir)
 
 	// Write templates to temp directory
-	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
-		return fmt.Errorf("failed to write templates: %w", err)
+	if errWrite := templates.WriteEdgeTemplates(tmpDir, vars, true); errWrite != nil {
+		return fmt.Errorf("failed to write templates: %w", errWrite)
 	}
 
 	// Create remote directory
@@ -767,8 +767,8 @@ func waitForHTTPS(cmd *cobra.Command, domain string, timeout time.Duration) erro
 	deadline := time.Now().Add(timeout)
 
 	for {
-		reqCtx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
-		req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), httpClient.Timeout)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			cancel()
 			return err
@@ -777,13 +777,13 @@ func waitForHTTPS(cmd *cobra.Command, domain string, timeout time.Duration) erro
 		cancel()
 		if err == nil && resp != nil && resp.StatusCode == 200 {
 			if resp.Body != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ HTTPS ready at %s\n", url)
 			return nil
 		}
 		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 
 		if time.Now().After(deadline) {
@@ -1003,19 +1003,27 @@ func newEdgeStatusCmd() *cobra.Command {
 		if strings.TrimSpace(domain) != "" {
 			url := "https://" + domain + "/health"
 			httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-			resp, err := httpClient.Get(url)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
+				cancel()
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
 			} else {
-				if resp.Body != nil {
-					resp.Body.Close()
+				resp, err := httpClient.Do(req)
+				cancel()
+				if err != nil {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
+				} else {
+					if resp.Body != nil {
+						_ = resp.Body.Close()
+					}
+					ok := resp.StatusCode == 200
+					mark := "✗"
+					if ok {
+						mark = "✓"
+					}
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> %s (http %d)\n", url, mark, resp.StatusCode)
 				}
-				ok := resp.StatusCode == 200
-				mark := "✗"
-				if ok {
-					mark = "✓"
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> %s (http %d)\n", url, mark, resp.StatusCode)
 			}
 		}
 		return nil
@@ -1223,15 +1231,24 @@ func newEdgeDoctorCmd() *cobra.Command {
 		if domain != "" {
 			url := "https://" + domain + "/health"
 			httpClient := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-			resp, err := httpClient.Get(url)
-			fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
-				fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
+				cancel()
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
 			} else {
-				if resp.Body != nil {
-					resp.Body.Close()
+				resp, err := httpClient.Do(req)
+				cancel()
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
+				if err != nil {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
+				} else {
+					if resp.Body != nil {
+						_ = resp.Body.Close()
+					}
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s http %d\n", url, resp.StatusCode)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), " %s http %d\n", url, resp.StatusCode)
 			}
 		}
 		// Hints minimal

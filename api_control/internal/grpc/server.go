@@ -202,7 +202,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	}
 
 	// Get billing status via Purser gRPC (not direct DB access)
-	var billingModel string = "postpaid"
+	var billingModel = "postpaid"
 	var isSuspended, isBalanceNegative bool
 
 	if s.purserClient != nil {

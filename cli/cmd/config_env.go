@@ -14,7 +14,7 @@ import (
 func newConfigEnvCmd() *cobra.Command {
 	var base string
 	var secrets string
-	var output string
+	var outputPath string
 	var context string
 
 	cmd := &cobra.Command{Use: "env", Short: "Generate merged env file"}
@@ -38,12 +38,12 @@ func newConfigEnvCmd() *cobra.Command {
 			Context:     context,
 		}
 
-		if strings.TrimSpace(output) == "" {
+		if strings.TrimSpace(outputPath) == "" {
 			opts.OutputFile = ".env"
-		} else if output == "-" {
+		} else if outputPath == "-" {
 			opts.OutputFile = ""
 		} else {
-			opts.OutputFile = filepath.Clean(output)
+			opts.OutputFile = filepath.Clean(outputPath)
 		}
 
 		env, err := configgen.Generate(opts)
@@ -71,7 +71,7 @@ func newConfigEnvCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&base, "base", "", "path to base env file (default: config/env/base.env)")
 	cmd.Flags().StringVar(&secrets, "secrets", "", "path to secrets env file (default: config/env/secrets.env)")
-	cmd.Flags().StringVar(&output, "output", "", "output path (default: .env, use '-' for stdout)")
+	cmd.Flags().StringVar(&outputPath, "output", "", "output path (default: .env, use '-' for stdout)")
 	cmd.Flags().StringVar(&context, "context", "dev", "value for ENV_CONTEXT")
 	return cmd
 }

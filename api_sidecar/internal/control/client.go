@@ -417,9 +417,11 @@ func runClient(addr string, logger logging.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	client := pb.NewHelmsmanControlClient(conn)
-	stream, err := client.Connect(context.Background())
+	stream, err := client.Connect(ctx)
 	if err != nil {
 		return err
 	}
@@ -680,7 +682,9 @@ func downloadToFile(url, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("mist returned %d", resp.StatusCode)
 	}
@@ -703,7 +707,6 @@ func downloadToFile(url, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		_ = os.Remove(tmpPath)
 		return err

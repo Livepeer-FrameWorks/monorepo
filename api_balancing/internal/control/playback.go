@@ -410,7 +410,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 			endpointURL = ResolveTemplateURL(webrtcURL, nodeOutputs.BaseURL, viewKey)
 			// If HOST wasn't replaced (direct protocol), use extracted public host
 			if strings.Contains(endpointURL, "HOST") && publicHost != "" {
-				endpointURL = strings.Replace(endpointURL, "HOST", publicHost, -1)
+				endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
 			}
 		} else if hlsURL, ok := nodeOutputs.Outputs["HLS"]; ok {
 			protocol = "hls"
@@ -546,13 +546,13 @@ func ResolveTemplateURL(raw interface{}, baseURL, streamName string) string {
 	if s == "" {
 		return ""
 	}
-	s = strings.Replace(s, "$", streamName, -1)
+	s = strings.ReplaceAll(s, "$", streamName)
 	if strings.Contains(s, "HOST") {
 		host := baseURL
 		host = strings.TrimPrefix(host, "https://")
 		host = strings.TrimPrefix(host, "http://")
 		host = strings.TrimSuffix(host, "/")
-		s = strings.Replace(s, "HOST", host, -1)
+		s = strings.ReplaceAll(s, "HOST", host)
 	}
 	s = strings.Trim(s, "[]\"")
 	return s
@@ -618,7 +618,7 @@ func BuildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamNa
 					// For direct protocols, just use the hostname (no port from publicHost)
 					// since they have their own ports in the URL
 					hostOnly := strings.Split(publicHost, ":")[0]
-					u = strings.Replace(u, "HOST", hostOnly, -1)
+					u = strings.ReplaceAll(u, "HOST", hostOnly)
 				}
 				outputs[proto] = &pb.OutputEndpoint{Protocol: proto, Url: u, Capabilities: BuildOutputCapabilities(proto, isLive)}
 			}

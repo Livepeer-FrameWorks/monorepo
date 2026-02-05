@@ -267,7 +267,7 @@ func (r *nodeRepositoryDB) ListNodeMaintenance(ctx context.Context) ([]state.Nod
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []state.NodeMaintenanceRecord
 	for rows.Next() {
@@ -374,7 +374,7 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 
 	for _, a := range artifacts {
 		// First, ensure the artifact exists in foghorn.artifacts (lifecycle table)
-		_, err := tx.ExecContext(ctx, `
+		_, errExec := tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifacts
 				(artifact_hash, artifact_type, internal_name, status, created_at, updated_at, access_count, last_accessed_at)
 			VALUES ($1, $2, $3, 'ready', to_timestamp($4), NOW(), $5, CASE WHEN $6 > 0 THEN to_timestamp($6) ELSE NULL END)
@@ -388,12 +388,12 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 				END,
 				updated_at = NOW()
 		`, a.ArtifactHash, a.ArtifactType, a.StreamName, a.CreatedAt, a.AccessCount, a.LastAccessed)
-		if err != nil {
-			return err
+		if errExec != nil {
+			return errExec
 		}
 
 		// Then, upsert into artifact_nodes (warm storage tracking)
-		_, err = tx.ExecContext(ctx, `
+		_, errExec = tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifact_nodes
 				(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW()))
@@ -411,8 +411,8 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 				last_seen_at = NOW(),
 				is_orphaned = false
 		`, a.ArtifactHash, nodeID, a.FilePath, a.SizeBytes, a.SegmentCount, a.SegmentBytes, a.AccessCount, a.LastAccessed)
-		if err != nil {
-			return err
+		if errExec != nil {
+			return errExec
 		}
 	}
 

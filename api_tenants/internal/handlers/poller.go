@@ -153,13 +153,13 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				defer func() { <-sem }()
 				url := fmt.Sprintf("http://%s:%d%s", ii.host, ii.port, ii.path)
 				status := "healthy"
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+				req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
 				if err != nil {
 					status = "unhealthy"
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", url).Debug("HTTP health check request failed")
-					_, _ = db.Exec(`UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+					_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
 					return
 				}
 				resp, err := client.Do(req)
@@ -175,7 +175,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				if resp != nil {
 					_ = resp.Body.Close()
 				}
-				_, _ = db.Exec(`UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+				_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
 			}(it)
 			continue
 		}
@@ -188,24 +188,24 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				defer func() { <-sem }()
 				addr := fmt.Sprintf("%s:%d", ii.host, ii.port)
 				status := "healthy"
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
 					status = "unhealthy"
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check dial failed")
-					_, _ = db.Exec(`UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+					_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
 					return
 				}
 				defer conn.Close()
 				hc := healthpb.NewHealthClient(conn)
-				if _, err := hc.Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
+				if _, err := hc.Check(probeCtx, &healthpb.HealthCheckRequest{}); err != nil {
 					status = "unhealthy"
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check failed")
 				} else {
 					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check passed")
 				}
-				_, _ = db.Exec(`UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
+				_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
 			}(it)
 			continue
 		}

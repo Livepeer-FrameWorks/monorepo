@@ -2500,7 +2500,7 @@ func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *p
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var nodes []*pb.InfrastructureNode
 	for rows.Next() {

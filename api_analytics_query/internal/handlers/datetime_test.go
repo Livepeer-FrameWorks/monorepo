@@ -278,7 +278,8 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 			// Verify response status
 			assert.Equal(t, tt.expectedStatus, w.Code, "Unexpected status code for %s", tt.name)
 
-			if tt.expectedStatus == http.StatusOK {
+			switch tt.expectedStatus {
+			case http.StatusOK:
 				// Verify response is valid JSON
 				var response map[string]interface{}
 				err := json.Unmarshal(w.Body.Bytes(), &response)
@@ -293,7 +294,7 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 				// Verify response contains time information
 				assert.Contains(t, response, "start_time", "Response should contain start_time")
 				assert.Contains(t, response, "end_time", "Response should contain end_time")
-			} else if tt.expectedStatus == http.StatusBadRequest {
+			case http.StatusBadRequest:
 				// Verify error response
 				var errResp errorResponse
 				err := json.Unmarshal(w.Body.Bytes(), &errResp)

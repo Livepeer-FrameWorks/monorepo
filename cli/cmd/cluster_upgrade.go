@@ -226,9 +226,9 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 	if !yes {
 		fmt.Fprintf(os.Stderr, "\nUpgrade %s from %s to %s? [y/N]: ", serviceName, previousVersion, svcInfo.Version)
 		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read confirmation: %w", err)
+		response, errRead := reader.ReadString('\n')
+		if errRead != nil {
+			return fmt.Errorf("failed to read confirmation: %w", errRead)
 		}
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response != "y" && response != "yes" {
@@ -239,8 +239,8 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 
 	// Stop service
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/6] Stopping service...\n")
-	if err := stopService(ctx, host, deployName, state.Mode, sshPool); err != nil {
-		return fmt.Errorf("failed to stop service: %w", err)
+	if errStop := stopService(ctx, host, deployName, state.Mode, sshPool); errStop != nil {
+		return fmt.Errorf("failed to stop service: %w", errStop)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service stopped\n")
 

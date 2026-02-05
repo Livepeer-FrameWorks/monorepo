@@ -508,7 +508,8 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 
 	// Collect filenames (needed for presigned URL generation)
 	var filenames []string
-	if asset.AssetType == AssetTypeDVR {
+	switch asset.AssetType {
+	case AssetTypeDVR:
 		manifestName := asset.AssetHash + ".m3u8"
 		filenames = append(filenames, manifestName)
 
@@ -535,7 +536,7 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 				filenames = append(filenames, entry.Name())
 			}
 		}
-	} else if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
+	case AssetTypeClip, AssetTypeVOD:
 		// Clip and VOD are single-file uploads
 		filenames = append(filenames, filepath.Base(asset.FilePath))
 		// Include .dtsh if it exists
@@ -744,11 +745,12 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 
 	// Notify completion via lifecycle event (synced, not frozen - local copy retained)
 	actualSizeBytes := asset.SizeBytes
-	if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
+	switch asset.AssetType {
+	case AssetTypeClip, AssetTypeVOD:
 		if info, err := os.Stat(asset.FilePath); err == nil {
 			actualSizeBytes = uint64(info.Size())
 		}
-	} else if asset.AssetType == AssetTypeDVR {
+	case AssetTypeDVR:
 		actualSizeBytes = sm.calculateDirSize(asset.FilePath)
 	}
 
@@ -1321,7 +1323,9 @@ func (sm *StorageManager) appendSegmentToManifest(manifestPath, segmentName stri
 		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to open manifest for append")
 		return
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 
 	segment := fmt.Sprintf("#EXTINF:%.3f,\nsegments/%s\n", duration, segmentName)
 	if _, err := f.WriteString(segment); err != nil {
@@ -1335,7 +1339,9 @@ func (sm *StorageManager) finalizeManifest(manifestPath string) {
 		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to open manifest for finalization")
 		return
 	}
-	defer f.Close()
+	defer func() {
+		_ = f.Close()
+	}()
 	if _, err := f.WriteString("#EXT-X-ENDLIST\n"); err != nil {
 		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to write ENDLIST to manifest")
 	}
@@ -1410,7 +1416,7 @@ func (sm *StorageManager) saveDefrostProgress(progress *DefrostProgress, localPa
 
 func (sm *StorageManager) removeDefrostProgress(localPath string) {
 	progressFile := filepath.Join(localPath, ".defrost.json")
-	os.Remove(progressFile)
+	_ = os.Remove(progressFile)
 }
 
 // Storage utility methods
@@ -1532,8 +1538,8 @@ func (sm *StorageManager) fallbackCleanup(clipsDir string, usedBytes, totalBytes
 				deleteErr = os.Remove(candidate.FilePath)
 				if deleteErr == nil {
 					// Clean up auxiliary files after main file deletion succeeds.
-					os.Remove(candidate.FilePath + ".dtsh")
-					os.Remove(candidate.FilePath + ".gop")
+					_ = os.Remove(candidate.FilePath + ".dtsh")
+					_ = os.Remove(candidate.FilePath + ".gop")
 				}
 			} else {
 				// DVR: remove entire directory

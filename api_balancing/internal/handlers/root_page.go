@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"html/template"
@@ -1195,7 +1196,7 @@ func HandleRootPage(c *gin.Context) {
 				var videoCodec, audioCodec, resolution, filename, title sql.NullString
 				var durationMs, bitrateKbps sql.NullInt32
 
-				err := artifactRows.Scan(
+				errScan := artifactRows.Scan(
 					&hash, &artType, &status, &internalName, &tenantID,
 					&storageLocation, &syncStatus, &s3URL, &format, &sizeBytes,
 					&accessCount, &lastAccessed,
@@ -1204,7 +1205,7 @@ func HandleRootPage(c *gin.Context) {
 					&videoCodec, &audioCodec, &resolution, &durationMs, &bitrateKbps,
 					&filename, &title,
 				)
-				if err != nil {
+				if errScan != nil {
 					continue
 				}
 
@@ -1275,18 +1276,18 @@ func HandleRootPage(c *gin.Context) {
 
 				// Query nodes hosting this artifact
 				art.NodeIDs = func() []string {
-					nodeRows, err := db.Query(`
+					nodeRows, errQuery := db.QueryContext(context.Background(), `
 						SELECT node_id FROM foghorn.artifact_nodes
 						WHERE artifact_hash = $1 AND NOT is_orphaned
 					`, hash)
-					if err != nil {
+					if errQuery != nil {
 						return nil
 					}
-					defer nodeRows.Close()
+					defer func() { _ = nodeRows.Close() }()
 					var ids []string
 					for nodeRows.Next() {
 						var nodeID string
-						if err := nodeRows.Scan(&nodeID); err == nil {
+						if errScan := nodeRows.Scan(&nodeID); errScan == nil {
 							ids = append(ids, nodeID)
 						}
 					}

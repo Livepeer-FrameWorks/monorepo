@@ -422,7 +422,12 @@ func NewWebSocketTestClient(serverURL string, jwt string) (*WebSocketTestClient,
 	}
 
 	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.Dial(serverURL, headers)
+	conn, resp, err := dialer.Dial(serverURL, headers)
+	if resp != nil {
+		defer func() {
+			_ = resp.Body.Close()
+		}()
+	}
 	if err != nil {
 		return nil, err
 	}

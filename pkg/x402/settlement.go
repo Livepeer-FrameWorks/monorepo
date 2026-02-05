@@ -286,9 +286,9 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 		if commodore == nil {
 			return nil, &SettlementError{Code: ErrResolverUnavailable, Message: "ingest resolver unavailable"}
 		}
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		resp, err := commodore.ValidateStreamKey(ctx, key)
+		resp, err := commodore.ValidateStreamKey(ctxTimeout, key)
 		if err != nil {
 			return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("invalid stream key: %v", err), ResourceType: "Stream", ResourceID: key}
 		}
@@ -319,9 +319,9 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 		if commodore == nil {
 			return nil, &SettlementError{Code: ErrResolverUnavailable, Message: "playback resolver unavailable"}
 		}
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		if resp, err := commodore.ResolveArtifactPlaybackID(ctx, raw); err == nil && resp != nil && resp.Found && resp.TenantId != "" {
+		if resp, err := commodore.ResolveArtifactPlaybackID(ctxTimeout, raw); err == nil && resp != nil && resp.Found && resp.TenantId != "" {
 			return &ResourceResolution{
 				Resource: "viewer://" + raw,
 				Kind:     ResourceKindViewer,
@@ -329,7 +329,7 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 				Resolved: true,
 			}, nil
 		}
-		if resp, err := commodore.ResolvePlaybackID(ctx, raw); err == nil && resp != nil && resp.TenantId != "" {
+		if resp, err := commodore.ResolvePlaybackID(ctxTimeout, raw); err == nil && resp != nil && resp.TenantId != "" {
 			return &ResourceResolution{
 				Resource: "viewer://" + raw,
 				Kind:     ResourceKindViewer,
@@ -352,9 +352,9 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 			}
 			raw = id
 		}
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		resp, err := commodore.ResolveClipHash(ctx, raw)
+		resp, err := commodore.ResolveClipHash(ctxTimeout, raw)
 		if err != nil {
 			return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("failed to resolve clip hash: %v", err), ResourceType: "Clip", ResourceID: raw}
 		}
@@ -372,9 +372,9 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 		if commodore == nil {
 			return nil, &SettlementError{Code: ErrResolverUnavailable, Message: "dvr resolver unavailable"}
 		}
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		resp, err := commodore.ResolveDVRHash(ctx, raw)
+		resp, err := commodore.ResolveDVRHash(ctxTimeout, raw)
 		if err != nil {
 			return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("failed to resolve DVR hash: %v", err), ResourceType: "DVR", ResourceID: raw}
 		}
@@ -398,9 +398,9 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 			}
 			raw = id
 		}
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		resp, err := commodore.ResolveIdentifier(ctx, raw)
+		resp, err := commodore.ResolveIdentifier(ctxTimeout, raw)
 		if err != nil {
 			return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("failed to resolve stream: %v", err), ResourceType: "Stream", ResourceID: raw}
 		}
@@ -427,10 +427,10 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 			}
 			raw = id
 		}
-		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		if _, err := uuid.Parse(raw); err == nil {
-			vodResp, err := commodore.ResolveVodID(ctx, raw)
+			vodResp, err := commodore.ResolveVodID(ctxTimeout, raw)
 			if err != nil {
 				return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("failed to resolve VOD ID: %v", err), ResourceType: "VOD", ResourceID: raw}
 			}
@@ -444,7 +444,7 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 				Resolved: vodResp.TenantId != "",
 			}, nil
 		}
-		vodResp, err := commodore.ResolveIdentifier(ctx, raw)
+		vodResp, err := commodore.ResolveIdentifier(ctxTimeout, raw)
 		if err != nil {
 			return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("failed to resolve VOD hash: %v", err), ResourceType: "VOD", ResourceID: raw}
 		}
@@ -473,9 +473,9 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 	if commodore == nil {
 		return nil, &SettlementError{Code: ErrResolverUnavailable, Message: "resource resolver unavailable"}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	resp, err := commodore.ResolveIdentifier(ctx, raw)
+	resp, err := commodore.ResolveIdentifier(ctxTimeout, raw)
 	if err != nil {
 		return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("failed to resolve resource: %v", err), ResourceType: "Resource", ResourceID: raw}
 	}
@@ -491,7 +491,7 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 		}, nil
 	}
 
-	streamResp, err := commodore.ValidateStreamKey(ctx, raw)
+	streamResp, err := commodore.ValidateStreamKey(ctxTimeout, raw)
 	if err == nil && streamResp != nil && streamResp.Valid {
 		return &ResourceResolution{
 			Resource: "stream://" + strings.TrimSpace(streamResp.StreamId),

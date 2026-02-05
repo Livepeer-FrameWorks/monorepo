@@ -466,10 +466,10 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		clipHash = req.GetClipHash()
 	} else {
 		// Fallback: generate locally (legacy, should not happen with Commodore integration)
-		var err error
-		clipHash, err = clips.GenerateClipHash(req.InternalName, startMs, durationMs)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to generate clip hash")
+		var errHash error
+		clipHash, errHash = clips.GenerateClipHash(req.InternalName, startMs, durationMs)
+		if errHash != nil {
+			s.logger.WithError(errHash).Error("Failed to generate clip hash")
 			return nil, status.Error(codes.Internal, "failed to generate clip hash")
 		}
 	}
@@ -572,8 +572,8 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 			failedData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_FAILED, req, reqID, clipHash)
 			failedData.Error = func() *string { e := fmt.Sprintf("storage node unavailable: %v", err); return &e }()
 			go func() {
-				if err := s.decklogClient.SendClipLifecycle(failedData); err != nil {
-					s.logger.WithError(err).Error("Failed to emit clip failed event")
+				if errSend := s.decklogClient.SendClipLifecycle(failedData); errSend != nil {
+					s.logger.WithError(errSend).Error("Failed to emit clip failed event")
 				}
 			}()
 		}
@@ -663,13 +663,13 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRe
 			ClipHash:  req.ClipHash,
 			RequestId: requestID,
 		}
-		if err := control.SendClipDelete(nodeID, deleteReq); err != nil {
-			cleanupError = fmt.Sprintf("node cleanup pending: %v", err)
+		if errSend := control.SendClipDelete(nodeID, deleteReq); errSend != nil {
+			cleanupError = fmt.Sprintf("node cleanup pending: %v", errSend)
 			// Log but don't fail - the soft delete still works, cleanup can happen later
 			s.logger.WithFields(logging.Fields{
 				"clip_hash": req.ClipHash,
 				"node_id":   nodeID,
-				"error":     err,
+				"error":     errSend,
 			}).Warn("Failed to send clip delete to storage node, will be cleaned up later")
 		} else {
 			s.logger.WithFields(logging.Fields{
@@ -752,7 +752,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	if existingHash != "" {
 		playbackID := ""
 		if control.CommodoreClient != nil {
-			if resp, err := control.CommodoreClient.ResolveDVRHash(ctx, existingHash); err == nil && resp.Found {
+			if resp, errResolve := control.CommodoreClient.ResolveDVRHash(ctx, existingHash); errResolve == nil && resp.Found {
 				playbackID = resp.PlaybackId
 			}
 		}
@@ -951,8 +951,8 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 				}(),
 			}
 			go func() {
-				if err := s.decklogClient.SendDVRLifecycle(failedData); err != nil {
-					s.logger.WithError(err).Error("Failed to emit DVR failed event")
+				if errSend := s.decklogClient.SendDVRLifecycle(failedData); errSend != nil {
+					s.logger.WithError(errSend).Error("Failed to emit DVR failed event")
 				}
 			}()
 		}
@@ -1074,8 +1074,8 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest)
 		RequestId: req.DvrHash,
 	}
 
-	if err := control.SendDVRStop(nodeID, stopReq); err != nil {
-		return nil, status.Errorf(codes.Unavailable, "storage node unavailable: %v", err)
+	if errStop := control.SendDVRStop(nodeID, stopReq); errStop != nil {
+		return nil, status.Errorf(codes.Unavailable, "storage node unavailable: %v", errStop)
 	}
 
 	// Update status in foghorn.artifacts
@@ -1147,11 +1147,11 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 				DvrHash:   req.DvrHash,
 				RequestId: req.DvrHash,
 			}
-			if err := control.SendDVRStop(nodeID, stopReq); err != nil {
+			if errStop := control.SendDVRStop(nodeID, stopReq); errStop != nil {
 				s.logger.WithFields(logging.Fields{
 					"dvr_hash": req.DvrHash,
 					"node_id":  nodeID,
-					"error":    err,
+					"error":    errStop,
 				}).Warn("Failed to send DVR stop before delete")
 			}
 		}
@@ -1166,13 +1166,13 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequ
 			DvrHash:   req.DvrHash,
 			RequestId: requestID,
 		}
-		if err := control.SendDVRDelete(nodeID, deleteReq); err != nil {
-			cleanupError = fmt.Sprintf("node cleanup pending: %v", err)
+		if errDelete := control.SendDVRDelete(nodeID, deleteReq); errDelete != nil {
+			cleanupError = fmt.Sprintf("node cleanup pending: %v", errDelete)
 			// Log but don't fail - the soft delete still works, cleanup can happen later
 			s.logger.WithFields(logging.Fields{
 				"dvr_hash": req.DvrHash,
 				"node_id":  nodeID,
-				"error":    err,
+				"error":    errDelete,
 			}).Warn("Failed to send DVR delete to storage node, will be cleaned up later")
 		} else {
 			s.logger.WithFields(logging.Fields{
@@ -1231,9 +1231,9 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	clientIP := req.GetViewerIp()
 
 	if !x402Paid && paymentHeader != "" && s.purserClient != nil && resolution.TenantId != "" {
-		paid, err := s.handleX402ViewerPayment(ctx, resolution.TenantId, resourcePath, paymentHeader, clientIP)
-		if err != nil {
-			return nil, err
+		paid, errPay := s.handleX402ViewerPayment(ctx, resolution.TenantId, resourcePath, paymentHeader, clientIP)
+		if errPay != nil {
+			return nil, errPay
 		}
 		x402Paid = paid
 	}
@@ -1919,8 +1919,8 @@ func (s *FoghornGRPCServer) ListVodAssets(ctx context.Context, req *pb.ListVodAs
 	// Count total
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM foghorn.artifacts a WHERE %s", baseWhere)
 	var total int32
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		s.logger.WithError(err).Error("Failed to count VOD assets")
+	if errCount := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); errCount != nil {
+		s.logger.WithError(errCount).Error("Failed to count VOD assets")
 		return nil, status.Error(codes.Internal, "failed to count VOD assets")
 	}
 
@@ -2067,7 +2067,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		WHERE artifact_hash = $1 AND NOT is_orphaned
 	`, req.ArtifactHash)
 	if err == nil {
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		requestID := uuid.NewString()
 		for rows.Next() {
 			var nodeID string
@@ -2097,12 +2097,12 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 
 	// Delete from S3 if we have a key and client
 	if s3Key != "" && s.s3Client != nil && currentStatus != "uploading" {
-		if err := s.s3Client.Delete(ctx, s3Key); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Sprintf("s3 cleanup pending: %v", err))
+		if errDelete := s.s3Client.Delete(ctx, s3Key); errDelete != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Sprintf("s3 cleanup pending: %v", errDelete))
 			s.logger.WithFields(logging.Fields{
 				"artifact_hash": req.ArtifactHash,
 				"s3_key":        s3Key,
-				"error":         err,
+				"error":         errDelete,
 			}).Warn("Failed to delete from S3, will be cleaned up later")
 		}
 	}

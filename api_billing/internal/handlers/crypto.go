@@ -344,9 +344,10 @@ func (cm *CryptoMonitor) isValidPaymentForNetwork(tx CryptoTransaction, expected
 // For invoice: marks invoice as paid
 // For prepaid: credits tenant's prepaid balance
 func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransaction, txAmount float64) {
+	ctx := context.Background()
 	if tx.Hash != "" {
 		var exists bool
-		err := cm.db.QueryRow(`
+		err := cm.db.QueryRowContext(ctx, `
 			SELECT EXISTS(
 				SELECT 1 FROM purser.crypto_wallets
 				WHERE network = $1 AND confirmed_tx_hash = $2
@@ -372,7 +373,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 		"confirmations": tx.Confirmations,
 	}).Info("Confirming crypto payment")
 
-	dbTx, err := cm.db.Begin()
+	dbTx, err := cm.db.BeginTx(ctx, nil)
 	if err != nil {
 		cm.logger.WithFields(logging.Fields{"error": err}).Error("Failed to begin transaction")
 		return
@@ -381,11 +382,12 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 
 	now := time.Now()
 
-	if wallet.Purpose == "invoice" {
+	switch wallet.Purpose {
+	case "invoice":
 		err = cm.confirmInvoicePayment(dbTx, wallet, tx, txAmount, now)
-	} else if wallet.Purpose == "prepaid" {
+	case "prepaid":
 		err = cm.confirmPrepaidTopup(dbTx, wallet, tx, txAmount, now)
-	} else {
+	default:
 		err = fmt.Errorf("unknown wallet purpose: %s", wallet.Purpose)
 	}
 

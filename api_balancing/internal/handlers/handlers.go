@@ -466,9 +466,9 @@ func Init(
 			endedAt         sql.NullTime
 		)
 
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 		if commodoreClient != nil {
-			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
 			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
 				tenantIDStr = resp.TenantId
 				userIDStr = resp.UserId
@@ -477,7 +477,7 @@ func Init(
 			}
 		}
 
-		_ = db.QueryRow(`
+		_ = db.QueryRowContext(cctx, `
 			SELECT retention_until, started_at, ended_at
 			FROM foghorn.artifacts
 			WHERE artifact_hash = $1
@@ -548,9 +548,9 @@ func Init(
 			endedAt         sql.NullTime
 		)
 
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 		if commodoreClient != nil {
-			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
 			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
 				tenantIDStr = resp.TenantId
 				userIDStr = resp.UserId
@@ -559,7 +559,7 @@ func Init(
 			}
 		}
 
-		_ = db.QueryRow(`
+		_ = db.QueryRowContext(cctx, `
 			SELECT retention_until, started_at, ended_at
 			FROM foghorn.artifacts
 			WHERE artifact_hash = $1
@@ -863,7 +863,7 @@ func HandleNodesOverview(c *gin.Context) {
 				var videoCodec, audioCodec, resolution, filename, title sql.NullString
 				var durationMs, bitrateKbps sql.NullInt32
 
-				err := artifactRows.Scan(
+				errScan := artifactRows.Scan(
 					&hash, &artType, &status, &internalName, &tenantID,
 					&storageLocation, &syncStatus, &s3URL, &format, &sizeBytes,
 					&manifestPath, &durationSeconds, &dtshSynced, &retentionUntil,
@@ -871,7 +871,7 @@ func HandleNodesOverview(c *gin.Context) {
 					&videoCodec, &audioCodec, &resolution, &durationMs, &bitrateKbps,
 					&filename, &title,
 				)
-				if err != nil {
+				if errScan != nil {
 					continue
 				}
 
@@ -934,18 +934,18 @@ func HandleNodesOverview(c *gin.Context) {
 
 				// Query nodes hosting this artifact
 				art["nodes"] = func() []string {
-					nodeRows, err := db.Query(`
+					nodeRows, errQuery := db.QueryContext(context.Background(), `
 						SELECT node_id FROM foghorn.artifact_nodes
 						WHERE artifact_hash = $1 AND NOT is_orphaned
 					`, hash)
-					if err != nil {
+					if errQuery != nil {
 						return nil
 					}
-					defer nodeRows.Close()
+					defer func() { _ = nodeRows.Close() }()
 					var nodeIDs []string
 					for nodeRows.Next() {
 						var nodeID string
-						if err := nodeRows.Scan(&nodeID); err == nil {
+						if errScan := nodeRows.Scan(&nodeID); errScan == nil {
 							nodeIDs = append(nodeIDs, nodeID)
 						}
 					}
@@ -982,12 +982,12 @@ func HandleNodesOverview(c *gin.Context) {
 				var createdAt time.Time
 				var startedAt, completedAt sql.NullTime
 
-				err := jobRows.Scan(
+				errScan := jobRows.Scan(
 					&jobID, &tenantID, &artifactHash, &jobType, &status, &progress,
 					&useGateway, &processingNode, &routingReason, &errorMessage, &retryCount,
 					&createdAt, &startedAt, &completedAt,
 				)
-				if err != nil {
+				if errScan != nil {
 					continue
 				}
 

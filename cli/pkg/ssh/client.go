@@ -417,8 +417,8 @@ func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 
 	// Create remote directory if needed
 	remoteDir := filepath.Dir(opts.RemotePath)
-	if _, err := c.Run(ctx, fmt.Sprintf("mkdir -p %s", remoteDir)); err != nil {
-		return fmt.Errorf("failed to create remote directory: %w", err)
+	if _, errRun := c.Run(ctx, fmt.Sprintf("mkdir -p %s", remoteDir)); errRun != nil {
+		return fmt.Errorf("failed to create remote directory: %w", errRun)
 	}
 
 	// Create session for SCP

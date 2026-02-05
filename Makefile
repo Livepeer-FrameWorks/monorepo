@@ -225,7 +225,7 @@ version:
 install-tools:
 	cd pkg/proto && make install-tools
 	cd api_gateway && make install-tools
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 
 # Run unit tests in every Go module
 test: proto graphql
@@ -386,7 +386,7 @@ dead-code-install:
 	@echo "Installing Go dead code analysis tools..."
 	go install golang.org/x/tools/cmd/deadcode@latest
 	go install honnef.co/go/tools/cmd/staticcheck@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	@echo ""
 	@echo "✓ Go dead code analysis tools installed"
 	@echo "Note: knip must be installed separately (workspace dev dependency)."

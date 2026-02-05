@@ -2,6 +2,7 @@ package wireguard
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -130,7 +131,7 @@ PersistentKeepalive = {{.KeepAlive}}
 	if err == nil {
 		if !strings.Contains(string(currentIPs), cfg.Address) {
 			// Flush old IPs (best-effort, continue even if fails)
-			_ = exec.Command("ip", "addr", "flush", "dev", m.interfaceName).Run() //nolint:errcheck // best-effort flush before adding new IP
+			_ = exec.CommandContext(context.Background(), "ip", "addr", "flush", "dev", m.interfaceName).Run() //nolint:errcheck // best-effort flush before adding new IP
 			// Add new IP
 			if out, err := exec.Command("ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); err != nil {
 				return fmt.Errorf("failed to set ip address: %w: %s", err, string(out))

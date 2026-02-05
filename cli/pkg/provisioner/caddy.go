@@ -126,7 +126,7 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 // installCaddy uses FlexibleProvisioner's logic for installing Caddy itself
 func (c *CaddyProvisioner) installCaddy(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	// Check if already provisioned
-	state, err := c.FlexibleProvisioner.Detect(ctx, host) // Corrected call to FlexibleProvisioner.Detect
+	state, err := c.Detect(ctx, host) // Corrected call to FlexibleProvisioner.Detect
 	if err == nil && state.Exists && state.Running {
 		fmt.Printf("Service %s already running, skipping...\n", c.GetName())
 		return nil

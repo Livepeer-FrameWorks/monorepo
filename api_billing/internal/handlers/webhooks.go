@@ -208,7 +208,8 @@ func sendPaymentStatusEmail(invoiceID, provider, status string) {
 	}
 
 	// Send appropriate email based on status
-	if status == "confirmed" {
+	switch status {
+	case "confirmed":
 		err = emailService.SendPaymentSuccessEmail(billingEmail, tenantName, invoiceID, amount, currency, provider)
 		if err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
@@ -217,7 +218,7 @@ func sendPaymentStatusEmail(invoiceID, provider, status string) {
 				"provider":     provider,
 			}).Error("Failed to send payment success email")
 		}
-	} else if status == "failed" {
+	case "failed":
 		err = emailService.SendPaymentFailedEmail(billingEmail, tenantName, invoiceID, amount, currency, provider)
 		if err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
@@ -257,7 +258,8 @@ func sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string,
 	}
 
 	currency = strings.ToUpper(currency)
-	if status == "confirmed" {
+	switch status {
+	case "confirmed":
 		err = emailService.SendPaymentSuccessEmail(billingEmail, tenantName, invoiceRef, amount, currency, provider)
 		if err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
@@ -266,7 +268,7 @@ func sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string,
 				"provider":     provider,
 			}).Error("Failed to send payment success email")
 		}
-	} else if status == "failed" {
+	case "failed":
 		err = emailService.SendPaymentFailedEmail(billingEmail, tenantName, invoiceRef, amount, currency, provider)
 		if err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
