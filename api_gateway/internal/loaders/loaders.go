@@ -2,6 +2,7 @@ package loaders
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"frameworks/api_gateway/internal/clients"
@@ -16,6 +17,7 @@ type Loaders struct {
 	NodesByCluster            *NodesByClusterLoader
 	ServiceInstancesByCluster *ServiceInstancesByClusterLoader
 	ServiceInstancesByNode    *ServiceInstancesByNodeLoader
+	LiveNodeState             *LiveNodeStateLoader
 	StreamMetrics             *StreamMetricsLoader
 	ArtifactLifecycle         *ArtifactLifecycleLoader
 	Memo                      *Memoizer
@@ -28,6 +30,7 @@ func New(serviceClients *clients.ServiceClients) *Loaders {
 		NodesByCluster:            NewNodesByClusterLoader(serviceClients),
 		ServiceInstancesByCluster: NewServiceInstancesByClusterLoader(serviceClients),
 		ServiceInstancesByNode:    NewServiceInstancesByNodeLoader(serviceClients),
+		LiveNodeState:             NewLiveNodeStateLoader(serviceClients),
 		StreamMetrics:             NewStreamMetricsLoader(serviceClients.Periscope),
 		ArtifactLifecycle:         NewArtifactLifecycleLoader(serviceClients.Periscope),
 		Memo:                      NewMemoizer(),
@@ -226,4 +229,59 @@ func (l *ServiceInstancesByNodeLoader) Load(ctx context.Context, nodeID string) 
 	l.cache[nodeID] = resp.Instances
 	l.mu.Unlock()
 	return resp.Instances, nil
+}
+
+// LiveNodeStateLoader fetches all live nodes in a single batch on first access,
+// then serves individual lookups from cache. Eliminates N+1 gRPC calls when
+// resolving liveState on multiple InfrastructureNode objects.
+type LiveNodeStateLoader struct {
+	sc      *clients.ServiceClients
+	once    sync.Once
+	nodes   map[string]*pb.LiveNode
+	loadErr error
+}
+
+func NewLiveNodeStateLoader(sc *clients.ServiceClients) *LiveNodeStateLoader {
+	return &LiveNodeStateLoader{sc: sc}
+}
+
+func (l *LiveNodeStateLoader) Load(ctx context.Context, nodeID string) (*pb.LiveNode, error) {
+	l.once.Do(func() {
+		l.loadAll(ctx)
+	})
+	if l.loadErr != nil {
+		return nil, l.loadErr
+	}
+	return l.nodes[nodeID], nil
+}
+
+func (l *LiveNodeStateLoader) loadAll(ctx context.Context) {
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		l.loadErr = fmt.Errorf("tenant context required for live node state")
+		return
+	}
+
+	var relatedTenantIDs []string
+	subs, err := l.sc.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+		TenantId: tenantID,
+	})
+	if err == nil && subs != nil {
+		for _, cluster := range subs.Clusters {
+			if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" && *cluster.OwnerTenantId != tenantID {
+				relatedTenantIDs = append(relatedTenantIDs, *cluster.OwnerTenantId)
+			}
+		}
+	}
+
+	response, err := l.sc.Periscope.GetLiveNodes(ctx, tenantID, nil, relatedTenantIDs)
+	if err != nil {
+		l.loadErr = err
+		return
+	}
+
+	l.nodes = make(map[string]*pb.LiveNode, len(response.Nodes))
+	for _, node := range response.Nodes {
+		l.nodes[node.NodeId] = node
+	}
 }

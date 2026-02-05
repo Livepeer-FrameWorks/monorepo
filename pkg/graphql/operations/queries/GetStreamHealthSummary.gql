@@ -1,0 +1,17 @@
+# Pre-aggregated stream health summary for dashboard views
+query GetStreamHealthSummary($streamId: ID, $timeRange: TimeRangeInput) {
+  analytics {
+    health {
+      streamHealthSummary(streamId: $streamId, timeRange: $timeRange) {
+        avgBitrate
+        avgFps
+        avgBufferHealth
+        totalRebufferCount
+        totalIssueCount
+        sampleCount
+        hasActiveIssues
+        currentQualityTier
+      }
+    }
+  }
+}

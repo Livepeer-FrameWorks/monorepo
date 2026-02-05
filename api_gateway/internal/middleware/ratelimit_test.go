@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -56,5 +57,33 @@ func TestRateLimiterCleanup(t *testing.T) {
 	rl.cleanup()
 	if _, ok := rl.buckets.Load("tenant-1"); ok {
 		t.Fatal("expected bucket to be removed after cleanup")
+	}
+}
+
+func TestEvaluateAccessPublicTenantSkipsGetLimits(t *testing.T) {
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+
+	getLimits := func(tenantID string) (int, int) {
+		t.Fatalf("getLimits should not be called for public tenant, got %q", tenantID)
+		return 0, 0
+	}
+
+	decision := EvaluateAccess(
+		context.Background(),
+		AccessRequest{
+			TenantID:          "",
+			ClientIP:          "172.18.0.1",
+			Path:              "/graphql/",
+			OperationName:     "serviceinstanceshealth",
+			PublicAllowlisted: true,
+		},
+		rl,
+		getLimits,
+		nil, nil, nil, nil, nil,
+	)
+
+	if !decision.Allowed {
+		t.Fatalf("expected public allowlisted request to be allowed, got status %d", decision.Status)
 	}
 }

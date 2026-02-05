@@ -7,9 +7,12 @@
   import {
     fragment,
     GetStreamStore,
-    GetStreamHealthStore,
+    GetStreamHealthCoreStore,
+    GetStreamHealthClientsStore,
+    GetStreamHealthLifecycleStore,
     GetViewerSessionsConnectionStore,
     GetRoutingEventsStore,
+    GetRoutingEfficiencyStore,
     TrackListUpdatesStore,
     StreamCoreFieldsStore,
     StreamMetricsFieldsStore,
@@ -37,24 +40,30 @@
 
   // Houdini stores
   const streamStore = new GetStreamStore();
-  const healthStore = new GetStreamHealthStore();
+  const healthCoreStore = new GetStreamHealthCoreStore();
+  const healthClientsStore = new GetStreamHealthClientsStore();
+  const healthLifecycleStore = new GetStreamHealthLifecycleStore();
   const viewerSessionsStore = new GetViewerSessionsConnectionStore();
   const routingEventsStore = new GetRoutingEventsStore();
+  const routingEfficiencyStore = new GetRoutingEfficiencyStore();
   const trackListSub = new TrackListUpdatesStore();
 
   // Fragment stores for unmasking nested data
   const streamCoreStore = new StreamCoreFieldsStore();
   const streamMetricsStore = new StreamMetricsFieldsStore();
 
-  // Types from Houdini - derive from the new healthStore
-  type HealthAnalytics = NonNullable<
-    NonNullable<NonNullable<typeof $healthStore.data>["analytics"]>["health"]
+  // Types from Houdini - derive from the split health stores
+  type HealthCoreAnalytics = NonNullable<
+    NonNullable<NonNullable<typeof $healthCoreStore.data>["analytics"]>["health"]
+  >;
+  type HealthClientsAnalytics = NonNullable<
+    NonNullable<NonNullable<typeof $healthClientsStore.data>["analytics"]>["health"]
   >;
   type LifecycleAnalytics = NonNullable<
-    NonNullable<NonNullable<typeof $healthStore.data>["analytics"]>["lifecycle"]
+    NonNullable<NonNullable<typeof $healthLifecycleStore.data>["analytics"]>["lifecycle"]
   >;
   type HealthMetricType = NonNullable<
-    HealthAnalytics["streamHealthConnection"]["edges"]
+    HealthCoreAnalytics["streamHealthConnection"]["edges"]
   >[0]["node"];
   type TrackListEventType = NonNullable<
     LifecycleAnalytics["trackListConnection"]["edges"]
@@ -62,7 +71,9 @@
   type BufferEventType = NonNullable<
     LifecycleAnalytics["bufferEventsConnection"]["edges"]
   >[0]["node"];
-  type ClientMetric5mType = NonNullable<HealthAnalytics["clientQoeConnection"]["edges"]>[0]["node"];
+  type ClientMetric5mType = NonNullable<
+    HealthClientsAnalytics["clientQoeConnection"]["edges"]
+  >[0]["node"];
 
   // page is a store; derive the current param value so it updates on navigation
   let streamId = $derived((page?.params?.id as string) ?? "");
@@ -94,7 +105,7 @@
   // Real-time metrics from STREAM_BUFFER subscription
   let realtimeMetrics = $derived(stream?.id ? $realtimeStreamMetrics[stream.id] : null);
   let healthMetrics = $derived(
-    ($healthStore.data?.analytics?.health?.streamHealthConnection?.edges ?? [])
+    ($healthCoreStore.data?.analytics?.health?.streamHealthConnection?.edges ?? [])
       .map((e: { node: HealthMetricType }) => e?.node)
       .filter(
         (n: HealthMetricType | null | undefined): n is HealthMetricType =>
@@ -113,7 +124,7 @@
 
   // Client metrics (viewer/connection quality)
   let clientMetrics = $derived(
-    ($healthStore.data?.analytics?.health?.clientQoeConnection?.edges ?? [])
+    ($healthClientsStore.data?.analytics?.health?.clientQoeConnection?.edges ?? [])
       .map((e: { node: ClientMetric5mType }) => e?.node)
       .filter(
         (n: ClientMetric5mType | null | undefined): n is ClientMetric5mType =>
@@ -186,7 +197,8 @@
 
   let trackListEvents = $state<TrackListEventType[]>([]);
   let bufferEvents = $derived.by(() => {
-    const edges = $healthStore.data?.analytics?.lifecycle?.bufferEventsConnection?.edges ?? [];
+    const edges =
+      $healthLifecycleStore.data?.analytics?.lifecycle?.bufferEventsConnection?.edges ?? [];
     return edges
       .map((e: { node: BufferEventType }) => e?.node)
       .filter(
@@ -196,13 +208,14 @@
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   });
   let rebufferingEvents = $derived(
-    $healthStore.data?.analytics?.health?.rebufferingEventsConnection?.edges?.map((e) => e.node) ??
-      []
+    $healthClientsStore.data?.analytics?.health?.rebufferingEventsConnection?.edges?.map(
+      (e) => e.node
+    ) ?? []
   );
 
   // 5-minute health aggregates
   let health5mData = $derived(
-    ($healthStore.data?.analytics?.health?.streamHealth5mConnection?.edges ?? [])
+    ($healthCoreStore.data?.analytics?.health?.streamHealth5mConnection?.edges ?? [])
       .map((e) => e.node)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
   );
@@ -231,7 +244,7 @@
   );
   let loading = $derived(
     $streamStore.fetching ||
-      $healthStore.fetching ||
+      $healthCoreStore.fetching ||
       $viewerSessionsStore.fetching ||
       $routingEventsStore.fetching
   );
@@ -272,26 +285,16 @@
     };
   });
 
-  // Routing efficiency for this stream
+  // Routing efficiency from pre-aggregated rollup endpoint
+  let routingEfficiencyData = $derived(
+    $routingEfficiencyStore.data?.analytics?.infra?.routingEfficiency ?? null
+  );
   let streamRoutingEfficiency = $derived.by(() => {
-    if (routingEvents.length === 0) return null;
-
-    let successCount = 0;
-    let totalDistance = 0;
-    let distanceCount = 0;
-
-    for (const event of routingEvents) {
-      if (event.selectedNode) successCount++;
-      if (event.routingDistance) {
-        totalDistance += event.routingDistance;
-        distanceCount++;
-      }
-    }
-
+    if (!routingEfficiencyData) return null;
     return {
-      totalDecisions: routingEvents.length,
-      successRate: (successCount / routingEvents.length) * 100,
-      avgDistance: distanceCount > 0 ? totalDistance / distanceCount : 0,
+      totalDecisions: routingEfficiencyData.totalDecisions,
+      successRate: routingEfficiencyData.successRate * 100,
+      avgDistance: routingEfficiencyData.avgRoutingDistance,
     };
   });
   let error = $state<string | null>(null);
@@ -314,10 +317,11 @@
 
   // Check if there are more pages to load from server
   let healthMetricsHasNextPage = $derived(
-    $healthStore.data?.analytics?.health?.streamHealthConnection?.pageInfo?.hasNextPage ?? false
+    $healthCoreStore.data?.analytics?.health?.streamHealthConnection?.pageInfo?.hasNextPage ?? false
   );
   let trackListEventsHasNextPage = $derived(
-    $healthStore.data?.analytics?.lifecycle?.trackListConnection?.pageInfo?.hasNextPage ?? false
+    $healthLifecycleStore.data?.analytics?.lifecycle?.trackListConnection?.pageInfo?.hasNextPage ??
+      false
   );
   let viewerSessionsHasNextPage = $derived(
     $viewerSessionsStore.data?.analytics?.lifecycle?.viewerSessionsConnection?.pageInfo
@@ -363,7 +367,7 @@
   // IMPORTANT: The length check must be INSIDE untrack() to avoid creating a reactive dependency
   // on trackListEvents, which would cause an effect loop
   $effect(() => {
-    const edges = $healthStore.data?.analytics?.lifecycle?.trackListConnection?.edges;
+    const edges = $healthLifecycleStore.data?.analytics?.lifecycle?.trackListConnection?.edges;
     if (edges) {
       untrack(() => {
         // Only sync if we haven't populated yet (check inside untrack to avoid dependency)
@@ -387,12 +391,12 @@
     await loadStreamData();
     await loadHealthData();
     startTrackListSubscription();
-    // Set up auto-refresh every 30 seconds for current health
+    // Set up auto-refresh every 30 seconds for core health data only
     refreshInterval = setInterval(async () => {
       try {
         if (streamId) {
           const analyticsStreamId = stream?.id ?? streamId;
-          await healthStore.fetch({
+          await healthCoreStore.fetch({
             variables: {
               id: streamId,
               streamId: analyticsStreamId,
@@ -464,23 +468,45 @@
   async function loadHealthData() {
     if (!streamId) return;
     try {
-      // Load all health data in a single query via Stream edges
       const analyticsStreamId = stream?.id ?? streamId;
-      await healthStore.fetch({
+      const timeRange = getTimeRange();
+      const metricsFirst = getMetricsFirst();
+
+      // Load core health data first (primary metrics + 5m aggregates)
+      await healthCoreStore.fetch({
         variables: {
           id: streamId,
           streamId: analyticsStreamId,
-          timeRange: getTimeRange(),
-          metricsFirst: getMetricsFirst(), // Combined for both health and client metrics
+          timeRange,
+          metricsFirst,
         },
       });
-      // Fetch viewer sessions and routing events in parallel
+
+      // Then load secondary data in parallel (clients, lifecycle, sessions, routing)
       await Promise.all([
+        healthClientsStore
+          .fetch({
+            variables: {
+              streamId: analyticsStreamId,
+              timeRange,
+              first: 50,
+            },
+          })
+          .catch(() => null),
+        healthLifecycleStore
+          .fetch({
+            variables: {
+              streamId: analyticsStreamId,
+              timeRange,
+              bufferFirst: 100,
+            },
+          })
+          .catch(() => null),
         viewerSessionsStore
           .fetch({
             variables: {
               streamId: analyticsStreamId,
-              timeRange: getTimeRange(),
+              timeRange,
               first: 200,
             },
           })
@@ -489,13 +515,20 @@
           .fetch({
             variables: {
               streamId: analyticsStreamId,
-              timeRange: getTimeRange(),
+              timeRange,
+            },
+          })
+          .catch(() => null),
+        routingEfficiencyStore
+          .fetch({
+            variables: {
+              streamId: analyticsStreamId,
+              timeRange,
             },
           })
           .catch(() => null),
       ]);
     } catch (err: unknown) {
-      // Ignore AbortErrors which happen on navigation/cancellation
       const errObj = err as { name?: string; message?: string };
       if (
         errObj.name === "AbortError" ||

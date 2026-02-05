@@ -118,6 +118,17 @@ func SetupComplexity(c *generated.ComplexityRoot) {
 		return connectionComplexity(childComplexity, page)
 	}
 
+	// Rollup summary fields (fixed cost, no pagination)
+	c.AnalyticsHealth.StreamHealthSummary = func(childComplexity int, _ *string, _ *model.TimeRangeInput, _ *bool) int {
+		return HeavyFieldCost + childComplexity
+	}
+	c.AnalyticsHealth.ClientQoeSummary = func(childComplexity int, _ *string, _ *model.TimeRangeInput, _ *bool) int {
+		return HeavyFieldCost + childComplexity
+	}
+	c.AnalyticsInfra.RoutingEfficiency = func(childComplexity int, _ *string, _ *model.TimeRangeInput, _ *bool) int {
+		return HeavyFieldCost + childComplexity
+	}
+
 	// Analytics root costs
 	c.Query.Analytics = func(childComplexity int) int {
 		return HeavyFieldCost + childComplexity

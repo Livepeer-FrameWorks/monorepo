@@ -1,10 +1,6 @@
-# Fetch complete infrastructure overview including tenant, clusters, nodes, and node metrics
-# Comprehensive query for infrastructure dashboard with resource utilization data
-query GetInfrastructureOverview(
-  $timeRange: TimeRangeInput
-  $first: Int = 100
-  $noCache: Boolean = false
-) {
+# Fetch tenant info and clusters for infrastructure dashboard
+# Nodes: use GetNodesConnection. Metrics: use GetInfrastructureMetrics.
+query GetInfrastructureOverview {
   tenant {
     id
     name
@@ -48,56 +44,5 @@ query GetInfrastructureOverview(
       ...PageInfoFields
     }
     totalCount
-  }
-  nodesConnection(page: { first: 50 }) {
-    edges {
-      cursor
-      node {
-        ...NodeCoreFields
-      }
-    }
-    pageInfo {
-      ...PageInfoFields
-    }
-    totalCount
-  }
-  analytics {
-    infra {
-      nodeMetricsAggregated(timeRange: $timeRange, noCache: $noCache) {
-        nodeId
-        clusterId
-        avgCpu
-        avgMemory
-        avgDisk
-        avgShm
-        totalBandwidthIn
-        totalBandwidthOut
-        sampleCount
-      }
-      nodeMetrics1hConnection(timeRange: $timeRange, noCache: $noCache, page: { first: $first }) {
-        edges {
-          cursor
-          node {
-            timestamp
-            nodeId
-            avgCpu
-            peakCpu
-            avgMemory
-            peakMemory
-            avgDisk
-            peakDisk
-            avgShm
-            peakShm
-            totalBandwidthIn
-            totalBandwidthOut
-            wasHealthy
-          }
-        }
-        pageInfo {
-          ...PageInfoFields
-        }
-        totalCount
-      }
-    }
   }
 }

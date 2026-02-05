@@ -57,6 +57,22 @@ models:
   TenantEvent:
     model:
       - frameworks/api_gateway/graph/model.TenantEvent
+  # Rollup analytics types - use generated model types (NOT proto)
+  # Proto has same-named types (StreamHealthSummary, ClientQoeSummary, RoutingCountryStat)
+  # but resolvers return model.* types, so we must override autobind.
+  StreamHealthSummary:
+    model:
+      - frameworks/api_gateway/graph/model.StreamHealthSummary
+  ClientQoeSummary:
+    model:
+      - frameworks/api_gateway/graph/model.ClientQoeSummary
+  RoutingEfficiency:
+    model:
+      - frameworks/api_gateway/graph/model.RoutingEfficiency
+  RoutingCountryStat:
+    model:
+      - frameworks/api_gateway/graph/model.RoutingCountryStat
+
   # Analytics types - bound to proto types
   StreamAnalyticsSummary:
     model:

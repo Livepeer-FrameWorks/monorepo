@@ -6,10 +6,12 @@
   import {
     fragment,
     GetInfrastructureOverviewStore,
+    GetNodesConnectionStore,
+    GetInfrastructureMetricsStore,
     SystemHealthStore,
     GetServiceInstancesConnectionStore,
     GetServiceInstancesHealthStore,
-    NodeCoreFieldsStore,
+    NodeListFieldsStore,
   } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -36,12 +38,14 @@
 
   // Houdini stores
   const infrastructureStore = new GetInfrastructureOverviewStore();
+  const nodesStore = new GetNodesConnectionStore();
+  const metricsStore = new GetInfrastructureMetricsStore();
   const systemHealthSub = new SystemHealthStore();
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
   const serviceInstancesHealthStore = new GetServiceInstancesHealthStore();
 
   // Fragment stores for unmasking nested data
-  const nodeCoreStore = new NodeCoreFieldsStore();
+  const nodeCoreStore = new NodeListFieldsStore();
 
   // Pagination state
   let loadingMoreInstances = $state(false);
@@ -57,9 +61,7 @@
   );
 
   // Get masked nodes from edges and unmask using fragment store
-  let maskedNodes = $derived(
-    $infrastructureStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []
-  );
+  let maskedNodes = $derived($nodesStore.data?.nodesConnection?.edges?.map((e) => e.node) ?? []);
 
   // Unmask nodes with fragment() and get() pattern
   let nodes = $derived(maskedNodes.map((node) => get(fragment(node, nodeCoreStore))));
@@ -98,9 +100,9 @@
     totalBandwidthOut: number;
   }
 
-  // Derived performance metrics from the store data
+  // Derived performance metrics from the metrics store
   let nodePerformanceMetrics = $derived.by(() => {
-    const aggregated = $infrastructureStore.data?.analytics?.infra?.nodeMetricsAggregated ?? [];
+    const aggregated = $metricsStore.data?.analytics?.infra?.nodeMetricsAggregated ?? [];
     if (aggregated.length === 0) return [] as NodePerformanceMetric[];
     return aggregated.map((metric) => ({
       nodeId: metric.nodeId,
@@ -112,7 +114,7 @@
   });
 
   let networkIOMetrics = $derived.by(() => {
-    const aggregated = $infrastructureStore.data?.analytics?.infra?.nodeMetricsAggregated ?? [];
+    const aggregated = $metricsStore.data?.analytics?.infra?.nodeMetricsAggregated ?? [];
     if (aggregated.length === 0) return [] as NetworkIOMetric[];
     return aggregated.map((metric) => ({
       nodeId: metric.nodeId,
@@ -177,12 +179,13 @@
   async function loadInfrastructureData() {
     try {
       const range = resolveTimeRange(timeRange);
-      currentRange = range;
       const metricsFirst = Math.min(range.days * 24, 150);
       const timeRangeInput = { start: range.start, end: range.end };
-      // Fetch infrastructure overview and service instances in parallel
+      // Fetch infrastructure overview, nodes, metrics, and service instances in parallel
       await Promise.all([
-        infrastructureStore.fetch({
+        infrastructureStore.fetch(),
+        nodesStore.fetch(),
+        metricsStore.fetch({
           variables: { timeRange: timeRangeInput, first: metricsFirst, noCache: false },
         }),
         serviceInstancesStore.fetch(),
@@ -199,7 +202,7 @@
       const initialHealth: Record<string, { event: SystemHealthEvent; ts: Date }> = {};
 
       // First: Use liveState from nodes (real-time data from live_nodes table)
-      const nodesData = $infrastructureStore.data?.nodesConnection?.edges ?? [];
+      const nodesData = $nodesStore.data?.nodesConnection?.edges ?? [];
       for (const edge of nodesData) {
         const maskedNode = edge?.node;
         if (!maskedNode) continue;
@@ -235,7 +238,7 @@
 
       // Second: Fall back to historical metrics for nodes without liveState
       const metricsData =
-        $infrastructureStore.data?.analytics?.infra?.nodeMetrics1hConnection?.edges ?? [];
+        $metricsStore.data?.analytics?.infra?.nodeMetrics1hConnection?.edges ?? [];
       if (metricsData.length > 0) {
         // Get most recent metric for each node
         const latestByNode = new SvelteMap<string, (typeof metricsData)[0]>();

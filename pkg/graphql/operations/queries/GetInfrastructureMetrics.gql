@@ -1,0 +1,47 @@
+# Fetch infrastructure node metrics (aggregated + hourly time-series)
+# Split from GetInfrastructureOverview to stay within query complexity limits
+query GetInfrastructureMetrics(
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $noCache: Boolean = false
+) {
+  analytics {
+    infra {
+      nodeMetricsAggregated(timeRange: $timeRange, noCache: $noCache) {
+        nodeId
+        clusterId
+        avgCpu
+        avgMemory
+        avgDisk
+        avgShm
+        totalBandwidthIn
+        totalBandwidthOut
+        sampleCount
+      }
+      nodeMetrics1hConnection(timeRange: $timeRange, noCache: $noCache, page: { first: $first }) {
+        edges {
+          cursor
+          node {
+            timestamp
+            nodeId
+            avgCpu
+            peakCpu
+            avgMemory
+            peakMemory
+            avgDisk
+            peakDisk
+            avgShm
+            peakShm
+            totalBandwidthIn
+            totalBandwidthOut
+            wasHealthy
+          }
+        }
+        pageInfo {
+          ...PageInfoFields
+        }
+        totalCount
+      }
+    }
+  }
+}

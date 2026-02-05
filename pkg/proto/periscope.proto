@@ -814,6 +814,7 @@ service NodeAnalyticsService {
 
 service RoutingAnalyticsService {
   rpc GetRoutingEvents(GetRoutingEventsRequest) returns (GetRoutingEventsResponse);
+  rpc GetRoutingEfficiency(GetRoutingEfficiencyRequest) returns (GetRoutingEfficiencyResponse);
 }
 
 service PlatformAnalyticsService {
@@ -1076,6 +1077,8 @@ service AggregatedAnalyticsService {
   rpc GetTenantAnalyticsDaily(GetTenantAnalyticsDailyRequest) returns (GetTenantAnalyticsDailyResponse);
   rpc GetStreamAnalyticsDaily(GetStreamAnalyticsDailyRequest) returns (GetStreamAnalyticsDailyResponse);
   rpc GetAPIUsage(GetAPIUsageRequest) returns (GetAPIUsageResponse);
+  rpc GetStreamHealthSummary(GetStreamHealthSummaryRequest) returns (GetStreamHealthSummaryResponse);
+  rpc GetClientQoeSummary(GetClientQoeSummaryRequest) returns (GetClientQoeSummaryResponse);
 }
 
 // ============================================================================
@@ -1561,4 +1564,75 @@ message GetAPIUsageResponse {
   repeated APIUsageRecord records = 2;                   // Hourly records (when summary_only=false)
   repeated APIUsageSummary summaries = 3;                // Daily summaries
   repeated APIUsageOperationSummary operation_summaries = 4;
+}
+
+// ============================================================================
+// Rollup / Summary Endpoints (pre-aggregated scalars, no pagination)
+// ============================================================================
+
+// Routing efficiency summary — aggregates routing_decisions into success/fail stats
+message RoutingEfficiencySummary {
+  int64 total_decisions = 1;
+  int64 success_count = 2;
+  double success_rate = 3;       // success_count / total_decisions
+  double avg_routing_distance = 4;
+  double avg_latency_ms = 5;
+  repeated RoutingCountryStat top_countries = 6;
+}
+
+message RoutingCountryStat {
+  string country_code = 1;
+  int64 request_count = 2;
+}
+
+message GetRoutingEfficiencyRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  common.TimeRange time_range = 3;
+}
+
+message GetRoutingEfficiencyResponse {
+  RoutingEfficiencySummary summary = 1;
+}
+
+// Stream health summary — aggregates stream_health_5m into dashboard scalars
+message StreamHealthSummary {
+  double avg_bitrate = 1;
+  double avg_fps = 2;
+  double avg_buffer_health = 3;
+  int64 total_rebuffer_count = 4;
+  int64 total_issue_count = 5;
+  int64 sample_count = 6;
+  bool has_active_issues = 7;
+  string current_quality_tier = 8;
+}
+
+message GetStreamHealthSummaryRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  common.TimeRange time_range = 3;
+}
+
+message GetStreamHealthSummaryResponse {
+  StreamHealthSummary summary = 1;
+}
+
+// Client QoE summary — aggregates client_qoe_5m into dashboard scalars
+message ClientQoeSummary {
+  optional double avg_packet_loss_rate = 1;
+  optional double peak_packet_loss_rate = 2;
+  double avg_bandwidth_in = 3;
+  double avg_bandwidth_out = 4;
+  double avg_connection_time = 5;
+  int64 total_active_sessions = 6;
+}
+
+message GetClientQoeSummaryRequest {
+  string tenant_id = 1;
+  optional string stream_id = 2;
+  common.TimeRange time_range = 3;
+}
+
+message GetClientQoeSummaryResponse {
+  ClientQoeSummary summary = 1;
 }

@@ -8,10 +8,10 @@
     fragment,
     GetNodesConnectionStore,
     GetGeographicDistributionStore,
-    GetRoutingEventsStore,
+    GetRoutingEventsDetailedStore,
     GetConnectionEventsStore,
     GetViewerGeoHourlyStore,
-    NodeCoreFieldsStore,
+    NodeListFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -30,13 +30,13 @@
   // Houdini stores
   const nodesStore = new GetNodesConnectionStore();
   const geoDistStore = new GetGeographicDistributionStore();
-  const routingEventsStore = new GetRoutingEventsStore();
+  const routingEventsStore = new GetRoutingEventsDetailedStore();
   const connectionEventsStore = new GetConnectionEventsStore();
   const viewerGeoHourlyStore = new GetViewerGeoHourlyStore();
   const CONNECTION_EVENTS_PAGE_SIZE = 50;
 
   // Fragment stores for unmasking nested data
-  const nodeCoreStore = new NodeCoreFieldsStore();
+  const nodeCoreStore = new NodeListFieldsStore();
 
   // Types from Houdini
   type ConnectionEventsConnection = NonNullable<

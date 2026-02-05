@@ -3067,3 +3067,153 @@ func buildStreamSummaryCursor(summary *pb.StreamAnalyticsSummary, sortBy perisco
 	}
 	return pagination.EncodeCursorWithSortKey(sortKey, summary.StreamId)
 }
+
+// DoGetRoutingEfficiency returns pre-aggregated routing decision stats.
+func (r *Resolver) DoGetRoutingEfficiency(ctx context.Context, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.RoutingEfficiency, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateRoutingEfficiency(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	streamKey := ""
+	if streamID != nil {
+		streamKey = *streamID
+	}
+	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "routing_efficiency", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetRoutingEfficiency(ctx, tenantID, streamID, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetRoutingEfficiencyResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for routing efficiency: %T", val)
+	}
+
+	s := resp.GetSummary()
+	countries := make([]*model.RoutingCountryStat, 0, len(s.GetTopCountries()))
+	for _, c := range s.GetTopCountries() {
+		countries = append(countries, &model.RoutingCountryStat{
+			CountryCode:  c.CountryCode,
+			RequestCount: int(c.RequestCount),
+		})
+	}
+
+	return &model.RoutingEfficiency{
+		TotalDecisions:     int(s.TotalDecisions),
+		SuccessCount:       int(s.SuccessCount),
+		SuccessRate:        s.SuccessRate,
+		AvgRoutingDistance: s.AvgRoutingDistance,
+		AvgLatencyMs:       s.AvgLatencyMs,
+		TopCountries:       countries,
+	}, nil
+}
+
+// DoGetStreamHealthSummary returns pre-aggregated stream health stats.
+func (r *Resolver) DoGetStreamHealthSummary(ctx context.Context, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamHealthSummary, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateStreamHealthSummary(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	streamKey := ""
+	if streamID != nil {
+		streamKey = *streamID
+	}
+	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_health_summary", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetStreamHealthSummary(ctx, tenantID, streamID, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetStreamHealthSummaryResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for stream health summary: %T", val)
+	}
+
+	s := resp.GetSummary()
+	var tier *string
+	if s.CurrentQualityTier != "" {
+		tier = &s.CurrentQualityTier
+	}
+
+	return &model.StreamHealthSummary{
+		AvgBitrate:         s.AvgBitrate,
+		AvgFps:             s.AvgFps,
+		AvgBufferHealth:    s.AvgBufferHealth,
+		TotalRebufferCount: int(s.TotalRebufferCount),
+		TotalIssueCount:    int(s.TotalIssueCount),
+		SampleCount:        int(s.SampleCount),
+		HasActiveIssues:    s.HasActiveIssues,
+		CurrentQualityTier: tier,
+	}, nil
+}
+
+// DoGetClientQoeSummary returns pre-aggregated client QoE stats.
+func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ClientQoeSummary, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateClientQoeSummary(), nil
+	}
+
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	startTime, endTime := parseTimeRange(timeRange)
+	skipCache := noCache != nil && *noCache
+
+	streamKey := ""
+	if streamID != nil {
+		streamKey = *streamID
+	}
+	keyParts := []string{tenantID, streamKey, timeKey(startTime), timeKey(endTime)}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "client_qoe_summary", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetClientQoeSummary(ctx, tenantID, streamID, timePtrsToTimeRangeOpts(startTime, endTime))
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := val.(*pb.GetClientQoeSummaryResponse)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type for client QoE summary: %T", val)
+	}
+
+	s := resp.GetSummary()
+	return &model.ClientQoeSummary{
+		AvgPacketLossRate:   s.AvgPacketLossRate,
+		PeakPacketLossRate:  s.PeakPacketLossRate,
+		AvgBandwidthIn:      s.AvgBandwidthIn,
+		AvgBandwidthOut:     s.AvgBandwidthOut,
+		AvgConnectionTime:   s.AvgConnectionTime,
+		TotalActiveSessions: int(s.TotalActiveSessions),
+	}, nil
+}

@@ -192,6 +192,16 @@ func (r *analyticsHealthResolver) ClientQoeConnection(ctx context.Context, obj *
 	return r.DoGetClientMetrics5mConnection(ctx, streamID, nodeID, timeRange, first, after, last, before, noCache)
 }
 
+// StreamHealthSummary is the resolver for the streamHealthSummary field.
+func (r *analyticsHealthResolver) StreamHealthSummary(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamHealthSummary, error) {
+	return r.DoGetStreamHealthSummary(ctx, streamID, timeRange, noCache)
+}
+
+// ClientQoeSummary is the resolver for the clientQoeSummary field.
+func (r *analyticsHealthResolver) ClientQoeSummary(ctx context.Context, obj *markers.AnalyticsHealth, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ClientQoeSummary, error) {
+	return r.DoGetClientQoeSummary(ctx, streamID, timeRange, noCache)
+}
+
 // RoutingEventsConnection is the resolver for the routingEventsConnection field.
 func (r *analyticsInfraResolver) RoutingEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, noCache *bool) (*model.RoutingEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
@@ -240,6 +250,11 @@ func (r *analyticsInfraResolver) ServiceInstancesHealth(ctx context.Context, obj
 		return nil, fmt.Errorf("failed to get service health: %w", err)
 	}
 	return resp.Instances, nil
+}
+
+// RoutingEfficiency is the resolver for the routingEfficiency field.
+func (r *analyticsInfraResolver) RoutingEfficiency(ctx context.Context, obj *markers.AnalyticsInfra, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.RoutingEfficiency, error) {
+	return r.DoGetRoutingEfficiency(ctx, streamID, timeRange, noCache)
 }
 
 // StreamEventsConnection is the resolver for the streamEventsConnection field.
@@ -1485,6 +1500,10 @@ func (r *infrastructureNodeResolver) LiveState(ctx context.Context, obj *proto.I
 		}, nil
 	}
 
+	lds := loaders.FromContext(ctx)
+	if lds != nil && lds.LiveNodeState != nil {
+		return lds.LiveNodeState.Load(ctx, obj.NodeId)
+	}
 	return r.DoGetLiveNodeState(ctx, obj.NodeId)
 }
 

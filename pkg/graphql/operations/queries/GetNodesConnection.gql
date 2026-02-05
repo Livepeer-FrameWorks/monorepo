@@ -15,7 +15,7 @@ query GetNodesConnection(
     edges {
       cursor
       node {
-        ...NodeCoreFields
+        ...NodeListFields
       }
     }
     pageInfo {

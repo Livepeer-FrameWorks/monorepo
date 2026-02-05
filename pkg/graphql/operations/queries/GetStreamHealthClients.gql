@@ -1,0 +1,51 @@
+# Client-side health: rebuffering events and QoE metrics
+# Deferred load on the health page
+query GetStreamHealthClients(
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+) {
+  analytics {
+    health {
+      rebufferingEventsConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $first }
+      ) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            bufferState
+            previousState
+            rebufferStart
+            rebufferEnd
+          }
+        }
+      }
+      clientQoeConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $first }
+      ) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            packetLossRate
+            activeSessions
+            avgBandwidthIn
+            avgBandwidthOut
+            avgConnectionTime
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}

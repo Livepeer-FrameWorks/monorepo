@@ -14,7 +14,7 @@
     UnsubscribeFromClusterStore,
     AcceptClusterInviteStore,
     CreatePrivateClusterStore,
-    NodeCoreFieldsStore,
+    NodeListFieldsStore,
     BootstrapTokenFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
@@ -37,7 +37,7 @@
   const createClusterMutation = new CreatePrivateClusterStore();
 
   // Fragment stores for unmasking
-  const nodeCoreStore = new NodeCoreFieldsStore();
+  const nodeCoreStore = new NodeListFieldsStore();
   const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   // Helper to unmask bootstrap token

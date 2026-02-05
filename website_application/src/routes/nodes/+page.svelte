@@ -8,7 +8,7 @@
     GetNodePerformance5mStore,
     GetNodeMetricsStore,
     SystemHealthStore,
-    NodeCoreFieldsStore,
+    NodeListFieldsStore,
     PageInfoFieldsStore,
   } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
@@ -51,7 +51,7 @@
   const systemHealthSub = new SystemHealthStore();
 
   // Fragment stores for unmasking nested data
-  const nodeCoreStore = new NodeCoreFieldsStore();
+  const nodeCoreStore = new NodeListFieldsStore();
   const pageInfoStore = new PageInfoFieldsStore();
 
   // Pagination state

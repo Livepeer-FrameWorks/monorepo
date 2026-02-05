@@ -417,7 +417,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 	}
 
 	limit, burst := 0, 0
-	if getLimits != nil {
+	if getLimits != nil && !isPublic {
 		limit, burst = getLimits(tenantIDStr)
 	}
 

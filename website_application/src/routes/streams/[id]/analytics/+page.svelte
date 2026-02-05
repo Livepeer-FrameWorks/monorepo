@@ -6,8 +6,7 @@
   import {
     fragment,
     GetStreamStore,
-    GetStreamOverviewStore,
-    GetStreamAnalyticsDailyConnectionStore,
+    GetStreamAnalyticsSummaryStore,
     GetStreamEventsStore,
     ViewerMetricsStreamStore,
     StreamCoreFieldsStore,
@@ -29,8 +28,7 @@
 
   // Houdini stores
   const streamStore = new GetStreamStore();
-  const streamOverviewStore = new GetStreamOverviewStore();
-  const streamDailyStore = new GetStreamAnalyticsDailyConnectionStore();
+  const streamAnalyticsSummaryStore = new GetStreamAnalyticsSummaryStore();
   const streamEventsStore = new GetStreamEventsStore();
   const viewerMetricsSub = new ViewerMetricsStreamStore();
 
@@ -86,14 +84,14 @@
 
   // Analytics summary
   let streamAnalyticsSummary = $derived(
-    $streamOverviewStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummary ?? null
+    $streamAnalyticsSummaryStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummary ?? null
   );
 
-  // Daily analytics for trend charts
+  // Daily analytics for trend charts (from summary query — no separate fetch needed)
   let streamDailyAnalytics = $derived.by(() => {
     const edges =
-      $streamDailyStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection?.edges ??
-      [];
+      $streamAnalyticsSummaryStore.data?.analytics?.usage?.streaming?.streamAnalyticsDailyConnection
+        ?.edges ?? [];
     return edges
       .map((e) => e.node)
       .sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
@@ -101,7 +99,8 @@
 
   // Quality tier daily edges from overview store
   let qualityTierDailyEdges = $derived(
-    $streamOverviewStore.data?.analytics?.usage?.streaming?.qualityTierDailyConnection?.edges ?? []
+    $streamAnalyticsSummaryStore.data?.analytics?.usage?.streaming?.qualityTierDailyConnection
+      ?.edges ?? []
   );
 
   // Transform quality tier daily data for trend visualization
@@ -253,18 +252,12 @@
 
       await Promise.all([
         streamStore.fetch({ variables: { id: streamId, streamId: streamId } }),
-        streamOverviewStore.fetch({
+        streamAnalyticsSummaryStore.fetch({
           variables: {
             id: streamId,
             streamId: streamId,
             timeRange: { start: range.start, end: range.end },
-          },
-        }),
-        streamDailyStore.fetch({
-          variables: {
-            streamId: streamId,
-            timeRange: { start: range.start, end: range.end },
-            first: Math.min(range.days, 120),
+            qualityFirst: Math.min(range.days, 30),
           },
         }),
         streamEventsStore.fetch({

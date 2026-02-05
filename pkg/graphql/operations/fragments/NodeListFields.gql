@@ -1,0 +1,27 @@
+fragment NodeListFields on InfrastructureNode {
+  id
+  nodeId
+  nodeName
+  clusterId
+  nodeType
+  region
+  externalIp
+  cpuCores
+  memoryGb
+  diskGb
+  lastHeartbeat
+  tags
+  latitude
+  longitude
+  liveState {
+    cpuPercent
+    ramUsedBytes
+    ramTotalBytes
+    isHealthy
+    activeStreams
+    updatedAt
+    diskUsedBytes
+    diskTotalBytes
+    location
+  }
+}

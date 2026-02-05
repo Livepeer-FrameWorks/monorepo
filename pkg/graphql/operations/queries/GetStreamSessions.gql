@@ -1,10 +1,9 @@
 # Fetch stream session/analytics data including hourly aggregates, quality metrics, and viewer sessions
-# Used for analytics expansion and session details
-query GetStreamSessions($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 50) {
+# Trimmed field set and reduced page sizes for lower complexity
+query GetStreamSessions($streamId: ID!, $timeRange: TimeRangeInput, $first: Int = 50, $sessionFirst: Int = 25) {
   analytics {
     usage {
       streaming {
-        # Hourly connection aggregates (bandwidth, viewers per hour)
         streamConnectionHourlyConnection(
           streamId: $streamId
           timeRange: $timeRange
@@ -29,34 +28,22 @@ query GetStreamSessions($streamId: ID!, $timeRange: TimeRangeInput, $first: Int 
       }
     }
     lifecycle {
-      # Individual viewer sessions (geo, quality, duration)
       viewerSessionsConnection(
         streamId: $streamId
         timeRange: $timeRange
-        page: { first: $first }
+        page: { first: $sessionFirst }
       ) {
         edges {
           cursor
           node {
             id
             timestamp
-            streamId
-            nodeId
             sessionId
             connector
             countryCode
             city
-            latitude
-            longitude
             durationSeconds
-            bytesUp
-            bytesDown
             connectionQuality
-            bufferHealth
-            clientBucket {
-              h3Index
-              resolution
-            }
           }
         }
         pageInfo {
@@ -66,8 +53,7 @@ query GetStreamSessions($streamId: ID!, $timeRange: TimeRangeInput, $first: Int 
       }
     }
     health {
-      # Client/viewer quality metrics (5m aggregates)
-      clientQoeConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $first }) {
+      clientQoeConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $sessionFirst }) {
         edges {
           cursor
           node {

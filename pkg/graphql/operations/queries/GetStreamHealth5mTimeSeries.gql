@@ -1,0 +1,29 @@
+# Stream health 5-minute aggregates time-series
+# Deferred load on the analytics page
+query GetStreamHealth5mTimeSeries(
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+) {
+  analytics {
+    health {
+      streamHealth5mConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $first }
+      ) {
+        edges {
+          node {
+            timestamp
+            nodeId
+            avgBitrate
+            avgFps
+            qualityTier
+            issueCount
+            rebufferCount
+          }
+        }
+      }
+    }
+  }
+}

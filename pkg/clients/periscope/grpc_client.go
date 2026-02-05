@@ -856,3 +856,48 @@ func (c *GRPCClient) GetAPIUsage(ctx context.Context, tenantID string, authType 
 	}
 	return c.aggregated.GetAPIUsage(ctx, req)
 }
+
+// GetRoutingEfficiency returns pre-aggregated routing decision stats
+func (c *GRPCClient) GetRoutingEfficiency(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts) (*pb.GetRoutingEfficiencyResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.GetRoutingEfficiencyRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	if streamID != nil {
+		req.StreamId = streamID
+	}
+	return c.routing.GetRoutingEfficiency(ctx, req)
+}
+
+// GetStreamHealthSummary returns pre-aggregated stream health stats
+func (c *GRPCClient) GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.GetStreamHealthSummaryRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	if streamID != nil {
+		req.StreamId = streamID
+	}
+	return c.aggregated.GetStreamHealthSummary(ctx, req)
+}
+
+// GetClientQoeSummary returns pre-aggregated client QoE stats
+func (c *GRPCClient) GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts) (*pb.GetClientQoeSummaryResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	req := &pb.GetClientQoeSummaryRequest{
+		TenantId:  tenantID,
+		TimeRange: buildTimeRange(timeRange),
+	}
+	if streamID != nil {
+		req.StreamId = streamID
+	}
+	return c.aggregated.GetClientQoeSummary(ctx, req)
+}

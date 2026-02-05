@@ -768,6 +768,24 @@ type AnalyticsHealth {
     timeRange: TimeRangeInput
     noCache: Boolean = false
   ): ClientMetrics5mConnection!
+  """
+  Pre-aggregated health summary for dashboard views.
+  Replaces paginated streamHealthConnection when only scalar stats are needed.
+  """
+  streamHealthSummary(
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): StreamHealthSummary!
+  """
+  Pre-aggregated client QoE summary for dashboard views.
+  Replaces paginated clientQoeConnection when only scalar stats are needed.
+  """
+  clientQoeSummary(
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): ClientQoeSummary!
 }
 
 """
@@ -871,6 +889,15 @@ type AnalyticsInfra {
     status: InstanceStatus
   ): ServiceInstancesConnection!
   serviceInstancesHealth(serviceId: String): [ServiceInstanceHealth!]
+  """
+  Pre-aggregated routing efficiency summary for dashboard views.
+  Replaces client-side aggregation of raw routingEventsConnection data.
+  """
+  routingEfficiency(
+    streamId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): RoutingEfficiency!
 }
 
 """
@@ -5049,6 +5076,49 @@ type NodeMetricsAggregated {
   totalBandwidthIn: Float!
   totalBandwidthOut: Float!
   sampleCount: Int!
+}
+
+"""
+Pre-aggregated routing efficiency summary (replaces client-side aggregation of raw routing events).
+"""
+type RoutingEfficiency {
+  totalDecisions: Int!
+  successCount: Int!
+  successRate: Float!
+  avgRoutingDistance: Float!
+  avgLatencyMs: Float!
+  topCountries: [RoutingCountryStat!]!
+}
+
+type RoutingCountryStat {
+  countryCode: String!
+  requestCount: Int!
+}
+
+"""
+Pre-aggregated stream health summary from stream_health_5m.
+"""
+type StreamHealthSummary {
+  avgBitrate: Float!
+  avgFps: Float!
+  avgBufferHealth: Float!
+  totalRebufferCount: Int!
+  totalIssueCount: Int!
+  sampleCount: Int!
+  hasActiveIssues: Boolean!
+  currentQualityTier: String
+}
+
+"""
+Pre-aggregated client QoE summary from client_qoe_5m.
+"""
+type ClientQoeSummary {
+  avgPacketLossRate: Float
+  peakPacketLossRate: Float
+  avgBandwidthIn: Float!
+  avgBandwidthOut: Float!
+  avgConnectionTime: Float!
+  totalActiveSessions: Int!
 }
 
 # Real-time node state from node_state_current (ReplacingMergeTree - current state snapshot)

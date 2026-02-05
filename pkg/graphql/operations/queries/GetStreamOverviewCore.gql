@@ -1,0 +1,75 @@
+# Stream overview: core fields, metrics, analytics summary, and viewer time-series
+# Loaded immediately on the stream detail page
+query GetStreamOverviewCore(
+  $id: ID!
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $viewerFirst: Int = 100
+  $viewerInterval: String = "1h"
+) {
+  stream(id: $id) {
+    ...StreamCoreFields
+
+    metrics {
+      ...StreamMetricsFields
+    }
+  }
+  analytics {
+    usage {
+      streaming {
+        streamAnalyticsSummary(streamId: $streamId, timeRange: $timeRange) {
+          streamId
+          rangeAvgViewers
+          rangePeakConcurrentViewers
+          rangeTotalViews
+          rangeTotalSessions
+          rangeUniqueViewers
+          rangeUniqueCountries
+          rangeViewerHours
+          rangeEgressGb
+          rangeAvgSessionSeconds
+          rangeAvgBytesPerSession
+          rangeAvgBufferHealth
+          rangeAvgBitrate
+          rangeAvgFps
+          rangePacketLossRate
+          rangeAvgConnectionTime
+          rangeRebufferCount
+          rangeIssueCount
+          rangeBufferDryCount
+          rangeQuality {
+            tier2160pMinutes
+            tier1440pMinutes
+            tier1080pMinutes
+            tier720pMinutes
+            tier480pMinutes
+            tierSdMinutes
+            codecH264Minutes
+            codecH265Minutes
+            codecVp9Minutes
+            codecAv1Minutes
+          }
+        }
+        viewerTimeSeriesConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          interval: $viewerInterval
+          page: { first: $viewerFirst }
+        ) {
+          edges {
+            cursor
+            node {
+              timestamp
+              streamId
+              viewerCount
+            }
+          }
+          pageInfo {
+            ...PageInfoFields
+          }
+          totalCount
+        }
+      }
+    }
+  }
+}

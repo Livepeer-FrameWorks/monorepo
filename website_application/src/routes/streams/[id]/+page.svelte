@@ -9,7 +9,8 @@
     GetStreamKeysStore,
     GetDVRRequestsStore,
     GetClipsConnectionStore,
-    GetStreamOverviewStore,
+    GetStreamOverviewCoreStore,
+    GetStreamOverviewChartsStore,
     GetStreamAnalyticsDailyConnectionStore,
     UpdateStreamStore,
     DeleteStreamStore,
@@ -72,7 +73,8 @@
   const streamKeysStore = new GetStreamKeysStore();
   const dvrRequestsStore = new GetDVRRequestsStore();
   const clipsStore = new GetClipsConnectionStore();
-  const streamOverviewStore = new GetStreamOverviewStore();
+  const streamOverviewCoreStore = new GetStreamOverviewCoreStore();
+  const streamOverviewChartsStore = new GetStreamOverviewChartsStore();
   const updateStreamMutation = new UpdateStreamStore();
   const deleteStreamMutation = new DeleteStreamStore();
   const refreshStreamKeyMutation = new RefreshStreamKeyStore();
@@ -150,7 +152,7 @@
 
   // Analytics and health from GetStreamOverview query
   let streamAnalyticsSummary = $derived(
-    $streamOverviewStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummary ?? null
+    $streamOverviewCoreStore.data?.analytics?.usage?.streaming?.streamAnalyticsSummary ?? null
   );
   let analytics = $derived.by(() => {
     if (!streamAnalyticsSummary && !stream?.metrics) return null;
@@ -167,7 +169,7 @@
     };
   });
   let healthMetrics = $derived(
-    ($streamOverviewStore.data?.analytics?.health?.streamHealthConnection?.edges ?? []).map(
+    ($streamOverviewChartsStore.data?.analytics?.health?.streamHealthConnection?.edges ?? []).map(
       (e) => e.node
     )
   );
@@ -229,8 +231,8 @@
       }));
     }
     const timeSeriesEdges =
-      $streamOverviewStore.data?.analytics?.usage?.streaming?.viewerTimeSeriesConnection?.edges ??
-      [];
+      $streamOverviewCoreStore.data?.analytics?.usage?.streaming?.viewerTimeSeriesConnection
+        ?.edges ?? [];
     if (timeSeriesEdges.length > 0) {
       return timeSeriesEdges.map((e) => ({
         timestamp: e.node.timestamp,
@@ -239,7 +241,7 @@
       }));
     }
     return (
-      $streamOverviewStore.data?.analytics?.usage?.streaming?.streamConnectionHourlyConnection?.edges?.map(
+      $streamOverviewChartsStore.data?.analytics?.usage?.streaming?.streamConnectionHourlyConnection?.edges?.map(
         (e) => ({
           timestamp: e.node.hour,
           viewerCount: e.node.uniqueViewers,
@@ -464,7 +466,7 @@
     // Set up auto-refresh every 60 seconds as fallback
     refreshInterval = setInterval(loadLiveData, 60000);
 
-    // Refresh health every 30 seconds when live (via streamOverviewStore)
+    // Refresh health every 30 seconds when live (both Core + Charts stores)
     healthRefreshInterval = setInterval(async () => {
       if (isLive && stream?.id) {
         const range = resolveTimeRange(timeRange);
@@ -473,17 +475,25 @@
         const overviewFirst = range.days <= 7 ? range.days * 24 : 168;
         const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
         const qualityFirst = getQualityFirst(range);
-        await streamOverviewStore.fetch({
-          variables: {
-            id: stream.id,
-            streamId: stream.id,
-            timeRange: timeRangeInput,
-            first: overviewFirst,
-            viewerInterval,
-            viewerFirst,
-            qualityFirst,
-          },
-        });
+        await Promise.all([
+          streamOverviewCoreStore.fetch({
+            variables: {
+              id: stream.id,
+              streamId: stream.id,
+              timeRange: timeRangeInput,
+              viewerFirst,
+              viewerInterval,
+            },
+          }),
+          streamOverviewChartsStore.fetch({
+            variables: {
+              streamId: stream.id,
+              timeRange: timeRangeInput,
+              first: overviewFirst,
+              qualityFirst,
+            },
+          }),
+        ]);
       }
     }, 30000);
   });
@@ -725,15 +735,23 @@
         streamKeysStore.fetch({ variables: { streamId } }),
         dvrRequestsStore.fetch({ variables: { streamId: resolvedStreamId } }),
         clipsStore.fetch({ variables: { streamId, first: 100 } }),
-        streamOverviewStore
+        streamOverviewCoreStore
           .fetch({
             variables: {
               id: streamId,
               streamId: resolvedStreamId,
               timeRange: timeRangeInput,
-              first: overviewFirst,
-              viewerInterval,
               viewerFirst,
+              viewerInterval,
+            },
+          })
+          .catch(() => null),
+        streamOverviewChartsStore
+          .fetch({
+            variables: {
+              streamId: resolvedStreamId,
+              timeRange: timeRangeInput,
+              first: overviewFirst,
               qualityFirst,
             },
           })
@@ -779,24 +797,20 @@
       const range = resolveTimeRange(timeRange);
       currentRange = range;
       const timeRangeInput = { start: range.start, end: range.end };
-      const overviewFirst = range.days <= 7 ? range.days * 24 : 168;
       const { viewerInterval, viewerFirst } = getViewerSeriesConfig(range);
-      const qualityFirst = getQualityFirst(range);
       const analyticsStreamId = stream?.id ?? streamId;
 
       await Promise.all([
         streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } }),
         analyticsStreamId
-          ? streamOverviewStore
+          ? streamOverviewCoreStore
               .fetch({
                 variables: {
                   id: streamId,
                   streamId: analyticsStreamId,
                   timeRange: timeRangeInput,
-                  first: overviewFirst,
-                  viewerInterval,
                   viewerFirst,
-                  qualityFirst,
+                  viewerInterval,
                 },
               })
               .catch(() => null)

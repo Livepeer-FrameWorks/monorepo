@@ -1,0 +1,87 @@
+# Stream overview charts: hourly connections, quality tier breakdown, and health time-series
+# Deferred load on the stream detail page
+query GetStreamOverviewCharts(
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $qualityFirst: Int = 30
+  $healthFirst: Int = 24
+) {
+  analytics {
+    usage {
+      streaming {
+        streamConnectionHourlyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $first }
+        ) {
+          edges {
+            cursor
+            node {
+              hour
+              streamId
+              totalBytes
+              uniqueViewers
+              totalSessions
+            }
+          }
+          pageInfo {
+            ...PageInfoFields
+          }
+          totalCount
+        }
+        qualityTierDailyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $qualityFirst }
+        ) {
+          edges {
+            cursor
+            node {
+              day
+              streamId
+              tier2160pMinutes
+              tier1440pMinutes
+              tier1080pMinutes
+              tier720pMinutes
+              tier480pMinutes
+              tierSdMinutes
+              codecH264Minutes
+              codecH265Minutes
+              avgBitrate
+              avgFps
+            }
+          }
+          pageInfo {
+            ...PageInfoFields
+          }
+          totalCount
+        }
+      }
+    }
+    health {
+      streamHealthConnection(streamId: $streamId, timeRange: $timeRange, page: { first: $healthFirst }) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            hasIssues
+            issuesDescription
+            bitrate
+            fps
+            width
+            height
+            codec
+            qualityTier
+            bufferState
+            bufferHealth
+          }
+        }
+        pageInfo {
+          ...PageInfoFields
+        }
+      }
+    }
+  }
+}

@@ -2137,6 +2137,89 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	}, nil
 }
 
+// GetRoutingEfficiency returns pre-aggregated routing decision stats from routing_decisions.
+func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *pb.GetRoutingEfficiencyRequest) (*pb.GetRoutingEfficiencyResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT
+			count() AS total,
+			countIf(status = 'success') AS successes,
+			avg(routing_distance_km) AS avg_dist,
+			avg(latency_ms) AS avg_lat
+		FROM periscope.routing_decisions
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
+	`
+	args := []interface{}{tenantID, startTime, endTime}
+
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
+	}
+
+	var total, successes int64
+	var avgDist, avgLat float64
+	if scanErr := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(&total, &successes, &avgDist, &avgLat); scanErr != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", scanErr)
+	}
+
+	var successRate float64
+	if total > 0 {
+		successRate = float64(successes) / float64(total)
+	}
+
+	// Top countries by request count
+	countryQuery := `
+		SELECT client_country, count() AS cnt
+		FROM periscope.routing_decisions
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
+	`
+	countryArgs := []interface{}{tenantID, startTime, endTime}
+	if streamID := req.GetStreamId(); streamID != "" {
+		countryQuery += " AND stream_id = ?"
+		countryArgs = append(countryArgs, streamID)
+	}
+	countryQuery += " GROUP BY client_country ORDER BY cnt DESC LIMIT 10"
+
+	rows, err := s.clickhouse.QueryContext(ctx, countryQuery, countryArgs...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var countries []*pb.RoutingCountryStat
+	for rows.Next() {
+		var code string
+		var cnt int64
+		if err := rows.Scan(&code, &cnt); err != nil {
+			continue
+		}
+		countries = append(countries, &pb.RoutingCountryStat{
+			CountryCode:  code,
+			RequestCount: cnt,
+		})
+	}
+
+	return &pb.GetRoutingEfficiencyResponse{
+		Summary: &pb.RoutingEfficiencySummary{
+			TotalDecisions:     total,
+			SuccessCount:       successes,
+			SuccessRate:        successRate,
+			AvgRoutingDistance: avgDist,
+			AvgLatencyMs:       avgLat,
+			TopCountries:       countries,
+		},
+	}, nil
+}
+
 // ============================================================================
 // PlatformAnalyticsService Implementation
 // ============================================================================
@@ -3847,6 +3930,121 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 	return &pb.GetStreamHealth5MResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
+	}, nil
+}
+
+// GetStreamHealthSummary returns pre-aggregated health stats from stream_health_5m.
+func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *pb.GetStreamHealthSummaryRequest) (*pb.GetStreamHealthSummaryResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT
+			avg(avg_bitrate) AS avg_bitrate,
+			avg(avg_fps) AS avg_fps,
+			avg(avg_buffer_health) AS avg_buffer_health,
+			sum(rebuffer_count) AS total_rebuffers,
+			sum(issue_count) AS total_issues,
+			count() AS samples,
+			countIf(issue_count > 0) AS issue_samples,
+			argMax(quality_tier, timestamp_5m) AS latest_tier
+		FROM stream_health_5m
+		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
+	`
+	args := []interface{}{tenantID, startTime, endTime}
+
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
+	}
+
+	var avgBitrate, avgFps, avgBufferHealth float64
+	var totalRebuffers, totalIssues, samples, issueSamples int64
+	var latestTier string
+	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+		&avgBitrate, &avgFps, &avgBufferHealth,
+		&totalRebuffers, &totalIssues, &samples, &issueSamples, &latestTier,
+	); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.GetStreamHealthSummaryResponse{
+		Summary: &pb.StreamHealthSummary{
+			AvgBitrate:         avgBitrate,
+			AvgFps:             avgFps,
+			AvgBufferHealth:    avgBufferHealth,
+			TotalRebufferCount: totalRebuffers,
+			TotalIssueCount:    totalIssues,
+			SampleCount:        samples,
+			HasActiveIssues:    issueSamples > 0,
+			CurrentQualityTier: latestTier,
+		},
+	}, nil
+}
+
+// GetClientQoeSummary returns pre-aggregated client QoE stats from client_qoe_5m.
+func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetClientQoeSummaryRequest) (*pb.GetClientQoeSummaryResponse, error) {
+	tenantID := getTenantID(ctx, req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT
+			avg(pkt_loss_rate) AS avg_pkt_loss,
+			max(pkt_loss_rate) AS peak_pkt_loss,
+			avg(avg_bw_in) AS avg_bw_in,
+			avg(avg_bw_out) AS avg_bw_out,
+			avg(avg_connection_time) AS avg_conn_time,
+			sum(active_sessions) AS total_sessions
+		FROM client_qoe_5m
+		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
+	`
+	args := []interface{}{tenantID, startTime, endTime}
+
+	if streamID := req.GetStreamId(); streamID != "" {
+		query += " AND stream_id = ?"
+		args = append(args, streamID)
+	}
+
+	var avgPktLoss, peakPktLoss sql.NullFloat64
+	var avgBwIn, avgBwOut, avgConnTime float64
+	var totalSessions int64
+	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+		&avgPktLoss, &peakPktLoss, &avgBwIn, &avgBwOut, &avgConnTime, &totalSessions,
+	); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	summary := &pb.ClientQoeSummary{
+		AvgBandwidthIn:      avgBwIn,
+		AvgBandwidthOut:     avgBwOut,
+		AvgConnectionTime:   avgConnTime,
+		TotalActiveSessions: totalSessions,
+	}
+	if avgPktLoss.Valid {
+		v := avgPktLoss.Float64
+		summary.AvgPacketLossRate = &v
+	}
+	if peakPktLoss.Valid {
+		v := peakPktLoss.Float64
+		summary.PeakPacketLossRate = &v
+	}
+
+	return &pb.GetClientQoeSummaryResponse{
+		Summary: summary,
 	}, nil
 }
 

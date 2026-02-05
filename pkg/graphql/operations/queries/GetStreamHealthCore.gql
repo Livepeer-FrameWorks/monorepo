@@ -1,0 +1,87 @@
+# Primary stream health: raw metrics time-series and 5-minute aggregates
+# Loaded immediately on the health page
+query GetStreamHealthCore(
+  $id: ID!
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $metricsFirst: Int = 50
+) {
+  stream(id: $id) {
+    id
+    name
+    playbackId
+    metrics {
+      status
+      isLive
+      currentViewers
+      bufferState
+      qualityTier
+      primaryWidth
+      primaryHeight
+      primaryFps
+      primaryCodec
+      primaryBitrate
+      hasIssues
+      issuesDescription
+    }
+  }
+  analytics {
+    health {
+      streamHealthConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $metricsFirst }
+      ) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            hasIssues
+            issuesDescription
+            bitrate
+            fps
+            width
+            height
+            codec
+            qualityTier
+            gopSize
+            bufferState
+            bufferHealth
+            bufferSize
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      streamHealth5mConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $metricsFirst }
+      ) {
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            nodeId
+            rebufferCount
+            issueCount
+            sampleIssues
+            avgBitrate
+            avgFps
+            bufferDryCount
+            qualityTier
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

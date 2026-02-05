@@ -1,0 +1,18 @@
+# Pre-aggregated routing efficiency summary (replaces client-side aggregation of raw events)
+query GetRoutingEfficiency($streamId: ID, $timeRange: TimeRangeInput) {
+  analytics {
+    infra {
+      routingEfficiency(streamId: $streamId, timeRange: $timeRange) {
+        totalDecisions
+        successCount
+        successRate
+        avgRoutingDistance
+        avgLatencyMs
+        topCountries {
+          countryCode
+          requestCount
+        }
+      }
+    }
+  }
+}

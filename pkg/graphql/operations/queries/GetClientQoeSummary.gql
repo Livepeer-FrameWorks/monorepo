@@ -1,0 +1,15 @@
+# Pre-aggregated client QoE summary for dashboard views
+query GetClientQoeSummary($streamId: ID, $timeRange: TimeRangeInput) {
+  analytics {
+    health {
+      clientQoeSummary(streamId: $streamId, timeRange: $timeRange) {
+        avgPacketLossRate
+        peakPacketLossRate
+        avgBandwidthIn
+        avgBandwidthOut
+        avgConnectionTime
+        totalActiveSessions
+      }
+    }
+  }
+}

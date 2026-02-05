@@ -878,7 +878,8 @@ var NodeAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	RoutingAnalyticsService_GetRoutingEvents_FullMethodName = "/periscope.RoutingAnalyticsService/GetRoutingEvents"
+	RoutingAnalyticsService_GetRoutingEvents_FullMethodName     = "/periscope.RoutingAnalyticsService/GetRoutingEvents"
+	RoutingAnalyticsService_GetRoutingEfficiency_FullMethodName = "/periscope.RoutingAnalyticsService/GetRoutingEfficiency"
 )
 
 // RoutingAnalyticsServiceClient is the client API for RoutingAnalyticsService service.
@@ -886,6 +887,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RoutingAnalyticsServiceClient interface {
 	GetRoutingEvents(ctx context.Context, in *GetRoutingEventsRequest, opts ...grpc.CallOption) (*GetRoutingEventsResponse, error)
+	GetRoutingEfficiency(ctx context.Context, in *GetRoutingEfficiencyRequest, opts ...grpc.CallOption) (*GetRoutingEfficiencyResponse, error)
 }
 
 type routingAnalyticsServiceClient struct {
@@ -906,11 +908,22 @@ func (c *routingAnalyticsServiceClient) GetRoutingEvents(ctx context.Context, in
 	return out, nil
 }
 
+func (c *routingAnalyticsServiceClient) GetRoutingEfficiency(ctx context.Context, in *GetRoutingEfficiencyRequest, opts ...grpc.CallOption) (*GetRoutingEfficiencyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRoutingEfficiencyResponse)
+	err := c.cc.Invoke(ctx, RoutingAnalyticsService_GetRoutingEfficiency_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RoutingAnalyticsServiceServer is the server API for RoutingAnalyticsService service.
 // All implementations must embed UnimplementedRoutingAnalyticsServiceServer
 // for forward compatibility.
 type RoutingAnalyticsServiceServer interface {
 	GetRoutingEvents(context.Context, *GetRoutingEventsRequest) (*GetRoutingEventsResponse, error)
+	GetRoutingEfficiency(context.Context, *GetRoutingEfficiencyRequest) (*GetRoutingEfficiencyResponse, error)
 	mustEmbedUnimplementedRoutingAnalyticsServiceServer()
 }
 
@@ -923,6 +936,9 @@ type UnimplementedRoutingAnalyticsServiceServer struct{}
 
 func (UnimplementedRoutingAnalyticsServiceServer) GetRoutingEvents(context.Context, *GetRoutingEventsRequest) (*GetRoutingEventsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRoutingEvents not implemented")
+}
+func (UnimplementedRoutingAnalyticsServiceServer) GetRoutingEfficiency(context.Context, *GetRoutingEfficiencyRequest) (*GetRoutingEfficiencyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRoutingEfficiency not implemented")
 }
 func (UnimplementedRoutingAnalyticsServiceServer) mustEmbedUnimplementedRoutingAnalyticsServiceServer() {
 }
@@ -964,6 +980,24 @@ func _RoutingAnalyticsService_GetRoutingEvents_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RoutingAnalyticsService_GetRoutingEfficiency_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRoutingEfficiencyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RoutingAnalyticsServiceServer).GetRoutingEfficiency(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RoutingAnalyticsService_GetRoutingEfficiency_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RoutingAnalyticsServiceServer).GetRoutingEfficiency(ctx, req.(*GetRoutingEfficiencyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RoutingAnalyticsService_ServiceDesc is the grpc.ServiceDesc for RoutingAnalyticsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -974,6 +1008,10 @@ var RoutingAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRoutingEvents",
 			Handler:    _RoutingAnalyticsService_GetRoutingEvents_Handler,
+		},
+		{
+			MethodName: "GetRoutingEfficiency",
+			Handler:    _RoutingAnalyticsService_GetRoutingEfficiency_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -1282,6 +1320,8 @@ const (
 	AggregatedAnalyticsService_GetTenantAnalyticsDaily_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetTenantAnalyticsDaily"
 	AggregatedAnalyticsService_GetStreamAnalyticsDaily_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetStreamAnalyticsDaily"
 	AggregatedAnalyticsService_GetAPIUsage_FullMethodName                 = "/periscope.AggregatedAnalyticsService/GetAPIUsage"
+	AggregatedAnalyticsService_GetStreamHealthSummary_FullMethodName      = "/periscope.AggregatedAnalyticsService/GetStreamHealthSummary"
+	AggregatedAnalyticsService_GetClientQoeSummary_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetClientQoeSummary"
 )
 
 // AggregatedAnalyticsServiceClient is the client API for AggregatedAnalyticsService service.
@@ -1309,6 +1349,8 @@ type AggregatedAnalyticsServiceClient interface {
 	GetTenantAnalyticsDaily(ctx context.Context, in *GetTenantAnalyticsDailyRequest, opts ...grpc.CallOption) (*GetTenantAnalyticsDailyResponse, error)
 	GetStreamAnalyticsDaily(ctx context.Context, in *GetStreamAnalyticsDailyRequest, opts ...grpc.CallOption) (*GetStreamAnalyticsDailyResponse, error)
 	GetAPIUsage(ctx context.Context, in *GetAPIUsageRequest, opts ...grpc.CallOption) (*GetAPIUsageResponse, error)
+	GetStreamHealthSummary(ctx context.Context, in *GetStreamHealthSummaryRequest, opts ...grpc.CallOption) (*GetStreamHealthSummaryResponse, error)
+	GetClientQoeSummary(ctx context.Context, in *GetClientQoeSummaryRequest, opts ...grpc.CallOption) (*GetClientQoeSummaryResponse, error)
 }
 
 type aggregatedAnalyticsServiceClient struct {
@@ -1499,6 +1541,26 @@ func (c *aggregatedAnalyticsServiceClient) GetAPIUsage(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *aggregatedAnalyticsServiceClient) GetStreamHealthSummary(ctx context.Context, in *GetStreamHealthSummaryRequest, opts ...grpc.CallOption) (*GetStreamHealthSummaryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetStreamHealthSummaryResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetStreamHealthSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetClientQoeSummary(ctx context.Context, in *GetClientQoeSummaryRequest, opts ...grpc.CallOption) (*GetClientQoeSummaryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetClientQoeSummaryResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetClientQoeSummary_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AggregatedAnalyticsServiceServer is the server API for AggregatedAnalyticsService service.
 // All implementations must embed UnimplementedAggregatedAnalyticsServiceServer
 // for forward compatibility.
@@ -1524,6 +1586,8 @@ type AggregatedAnalyticsServiceServer interface {
 	GetTenantAnalyticsDaily(context.Context, *GetTenantAnalyticsDailyRequest) (*GetTenantAnalyticsDailyResponse, error)
 	GetStreamAnalyticsDaily(context.Context, *GetStreamAnalyticsDailyRequest) (*GetStreamAnalyticsDailyResponse, error)
 	GetAPIUsage(context.Context, *GetAPIUsageRequest) (*GetAPIUsageResponse, error)
+	GetStreamHealthSummary(context.Context, *GetStreamHealthSummaryRequest) (*GetStreamHealthSummaryResponse, error)
+	GetClientQoeSummary(context.Context, *GetClientQoeSummaryRequest) (*GetClientQoeSummaryResponse, error)
 	mustEmbedUnimplementedAggregatedAnalyticsServiceServer()
 }
 
@@ -1587,6 +1651,12 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetStreamAnalyticsDaily(con
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetAPIUsage(context.Context, *GetAPIUsageRequest) (*GetAPIUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAPIUsage not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetStreamHealthSummary(context.Context, *GetStreamHealthSummaryRequest) (*GetStreamHealthSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetStreamHealthSummary not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetClientQoeSummary(context.Context, *GetClientQoeSummaryRequest) (*GetClientQoeSummaryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClientQoeSummary not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) mustEmbedUnimplementedAggregatedAnalyticsServiceServer() {
 }
@@ -1934,6 +2004,42 @@ func _AggregatedAnalyticsService_GetAPIUsage_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AggregatedAnalyticsService_GetStreamHealthSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStreamHealthSummaryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetStreamHealthSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetStreamHealthSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetStreamHealthSummary(ctx, req.(*GetStreamHealthSummaryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetClientQoeSummary_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClientQoeSummaryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetClientQoeSummary(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetClientQoeSummary_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetClientQoeSummary(ctx, req.(*GetClientQoeSummaryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AggregatedAnalyticsService_ServiceDesc is the grpc.ServiceDesc for AggregatedAnalyticsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2012,6 +2118,14 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetAPIUsage",
 			Handler:    _AggregatedAnalyticsService_GetAPIUsage_Handler,
+		},
+		{
+			MethodName: "GetStreamHealthSummary",
+			Handler:    _AggregatedAnalyticsService_GetStreamHealthSummary_Handler,
+		},
+		{
+			MethodName: "GetClientQoeSummary",
+			Handler:    _AggregatedAnalyticsService_GetClientQoeSummary_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

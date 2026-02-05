@@ -1,0 +1,63 @@
+# Lifecycle health: track list snapshots and buffer events
+# Deferred/on-demand load on the health page
+query GetStreamHealthLifecycle(
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $bufferFirst: Int = 100
+) {
+  analytics {
+    lifecycle {
+      trackListConnection(streamId: $streamId, timeRange: $timeRange, page: { first: 20 }) {
+        edges {
+          node {
+            timestamp
+            streamId
+            nodeId
+            trackList
+            trackCount
+            tracks {
+              trackName
+              trackType
+              codec
+              bitrateKbps
+              width
+              height
+              fps
+              buffer
+              jitter
+              channels
+              sampleRate
+              hasBFrames
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      bufferEventsConnection(
+        streamId: $streamId
+        timeRange: $timeRange
+        page: { first: $bufferFirst }
+      ) {
+        edges {
+          cursor
+          node {
+            eventId
+            timestamp
+            nodeId
+            bufferState
+            eventData
+            payload
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        totalCount
+      }
+    }
+  }
+}

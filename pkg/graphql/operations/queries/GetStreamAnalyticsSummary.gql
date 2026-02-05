@@ -1,0 +1,111 @@
+# Stream analytics: summary stats, hourly viewer hours, daily analytics, and quality tiers
+# Loaded immediately on the analytics page
+query GetStreamAnalyticsSummary(
+  $id: ID!
+  $streamId: ID!
+  $timeRange: TimeRangeInput
+  $hourlyFirst: Int = 72
+  $qualityFirst: Int = 30
+) {
+  stream(id: $id) {
+    id
+    name
+    playbackId
+  }
+  analytics {
+    usage {
+      streaming {
+        streamAnalyticsSummary(streamId: $streamId, timeRange: $timeRange) {
+          streamId
+          rangeAvgViewers
+          rangePeakConcurrentViewers
+          rangeTotalViews
+          rangeTotalSessions
+          rangeAvgBufferHealth
+          rangeAvgBitrate
+          rangeAvgFps
+          rangePacketLossRate
+          rangeAvgConnectionTime
+          rangeViewerHours
+          rangeEgressGb
+          rangeAvgSessionSeconds
+          rangeAvgBytesPerSession
+          rangeUniqueViewers
+          rangeUniqueCountries
+          rangeRebufferCount
+          rangeIssueCount
+          rangeBufferDryCount
+          rangeQuality {
+            tier2160pMinutes
+            tier1440pMinutes
+            tier1080pMinutes
+            tier720pMinutes
+            tier480pMinutes
+            tierSdMinutes
+            codecH264Minutes
+            codecH265Minutes
+            codecVp9Minutes
+            codecAv1Minutes
+          }
+        }
+        viewerHoursHourlyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $hourlyFirst }
+        ) {
+          edges {
+            node {
+              hour
+              streamId
+              uniqueViewers
+              totalSessionSeconds
+              viewerHours
+              egressGb
+            }
+          }
+        }
+        streamAnalyticsDailyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: 30 }
+        ) {
+          edges {
+            node {
+              day
+              streamId
+              totalViews
+              uniqueViewers
+              uniqueCountries
+              uniqueCities
+              egressBytes
+            }
+          }
+        }
+        qualityTierDailyConnection(
+          streamId: $streamId
+          timeRange: $timeRange
+          page: { first: $qualityFirst }
+        ) {
+          edges {
+            node {
+              day
+              streamId
+              tier2160pMinutes
+              tier1440pMinutes
+              tier1080pMinutes
+              tier720pMinutes
+              tier480pMinutes
+              tierSdMinutes
+              codecH264Minutes
+              codecH265Minutes
+              codecVp9Minutes
+              codecAv1Minutes
+              avgBitrate
+              avgFps
+            }
+          }
+        }
+      }
+    }
+  }
+}

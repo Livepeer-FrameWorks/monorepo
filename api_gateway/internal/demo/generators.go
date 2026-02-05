@@ -4585,6 +4585,53 @@ func GenerateAPIUsageConnection(authType *string, operationType *string, operati
 	}
 }
 
+// GenerateRoutingEfficiency returns demo routing efficiency summary data.
+func GenerateRoutingEfficiency() *model.RoutingEfficiency {
+	return &model.RoutingEfficiency{
+		TotalDecisions:     1250,
+		SuccessCount:       1187,
+		SuccessRate:        0.9496,
+		AvgRoutingDistance: 342.5,
+		AvgLatencyMs:       12.3,
+		TopCountries: []*model.RoutingCountryStat{
+			{CountryCode: "US", RequestCount: 520},
+			{CountryCode: "DE", RequestCount: 230},
+			{CountryCode: "JP", RequestCount: 180},
+			{CountryCode: "GB", RequestCount: 145},
+			{CountryCode: "BR", RequestCount: 98},
+		},
+	}
+}
+
+// GenerateStreamHealthSummary returns demo stream health summary data.
+func GenerateStreamHealthSummary() *model.StreamHealthSummary {
+	tier := "hd"
+	return &model.StreamHealthSummary{
+		AvgBitrate:         4500000,
+		AvgFps:             29.97,
+		AvgBufferHealth:    0.95,
+		TotalRebufferCount: 3,
+		TotalIssueCount:    1,
+		SampleCount:        288,
+		HasActiveIssues:    false,
+		CurrentQualityTier: &tier,
+	}
+}
+
+// GenerateClientQoeSummary returns demo client QoE summary data.
+func GenerateClientQoeSummary() *model.ClientQoeSummary {
+	avgPktLoss := 0.002
+	peakPktLoss := 0.015
+	return &model.ClientQoeSummary{
+		AvgPacketLossRate:   &avgPktLoss,
+		PeakPacketLossRate:  &peakPktLoss,
+		AvgBandwidthIn:      5200000,
+		AvgBandwidthOut:     850000,
+		AvgConnectionTime:   1.2,
+		TotalActiveSessions: 42,
+	}
+}
+
 func int32Ptr(v int32) *int32                                  { return &v }
 func int64Ptr(v int64) *int64                                  { return &v }
 func uint32Ptr(v uint32) *uint32                               { return &v }
