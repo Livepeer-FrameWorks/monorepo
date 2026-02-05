@@ -51,16 +51,16 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 // NewClient creates a new Navigator gRPC client
 func NewClient(config Config) (*Client, error) {
 	if config.Addr == "" {
-		return nil, fmt.Errorf("Navigator address is required")
+		return nil, fmt.Errorf("navigator address is required")
 	}
 	if config.Timeout == 0 {
 		config.Timeout = 5 * time.Second
 	}
 
+	// DialContext+WithBlock ensures we fail fast if Navigator is unreachable.
+	// grpc.NewClient ignores WithBlock/WithTimeout, deferring failures to first RPC.
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
-
-	// For now, use insecure credentials for development. In production, use TLS.
 	conn, err := grpc.DialContext(
 		ctx,
 		config.Addr,

@@ -2107,12 +2107,20 @@ func (r *mutationResolver) PromoteToPaid(ctx context.Context, tierID string) (mo
 
 // CreateConversation is the resolver for the createConversation field.
 func (r *mutationResolver) CreateConversation(ctx context.Context, input model.CreateConversationInput) (model.CreateConversationResult, error) {
-	return r.Resolver.CreateConversation(ctx, input)
+	resolver := r.Resolver
+	if resolver == nil {
+		return nil, fmt.Errorf("resolver unavailable")
+	}
+	return resolver.CreateConversation(ctx, input)
 }
 
 // SendMessage is the resolver for the sendMessage field.
 func (r *mutationResolver) SendMessage(ctx context.Context, input model.SendMessageInput) (model.SendMessageResult, error) {
-	return r.Resolver.SendMessage(ctx, input)
+	resolver := r.Resolver
+	if resolver == nil {
+		return nil, fmt.Errorf("resolver unavailable")
+	}
+	return resolver.SendMessage(ctx, input)
 }
 
 // ID is the resolver for the id field.
@@ -3331,7 +3339,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		return nil, fmt.Errorf("artifact event not found")
 	case globalid.TypeConversation:
-		return r.Resolver.Conversation(ctx, id)
+		return r.Conversation(ctx, id)
 	case globalid.TypeMessage:
 		parts, err := globalid.DecodeCompositeExpected(id, globalid.TypeMessage, 2)
 		if err != nil {
@@ -3611,17 +3619,29 @@ func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey str
 
 // ConversationsConnection is the resolver for the conversationsConnection field.
 func (r *queryResolver) ConversationsConnection(ctx context.Context, page *model.ConnectionInput) (*model.ConversationsConnection, error) {
-	return r.Resolver.ConversationsConnection(ctx, page)
+	resolver := r.Resolver
+	if resolver == nil {
+		return nil, fmt.Errorf("resolver unavailable")
+	}
+	return resolver.ConversationsConnection(ctx, page)
 }
 
 // Conversation is the resolver for the conversation field.
 func (r *queryResolver) Conversation(ctx context.Context, id string) (*model.Conversation, error) {
-	return r.Resolver.Conversation(ctx, id)
+	resolver := r.Resolver
+	if resolver == nil {
+		return nil, fmt.Errorf("resolver unavailable")
+	}
+	return resolver.Conversation(ctx, id)
 }
 
 // MessagesConnection is the resolver for the messagesConnection field.
 func (r *queryResolver) MessagesConnection(ctx context.Context, conversationID string, page *model.ConnectionInput) (*model.MessagesConnection, error) {
-	return r.Resolver.MessagesConnection(ctx, conversationID, page)
+	resolver := r.Resolver
+	if resolver == nil {
+		return nil, fmt.Errorf("resolver unavailable")
+	}
+	return resolver.MessagesConnection(ctx, conversationID, page)
 }
 
 // Timestamp is the resolver for the timestamp field.
@@ -4620,14 +4640,14 @@ func (r *subscriptionResolver) LiveSystemHealth(ctx context.Context) (<-chan *pr
 // LiveFirehose is the resolver for the liveFirehose field.
 func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.TenantEvent, error) {
 	if r.Metrics != nil {
-		r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "requested").Inc()
+		r.Metrics.Operations.WithLabelValues("subscription_firehose", "requested").Inc()
 	}
 
 	// Demo mode returns mock events
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo firehose subscription")
 		if r.Metrics != nil {
-			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "demo").Inc()
+			r.Metrics.Operations.WithLabelValues("subscription_firehose", "demo").Inc()
 		}
 		ch := make(chan *model.TenantEvent, 10)
 		go func() {
@@ -4656,7 +4676,7 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 	user, err := middleware.RequireAuth(ctx)
 	if err != nil {
 		if r.Metrics != nil {
-			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "auth_error").Inc()
+			r.Metrics.Operations.WithLabelValues("subscription_firehose", "auth_error").Inc()
 		}
 		return nil, fmt.Errorf("authentication required for firehose subscription: %w", err)
 	}
@@ -4667,22 +4687,22 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 	ch, err := r.SubManager.SubscribeToFirehose(ctx, config)
 	if err != nil {
 		if r.Metrics != nil {
-			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "error").Inc()
+			r.Metrics.Operations.WithLabelValues("subscription_firehose", "error").Inc()
 		}
-		r.Resolver.Logger.WithError(err).WithFields(logging.Fields{
+		r.Logger.WithError(err).WithFields(logging.Fields{
 			"user_id":   user.UserID,
 			"tenant_id": user.TenantID,
 		}).Error("Failed to setup firehose subscription")
 		return nil, fmt.Errorf("failed to setup firehose subscription: %w", err)
 	}
 
-	r.Resolver.Logger.WithFields(logging.Fields{
+	r.Logger.WithFields(logging.Fields{
 		"user_id":   user.UserID,
 		"tenant_id": user.TenantID,
 	}).Info("Successfully setup firehose subscription")
 
 	if r.Metrics != nil {
-		r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "success").Inc()
+		r.Metrics.Operations.WithLabelValues("subscription_firehose", "success").Inc()
 	}
 	return ch, nil
 }
@@ -5187,7 +5207,7 @@ func (r *viewerCountBucketResolver) Stream(ctx context.Context, obj *proto.Viewe
 
 // Outputs is the resolver for the outputs field.
 func (r *viewerEndpointResolver) Outputs(ctx context.Context, obj *proto.ViewerEndpoint) (*string, error) {
-	if obj.Outputs == nil || len(obj.Outputs) == 0 {
+	if len(obj.Outputs) == 0 {
 		return nil, nil
 	}
 	b, err := json.Marshal(obj.Outputs)

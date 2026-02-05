@@ -44,7 +44,7 @@ func main() {
 	dbConfig := database.DefaultConfig()
 	dbConfig.URL = dbURL
 	yugaDB := database.MustConnect(dbConfig, logger)
-	defer yugaDB.Close()
+	defer func() { _ = yugaDB.Close() }()
 
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
@@ -53,7 +53,7 @@ func main() {
 	chConfig.Username = clickhouseUser
 	chConfig.Password = clickhousePassword
 	clickhouse := database.MustConnectClickHouse(chConfig, logger)
-	defer clickhouse.Close()
+	defer func() { _ = clickhouse.Close() }()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("periscope-query", version.Version)
@@ -124,7 +124,7 @@ func main() {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
 			return
 		}
-		defer qc.Close()
+		defer func() { _ = qc.Close() }()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		healthEndpoint := "/health"

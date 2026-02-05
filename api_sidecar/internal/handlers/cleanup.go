@@ -172,11 +172,11 @@ func (cm *CleanupMonitor) checkAndCleanup() error {
 			break // Reached target
 		}
 
-		if err := cm.cleanupClip(candidate); err != nil {
-			if errors.Is(err, errCleanupSkip) {
+		if cleanupErr := cm.cleanupClip(candidate); cleanupErr != nil {
+			if errors.Is(cleanupErr, errCleanupSkip) {
 				continue
 			}
-			cm.logger.WithError(err).WithFields(logging.Fields{
+			cm.logger.WithError(cleanupErr).WithFields(logging.Fields{
 				"artifact_hash": candidate.ClipHash,
 				"asset_type":    candidate.AssetType,
 			}).Error("Failed to cleanup artifact")

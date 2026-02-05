@@ -47,7 +47,7 @@ func main() {
 	chConfig.Username = clickhouseUser
 	chConfig.Password = clickhousePassword
 	clickhouse := database.MustConnectClickHouseNative(chConfig, logger)
-	defer clickhouse.Close()
+	defer func() { _ = clickhouse.Close() }()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("periscope-ingest", version.Version)
@@ -90,7 +90,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create DLQ Kafka producer (DLQ disabled)")
 		dlqProducer = nil
 	} else {
-		defer dlqProducer.Close()
+		defer func() { _ = dlqProducer.Close() }()
 	}
 
 	wrapWithDLQ := func(consumerName string, handler func(context.Context, kafka.Message) error) func(context.Context, kafka.Message) error {
@@ -218,9 +218,9 @@ func main() {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
 			return
 		}
-		defer qc.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		defer func() { _ = qc.Close() }()
+		ctx, bootstrapCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer bootstrapCancel()
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("PERISCOPE_INGEST_HOST", "periscope-ingest")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
@@ -254,7 +254,9 @@ func main() {
 	// Cleanup
 	cancel()
 	if consumer != nil {
-		consumer.Close()
+		if err := consumer.Close(); err != nil {
+			logger.WithError(err).Warn("Failed to close Kafka consumer")
+		}
 	}
 
 	logger.Info("Periscope-Ingest stopped")

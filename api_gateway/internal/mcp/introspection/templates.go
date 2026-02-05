@@ -1,6 +1,7 @@
 package introspection
 
 import (
+	"errors"
 	"io/fs"
 	"regexp"
 	"sort"
@@ -65,7 +66,9 @@ func (tl *TemplateLoader) Load() error {
 		}
 		return nil
 	}); err != nil {
-		// Fragments directory may not exist, which is fine
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 
 	// Load queries, mutations, subscriptions
@@ -98,8 +101,8 @@ func (tl *TemplateLoader) Load() error {
 				}
 			}
 			return nil
-		}); err != nil {
-			// Directory may not exist
+		}); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
 		}
 	}
 

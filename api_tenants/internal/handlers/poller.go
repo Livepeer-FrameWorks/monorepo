@@ -99,7 +99,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var list []serviceInstance
 	for rows.Next() {
@@ -190,14 +190,18 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 				status := "healthy"
 				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
-				conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				conn, err := grpc.NewClient(
+					addr,
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+					grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 2 * time.Second}),
+				)
 				if err != nil {
 					status = "unhealthy"
 					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check dial failed")
 					_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, status, ii.id)
 					return
 				}
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				hc := healthpb.NewHealthClient(conn)
 				if _, err := hc.Check(probeCtx, &healthpb.HealthCheckRequest{}); err != nil {
 					status = "unhealthy"
@@ -277,7 +281,7 @@ func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	desired := make(map[string]serviceInstance)
 	now := time.Now()
@@ -353,16 +357,17 @@ func (m *grpcWatchManager) clearWatch(instanceID string) {
 
 func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceInstance, dialTimeout, backoff time.Duration) {
 	addr := fmt.Sprintf("%s:%d", inst.host, inst.port)
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-
-	conn, err := grpc.DialContext(dialCtx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	conn, err := grpc.NewClient(
+		addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: dialTimeout}),
+	)
 	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("addr", addr).Debug("gRPC watch dial failed")
 		m.setBackoff(inst.id, backoff)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := healthpb.NewHealthClient(conn)
 	stream, err := client.Watch(ctx, &healthpb.HealthCheckRequest{})
@@ -382,7 +387,7 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 			return
 		}
 		statusStr := mapGrpcHealthStatus(resp.GetStatus())
-		_, _ = db.Exec(`UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, statusStr, inst.id)
+		_, _ = db.ExecContext(context.Background(), `UPDATE quartermaster.service_instances SET health_status=$1, last_health_check=NOW(), updated_at=NOW() WHERE instance_id=$2`, statusStr, inst.id)
 	}
 }
 

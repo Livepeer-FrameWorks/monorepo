@@ -152,7 +152,7 @@ func promptConfirm(prompt string, skipConfirm bool) bool {
 		return true
 	}
 
-	fmt.Fprintf(os.Stderr, "%s [y/N]: ", prompt)
+	_, _ = fmt.Fprintf(os.Stderr, "%s [y/N]: ", prompt)
 	reader := bufio.NewReader(os.Stdin)
 	response, err := reader.ReadString('\n')
 	if err != nil {
@@ -228,7 +228,7 @@ func newAdminTokensCreateCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer cli.Close()
+		defer func() { _ = cli.Close() }()
 
 		req := &pb.CreateAPITokenRequest{TokenName: name}
 		if strings.TrimSpace(perms) != "" {
@@ -251,9 +251,9 @@ func newAdminTokensCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Created token %q (id=%s)\n", resp.TokenName, resp.Id)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created token %q (id=%s)\n", resp.TokenName, resp.Id)
 		if resp.TokenValue != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "Token value: %s\n", resp.TokenValue)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Token value: %s\n", resp.TokenValue)
 		}
 		return nil
 	}}
@@ -269,7 +269,7 @@ func newAdminTokensListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer cli.Close()
+		defer func() { _ = cli.Close() }()
 
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -282,9 +282,9 @@ func newAdminTokensListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Tokens (%d)\n", len(resp.Tokens))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Tokens (%d)\n", len(resp.Tokens))
 		for _, t := range resp.Tokens {
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (%s) status=%s\n", t.TokenName, t.Id, t.Status)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (%s) status=%s\n", t.TokenName, t.Id, t.Status)
 		}
 		return nil
 	}}
@@ -298,7 +298,7 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer cli.Close()
+		defer func() { _ = cli.Close() }()
 
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -337,7 +337,7 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 			displayName = fmt.Sprintf("%s (%s)", tokenName, tokenID)
 		}
 		if !promptConfirm(fmt.Sprintf("Revoke API token %s? This cannot be undone", displayName), yes) {
-			fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
 			return nil
 		}
 
@@ -345,7 +345,7 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Revoked token %s\n", tokenID)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Revoked token %s\n", tokenID)
 		return nil
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "revoke token by name instead of ID")
@@ -436,7 +436,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		if strings.TrimSpace(ctxCfg.Auth.ServiceToken) == "" && strings.TrimSpace(ctxCfg.Auth.JWT) == "" {
 			return fmt.Errorf("service token or JWT required; run 'frameworks login' first")
 		}
@@ -472,7 +472,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Created bootstrap token: %s (kind=%s) expires=%s\n", resp.Token.Token, resp.Token.Kind, resp.Token.ExpiresAt.AsTime().Format(time.RFC3339))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created bootstrap token: %s (kind=%s) expires=%s\n", resp.Token.Token, resp.Token.Kind, resp.Token.ExpiresAt.AsTime().Format(time.RFC3339))
 		return nil
 	}}
 	cmd.Flags().StringVar(&kind, "kind", "edge_node", "token kind: edge_node|service|infrastructure_node")
@@ -491,7 +491,7 @@ func newAdminBootstrapTokensListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -506,7 +506,7 @@ func newAdminBootstrapTokensListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Bootstrap tokens (%d)\n", len(resp.Tokens))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Bootstrap tokens (%d)\n", len(resp.Tokens))
 		for _, t := range resp.Tokens {
 			used := ""
 			if t.UsedAt != nil {
@@ -520,7 +520,7 @@ func newAdminBootstrapTokensListCmd() *cobra.Command {
 			if t.ClusterId != nil {
 				cluster = *t.ClusterId
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) kind=%s tenant=%s cluster=%s expires=%s%s\n", t.Name, t.Id, t.Kind, tenant, cluster, t.ExpiresAt.AsTime().Format(time.RFC3339), used)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) kind=%s tenant=%s cluster=%s expires=%s%s\n", t.Name, t.Id, t.Kind, tenant, cluster, t.ExpiresAt.AsTime().Format(time.RFC3339), used)
 		}
 		return nil
 	}}
@@ -534,7 +534,7 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -575,14 +575,14 @@ func newAdminBootstrapTokensRevokeCmd() *cobra.Command {
 			displayName = fmt.Sprintf("%s (%s)", tokenName, tokenID)
 		}
 		if !promptConfirm(fmt.Sprintf("Revoke bootstrap token %s? This cannot be undone", displayName), yes) {
-			fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
 			return nil
 		}
 
 		if err := qm.RevokeBootstrapToken(cctx, tokenID); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Revoked bootstrap token %s\n", tokenID)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Revoked bootstrap token %s\n", tokenID)
 		return nil
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "revoke token by name instead of ID")
@@ -604,7 +604,7 @@ func newAdminTenantsListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -619,9 +619,9 @@ func newAdminTenantsListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Tenants (%d)\n", len(resp.Tenants))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Tenants (%d)\n", len(resp.Tenants))
 		for _, t := range resp.Tenants {
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) tier=%s\n", t.Name, t.Id, t.DeploymentTier)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) tier=%s\n", t.Name, t.Id, t.DeploymentTier)
 		}
 		return nil
 	}}
@@ -646,7 +646,7 @@ func newAdminClustersListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -661,9 +661,9 @@ func newAdminClustersListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Clusters (%d)\n", len(resp.Clusters))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Clusters (%d)\n", len(resp.Clusters))
 		for _, c := range resp.Clusters {
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s url=%s\n", c.ClusterName, c.ClusterId, c.ClusterType, c.BaseUrl)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s url=%s\n", c.ClusterName, c.ClusterId, c.ClusterType, c.BaseUrl)
 		}
 		return nil
 	}}
@@ -711,7 +711,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -748,7 +748,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Created cluster %s (%s)\n", resp.Cluster.ClusterName, resp.Cluster.ClusterId)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created cluster %s (%s)\n", resp.Cluster.ClusterName, resp.Cluster.ClusterId)
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -800,7 +800,7 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -865,7 +865,7 @@ func newAdminClustersUpdateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Updated cluster %s (%s)\n", resp.Cluster.ClusterName, resp.Cluster.ClusterId)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Updated cluster %s (%s)\n", resp.Cluster.ClusterName, resp.Cluster.ClusterId)
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -907,7 +907,7 @@ func newAdminClustersAccessListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -922,9 +922,9 @@ func newAdminClustersAccessListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Accessible clusters (%d)\n", len(resp.Clusters))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Accessible clusters (%d)\n", len(resp.Clusters))
 		for _, c := range resp.Clusters {
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) access=%s\n", c.ClusterName, c.ClusterId, c.AccessLevel)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) access=%s\n", c.ClusterName, c.ClusterId, c.AccessLevel)
 		}
 		return nil
 	}}
@@ -965,7 +965,7 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -984,7 +984,7 @@ func newAdminClustersAccessGrantCmd() *cobra.Command {
 		if err := qm.GrantClusterAccess(cctx, req); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Granted access to cluster %s for tenant %s\n", clusterID, tenantID)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Granted access to cluster %s for tenant %s\n", clusterID, tenantID)
 		return nil
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
@@ -1037,7 +1037,7 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1063,7 +1063,7 @@ func newAdminClustersInvitesCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Created invite %s for tenant %s (token=%s)\n", resp.Id, resp.InvitedTenantId, resp.InviteToken)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created invite %s for tenant %s (token=%s)\n", resp.Id, resp.InvitedTenantId, resp.InviteToken)
 		return nil
 	}}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
@@ -1092,7 +1092,7 @@ func newAdminClustersInvitesListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1111,13 +1111,13 @@ func newAdminClustersInvitesListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Invites (%d)\n", len(resp.Invites))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Invites (%d)\n", len(resp.Invites))
 		for _, inv := range resp.Invites {
 			expires := "-"
 			if inv.ExpiresAt != nil {
 				expires = inv.ExpiresAt.AsTime().Format(time.RFC3339)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s tenant=%s status=%s expires=%s\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s tenant=%s status=%s expires=%s\n",
 				inv.Id, inv.InvitedTenantId, inv.Status, expires)
 		}
 		return nil
@@ -1144,7 +1144,7 @@ func newAdminClustersInvitesRevokeCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1157,7 +1157,7 @@ func newAdminClustersInvitesRevokeCmd() *cobra.Command {
 		}); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Revoked invite %s\n", inviteID)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Revoked invite %s\n", inviteID)
 		return nil
 	}}
 	cmd.Flags().StringVar(&inviteID, "invite-id", "", "invite id (required)")
@@ -1177,7 +1177,7 @@ func newAdminClustersInvitesListMineCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1195,13 +1195,13 @@ func newAdminClustersInvitesListMineCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Invites (%d)\n", len(resp.Invites))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Invites (%d)\n", len(resp.Invites))
 		for _, inv := range resp.Invites {
 			expires := "-"
 			if inv.ExpiresAt != nil {
 				expires = inv.ExpiresAt.AsTime().Format(time.RFC3339)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s cluster=%s status=%s expires=%s\n",
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s cluster=%s status=%s expires=%s\n",
 				inv.Id, inv.ClusterId, inv.Status, expires)
 		}
 		return nil
@@ -1226,7 +1226,7 @@ func newAdminClustersInvitesAcceptCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1245,7 +1245,7 @@ func newAdminClustersInvitesAcceptCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Accepted invite: cluster=%s tenant=%s access=%s\n", resp.ClusterId, resp.TenantId, resp.AccessLevel)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Accepted invite: cluster=%s tenant=%s access=%s\n", resp.ClusterId, resp.TenantId, resp.AccessLevel)
 		return nil
 	}}
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (optional; uses auth context if omitted)")
@@ -1272,7 +1272,7 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1287,9 +1287,9 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Subscriptions (%d)\n", len(resp.Clusters))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Subscriptions (%d)\n", len(resp.Clusters))
 		for _, c := range resp.Clusters {
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s\n", c.ClusterName, c.ClusterId, c.ClusterType)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s\n", c.ClusterName, c.ClusterId, c.ClusterType)
 		}
 		return nil
 	}}
@@ -1316,7 +1316,7 @@ func newAdminNodesListCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1331,9 +1331,9 @@ func newAdminNodesListCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Nodes (%d)\n", len(resp.Nodes))
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Nodes (%d)\n", len(resp.Nodes))
 		for _, n := range resp.Nodes {
-			fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s cluster=%s\n", n.NodeName, n.NodeId, n.NodeType, n.ClusterId)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), " - %s (id=%s) type=%s cluster=%s\n", n.NodeName, n.NodeId, n.NodeType, n.ClusterId)
 		}
 		return nil
 	}}
@@ -1407,7 +1407,7 @@ func newAdminNodesCreateCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1465,7 +1465,7 @@ func newAdminNodesCreateCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Created node %s (id=%s)\n", resp.Node.NodeName, resp.Node.NodeId)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Created node %s (id=%s)\n", resp.Node.NodeName, resp.Node.NodeId)
 		return nil
 	}}
 	cmd.Flags().StringVar(&nodeID, "node-id", "", "node id (defaults to node-name)")
@@ -1501,7 +1501,7 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer qm.Close()
+		defer func() { _ = qm.Close() }()
 		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if ctxCfg.Auth.JWT != "" {
@@ -1522,7 +1522,7 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 		if err := qm.UpdateNodeHardware(cctx, req); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Updated node hardware for %s\n", nodeID)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Updated node hardware for %s\n", nodeID)
 		return nil
 	}}
 	cmd.Flags().StringVar(&nodeID, "node-id", "", "node id (required)")

@@ -558,11 +558,11 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 		dm.mutex.Lock()
 		defer dm.mutex.Unlock()
 
-		if job, exists := dm.jobs[job.DVRHash]; exists {
-			job.Logger.WithField("retry_count", job.RetryCount).Error("DVR push failed after maximum retries")
-			job.Status = "failed"
-			dm.sendCompletion(job, "failed", fmt.Sprintf("Push failed after %d retries", job.RetryCount))
-			delete(dm.jobs, job.DVRHash)
+		if existingJob, exists := dm.jobs[job.DVRHash]; exists {
+			existingJob.Logger.WithField("retry_count", existingJob.RetryCount).Error("DVR push failed after maximum retries")
+			existingJob.Status = "failed"
+			dm.sendCompletion(existingJob, "failed", fmt.Sprintf("Push failed after %d retries", existingJob.RetryCount))
+			delete(dm.jobs, existingJob.DVRHash)
 		}
 		return
 	}
@@ -572,11 +572,11 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 		dm.mutex.Lock()
 		defer dm.mutex.Unlock()
 
-		if job, exists := dm.jobs[job.DVRHash]; exists {
-			job.Logger.Info("DVR recording completed successfully")
-			job.Status = "completed"
-			dm.sendCompletion(job, "success", "")
-			delete(dm.jobs, job.DVRHash)
+		if existingJob, exists := dm.jobs[job.DVRHash]; exists {
+			existingJob.Logger.Info("DVR recording completed successfully")
+			existingJob.Status = "completed"
+			dm.sendCompletion(existingJob, "success", "")
+			delete(dm.jobs, existingJob.DVRHash)
 		}
 	}
 }
@@ -591,8 +591,8 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 		// Clean up any existing pushes for this stream/target combination
 		for _, push := range pushes {
 			if push.StreamName == job.StreamName && push.TargetURI == job.TargetURI {
-				if err := dm.mistClient.PushStop(push.ID); err != nil {
-					job.Logger.WithError(err).WithField("old_push_id", push.ID).Debug("Failed to stop old push")
+				if stopErr := dm.mistClient.PushStop(push.ID); stopErr != nil {
+					job.Logger.WithError(stopErr).WithField("old_push_id", push.ID).Debug("Failed to stop old push")
 				} else {
 					job.Logger.WithField("old_push_id", push.ID).Debug("Cleaned up old push")
 				}
@@ -601,8 +601,8 @@ func (dm *DVRManager) createOrRecreatePush(job *DVRJob) (int, error) {
 	}
 
 	// Create new push
-	if err := dm.mistClient.PushStart(job.StreamName, job.TargetURI); err != nil {
-		return 0, fmt.Errorf("failed to start push: %w", err)
+	if pushErr := dm.mistClient.PushStart(job.StreamName, job.TargetURI); pushErr != nil {
+		return 0, fmt.Errorf("failed to start push: %w", pushErr)
 	}
 
 	// Find the newly created push ID
@@ -787,9 +787,7 @@ func (dm *DVRManager) parseManifestSegments(manifestPath string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer func() { _ = file.Close() }()
 
 	var segments []string
 	scanner := bufio.NewScanner(file)
@@ -826,9 +824,7 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 	if err != nil {
 		return fmt.Errorf("failed to open segment file: %w", err)
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -847,9 +843,7 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 	if err != nil {
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("S3 upload failed with status %d", resp.StatusCode)
@@ -900,9 +894,7 @@ func (dm *DVRManager) uploadManifestToS3(ctx context.Context, filePath, presigne
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer func() { _ = file.Close() }()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -920,9 +912,7 @@ func (dm *DVRManager) uploadManifestToS3(ctx context.Context, filePath, presigne
 	if err != nil {
 		return err
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("manifest upload failed with status %d", resp.StatusCode)

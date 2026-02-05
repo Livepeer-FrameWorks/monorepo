@@ -45,7 +45,7 @@ func TestNewReader(t *testing.T) {
 
 			// Always try to close if we got a reader
 			if reader != nil {
-				reader.Close()
+				_ = reader.Close()
 			}
 		})
 	}

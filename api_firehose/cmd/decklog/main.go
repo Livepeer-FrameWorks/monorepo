@@ -117,7 +117,7 @@ func main() {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
 			return
 		}
-		defer qc.Close()
+		defer func() { _ = qc.Close() }()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		pi, _ := strconv.Atoi(port)

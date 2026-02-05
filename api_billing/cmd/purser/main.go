@@ -50,7 +50,7 @@ func main() {
 	dbConfig := database.DefaultConfig()
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("purser", version.Version)
@@ -94,7 +94,7 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
 	}
-	defer qmGRPCClient.Close()
+	defer func() { _ = qmGRPCClient.Close() }()
 
 	// Create Commodore gRPC client for stream termination on suspension
 	commodoreClient, err := commodoreclnt.NewGRPCClient(commodoreclnt.GRPCConfig{
@@ -106,7 +106,7 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Commodore gRPC client")
 	}
-	defer commodoreClient.Close()
+	defer func() { _ = commodoreClient.Close() }()
 
 	// Create Decklog gRPC client for service events
 	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
@@ -121,7 +121,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Decklog gRPC client - service events will be disabled")
 		decklogClient = nil
 	} else {
-		defer decklogClient.Close()
+		defer func() { _ = decklogClient.Close() }()
 		logger.WithField("addr", decklogGRPCAddr).Info("Connected to Decklog gRPC")
 	}
 
@@ -235,7 +235,7 @@ func main() {
 			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
 			return
 		}
-		defer qc.Close()
+		defer func() { _ = qc.Close() }()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		healthEndpoint := "/health"

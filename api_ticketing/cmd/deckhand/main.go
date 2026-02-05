@@ -86,7 +86,7 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
 	}
-	defer qmClient.Close()
+	defer func() { _ = qmClient.Close() }()
 
 	// Create Purser gRPC client (for billing info)
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
@@ -98,7 +98,7 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Purser gRPC client")
 	}
-	defer purserClient.Close()
+	defer func() { _ = purserClient.Close() }()
 
 	// Create Decklog gRPC client (for real-time events)
 	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
@@ -111,7 +111,7 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Decklog gRPC client")
 	}
-	defer decklogClient.Close()
+	defer func() { _ = decklogClient.Close() }()
 
 	// Build Chatwoot API URL
 	chatwootBaseURL := fmt.Sprintf("http://%s:%s", chatwootHost, chatwootPort)

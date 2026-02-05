@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -33,7 +34,7 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 	var token APIToken
 	var permissions pq.StringArray
 	// Get token from database
-	err := db.QueryRow(`
+	err := db.QueryRowContext(context.Background(), `
 		SELECT id, tenant_id, user_id, token_name,
 		       permissions, is_active, expires_at, created_at
 		FROM commodore.api_tokens

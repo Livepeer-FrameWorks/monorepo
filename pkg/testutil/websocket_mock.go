@@ -255,7 +255,7 @@ func (c *MockConnection) Close() {
 	if !c.closed {
 		c.closed = true
 		close(c.messages)
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 }
 
@@ -336,7 +336,7 @@ func (c *MockConnection) writePump(server *MockWebSocketServer) {
 	ticker := time.NewTicker(54 * time.Second)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		_ = c.conn.Close()
 	}()
 
 	for {
@@ -424,12 +424,13 @@ func NewWebSocketTestClient(serverURL string, jwt string) (*WebSocketTestClient,
 	dialer := websocket.DefaultDialer
 	conn, resp, err := dialer.Dial(serverURL, headers)
 	if resp != nil {
-		defer func() {
-			_ = resp.Body.Close()
-		}()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	if err != nil {
 		return nil, err
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
 	}
 
 	client := &WebSocketTestClient{
@@ -495,7 +496,7 @@ func (c *WebSocketTestClient) Close() error {
 }
 
 func (c *WebSocketTestClient) readPump() {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	for {
 		var message map[string]interface{}

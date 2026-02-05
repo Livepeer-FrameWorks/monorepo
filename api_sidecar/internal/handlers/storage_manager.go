@@ -517,13 +517,13 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 		localManifestPath := filepath.Join(asset.FilePath, manifestName)
 		localManifestContent, err := os.ReadFile(localManifestPath)
 		if err == nil {
-			parsedManifest, err := parseHLSManifest(string(localManifestContent))
-			if err == nil {
+			parsedManifest, parseErr := parseHLSManifest(string(localManifestContent))
+			if parseErr == nil {
 				for _, seg := range parsedManifest.Segments {
 					filenames = append(filenames, seg.Name)
 				}
 			} else {
-				sm.logger.WithError(err).Warn("Failed to parse DVR manifest for freeze")
+				sm.logger.WithError(parseErr).Warn("Failed to parse DVR manifest for freeze")
 			}
 		} else {
 			sm.logger.WithError(err).Warn("Failed to read DVR manifest for freeze")
@@ -1323,9 +1323,7 @@ func (sm *StorageManager) appendSegmentToManifest(manifestPath, segmentName stri
 		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to open manifest for append")
 		return
 	}
-	defer func() {
-		_ = f.Close()
-	}()
+	defer func() { _ = f.Close() }()
 
 	segment := fmt.Sprintf("#EXTINF:%.3f,\nsegments/%s\n", duration, segmentName)
 	if _, err := f.WriteString(segment); err != nil {
@@ -1339,9 +1337,7 @@ func (sm *StorageManager) finalizeManifest(manifestPath string) {
 		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to open manifest for finalization")
 		return
 	}
-	defer func() {
-		_ = f.Close()
-	}()
+	defer func() { _ = f.Close() }()
 	if _, err := f.WriteString("#EXT-X-ENDLIST\n"); err != nil {
 		sm.logger.WithError(err).WithField("manifest", manifestPath).Warn("Failed to write ENDLIST to manifest")
 	}

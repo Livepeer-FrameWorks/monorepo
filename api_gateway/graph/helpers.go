@@ -70,7 +70,7 @@ func (r *Resolver) resolveArtifactPlaybackID(ctx context.Context, contentType, h
 	}
 	if !clips.ValidateClipHash(hash) {
 		if r.Logger != nil {
-			r.Resolver.Logger.WithField("content_type", contentType).WithField("hash", hash).Debug("Skipping artifact playback resolution: invalid hash format")
+			r.Logger.WithField("content_type", contentType).WithField("hash", hash).Debug("Skipping artifact playback resolution: invalid hash format")
 		}
 		return nil
 	}
@@ -172,19 +172,4 @@ func (r *Resolver) resolveArtifactPlaybackID(ctx context.Context, contentType, h
 		return nil
 	}
 	return &s
-}
-
-// formatMetricName formats a metric key for display in invoice line items
-func formatMetricName(metric string) string {
-	names := map[string]string{
-		"viewer_hours":     "Delivered Minutes",
-		"storage_gb_hours": "Storage (GB-hours)",
-		"bandwidth_gb":     "Bandwidth (GB)",
-		"ingest_hours":     "Ingest Hours",
-		"transcode_hours":  "Transcode Hours",
-	}
-	if name, ok := names[metric]; ok {
-		return name
-	}
-	return metric
 }
