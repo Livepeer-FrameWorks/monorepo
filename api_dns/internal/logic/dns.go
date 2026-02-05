@@ -178,8 +178,8 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string,
 			// Cloudflare LBs are matched by hostname (subdomain.domain.com)
 			if lb.Name == fqdn {
 				m.logger.WithField("lb_id", lb.ID).Info("Deleting conflicting Load Balancer for Single Node mode")
-				if err := m.cfClient.DeleteLoadBalancer(lb.ID); err != nil {
-					m.logger.WithError(err).Error("Failed to delete conflicting LB")
+				if deleteErr := m.cfClient.DeleteLoadBalancer(lb.ID); deleteErr != nil {
+					m.logger.WithError(deleteErr).Error("Failed to delete conflicting LB")
 				}
 			}
 		}
@@ -254,9 +254,9 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 		// If origin exists but is not in desired list, REMOVE it
 		if !desiredMap[origin.Address] {
 			m.logger.WithField("ip", origin.Address).Info("Removing stale origin from pool")
-			if _, err := m.cfClient.RemoveOriginFromPool(poolID, origin.Address); err != nil {
-				m.logger.WithError(err).Error("Failed to remove origin")
-				partialErrors[fmt.Sprintf("%s:%s", fqdn, origin.Address)] = err.Error()
+			if _, removeErr := m.cfClient.RemoveOriginFromPool(poolID, origin.Address); removeErr != nil {
+				m.logger.WithError(removeErr).Error("Failed to remove origin")
+				partialErrors[fmt.Sprintf("%s:%s", fqdn, origin.Address)] = removeErr.Error()
 			}
 		}
 	}
@@ -271,9 +271,9 @@ func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName
 				Enabled: true,
 				Weight:  1.0,
 			}
-			if _, err := m.cfClient.AddOriginToPool(poolID, origin); err != nil {
-				m.logger.WithError(err).Error("Failed to add origin")
-				partialErrors[fmt.Sprintf("%s:%s", fqdn, ip)] = err.Error()
+			if _, addErr := m.cfClient.AddOriginToPool(poolID, origin); addErr != nil {
+				m.logger.WithError(addErr).Error("Failed to add origin")
+				partialErrors[fmt.Sprintf("%s:%s", fqdn, ip)] = addErr.Error()
 			}
 		}
 	}

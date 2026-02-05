@@ -100,20 +100,20 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 		return "", "", time.Time{}, fmt.Errorf("failed to create cloudflare provider: %w", err)
 	}
 
-	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
-		return "", "", time.Time{}, fmt.Errorf("failed to set DNS provider: %w", err)
+	if challengeErr := client.Challenge.SetDNS01Provider(provider); challengeErr != nil {
+		return "", "", time.Time{}, fmt.Errorf("failed to set DNS provider: %w", challengeErr)
 	}
 
 	// 6. Register User (if new)
 	if user.Registration == nil {
-		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-		if err != nil {
-			return "", "", time.Time{}, fmt.Errorf("registration failed: %w", err)
+		reg, regErr := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if regErr != nil {
+			return "", "", time.Time{}, fmt.Errorf("registration failed: %w", regErr)
 		}
 		user.Registration = reg
 		// Save updated registration to DB (with tenant context)
-		if err := m.saveUser(ctx, tenantID, user); err != nil {
-			return "", "", time.Time{}, fmt.Errorf("failed to save user registration: %w", err)
+		if saveErr := m.saveUser(ctx, tenantID, user); saveErr != nil {
+			return "", "", time.Time{}, fmt.Errorf("failed to save user registration: %w", saveErr)
 		}
 	}
 
@@ -196,15 +196,15 @@ func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email strin
 	if err == nil {
 		// Parse Private Key
 		block, _ := pem.Decode([]byte(acc.PrivateKeyPEM))
-		key, err := x509.ParseECPrivateKey(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse stored private key: %w", err)
+		key, parseKeyErr := x509.ParseECPrivateKey(block.Bytes)
+		if parseKeyErr != nil {
+			return nil, fmt.Errorf("failed to parse stored private key: %w", parseKeyErr)
 		}
 
 		// Parse Registration
 		var reg registration.Resource
-		if err := json.Unmarshal([]byte(acc.Registration), &reg); err != nil {
-			return nil, fmt.Errorf("failed to parse stored registration: %w", err)
+		if unmarshalErr := json.Unmarshal([]byte(acc.Registration), &reg); unmarshalErr != nil {
+			return nil, fmt.Errorf("failed to parse stored registration: %w", unmarshalErr)
 		}
 
 		return &ACMEUser{
