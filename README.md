@@ -21,11 +21,13 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
 | [@livepeer-frameworks/streamcrafter-svelte](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte) |
 | [@livepeer-frameworks/streamcrafter-core](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)     | [![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-core)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)     |
 
-| Bundle    | Size                                                                                                                                                                                                        |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| app       | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-application-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-application-esm) |
-| marketing | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-marketing-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-marketing-esm)     |
-| docs      | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-docs-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-docs-esm)               |
+| Bundle        | Size                                                                                                                                                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| app           | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-application-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-application-esm)                                               |
+| marketing     | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-marketing-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-marketing-esm)                                                   |
+| docs          | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-docs-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-docs-esm)                                                             |
+| webapp client | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-application-__sveltekit.app-client-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-application-__sveltekit.app-client-esm) |
+| webapp server | [![size](https://codecov.io/github/Livepeer-FrameWorks/monorepo/graph/bundle/website-application-__sveltekit.app-server-esm/badge.svg)](https://app.codecov.io/github/Livepeer-FrameWorks/monorepo/bundle/website-application-__sveltekit.app-server-esm) |
 
 ## Architecture at a glance
 
