@@ -610,7 +610,9 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 		}).Warn("Failed to send DVR stop command")
 		return
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash); err != nil {
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer updateCancel()
+	if _, err := db.ExecContext(updateCtx, `UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash); err != nil {
 		logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to update DVR status to stopping")
 	}
 }
@@ -1250,7 +1252,10 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	sendDVRReadyResponse(stream, response, logger)
 
 	// Update artifact status to indicate storage node is starting recording
-	_, err = db.ExecContext(ctx, `
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer updateCancel()
+
+	_, err = db.ExecContext(updateCtx, `
 		UPDATE foghorn.artifacts
 		SET status = 'starting', started_at = NOW(), updated_at = NOW()
 		WHERE artifact_hash = $1`,
@@ -2107,13 +2112,15 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 	// Get tenant_id from Commodore (business registry owner)
 	var tenantID string
 	if CommodoreClient != nil {
+		rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rpcCancel()
 		switch assetType {
 		case "clip":
-			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
+			if resp, err := CommodoreClient.ResolveClipHash(rpcCtx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
 		case "dvr":
-			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+			if resp, err := CommodoreClient.ResolveDVRHash(rpcCtx, assetHash); err == nil && resp.Found {
 				tenantID = resp.TenantId
 			}
 		}

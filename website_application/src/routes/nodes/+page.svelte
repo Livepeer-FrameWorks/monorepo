@@ -202,7 +202,7 @@
       const range = resolveTimeRange(timeRange);
       currentRange = range;
       const timeRangeInput = { start: range.start, end: range.end };
-      const perfFirst = Math.min(range.days * 24 * 12, 1000);
+      const perfFirst = Math.min(range.days * 24 * 12, 150);
 
       await Promise.all([
         nodesStore.fetch(),
