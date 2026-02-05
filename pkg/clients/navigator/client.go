@@ -57,12 +57,16 @@ func NewClient(config Config) (*Client, error) {
 		config.Timeout = 5 * time.Second
 	}
 
-	// For now, use insecure credentials for development. In production, use TLS.
-	conn, err := grpc.NewClient(
+	// DialContext+WithBlock ensures we fail fast if Navigator is unreachable.
+	// grpc.NewClient ignores WithBlock/WithTimeout, deferring failures to first RPC.
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
+	conn, err := grpc.DialContext(
+		ctx,
 		config.Addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
-		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: config.Timeout}),
+		grpc.WithBlock(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Navigator gRPC server: %w", err)
