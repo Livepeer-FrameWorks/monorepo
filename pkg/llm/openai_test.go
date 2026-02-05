@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,9 +33,48 @@ func TestOpenAIProviderStream(t *testing.T) {
 			t.Fatalf("expected tools in request")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n")
-		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"search\",\"arguments\":\"{\\\"q\\\":\\\"x\\\"}\"}}]}}]}\n\n")
+
+		send := func(v any) {
+			b, err := json.Marshal(v)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			fmt.Fprintf(w, "data: %s\n\n", b)
+		}
+
+		send(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": "Hello "}}}})
+		send(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"content": "world"}}}})
+		send(map[string]any{
+			"choices": []any{map[string]any{
+				"delta": map[string]any{
+					"tool_calls": []any{map[string]any{
+						"id":    "call_1",
+						"index": 0,
+						"type":  "function",
+						"function": map[string]any{
+							"name":      "search",
+							"arguments": "{\"q\":\"",
+						},
+					}},
+				},
+			}},
+		})
+		send(map[string]any{
+			"choices": []any{map[string]any{
+				"delta": map[string]any{
+					"tool_calls": []any{map[string]any{
+						"id":    "call_1",
+						"index": 0,
+						"type":  "function",
+						"function": map[string]any{
+							"arguments": "x\"}",
+						},
+					}},
+				},
+			}},
+		})
+		send(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{}, "finish_reason": "tool_calls"}}})
+
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
@@ -65,7 +105,7 @@ func TestOpenAIProviderStream(t *testing.T) {
 	var toolCalls []ToolCall
 	for {
 		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -83,5 +123,8 @@ func TestOpenAIProviderStream(t *testing.T) {
 	}
 	if toolCalls[0].Name != "search" {
 		t.Fatalf("unexpected tool name %q", toolCalls[0].Name)
+	}
+	if toolCalls[0].Arguments != "{\"q\":\"x\"}" {
+		t.Fatalf("unexpected tool arguments %q", toolCalls[0].Arguments)
 	}
 }

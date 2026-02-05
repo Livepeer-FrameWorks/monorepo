@@ -45,12 +45,8 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 		reqBody.Tools = make([]openAITool, 0, len(tools))
 		for _, tool := range tools {
 			reqBody.Tools = append(reqBody.Tools, openAITool{
-				Type: "function",
-				Function: openAIFunction{
-					Name:        tool.Name,
-					Description: tool.Description,
-					Parameters:  tool.Parameters,
-				},
+				Type:     "function",
+				Function: openAIFunction(tool),
 			})
 		}
 	}
@@ -79,7 +75,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 		return nil, fmt.Errorf("openai: unexpected status %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
-	return newSSEStream(resp, decodeOpenAIChunk), nil
+	return newSSEStream(resp, newOpenAIChunkDecoder()), nil
 }
 
 type openAIRequest struct {
@@ -116,6 +112,7 @@ type openAIStreamResponse struct {
 
 type openAIToolCall struct {
 	ID       string             `json:"id"`
+	Index    int                `json:"index"`
 	Type     string             `json:"type"`
 	Function openAIFunctionCall `json:"function"`
 }
@@ -125,25 +122,49 @@ type openAIFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
-func decodeOpenAIChunk(data []byte) (Chunk, error) {
-	var payload openAIStreamResponse
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return Chunk{}, fmt.Errorf("openai: decode chunk: %w", err)
-	}
-	if len(payload.Choices) == 0 {
-		return Chunk{}, nil
-	}
-	delta := payload.Choices[0].Delta
-	chunk := Chunk{Content: delta.Content}
-	if len(delta.ToolCalls) > 0 {
-		chunk.ToolCalls = make([]ToolCall, 0, len(delta.ToolCalls))
-		for _, call := range delta.ToolCalls {
-			chunk.ToolCalls = append(chunk.ToolCalls, ToolCall{
-				ID:        call.ID,
-				Name:      call.Function.Name,
-				Arguments: call.Function.Arguments,
-			})
+func newOpenAIChunkDecoder() func([]byte) (Chunk, error) {
+	acc := make(map[string]*ToolCall)
+
+	return func(data []byte) (Chunk, error) {
+		var payload openAIStreamResponse
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return Chunk{}, fmt.Errorf("openai: decode chunk: %w", err)
 		}
+		if len(payload.Choices) == 0 {
+			return Chunk{}, nil
+		}
+
+		choice := payload.Choices[0]
+		delta := choice.Delta
+		chunk := Chunk{Content: delta.Content}
+
+		if len(delta.ToolCalls) > 0 {
+			for _, call := range delta.ToolCalls {
+				key := call.ID
+				if key == "" {
+					key = fmt.Sprintf("index_%d", call.Index)
+				}
+				tc := acc[key]
+				if tc == nil {
+					tc = &ToolCall{ID: call.ID}
+					acc[key] = tc
+				}
+				if call.Function.Name != "" {
+					tc.Name = call.Function.Name
+				}
+				tc.Arguments += call.Function.Arguments
+			}
+		}
+
+		if choice.FinishReason != nil && *choice.FinishReason == "tool_calls" {
+			chunk.ToolCalls = make([]ToolCall, 0, len(acc))
+			for _, tc := range acc {
+				chunk.ToolCalls = append(chunk.ToolCalls, *tc)
+			}
+			// Reset for the next tool-call round.
+			clear(acc)
+		}
+
+		return chunk, nil
 	}
-	return chunk, nil
 }
