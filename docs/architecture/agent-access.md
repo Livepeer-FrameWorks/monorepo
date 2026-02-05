@@ -306,7 +306,7 @@ Single private key used on all EVM chains (same address everywhere):
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
 
-**Summary**: 27 tools (10 categories), 18 resources (9 categories), 8 prompts.
+**Summary**: 27 tools (11 categories), 18 resources (9 categories), 8 prompts.
 
 | Category        | Tools                                                                              | Resources                                                            |
 | --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -316,7 +316,7 @@ Model Context Protocol integration for AI agent tool discovery, integrated into 
 | Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`            | `streams://list`, `streams://{id}`, `streams://{id}/health`          |
 | Clips           | `create_clip`, `delete_clip`                                                       | —                                                                    |
 | DVR             | `start_dvr`, `stop_dvr`                                                            | —                                                                    |
-| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset` | `vod://list`, `vod://{id}`                                           |
+| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset` | `vod://list`, `vod://{artifact_hash}`                                |
 | Playback        | `resolve_playback_endpoint`                                                        | —                                                                    |
 | Analytics       | —                                                                                  | `analytics://usage`, `analytics://viewers`, `analytics://geographic` |
 | QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)          | —                                                                    |
@@ -343,13 +343,13 @@ api_gateway/internal/mcp/
 │   ├── nodes.go        # nodes://list, nodes://{id}
 │   ├── streams.go      # streams://list, streams://{id}
 │   ├── support.go      # support://conversations, support://conversations/{id}
-│   └── vod.go          # vod://list, vod://{id}
+│   └── vod.go          # vod://list, vod://{artifact_hash}
 ├── tools/
 │   ├── account.go      # update_billing_details
 │   ├── api_assistant.go# introspect_schema, generate_query
 │   ├── billing.go      # topup_balance, check_topup
-│   ├── clips.go        # create_clip
-│   ├── dvr.go          # start_dvr
+│   ├── clips.go        # create_clip, delete_clip
+│   ├── dvr.go          # start_dvr, stop_dvr
 │   ├── payment.go      # get_payment_options, submit_payment
 │   ├── playback.go     # resolve_playback_endpoint
 │   ├── qoe.go          # diagnose_* + health/anomaly tools
@@ -380,7 +380,7 @@ api_gateway/internal/mcp/
 | `knowledge://sources`          | Curated external documentation sources        |
 | `schema://catalog`             | GraphQL schema catalog + templates            |
 | `vod://list`                   | VOD assets                                    |
-| `vod://{id}`                   | VOD asset details                             |
+| `vod://{artifact_hash}`        | VOD asset details                             |
 
 ### Tools (Actions)
 

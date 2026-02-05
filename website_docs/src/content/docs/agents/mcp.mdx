@@ -79,7 +79,7 @@ Read-only data sources. 18 URIs across 9 categories.
 | `knowledge://sources`                       | Curated documentation sources for video streaming |
 | `schema://catalog`                          | Curated GraphQL catalog (schema + templates)      |
 
-Public resources (no auth required): `account://status`, `billing://pricing`, `knowledge://sources`.
+Public resources (no auth required): `account://status`, `billing://pricing`.
 
 ### account://status
 
@@ -111,7 +111,7 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 ## Tools
 
-Actions the agent can perform. 27 tools across 10 categories.
+Actions the agent can perform. 27 tools across 11 categories.
 
 | Tool                        | Description                               | Requires          |
 | --------------------------- | ----------------------------------------- | ----------------- |
@@ -140,10 +140,10 @@ Actions the agent can perform. 27 tools across 10 categories.
 | `get_stream_health_summary` | Aggregated stream health metrics          | Auth              |
 | `get_anomaly_report`        | Detect anomalies vs baseline              | Auth              |
 | `search_support_history`    | Search support conversations              | Auth              |
-| `introspect_schema`         | Explore the GraphQL schema                | None              |
-| `generate_query`            | Generate a GraphQL query from templates   | None              |
+| `introspect_schema`         | Explore the GraphQL schema                | Auth              |
+| `generate_query`            | Generate a GraphQL query from templates   | Auth              |
 
-Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`, `introspect_schema`, `generate_query`.
+Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`.
 
 QoE tool responses use a consistent status enum: `healthy | warning | critical | no_data`.
 
@@ -237,7 +237,7 @@ Read `knowledge://sources` to get curated entry points for video streaming docum
 ```json
 {
   "sources": [
-    { "name": "FrameWorks Docs", "index": "https://docs.framework.network/", "sitemap": "..." },
+    { "name": "FrameWorks Docs", "index": "https://docs.frameworks.network/", "sitemap": "..." },
     { "name": "MistServer Docs", "index": "https://docs.mistserver.org/", "sitemap": "..." },
     { "name": "FFmpeg Wiki", "index": "https://trac.ffmpeg.org/wiki/TitleIndex" },
     { "name": "OBS Wiki", "index": "https://obsproject.com/wiki/" }

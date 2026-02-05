@@ -41,8 +41,8 @@ func handleKnowledgeSources() (*mcp.ReadResourceResult, error) {
 			{
 				Name:        "FrameWorks Docs",
 				Description: "Platform documentation for streamers, operators, and hybrid setups. Covers ingest protocols, playback, API reference, and cluster deployment.",
-				Index:       "https://docs.framework.network/",
-				Sitemap:     "https://docs.framework.network/sitemap.xml",
+				Index:       "https://docs.frameworks.network/",
+				Sitemap:     "https://docs.frameworks.network/sitemap.xml",
 			},
 			{
 				Name:        "MistServer Docs",
