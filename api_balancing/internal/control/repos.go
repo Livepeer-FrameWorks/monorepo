@@ -373,30 +373,27 @@ func (r *artifactRepositoryDB) UpsertArtifacts(ctx context.Context, nodeID strin
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
 	for _, a := range artifacts {
-		// First, ensure the artifact exists in foghorn.artifacts (lifecycle table)
-		_, errExec := tx.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts
-				(artifact_hash, artifact_type, internal_name, status, created_at, updated_at, access_count, last_accessed_at)
-			VALUES ($1, $2, $3, 'ready', to_timestamp($4), NOW(), $5, CASE WHEN $6 > 0 THEN to_timestamp($6) ELSE NULL END)
-			ON CONFLICT (artifact_hash) DO UPDATE SET
-				internal_name = COALESCE(foghorn.artifacts.internal_name, EXCLUDED.internal_name),
-				access_count = GREATEST(COALESCE(foghorn.artifacts.access_count, 0), EXCLUDED.access_count),
+		// Update metadata on existing lifecycle rows (created by StartDVR/CreateClip/CreateVodUpload).
+		// Warm storage sync never creates lifecycle rows — it lacks tenant context.
+		_, _ = tx.ExecContext(ctx, `
+			UPDATE foghorn.artifacts SET
+				internal_name = COALESCE(internal_name, $3),
+				access_count = GREATEST(COALESCE(access_count, 0), $5),
 				last_accessed_at = CASE
-					WHEN EXCLUDED.last_accessed_at IS NULL THEN foghorn.artifacts.last_accessed_at
-					WHEN foghorn.artifacts.last_accessed_at IS NULL THEN EXCLUDED.last_accessed_at
-					ELSE GREATEST(foghorn.artifacts.last_accessed_at, EXCLUDED.last_accessed_at)
+					WHEN $6 = 0 THEN last_accessed_at
+					WHEN last_accessed_at IS NULL THEN to_timestamp($6)
+					ELSE GREATEST(last_accessed_at, to_timestamp($6))
 				END,
 				updated_at = NOW()
+			WHERE artifact_hash = $1
 		`, a.ArtifactHash, a.ArtifactType, a.StreamName, a.CreatedAt, a.AccessCount, a.LastAccessed)
-		if errExec != nil {
-			return errExec
-		}
 
-		// Then, upsert into artifact_nodes (warm storage tracking)
-		_, errExec = tx.ExecContext(ctx, `
+		// Upsert warm storage tracking — only if the lifecycle row exists (FK guard).
+		_, errExec := tx.ExecContext(ctx, `
 			INSERT INTO foghorn.artifact_nodes
 				(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW()))
+			SELECT $1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW())
+			WHERE EXISTS (SELECT 1 FROM foghorn.artifacts WHERE artifact_hash = $1)
 			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
 				file_path = EXCLUDED.file_path,
 				size_bytes = EXCLUDED.size_bytes,
