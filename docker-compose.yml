@@ -80,7 +80,7 @@ services:
   # PostgreSQL
   postgres:
     <<: *default-env
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: frameworks-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -97,6 +97,7 @@ services:
       - ./pkg/database/sql/schema/listmonk.sql:/docker-entrypoint-initdb.d/60_init_listmonk.sql:ro
       - ./pkg/database/sql/schema/navigator.sql:/docker-entrypoint-initdb.d/70_init_navigator.sql:ro
       - ./pkg/database/sql/schema/chatwoot.sql:/docker-entrypoint-initdb.d/75_init_chatwoot.sql:ro
+      - ./pkg/database/sql/schema/skipper.sql:/docker-entrypoint-initdb.d/78_init_skipper.sql:ro
       # Static Seeds (Prod)
       - ./pkg/database/sql/seeds/static/purser_tiers.sql:/docker-entrypoint-initdb.d/80_seed_purser_tiers.sql:ro
       # Demo Seeds (Dev/Demo only - loaded by default in this compose profile)
