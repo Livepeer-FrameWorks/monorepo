@@ -1,0 +1,162 @@
+---
+title: "Wallet Authentication"
+description: "Headless authentication for AI agents using EVM wallet signatures."
+sidebar:
+  order: 2
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Agents authenticate with an EVM wallet signature. No email, no API key, no registration. First-time wallets are auto-provisioned with a prepaid tenant.
+
+## How It Works
+
+1. Agent creates or loads an EVM wallet (any chain, any client).
+2. Agent signs a login message using EIP-191 `personal_sign`.
+3. Agent calls `POST /auth/wallet-login` with the signed message.
+4. Server verifies the signature, creates a tenant if new, and returns a JWT.
+
+## Message Format
+
+The signed message must match this exact format:
+
+```
+FrameWorks Login
+Timestamp: 2025-01-15T12:00:00Z
+Nonce: 12345
+```
+
+- **Timestamp**: ISO 8601 UTC. Must be within a reasonable window.
+- **Nonce**: Any random string, unique per request.
+
+## Signing Examples
+
+### TypeScript (viem)
+
+```ts
+import { createWalletClient, http } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+
+const account = privateKeyToAccount("0x...");
+const client = createWalletClient({ account, transport: http() });
+
+const message = [
+  "FrameWorks Login",
+  `Timestamp: ${new Date().toISOString()}`,
+  `Nonce: ${crypto.randomUUID()}`,
+].join("\n");
+
+const signature = await client.signMessage({ message });
+```
+
+### Python (eth-account)
+
+```python
+from eth_account import Account
+from eth_account.messages import encode_defunct
+import os
+from datetime import datetime, timezone
+import uuid
+
+message = "\n".join([
+    "FrameWorks Login",
+    f"Timestamp: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
+    f"Nonce: {uuid.uuid4()}"
+])
+
+signed = Account.sign_message(
+    encode_defunct(text=message),
+    private_key=os.environ["FRAMEWORKS_WALLET_PRIVKEY"]
+)
+signature = signed.signature.hex()
+```
+
+## Headers
+
+For MCP and HTTP requests, pass wallet credentials in headers:
+
+| Header               | Value                                           |
+| -------------------- | ----------------------------------------------- |
+| `X-Wallet-Address`   | `0x`-prefixed Ethereum address                  |
+| `X-Wallet-Signature` | EIP-191 `personal_sign` signature               |
+| `X-Wallet-Message`   | The signed message (includes timestamp + nonce) |
+
+Alternatively, call `/auth/wallet-login` first to exchange the signature for a JWT, then use `Authorization: Bearer <jwt>` on subsequent requests.
+
+## Client Configuration
+
+### Claude Desktop
+
+```json
+{
+  "mcpServers": {
+    "frameworks": {
+      "url": "%GATEWAY_URL%/mcp",
+      "headers": {
+        "X-Wallet-Address": "0x...",
+        "X-Wallet-Signature": "0x...",
+        "X-Wallet-Message": "FrameWorks Login\nTimestamp: 2025-01-15T12:00:00Z\nNonce: 12345"
+      }
+    }
+  }
+}
+```
+
+### Claude Code CLI
+
+```bash
+claude mcp add frameworks %GATEWAY_URL%/mcp \
+  --header "X-Wallet-Address: 0x..." \
+  --header "X-Wallet-Signature: 0x..." \
+  --header "X-Wallet-Message: FrameWorks Login..."
+```
+
+### Bearer Token (Alternative)
+
+If you prefer a traditional token flow:
+
+```json
+{
+  "mcpServers": {
+    "frameworks": {
+      "url": "%GATEWAY_URL%/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_TOKEN"
+      }
+    }
+  }
+}
+```
+
+Get API tokens from **Developer → API** in the dashboard.
+
+## Auto-Provisioning
+
+When a new wallet authenticates for the first time:
+
+1. A new **tenant** is created with `billing_model = 'prepaid'`.
+2. A new **user** is created (email is `NULL`).
+3. **Prepaid balance** is initialized at $0.
+4. A **wallet identity** record links the wallet address to the user and tenant.
+
+The agent can immediately read `account://status`, which will show blockers like `INSUFFICIENT_BALANCE` or `BILLING_DETAILS_MISSING`.
+
+## Trust Model
+
+| Account Type            | Billing Model         | Trust Level                    |
+| ----------------------- | --------------------- | ------------------------------ |
+| Wallet-only             | `prepaid` (mandatory) | Low — must fund balance first  |
+| Email (verified)        | `postpaid` (invoiced) | High — use now, pay later      |
+| Wallet + verified email | User choice           | High — can upgrade to postpaid |
+
+<Aside type="note">
+  Wallet-only accounts are always prepaid. This provides sybil resistance — agents must fund their
+  account before consuming resources.
+</Aside>
+
+## Security
+
+- Store private keys locally. Never send them to any API.
+- Only send wallet headers to `*.frameworks.network` domains.
+- Wallet signatures are verified server-side using `ecrecover` (EIP-191).
+- The GraphQL API also accepts wallet auth via the `walletLogin` mutation with the same address/message/signature fields.

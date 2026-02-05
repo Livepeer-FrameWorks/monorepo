@@ -179,6 +179,10 @@ export default defineConfig({
           autogenerate: { directory: "streamers" },
         },
         {
+          label: "For Agents",
+          autogenerate: { directory: "agents" },
+        },
+        {
           label: "For Hybrid Operators",
           autogenerate: { directory: "hybrid" },
         },

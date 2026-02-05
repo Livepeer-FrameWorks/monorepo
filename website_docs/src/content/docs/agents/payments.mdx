@@ -1,0 +1,145 @@
+---
+title: "Payments"
+description: "Fund your agent account with x402 or crypto deposits."
+sidebar:
+  order: 3
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Agents need a positive prepaid balance to create streams, clips, DVR recordings, and VOD uploads. Two funding methods are available: **x402** (inline, instant) and **crypto deposits** (on-chain transfer).
+
+<Aside type="tip">
+  API requests are free. You only pay for resource consumption: viewer delivery minutes and storage.
+</Aside>
+
+## x402 Protocol
+
+[x402](https://www.x402.org/) enables gasless USDC payments using EIP-3009 `transferWithAuthorization`. The agent signs a transfer authorization off-chain; FrameWorks submits it on-chain and pays the gas.
+
+### Flow
+
+1. Agent calls a billable tool (e.g., `create_stream`) with insufficient balance.
+2. Server returns an `INSUFFICIENT_BALANCE` error with `x402_accepts` payment options.
+3. Agent signs an EIP-3009 authorization for the required amount.
+4. Agent retries with the `X-PAYMENT` header containing the base64-encoded signed payload.
+5. Server verifies the signature, submits the transaction on-chain, and credits the balance.
+6. The original operation proceeds.
+
+### Payment Options
+
+Call `get_payment_options` (public, no auth required) to get the platform's payment address and supported networks:
+
+```json
+{
+  "x402Version": 1,
+  "payTo": "0x...",
+  "networks": [
+    { "name": "base", "chainId": 8453, "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+    { "name": "arbitrum", "chainId": 42161, "asset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" }
+  ]
+}
+```
+
+### X-PAYMENT Header
+
+The `X-PAYMENT` header contains a base64-encoded JSON payload:
+
+```json
+{
+  "x402Version": 1,
+  "scheme": "exact",
+  "network": "base",
+  "payload": {
+    "signature": "0x...",
+    "authorization": {
+      "from": "0x<your-wallet>",
+      "to": "0x<payTo-from-payment-options>",
+      "value": "1000000",
+      "validAfter": "0",
+      "validBefore": "1735689600",
+      "nonce": "0x..."
+    }
+  }
+}
+```
+
+`PAYMENT-SIGNATURE` is also accepted as a header name.
+
+### Auth-Only Mode
+
+Call `submit_payment` with `value=0` to authenticate via wallet signature without transferring funds. This proves wallet ownership and provisions a tenant, similar to `wallet-login`.
+
+### Supported Networks
+
+| Network                    | Chain ID | USDC Contract                                |
+| -------------------------- | -------- | -------------------------------------------- |
+| Base                       | 8453     | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` |
+| Arbitrum                   | 42161    | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` |
+| Base Sepolia (testnet)     | 84532    | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+| Arbitrum Sepolia (testnet) | 421614   | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` |
+
+<Aside type="note">
+  x402 only works with USDC (EIP-3009 required). ETH and LPT use the crypto deposit flow below.
+</Aside>
+
+### Testnet
+
+Testnet payments are accepted when enabled on the server. Use testnets for agent dry-runs without spending mainnet funds.
+
+## Crypto Deposits
+
+For ETH, LPT, or larger USDC amounts, use the deposit flow:
+
+1. Call `topup_balance` with `amount_cents` and `asset` (USDC, ETH, or LPT).
+2. Receive a unique deposit address and expiration time.
+3. Send the payment to that address on-chain.
+4. Call `check_topup` to monitor confirmation status.
+5. Balance updates automatically once confirmed.
+
+## Preflight Errors
+
+Billable tools validate requirements before executing. When requirements aren't met, the error includes resolution guidance:
+
+**Missing billing details:**
+
+```json
+{
+  "code": "BILLING_DETAILS_MISSING",
+  "message": "Billing details required before any payments",
+  "resolution": "Call update_billing_details with address_line1, city, postal_code, country",
+  "tool": "update_billing_details",
+  "required_fields": ["address_line1", "city", "postal_code", "country"]
+}
+```
+
+**Insufficient balance:**
+
+```json
+{
+  "code": "INSUFFICIENT_BALANCE",
+  "message": "Balance is 0 cents. Top up required to perform billable operations.",
+  "resolution": "Call topup_balance tool to add credits, OR pay via x402",
+  "tool": "topup_balance",
+  "x402_accepts": [
+    { "network": "base", "asset": "USDC", "pay_to": "0x...", "description": "USDC on Base" },
+    { "network": "arbitrum", "asset": "USDC", "pay_to": "0x...", "description": "USDC on Arbitrum" }
+  ]
+}
+```
+
+<Aside type="caution">
+  x402 payments of €100 or more require billing details. Call `update_billing_details` first.
+</Aside>
+
+## Cost Awareness
+
+Active streams incur ongoing costs. Monitor via the `billing://balance` resource:
+
+| Field                       | Description          |
+| --------------------------- | -------------------- |
+| `balance_cents`             | Current balance      |
+| `drain_rate_cents_per_hour` | Current spend rate   |
+| `estimated_hours_left`      | Time until depletion |
+
+Streams are terminated if the balance drops below -$10. Top up proactively.

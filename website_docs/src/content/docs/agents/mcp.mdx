@@ -1,8 +1,8 @@
 ---
-title: "MCP Integration"
-description: "AI agent access via Model Context Protocol."
+title: "MCP Reference"
+description: "Complete reference for FrameWorks MCP tools, resources, and prompts."
 sidebar:
-  order: 5
+  order: 4
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -15,16 +15,6 @@ FrameWorks exposes an MCP (Model Context Protocol) server for AI agent integrati
   [modelcontextprotocol.io](https://modelcontextprotocol.io).
 </Aside>
 
-## For AI Agents
-
-FrameWorks publishes agent-facing metadata and a wallet-first auth flow:
-
-- **skill.md**: https://frameworks.network/skill.md
-- **skill.json**: https://frameworks.network/skill.json
-- **MCP discovery**: `/.well-known/mcp.json`
-
-Agents should use wallet authentication or x402 payment headers for headless access. Wallet auth auto-provisions a prepaid tenant with $0 balance, while x402 enables instant top-ups and acts as an anti-abuse barrier.
-
 ## Endpoint
 
 ```
@@ -34,8 +24,6 @@ Agents should use wallet authentication or x402 payment headers for headless acc
 Discovery metadata: `/.well-known/mcp.json`
 
 ## Connecting Your AI Client
-
-MCP works with any client that supports the protocol. Configuration varies by client.
 
 ### Claude Desktop
 
@@ -64,48 +52,11 @@ claude mcp add frameworks %GATEWAY_URL%/mcp
 
 ### Other Clients
 
-Any MCP-compatible client can connect using the endpoint URL and authentication headers. The protocol is transport-agnostic (HTTP with SSE streaming).
-
-## Authentication
-
-Requests accept any of the following:
-
-**Bearer Token** (API token or JWT):
-
-```
-Authorization: Bearer YOUR_TOKEN
-```
-
-**Wallet Signature** (for autonomous agents):
-
-```
-X-Wallet-Address: 0x...
-X-Wallet-Signature: 0x...
-X-Wallet-Message: <signed message>
-```
-
-Message format (verbatim):
-
-```
-FrameWorks Login
-Timestamp: 2025-01-15T12:00:00Z
-Nonce: 12345
-```
-
-**x402 Auth‑Only** (wallet auth via payment header):
-
-```
-X-PAYMENT: <base64-encoded payload>
-```
-
-(`PAYMENT-SIGNATURE` is also accepted.)
-
-Get API tokens from **Developer → API** in the dashboard.
-Some resources and tools are public (e.g., `account://status`, `billing://pricing`, `resolve_playback_endpoint`, `get_payment_options`, `submit_payment`).
+Any MCP-compatible client can connect using the endpoint URL and authentication headers. See [Wallet Auth](/agents/wallet-auth) for headless agent auth or use a bearer token.
 
 ## Resources
 
-Read-only data sources.
+Read-only data sources. 18 URIs across 9 categories.
 
 | URI                                         | Description                                       |
 | ------------------------------------------- | ------------------------------------------------- |
@@ -127,6 +78,8 @@ Read-only data sources.
 | `support://conversations/{conversation_id}` | Support conversation details                      |
 | `knowledge://sources`                       | Curated documentation sources for video streaming |
 | `schema://catalog`                          | Curated GraphQL catalog (schema + templates)      |
+
+Public resources (no auth required): `account://status`, `billing://pricing`, `knowledge://sources`.
 
 ### account://status
 
@@ -158,7 +111,7 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 ## Tools
 
-Actions the agent can perform. Some require billing details and positive balance.
+Actions the agent can perform. 27 tools across 10 categories.
 
 | Tool                        | Description                               | Requires          |
 | --------------------------- | ----------------------------------------- | ----------------- |
@@ -187,8 +140,10 @@ Actions the agent can perform. Some require billing details and positive balance
 | `get_stream_health_summary` | Aggregated stream health metrics          | Auth              |
 | `get_anomaly_report`        | Detect anomalies vs baseline              | Auth              |
 | `search_support_history`    | Search support conversations              | Auth              |
-| `introspect_schema`         | Explore the GraphQL schema                | Auth              |
-| `generate_query`            | Generate a GraphQL query from templates   | Auth              |
+| `introspect_schema`         | Explore the GraphQL schema                | None              |
+| `generate_query`            | Generate a GraphQL query from templates   | None              |
+
+Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`, `introspect_schema`, `generate_query`.
 
 QoE tool responses use a consistent status enum: `healthy | warning | critical | no_data`.
 
@@ -242,36 +197,19 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 
 - `artifact_hash` (required): VOD relay ID or artifact hash
 
+**introspect_schema**
+
+- `focus` (required): `query`, `mutation`, `subscription`, or a specific type name
+- `depth`: Recursion depth 1-4 (default 2)
+
+**generate_query**
+
+- `field` (required): Field name or dot-separated path (e.g., `streams`, `stream.health`)
+- `operation`: `query`, `mutation`, or `subscription` (default `query`)
+
 ### Preflight Errors
 
-Billable tools check requirements before executing. Failures include resolution guidance:
-
-```json
-{
-  "code": "BILLING_DETAILS_MISSING",
-  "message": "Billing details required before any payments",
-  "resolution": "Call update_billing_details with address_line1, city, postal_code, country",
-  "tool": "update_billing_details",
-  "required_fields": ["address_line1", "city", "postal_code", "country"]
-}
-```
-
-For `INSUFFICIENT_BALANCE`, the error includes x402 payment options:
-
-```json
-{
-  "code": "INSUFFICIENT_BALANCE",
-  "message": "Balance is 0 cents. Top up required to perform billable operations.",
-  "resolution": "Call topup_balance tool to add credits, OR pay via x402",
-  "tool": "topup_balance",
-  "x402_accepts": [
-    { "network": "base", "asset": "USDC", "pay_to": "0x...", "description": "USDC on Base" },
-    { "network": "arbitrum", "asset": "USDC", "pay_to": "0x...", "description": "USDC on Arbitrum" }
-  ]
-}
-```
-
-See [x402 Payments](#x402-payments) for how to pay inline.
+Billable tools check requirements before executing. See [Payments — Preflight Errors](/agents/payments#preflight-errors) for details on `BILLING_DETAILS_MISSING` and `INSUFFICIENT_BALANCE` responses.
 
 ## Prompts
 
@@ -287,60 +225,6 @@ Guided workflows for common tasks.
 | `video_consultant`          | Expert streaming consultant persona | None                                         |
 | `diagnose_quality_issue`    | Guided QoE troubleshooting workflow | `stream_id` (required), `symptom` (optional) |
 | `api_integration_assistant` | Guided API integration workflow     | `goal` (optional)                            |
-
-## x402 Payments
-
-Agents with wallets can pay inline using the [x402 protocol](https://www.x402.org/).
-
-When a tool returns `INSUFFICIENT_BALANCE` with `x402_accepts`:
-
-1. Sign an EIP-3009 `transferWithAuthorization` for the required amount
-2. Retry the request with an `X-PAYMENT` (or `PAYMENT-SIGNATURE`) header containing the base64-encoded signed payload
-3. Server verifies signature and settles on-chain
-4. Original request proceeds with credited balance
-
-Decoded `X-PAYMENT` payload (before base64 encoding):
-
-```json
-{
-  "x402Version": 1,
-  "scheme": "exact",
-  "network": "base",
-  "payload": {
-    "signature": "0x...",
-    "authorization": {
-      "from": "0x<your-wallet>",
-      "to": "0x<pay_to-from-x402_accepts>",
-      "value": "1000000",
-      "validAfter": "0",
-      "validBefore": "1735689600",
-      "nonce": "0x..."
-    }
-  }
-}
-```
-
-Supported networks: Base, Arbitrum (USDC).
-
-## Manual Top-ups
-
-Alternatively, use the `topup_balance` tool:
-
-1. Call `topup_balance` with amount and asset (USDC, ETH, or LPT)
-2. Receive a deposit address and expiration time
-3. Send payment to the address
-4. Call `check_topup` to verify confirmation
-5. Balance updates automatically
-
-## Cost Awareness
-
-Active streams incur ongoing costs. Monitor via `billing://balance`:
-
-- `balance_cents`: Current balance
-- `drain_rate_cents_per_hour`: Current spend rate
-- `estimated_hours_left`: Time until depletion
-
-Streams fail if balance depletes mid-session. Top up proactively.
 
 ## Video Consultant
 
@@ -369,6 +253,7 @@ Your AI can navigate these sitemaps to find codec guides, protocol references, a
 | --------------------------- | ----------------------------------------- |
 | `diagnose_rebuffering`      | Viewers experiencing buffering/stuttering |
 | `diagnose_buffer_health`    | Quality fluctuations, dry buffer events   |
+| `diagnose_packet_loss`      | Protocol-aware packet loss analysis       |
 | `diagnose_routing`          | CDN path issues, geographic performance   |
 | `get_stream_health_summary` | Overall stream quality assessment         |
 | `get_anomaly_report`        | Detect sudden changes from baseline       |
@@ -391,9 +276,9 @@ Each tool returns structured results with status, metrics, analysis, and recomme
 
 Access past support conversations to find previous solutions:
 
-- `support://conversations` - List all conversations
-- `support://conversations/{id}` - Full conversation with messages
-- `search_support_history(query)` - Search by keyword
+- `support://conversations` — List all conversations
+- `support://conversations/{id}` — Full conversation with messages
+- `search_support_history(query)` — Search by keyword
 
 ### Example Workflow
 

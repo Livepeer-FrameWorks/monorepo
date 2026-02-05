@@ -1,0 +1,122 @@
+---
+title: "Agent Access"
+description: "Build autonomous agents that stream, record, and analyze live video."
+sidebar:
+  order: 1
+---
+
+import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
+
+FrameWorks is an MCP-native live streaming platform. AI agents can discover, authenticate, fund, and operate the full platform without human interaction.
+
+<CardGrid>
+  <LinkCard
+    title="Wallet Authentication"
+    href="/agents/wallet-auth"
+    description="Headless auth with EVM wallets."
+  />
+  <LinkCard title="Payments" href="/agents/payments" description="x402 and crypto top-ups." />
+  <LinkCard title="MCP Reference" href="/agents/mcp" description="Tools, resources, and prompts." />
+</CardGrid>
+
+## Quick Start
+
+1. **Create or load an EVM wallet.**
+2. **Sign a wallet login message** (EIP-191) and call `POST /auth/wallet-login` to auto-provision a prepaid tenant.
+3. **Check `account://status`** to confirm readiness and resolve any blockers.
+4. **Fund the tenant** via x402 (`submit_payment`) or crypto deposit (`topup_balance`).
+5. **Create a stream** via MCP `create_stream`, then push RTMP with the returned stream key.
+
+<Aside type="tip">
+  No email, no signup form, no API key. A wallet signature is all you need to get started.
+</Aside>
+
+## Discovery
+
+FrameWorks publishes metadata following the [Agent Skills](https://agentskills.io) open standard so agents can discover and connect automatically.
+
+| URL                                     | Standard     | Purpose                                                                 |
+| --------------------------------------- | ------------ | ----------------------------------------------------------------------- |
+| `/.well-known/mcp.json`                 | MCP          | Server discovery: endpoint, transports, auth schemes, public operations |
+| `/.well-known/did.json`                 | W3C DID      | Decentralized identity and service endpoints                            |
+| `/.well-known/oauth-protected-resource` | RFC 8707     | OAuth resource metadata with wallet and x402 extensions                 |
+| `/.well-known/security.txt`             | RFC 9116     | Security contact and advisories                                         |
+| `/skill.json`                           | Agent Skills | Machine-readable skill metadata (name, auth, endpoints, keywords)       |
+| `/skill.md`                             | Agent Skills | Human/LLM-readable quick-start guide                                    |
+| `/llms.txt`                             | Emerging     | LLM-friendly documentation index                                        |
+| `/robots.txt`                           | Standard     | Crawler directives (allows AI bots)                                     |
+
+### skill.json
+
+The primary machine-readable entry point. Compatible with [OpenClaw](https://docs.openclaw.ai/tools/skills), Claude Code, Cursor, Gemini CLI, and other Agent Skills consumers.
+
+```json
+{
+  "name": "frameworks-network",
+  "version": "1.0.0",
+  "description": "Multi-tenant live streaming SaaS with MCP, wallet auth, and x402 payments.",
+  "homepage": "https://frameworks.network",
+  "metadata": {
+    "emoji": "📡",
+    "category": "streaming",
+    "api_base": "https://api.frameworks.network",
+    "mcp_discovery": "https://api.frameworks.network/.well-known/mcp.json"
+  },
+  "auth": {
+    "methods": ["wallet", "x402", "bearer"],
+    "wallet_message_format": "FrameWorks Login\nTimestamp: {ISO8601}\nNonce: {random}"
+  },
+  "endpoints": {
+    "mcp": "GET /.well-known/mcp.json",
+    "mcp_rpc": "POST /mcp",
+    "graphql": "POST /graphql",
+    "wallet_login": "POST /auth/wallet-login"
+  },
+  "keywords": ["streaming", "live", "rtmp", "x402", "mcp", "ai-agent", "wallet"]
+}
+```
+
+### MCP Discovery
+
+Agents that speak MCP can use `/.well-known/mcp.json` directly:
+
+```json
+{
+  "mcp_endpoint": "https://api.frameworks.network/mcp",
+  "transports": ["streamable-http"],
+  "auth": {
+    "schemes": ["bearer", "wallet", "x402"],
+    "required": true,
+    "registration_required": false
+  }
+}
+```
+
+## Authentication Methods
+
+Three methods, all stateless, no registration required:
+
+| Method               | Best For                  | Details                                                                          |
+| -------------------- | ------------------------- | -------------------------------------------------------------------------------- |
+| **Wallet** (EIP-191) | Autonomous agents         | Sign a message, auto-provision a tenant. See [Wallet Auth](/agents/wallet-auth). |
+| **x402** (EIP-3009)  | Pay-per-use agents        | Gasless USDC on Base/Arbitrum. See [Payments](/agents/payments).                 |
+| **Bearer** (JWT)     | Dashboard users, API keys | From login or account settings.                                                  |
+
+## Platform Capabilities
+
+What agents can do via MCP:
+
+| Category            | Operations                                                  |
+| ------------------- | ----------------------------------------------------------- |
+| **Streams**         | Create, update, delete, refresh keys, monitor health        |
+| **Clips**           | Create from live or recorded streams, delete                |
+| **DVR**             | Start/stop catch-up recording                               |
+| **VOD**             | Upload, complete, abort, delete video assets                |
+| **Playback**        | Resolve viewer endpoints with geo-routing                   |
+| **Billing**         | Top up balance, check deposits, update billing details      |
+| **Analytics**       | Usage aggregates, viewer metrics, geographic distribution   |
+| **QoE Diagnostics** | Rebuffering, buffer health, packet loss, routing, anomalies |
+| **Support**         | Search past conversations                                   |
+| **API Exploration** | Introspect GraphQL schema, generate queries from templates  |
+
+See the full [MCP Reference](/agents/mcp) for all 27 tools, 18 resources, and 8 prompts.

@@ -54,6 +54,27 @@ The agent access system provides:
 
 ---
 
+## Discovery Endpoints
+
+Public metadata served by the API gateway for agent and skill discovery. Source files in `docs/skills/`, routed by `api_gateway/cmd/bridge/main.go`.
+
+| Path                                    | Standard     | Purpose                                               |
+| --------------------------------------- | ------------ | ----------------------------------------------------- |
+| `/.well-known/mcp.json`                 | MCP          | Server discovery (endpoint, transports, auth schemes) |
+| `/.well-known/did.json`                 | W3C DID      | Decentralized identity; x402 verification + services  |
+| `/.well-known/oauth-protected-resource` | RFC 8707     | OAuth resource metadata with wallet/x402 extensions   |
+| `/.well-known/security.txt`             | RFC 9116     | Security contact and advisories                       |
+| `/skill.json`                           | Agent Skills | Machine-readable skill metadata                       |
+| `/skill.md`                             | Agent Skills | Human/LLM-readable quick-start guide                  |
+| `/llms.txt`                             | Emerging     | LLM-friendly documentation index                      |
+| `/robots.txt`                           | Standard     | Crawler directives (allows AI bots)                   |
+
+These follow the [Agent Skills](https://agentskills.io) open standard adopted by Claude Code, OpenClaw, Cursor, Gemini CLI, and 25+ other agent products.
+
+The DID document (`did.json`) substitutes `{{PLATFORM_X402_ADDRESS}}` at runtime from the environment.
+
+---
+
 ## Wallet Authentication
 
 EVM wallet identity system. Signature auth is currently Ethereum (EIP-191); Base/Arbitrum are used for x402 settlement.
@@ -284,6 +305,27 @@ Single private key used on all EVM chains (same address everywhere):
 ## MCP Adapter
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
+
+**Summary**: 27 tools (10 categories), 18 resources (9 categories), 8 prompts.
+
+| Category        | Tools                                                                              | Resources                                                            |
+| --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Account & Auth  | `update_billing_details`                                                           | `account://status`                                                   |
+| Payment         | `get_payment_options`, `submit_payment`                                            | —                                                                    |
+| Billing         | `topup_balance`, `check_topup`                                                     | `billing://balance`, `billing://pricing`, `billing://transactions`   |
+| Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`            | `streams://list`, `streams://{id}`, `streams://{id}/health`          |
+| Clips           | `create_clip`, `delete_clip`                                                       | —                                                                    |
+| DVR             | `start_dvr`, `stop_dvr`                                                            | —                                                                    |
+| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset` | `vod://list`, `vod://{id}`                                           |
+| Playback        | `resolve_playback_endpoint`                                                        | —                                                                    |
+| Analytics       | —                                                                                  | `analytics://usage`, `analytics://viewers`, `analytics://geographic` |
+| QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)          | —                                                                    |
+| Support         | `search_support_history`                                                           | `support://conversations`, `support://conversations/{id}`            |
+| Knowledge       | —                                                                                  | `knowledge://sources`                                                |
+| Schema          | `introspect_schema`, `generate_query`                                              | `schema://catalog`                                                   |
+| Infrastructure  | —                                                                                  | `nodes://list`, `nodes://{id}`                                       |
+
+For full tool parameters, preflight error formats, and prompt details, see the [public docs](https://docs.frameworks.network/agents/mcp/).
 
 ### Structure
 
