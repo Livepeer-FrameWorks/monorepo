@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-const defaultSearxngURL = "http://localhost:8080"
-
 // SearxngProvider implements the SearXNG API.
 type SearxngProvider struct {
 	apiURL string
@@ -21,7 +19,7 @@ type SearxngProvider struct {
 // NewSearxngProvider creates a SearXNG provider.
 func NewSearxngProvider(apiURL string) (*SearxngProvider, error) {
 	if strings.TrimSpace(apiURL) == "" {
-		apiURL = defaultSearxngURL
+		return nil, fmt.Errorf("searxng api url is required")
 	}
 	return &SearxngProvider{
 		apiURL: strings.TrimRight(apiURL, "/"),
