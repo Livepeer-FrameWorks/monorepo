@@ -125,8 +125,8 @@ PersistentKeepalive = {{.KeepAlive}}
 
 	// 2. Apply with wg setconf
 	// setconf replaces the current configuration
-	if out, err := exec.CommandContext(ctx, "wg", "setconf", m.interfaceName, tmpFile.Name()).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to apply wireguard config: %w: %s", err, string(out))
+	if out, cmdErr := exec.CommandContext(ctx, "wg", "setconf", m.interfaceName, tmpFile.Name()).CombinedOutput(); cmdErr != nil {
+		return fmt.Errorf("failed to apply wireguard config: %w: %s", cmdErr, string(out))
 	}
 
 	// 3. Set IP Address
@@ -138,8 +138,8 @@ PersistentKeepalive = {{.KeepAlive}}
 			// Flush old IPs (best-effort, continue even if fails)
 			_ = exec.CommandContext(ctx, "ip", "addr", "flush", "dev", m.interfaceName).Run() //nolint:errcheck // best-effort flush before adding new IP
 			// Add new IP
-			if out, err := exec.CommandContext(ctx, "ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to set ip address: %w: %s", err, string(out))
+			if out, addErr := exec.CommandContext(ctx, "ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); addErr != nil {
+				return fmt.Errorf("failed to set ip address: %w: %s", addErr, string(out))
 			}
 		}
 	}
