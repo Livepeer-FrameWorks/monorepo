@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-svelte",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Svelte 5 stores for StreamCrafter browser streaming",
   "svelte": "./dist/index.js",
