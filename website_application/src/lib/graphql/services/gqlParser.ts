@@ -470,7 +470,7 @@ export function stripClientDirectives(query: string): string {
   for (const directive of clientDirectives) {
     // Remove directive with optional arguments: @directive or @directive(...)
     // This regex handles @directive, @directive(...), and preserves surrounding whitespace
-    const pattern = new RegExp(`\\s*${directive.replace("@", "@")}(?:\\([^)]*\\))?`, "g");
+    const pattern = new RegExp(`\\s*${directive}(?:\\([^)]*\\))?`, "g");
     result = result.replace(pattern, "");
   }
 

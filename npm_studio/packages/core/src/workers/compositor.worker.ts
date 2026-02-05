@@ -170,14 +170,14 @@ async function handleInit(cfg: CompositorConfig, offscreenCanvas: OffscreenCanva
 
   for (const rendererType of fallbackChain) {
     try {
-      console.log(`[CompositorWorker] Trying ${rendererType} renderer...`);
+      console.log("[CompositorWorker] Trying", rendererType, "renderer...");
       renderer = createRenderer(rendererType);
       await renderer.init(canvas, config);
-      console.log(`[CompositorWorker] ${rendererType} renderer initialized successfully`);
+      console.log("[CompositorWorker]", rendererType, "renderer initialized successfully");
       break;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      console.warn(`[CompositorWorker] ${rendererType} renderer failed:`, lastError.message);
+      console.warn("[CompositorWorker]", rendererType, "renderer failed:", lastError.message);
       renderer = null;
 
       // If this wasn't canvas2d, try the next one in the chain

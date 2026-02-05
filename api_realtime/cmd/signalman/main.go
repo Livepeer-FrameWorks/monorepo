@@ -330,6 +330,10 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		grpcPortInt, _ := strconv.Atoi(grpcPort)
+		if grpcPortInt <= 0 || grpcPortInt > 65535 {
+			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+			return
+		}
 		advertiseHost := config.GetEnv("SIGNALMAN_HOST", "signalman")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{

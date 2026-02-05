@@ -240,6 +240,10 @@ func main() {
 		defer cancel()
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
+		if httpPort <= 0 || httpPort > 65535 {
+			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+			return
+		}
 		advertiseHost := config.GetEnv("PURSER_HOST", "purser")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{

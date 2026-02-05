@@ -2265,7 +2265,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.setState("gateway_loading", { gatewayStatus: "loading" });
 
     try {
-      const jsonUrl = `${mistUrl.replace(/\/+$/, "")}/json_${encodeURIComponent(contentId)}.js`;
+      let baseUrl = mistUrl;
+      while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
+      const jsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js`;
       this.log(`[resolveFromMistServer] Fetching ${jsonUrl}`);
 
       const response = await fetch(jsonUrl, { cache: "no-store" });

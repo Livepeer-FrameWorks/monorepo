@@ -129,6 +129,10 @@ func main() {
 		defer cancel()
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
+		if httpPort <= 0 || httpPort > 65535 {
+			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+			return
+		}
 		advertiseHost := config.GetEnv("PERISCOPE_QUERY_HOST", "periscope-query")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{

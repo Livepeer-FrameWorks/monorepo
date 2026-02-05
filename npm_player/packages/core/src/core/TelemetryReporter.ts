@@ -4,7 +4,10 @@ import type { TelemetryPayload, PlaybackQuality, ContentType } from "../types";
  * Generate a unique session ID
  */
 function generateSessionId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).substr(2, 9)}`;
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${Date.now().toString(36)}-${hex}`;
 }
 
 export interface TelemetryReporterConfig {

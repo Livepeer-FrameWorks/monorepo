@@ -609,7 +609,7 @@ console.log(result.data);`,
 curl -X POST \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${tokenValue}" \\
-  -d '{"query":"${query.replace(/"/g, '\\"').replace(/\n/g, "\\n")}"${hasVariables ? `,"variables":${JSON.stringify(variables)}` : ""}}' \\
+  -d '{"query":"${query.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"${hasVariables ? `,"variables":${JSON.stringify(variables)}` : ""}}' \\
   ${GRAPHQL_HTTP_URL}`,
 
       python: `# Python (requests)

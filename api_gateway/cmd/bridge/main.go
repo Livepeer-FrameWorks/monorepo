@@ -536,6 +536,10 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		port, _ := strconv.Atoi(serverConfig.Port)
+		if port <= 0 || port > 65535 {
+			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+			return
+		}
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
 		clusterID := config.GetEnv("CLUSTER_ID", "")

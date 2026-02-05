@@ -10,7 +10,9 @@ export function sanitizeBaseUrl(input: string): string {
   if (!/^https?:\/\//i.test(trimmed)) {
     return `http://${trimmed.replace(/^\/+/, "")}`;
   }
-  return trimmed.replace(/\/+$/, "");
+  let result = trimmed;
+  while (result.endsWith("/")) result = result.slice(0, -1);
+  return result;
 }
 
 /**
@@ -19,9 +21,12 @@ export function sanitizeBaseUrl(input: string): string {
 export function normalizeViewerPath(path: string): string {
   const trimmed = path.trim();
   if (!trimmed || trimmed === "/") return "";
-  const withoutLeading = trimmed.replace(/^\/+/, "");
-  const withoutTrailing = withoutLeading.replace(/\/+$/, "");
-  return withoutTrailing ? `/${withoutTrailing}` : "";
+  let start = 0;
+  while (start < trimmed.length && trimmed[start] === "/") start++;
+  let end = trimmed.length;
+  while (end > start && trimmed[end - 1] === "/") end--;
+  const stripped = trimmed.slice(start, end);
+  return stripped ? `/${stripped}` : "";
 }
 
 /**

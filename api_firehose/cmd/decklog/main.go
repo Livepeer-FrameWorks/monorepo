@@ -121,6 +121,10 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		pi, _ := strconv.Atoi(port)
+		if pi <= 0 || pi > 65535 {
+			logger.Warn("Quartermaster bootstrap skipped: invalid port")
+			return
+		}
 		advertiseHost := config.GetEnv("DECKLOG_HOST", "decklog")
 		healthEndpoint := "/health"
 		clusterID := config.GetEnv("CLUSTER_ID", "")
