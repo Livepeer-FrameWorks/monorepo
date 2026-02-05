@@ -1,4 +1,4 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-forms \
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-forms build-bin-skipper \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
 	lint lint-all lint-fix lint-report lint-analyze \
@@ -16,7 +16,7 @@ LDFLAGS = -ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
 					-X frameworks/pkg/version.BuildDate=$(BUILD_DATE)"
 
 # All microservices (only services with actual binaries)
-SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer deckhand
+SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer deckhand skipper
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
@@ -209,6 +209,9 @@ build-bin-deckhand: proto
 
 build-bin-forms: proto
 	cd api_forms && go build $(LDFLAGS) -o ../bin/forms cmd/forms/main.go
+
+build-bin-skipper: proto
+	cd api_skipper && go build $(LDFLAGS) -o ../bin/skipper cmd/skipper/main.go
 
 # Clean build artifacts
 clean:

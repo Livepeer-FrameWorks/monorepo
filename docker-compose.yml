@@ -799,6 +799,83 @@ services:
       retries: 3
       start_period: 10s
 
+  # Skipper (AI Video Consultant API)
+  skipper:
+    <<: *default-env
+    container_name: frameworks-skipper
+    build:
+      context: .
+      dockerfile: api_skipper/Dockerfile
+    ports:
+      - "18012:18012"
+      - "19012:19012"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${SKIPPER_PORT}
+      GRPC_PORT: ${SKIPPER_GRPC_PORT}
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
+      DECKHAND_GRPC_ADDR: ${DECKHAND_GRPC_ADDR}
+      PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      SKIPPER_HOST: ${SKIPPER_HOST:-skipper}
+      CLUSTER_ID: ${CLUSTER_ID}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_API_URL: ${LLM_API_URL}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER}
+      SEARCH_API_KEY: ${SEARCH_API_KEY}
+      SEARCH_API_URL: ${SEARCH_API_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_healthy
+      commodore:
+        condition: service_started
+      periscope-query:
+        condition: service_started
+      deckhand:
+        condition: service_started
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18012/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Ollama (optional local LLM runtime)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: frameworks-ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - frameworks
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
   # Forms service
   forms:
     <<: *default-env
