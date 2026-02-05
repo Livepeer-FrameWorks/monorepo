@@ -59,15 +59,17 @@ const LandingPage = () => {
     img.src = "/frameworks-dark-vertical-lockup.svg";
 
     // Logo enters with glitch, then reveals player
-    const playerTimer = setTimeout(() => {
-      console.log("revealing player");
-      setShowPlayer(true);
-    }, 2000);
+    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const revealDelay = prefersReduced ? 0 : 800;
+    const fadeMs = prefersReduced ? 0 : 1200;
 
-    // Remove logo element after fade animation completes
+    const playerTimer = setTimeout(() => {
+      setShowPlayer(true);
+    }, revealDelay);
+
     const cleanupTimer = setTimeout(() => {
       setLogoAnimationComplete(true);
-    }, 4200); // 2000ms delay + 2200ms animation duration
+    }, revealDelay + fadeMs);
 
     return () => {
       clearTimeout(playerTimer);
@@ -411,10 +413,10 @@ const LandingPage = () => {
                     scale: showPlayer ? 1.05 : 1,
                   }}
                   transition={{
-                    duration: 2,
+                    duration: 1.2,
                     ease: [0.25, 0.46, 0.45, 0.94],
-                    opacity: { duration: 2 },
-                    scale: { duration: 2.2 },
+                    opacity: { duration: 1.2 },
+                    scale: { duration: 1.4 },
                   }}
                 >
                   {/* Logo Entry Animation */}
@@ -524,123 +526,6 @@ const LandingPage = () => {
           </motion.div>
         }
       />
-
-      {/* CSS for glitch animations */}
-      <style>{`
-        @keyframes glitch-5 {
-          0.00%, 33.33%, 43.33%, 66.67%, 76.67%, 100.00% {
-            transform: none;
-            filter: hue-rotate(0) drop-shadow(0 0 0 transparent);
-          }
-          33.43%, 43.23% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff0040);
-          }
-          66.77%, 76.57% {
-            transform: translateX(var(--glitch-x-2));
-            filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 #00ffff);
-          }
-        }
-        
-        @keyframes glitch-6 {
-          0.00%, 25.00%, 35.00%, 50.00%, 60.00%, 75.00%, 85.00%, 100.00% {
-            transform: none;
-            filter: hue-rotate(0) drop-shadow(0 0 0 transparent);
-          }
-          25.10%, 34.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 #ff0040);
-          }
-          50.10%, 59.90% {
-            transform: translateX(var(--glitch-x-2));
-            filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-1px 0 0 #00ffff);
-          }
-          75.10%, 84.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff4000);
-          }
-        }
-        
-        @keyframes glitch-7 {
-          0.00%, 20.00%, 30.00%, 40.00%, 50.00%, 70.00%, 80.00%, 100.00% {
-            transform: none;
-            filter: hue-rotate(0) drop-shadow(0 0 0 transparent);
-          }
-          20.10%, 29.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(3px 0 0 #ff0040);
-          }
-          40.10%, 49.90% {
-            transform: translateX(var(--glitch-x-2));
-            filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-3px 0 0 #00ffff);
-          }
-          70.10%, 79.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 #ff4000);
-          }
-        }
-        
-        @keyframes glitch-8 {
-          0.00%, 15.00%, 25.00%, 45.00%, 55.00%, 65.00%, 75.00%, 100.00% {
-            transform: none;
-            filter: hue-rotate(0) drop-shadow(0 0 0 transparent);
-          }
-          15.10%, 24.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff0040);
-          }
-          45.10%, 54.90% {
-            transform: translateX(var(--glitch-x-2));
-            filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 #00ffff);
-          }
-          65.10%, 74.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(3px 0 0 #ff4000);
-          }
-        }
-        
-        @keyframes glitch-9 {
-          0.00%, 10.00%, 20.00%, 60.00%, 70.00%, 90.00%, 100.00% {
-            transform: none;
-            filter: hue-rotate(0) drop-shadow(0 0 0 transparent);
-          }
-          10.10%, 19.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 #ff0040);
-          }
-          60.10%, 69.90% {
-            transform: translateX(var(--glitch-x-2));
-            filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-1px 0 0 #00ffff);
-          }
-          90.10%, 99.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff4000);
-          }
-        }
-        
-        @keyframes glitch-10 {
-          0.00%, 5.00%, 15.00%, 35.00%, 45.00%, 55.00%, 65.00%, 85.00%, 95.00%, 100.00% {
-            transform: none;
-            filter: hue-rotate(0) drop-shadow(0 0 0 transparent);
-          }
-          5.10%, 14.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(4px 0 0 #ff0040);
-          }
-          35.10%, 44.90% {
-            transform: translateX(var(--glitch-x-2));
-            filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-4px 0 0 #00ffff);
-          }
-          55.10%, 64.90% {
-            transform: translateX(var(--glitch-x-1));
-            filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff4000);
-          }
-          85.10%, 94.90% {
-            transform: translateX(var(--glitch-x-2));
-            filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 #40ff00);
-          }
-        }
-      `}</style>
 
       <SectionDivider />
 

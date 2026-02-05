@@ -457,6 +457,7 @@ const Pricing = () => {
       id: plan.id,
       tone: plan.tone ?? "accent",
       title: plan.name,
+      badge: plan.id === "developer" ? "Best Value" : undefined,
       price: plan.price,
       period: plan.period,
       meta: plan.dailyCost,

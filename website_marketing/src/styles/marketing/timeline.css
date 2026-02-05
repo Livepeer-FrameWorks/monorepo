@@ -14,7 +14,7 @@
   .marketing-timeline-block {
     position: relative;
     border-radius: clamp(0.9rem, 1.15vw, 1.25rem);
-    border: 1px solid rgba(125, 207, 255, 0.18);
+    border: 1px solid rgba(var(--accent-rgb) / 0.18);
     background:
       linear-gradient(135deg, rgba(28, 32, 48, 0.92), rgba(14, 18, 30, 0.96)),
       linear-gradient(180deg, rgba(14, 18, 30, 0.92), rgba(12, 14, 26, 0.94));
@@ -28,7 +28,7 @@
     flex-direction: column;
     gap: clamp(0.65rem, 1vw, 0.95rem);
     padding: clamp(1.8rem, 2.2vw, 2.4rem) clamp(1.9rem, 2.4vw, 2.6rem);
-    border-bottom: 1px solid rgba(125, 207, 255, 0.14);
+    border-bottom: 1px solid rgba(var(--accent-rgb) / 0.14);
     background: linear-gradient(140deg, rgba(35, 40, 60, 0.82), rgba(28, 32, 50, 0.85));
   }
 
@@ -59,7 +59,7 @@
       hsl(var(--brand-cyan)),
       hsl(var(--brand-green))
     );
-    box-shadow: 0 0 18px rgba(125, 207, 255, 0.28);
+    box-shadow: 0 0 18px rgba(var(--accent-rgb) / 0.28);
   }
 
   .marketing-timeline-block__subtitle {
@@ -108,8 +108,8 @@
     width: 40px;
     height: 40px;
     border-radius: 10px;
-    background: linear-gradient(145deg, rgba(122, 162, 247, 0.5), rgba(125, 207, 255, 0.35));
-    border: 1px solid rgba(122, 162, 247, 0.35);
+    background: linear-gradient(145deg, rgba(var(--accent-rgb) / 0.5), rgba(var(--accent-rgb) / 0.35));
+    border: 1px solid rgba(var(--accent-rgb) / 0.35);
     color: rgba(13, 24, 44, 0.92);
     flex-shrink: 0;
   }
@@ -123,14 +123,14 @@
   .marketing-accordion__trigger:focus-visible .marketing-timeline__icon,
   .marketing-accordion__trigger[data-state="open"] .marketing-timeline__icon {
     transform: none;
-    border-color: rgba(122, 162, 247, 0.45);
+    border-color: rgba(var(--accent-rgb) / 0.45);
     box-shadow: none;
   }
 
   .marketing-accordion__trigger:hover .marketing-timeline__badge,
   .marketing-accordion__trigger:focus-visible .marketing-timeline__badge {
-    border-color: rgba(125, 207, 255, 0.48);
-    color: rgba(213, 229, 255, 0.92);
+    border-color: rgba(var(--accent-rgb) / 0.48);
+    color: hsl(var(--foreground) / 0.92);
   }
 
   .marketing-accordion__content[data-state="open"] .marketing-timeline__body {
@@ -166,7 +166,7 @@
     font-size: 1rem;
     font-weight: 600;
     line-height: 1.2;
-    color: rgba(222, 232, 255, 0.95);
+    color: hsl(var(--foreground) / 0.95);
   }
 
   .marketing-timeline__year {
@@ -174,7 +174,7 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(186, 202, 235, 0.78);
+    color: hsl(var(--muted-foreground) / 0.78);
     position: relative;
   }
 
@@ -193,22 +193,22 @@
   }
 
   .marketing-timeline__badge {
-    border: 1px solid #2c3250 !important;
+    border: 1px solid hsl(var(--border));
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-size: 0.75rem;
     line-height: 1rem;
-    color: #d5e5ffe6;
+    color: hsl(var(--foreground) / 0.9);
     padding-block: 0.125rem;
     padding-inline: 0.625rem;
     border-radius: 999px;
     font-weight: 500;
-    background: rgba(125, 207, 255, 0.08);
+    background: rgba(var(--accent-rgb) / 0.08);
   }
 
   .marketing-timeline__subtitle {
     font-size: 0.88rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 76%, rgba(125, 207, 255, 0.68));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 76%, rgba(var(--accent-rgb) / 0.68));
   }
 
   .marketing-timeline__panel {
@@ -222,7 +222,7 @@
     gap: clamp(0.9rem, 1.3vw, 1.2rem);
     padding: clamp(1.4rem, 1.8vw, 1.9rem) clamp(1.9rem, 2.3vw, 2.35rem) clamp(1.55rem, 2vw, 2rem);
     background: linear-gradient(150deg, rgba(22, 24, 36, 0.9), rgba(14, 16, 26, 0.94));
-    border-top: 1px solid rgba(125, 207, 255, 0.14);
+    border-top: 1px solid rgba(var(--accent-rgb) / 0.14);
   }
 
   .marketing-timeline__summary {
@@ -245,7 +245,7 @@
     gap: 0.75rem;
     align-items: flex-start;
     font-size: 0.95rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(255, 255, 255, 0.24));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, hsl(var(--foreground) / 0.24));
   }
 
   .marketing-timeline__bullet {
@@ -253,7 +253,7 @@
     height: 0.48rem;
     border-radius: 999px;
     background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--brand-cyan)));
-    box-shadow: 0 0 10px rgba(125, 207, 255, 0.32);
+    box-shadow: 0 0 10px rgba(var(--accent-rgb) / 0.32);
     flex-shrink: 0;
     margin-top: 0.35rem;
   }

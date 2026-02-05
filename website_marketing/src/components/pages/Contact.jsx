@@ -7,7 +7,6 @@ import {
   ChatBubbleLeftRightIcon,
   ChatBubbleOvalLeftEllipsisIcon,
   BugAntIcon,
-  CpuChipIcon,
   UserIcon,
   CheckCircleIcon,
   ExclamationCircleIcon,
@@ -474,49 +473,28 @@ const Contact = () => {
 
               {!isTurnstileEnabled && (
                 <div className="contact-verification">
-                  <span className="contact-turnstile__label">Security Check *</span>
-                  <div className="contact-verification__options">
-                    <label
-                      className={cn(
-                        "contact-verification__option contact-verification__option--robot",
-                        success && "is-disabled"
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        name="human_check"
-                        value="robot"
-                        checked={formData.human_check === "robot"}
-                        onChange={handleChange}
-                        disabled={success}
-                        className="contact-verification__radio"
-                      />
-                      <CpuChipIcon className="contact-verification__icon" />
-                      <span className="contact-verification__copy">
-                        I am a robot – discard this message.
-                      </span>
-                    </label>
-                    <label
-                      className={cn(
-                        "contact-verification__option contact-verification__option--human",
-                        success && "is-disabled"
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        name="human_check"
-                        value="human"
-                        checked={formData.human_check === "human"}
-                        onChange={handleChange}
-                        disabled={success}
-                        className="contact-verification__radio"
-                      />
-                      <UserIcon className="contact-verification__icon" />
-                      <span className="contact-verification__copy">
-                        I am human – please send this.
-                      </span>
-                    </label>
-                  </div>
+                  <label
+                    className={cn(
+                      "contact-verification__option contact-verification__option--human",
+                      success && "is-disabled"
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      name="human_check"
+                      checked={formData.human_check === "human"}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          human_check: e.target.checked ? "human" : "robot",
+                        }))
+                      }
+                      disabled={success}
+                      className="contact-verification__radio"
+                    />
+                    <UserIcon className="contact-verification__icon" />
+                    <span className="contact-verification__copy">I confirm I am not a robot</span>
+                  </label>
                 </div>
               )}
 

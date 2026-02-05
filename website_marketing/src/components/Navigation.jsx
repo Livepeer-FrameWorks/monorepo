@@ -90,7 +90,13 @@ const Navigation = () => {
                 aria-expanded={isMenuOpen}
                 aria-controls="mobile-nav-panel"
               >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
                   {isMenuOpen ? (
                     <path
                       strokeLinecap="round"
@@ -133,7 +139,7 @@ const Navigation = () => {
                 </SheetClose>
                 <SheetClose asChild>
                   <a href={config.docsUrl} className={linkClasses(null, "mobile")}>
-                    Documentation
+                    Docs
                   </a>
                 </SheetClose>
                 <SheetClose asChild>
