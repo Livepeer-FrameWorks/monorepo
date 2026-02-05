@@ -96,6 +96,20 @@ Endpoints (local)
 - Postgres: localhost:5432
 - ClickHouse: 8123 (HTTP), 9000 (native)
 
+## Building & Testing
+
+All build and test commands go through the Makefile. Key targets:
+
+| Target        | Description                                     |
+| ------------- | ----------------------------------------------- |
+| `make build`  | Build all service binaries                      |
+| `make test`   | Run all tests (with race detector)              |
+| `make lint`   | Lint new code against baseline (matches CI)     |
+| `make verify` | Full verification (tidy, fmt, vet, test, build) |
+| `make env`    | Generate `.env` from `config/env/`              |
+
+Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Makefile` for all targets.
+
 ## Ports
 
 | Plane    | Service                     | Port  | Notes                                                                        |
@@ -145,33 +159,23 @@ Endpoints (local)
 | Support  | Deckhand (api_ticketing)    | 18015 | Support ticketing                                                            |
 | Support  | Deckhand (gRPC)             | 19006 | Support gRPC API                                                             |
 
-## Configuration
+## Documentation
 
-### GeoIP
+**Public docs:** [docs.frameworks.network](https://docs.frameworks.network) (source: `website_docs/`)
 
-Foghorn (api_balancing) can determine geography from either:
+| Audience  | Covers                                              |
+| --------- | --------------------------------------------------- |
+| Streamers | Quick start, encoder setup, API reference, playback |
+| Operators | Architecture, deployment, DNS, CLI, WireGuard mesh  |
+| Hybrid    | Self-hosted edge nodes with managed control plane   |
+| Agents    | MCP integration, wallet auth, x402 payments         |
 
-- Proxy-injected geo headers (e.g., Cloudflare’s CF-IPCountry or similar), or
-- A local MMDB file (any vendor providing a compatible City/Country database).
+**Internal docs** (in-repo, for contributors):
 
-It is recommended to point it to a local MMDB file, which ensures all events are enriched with Geo data. Only events originating from the Load Balancer can be enriched via geo headers.
-
-To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If neither headers nor MMDB are available, Foghorn operates without geo routing data.
-
-### Storage
-
-Foghorn reconstructs local file paths when defrosting artifacts from S3. It uses the node's registered `StorageLocal` path when available; if not, it falls back to `FOGHORN_DEFAULT_STORAGE_BASE`:
-
-| Variable                       | Default                          | Description                                                                                                                                       |
-| ------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FOGHORN_DEFAULT_STORAGE_BASE` | `/var/lib/mistserver/recordings` | Fallback storage path for artifact defrost when node's StorageLocal is unavailable. Must be absolute. Should match `HELMSMAN_STORAGE_LOCAL_PATH`. |
-
-## Docs
-
-See `website_docs/` for full documentation (Astro Starlight site):
-
-- **Streamers** — Quick start, encoder setup, API reference, playback
-- **Operators** — Architecture, deployment, DNS, CLI reference, WireGuard mesh
-- **Hybrid** — Self-hosted edge nodes with managed control plane
-- **Roadmap** — Feature status and priorities
-- **Blog** — Changelog, technical posts
+| Directory            | Purpose                                         |
+| -------------------- | ----------------------------------------------- |
+| `docs/architecture/` | System design decisions (analytics, routing, …) |
+| `docs/standards/`    | Design system, metrics naming, testing policy   |
+| `docs/rfcs/`         | Proposals under discussion                      |
+| `docs/skills/`       | Agent integration & discovery files             |
+| `CONTRIBUTING.md`    | Dev setup, code style, workflows, PR process    |

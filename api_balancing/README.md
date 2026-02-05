@@ -126,6 +126,27 @@ Generic viewer endpoints validate view keys via Commodore gRPC (ResolvePlaybackI
 - Returns `internal_name`, `tenant_id`, `status`
 - Invalid keys return HTTP 404
 
+## Configuration
+
+### GeoIP
+
+Foghorn can determine geography from either:
+
+- Proxy-injected geo headers (e.g., Cloudflare's CF-IPCountry or similar), or
+- A local MMDB file (any vendor providing a compatible City/Country database).
+
+It is recommended to point it to a local MMDB file, which ensures all events are enriched with Geo data. Only events originating from the Load Balancer can be enriched via geo headers.
+
+To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If neither headers nor MMDB are available, Foghorn operates without geo routing data.
+
+### Storage
+
+Foghorn reconstructs local file paths when defrosting artifacts from S3. It uses the node's registered `StorageLocal` path when available; if not, it falls back to `FOGHORN_DEFAULT_STORAGE_BASE`:
+
+| Variable                       | Default                          | Description                                                                                                                                       |
+| ------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FOGHORN_DEFAULT_STORAGE_BASE` | `/var/lib/mistserver/recordings` | Fallback storage path for artifact defrost when node's StorageLocal is unavailable. Must be absolute. Should match `HELMSMAN_STORAGE_LOCAL_PATH`. |
+
 ## Related
 
 - Root `README.md` (ports, stack overview)
