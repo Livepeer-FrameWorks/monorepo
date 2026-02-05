@@ -579,9 +579,11 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 	if db == nil || internalName == "" {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	// Query foghorn.artifacts for active DVR, join with artifact_nodes for node_id
 	var dvrHash, storageNodeID string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
         SELECT a.artifact_hash, COALESCE(an.node_id,'')
         FROM foghorn.artifacts a
         LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
@@ -608,7 +610,9 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 		}).Warn("Failed to send DVR stop command")
 		return
 	}
-	_, _ = db.Exec(`UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash)
+	if _, err := db.ExecContext(ctx, `UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash); err != nil {
+		logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to update DVR status to stopping")
+	}
 }
 
 func emitIngestDVRFailure(dvrHash, streamID, errorMsg string, req *pb.DVRStartRequest, logger logging.Logger) {
@@ -1119,9 +1123,12 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 		"requesting_node_id": requestingNodeID,
 	}).Info("Processing DVR readiness request")
 
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Look up the DVR artifact in database to get stream info
 	var internalName string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT internal_name
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = 'dvr'`,
@@ -1243,7 +1250,7 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	sendDVRReadyResponse(stream, response, logger)
 
 	// Update artifact status to indicate storage node is starting recording
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		UPDATE foghorn.artifacts
 		SET status = 'starting', started_at = NOW(), updated_at = NOW()
 		WHERE artifact_hash = $1`,
@@ -1645,9 +1652,12 @@ func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID stri
 		return
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Look up asset info from foghorn.artifacts for internal_name
 	var streamName string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT internal_name
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1 AND artifact_type = $2`,
@@ -2079,9 +2089,12 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 		"asset_type": assetType,
 	})
 
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Look up stream info from foghorn.artifacts
 	var streamName string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT internal_name
 		FROM foghorn.artifacts
 		WHERE artifact_hash = $1`,
@@ -2094,8 +2107,6 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 	// Get tenant_id from Commodore (business registry owner)
 	var tenantID string
 	if CommodoreClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		switch assetType {
 		case "clip":
 			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
@@ -2264,7 +2275,7 @@ func requestDefrost(ctx context.Context, assetType, assetHash, nodeID string, ti
 	// Look up asset info from foghorn.artifacts
 	var streamName, storageLocation, format, tenantID string
 	var s3Key, filename, streamID sql.NullString
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT a.internal_name,
 		       COALESCE(a.storage_location, 'local'),
 		       COALESCE(a.format, ''),

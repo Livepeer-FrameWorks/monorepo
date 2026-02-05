@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -38,8 +39,11 @@ func (c *ClickHouseChecker) Check(address string, port int) *CheckResult {
 	}
 	defer db.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	// Try to ping
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		result.OK = false
 		result.Status = "unhealthy"
 		result.Error = fmt.Sprintf("ping failed: %v", err)
@@ -50,7 +54,7 @@ func (c *ClickHouseChecker) Check(address string, port int) *CheckResult {
 
 	// Execute simple query
 	var one int
-	if err := db.QueryRow("SELECT 1").Scan(&one); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT 1").Scan(&one); err != nil {
 		result.OK = false
 		result.Status = "degraded"
 		result.Error = fmt.Sprintf("query failed: %v", err)
@@ -59,20 +63,20 @@ func (c *ClickHouseChecker) Check(address string, port int) *CheckResult {
 
 	// Get version
 	var version string
-	if err := db.QueryRow("SELECT version()").Scan(&version); err == nil {
+	if err := db.QueryRowContext(ctx, "SELECT version()").Scan(&version); err == nil {
 		result.Metadata["version"] = version
 	}
 
 	// Get uptime
 	var uptime int64
-	if err := db.QueryRow("SELECT uptime()").Scan(&uptime); err == nil {
+	if err := db.QueryRowContext(ctx, "SELECT uptime()").Scan(&uptime); err == nil {
 		result.Metadata["uptime_seconds"] = fmt.Sprintf("%d", uptime)
 	}
 
 	// Check number of tables
 	var tableCount int
 	query := fmt.Sprintf("SELECT COUNT(*) FROM system.tables WHERE database = '%s'", c.Database)
-	if err := db.QueryRow(query).Scan(&tableCount); err == nil {
+	if err := db.QueryRowContext(ctx, query).Scan(&tableCount); err == nil {
 		result.Metadata["tables"] = fmt.Sprintf("%d", tableCount)
 	}
 
