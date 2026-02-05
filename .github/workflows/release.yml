@@ -151,22 +151,30 @@ jobs:
           cd npm_player
           pnpm run build
 
+      - name: Build studio package
+        run: |
+          cd npm_studio
+          pnpm run build
+
       - name: Build application
         env:
           # webapp (website_application) variables
           VITE_AUTH_URL: ${{ secrets.VITE_AUTH_URL }}
           VITE_GRAPHQL_HTTP_URL: ${{ secrets.VITE_GRAPHQL_HTTP_URL }}
           VITE_GRAPHQL_WS_URL: ${{ secrets.VITE_GRAPHQL_WS_URL }}
-          VITE_RTMP_DOMAIN: ${{ secrets.VITE_RTMP_DOMAIN }}
-          VITE_HTTP_DOMAIN: ${{ secrets.VITE_HTTP_DOMAIN }}
-          VITE_CDN_DOMAIN: ${{ secrets.VITE_CDN_DOMAIN }}
-          VITE_RTMP_PATH: ${{ secrets.VITE_RTMP_PATH }}
-          VITE_HLS_PATH: ${{ secrets.VITE_HLS_PATH }}
-          VITE_WEBRTC_PATH: ${{ secrets.VITE_WEBRTC_PATH }}
-          VITE_EMBED_PATH: ${{ secrets.VITE_EMBED_PATH }}
+          VITE_STREAMING_INGEST_URL: ${{ secrets.VITE_STREAMING_INGEST_URL }}
+          VITE_STREAMING_PLAY_URL: ${{ secrets.VITE_STREAMING_PLAY_URL }}
+          VITE_STREAMING_EDGE_URL: ${{ secrets.VITE_STREAMING_EDGE_URL }}
+          VITE_STREAMING_RTMP_PORT: ${{ secrets.VITE_STREAMING_RTMP_PORT }}
+          VITE_STREAMING_SRT_PORT: ${{ secrets.VITE_STREAMING_SRT_PORT }}
+          VITE_STREAMING_RTMP_PATH: ${{ secrets.VITE_STREAMING_RTMP_PATH }}
+          VITE_STREAMING_HLS_PATH: ${{ secrets.VITE_STREAMING_HLS_PATH }}
+          VITE_STREAMING_WEBRTC_PATH: ${{ secrets.VITE_STREAMING_WEBRTC_PATH }}
+          VITE_STREAMING_EMBED_PATH: ${{ secrets.VITE_STREAMING_EMBED_PATH }}
           VITE_MARKETING_SITE_URL: ${{ secrets.VITE_MARKETING_SITE_URL }}
           VITE_DOCS_SITE_URL: ${{ secrets.VITE_DOCS_SITE_URL }}
           VITE_TURNSTILE_AUTH_SITE_KEY: ${{ secrets.VITE_TURNSTILE_AUTH_SITE_KEY }}
+          BASE_PATH: ${{ secrets.BASE_PATH }}
           # website (website_marketing) variables
           VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
           VITE_CONTACT_API_URL: ${{ secrets.VITE_CONTACT_API_URL }}
@@ -181,6 +189,17 @@ jobs:
           VITE_COMPANY_NAME: ${{ secrets.VITE_COMPANY_NAME }}
           VITE_DOMAIN: ${{ secrets.VITE_DOMAIN }}
           VITE_TURNSTILE_FORMS_SITE_KEY: ${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
+          # docs (website_docs) variables
+          PUBLIC_DOCS_URL: ${{ secrets.PUBLIC_DOCS_URL }}
+          WEBAPP_PUBLIC_URL: ${{ secrets.WEBAPP_PUBLIC_URL }}
+          MARKETING_PUBLIC_URL: ${{ secrets.MARKETING_PUBLIC_URL }}
+          GATEWAY_PUBLIC_URL: ${{ secrets.GATEWAY_PUBLIC_URL }}
+          STREAMING_INGEST_URL: ${{ secrets.STREAMING_INGEST_URL }}
+          STREAMING_EDGE_URL: ${{ secrets.STREAMING_EDGE_URL }}
+          STREAMING_HLS_PATH: ${{ secrets.STREAMING_HLS_PATH }}
+          STREAMING_WEBRTC_PATH: ${{ secrets.STREAMING_WEBRTC_PATH }}
+          DISCORD_URL: ${{ secrets.DISCORD_URL }}
+          GITHUB_URL: ${{ secrets.GITHUB_URL }}
         run: |
           cd ${{ matrix.webapp.context }}
           pnpm run build
@@ -219,6 +238,47 @@ jobs:
           push: true
           provenance: true
           sbom: true
+          build-args: |
+            BUILD_ENV=production
+            VITE_AUTH_URL=${{ secrets.VITE_AUTH_URL }}
+            VITE_GRAPHQL_HTTP_URL=${{ secrets.VITE_GRAPHQL_HTTP_URL }}
+            VITE_GRAPHQL_WS_URL=${{ secrets.VITE_GRAPHQL_WS_URL }}
+            VITE_STREAMING_INGEST_URL=${{ secrets.VITE_STREAMING_INGEST_URL }}
+            VITE_STREAMING_PLAY_URL=${{ secrets.VITE_STREAMING_PLAY_URL }}
+            VITE_STREAMING_EDGE_URL=${{ secrets.VITE_STREAMING_EDGE_URL }}
+            VITE_STREAMING_RTMP_PORT=${{ secrets.VITE_STREAMING_RTMP_PORT }}
+            VITE_STREAMING_SRT_PORT=${{ secrets.VITE_STREAMING_SRT_PORT }}
+            VITE_STREAMING_RTMP_PATH=${{ secrets.VITE_STREAMING_RTMP_PATH }}
+            VITE_STREAMING_HLS_PATH=${{ secrets.VITE_STREAMING_HLS_PATH }}
+            VITE_STREAMING_WEBRTC_PATH=${{ secrets.VITE_STREAMING_WEBRTC_PATH }}
+            VITE_STREAMING_EMBED_PATH=${{ secrets.VITE_STREAMING_EMBED_PATH }}
+            VITE_MARKETING_SITE_URL=${{ secrets.VITE_MARKETING_SITE_URL }}
+            VITE_DOCS_SITE_URL=${{ secrets.VITE_DOCS_SITE_URL }}
+            VITE_TURNSTILE_AUTH_SITE_KEY=${{ secrets.VITE_TURNSTILE_AUTH_SITE_KEY }}
+            BASE_PATH=${{ secrets.BASE_PATH }}
+            VITE_APP_URL=${{ secrets.VITE_APP_URL }}
+            VITE_CONTACT_API_URL=${{ secrets.VITE_CONTACT_API_URL }}
+            VITE_GATEWAY_URL=${{ secrets.VITE_GATEWAY_URL }}
+            VITE_GITHUB_URL=${{ secrets.VITE_GITHUB_URL }}
+            VITE_LIVEPEER_URL=${{ secrets.VITE_LIVEPEER_URL }}
+            VITE_LIVEPEER_EXPLORER_URL=${{ secrets.VITE_LIVEPEER_EXPLORER_URL }}
+            VITE_CONTACT_EMAIL=${{ secrets.VITE_CONTACT_EMAIL }}
+            VITE_FORUM_URL=${{ secrets.VITE_FORUM_URL }}
+            VITE_DISCORD_URL=${{ secrets.VITE_DISCORD_URL }}
+            VITE_DEMO_STREAM_NAME=${{ secrets.VITE_DEMO_STREAM_NAME }}
+            VITE_COMPANY_NAME=${{ secrets.VITE_COMPANY_NAME }}
+            VITE_DOMAIN=${{ secrets.VITE_DOMAIN }}
+            VITE_TURNSTILE_FORMS_SITE_KEY=${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
+            PUBLIC_DOCS_URL=${{ secrets.PUBLIC_DOCS_URL }}
+            WEBAPP_PUBLIC_URL=${{ secrets.WEBAPP_PUBLIC_URL }}
+            MARKETING_PUBLIC_URL=${{ secrets.MARKETING_PUBLIC_URL }}
+            GATEWAY_PUBLIC_URL=${{ secrets.GATEWAY_PUBLIC_URL }}
+            STREAMING_INGEST_URL=${{ secrets.STREAMING_INGEST_URL }}
+            STREAMING_EDGE_URL=${{ secrets.STREAMING_EDGE_URL }}
+            STREAMING_HLS_PATH=${{ secrets.STREAMING_HLS_PATH }}
+            STREAMING_WEBRTC_PATH=${{ secrets.STREAMING_WEBRTC_PATH }}
+            DISCORD_URL=${{ secrets.DISCORD_URL }}
+            GITHUB_URL=${{ secrets.GITHUB_URL }}
           tags: |
             ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
             livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
