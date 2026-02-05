@@ -222,6 +222,14 @@ func TestValidateWalletMessageTimestamp(t *testing.T) {
 }
 
 func TestValidateWalletMessageTimestampBoundaries(t *testing.T) {
+	t.Run("timestamp at now is allowed", func(t *testing.T) {
+		now := time.Now().UTC()
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", now.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("just under 1 minute in the future is allowed", func(t *testing.T) {
 		future := time.Now().UTC().Add(59 * time.Second)
 		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", future.Format(time.RFC3339))
@@ -251,6 +259,14 @@ func TestValidateWalletMessageTimestampBoundaries(t *testing.T) {
 		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
 		if err := ValidateWalletMessageTimestamp(msg); err == nil {
 			t.Error("expected error for expired timestamp beyond 5 minutes")
+		}
+	})
+
+	t.Run("timestamp before epoch is rejected", func(t *testing.T) {
+		past := time.Date(1969, time.December, 31, 23, 59, 0, 0, time.UTC)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("expected error for expired timestamp before epoch")
 		}
 	})
 }

@@ -627,6 +627,53 @@ func TestSanitizeServiceEventData(t *testing.T) {
 	}
 }
 
+func TestParseProtobufData(t *testing.T) {
+	handler := &AnalyticsHandler{}
+
+	t.Run("valid viewer connect data", func(t *testing.T) {
+		event := kafka.AnalyticsEvent{
+			Data: map[string]interface{}{
+				"streamName": "stream-1",
+				"host":       "1.2.3.4",
+			},
+		}
+		var payload pb.ViewerConnectTrigger
+		if err := handler.parseProtobufData(event, &payload); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if payload.GetStreamName() != "stream-1" {
+			t.Fatalf("expected stream name stream-1, got %q", payload.GetStreamName())
+		}
+		if payload.GetHost() != "1.2.3.4" {
+			t.Fatalf("expected host 1.2.3.4, got %q", payload.GetHost())
+		}
+	})
+
+	t.Run("invalid json payload", func(t *testing.T) {
+		event := kafka.AnalyticsEvent{
+			Data: map[string]interface{}{
+				"streamName": 123,
+			},
+		}
+		var payload pb.ViewerConnectTrigger
+		if err := handler.parseProtobufData(event, &payload); err == nil {
+			t.Fatal("expected error for invalid payload")
+		}
+	})
+
+	t.Run("marshal error", func(t *testing.T) {
+		event := kafka.AnalyticsEvent{
+			Data: map[string]interface{}{
+				"bad": func() {},
+			},
+		}
+		var payload pb.ViewerConnectTrigger
+		if err := handler.parseProtobufData(event, &payload); err == nil {
+			t.Fatal("expected error for marshal failure")
+		}
+	})
+}
+
 func assertInterfaceValue[T comparable](t *testing.T, got interface{}, expected *T) {
 	t.Helper()
 	if expected == nil {
