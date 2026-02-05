@@ -47,7 +47,7 @@ func main() {
 
 	logger.Info("Starting Bridge GraphQL Gateway")
 
-	skillMarkdown, skillJSON := loadSkillFiles(logger)
+	skillMarkdown, skillJSON, mcpJSON := loadSkillFiles(logger)
 
 	// Initialize service clients (all gRPC-based)
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
@@ -352,32 +352,13 @@ func main() {
 			c.Data(http.StatusOK, "application/json; charset=utf-8", skillJSON)
 		})
 
-		// MCP discovery endpoint (SEP-1649)
 		app.GET("/.well-known/mcp.json", func(c *gin.Context) {
-			c.Header("Access-Control-Allow-Origin", "*")
-			docsURL := strings.TrimSpace(os.Getenv("DOCS_PUBLIC_URL"))
-			docsURLValue := ""
-			if docsURL != "" {
-				docsURLValue = docsURL + "/streamers/mcp"
+			if mcpJSON == nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "mcp.json not available"})
+				return
 			}
-			c.JSON(http.StatusOK, gin.H{
-				"name":         "frameworks",
-				"version":      version.Version,
-				"title":        config.GetEnv("BRAND_NAME", "FrameWorks"),
-				"description":  "Sovereign SaaS for live video",
-				"mcp_endpoint": "/mcp",
-				"transports":   []string{"streamable-http"},
-				"auth": gin.H{
-					"schemes":  []string{"bearer", "wallet"},
-					"required": true,
-				},
-				"capabilities": gin.H{
-					"tools":     true,
-					"resources": true,
-					"prompts":   true,
-				},
-				"docs_url": docsURLValue,
-			})
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Data(http.StatusOK, "application/json; charset=utf-8", mcpJSON)
 		})
 	}
 
@@ -544,7 +525,7 @@ func extractUsageContext(ctx context.Context) (tenantID, authType, userID string
 	return tenantID, authType, userID, tokenHash
 }
 
-func loadSkillFiles(logger logging.Logger) ([]byte, []byte) {
+func loadSkillFiles(logger logging.Logger) ([]byte, []byte, []byte) {
 	candidates := []string{}
 	if envDir := strings.TrimSpace(os.Getenv("SKILL_FILES_DIR")); envDir != "" {
 		candidates = append(candidates, envDir)
@@ -567,7 +548,7 @@ func loadSkillFiles(logger logging.Logger) ([]byte, []byte) {
 
 	if markdownPath == "" || jsonPath == "" {
 		logger.WithField("candidates", strings.Join(candidates, ", ")).Warn("skill files not found in any candidate directory")
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	markdown, err := os.ReadFile(markdownPath)
@@ -580,7 +561,14 @@ func loadSkillFiles(logger logging.Logger) ([]byte, []byte) {
 		logger.WithError(err).WithField("path", jsonPath).Warn("skill.json not found")
 	}
 
-	return markdown, jsonData
+	var mcpData []byte
+	mcpPath := filepath.Join(filepath.Dir(markdownPath), "mcp.json")
+	mcpData, err = os.ReadFile(mcpPath)
+	if err != nil {
+		logger.WithError(err).WithField("path", mcpPath).Warn("mcp.json not found")
+	}
+
+	return markdown, jsonData, mcpData
 }
 
 // calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.

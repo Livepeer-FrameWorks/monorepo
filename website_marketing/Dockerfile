@@ -66,7 +66,9 @@ COPY docs/skills/ docs/skills/
 
 # build the marketing site
 RUN cp docs/skills/skill.md website_marketing/public/skill.md \
-  && cp docs/skills/skill.json website_marketing/public/skill.json
+  && cp docs/skills/skill.json website_marketing/public/skill.json \
+  && mkdir -p website_marketing/public/.well-known \
+  && cp docs/skills/mcp.json website_marketing/public/.well-known/mcp.json
 RUN pnpm --filter frameworks-website... run build
 
 FROM node:24-alpine AS runner

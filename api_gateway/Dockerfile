@@ -60,6 +60,7 @@ WORKDIR /app
 COPY --from=builder /src/frameworks/api_gateway/bridge .
 COPY --from=builder /src/frameworks/docs/skills/skill.md ./skill.md
 COPY --from=builder /src/frameworks/docs/skills/skill.json ./skill.json
+COPY --from=builder /src/frameworks/docs/skills/mcp.json ./mcp.json
 
 # Change ownership
 RUN chown frameworks:frameworks /app/bridge

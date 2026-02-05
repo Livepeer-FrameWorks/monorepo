@@ -49,7 +49,9 @@ COPY docs/skills/ docs/skills/
 
 # build the docs site
 RUN cp docs/skills/skill.md website_docs/public/skill.md \
-  && cp docs/skills/skill.json website_docs/public/skill.json
+  && cp docs/skills/skill.json website_docs/public/skill.json \
+  && mkdir -p website_docs/public/.well-known \
+  && cp docs/skills/mcp.json website_docs/public/.well-known/mcp.json
 RUN pnpm --filter website_docs... run build
 
 FROM node:24-alpine AS runner
