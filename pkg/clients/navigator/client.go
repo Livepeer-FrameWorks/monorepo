@@ -61,12 +61,12 @@ func NewClient(config Config) (*Client, error) {
 	// grpc.NewClient ignores WithBlock/WithTimeout, deferring failures to first RPC.
 	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
 	defer cancel()
-	conn, err := grpc.DialContext(
+	conn, err := grpc.DialContext( //nolint:staticcheck // Need DialContext+WithBlock to fail fast; grpc.NewClient defers failures to first RPC.
 		ctx,
 		config.Addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
-		grpc.WithBlock(),
+		grpc.WithBlock(), //nolint:staticcheck // See DialContext comment above.
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Navigator gRPC server: %w", err)

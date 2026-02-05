@@ -284,6 +284,13 @@ func TestParsePaymentHeader(t *testing.T) {
 			t.Error("expected error for empty header")
 		}
 	})
+
+	t.Run("whitespace header", func(t *testing.T) {
+		_, err := ParsePaymentHeader("   ")
+		if err == nil {
+			t.Error("expected error for whitespace header")
+		}
+	})
 }
 
 func TestBase64DecodeFallbackOrder(t *testing.T) {

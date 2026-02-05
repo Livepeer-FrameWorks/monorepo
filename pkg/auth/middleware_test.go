@@ -66,6 +66,15 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		t.Fatalf("expected 401, got %d", w.Code)
 	}
 
+	// Invalid token -> 401
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+	req.Header.Set("Authorization", "Bearer invalid.token.value")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+
 	// Valid token -> 200
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
