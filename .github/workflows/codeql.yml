@@ -23,11 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: ${{ matrix.language }}
-
       - name: Setup Go
         if: matrix.language == 'go'
         uses: actions/setup-go@v6
@@ -41,6 +36,11 @@ jobs:
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0
           go install github.com/99designs/gqlgen@v0.17.78
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
 
       - name: Build Go services
         if: matrix.language == 'go'
