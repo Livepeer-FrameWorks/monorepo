@@ -6,9 +6,9 @@ Implemented (Phase 1) | Phase 2 in design
 
 ## TL;DR
 
-- Phase 1 (implemented): MCP tools/resources/prompts so customer-side LLMs can diagnose streaming issues.
-- Phase 2 (next): **Skipper** (`api_skipper`) — server-side AI video consultant with chat interface, smart heartbeat agent, and provider-agnostic LLM backend. Premium, metered feature.
-- Phase 3 (deferred): RAG knowledge base for deeper domain expertise.
+- Phase 1 (implemented): MCP tools/resources/prompts so customer-side LLMs can diagnose streaming issues (BYO LLM).
+- Phase 2 (next): **Skipper** (`api_skipper`) MVP — chat + orchestration (**2A**) and grounding (**2B**: RAG + web search + confidence/citations). Premium, metered feature.
+- Phase 3 (deferred): Productization and expansion (**3A** heartbeat/investigations, **3B** metering/billing/tier gating, **3C** extra surfaces like docs-embedded chat + API/SDK polish).
 - Research: `./references/` contains industry analysis backing these decisions.
 
 ## Current State (as of 2026-02-05)
@@ -76,8 +76,6 @@ Phase 1 (Implemented):
 │  Prompts:                                                   │
 │    video_consultant, diagnose_quality_issue                 │
 │                                                             │
-│  Notifications (SSE):                                       │
-│    qoe/anomaly - pushed when metrics degrade                │
 └─────────────────────────┬───────────────────────────────────┘
                           │
           ┌───────────────┼───────────────┐
@@ -129,11 +127,14 @@ Phase 2 (Skipper):
 
 ### Phased Approach
 
-| Phase       | Scope                                                         | Effort       | Dependencies         |
-| ----------- | ------------------------------------------------------------- | ------------ | -------------------- |
-| **Phase 1** | Knowledge resources + QoE tools + support history             | ~1 week      | None                 |
-| **Phase 2** | Skipper: LLM + RAG + web search + chat + heartbeat + metering | ~11-13 weeks | LLM + search API key |
-| Phase 3     | Enhancements: self-hosted infra, conversation embeddings      | TBD          | Phase 2              |
+| Phase        | Scope                                                                              | Effort  | Dependencies         |
+| ------------ | ---------------------------------------------------------------------------------- | ------- | -------------------- |
+| **Phase 1**  | MCP consultant foundation (tools/resources/prompts; BYO LLM)                       | ~1 week | None                 |
+| **Phase 2A** | Skipper chat + orchestration (api_skipper HTTP+SSE, persistence, dashboard widget) | TBD     | LLM API key          |
+| **Phase 2B** | Grounding layer (pgvector RAG + web search + confidence/citations)                 | TBD     | LLM + search API key |
+| **Phase 3A** | Smart heartbeat agent + investigations + notifications                             | TBD     | Phase 2              |
+| **Phase 3B** | Metering/billing + tier gating + per-tenant rate limits                            | TBD     | Phase 2              |
+| **Phase 3C** | Extra surfaces (docs-embedded chat + API/SDK polish)                               | TBD     | Phase 2              |
 
 ---
 
