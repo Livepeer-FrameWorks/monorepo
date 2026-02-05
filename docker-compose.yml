@@ -808,8 +808,8 @@ services:
       context: .
       dockerfile: api_skipper/Dockerfile
     ports:
-      - "18012:18012"
-      - "19012:19012"
+      - "18016:18016"
+      - "19016:19016"
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${SKIPPER_PORT}
@@ -854,7 +854,7 @@ services:
         max-file: "3"
     healthcheck:
       test:
-        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18012/health"]
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18016/health"]
       interval: 10s
       timeout: 5s
       retries: 3
