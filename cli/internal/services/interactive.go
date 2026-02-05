@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // InteractiveSelect returns a selected set of services and the profile used (if any).
@@ -52,7 +55,7 @@ func InteractiveSelect(c Catalog) ([]ServiceSpec, string, error) {
 		// Print menu
 		i := 1
 		for _, r := range roles {
-			fmt.Printf("\n[%s]\n", strings.Title(r))
+			fmt.Printf("\n[%s]\n", cases.Title(language.English).String(r))
 			for _, s := range groups[r] {
 				mark := "[ ]"
 				if selected[s.Name] {

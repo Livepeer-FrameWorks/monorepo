@@ -23,17 +23,18 @@ func newLinuxManager(interfaceName string) Manager {
 }
 
 func (m *linuxManager) Init() error {
+	ctx := context.Background()
 	// Check if interface exists
-	_, err := exec.Command("ip", "link", "show", m.interfaceName).Output()
+	_, err := exec.CommandContext(ctx, "ip", "link", "show", m.interfaceName).Output()
 	if err != nil {
 		// Create interface
-		if out, err := exec.Command("ip", "link", "add", "dev", m.interfaceName, "type", "wireguard").CombinedOutput(); err != nil {
+		if out, err := exec.CommandContext(ctx, "ip", "link", "add", "dev", m.interfaceName, "type", "wireguard").CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to create interface: %w: %s", err, string(out))
 		}
 	}
 
 	// Ensure it is up
-	if out, err := exec.Command("ip", "link", "set", "up", "dev", m.interfaceName).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "ip", "link", "set", "up", "dev", m.interfaceName).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set interface up: %w: %s", err, string(out))
 	}
 
@@ -41,6 +42,7 @@ func (m *linuxManager) Init() error {
 }
 
 func (m *linuxManager) GetPublicKey() (string, error) {
+	ctx := context.Background()
 	// Ensure directory exists
 	if err := os.MkdirAll(m.configPath, 0700); err != nil {
 		return "", err
@@ -51,7 +53,7 @@ func (m *linuxManager) GetPublicKey() (string, error) {
 	// Check if private key exists
 	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
 		// Generate private key
-		out, err := exec.Command("wg", "genkey").Output()
+		out, err := exec.CommandContext(ctx, "wg", "genkey").Output()
 		if err != nil {
 			return "", fmt.Errorf("failed to generate private key: %w", err)
 		}
@@ -68,7 +70,7 @@ func (m *linuxManager) GetPublicKey() (string, error) {
 	}
 
 	// Generate public key
-	cmd := exec.Command("wg", "pubkey")
+	cmd := exec.CommandContext(ctx, "wg", "pubkey")
 	cmd.Stdin = bytes.NewReader(privKeyBytes)
 	out, err := cmd.Output()
 	if err != nil {
@@ -88,6 +90,7 @@ func (m *linuxManager) GetPrivateKey() (string, error) {
 }
 
 func (m *linuxManager) Apply(cfg Config) error {
+	ctx := context.Background()
 	// 1. Write config to temp file
 	tmpl := `[Interface]
 PrivateKey = {{.PrivateKey}}
@@ -122,21 +125,21 @@ PersistentKeepalive = {{.KeepAlive}}
 
 	// 2. Apply with wg setconf
 	// setconf replaces the current configuration
-	if out, err := exec.Command("wg", "setconf", m.interfaceName, tmpFile.Name()).CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to apply wireguard config: %w: %s", err, string(out))
+	if out, cmdErr := exec.CommandContext(ctx, "wg", "setconf", m.interfaceName, tmpFile.Name()).CombinedOutput(); cmdErr != nil {
+		return fmt.Errorf("failed to apply wireguard config: %w: %s", cmdErr, string(out))
 	}
 
 	// 3. Set IP Address
 	// Check current IP
 	// This is a bit naive (assumes single IP), but sufficient for mesh
-	currentIPs, err := exec.Command("ip", "-o", "-4", "addr", "show", m.interfaceName).Output()
+	currentIPs, err := exec.CommandContext(ctx, "ip", "-o", "-4", "addr", "show", m.interfaceName).Output()
 	if err == nil {
 		if !strings.Contains(string(currentIPs), cfg.Address) {
 			// Flush old IPs (best-effort, continue even if fails)
-			_ = exec.CommandContext(context.Background(), "ip", "addr", "flush", "dev", m.interfaceName).Run() //nolint:errcheck // best-effort flush before adding new IP
+			_ = exec.CommandContext(ctx, "ip", "addr", "flush", "dev", m.interfaceName).Run() //nolint:errcheck // best-effort flush before adding new IP
 			// Add new IP
-			if out, err := exec.Command("ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to set ip address: %w: %s", err, string(out))
+			if out, addErr := exec.CommandContext(ctx, "ip", "addr", "add", cfg.Address, "dev", m.interfaceName).CombinedOutput(); addErr != nil {
+				return fmt.Errorf("failed to set ip address: %w: %s", addErr, string(out))
 			}
 		}
 	}

@@ -1,6 +1,7 @@
 package health
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -38,8 +39,11 @@ func (c *PostgresChecker) Check(address string, port int) *CheckResult {
 	}
 	defer db.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	// Try to ping
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		result.OK = false
 		result.Status = "unhealthy"
 		result.Error = fmt.Sprintf("ping failed: %v", err)
@@ -50,7 +54,7 @@ func (c *PostgresChecker) Check(address string, port int) *CheckResult {
 
 	// Execute simple query
 	var one int
-	if err := db.QueryRow("SELECT 1").Scan(&one); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT 1").Scan(&one); err != nil {
 		result.OK = false
 		result.Status = "degraded"
 		result.Error = fmt.Sprintf("query failed: %v", err)
@@ -59,7 +63,7 @@ func (c *PostgresChecker) Check(address string, port int) *CheckResult {
 
 	// Check if it's YugabyteDB or vanilla Postgres
 	var version string
-	if err := db.QueryRow("SELECT version()").Scan(&version); err == nil {
+	if err := db.QueryRowContext(ctx, "SELECT version()").Scan(&version); err == nil {
 		result.Metadata["version"] = version
 		if contains(version, "YugabyteDB") {
 			result.Metadata["type"] = "yugabyte"
@@ -70,7 +74,7 @@ func (c *PostgresChecker) Check(address string, port int) *CheckResult {
 
 	// Check active connections
 	var activeConns int
-	if err := db.QueryRow("SELECT COUNT(*) FROM pg_stat_activity WHERE state = 'active'").Scan(&activeConns); err == nil {
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pg_stat_activity WHERE state = 'active'").Scan(&activeConns); err == nil {
 		result.Metadata["active_connections"] = fmt.Sprintf("%d", activeConns)
 	}
 

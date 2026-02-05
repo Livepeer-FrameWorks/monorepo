@@ -128,11 +128,14 @@ func getClipLifecycleContextByRequestID(requestID string) clipLifecycleContext {
 		return clipLifecycleContext{}
 	}
 
+	queryCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Get local context from foghorn.artifacts (denormalized fallback values).
 	var clipHash, internalName string
 	var fallbackTenantID sql.NullString
 	var fallbackUserID sql.NullString
-	err := db.QueryRow(`
+	err := db.QueryRowContext(queryCtx, `
 		SELECT artifact_hash, internal_name, tenant_id, user_id
 		FROM foghorn.artifacts
 		WHERE request_id = $1 AND artifact_type = 'clip'

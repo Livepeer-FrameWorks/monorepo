@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -142,7 +143,14 @@ func main() {
 	// Default 1000 matches Shopify's per-query limit with pagination-aware complexity
 	complexityLimit := config.GetEnvInt("GRAPHQL_COMPLEXITY_LIMIT", 1000)
 	if complexityLimit > 0 {
-		gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
+		gqlHandler.Use(&extension.ComplexityLimit{
+			Func: func(_ context.Context, opCtx *graphql.OperationContext) int {
+				if isIntrospectionOperation(opCtx.Operation) {
+					return math.MaxInt
+				}
+				return complexityLimit
+			},
+		})
 		logger.WithField("limit", complexityLimit).Info("GraphQL complexity limit enabled")
 	}
 

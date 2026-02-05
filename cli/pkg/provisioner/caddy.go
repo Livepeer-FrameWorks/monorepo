@@ -259,7 +259,7 @@ func (c *CaddyProvisioner) provisionNative(ctx context.Context, host inventory.H
 	// Download and install binary
 	binaryURL, err := svcInfo.GetBinaryURL(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		return fmt.Errorf("Caddy binary not available: %w", err)
+		return fmt.Errorf("caddy binary not available: %w", err)
 	}
 
 	installScript := fmt.Sprintf(`#!/bin/bash
@@ -350,7 +350,7 @@ func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, co
 	// But as a self-check, the internal admin API is best.
 	result := checker.Check(host.Address, 2019) // Caddy admin API port
 	if !result.OK {
-		return fmt.Errorf("Caddy admin API health check failed: %s", result.Error)
+		return fmt.Errorf("caddy admin API health check failed: %s", result.Error)
 	}
 
 	return nil
