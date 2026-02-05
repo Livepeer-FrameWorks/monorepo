@@ -47,6 +47,20 @@ Alerts are fragmented across tools and are not surfaced as a unified incident fe
 - Alert webhook ingestion.
 - GraphQL + realtime integrations.
 
+### Downstream Consumer: Skipper
+
+Lookout incident events are a trigger source for Skipper (AI Video Consultant,
+see `./mcp-consultant/mcp-consultant.md`). When Lookout fires an incident, Skipper
+can automatically investigate the root cause using its diagnostic tool chain and
+deliver a pre-investigated report alongside the alert.
+
+This is a **soft dependency** — Skipper's heartbeat agent works independently of
+Lookout, but integrating Lookout events enables immediate, event-driven investigation
+rather than waiting for the next heartbeat cycle.
+
+Incidents should be tenant-scoped and emitted via Kafka so Skipper can subscribe
+to the incident topic.
+
 ## Alternatives Considered
 
 - Continue with Prometheus/Grafana only.
@@ -62,14 +76,17 @@ Alerts are fragmented across tools and are not surfaced as a unified incident fe
 1. Implement webhook ingestion + incident store.
 2. Add GraphQL + realtime feed.
 3. Expand integrations only after MVP stabilizes.
+4. Skipper integration: subscribe to incident Kafka topic for auto-investigation triggers.
 
 ## Open Questions
 
 - What is the minimum incident schema for v1?
 - Should incidents be tenant-scoped or global by default?
+  - **Leaning**: Tenant-scoped, as Skipper's investigation is per-tenant and requires `tenant_id` for tool calls.
 
 ## References, Sources & Evidence
 
 - `infrastructure/prometheus/`
 - `infrastructure/grafana/`
 - `api_incidents/`
+- [Related RFC] ./mcp-consultant/mcp-consultant.md — Skipper consumes Lookout incidents as investigation triggers

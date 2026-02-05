@@ -37,6 +37,19 @@
                         <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Incident management</text>
                     </g>
                 </g>
+                <g id="Skipper" transform="matrix(23.5986,0,0,30.8642,20669.8,4083.78)">
+                    <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(156,39,176);stroke-width:1.31px;"/>
+                    <g transform="matrix(1.30789,0,0,1,125.347,420.072)">
+                        <g transform="matrix(11,0,0,11,37.2969,0)">
+                        </g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Skipper</text>
+                    </g>
+                    <g transform="matrix(1.30789,0,0,1,99.4497,432.309)">
+                        <g transform="matrix(8,0,0,8,77.3711,0)">
+                        </g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">AI platform consultant</text>
+                    </g>
+                </g>
                 <g id="Parlor" transform="matrix(23.5986,0,0,30.8642,20669.8,2726.47)">
                     <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(156,39,176);stroke-width:1.31px;"/>
                     <g transform="matrix(1.30789,0,0,1,130.283,419.791)">
