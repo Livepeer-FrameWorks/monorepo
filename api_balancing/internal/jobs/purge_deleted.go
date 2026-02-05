@@ -128,11 +128,12 @@ func (j *PurgeDeletedJob) purge() {
 			// Get tenant_id from Commodore for S3 path building
 			var tenantID string
 			if j.commodoreClient != nil {
-				if artifactType == "clip" {
+				switch artifactType {
+				case "clip":
 					if resp, errResolve := j.commodoreClient.ResolveClipHash(ctx, hash); errResolve == nil && resp.Found {
 						tenantID = resp.TenantId
 					}
-				} else if artifactType == "dvr" {
+				case "dvr":
 					if resp, errResolve := j.commodoreClient.ResolveDVRHash(ctx, hash); errResolve == nil && resp.Found {
 						tenantID = resp.TenantId
 					}
@@ -141,7 +142,8 @@ func (j *PurgeDeletedJob) purge() {
 
 			// Delete from S3 if client configured
 			if j.s3Client != nil && tenantID != "" {
-				if artifactType == "clip" {
+				switch artifactType {
+				case "clip":
 					// Infer format from path or default to mp4
 					format := "mp4"
 					if idx := len(manifestPath) - 4; idx > 0 && manifestPath[idx] == '.' {
@@ -151,7 +153,7 @@ func (j *PurgeDeletedJob) purge() {
 					if errDelete := j.s3Client.Delete(ctx, key); errDelete != nil {
 						j.logger.WithError(errDelete).WithField("clip_hash", hash).Warn("Failed to delete clip from S3")
 					}
-				} else if artifactType == "dvr" {
+				case "dvr":
 					prefix := j.s3Client.BuildDVRS3Key(tenantID, internalName, hash)
 					if _, errDelete := j.s3Client.DeletePrefix(ctx, prefix); errDelete != nil {
 						j.logger.WithError(errDelete).WithField("dvr_hash", hash).Warn("Failed to delete DVR from S3")

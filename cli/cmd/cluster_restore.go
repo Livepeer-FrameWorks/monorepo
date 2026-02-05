@@ -271,7 +271,7 @@ func restoreVolumes(ctx context.Context, cmd *cobra.Command, manifest *inventory
 	// Stop all services
 	stopCmd := "cd /opt/frameworks && for dir in */; do (cd $dir && docker compose down 2>/dev/null || true); done"
 	if result, errRun := runner.Run(ctx, stopCmd); errRun != nil || result.ExitCode != 0 {
-		fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Some services may not have stopped: %v\n", errRun)
+		_, _ = fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Some services may not have stopped: %v\n", errRun)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Services stopped\n")
 

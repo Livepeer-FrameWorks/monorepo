@@ -16,7 +16,7 @@ func TestGenerateDVRHash(t *testing.T) {
 			t.Errorf("hash length = %d, want 32", len(hash))
 		}
 		for _, c := range hash {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 				t.Errorf("invalid hex character: %c", c)
 			}
 		}

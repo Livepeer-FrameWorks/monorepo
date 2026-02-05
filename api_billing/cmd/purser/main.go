@@ -136,7 +136,7 @@ func main() {
 		logger.WithError(err).Warn("Failed to create Periscope gRPC client - invoice enrichment will be disabled")
 		periscopeClient = nil
 	} else {
-		defer periscopeClient.Close()
+		defer func() { _ = periscopeClient.Close() }()
 		logger.WithField("addr", periscopeGRPCAddr).Info("Connected to Periscope gRPC")
 	}
 

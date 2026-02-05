@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"html/template"
@@ -1275,14 +1276,14 @@ func HandleRootPage(c *gin.Context) {
 
 				// Query nodes hosting this artifact
 				art.NodeIDs = func() []string {
-					nodeRows, errQuery := db.Query(`
+					nodeRows, errQuery := db.QueryContext(context.Background(), `
 						SELECT node_id FROM foghorn.artifact_nodes
 						WHERE artifact_hash = $1 AND NOT is_orphaned
 					`, hash)
 					if errQuery != nil {
 						return nil
 					}
-					defer nodeRows.Close()
+					defer func() { _ = nodeRows.Close() }()
 					var ids []string
 					for nodeRows.Next() {
 						var nodeID string

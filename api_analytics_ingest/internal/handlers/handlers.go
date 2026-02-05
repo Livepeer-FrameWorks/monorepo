@@ -782,7 +782,7 @@ func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, e
 		h.logger.WithError(err).WithField("event_id", eventID).Warn("Failed to check for duplicate event")
 		return false
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if rows.Next() {
 		h.logger.WithField("event_id", eventID).WithField("table", table).Debug("Skipping duplicate event")
 		if h.metrics != nil && h.metrics.DuplicateEvents != nil {

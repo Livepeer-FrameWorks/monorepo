@@ -142,7 +142,7 @@ func (e *ThresholdEnforcer) notifyTenantSuspended(tenantID string, balanceCents 
 	}
 
 	var billingEmail string
-	err := e.db.QueryRow(`
+	err := e.db.QueryRowContext(context.Background(), `
 		SELECT billing_email FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1
 	`, tenantID).Scan(&billingEmail)

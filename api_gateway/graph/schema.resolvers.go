@@ -37,7 +37,7 @@ func (r *aPIUsageResolver) APIUsageConnection(ctx context.Context, obj *markers.
 		after = page.After
 		before = page.Before
 	}
-	return r.Resolver.DoGetAPIUsageConnection(ctx, authType, operationType, nil, timeRange, first, after, last, before, noCache)
+	return r.DoGetAPIUsageConnection(ctx, authType, operationType, nil, timeRange, first, after, last, before, noCache)
 }
 
 // TotalRequests is the resolver for the totalRequests field.
@@ -141,7 +141,7 @@ func (r *aPIUsageSummaryResolver) UniqueTokens(ctx context.Context, obj *proto.A
 
 // Overview is the resolver for the overview field.
 func (r *analyticsResolver) Overview(ctx context.Context, obj *markers.Analytics, timeRange *model.TimeRangeInput) (*proto.GetPlatformOverviewResponse, error) {
-	return r.Resolver.DoGetPlatformOverview(ctx, timeRange)
+	return r.DoGetPlatformOverview(ctx, timeRange)
 }
 
 // Usage is the resolver for the usage field.
@@ -171,60 +171,60 @@ func (r *analyticsHealthResolver) StreamHealthConnection(ctx context.Context, ob
 	if streamID != nil {
 		streamName = *streamID
 	}
-	return r.Resolver.DoGetStreamHealthMetricsConnection(ctx, streamName, timeRange, first, after, last, before, noCache)
+	return r.DoGetStreamHealthMetricsConnection(ctx, streamName, timeRange, first, after, last, before, noCache)
 }
 
 // StreamHealth5mConnection is the resolver for the streamHealth5mConnection field.
 func (r *analyticsHealthResolver) StreamHealth5mConnection(ctx context.Context, obj *markers.AnalyticsHealth, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamHealth5mConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetStreamHealth5mConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetStreamHealth5mConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // RebufferingEventsConnection is the resolver for the rebufferingEventsConnection field.
 func (r *analyticsHealthResolver) RebufferingEventsConnection(ctx context.Context, obj *markers.AnalyticsHealth, page *model.ConnectionInput, streamID *string, nodeID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.RebufferingEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetRebufferingEventsConnection(ctx, streamID, nodeID, timeRange, first, after, last, before, noCache)
+	return r.DoGetRebufferingEventsConnection(ctx, streamID, nodeID, timeRange, first, after, last, before, noCache)
 }
 
 // ClientQoeConnection is the resolver for the clientQoeConnection field.
 func (r *analyticsHealthResolver) ClientQoeConnection(ctx context.Context, obj *markers.AnalyticsHealth, page *model.ConnectionInput, streamID *string, nodeID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ClientMetrics5mConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetClientMetrics5mConnection(ctx, streamID, nodeID, timeRange, first, after, last, before, noCache)
+	return r.DoGetClientMetrics5mConnection(ctx, streamID, nodeID, timeRange, first, after, last, before, noCache)
 }
 
 // RoutingEventsConnection is the resolver for the routingEventsConnection field.
 func (r *analyticsInfraResolver) RoutingEventsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, subjectTenantID *string, clusterID *string, noCache *bool) (*model.RoutingEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetRoutingEventsConnection(ctx, streamID, timeRange, subjectTenantID, clusterID, first, after, last, before, noCache)
+	return r.DoGetRoutingEventsConnection(ctx, streamID, timeRange, subjectTenantID, clusterID, first, after, last, before, noCache)
 }
 
 // NodeMetricsConnection is the resolver for the nodeMetricsConnection field.
 func (r *analyticsInfraResolver) NodeMetricsConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, nodeID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.NodeMetricsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetNodeMetricsConnection(ctx, nodeID, timeRange, first, after, last, before, noCache)
+	return r.DoGetNodeMetricsConnection(ctx, nodeID, timeRange, first, after, last, before, noCache)
 }
 
 // NodeMetrics1hConnection is the resolver for the nodeMetrics1hConnection field.
 func (r *analyticsInfraResolver) NodeMetrics1hConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, timeRange *model.TimeRangeInput, nodeID *string, noCache *bool) (*model.NodeMetrics1hConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetNodeMetrics1hConnection(ctx, timeRange, nodeID, first, after, last, before, noCache)
+	return r.DoGetNodeMetrics1hConnection(ctx, timeRange, nodeID, first, after, last, before, noCache)
 }
 
 // NodeMetricsAggregated is the resolver for the nodeMetricsAggregated field.
 func (r *analyticsInfraResolver) NodeMetricsAggregated(ctx context.Context, obj *markers.AnalyticsInfra, timeRange *model.TimeRangeInput, nodeID *string, noCache *bool) ([]*proto.NodeMetricsAggregated, error) {
-	return r.Resolver.DoGetNodeMetricsAggregated(ctx, timeRange, nodeID, noCache)
+	return r.DoGetNodeMetricsAggregated(ctx, timeRange, nodeID, noCache)
 }
 
 // NodePerformance5mConnection is the resolver for the nodePerformance5mConnection field.
 func (r *analyticsInfraResolver) NodePerformance5mConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, nodeID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.NodePerformance5mConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetNodePerformance5mConnection(ctx, nodeID, timeRange, first, after, last, before, noCache)
+	return r.DoGetNodePerformance5mConnection(ctx, nodeID, timeRange, first, after, last, before, noCache)
 }
 
 // ServiceInstancesConnection is the resolver for the serviceInstancesConnection field.
 func (r *analyticsInfraResolver) ServiceInstancesConnection(ctx context.Context, obj *markers.AnalyticsInfra, page *model.ConnectionInput, clusterID *string, nodeID *string, status *model.InstanceStatus) (*model.ServiceInstancesConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetServiceInstancesConnection(ctx, clusterID, nodeID, status, first, after, last, before)
+	return r.DoGetServiceInstancesConnection(ctx, clusterID, nodeID, status, first, after, last, before)
 }
 
 // ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
@@ -245,49 +245,49 @@ func (r *analyticsInfraResolver) ServiceInstancesHealth(ctx context.Context, obj
 // StreamEventsConnection is the resolver for the streamEventsConnection field.
 func (r *analyticsLifecycleResolver) StreamEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetStreamEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetStreamEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // BufferEventsConnection is the resolver for the bufferEventsConnection field.
 func (r *analyticsLifecycleResolver) BufferEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.BufferEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetBufferEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetBufferEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // ArtifactEventsConnection is the resolver for the artifactEventsConnection field.
 func (r *analyticsLifecycleResolver) ArtifactEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID *string, stage *string, contentType *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ArtifactEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetArtifactEventsConnection(ctx, streamID, stage, contentType, timeRange, first, after, last, before, noCache)
+	return r.DoGetArtifactEventsConnection(ctx, streamID, stage, contentType, timeRange, first, after, last, before, noCache)
 }
 
 // StorageEventsConnection is the resolver for the storageEventsConnection field.
 func (r *analyticsLifecycleResolver) StorageEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, assetType *string, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StorageEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetStorageEventsConnection(ctx, streamID, assetType, timeRange, first, after, last, before, noCache)
+	return r.DoGetStorageEventsConnection(ctx, streamID, assetType, timeRange, first, after, last, before, noCache)
 }
 
 // ConnectionEventsConnection is the resolver for the connectionEventsConnection field.
 func (r *analyticsLifecycleResolver) ConnectionEventsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ConnectionEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetConnectionEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetConnectionEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // ViewerSessionsConnection is the resolver for the viewerSessionsConnection field.
 func (r *analyticsLifecycleResolver) ViewerSessionsConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ViewerSessionsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetViewerSessionsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetViewerSessionsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // TrackListConnection is the resolver for the trackListConnection field.
 func (r *analyticsLifecycleResolver) TrackListConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, noCache *bool) (*model.TrackListEventsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetTrackListEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetTrackListEventsConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // ArtifactStatesConnection is the resolver for the artifactStatesConnection field.
 func (r *analyticsLifecycleResolver) ArtifactStatesConnection(ctx context.Context, obj *markers.AnalyticsLifecycle, page *model.ConnectionInput, streamID *string, contentType *string, stage *string) (*model.ArtifactStatesConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetArtifactStatesConnection(ctx, streamID, contentType, stage, first, after, last, before)
+	return r.DoGetArtifactStatesConnection(ctx, streamID, contentType, stage, first, after, last, before)
 }
 
 // Streaming is the resolver for the streaming field.
@@ -521,7 +521,7 @@ func (r *billingStatusResolver) TrialEndsAt(ctx context.Context, obj *proto.Bill
 
 // LiveUsage is the resolver for the liveUsage field.
 func (r *billingStatusResolver) LiveUsage(ctx context.Context, obj *proto.BillingStatusResponse) (*proto.LiveUsageSummary, error) {
-	preview, _ := r.Resolver.DoGetInvoicePreview(ctx)
+	preview, _ := r.DoGetInvoicePreview(ctx)
 	var startTime, endTime *time.Time
 	if preview != nil {
 		if preview.PeriodStart != nil {
@@ -533,12 +533,12 @@ func (r *billingStatusResolver) LiveUsage(ctx context.Context, obj *proto.Billin
 			endTime = &end
 		}
 	}
-	return r.Resolver.DoGetLiveUsageSummary(ctx, startTime, endTime)
+	return r.DoGetLiveUsageSummary(ctx, startTime, endTime)
 }
 
 // InvoicePreview is the resolver for the invoicePreview field.
 func (r *billingStatusResolver) InvoicePreview(ctx context.Context, obj *proto.BillingStatusResponse) (*proto.Invoice, error) {
-	return r.Resolver.DoGetInvoicePreview(ctx)
+	return r.DoGetInvoicePreview(ctx)
 }
 
 // Metadata is the resolver for the metadata field.
@@ -876,7 +876,7 @@ func (r *clusterResolver) ID(ctx context.Context, obj *proto.InfrastructureClust
 
 // IsSubscribed is the resolver for the isSubscribed field.
 func (r *clusterResolver) IsSubscribed(ctx context.Context, obj *proto.InfrastructureCluster) (bool, error) {
-	return r.Resolver.DoCheckIsSubscribed(ctx, obj)
+	return r.DoCheckIsSubscribed(ctx, obj)
 }
 
 // CreatedAt is the resolver for the createdAt field.
@@ -901,7 +901,7 @@ func (r *clusterResolver) UpdatedAt(ctx context.Context, obj *proto.Infrastructu
 func (r *clusterResolver) NodesConnection(ctx context.Context, obj *proto.InfrastructureCluster, page *model.ConnectionInput) (*model.NodesConnection, error) {
 	// Reuse DoGetNodesConnection with cluster ID filter
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetNodesConnection(ctx, &obj.Id, nil, nil, first, after, last, before)
+	return r.DoGetNodesConnection(ctx, &obj.Id, nil, nil, first, after, last, before)
 }
 
 // ResourceLimits is the resolver for the resourceLimits field.
@@ -1445,13 +1445,13 @@ func (r *infrastructureNodeResolver) UpdatedAt(ctx context.Context, obj *proto.I
 // MetricsConnection is the resolver for the metricsConnection field.
 func (r *infrastructureNodeResolver) MetricsConnection(ctx context.Context, obj *proto.InfrastructureNode, page *model.ConnectionInput, timeRange *model.TimeRangeInput) (*model.NodeMetricsConnection, error) {
 	first, after := mergeForwardConnectionInput(page, nil, nil)
-	return r.Resolver.DoGetNodeMetricsConnectionForNode(ctx, obj, timeRange, first, after)
+	return r.DoGetNodeMetricsConnectionForNode(ctx, obj, timeRange, first, after)
 }
 
 // Metrics1hConnection is the resolver for the metrics1hConnection field.
 func (r *infrastructureNodeResolver) Metrics1hConnection(ctx context.Context, obj *proto.InfrastructureNode, page *model.ConnectionInput, timeRange *model.TimeRangeInput) (*model.NodeMetrics1hConnection, error) {
 	first, after := mergeForwardConnectionInput(page, nil, nil)
-	return r.Resolver.DoGetNodeMetrics1hConnectionForNode(ctx, obj, timeRange, first, after)
+	return r.DoGetNodeMetrics1hConnectionForNode(ctx, obj, timeRange, first, after)
 }
 
 // LiveState is the resolver for the liveState field.
@@ -1485,7 +1485,7 @@ func (r *infrastructureNodeResolver) LiveState(ctx context.Context, obj *proto.I
 		}, nil
 	}
 
-	return r.Resolver.DoGetLiveNodeState(ctx, obj.NodeId)
+	return r.DoGetLiveNodeState(ctx, obj.NodeId)
 }
 
 // StreamID is the resolver for the streamId field.
@@ -1842,7 +1842,7 @@ func (r *mutationResolver) RefreshStreamKey(ctx context.Context, id string) (mod
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolver.DoRefreshStreamKey(ctx, rawID)
+	return r.DoRefreshStreamKey(ctx, rawID)
 }
 
 // CreateClip is the resolver for the createClip field.
@@ -1865,7 +1865,7 @@ func (r *mutationResolver) StartDvr(ctx context.Context, streamID string, expire
 	if err != nil {
 		return nil, err
 	}
-	res, err := r.Resolver.DoStartDVR(ctx, rawID, expiresAt)
+	res, err := r.DoStartDVR(ctx, rawID, expiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1884,27 +1884,27 @@ func (r *mutationResolver) StartDvr(ctx context.Context, streamID string, expire
 
 // StopDvr is the resolver for the stopDVR field.
 func (r *mutationResolver) StopDvr(ctx context.Context, dvrHash string) (model.StopDVRResult, error) {
-	return r.Resolver.DoStopDVR(ctx, dvrHash)
+	return r.DoStopDVR(ctx, dvrHash)
 }
 
 // DeleteDvr is the resolver for the deleteDVR field.
 func (r *mutationResolver) DeleteDvr(ctx context.Context, dvrHash string) (model.DeleteDVRResult, error) {
-	return r.Resolver.DoDeleteDVR(ctx, dvrHash)
+	return r.DoDeleteDVR(ctx, dvrHash)
 }
 
 // CreateVodUpload is the resolver for the createVodUpload field.
 func (r *mutationResolver) CreateVodUpload(ctx context.Context, input model.CreateVodUploadInput) (model.CreateVodUploadResult, error) {
-	return r.Resolver.DoCreateVodUpload(ctx, input)
+	return r.DoCreateVodUpload(ctx, input)
 }
 
 // CompleteVodUpload is the resolver for the completeVodUpload field.
 func (r *mutationResolver) CompleteVodUpload(ctx context.Context, input model.CompleteVodUploadInput) (model.CompleteVodUploadResult, error) {
-	return r.Resolver.DoCompleteVodUpload(ctx, input)
+	return r.DoCompleteVodUpload(ctx, input)
 }
 
 // AbortVodUpload is the resolver for the abortVodUpload field.
 func (r *mutationResolver) AbortVodUpload(ctx context.Context, uploadID string) (model.AbortVodUploadResult, error) {
-	return r.Resolver.DoAbortVodUpload(ctx, uploadID)
+	return r.DoAbortVodUpload(ctx, uploadID)
 }
 
 // DeleteVodAsset is the resolver for the deleteVodAsset field.
@@ -1913,7 +1913,7 @@ func (r *mutationResolver) DeleteVodAsset(ctx context.Context, id string) (model
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolver.DoDeleteVodAsset(ctx, rawID)
+	return r.DoDeleteVodAsset(ctx, rawID)
 }
 
 // CreatePayment is the resolver for the createPayment field.
@@ -1923,52 +1923,52 @@ func (r *mutationResolver) CreatePayment(ctx context.Context, input model.Create
 
 // SubmitX402Payment is the resolver for the submitX402Payment field.
 func (r *mutationResolver) SubmitX402Payment(ctx context.Context, payment string, resource *string) (model.SubmitX402PaymentResult, error) {
-	return r.Resolver.DoSubmitX402Payment(ctx, payment, resource)
+	return r.DoSubmitX402Payment(ctx, payment, resource)
 }
 
 // CreateStripeCheckout is the resolver for the createStripeCheckout field.
 func (r *mutationResolver) CreateStripeCheckout(ctx context.Context, tierID string, billingPeriod string, successURL string, cancelURL string) (model.StripeCheckoutResult, error) {
-	return r.Resolver.DoCreateStripeCheckout(ctx, tierID, billingPeriod, successURL, cancelURL)
+	return r.DoCreateStripeCheckout(ctx, tierID, billingPeriod, successURL, cancelURL)
 }
 
 // CreateStripeBillingPortal is the resolver for the createStripeBillingPortal field.
 func (r *mutationResolver) CreateStripeBillingPortal(ctx context.Context, returnURL string) (model.StripeBillingPortalResult, error) {
-	return r.Resolver.DoCreateStripeBillingPortal(ctx, returnURL)
+	return r.DoCreateStripeBillingPortal(ctx, returnURL)
 }
 
 // CreateMollieFirstPayment is the resolver for the createMollieFirstPayment field.
 func (r *mutationResolver) CreateMollieFirstPayment(ctx context.Context, tierID string, method string, redirectURL string) (model.MollieFirstPaymentResult, error) {
-	return r.Resolver.DoCreateMollieFirstPayment(ctx, tierID, method, redirectURL)
+	return r.DoCreateMollieFirstPayment(ctx, tierID, method, redirectURL)
 }
 
 // CreateMollieSubscription is the resolver for the createMollieSubscription field.
 func (r *mutationResolver) CreateMollieSubscription(ctx context.Context, tierID string, mandateID string, description *string) (model.MollieSubscriptionResult, error) {
-	return r.Resolver.DoCreateMollieSubscription(ctx, tierID, mandateID, description)
+	return r.DoCreateMollieSubscription(ctx, tierID, mandateID, description)
 }
 
 // CreateCardTopup is the resolver for the createCardTopup field.
 func (r *mutationResolver) CreateCardTopup(ctx context.Context, input model.CreateCardTopupInput) (*model.CardTopupResult, error) {
-	return r.Resolver.DoCreateCardTopup(ctx, input)
+	return r.DoCreateCardTopup(ctx, input)
 }
 
 // CreateCryptoTopup is the resolver for the createCryptoTopup field.
 func (r *mutationResolver) CreateCryptoTopup(ctx context.Context, input model.CreateCryptoTopupInput) (*model.CryptoTopupResult, error) {
-	return r.Resolver.DoCreateCryptoTopup(ctx, input)
+	return r.DoCreateCryptoTopup(ctx, input)
 }
 
 // CryptoTopupStatus is the resolver for the cryptoTopupStatus field.
 func (r *mutationResolver) CryptoTopupStatus(ctx context.Context, topupID string) (*model.CryptoTopupStatus, error) {
-	return r.Resolver.DoGetCryptoTopupStatus(ctx, topupID)
+	return r.DoGetCryptoTopupStatus(ctx, topupID)
 }
 
 // UpdateBillingDetails is the resolver for the updateBillingDetails field.
 func (r *mutationResolver) UpdateBillingDetails(ctx context.Context, input model.UpdateBillingDetailsInput) (*proto.BillingDetails, error) {
-	return r.Resolver.DoUpdateBillingDetails(ctx, input)
+	return r.DoUpdateBillingDetails(ctx, input)
 }
 
 // UpdateSubscriptionCustomTerms is the resolver for the updateSubscriptionCustomTerms field.
 func (r *mutationResolver) UpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*proto.TenantSubscription, error) {
-	return r.Resolver.DoUpdateSubscriptionCustomTerms(ctx, tenantID, input)
+	return r.DoUpdateSubscriptionCustomTerms(ctx, tenantID, input)
 }
 
 // UpdateTenant is the resolver for the updateTenant field.
@@ -1982,7 +1982,7 @@ func (r *mutationResolver) SubscribeToCluster(ctx context.Context, clusterID str
 	if err != nil {
 		return false, err
 	}
-	return r.Resolver.DoSubscribeToCluster(ctx, rawID)
+	return r.DoSubscribeToCluster(ctx, rawID)
 }
 
 // UnsubscribeFromCluster is the resolver for the unsubscribeFromCluster field.
@@ -1991,7 +1991,7 @@ func (r *mutationResolver) UnsubscribeFromCluster(ctx context.Context, clusterID
 	if err != nil {
 		return false, err
 	}
-	return r.Resolver.DoUnsubscribeFromCluster(ctx, rawID)
+	return r.DoUnsubscribeFromCluster(ctx, rawID)
 }
 
 // CreatePrivateCluster is the resolver for the createPrivateCluster field.
@@ -2068,7 +2068,7 @@ func (r *mutationResolver) CreateStreamKey(ctx context.Context, streamID string,
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolver.DoCreateStreamKey(ctx, rawID, input)
+	return r.DoCreateStreamKey(ctx, rawID, input)
 }
 
 // DeleteStreamKey is the resolver for the deleteStreamKey field.
@@ -2077,32 +2077,32 @@ func (r *mutationResolver) DeleteStreamKey(ctx context.Context, streamID string,
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolver.DoDeleteStreamKey(ctx, rawID, keyID)
+	return r.DoDeleteStreamKey(ctx, rawID, keyID)
 }
 
 // WalletLogin is the resolver for the walletLogin field.
 func (r *mutationResolver) WalletLogin(ctx context.Context, input model.WalletLoginInput) (model.WalletLoginResult, error) {
-	return r.Resolver.DoWalletLogin(ctx, input)
+	return r.DoWalletLogin(ctx, input)
 }
 
 // LinkWallet is the resolver for the linkWallet field.
 func (r *mutationResolver) LinkWallet(ctx context.Context, input model.WalletLoginInput) (model.LinkWalletResult, error) {
-	return r.Resolver.DoLinkWallet(ctx, input)
+	return r.DoLinkWallet(ctx, input)
 }
 
 // UnlinkWallet is the resolver for the unlinkWallet field.
 func (r *mutationResolver) UnlinkWallet(ctx context.Context, walletID string) (model.UnlinkWalletResult, error) {
-	return r.Resolver.DoUnlinkWallet(ctx, walletID)
+	return r.DoUnlinkWallet(ctx, walletID)
 }
 
 // LinkEmail is the resolver for the linkEmail field.
 func (r *mutationResolver) LinkEmail(ctx context.Context, input model.LinkEmailInput) (model.LinkEmailResult, error) {
-	return r.Resolver.DoLinkEmail(ctx, input)
+	return r.DoLinkEmail(ctx, input)
 }
 
 // PromoteToPaid is the resolver for the promoteToPaid field.
 func (r *mutationResolver) PromoteToPaid(ctx context.Context, tierID string) (model.PromoteToPaidResult, error) {
-	return r.Resolver.DoPromoteToPaid(ctx, tierID)
+	return r.DoPromoteToPaid(ctx, tierID)
 }
 
 // CreateConversation is the resolver for the createConversation field.
@@ -2416,7 +2416,7 @@ func (r *platformOverviewResolver) TotalDownloadBytes(ctx context.Context, obj *
 
 // DailyStats is the resolver for the dailyStats field.
 func (r *platformOverviewResolver) DailyStats(ctx context.Context, obj *proto.GetPlatformOverviewResponse, days *int) ([]*proto.TenantDailyStat, error) {
-	return r.Resolver.DoGetTenantDailyStats(ctx, days)
+	return r.DoGetTenantDailyStats(ctx, days)
 }
 
 // BytesUp is the resolver for the bytesUp field.
@@ -2467,7 +2467,7 @@ func (r *playbackMetadataResolver) CreatedAt(ctx context.Context, obj *proto.Pla
 // ProcessingUsageConnection is the resolver for the processingUsageConnection field.
 func (r *processingUsageResolver) ProcessingUsageConnection(ctx context.Context, obj *markers.ProcessingUsage, page *model.ConnectionInput, streamID *string, processType *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ProcessingUsageConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetProcessingUsageConnection(ctx, streamID, processType, timeRange, first, after, last, before, noCache)
+	return r.DoGetProcessingUsageConnection(ctx, streamID, processType, timeRange, first, after, last, before, noCache)
 }
 
 // ID is the resolver for the id field.
@@ -2723,7 +2723,7 @@ func (r *queryResolver) ValidateStreamKey(ctx context.Context, streamKey string)
 // StreamKeysConnection is the resolver for the streamKeysConnection field.
 func (r *queryResolver) StreamKeysConnection(ctx context.Context, page *model.ConnectionInput, streamID string) (*model.StreamKeysConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetStreamKeysConnection(ctx, streamID, first, after, last, before)
+	return r.DoGetStreamKeysConnection(ctx, streamID, first, after, last, before)
 }
 
 // ClipsConnection is the resolver for the clipsConnection field.
@@ -2749,7 +2749,7 @@ func (r *queryResolver) BillingTiers(ctx context.Context) ([]*proto.BillingTier,
 // InvoicesConnection is the resolver for the invoicesConnection field.
 func (r *queryResolver) InvoicesConnection(ctx context.Context, page *model.ConnectionInput) (*model.InvoicesConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetInvoicesConnection(ctx, first, after, last, before)
+	return r.DoGetInvoicesConnection(ctx, first, after, last, before)
 }
 
 // Invoice is the resolver for the invoice field.
@@ -2764,22 +2764,22 @@ func (r *queryResolver) BillingStatus(ctx context.Context) (*proto.BillingStatus
 
 // MollieMandates is the resolver for the mollieMandates field.
 func (r *queryResolver) MollieMandates(ctx context.Context) ([]*proto.MollieMandate, error) {
-	return r.Resolver.DoListMollieMandates(ctx)
+	return r.DoListMollieMandates(ctx)
 }
 
 // PrepaidBalance is the resolver for the prepaidBalance field.
 func (r *queryResolver) PrepaidBalance(ctx context.Context, currency *string) (*model.PrepaidBalance, error) {
-	return r.Resolver.DoGetPrepaidBalance(ctx, currency)
+	return r.DoGetPrepaidBalance(ctx, currency)
 }
 
 // BillingDetails is the resolver for the billingDetails field.
 func (r *queryResolver) BillingDetails(ctx context.Context) (*proto.BillingDetails, error) {
-	return r.Resolver.DoGetBillingDetails(ctx)
+	return r.DoGetBillingDetails(ctx)
 }
 
 // BalanceTransactionsConnection is the resolver for the balanceTransactionsConnection field.
 func (r *queryResolver) BalanceTransactionsConnection(ctx context.Context, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) (*model.BalanceTransactionsConnection, error) {
-	return r.Resolver.DoGetBalanceTransactionsConnection(ctx, page, transactionType, timeRange)
+	return r.DoGetBalanceTransactionsConnection(ctx, page, transactionType, timeRange)
 }
 
 // TenantUsage is the resolver for the tenantUsage field.
@@ -2790,7 +2790,7 @@ func (r *queryResolver) TenantUsage(ctx context.Context, timeRange *model.TimeRa
 // UsageRecordsConnection is the resolver for the usageRecordsConnection field.
 func (r *queryResolver) UsageRecordsConnection(ctx context.Context, page *model.ConnectionInput, timeRange *model.TimeRangeInput) (*model.UsageRecordsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetUsageRecordsConnection(ctx, timeRange, first, after, last, before)
+	return r.DoGetUsageRecordsConnection(ctx, timeRange, first, after, last, before)
 }
 
 // UsageAggregates is the resolver for the usageAggregates field.
@@ -2799,7 +2799,7 @@ func (r *queryResolver) UsageAggregates(ctx context.Context, timeRange model.Tim
 	if granularity != nil && *granularity != "" {
 		gran = *granularity
 	}
-	return r.Resolver.DoGetUsageAggregates(ctx, &timeRange, gran, usageTypes)
+	return r.DoGetUsageAggregates(ctx, &timeRange, gran, usageTypes)
 }
 
 // Tenant is the resolver for the tenant field.
@@ -2810,7 +2810,7 @@ func (r *queryResolver) Tenant(ctx context.Context) (*proto.Tenant, error) {
 // ClustersConnection is the resolver for the clustersConnection field.
 func (r *queryResolver) ClustersConnection(ctx context.Context, page *model.ConnectionInput) (*model.ClustersConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetClustersConnection(ctx, first, after, last, before)
+	return r.DoGetClustersConnection(ctx, first, after, last, before)
 }
 
 // Cluster is the resolver for the cluster field.
@@ -2825,7 +2825,7 @@ func (r *queryResolver) Cluster(ctx context.Context, id string) (*proto.Infrastr
 // NodesConnection is the resolver for the nodesConnection field.
 func (r *queryResolver) NodesConnection(ctx context.Context, page *model.ConnectionInput, clusterID *string, status *model.NodeStatus, typeArg *string) (*model.NodesConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetNodesConnection(ctx, clusterID, status, typeArg, first, after, last, before)
+	return r.DoGetNodesConnection(ctx, clusterID, status, typeArg, first, after, last, before)
 }
 
 // Node is the resolver for the node field.
@@ -2848,7 +2848,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		if err != nil {
 			return nil, err
 		}
-		return r.Resolver.DoGetVodAsset(ctx, normalized)
+		return r.DoGetVodAsset(ctx, normalized)
 	case globalid.TypeCluster:
 		return r.DoGetCluster(ctx, rawID)
 	case globalid.TypeInfrastructureNode:
@@ -2865,7 +2865,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			return nil, err
 		}
 		first := 100
-		conn, err := r.Resolver.DoGetStreamEventsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetStreamEventsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2887,7 +2887,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			return nil, err
 		}
 		first := 100
-		conn, err := r.Resolver.DoGetBufferEventsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetBufferEventsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2909,7 +2909,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			return nil, err
 		}
 		first := 100
-		conn, err := r.Resolver.DoGetTrackListEventsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetTrackListEventsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2932,7 +2932,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 100
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetConnectionEventsConnection(ctx, streamPtr, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetConnectionEventsConnection(ctx, streamPtr, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2955,7 +2955,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetViewerSessionsConnection(ctx, streamPtr, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetViewerSessionsConnection(ctx, streamPtr, timeRangeAround(ts, time.Hour), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2977,7 +2977,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			return nil, err
 		}
 		first := 200
-		conn, err := r.Resolver.DoGetStreamHealthMetricsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Minute*5), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetStreamHealthMetricsConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Minute*5), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2999,7 +2999,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			return nil, err
 		}
 		first := 200
-		conn, err := r.Resolver.DoGetStreamHealth5mConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Minute*10), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetStreamHealth5mConnection(ctx, streamIDGlobal, timeRangeAround(ts, time.Minute*10), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3022,7 +3022,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetStreamConnectionHourlyConnection(ctx, streamPtr, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetStreamConnectionHourlyConnection(ctx, streamPtr, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3046,7 +3046,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		first := 200
 		streamPtr := &streamIDGlobal
 		nodePtr := &nodeID
-		conn, err := r.Resolver.DoGetClientMetrics5mConnection(ctx, streamPtr, nodePtr, timeRangeAround(ts, time.Minute*10), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetClientMetrics5mConnection(ctx, streamPtr, nodePtr, timeRangeAround(ts, time.Minute*10), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3069,7 +3069,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetQualityTierDailyConnection(ctx, streamPtr, timeRangeAround(day, time.Hour*24*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetQualityTierDailyConnection(ctx, streamPtr, timeRangeAround(day, time.Hour*24*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3095,7 +3095,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			streamIDGlobal := globalid.Encode(globalid.TypeStream, streamID)
 			streamPtr = &streamIDGlobal
 		}
-		conn, err := r.Resolver.DoGetViewerHoursHourlyConnection(ctx, streamPtr, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetViewerHoursHourlyConnection(ctx, streamPtr, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3116,7 +3116,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			return nil, err
 		}
 		first := 200
-		conn, err := r.Resolver.DoGetViewerGeoHourlyConnection(ctx, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetViewerGeoHourlyConnection(ctx, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3139,7 +3139,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetStreamAnalyticsDailyConnection(ctx, streamPtr, timeRangeAround(day, time.Hour*24*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetStreamAnalyticsDailyConnection(ctx, streamPtr, timeRangeAround(day, time.Hour*24*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3162,7 +3162,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		if days < 1 {
 			days = 1
 		}
-		stats, err := r.Resolver.DoGetTenantDailyStats(ctx, &days)
+		stats, err := r.DoGetTenantDailyStats(ctx, &days)
 		if err != nil {
 			return nil, err
 		}
@@ -3184,7 +3184,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		nodePtr := &nodeID
-		conn, err := r.Resolver.DoGetNodePerformance5mConnection(ctx, nodePtr, timeRangeAround(ts, time.Minute*10), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetNodePerformance5mConnection(ctx, nodePtr, timeRangeAround(ts, time.Minute*10), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3206,7 +3206,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		nodePtr := &nodeID
-		conn, err := r.Resolver.DoGetNodeMetricsConnection(ctx, nodePtr, timeRangeAround(ts, time.Minute*5), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetNodeMetricsConnection(ctx, nodePtr, timeRangeAround(ts, time.Minute*5), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3228,7 +3228,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		nodePtr := &nodeID
-		conn, err := r.Resolver.DoGetNodeMetrics1hConnection(ctx, timeRangeAround(ts, time.Hour*2), nodePtr, &first, nil, nil, nil, nil)
+		conn, err := r.DoGetNodeMetrics1hConnection(ctx, timeRangeAround(ts, time.Hour*2), nodePtr, &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3251,7 +3251,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		first := 200
 		nodePtr := &nodeID
 		scopePtr := &storageScope
-		conn, err := r.Resolver.DoGetStorageUsageConnection(ctx, nodePtr, scopePtr, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetStorageUsageConnection(ctx, nodePtr, scopePtr, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3274,7 +3274,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetStorageEventsConnection(ctx, streamPtr, nil, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetStorageEventsConnection(ctx, streamPtr, nil, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3297,7 +3297,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetProcessingUsageConnection(ctx, streamPtr, nil, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetProcessingUsageConnection(ctx, streamPtr, nil, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3320,7 +3320,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		}
 		first := 200
 		streamPtr := &streamIDGlobal
-		conn, err := r.Resolver.DoGetArtifactEventsConnection(ctx, streamPtr, nil, nil, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetArtifactEventsConnection(ctx, streamPtr, nil, nil, timeRangeAround(ts, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3338,7 +3338,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 			return nil, err
 		}
 		conversationID, messageID := parts[0], parts[1]
-		return r.Resolver.MessageByID(ctx, conversationID, messageID)
+		return r.MessageByID(ctx, conversationID, messageID)
 	case globalid.TypeAPIUsageRecord:
 		parts, err := globalid.DecodeCompositeExpected(id, globalid.TypeAPIUsageRecord, 4)
 		if err != nil {
@@ -3353,7 +3353,7 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 		authTypePtr := &authType
 		operationTypePtr := &operationType
 		operationNamePtr := &operationName
-		conn, err := r.Resolver.DoGetAPIUsageConnection(ctx, authTypePtr, operationTypePtr, operationNamePtr, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
+		conn, err := r.DoGetAPIUsageConnection(ctx, authTypePtr, operationTypePtr, operationNamePtr, timeRangeAround(hour, time.Hour*2), &first, nil, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -3371,40 +3371,40 @@ func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error)
 // DiscoverServicesConnection is the resolver for the discoverServicesConnection field.
 func (r *queryResolver) DiscoverServicesConnection(ctx context.Context, page *model.ConnectionInput, typeArg string, clusterID *string) (*model.ServiceInstancesConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetDiscoverServicesConnection(ctx, typeArg, clusterID, first, after, last, before)
+	return r.DoGetDiscoverServicesConnection(ctx, typeArg, clusterID, first, after, last, before)
 }
 
 // ClustersAccess is the resolver for the clustersAccess field.
 func (r *queryResolver) ClustersAccess(ctx context.Context, first *int, after *string) ([]*model.ClusterAccess, error) {
-	return r.Resolver.DoGetClustersAccess(ctx, first, after)
+	return r.DoGetClustersAccess(ctx, first, after)
 }
 
 // ClustersAccessConnection is the resolver for the clustersAccessConnection field.
 func (r *queryResolver) ClustersAccessConnection(ctx context.Context, page *model.ConnectionInput) (*model.ClusterAccessConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetClustersAccessConnection(ctx, first, after, last, before)
+	return r.DoGetClustersAccessConnection(ctx, first, after, last, before)
 }
 
 // ClustersAvailable is the resolver for the clustersAvailable field.
 func (r *queryResolver) ClustersAvailable(ctx context.Context, first *int, after *string) ([]*model.AvailableCluster, error) {
-	return r.Resolver.DoGetClustersAvailable(ctx, first, after)
+	return r.DoGetClustersAvailable(ctx, first, after)
 }
 
 // ClustersAvailableConnection is the resolver for the clustersAvailableConnection field.
 func (r *queryResolver) ClustersAvailableConnection(ctx context.Context, page *model.ConnectionInput) (*model.AvailableClusterConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetClustersAvailableConnection(ctx, first, after, last, before)
+	return r.DoGetClustersAvailableConnection(ctx, first, after, last, before)
 }
 
 // MySubscriptions is the resolver for the mySubscriptions field.
 func (r *queryResolver) MySubscriptions(ctx context.Context, first *int, after *string) ([]*proto.InfrastructureCluster, error) {
-	return r.Resolver.DoListMySubscriptions(ctx, first, after)
+	return r.DoListMySubscriptions(ctx, first, after)
 }
 
 // MySubscriptionsConnection is the resolver for the mySubscriptionsConnection field.
 func (r *queryResolver) MySubscriptionsConnection(ctx context.Context, page *model.ConnectionInput) (*model.MySubscriptionsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetMySubscriptionsConnection(ctx, first, after, last, before)
+	return r.DoGetMySubscriptionsConnection(ctx, first, after, last, before)
 }
 
 // ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
@@ -3430,7 +3430,7 @@ func (r *queryResolver) MarketplaceClusters(ctx context.Context, first *int, aft
 // MarketplaceClustersConnection is the resolver for the marketplaceClustersConnection field.
 func (r *queryResolver) MarketplaceClustersConnection(ctx context.Context, page *model.ConnectionInput) (*model.MarketplaceClusterConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetMarketplaceClustersConnection(ctx, first, after, last, before)
+	return r.DoGetMarketplaceClustersConnection(ctx, first, after, last, before)
 }
 
 // MarketplaceCluster is the resolver for the marketplaceCluster field.
@@ -3458,7 +3458,7 @@ func (r *queryResolver) PendingSubscriptionsConnection(ctx context.Context, page
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolver.DoGetPendingSubscriptionsConnection(ctx, rawID, first, after, last, before)
+	return r.DoGetPendingSubscriptionsConnection(ctx, rawID, first, after, last, before)
 }
 
 // ClusterInvites is the resolver for the clusterInvites field.
@@ -3477,7 +3477,7 @@ func (r *queryResolver) ClusterInvitesConnection(ctx context.Context, page *mode
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolver.DoGetClusterInvitesConnection(ctx, rawID, first, after, last, before)
+	return r.DoGetClusterInvitesConnection(ctx, rawID, first, after, last, before)
 }
 
 // MyClusterInvites is the resolver for the myClusterInvites field.
@@ -3488,25 +3488,25 @@ func (r *queryResolver) MyClusterInvites(ctx context.Context) ([]*proto.ClusterI
 // MyClusterInvitesConnection is the resolver for the myClusterInvitesConnection field.
 func (r *queryResolver) MyClusterInvitesConnection(ctx context.Context, page *model.ConnectionInput) (*model.ClusterInviteConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetMyClusterInvitesConnection(ctx, first, after, last, before)
+	return r.DoGetMyClusterInvitesConnection(ctx, first, after, last, before)
 }
 
 // DeveloperTokensConnection is the resolver for the developerTokensConnection field.
 func (r *queryResolver) DeveloperTokensConnection(ctx context.Context, page *model.ConnectionInput) (*model.DeveloperTokensConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetDeveloperTokensConnection(ctx, first, after, last, before)
+	return r.DoGetDeveloperTokensConnection(ctx, first, after, last, before)
 }
 
 // BootstrapTokensConnection is the resolver for the bootstrapTokensConnection field.
 func (r *queryResolver) BootstrapTokensConnection(ctx context.Context, page *model.ConnectionInput, kind *string) (*model.BootstrapTokenConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetBootstrapTokensConnection(ctx, kind, first, after, last, before)
+	return r.DoGetBootstrapTokensConnection(ctx, kind, first, after, last, before)
 }
 
 // DvrRecordingsConnection is the resolver for the dvrRecordingsConnection field.
 func (r *queryResolver) DvrRecordingsConnection(ctx context.Context, page *model.ConnectionInput, streamID *string) (*model.DVRRecordingsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetDVRRecordingsConnection(ctx, streamID, first, after, last, before)
+	return r.DoGetDVRRecordingsConnection(ctx, streamID, first, after, last, before)
 }
 
 // VodAsset is the resolver for the vodAsset field.
@@ -3515,13 +3515,13 @@ func (r *queryResolver) VodAsset(ctx context.Context, id string) (*model.VodAsse
 	if err != nil {
 		return nil, err
 	}
-	return r.Resolver.DoGetVodAsset(ctx, rawID)
+	return r.DoGetVodAsset(ctx, rawID)
 }
 
 // VodAssetsConnection is the resolver for the vodAssetsConnection field.
 func (r *queryResolver) VodAssetsConnection(ctx context.Context, page *model.ConnectionInput) (*model.VodAssetsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetVodAssetsConnection(ctx, first, after, last, before)
+	return r.DoGetVodAssetsConnection(ctx, first, after, last, before)
 }
 
 // ResolveViewerEndpoint is the resolver for the resolveViewerEndpoint field.
@@ -3569,7 +3569,7 @@ func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentID str
 
 	// Call Commodore's viewer endpoint resolution (which then calls Foghorn)
 	// proto.ViewerEndpointResponse is autobound to GraphQL ViewerEndpointResponse
-	return r.Resolver.DoResolveViewerEndpoint(ctx, contentID, viewerIP)
+	return r.DoResolveViewerEndpoint(ctx, contentID, viewerIP)
 }
 
 // ResolveIngestEndpoint is the resolver for the resolveIngestEndpoint field.
@@ -3606,7 +3606,7 @@ func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey str
 		}
 	}
 
-	return r.Resolver.DoResolveIngestEndpoint(ctx, streamKey, viewerIP)
+	return r.DoResolveIngestEndpoint(ctx, streamKey, viewerIP)
 }
 
 // ConversationsConnection is the resolver for the conversationsConnection field.
@@ -3837,7 +3837,7 @@ func (r *storageEventResolver) SizeBytes(ctx context.Context, obj *proto.Storage
 // StorageUsageConnection is the resolver for the storageUsageConnection field.
 func (r *storageUsageResolver) StorageUsageConnection(ctx context.Context, obj *markers.StorageUsage, page *model.ConnectionInput, nodeID *string, storageScope *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StorageUsageConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetStorageUsageConnection(ctx, nodeID, storageScope, timeRange, first, after, last, before, noCache)
+	return r.DoGetStorageUsageConnection(ctx, nodeID, storageScope, timeRange, first, after, last, before, noCache)
 }
 
 // ID is the resolver for the id field.
@@ -3942,7 +3942,8 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto
 			EndedAt:         obj.EndedAt,
 		}
 		// Add quality metrics for live/recording streams
-		if obj.Status == "live" || obj.Status == "recording" {
+		switch obj.Status {
+		case "live", "recording":
 			bufferState := "FULL"
 			qualityTier := "1080p30"
 			primaryWidth := int32(1920)
@@ -3961,7 +3962,7 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto
 			resp.HasIssues = &hasIssues
 			resp.LastEventType = "stream-buffer"
 			resp.LastEventAt = obj.UpdatedAt
-		} else if obj.Status == "ended" {
+		case "ended":
 			// Ended streams have last event info
 			resp.LastEventType = "stream-end"
 			resp.LastEventAt = obj.EndedAt
@@ -4480,84 +4481,84 @@ func (r *streamMetricsResolver) PrimaryFps(ctx context.Context, obj *proto.Strea
 // ViewerGeographicsConnection is the resolver for the viewerGeographicsConnection field.
 func (r *streamingUsageResolver) ViewerGeographicsConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput) (*model.ViewerGeographicsConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetViewerGeographicsConnection(ctx, streamID, timeRange, first, after, last, before)
+	return r.DoGetViewerGeographicsConnection(ctx, streamID, timeRange, first, after, last, before)
 }
 
 // GeographicDistribution is the resolver for the geographicDistribution field.
 func (r *streamingUsageResolver) GeographicDistribution(ctx context.Context, obj *markers.StreamingUsage, streamID *string, timeRange *model.TimeRangeInput, topN *int) (*model.GeographicDistribution, error) {
-	return r.Resolver.DoGetGeographicDistribution(ctx, streamID, timeRange, topN)
+	return r.DoGetGeographicDistribution(ctx, streamID, timeRange, topN)
 }
 
 // StreamAnalyticsSummary is the resolver for the streamAnalyticsSummary field.
 func (r *streamingUsageResolver) StreamAnalyticsSummary(ctx context.Context, obj *markers.StreamingUsage, streamID string, timeRange *model.TimeRangeInput) (*proto.StreamAnalyticsSummary, error) {
-	return r.Resolver.DoGetStreamAnalyticsSummary(ctx, streamID, timeRange)
+	return r.DoGetStreamAnalyticsSummary(ctx, streamID, timeRange)
 }
 
 // StreamAnalyticsSummariesConnection is the resolver for the streamAnalyticsSummariesConnection field.
 func (r *streamingUsageResolver) StreamAnalyticsSummariesConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, timeRange model.TimeRangeInput, sortBy *proto.StreamSummarySortField, sortOrder *proto.SortOrder) (*model.StreamAnalyticsSummaryConnection, error) {
-	return r.Resolver.DoGetStreamAnalyticsSummariesConnection(ctx, page, &timeRange, sortBy, sortOrder)
+	return r.DoGetStreamAnalyticsSummariesConnection(ctx, page, &timeRange, sortBy, sortOrder)
 }
 
 // ViewerHoursHourlyConnection is the resolver for the viewerHoursHourlyConnection field.
 func (r *streamingUsageResolver) ViewerHoursHourlyConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.ViewerHoursHourlyConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetViewerHoursHourlyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetViewerHoursHourlyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // ViewerGeoHourlyConnection is the resolver for the viewerGeoHourlyConnection field.
 func (r *streamingUsageResolver) ViewerGeoHourlyConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, timeRange *model.TimeRangeInput, noCache *bool) (*model.ViewerGeoHourlyConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetViewerGeoHourlyConnection(ctx, timeRange, first, after, last, before, noCache)
+	return r.DoGetViewerGeoHourlyConnection(ctx, timeRange, first, after, last, before, noCache)
 }
 
 // ViewerTimeSeriesConnection is the resolver for the viewerTimeSeriesConnection field.
 func (r *streamingUsageResolver) ViewerTimeSeriesConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, streamID string, timeRange *model.TimeRangeInput, interval *string) (*model.ViewerTimeSeriesConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetViewerTimeSeriesConnection(ctx, streamID, timeRange, interval, first, after, last, before)
+	return r.DoGetViewerTimeSeriesConnection(ctx, streamID, timeRange, interval, first, after, last, before)
 }
 
 // QualityTierDailyConnection is the resolver for the qualityTierDailyConnection field.
 func (r *streamingUsageResolver) QualityTierDailyConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.QualityTierDailyConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetQualityTierDailyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetQualityTierDailyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // StreamConnectionHourlyConnection is the resolver for the streamConnectionHourlyConnection field.
 func (r *streamingUsageResolver) StreamConnectionHourlyConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamConnectionHourlyConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetStreamConnectionHourlyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetStreamConnectionHourlyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // TenantAnalyticsDailyConnection is the resolver for the tenantAnalyticsDailyConnection field.
 func (r *streamingUsageResolver) TenantAnalyticsDailyConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, timeRange *model.TimeRangeInput, noCache *bool) (*model.TenantAnalyticsDailyConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetTenantAnalyticsDailyConnection(ctx, timeRange, first, after, last, before, noCache)
+	return r.DoGetTenantAnalyticsDailyConnection(ctx, timeRange, first, after, last, before, noCache)
 }
 
 // StreamAnalyticsDailyConnection is the resolver for the streamAnalyticsDailyConnection field.
 func (r *streamingUsageResolver) StreamAnalyticsDailyConnection(ctx context.Context, obj *markers.StreamingUsage, page *model.ConnectionInput, streamID *string, timeRange *model.TimeRangeInput, noCache *bool) (*model.StreamAnalyticsDailyConnection, error) {
 	first, after, last, before := mergeConnectionInput(page, nil, nil, nil, nil)
-	return r.Resolver.DoGetStreamAnalyticsDailyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
+	return r.DoGetStreamAnalyticsDailyConnection(ctx, streamID, timeRange, first, after, last, before, noCache)
 }
 
 // LiveStreamEvents is the resolver for the liveStreamEvents field.
 func (r *subscriptionResolver) LiveStreamEvents(ctx context.Context, streamID *string) (<-chan *model.StreamEvent, error) {
-	return r.Resolver.DoStreamUpdates(ctx, streamID)
+	return r.DoStreamUpdates(ctx, streamID)
 }
 
 // LiveViewerMetrics is the resolver for the liveViewerMetrics field.
 func (r *subscriptionResolver) LiveViewerMetrics(ctx context.Context, streamID string) (<-chan *proto.ClientLifecycleUpdate, error) {
-	return r.Resolver.DoAnalyticsUpdates(ctx, streamID)
+	return r.DoAnalyticsUpdates(ctx, streamID)
 }
 
 // LiveConnectionEvents is the resolver for the liveConnectionEvents field.
 func (r *subscriptionResolver) LiveConnectionEvents(ctx context.Context, streamID *string) (<-chan *proto.ConnectionEvent, error) {
-	return r.Resolver.DoConnectionEvents(ctx, streamID)
+	return r.DoConnectionEvents(ctx, streamID)
 }
 
 // LiveTrackListUpdates is the resolver for the liveTrackListUpdates field.
 func (r *subscriptionResolver) LiveTrackListUpdates(ctx context.Context, streamID string) (<-chan *proto.StreamTrackListTrigger, error) {
-	return r.Resolver.DoTrackListUpdates(ctx, streamID)
+	return r.DoTrackListUpdates(ctx, streamID)
 }
 
 // LiveClipLifecycle is the resolver for the liveClipLifecycle field.
@@ -4572,7 +4573,7 @@ func (r *subscriptionResolver) LiveClipLifecycle(ctx context.Context, streamID s
 	}
 	jwtToken := ctxkeys.GetJWTToken(ctx)
 	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.Resolver.SubManager.SubscribeToLifecycle(ctx, cfg, rawID)
+	return r.SubManager.SubscribeToLifecycle(ctx, cfg, rawID)
 }
 
 // LiveDvrLifecycle is the resolver for the liveDvrLifecycle field.
@@ -4587,7 +4588,7 @@ func (r *subscriptionResolver) LiveDvrLifecycle(ctx context.Context, streamID st
 	}
 	jwtToken := ctxkeys.GetJWTToken(ctx)
 	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.Resolver.SubManager.SubscribeToDVRLifecycle(ctx, cfg, rawID)
+	return r.SubManager.SubscribeToDVRLifecycle(ctx, cfg, rawID)
 }
 
 // LiveVodLifecycle is the resolver for the liveVodLifecycle field.
@@ -4598,34 +4599,34 @@ func (r *subscriptionResolver) LiveVodLifecycle(ctx context.Context) (<-chan *pr
 	}
 	jwtToken := ctxkeys.GetJWTToken(ctx)
 	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.Resolver.SubManager.SubscribeToVodLifecycle(ctx, cfg)
+	return r.SubManager.SubscribeToVodLifecycle(ctx, cfg)
 }
 
 // LiveStorageEvents is the resolver for the liveStorageEvents field.
 func (r *subscriptionResolver) LiveStorageEvents(ctx context.Context, streamID *string) (<-chan *proto.StorageEvent, error) {
-	return r.Resolver.DoStorageEvents(ctx, streamID)
+	return r.DoStorageEvents(ctx, streamID)
 }
 
 // LiveProcessingEvents is the resolver for the liveProcessingEvents field.
 func (r *subscriptionResolver) LiveProcessingEvents(ctx context.Context, streamID *string) (<-chan *proto.ProcessingUsageRecord, error) {
-	return r.Resolver.DoProcessingEvents(ctx, streamID)
+	return r.DoProcessingEvents(ctx, streamID)
 }
 
 // LiveSystemHealth is the resolver for the liveSystemHealth field.
 func (r *subscriptionResolver) LiveSystemHealth(ctx context.Context) (<-chan *proto.NodeLifecycleUpdate, error) {
-	return r.Resolver.DoSystemUpdates(ctx)
+	return r.DoSystemUpdates(ctx)
 }
 
 // LiveFirehose is the resolver for the liveFirehose field.
 func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.TenantEvent, error) {
-	if r.Resolver.Metrics != nil {
+	if r.Metrics != nil {
 		r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "requested").Inc()
 	}
 
 	// Demo mode returns mock events
 	if middleware.IsDemoMode(ctx) {
-		r.Resolver.Logger.Debug("Returning demo firehose subscription")
-		if r.Resolver.Metrics != nil {
+		r.Logger.Debug("Returning demo firehose subscription")
+		if r.Metrics != nil {
 			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "demo").Inc()
 		}
 		ch := make(chan *model.TenantEvent, 10)
@@ -4651,10 +4652,10 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 		return ch, nil
 	}
 
-	r.Resolver.Logger.Info("Setting up firehose subscription")
+	r.Logger.Info("Setting up firehose subscription")
 	user, err := middleware.RequireAuth(ctx)
 	if err != nil {
-		if r.Resolver.Metrics != nil {
+		if r.Metrics != nil {
 			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "auth_error").Inc()
 		}
 		return nil, fmt.Errorf("authentication required for firehose subscription: %w", err)
@@ -4663,9 +4664,9 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 	jwtToken := ctxkeys.GetJWTToken(ctx)
 
 	config := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	ch, err := r.Resolver.SubManager.SubscribeToFirehose(ctx, config)
+	ch, err := r.SubManager.SubscribeToFirehose(ctx, config)
 	if err != nil {
-		if r.Resolver.Metrics != nil {
+		if r.Metrics != nil {
 			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "error").Inc()
 		}
 		r.Resolver.Logger.WithError(err).WithFields(logging.Fields{
@@ -4680,7 +4681,7 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 		"tenant_id": user.TenantID,
 	}).Info("Successfully setup firehose subscription")
 
-	if r.Resolver.Metrics != nil {
+	if r.Metrics != nil {
 		r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "success").Inc()
 	}
 	return ch, nil
@@ -4689,13 +4690,13 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 // LiveMessageReceived is the resolver for the liveMessageReceived field.
 // Streams new messages for a specific conversation via Signalman's CHANNEL_MESSAGING.
 func (r *subscriptionResolver) LiveMessageReceived(ctx context.Context, conversationID string) (<-chan *model.Message, error) {
-	return r.Resolver.DoMessageUpdates(ctx, conversationID)
+	return r.DoMessageUpdates(ctx, conversationID)
 }
 
 // LiveConversationUpdates is the resolver for the liveConversationUpdates field.
 // Streams conversation lifecycle updates via Signalman's CHANNEL_MESSAGING.
 func (r *subscriptionResolver) LiveConversationUpdates(ctx context.Context, conversationID *string) (<-chan *model.Conversation, error) {
-	return r.Resolver.DoConversationUpdates(ctx, conversationID)
+	return r.DoConversationUpdates(ctx, conversationID)
 }
 
 // NodeID is the resolver for the nodeId field.

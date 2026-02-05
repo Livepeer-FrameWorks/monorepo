@@ -203,7 +203,7 @@ func newEdgeEnrollCmd() *cobra.Command {
 				break
 			}
 			if resp != nil && resp.Body != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			if time.Now().After(deadline) {
 				if err != nil {
@@ -1007,12 +1007,12 @@ func newEdgeStatusCmd() *cobra.Command {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				cancel()
-				fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
 			} else {
 				resp, err := httpClient.Do(req)
 				cancel()
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> error: %v\n", url, err)
 				} else {
 					if resp.Body != nil {
 						_ = resp.Body.Close()
@@ -1022,7 +1022,7 @@ func newEdgeStatusCmd() *cobra.Command {
 					if ok {
 						mark = "✓"
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> %s (http %d)\n", url, mark, resp.StatusCode)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "HTTPS: %s -> %s (http %d)\n", url, mark, resp.StatusCode)
 				}
 			}
 		}
@@ -1235,19 +1235,19 @@ func newEdgeDoctorCmd() *cobra.Command {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				cancel()
-				fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
-				fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
 			} else {
 				resp, err := httpClient.Do(req)
 				cancel()
-				fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "HTTPS Health:")
 				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s error: %v\n", url, err)
 				} else {
 					if resp.Body != nil {
 						_ = resp.Body.Close()
 					}
-					fmt.Fprintf(cmd.OutOrStdout(), " %s http %d\n", url, resp.StatusCode)
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), " %s http %d\n", url, resp.StatusCode)
 				}
 			}
 		}

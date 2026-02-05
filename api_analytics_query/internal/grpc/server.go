@@ -3352,7 +3352,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var summaries []*pb.StreamAnalyticsSummary
 
@@ -4721,7 +4721,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		s.logger.WithError(err).Warn("Failed to query viewer_geo_hourly for geo breakdown")
 	} else if rows != nil {
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var countryCode string
 			var viewerCount int32

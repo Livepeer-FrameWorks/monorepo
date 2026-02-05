@@ -241,7 +241,7 @@ func (r *X402Reconciler) reconcileFailedTimeouts(ctx context.Context) {
 		r.logger.WithError(err).Error("Failed to query failed x402 settlements")
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var s PendingSettlement
@@ -337,7 +337,7 @@ func (r *X402Reconciler) reconcileConfirmedSettlements(ctx context.Context) {
 		r.logger.WithError(err).Error("Failed to query confirmed x402 settlements")
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var s PendingSettlement
@@ -502,7 +502,7 @@ func (r *X402Reconciler) getLatestBlockNumber(ctx context.Context, network Netwo
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -606,7 +606,7 @@ func (r *X402Reconciler) getTransactionReceipt(ctx context.Context, network Netw
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

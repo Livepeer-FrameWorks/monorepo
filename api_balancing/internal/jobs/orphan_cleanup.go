@@ -212,7 +212,7 @@ func (j *OrphanCleanupJob) findOrphanedVODs(ctx context.Context) ([]orphanedVOD,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var orphans []orphanedVOD
 	for rows.Next() {

@@ -267,7 +267,7 @@ func (r *nodeRepositoryDB) ListNodeMaintenance(ctx context.Context) ([]state.Nod
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []state.NodeMaintenanceRecord
 	for rows.Next() {

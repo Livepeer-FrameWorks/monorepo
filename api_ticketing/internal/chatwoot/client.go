@@ -158,7 +158,7 @@ func (c *Client) GetContactByEmail(ctx context.Context, email string) (*Contact,
 	if err != nil {
 		return nil, fmt.Errorf("search contacts: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("search contacts: status %d", resp.StatusCode)
@@ -193,7 +193,7 @@ func (c *Client) UpdateContactSourceID(ctx context.Context, contactID int64, sou
 	if err != nil {
 		return nil, fmt.Errorf("update contact: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)

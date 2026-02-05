@@ -57,8 +57,12 @@ func NewClient(config Config) (*Client, error) {
 		config.Timeout = 5 * time.Second
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
+
 	// For now, use insecure credentials for development. In production, use TLS.
-	conn, err := grpc.NewClient(
+	conn, err := grpc.DialContext(
+		ctx,
 		config.Addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),

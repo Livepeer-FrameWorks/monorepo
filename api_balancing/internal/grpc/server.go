@@ -2067,7 +2067,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVo
 		WHERE artifact_hash = $1 AND NOT is_orphaned
 	`, req.ArtifactHash)
 	if err == nil {
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		requestID := uuid.NewString()
 		for rows.Next() {
 			var nodeID string

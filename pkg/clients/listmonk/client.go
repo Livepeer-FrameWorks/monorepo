@@ -142,7 +142,7 @@ func (c *Client) GetSubscriber(ctx context.Context, email string) (*SubscriberIn
 	if err != nil {
 		return nil, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return nil, false, fmt.Errorf("listmonk returned status: %d", resp.StatusCode)
@@ -216,7 +216,7 @@ func (c *Client) Unsubscribe(ctx context.Context, subscriberID int, listID int) 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("listmonk returned status: %d", resp.StatusCode)

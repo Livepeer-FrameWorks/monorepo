@@ -466,9 +466,9 @@ func Init(
 			endedAt         sql.NullTime
 		)
 
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 		if commodoreClient != nil {
-			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
 			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
 				tenantIDStr = resp.TenantId
 				userIDStr = resp.UserId
@@ -477,7 +477,7 @@ func Init(
 			}
 		}
 
-		_ = db.QueryRow(`
+		_ = db.QueryRowContext(cctx, `
 			SELECT retention_until, started_at, ended_at
 			FROM foghorn.artifacts
 			WHERE artifact_hash = $1
@@ -548,9 +548,9 @@ func Init(
 			endedAt         sql.NullTime
 		)
 
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 		if commodoreClient != nil {
-			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
 			if resp, err := commodoreClient.ResolveDVRHash(cctx, dvrHash); err == nil && resp.Found {
 				tenantIDStr = resp.TenantId
 				userIDStr = resp.UserId
@@ -559,7 +559,7 @@ func Init(
 			}
 		}
 
-		_ = db.QueryRow(`
+		_ = db.QueryRowContext(cctx, `
 			SELECT retention_until, started_at, ended_at
 			FROM foghorn.artifacts
 			WHERE artifact_hash = $1
@@ -934,14 +934,14 @@ func HandleNodesOverview(c *gin.Context) {
 
 				// Query nodes hosting this artifact
 				art["nodes"] = func() []string {
-					nodeRows, errQuery := db.Query(`
+					nodeRows, errQuery := db.QueryContext(context.Background(), `
 						SELECT node_id FROM foghorn.artifact_nodes
 						WHERE artifact_hash = $1 AND NOT is_orphaned
 					`, hash)
 					if errQuery != nil {
 						return nil
 					}
-					defer nodeRows.Close()
+					defer func() { _ = nodeRows.Close() }()
 					var nodeIDs []string
 					for nodeRows.Next() {
 						var nodeID string

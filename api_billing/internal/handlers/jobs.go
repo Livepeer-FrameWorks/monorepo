@@ -512,13 +512,13 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 		}
 	}
 
-	tx, err := jm.db.Begin()
+	tx, err := jm.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
 		VALUES ($1, 0, $2)
 		ON CONFLICT (tenant_id, currency) DO NOTHING
@@ -528,7 +528,7 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 	}
 
 	var currentBalance int64
-	err = tx.QueryRow(`
+	err = tx.QueryRowContext(ctx, `
 		SELECT balance_cents
 		FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
@@ -540,7 +540,7 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 
 	newBalance = currentBalance - amountCents
 
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		UPDATE purser.prepaid_balances
 		SET balance_cents = $1, updated_at = NOW()
 		WHERE tenant_id = $2 AND currency = $3
@@ -549,7 +549,7 @@ func (jm *JobManager) deductPrepaidBalanceForCredit(ctx context.Context, tenantI
 		return 0, false, err
 	}
 
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			tenant_id, amount_cents, balance_after_cents,
 			transaction_type, description, reference_id, reference_type, created_at
@@ -590,13 +590,13 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 	var newBalance int64
 	currency := billing.DefaultCurrency()
 
-	tx, err := jm.db.Begin()
+	tx, err := jm.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, 0, false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
 		VALUES ($1, 0, $2)
 		ON CONFLICT (tenant_id, currency) DO NOTHING
@@ -606,7 +606,7 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 	}
 
 	var currentBalance int64
-	err = tx.QueryRow(`
+	err = tx.QueryRowContext(ctx, `
 		SELECT balance_cents
 		FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
@@ -617,7 +617,7 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 	}
 
 	newBalance = currentBalance - amountCents
-	result, err := tx.Exec(`
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			tenant_id, amount_cents, balance_after_cents,
 			transaction_type, description, reference_id, reference_type, created_at
@@ -641,7 +641,7 @@ func (jm *JobManager) deductPrepaidBalanceForUsage(ctx context.Context, tenantID
 		return currentBalance, currentBalance, false, nil
 	}
 
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		UPDATE purser.prepaid_balances
 		SET balance_cents = $1, updated_at = NOW()
 		WHERE tenant_id = $2 AND currency = $3

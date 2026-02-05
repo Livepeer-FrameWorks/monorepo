@@ -258,7 +258,7 @@ func main() {
 		clientStatusGauge.WithLabelValues("quartermaster").Set(1)
 	}
 	if qmClient != nil {
-		defer qmClient.Close()
+		defer func() { _ = qmClient.Close() }()
 	}
 
 	// Commodore (gRPC)
@@ -309,7 +309,7 @@ func main() {
 		clientStatusGauge.WithLabelValues("commodore").Set(1)
 	}
 	if commodoreClient != nil {
-		defer commodoreClient.Close()
+		defer func() { _ = commodoreClient.Close() }()
 	}
 
 	// Purser (gRPC) - x402 settlement + billing checks

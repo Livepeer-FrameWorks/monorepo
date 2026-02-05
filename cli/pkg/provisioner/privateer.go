@@ -206,7 +206,7 @@ func (p *PrivateerProvisioner) configureDNS(ctx context.Context, host inventory.
 // Validate checks health
 func (p *PrivateerProvisioner) Validate(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	// Check process
-	return p.BaseProvisioner.WaitForService(ctx, host, "privateer", 10)
+	return p.WaitForService(ctx, host, "privateer", 10)
 }
 
 // Initialize - no op

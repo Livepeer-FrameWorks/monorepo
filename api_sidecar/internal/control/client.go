@@ -413,7 +413,7 @@ func runClient(addr string, logger logging.Logger) error {
 		logger.Info("Connecting to gRPC server with insecure connection")
 	}
 
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds), grpc.WithBlock())
+	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(creds), grpc.WithBlock())
 	if err != nil {
 		return err
 	}
@@ -421,7 +421,7 @@ func runClient(addr string, logger logging.Logger) error {
 		_ = conn.Close()
 	}()
 	client := pb.NewHelmsmanControlClient(conn)
-	stream, err := client.Connect(context.Background())
+	stream, err := client.Connect(ctx)
 	if err != nil {
 		return err
 	}
