@@ -1,0 +1,28 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 0512e07c5986df98479a85defb0c4e6654625a76..8e2216d9f81632147b6526f0b78fd7d5c365ecd1 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -5,7 +5,8 @@ const bundlerPluginCore = require('@codecov/bundler-plugin-core');
+ const vitePlugin = require('@codecov/vite-plugin');
+ 
+ function getBundleName(initialName = "", initialDir = "", format, name) {
+-  let bundleName = name ? `${initialName}-${name}` : initialName;
++  let sanitizedName = name?.replace(/__sveltekit_\w+/, '__sveltekit');
++  let bundleName = sanitizedName ? `${initialName}-${sanitizedName}` : initialName;
+   const dir = initialDir.includes("server") ? "server" : initialDir.includes("client") ? "client" : void 0;
+   if (dir) {
+     bundleName = `${bundleName}-${dir}`;
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 6c84b2d334ee779bae564546278a713f13f2b64b..98176fac4e30dc0705971fa2b45cf1b89bf4525a 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -3,7 +3,8 @@ import { red, checkNodeVersion, normalizeOptions, handleErrors, createSentryInst
+ import { _internal_viteBundleAnalysisPlugin } from '@codecov/vite-plugin';
+ 
+ function getBundleName(initialName = "", initialDir = "", format, name) {
+-  let bundleName = name ? `${initialName}-${name}` : initialName;
++  let sanitizedName = name?.replace(/__sveltekit_\w+/, '__sveltekit');
++  let bundleName = sanitizedName ? `${initialName}-${sanitizedName}` : initialName;
+   const dir = initialDir.includes("server") ? "server" : initialDir.includes("client") ? "client" : void 0;
+   if (dir) {
+     bundleName = `${bundleName}-${dir}`;

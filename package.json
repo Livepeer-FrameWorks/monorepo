@@ -34,5 +34,10 @@
     "lefthook": "^2.0.16",
     "prettier": "^3.8.1",
     "prettier-plugin-svelte": "^3.2.6"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@codecov/sveltekit-plugin": "patches/@codecov__sveltekit-plugin.patch"
+    }
   }
 }
