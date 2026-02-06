@@ -12,7 +12,10 @@ type Config struct {
 	Port     string
 	User     string
 	Password string
-	From     string
+	// From is the SMTP envelope sender (MAIL FROM). This should be a raw mailbox address.
+	From string
+	// FromName is an optional display name used only for the message header.
+	FromName string
 }
 
 type Sender struct {
@@ -35,8 +38,13 @@ func NewSender(config Config) *Sender {
 func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) error {
 	addr := fmt.Sprintf("%s:%s", s.config.Host, s.config.Port)
 
+	fromHeader := s.config.From
+	if strings.TrimSpace(s.config.FromName) != "" {
+		fromHeader = fmt.Sprintf("%s <%s>", s.config.FromName, s.config.From)
+	}
+
 	msg := []string{
-		fmt.Sprintf("From: %s", s.config.From),
+		fmt.Sprintf("From: %s", fromHeader),
 		fmt.Sprintf("To: %s", to),
 		fmt.Sprintf("Subject: %s", subject),
 		"MIME-Version: 1.0",

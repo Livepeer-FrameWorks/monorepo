@@ -2,7 +2,6 @@ package notify
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -54,25 +53,37 @@ func (n *MCPNotifier) Notify(ctx context.Context, report Report) error {
 		TenantTag: report.TenantName,
 	}
 
-	var errs []error
-	sentCount := 0
+	type logSession interface {
+		Log(ctx context.Context, params *mcp.LoggingMessageParams) error
+	}
+
+	var sessions []logSession
 	for session := range n.server.Sessions() {
-		sentCount++
-		if err := session.Log(ctx, &mcp.LoggingMessageParams{
-			Level:  mcp.LoggingLevel("info"),
-			Logger: n.eventType,
-			Data:   payload,
-		}); err != nil {
-			errs = append(errs, fmt.Errorf("send mcp notification: %w", err))
+		ls, ok := any(session).(logSession)
+		if !ok {
+			continue
 		}
+		sessions = append(sessions, ls)
 	}
 
-	if sentCount == 0 {
+	if len(sessions) == 0 {
 		n.logger.WithField("tenant_id", report.TenantID).Info("No MCP sessions available for skipper investigation notification")
+		return nil
 	}
 
-	if len(errs) > 0 {
-		return errors.Join(errs...)
+	// Safety: Sessions() returns all active sessions with no tenant scoping.
+	// Until we can reliably map sessions to tenant IDs, avoid broadcasting tenant data.
+	if len(sessions) > 1 {
+		n.logger.WithField("tenant_id", report.TenantID).WithField("session_count", len(sessions)).Warn("Skipping MCP notification: multiple sessions present and tenant scoping is not implemented")
+		return nil
+	}
+
+	if err := sessions[0].Log(ctx, &mcp.LoggingMessageParams{
+		Level:  mcp.LoggingLevel("info"),
+		Logger: n.eventType,
+		Data:   payload,
+	}); err != nil {
+		return fmt.Errorf("send mcp notification: %w", err)
 	}
 
 	return nil
