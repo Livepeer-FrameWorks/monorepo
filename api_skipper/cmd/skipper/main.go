@@ -5,11 +5,15 @@ import (
 	"strconv"
 	"time"
 
+	"frameworks/api_skipper/internal/chat"
 	skipperconfig "frameworks/api_skipper/internal/config"
 	"frameworks/api_skipper/internal/knowledge"
+	"frameworks/pkg/auth"
 	commodoreclient "frameworks/pkg/clients/commodore"
 	deckhandclient "frameworks/pkg/clients/deckhand"
+	decklogclient "frameworks/pkg/clients/decklog"
 	periscopeclient "frameworks/pkg/clients/periscope"
+	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
@@ -17,6 +21,7 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/search"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
@@ -103,8 +108,95 @@ func main() {
 	_ = deckhandClient
 	_ = commodoreClient
 
+	// Create Purser gRPC client for tier checks
+	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
+	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+		GRPCAddr:     purserGRPCAddr,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Purser gRPC client - tier gating unavailable")
+		purserClient = nil
+	} else {
+		defer func() { _ = purserClient.Close() }()
+	}
+
+	// Create Decklog gRPC client for usage metering
+	decklogGRPCAddr := config.GetEnv("DECKLOG_GRPC_ADDR", "decklog:18006")
+	decklogClient, err := decklogclient.NewBatchedClient(decklogclient.BatchedClientConfig{
+		Target:        decklogGRPCAddr,
+		AllowInsecure: true,
+		Timeout:       5 * time.Second,
+		Source:        "skipper",
+		ServiceToken:  serviceToken,
+	}, logger)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Decklog client - usage metering disabled")
+		decklogClient = nil
+	} else {
+		defer func() { _ = decklogClient.Close() }()
+	}
+
+	llmProvider, err := llm.NewProvider(llm.Config{
+		Provider: cfg.LLMProvider,
+		Model:    cfg.LLMModel,
+		APIKey:   cfg.LLMAPIKey,
+		APIURL:   cfg.LLMAPIURL,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to initialize LLM provider")
+		llmProvider = nil
+	}
+
+	embeddingClient, err := llm.NewEmbeddingClient(llm.Config{
+		Provider: cfg.LLMProvider,
+		Model:    cfg.LLMModel,
+		APIKey:   cfg.LLMAPIKey,
+		APIURL:   cfg.LLMAPIURL,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to initialize embedding client")
+		embeddingClient = nil
+	}
+
+	var embedder *knowledge.Embedder
+	if embeddingClient != nil {
+		embedder, err = knowledge.NewEmbedder(embeddingClient)
+		if err != nil {
+			logger.WithError(err).Warn("Failed to initialize knowledge embedder")
+		}
+	}
+
+	searchProvider, err := search.NewProvider(search.Config{
+		Provider: cfg.SearchProvider,
+		APIKey:   cfg.SearchAPIKey,
+		APIURL:   cfg.SearchAPIURL,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to initialize search provider")
+		searchProvider = nil
+	}
+
+	conversationStore := chat.NewConversationStore(db)
+	knowledgeStore := knowledge.NewStore(db)
+	searchTool := chat.NewSearchWebTool(searchProvider)
+	orchestrator := chat.NewOrchestrator(chat.OrchestratorConfig{
+		LLMProvider: llmProvider,
+		Logger:      logger,
+		SearchWeb:   searchTool,
+		Knowledge:   knowledgeStore,
+		Embedder:    embedder,
+		Periscope:   periscopeClient,
+	})
+	chatHandler := chat.NewChatHandler(conversationStore, orchestrator, purserClient, decklogClient, logger, cfg.RequiredTierLevel)
+
 	// Setup router with unified monitoring (health/metrics only)
 	router := server.SetupServiceRouter(logger, "skipper", healthChecker, metricsCollector)
+	apiGroup := router.Group("/api/skipper")
+	apiGroup.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
+	chat.RegisterRoutes(apiGroup, chatHandler)
 
 	store := knowledge.NewStore(db)
 
