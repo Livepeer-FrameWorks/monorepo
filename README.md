@@ -53,6 +53,8 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
 - Network & Infrastructure
   - Navigator (`api_dns`): public DNS automation & certificate issuance
   - Privateer (`api_mesh`): WireGuard mesh agent & local DNS
+- AI
+  - Skipper (`api_consultant`): AI video consultant with RAG, tool-use, and SSE streaming
 - Realtime
   - Signalman (`api_realtime`): WebSocket hub for live updates
 - Interfaces
@@ -160,6 +162,8 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Planned  | Parlor (api_rooms)          | 18014    | Channel rooms for interactive features                                       |
 | Support  | Deckhand (api_ticketing)    | 18015    | Support ticketing                                                            |
 | Support  | Deckhand (gRPC)             | 19006    | Support gRPC API                                                             |
+| AI       | Skipper                     | 18018    | AI video consultant HTTP                                                     |
+| AI       | Skipper (gRPC)              | 19007    | gRPC API                                                                     |
 
 ## Documentation
 

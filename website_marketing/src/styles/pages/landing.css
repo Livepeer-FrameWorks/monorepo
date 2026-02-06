@@ -109,13 +109,21 @@
     font-size: 0.66rem;
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.14));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 82%,
+      rgba(var(--fx-rgb-255-255-255) / 0.14)
+    );
   }
   .hero-player-card__caption {
     margin: 0;
     font-size: 0.82rem;
     line-height: 1.45;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 84%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 84%,
+      rgba(var(--fx-rgb-255-255-255) / 0.12)
+    );
   }
   .hero-player-card__viewport {
     flex: 1;
@@ -384,11 +392,11 @@
 
 /* Base frame — 16:9 glass rectangle */
 .hero-frame {
-    position: absolute;
-    border-radius: 0;
-    border: 1px solid rgba(var(--frame-color), 0.22);
-    background: linear-gradient(
-      145deg,
+  position: absolute;
+  border-radius: 0;
+  border: 1px solid rgba(var(--frame-color), 0.22);
+  background: linear-gradient(
+    145deg,
     rgba(var(--frame-color), 0.14),
     rgba(var(--frame-color), 0.05) 60%,
     rgba(var(--frame-color), 0.02)
@@ -447,58 +455,122 @@
 /* --- Orbit paths (animate `translate`) — offset from center for better spread --- */
 
 @keyframes orbit-wide {
-  0%   { translate: 340px   30px  260px; }
-  25%  { translate: -80px  -25px  400px; }
-  50%  { translate: -380px  30px -260px; }
-  75%  { translate: -80px  -25px -400px; }
-  100% { translate: 340px   30px  260px; }
+  0% {
+    translate: 340px 30px 260px;
+  }
+  25% {
+    translate: -80px -25px 400px;
+  }
+  50% {
+    translate: -380px 30px -260px;
+  }
+  75% {
+    translate: -80px -25px -400px;
+  }
+  100% {
+    translate: 340px 30px 260px;
+  }
 }
 
 @keyframes orbit-left {
-  0%   { translate: -280px  20px  200px; }
-  25%  { translate: -480px -20px  100px; }
-  50%  { translate: -280px  20px -200px; }
-  75%  { translate: -100px -20px -100px; }
-  100% { translate: -280px  20px  200px; }
+  0% {
+    translate: -280px 20px 200px;
+  }
+  25% {
+    translate: -480px -20px 100px;
+  }
+  50% {
+    translate: -280px 20px -200px;
+  }
+  75% {
+    translate: -100px -20px -100px;
+  }
+  100% {
+    translate: -280px 20px 200px;
+  }
 }
 
 @keyframes orbit-mid {
-  0%   { translate: 200px   20px  200px; }
-  25%  { translate: -60px  -18px  280px; }
-  50%  { translate: -240px  20px -200px; }
-  75%  { translate: -60px  -18px -280px; }
-  100% { translate: 200px   20px  200px; }
+  0% {
+    translate: 200px 20px 200px;
+  }
+  25% {
+    translate: -60px -18px 280px;
+  }
+  50% {
+    translate: -240px 20px -200px;
+  }
+  75% {
+    translate: -60px -18px -280px;
+  }
+  100% {
+    translate: 200px 20px 200px;
+  }
 }
 
 @keyframes orbit-tight {
-  0%   { translate: 140px   12px  140px; }
-  25%  { translate: -40px  -12px  200px; }
-  50%  { translate: -180px  12px -140px; }
-  75%  { translate: -40px  -12px -200px; }
-  100% { translate: 140px   12px  140px; }
+  0% {
+    translate: 140px 12px 140px;
+  }
+  25% {
+    translate: -40px -12px 200px;
+  }
+  50% {
+    translate: -180px 12px -140px;
+  }
+  75% {
+    translate: -40px -12px -200px;
+  }
+  100% {
+    translate: 140px 12px 140px;
+  }
 }
 
 /* --- Sway patterns (animate `rotate`) — gentle rocking, not full spins --- */
 
 @keyframes sway-a {
-  0%   { rotate: 1 0.3 0   -8deg; }
-  33%  { rotate: 1 0.3 0    6deg; }
-  66%  { rotate: 1 0.3 0   -4deg; }
-  100% { rotate: 1 0.3 0   -8deg; }
+  0% {
+    rotate: 1 0.3 0 -8deg;
+  }
+  33% {
+    rotate: 1 0.3 0 6deg;
+  }
+  66% {
+    rotate: 1 0.3 0 -4deg;
+  }
+  100% {
+    rotate: 1 0.3 0 -8deg;
+  }
 }
 
 @keyframes sway-b {
-  0%   { rotate: 0.2 1 0.3  10deg; }
-  33%  { rotate: 0.2 1 0.3  -6deg; }
-  66%  { rotate: 0.2 1 0.3   4deg; }
-  100% { rotate: 0.2 1 0.3  10deg; }
+  0% {
+    rotate: 0.2 1 0.3 10deg;
+  }
+  33% {
+    rotate: 0.2 1 0.3 -6deg;
+  }
+  66% {
+    rotate: 0.2 1 0.3 4deg;
+  }
+  100% {
+    rotate: 0.2 1 0.3 10deg;
+  }
 }
 
 @keyframes sway-c {
-  0%   { rotate: 0.4 0.5 1  -6deg; }
-  33%  { rotate: 0.4 0.5 1   8deg; }
-  66%  { rotate: 0.4 0.5 1  -3deg; }
-  100% { rotate: 0.4 0.5 1  -6deg; }
+  0% {
+    rotate: 0.4 0.5 1 -6deg;
+  }
+  33% {
+    rotate: 0.4 0.5 1 8deg;
+  }
+  66% {
+    rotate: 0.4 0.5 1 -3deg;
+  }
+  100% {
+    rotate: 0.4 0.5 1 -6deg;
+  }
 }
 
 /* --- Reduced motion: freeze everything --- */

@@ -8,6 +8,7 @@ export default defineConfig({
     outputFile: {
       junit: "./test-results/junit.xml",
     },
+    pool: "forks",
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

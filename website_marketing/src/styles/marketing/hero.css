@@ -82,7 +82,11 @@
     top: var(--hero-before-top, -240px);
     left: var(--hero-before-left, -320px);
     background:
-      linear-gradient(130deg, rgba(var(--accent-rgb) / 0.24), color-mix(in srgb, var(--fx-surface-mid) 44%, transparent)),
+      linear-gradient(
+        130deg,
+        rgba(var(--accent-rgb) / 0.24),
+        color-mix(in srgb, var(--fx-surface-mid) 44%, transparent)
+      ),
       radial-gradient(circle at 15% 20%, rgba(var(--accent-rgb) / 0.22), transparent 66%);
     border-radius: 32px;
     transform: rotate(var(--hero-before-rotate, -14deg)) scale(var(--hero-before-scale, 1));
@@ -97,8 +101,16 @@
     top: var(--hero-after-top, -110px);
     right: var(--hero-after-right, -260px);
     background:
-      linear-gradient(200deg, rgba(var(--accent-rgb) / 0.22), color-mix(in srgb, var(--fx-surface-mid) 36%, transparent)),
-      linear-gradient(150deg, color-mix(in srgb, var(--fx-surface-strong) 34%, transparent), transparent 70%);
+      linear-gradient(
+        200deg,
+        rgba(var(--accent-rgb) / 0.22),
+        color-mix(in srgb, var(--fx-surface-mid) 36%, transparent)
+      ),
+      linear-gradient(
+        150deg,
+        color-mix(in srgb, var(--fx-surface-strong) 34%, transparent),
+        transparent 70%
+      );
     border-radius: 28px;
     transform: rotate(var(--hero-after-rotate, -6deg)) scale(var(--hero-after-scale, 1));
     opacity: var(--hero-after-opacity, 0.48);
@@ -155,7 +167,11 @@
     top: var(--hero-after-top, -90px);
     right: var(--hero-after-right, -260px);
     background:
-      linear-gradient(120deg, rgba(var(--accent-rgb) / 0.14), color-mix(in srgb, var(--fx-surface-strong) 18%, transparent)),
+      linear-gradient(
+        120deg,
+        rgba(var(--accent-rgb) / 0.14),
+        color-mix(in srgb, var(--fx-surface-strong) 18%, transparent)
+      ),
       radial-gradient(circle at 68% 28%, rgba(var(--accent-rgb) / 0.14), transparent 72%);
     border-radius: 34px;
     transform: rotate(var(--hero-after-rotate, -8deg)) scale(var(--hero-after-scale, 1.08));
@@ -263,7 +279,11 @@
   .marketing-hero__media--surface-glow {
     padding: clamp(1.2rem, 2vw, 1.8rem);
     border-radius: 0;
-    background: linear-gradient(160deg, rgba(var(--fx-rgb-24-28-46) / 0.64), rgba(var(--fx-rgb-14-16-28) / 0.4));
+    background: linear-gradient(
+      160deg,
+      rgba(var(--fx-rgb-24-28-46) / 0.64),
+      rgba(var(--fx-rgb-14-16-28) / 0.4)
+    );
     border: 1px solid rgba(var(--accent-rgb) / 0.2);
     box-shadow: none;
   }
@@ -301,7 +321,11 @@
     margin: 0;
     font-size: clamp(1.05rem, 1.8vw, 1.35rem);
     max-width: clamp(36rem, 60vw, 48rem);
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 82%,
+      rgba(var(--fx-rgb-255-255-255) / 0.12)
+    );
     line-height: 1.7;
   }
 
@@ -328,12 +352,20 @@
 
   .marketing-hero__support {
     font-size: clamp(1rem, 1.7vw, 1.15rem);
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.08));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-255-255-255) / 0.08)
+    );
   }
 
   .marketing-hero__footnote {
     font-size: 0.85rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.14));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 82%,
+      rgba(var(--fx-rgb-255-255-255) / 0.14)
+    );
     max-width: 40ch;
   }
 
@@ -349,7 +381,11 @@
   .deployment-panel {
     border-radius: clamp(1.5rem, 2.2vw, 2rem);
     border: 1px solid rgba(var(--brand-cyan-rgb) / 0.18);
-    background: linear-gradient(165deg, rgba(var(--fx-rgb-32-35-52) / 0.96), rgba(var(--fx-rgb-16-18-30) / 0.92));
+    background: linear-gradient(
+      165deg,
+      rgba(var(--fx-rgb-32-35-52) / 0.96),
+      rgba(var(--fx-rgb-16-18-30) / 0.92)
+    );
     box-shadow: 0 32px 64px rgba(var(--fx-rgb-8-10-24) / 0.45);
     overflow: hidden;
   }

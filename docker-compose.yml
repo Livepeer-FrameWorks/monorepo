@@ -80,7 +80,7 @@ services:
   # PostgreSQL
   postgres:
     <<: *default-env
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: frameworks-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -97,6 +97,7 @@ services:
       - ./pkg/database/sql/schema/listmonk.sql:/docker-entrypoint-initdb.d/60_init_listmonk.sql:ro
       - ./pkg/database/sql/schema/navigator.sql:/docker-entrypoint-initdb.d/70_init_navigator.sql:ro
       - ./pkg/database/sql/schema/chatwoot.sql:/docker-entrypoint-initdb.d/75_init_chatwoot.sql:ro
+      - ./pkg/database/sql/schema/skipper.sql:/docker-entrypoint-initdb.d/78_init_skipper.sql:ro
       # Static Seeds (Prod)
       - ./pkg/database/sql/seeds/static/purser_tiers.sql:/docker-entrypoint-initdb.d/80_seed_purser_tiers.sql:ro
       # Demo Seeds (Dev/Demo only - loaded by default in this compose profile)
@@ -799,10 +800,87 @@ services:
       retries: 3
       start_period: 10s
 
-  # Forms service
-  forms:
+  # Skipper (AI Video Consultant API)
+  skipper:
     <<: *default-env
-    container_name: frameworks-forms
+    container_name: frameworks-skipper
+    build:
+      context: .
+      dockerfile: api_consultant/Dockerfile
+    ports:
+      - "18018:18018"
+      - "19007:19007"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${SKIPPER_PORT}
+      GRPC_PORT: ${SKIPPER_GRPC_PORT}
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
+      DECKHAND_GRPC_ADDR: ${DECKHAND_GRPC_ADDR}
+      PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      SKIPPER_HOST: ${SKIPPER_HOST:-skipper}
+      CLUSTER_ID: ${CLUSTER_ID}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_MODEL: ${LLM_MODEL}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_API_URL: ${LLM_API_URL}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER}
+      SEARCH_API_KEY: ${SEARCH_API_KEY}
+      SEARCH_API_URL: ${SEARCH_API_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_healthy
+      commodore:
+        condition: service_started
+      periscope-query:
+        condition: service_started
+      deckhand:
+        condition: service_started
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18016/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Ollama (optional local LLM runtime)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: frameworks-ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - frameworks
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # Steward (Forms service)
+  steward:
+    <<: *default-env
+    container_name: frameworks-steward
     build:
       context: .
       dockerfile: api_forms/Dockerfile
@@ -843,9 +921,9 @@ services:
       retries: 3
       start_period: 10s
 
-  # Web Console
-  webapp:
-    container_name: frameworks-webapp
+  # Chartroom (Web Console)
+  chartroom:
+    container_name: frameworks-chartroom
     build:
       context: .
       dockerfile: website_application/Dockerfile
@@ -868,6 +946,8 @@ services:
         - VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
         - VITE_TURNSTILE_AUTH_SITE_KEY=${VITE_TURNSTILE_AUTH_SITE_KEY}
         - BASE_PATH=${BASE_PATH}
+        - VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
+        - VITE_GITHUB_URL=${VITE_GITHUB_URL}
     depends_on:
       commodore:
         condition: service_started
@@ -888,9 +968,9 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  # Marketing Website
-  website:
-    container_name: frameworks-website
+  # Foredeck (Marketing Website)
+  foredeck:
+    container_name: frameworks-foredeck
     build:
       context: .
       dockerfile: website_marketing/Dockerfile
@@ -911,7 +991,7 @@ services:
         - VITE_DOMAIN=${VITE_DOMAIN}
         - VITE_CONTACT_API_URL=${VITE_CONTACT_API_URL}
         - VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
-    hostname: website
+    hostname: foredeck
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${WEBSITE_PORT}
@@ -940,9 +1020,9 @@ services:
       retries: 3
       start_period: 10s
 
-  # Documentation Website
-  website_docs:
-    container_name: frameworks-website-docs
+  # Logbook (Documentation Website)
+  logbook:
+    container_name: frameworks-logbook
     build:
       context: .
       dockerfile: website_docs/Dockerfile
@@ -955,11 +1035,15 @@ services:
         - GATEWAY_PUBLIC_URL=${GATEWAY_PUBLIC_URL}
         - STREAMING_INGEST_URL=${STREAMING_INGEST_URL}
         - STREAMING_EDGE_URL=${STREAMING_EDGE_URL}
+        - STREAMING_PLAY_URL=${STREAMING_PLAY_URL}
+        - STREAMING_RTMP_PORT=${STREAMING_RTMP_PORT}
+        - STREAMING_SRT_PORT=${STREAMING_SRT_PORT}
+        - STREAMING_RTMP_PATH=${STREAMING_RTMP_PATH}
         - STREAMING_HLS_PATH=${STREAMING_HLS_PATH}
         - STREAMING_WEBRTC_PATH=${STREAMING_WEBRTC_PATH}
         - DISCORD_URL=${DISCORD_URL}
         - GITHUB_URL=${GITHUB_URL}
-    hostname: website-docs
+    hostname: logbook
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${WEBSITE_DOCS_PORT}
@@ -1012,9 +1096,9 @@ services:
         condition: service_started
       periscope-query:
         condition: service_started
-      webapp:
+      chartroom:
         condition: service_started
-      website:
+      foredeck:
         condition: service_started
       quartermaster:
         condition: service_healthy

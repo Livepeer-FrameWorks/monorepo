@@ -432,8 +432,12 @@ body {
   border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
   background: hsl(var(--tn-bg-dark));
 }
-.slab-section-label--studio { color: hsl(var(--tn-orange) / 0.7); }
-.slab-section-label--player { color: hsl(var(--tn-teal) / 0.7); }
+.slab-section-label--studio {
+  color: hsl(var(--tn-orange) / 0.7);
+}
+.slab-section-label--player {
+  color: hsl(var(--tn-teal) / 0.7);
+}
 
 /* Zone-colored hover glow */
 .slab--studio:hover {

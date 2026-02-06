@@ -51,9 +51,15 @@ func JWTAuthMiddleware(secret []byte) gin.HandlerFunc {
 
 		auth := c.GetHeader("Authorization")
 		if auth == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "No authorization header"})
-			c.Abort()
-			return
+			// Browser clients typically use httpOnly cookies for auth.
+			// Fall back to the access_token cookie when no bearer header is provided.
+			if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
+				auth = "Bearer " + cookieToken
+			} else {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "No authorization header"})
+				c.Abort()
+				return
+			}
 		}
 
 		// Extract Bearer token

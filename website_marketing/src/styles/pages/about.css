@@ -109,7 +109,11 @@
     margin: 0;
     font-size: 0.95rem;
     line-height: 1.55;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 86%,
+      rgba(var(--fx-rgb-255-255-255) / 0.12)
+    );
   }
 
   .marketing-tech-rows {
@@ -133,13 +137,21 @@
     font-size: 0.82rem;
     letter-spacing: 0.22em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 68%,
+      rgba(var(--fx-rgb-255-255-255) / 0.12)
+    );
   }
 
   .marketing-tech-row__description {
     font-size: 0.95rem;
     line-height: 1.6;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(var(--fx-rgb-255-255-255) / 0.14));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 86%,
+      rgba(var(--fx-rgb-255-255-255) / 0.14)
+    );
   }
 
   .marketing-tech-row__list {
@@ -195,7 +207,11 @@
   .marketing-tech-row__text {
     font-size: 0.98rem;
     line-height: 1.5;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 88%, rgba(var(--fx-rgb-255-255-255) / 0.1));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 88%,
+      rgba(var(--fx-rgb-255-255-255) / 0.1)
+    );
   }
 
   @media (max-width: 900px) {

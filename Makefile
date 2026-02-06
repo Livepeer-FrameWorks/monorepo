@@ -1,5 +1,5 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-forms \
-	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand \
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-forms build-bin-skipper \
+	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper \
 	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
 	lint lint-all lint-fix lint-report lint-analyze \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
@@ -16,7 +16,7 @@ LDFLAGS = -ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
 					-X frameworks/pkg/version.BuildDate=$(BUILD_DATE)"
 
 # All microservices (only services with actual binaries)
-SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer deckhand
+SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer deckhand skipper
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
@@ -148,8 +148,8 @@ build-image-bridge: proto
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_gateway/Dockerfile .
 
-build-image-docs:
-	docker build -t frameworks-website-docs:$(VERSION) \
+build-image-logbook:
+	docker build -t frameworks-logbook:$(VERSION) \
 		--build-arg BUILD_ENV=production \
 		-f website_docs/Dockerfile .
 
@@ -166,6 +166,13 @@ build-image-deckhand: proto
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_ticketing/Dockerfile .
+
+build-image-skipper:
+	docker build -t frameworks-skipper:$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f api_consultant/Dockerfile .
 
 # Individual service bin builds (explicit)
 build-bin-commodore: proto
@@ -209,6 +216,9 @@ build-bin-deckhand: proto
 
 build-bin-forms: proto
 	cd api_forms && go build $(LDFLAGS) -o ../bin/forms cmd/forms/main.go
+
+build-bin-skipper: proto
+	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper cmd/skipper/main.go
 
 # Clean build artifacts
 clean:

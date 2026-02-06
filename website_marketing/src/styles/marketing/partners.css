@@ -40,7 +40,11 @@
 
   .marketing-partner-card--interactive:hover,
   .marketing-partner-card--interactive:focus-visible {
-    background: color-mix(in srgb, rgba(var(--brand-cyan-rgb) / 0.14) 32%, rgba(var(--fx-rgb-18-22-36) / 0.68) 68%);
+    background: color-mix(
+      in srgb,
+      rgba(var(--brand-cyan-rgb) / 0.14) 32%,
+      rgba(var(--fx-rgb-18-22-36) / 0.68) 68%
+    );
   }
 
   .marketing-partner-card__header {
@@ -89,12 +93,20 @@
     font-size: 0.78rem;
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(var(--fx-rgb-213-229-255) / 0.28));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 68%,
+      rgba(var(--fx-rgb-213-229-255) / 0.28)
+    );
   }
 
   .marketing-partner-card__copy {
     margin: 0;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.26));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-213-229-255) / 0.26)
+    );
     line-height: 1.6;
   }
 

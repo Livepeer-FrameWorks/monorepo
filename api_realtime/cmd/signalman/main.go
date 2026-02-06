@@ -371,6 +371,8 @@ func mapEventTypeToChannel(eventType string) pb.Channel {
 		return pb.Channel_CHANNEL_ANALYTICS
 	case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
 		return pb.Channel_CHANNEL_MESSAGING
+	case "skipper_investigation":
+		return pb.Channel_CHANNEL_AI
 	default:
 		return pb.Channel_CHANNEL_ANALYTICS
 	}
@@ -427,6 +429,9 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 	// Messaging events
 	case "message_lifecycle", "message_received", "message_updated", "conversation_created", "conversation_updated":
 		return pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE
+	// AI events
+	case "skipper_investigation":
+		return pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION
 	default:
 		return pb.EventType_EVENT_TYPE_UNSPECIFIED
 	}
@@ -551,6 +556,8 @@ func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *p
 		ml.Timestamp = ts.Unix()
 
 		return &pb.EventData{Payload: &pb.EventData_MessageLifecycle{MessageLifecycle: ml}}
+	case "skipper_investigation":
+		return &pb.EventData{}
 	default:
 		return nil
 	}

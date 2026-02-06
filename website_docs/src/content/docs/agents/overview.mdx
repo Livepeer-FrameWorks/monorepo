@@ -35,62 +35,28 @@ FrameWorks is an MCP-native live streaming platform. AI agents can discover, aut
 
 FrameWorks publishes metadata following the [Agent Skills](https://agentskills.io) open standard so agents can discover and connect automatically.
 
-| URL                                     | Standard     | Purpose                                                                 |
-| --------------------------------------- | ------------ | ----------------------------------------------------------------------- |
-| `/.well-known/mcp.json`                 | MCP          | Server discovery: endpoint, transports, auth schemes, public operations |
-| `/.well-known/did.json`                 | W3C DID      | Decentralized identity and service endpoints                            |
-| `/.well-known/oauth-protected-resource` | RFC 8707     | OAuth resource metadata with wallet and x402 extensions                 |
-| `/.well-known/security.txt`             | RFC 9116     | Security contact and advisories                                         |
-| `/skill.json`                           | Agent Skills | Machine-readable skill metadata (name, auth, endpoints, keywords)       |
-| `/skill.md`                             | Agent Skills | Human/LLM-readable quick-start guide                                    |
-| `/llms.txt`                             | Emerging     | LLM-friendly documentation index                                        |
-| `/robots.txt`                           | Standard     | Crawler directives (allows AI bots)                                     |
+| URL                                                                                           | Standard     | Purpose                                                                 |
+| --------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------- |
+| [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json)                                 | MCP          | Server discovery: endpoint, transports, auth schemes, public operations |
+| [`/.well-known/did.json`](%GATEWAY_URL%/.well-known/did.json)                                 | W3C DID      | Decentralized identity and service endpoints                            |
+| [`/.well-known/oauth-protected-resource`](%GATEWAY_URL%/.well-known/oauth-protected-resource) | RFC 8707     | OAuth resource metadata with wallet and x402 extensions                 |
+| [`/.well-known/security.txt`](%GATEWAY_URL%/.well-known/security.txt)                         | RFC 9116     | Security contact and advisories                                         |
+| [`/skill.json`](%MARKETING_URL%/skill.json)                                                   | Agent Skills | Machine-readable skill metadata (name, auth, endpoints, keywords)       |
+| [`/skill.md`](%MARKETING_URL%/skill.md)                                                       | Agent Skills | Human/LLM-readable quick-start guide                                    |
+| [`/llms.txt`](%MARKETING_URL%/llms.txt)                                                       | Emerging     | LLM-friendly documentation index                                        |
+| `/robots.txt`                                                                                 | Standard     | Crawler directives (allows AI bots)                                     |
 
 ### skill.json
 
 The primary machine-readable entry point. Compatible with [OpenClaw](https://docs.openclaw.ai/tools/skills), Claude Code, Cursor, Gemini CLI, and other Agent Skills consumers.
 
-```json
-{
-  "name": "frameworks-network",
-  "version": "1.0.0",
-  "description": "Multi-tenant live streaming SaaS with MCP, wallet auth, and x402 payments.",
-  "homepage": "https://frameworks.network",
-  "metadata": {
-    "emoji": "📡",
-    "category": "streaming",
-    "api_base": "https://api.frameworks.network",
-    "mcp_discovery": "https://api.frameworks.network/.well-known/mcp.json"
-  },
-  "auth": {
-    "methods": ["wallet", "x402", "bearer"],
-    "wallet_message_format": "FrameWorks Login\nTimestamp: {ISO8601}\nNonce: {random}"
-  },
-  "endpoints": {
-    "mcp": "GET /.well-known/mcp.json",
-    "mcp_rpc": "POST /mcp",
-    "graphql": "POST /graphql",
-    "wallet_login": "POST /auth/wallet-login"
-  },
-  "keywords": ["streaming", "live", "rtmp", "x402", "mcp", "ai-agent", "wallet"]
-}
-```
+> **Live file:** [`%MARKETING_URL%/skill.json`](%MARKETING_URL%/skill.json)
 
 ### MCP Discovery
 
-Agents that speak MCP can use `/.well-known/mcp.json` directly:
+Agents that speak MCP can use `/.well-known/mcp.json` directly for full server discovery — endpoint, transports, auth schemes, public operations, and capabilities.
 
-```json
-{
-  "mcp_endpoint": "https://api.frameworks.network/mcp",
-  "transports": ["streamable-http"],
-  "auth": {
-    "schemes": ["bearer", "wallet", "x402"],
-    "required": true,
-    "registration_required": false
-  }
-}
-```
+> **Live file:** [`%GATEWAY_URL%/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json)
 
 ## Authentication Methods
 

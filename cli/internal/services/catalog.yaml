@@ -147,8 +147,7 @@ services:
     name: steward
     title: Steward (Forms)
     role: support
-    image: ghcr.io/livepeer-frameworks/frameworks-forms:latest
-    deploy: forms
+    image: ghcr.io/livepeer-frameworks/frameworks-steward:latest
     ports: ["18032:18032"]
     health:
       protocol: http
@@ -158,8 +157,7 @@ services:
     name: chartroom
     title: Chartroom (Dashboard)
     role: interface
-    image: ghcr.io/livepeer-frameworks/frameworks-webapp:latest
-    deploy: webapp
+    image: ghcr.io/livepeer-frameworks/frameworks-chartroom:latest
     ports: ["18030:18030"]
     health:
       protocol: http
@@ -169,8 +167,7 @@ services:
     name: foredeck
     title: Foredeck (Marketing)
     role: interface
-    image: ghcr.io/livepeer-frameworks/frameworks-website:latest
-    deploy: website
+    image: ghcr.io/livepeer-frameworks/frameworks-foredeck:latest
     ports: ["18031:18031"]
     health:
       protocol: http
@@ -180,8 +177,7 @@ services:
     name: logbook
     title: Logbook (Docs)
     role: interface
-    image: ghcr.io/livepeer-frameworks/frameworks-website-docs:latest
-    deploy: docs
+    image: ghcr.io/livepeer-frameworks/frameworks-logbook:latest
     ports: ["18033:18033"]
     health:
       protocol: http
