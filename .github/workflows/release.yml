@@ -41,6 +41,7 @@ jobs:
           - { name: forms, context: api_forms, dockerfile: api_forms/Dockerfile }
           - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
           - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
+          - { name: skipper, context: api_skipper, dockerfile: api_skipper/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -378,6 +379,7 @@ jobs:
           - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator }
           - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand }
           - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer }
+          - { name: skipper, context: api_skipper, cmd_path: ./cmd/skipper }
         arch:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }

@@ -19,8 +19,8 @@ type Config struct {
 // LoadConfig loads the Skipper configuration from environment variables.
 func LoadConfig() Config {
 	return Config{
-		Port:           config.GetEnv("PORT", "18016"),
-		GRPCPort:       config.GetEnv("GRPC_PORT", "19016"),
+		Port:           config.GetEnv("PORT", "18018"),
+		GRPCPort:       config.GetEnv("GRPC_PORT", "19007"),
 		DatabaseURL:    config.RequireEnv("DATABASE_URL"),
 		LLMProvider:    config.GetEnv("LLM_PROVIDER", ""),
 		LLMModel:       config.GetEnv("LLM_MODEL", ""),

@@ -63,8 +63,8 @@ USER frameworks
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:18012/health || exit 1
+    CMD curl -f http://localhost:18018/health || exit 1
 
-EXPOSE 18012 19012
+EXPOSE 18018 19007
 
 CMD ["./skipper"]

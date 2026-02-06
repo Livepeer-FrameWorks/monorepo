@@ -808,8 +808,8 @@ services:
       context: .
       dockerfile: api_skipper/Dockerfile
     ports:
-      - "18016:18016"
-      - "19016:19016"
+      - "18018:18018"
+      - "19007:19007"
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${SKIPPER_PORT}
