@@ -10,3 +10,4 @@ export { default as GraphQLExplorer } from "./GraphQLExplorer.svelte";
 // Re-export from subdirectories for convenience
 export * from "./cards";
 export * from "./health";
+export * from "./skipper";
