@@ -81,7 +81,7 @@
   }
 </script>
 
-<div class="flex flex-col gap-2">
+<div class="flex flex-col gap-2" data-message-id={message.id}>
   <div class="flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-muted-foreground">
     <span class="font-semibold">{message.role === "assistant" ? "Skipper" : "You"}</span>
     {#if message.role === "assistant" && message.confidence}
@@ -121,6 +121,7 @@
   >
     <div class={message.confidence === "best_guess" ? "opacity-80" : "opacity-100"}>
       <div class="prose prose-sm max-w-none text-inherit prose-a:text-primary">
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes input -->
         {@html renderMarkdown(message.content)}
       </div>
     </div>
@@ -132,13 +133,13 @@
     >
       <div class="font-semibold uppercase tracking-[0.16em] text-[10px]">Citations</div>
       <ul class="mt-2 space-y-1">
-        {#each message.citations as citation}
+        {#each message.citations as citation (citation.url)}
           <li>
             <a
               class="text-primary underline underline-offset-4"
               href={citation.url}
               target="_blank"
-              rel="noreferrer"
+              rel="external noreferrer"
             >
               {citation.label}
             </a>
@@ -154,13 +155,13 @@
     >
       <div class="font-semibold uppercase tracking-[0.16em] text-[10px]">External sources</div>
       <ul class="mt-2 space-y-1">
-        {#each message.externalLinks as link}
+        {#each message.externalLinks as link (link.url)}
           <li>
             <a
               class="text-primary underline underline-offset-4"
               href={link.url}
               target="_blank"
-              rel="noreferrer"
+              rel="external noreferrer"
             >
               {link.label}
             </a>
@@ -178,7 +179,7 @@
         Details
       </summary>
       <div class="mt-2 space-y-2">
-        {#each message.details as detail}
+        {#each message.details as detail, i (i)}
           <div>
             {#if detail.title}
               <div class="font-semibold text-foreground">{detail.title}</div>
