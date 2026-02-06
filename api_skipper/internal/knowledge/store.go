@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/pgvector/pgvector-go"
 )
@@ -24,6 +25,12 @@ type Chunk struct {
 
 type Store struct {
 	db *sql.DB
+}
+
+type SourceSummary struct {
+	SourceURL   string
+	PageCount   int
+	LastCrawlAt *time.Time
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -174,9 +181,50 @@ func (s *Store) DeleteBySource(ctx context.Context, tenantID, sourceURL string) 
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		DELETE FROM skipper.skipper_knowledge
-		WHERE tenant_id = $1 AND source_url = $2
+		WHERE tenant_id = $1
+		  AND (source_url = $2 OR metadata->>'source_root' = $2)
 	`, tenantID, sourceURL); err != nil {
 		return fmt.Errorf("delete by source: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) ListSources(ctx context.Context, tenantID string) ([]SourceSummary, error) {
+	if tenantID == "" {
+		return nil, errors.New("tenant id is required")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			COALESCE(NULLIF(metadata->>'source_root', ''), source_url) AS source_url,
+			COUNT(DISTINCT COALESCE(NULLIF(metadata->>'page_url', ''), source_url)) AS page_count,
+			MAX(NULLIF(metadata->>'ingested_at', '')::timestamptz) AS last_crawl_at
+		FROM skipper.skipper_knowledge
+		WHERE tenant_id = $1
+		GROUP BY COALESCE(NULLIF(metadata->>'source_root', ''), source_url)
+		ORDER BY source_url
+	`, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("list sources: %w", err)
+	}
+	defer rows.Close()
+
+	var sources []SourceSummary
+	for rows.Next() {
+		var source SourceSummary
+		var lastCrawl sql.NullTime
+		if err := rows.Scan(&source.SourceURL, &source.PageCount, &lastCrawl); err != nil {
+			return nil, fmt.Errorf("scan source: %w", err)
+		}
+		if lastCrawl.Valid {
+			t := lastCrawl.Time
+			source.LastCrawlAt = &t
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sources: %w", err)
+	}
+
+	return sources, nil
 }
