@@ -120,6 +120,7 @@
 
     const response = await fetch("/api/skipper/chat", {
       method: "POST",
+      credentials: "include",
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",

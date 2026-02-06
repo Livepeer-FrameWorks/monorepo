@@ -62,6 +62,7 @@
     try {
       const response = await fetch("/api/skipper/chat?mode=docs", {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
