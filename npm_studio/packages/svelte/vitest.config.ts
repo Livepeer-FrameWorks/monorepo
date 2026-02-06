@@ -1,8 +1,15 @@
 import { defineConfig } from "vitest/config";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import path from "path";
 
 export default defineConfig({
   plugins: [svelte({ hot: false })],
+  resolve: {
+    conditions: ["source"],
+    alias: {
+      "@livepeer-frameworks/streamcrafter-core": path.resolve(__dirname, "../core/src/index.ts"),
+    },
+  },
   test: {
     include: ["test/**/*.test.{ts,js}"],
     environment: "jsdom",

@@ -406,6 +406,7 @@ message ResolveArtifactInternalNameResponse {
 message GetOrCreateWalletUserRequest {
   string chain_type = 1;                // "ethereum", "base", "arbitrum"
   string wallet_address = 2;            // 0x-prefixed, will be normalized to checksum format
+  common.SignupAttribution attribution = 3;
 }
 
 // GetOrCreateWalletUserResponse returns the tenant/user for a wallet.
@@ -508,6 +509,7 @@ message RegisterRequest {
   string turnstile_token = 6;           // json:"turnstile_token,omitempty" - Cloudflare Turnstile token
   string human_check = 7;               // json:"human_check,omitempty" - Should be "human" if checkbox clicked
   BehaviorData behavior = 8;            // json:"behavior,omitempty" - Client-side behavioral signals
+  common.SignupAttribution attribution = 9; // json:"attribution,omitempty"
 }
 
 // Matches pkg/api/commodore/types.go:AuthResponse (lines 101-105)
@@ -612,6 +614,7 @@ message WalletLoginRequest {
   string wallet_address = 1;            // 0x-prefixed Ethereum address
   string message = 2;                   // Message that was signed (includes timestamp + nonce)
   string signature = 3;                 // 0x-prefixed hex signature (65 bytes: R|S|V)
+  common.SignupAttribution attribution = 4;
 }
 
 // WalletLoginWithX402Request authenticates via x402 payload (EIP-3009)
@@ -620,6 +623,7 @@ message WalletLoginWithX402Request {
   purser.X402PaymentPayload payment = 1;
   string client_ip = 2;                 // For VAT evidence
   optional string target_tenant_id = 3; // Optional credit target (donations)
+  common.SignupAttribution attribution = 4;
 }
 
 message WalletLoginWithX402Response {

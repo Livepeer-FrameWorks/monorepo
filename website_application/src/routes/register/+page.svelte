@@ -36,6 +36,49 @@
   let turnstileToken = $state("");
   let turnstileWidgetId = $state("");
 
+  let attribution = $state({
+    utm_source: "",
+    utm_medium: "",
+    utm_campaign: "",
+    utm_content: "",
+    utm_term: "",
+    referral_code: "",
+    landing_page: "",
+  });
+
+  const readAttribution = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const referralCode = params.get("referral_code") || params.get("ref") || "";
+    const fromParams = {
+      utm_source: params.get("utm_source") || "",
+      utm_medium: params.get("utm_medium") || "",
+      utm_campaign: params.get("utm_campaign") || "",
+      utm_content: params.get("utm_content") || "",
+      utm_term: params.get("utm_term") || "",
+      referral_code: referralCode,
+      landing_page: window.location.href,
+    };
+
+    let stored = {};
+    try {
+      stored = JSON.parse(window.sessionStorage.getItem("signup_attribution") || "{}");
+    } catch {
+      stored = {};
+    }
+
+    attribution = {
+      ...attribution,
+      ...stored,
+      ...Object.fromEntries(Object.entries(fromParams).filter(([, value]) => value)),
+    };
+
+    window.sessionStorage.setItem("signup_attribution", JSON.stringify(attribution));
+  };
+
   const resetTurnstileWidget = () => {
     if (typeof window !== "undefined" && turnstileWidgetId) {
       try {
@@ -55,6 +98,8 @@
   onMount(() => {
     // Record when form was shown
     formShownAt = Date.now();
+
+    readAttribution();
 
     // Add interaction listeners
     const form = document.querySelector("form");
@@ -115,6 +160,7 @@
       human_check,
       behavior: JSON.stringify(behaviorData),
       turnstileToken: turnstileToken || undefined,
+      ...attribution,
     });
 
     if (result.success) {

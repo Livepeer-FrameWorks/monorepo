@@ -1354,7 +1354,8 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 	}
 	tenantName := "Wallet: " + normalizedAddress[:10] + "..."
 	tenantResp, err := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
-		Name: tenantName,
+		Name:        tenantName,
+		Attribution: req.GetAttribution(),
 	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create tenant via Quartermaster")
@@ -2395,9 +2396,17 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRe
 	}
 
 	// Resolve or create wallet identity (single source of truth)
+	attr := req.GetAttribution()
+	if attr == nil {
+		attr = &pb.SignupAttribution{
+			SignupChannel: "wallet",
+			SignupMethod:  "wallet_ethereum",
+		}
+	}
 	walletResp, err := s.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
 		ChainType:     string(auth.ChainEthereum),
 		WalletAddress: normalizedAddr,
+		Attribution:   attr,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to resolve wallet user: %v", err)
@@ -2502,9 +2511,21 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 	}
 
 	chainType := x402NetworkToChainType(payment.GetNetwork())
+	attr := req.GetAttribution()
+	if attr == nil {
+		signupMethod := "x402"
+		if payment.GetNetwork() != "" {
+			signupMethod = "x402_" + strings.ToLower(payment.GetNetwork())
+		}
+		attr = &pb.SignupAttribution{
+			SignupChannel: "x402",
+			SignupMethod:  signupMethod,
+		}
+	}
 	walletResp, err := s.GetOrCreateWalletUser(ctx, &pb.GetOrCreateWalletUserRequest{
 		ChainType:     chainType,
 		WalletAddress: payerAddress,
+		Attribution:   attr,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to resolve wallet user: %v", err)

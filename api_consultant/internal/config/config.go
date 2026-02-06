@@ -16,6 +16,10 @@ type Config struct {
 	LLMModel           string
 	LLMAPIKey          string
 	LLMAPIURL          string
+	EmbeddingProvider  string
+	EmbeddingModel     string
+	EmbeddingAPIKey    string
+	EmbeddingAPIURL    string
 	SearchProvider     string
 	SearchAPIKey       string
 	SearchAPIURL       string
@@ -58,6 +62,10 @@ func LoadConfig() Config {
 		LLMModel:           config.GetEnv("LLM_MODEL", ""),
 		LLMAPIKey:          config.GetEnv("LLM_API_KEY", ""),
 		LLMAPIURL:          config.GetEnv("LLM_API_URL", ""),
+		EmbeddingProvider:  config.GetEnv("EMBEDDING_PROVIDER", config.GetEnv("LLM_PROVIDER", "")),
+		EmbeddingModel:     config.GetEnv("EMBEDDING_MODEL", config.GetEnv("LLM_MODEL", "")),
+		EmbeddingAPIKey:    config.GetEnv("EMBEDDING_API_KEY", config.GetEnv("LLM_API_KEY", "")),
+		EmbeddingAPIURL:    config.GetEnv("EMBEDDING_API_URL", config.GetEnv("LLM_API_URL", "")),
 		SearchProvider:     config.GetEnv("SEARCH_PROVIDER", ""),
 		SearchAPIKey:       config.GetEnv("SEARCH_API_KEY", ""),
 		SearchAPIURL:       config.GetEnv("SEARCH_API_URL", ""),

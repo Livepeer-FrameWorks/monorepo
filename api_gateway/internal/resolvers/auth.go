@@ -126,7 +126,7 @@ func (r *Resolver) DoWalletLogin(ctx context.Context, input model.WalletLoginInp
 	}()
 
 	// Call Commodore wallet login
-	authResp, err := r.Clients.Commodore.WalletLogin(ctx, input.Address, input.Message, input.Signature)
+	authResp, err := r.Clients.Commodore.WalletLogin(ctx, input.Address, input.Message, input.Signature, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Wallet login failed")
 		if r.Metrics != nil {

@@ -1322,6 +1322,9 @@ const (
 	AggregatedAnalyticsService_GetAPIUsage_FullMethodName                 = "/periscope.AggregatedAnalyticsService/GetAPIUsage"
 	AggregatedAnalyticsService_GetStreamHealthSummary_FullMethodName      = "/periscope.AggregatedAnalyticsService/GetStreamHealthSummary"
 	AggregatedAnalyticsService_GetClientQoeSummary_FullMethodName         = "/periscope.AggregatedAnalyticsService/GetClientQoeSummary"
+	AggregatedAnalyticsService_GetNetworkUsage_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetNetworkUsage"
+	AggregatedAnalyticsService_GetAcquisitionFunnel_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetAcquisitionFunnel"
+	AggregatedAnalyticsService_GetAcquisitionCohortUsage_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetAcquisitionCohortUsage"
 )
 
 // AggregatedAnalyticsServiceClient is the client API for AggregatedAnalyticsService service.
@@ -1351,6 +1354,9 @@ type AggregatedAnalyticsServiceClient interface {
 	GetAPIUsage(ctx context.Context, in *GetAPIUsageRequest, opts ...grpc.CallOption) (*GetAPIUsageResponse, error)
 	GetStreamHealthSummary(ctx context.Context, in *GetStreamHealthSummaryRequest, opts ...grpc.CallOption) (*GetStreamHealthSummaryResponse, error)
 	GetClientQoeSummary(ctx context.Context, in *GetClientQoeSummaryRequest, opts ...grpc.CallOption) (*GetClientQoeSummaryResponse, error)
+	GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error)
+	GetAcquisitionFunnel(ctx context.Context, in *GetAcquisitionFunnelRequest, opts ...grpc.CallOption) (*GetAcquisitionFunnelResponse, error)
+	GetAcquisitionCohortUsage(ctx context.Context, in *GetAcquisitionCohortUsageRequest, opts ...grpc.CallOption) (*GetAcquisitionCohortUsageResponse, error)
 }
 
 type aggregatedAnalyticsServiceClient struct {
@@ -1561,6 +1567,36 @@ func (c *aggregatedAnalyticsServiceClient) GetClientQoeSummary(ctx context.Conte
 	return out, nil
 }
 
+func (c *aggregatedAnalyticsServiceClient) GetNetworkUsage(ctx context.Context, in *GetNetworkUsageRequest, opts ...grpc.CallOption) (*GetNetworkUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetNetworkUsageResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetNetworkUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetAcquisitionFunnel(ctx context.Context, in *GetAcquisitionFunnelRequest, opts ...grpc.CallOption) (*GetAcquisitionFunnelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAcquisitionFunnelResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetAcquisitionFunnel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *aggregatedAnalyticsServiceClient) GetAcquisitionCohortUsage(ctx context.Context, in *GetAcquisitionCohortUsageRequest, opts ...grpc.CallOption) (*GetAcquisitionCohortUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAcquisitionCohortUsageResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetAcquisitionCohortUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AggregatedAnalyticsServiceServer is the server API for AggregatedAnalyticsService service.
 // All implementations must embed UnimplementedAggregatedAnalyticsServiceServer
 // for forward compatibility.
@@ -1588,6 +1624,9 @@ type AggregatedAnalyticsServiceServer interface {
 	GetAPIUsage(context.Context, *GetAPIUsageRequest) (*GetAPIUsageResponse, error)
 	GetStreamHealthSummary(context.Context, *GetStreamHealthSummaryRequest) (*GetStreamHealthSummaryResponse, error)
 	GetClientQoeSummary(context.Context, *GetClientQoeSummaryRequest) (*GetClientQoeSummaryResponse, error)
+	GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error)
+	GetAcquisitionFunnel(context.Context, *GetAcquisitionFunnelRequest) (*GetAcquisitionFunnelResponse, error)
+	GetAcquisitionCohortUsage(context.Context, *GetAcquisitionCohortUsageRequest) (*GetAcquisitionCohortUsageResponse, error)
 	mustEmbedUnimplementedAggregatedAnalyticsServiceServer()
 }
 
@@ -1657,6 +1696,15 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetStreamHealthSummary(cont
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetClientQoeSummary(context.Context, *GetClientQoeSummaryRequest) (*GetClientQoeSummaryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClientQoeSummary not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetNetworkUsage(context.Context, *GetNetworkUsageRequest) (*GetNetworkUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNetworkUsage not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetAcquisitionFunnel(context.Context, *GetAcquisitionFunnelRequest) (*GetAcquisitionFunnelResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAcquisitionFunnel not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetAcquisitionCohortUsage(context.Context, *GetAcquisitionCohortUsageRequest) (*GetAcquisitionCohortUsageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAcquisitionCohortUsage not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) mustEmbedUnimplementedAggregatedAnalyticsServiceServer() {
 }
@@ -2040,6 +2088,60 @@ func _AggregatedAnalyticsService_GetClientQoeSummary_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AggregatedAnalyticsService_GetNetworkUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNetworkUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetNetworkUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetNetworkUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetNetworkUsage(ctx, req.(*GetNetworkUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetAcquisitionFunnel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAcquisitionFunnelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetAcquisitionFunnel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetAcquisitionFunnel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetAcquisitionFunnel(ctx, req.(*GetAcquisitionFunnelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AggregatedAnalyticsService_GetAcquisitionCohortUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAcquisitionCohortUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetAcquisitionCohortUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetAcquisitionCohortUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetAcquisitionCohortUsage(ctx, req.(*GetAcquisitionCohortUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AggregatedAnalyticsService_ServiceDesc is the grpc.ServiceDesc for AggregatedAnalyticsService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2126,6 +2228,18 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetClientQoeSummary",
 			Handler:    _AggregatedAnalyticsService_GetClientQoeSummary_Handler,
+		},
+		{
+			MethodName: "GetNetworkUsage",
+			Handler:    _AggregatedAnalyticsService_GetNetworkUsage_Handler,
+		},
+		{
+			MethodName: "GetAcquisitionFunnel",
+			Handler:    _AggregatedAnalyticsService_GetAcquisitionFunnel_Handler,
+		},
+		{
+			MethodName: "GetAcquisitionCohortUsage",
+			Handler:    _AggregatedAnalyticsService_GetAcquisitionCohortUsage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

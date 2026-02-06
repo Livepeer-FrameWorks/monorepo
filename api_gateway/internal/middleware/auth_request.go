@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_gateway/internal/attribution"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/ctxkeys"
@@ -49,7 +50,12 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 				return nil, fmt.Errorf("invalid X-PAYMENT header")
 			}
 			clientIP := ClientIPFromRequest(r)
-			walletResp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "")
+			signupMethod := "x402"
+			if payload.GetNetwork() != "" {
+				signupMethod = "x402_" + strings.ToLower(payload.GetNetwork())
+			}
+			attr := attribution.FromRequest(r, "x402", signupMethod)
+			walletResp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "", attr)
 			if err != nil {
 				if logger != nil {
 					logger.WithError(err).Warn("X-PAYMENT login failed")
@@ -99,7 +105,8 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 				return nil, fmt.Errorf("missing wallet auth headers")
 			}
 
-			resp, err := clients.Commodore.WalletLogin(ctx, walletAddr, message, signature)
+			attr := attribution.FromRequest(r, "wallet", "wallet_ethereum")
+			resp, err := clients.Commodore.WalletLogin(ctx, walletAddr, message, signature, attr)
 			if err != nil {
 				if logger != nil {
 					logger.WithError(err).Warn("Wallet auth failed")

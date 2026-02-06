@@ -285,6 +285,7 @@ message CreateTenantRequest {
   string deployment_tier = 7;           // json:"deployment_tier"
   string deployment_model = 8;          // json:"deployment_model"
   string primary_deployment_tier = 9;   // json:"primary_deployment_tier"
+  common.SignupAttribution attribution = 10;
 }
 
 // Matches pkg/api/quartermaster/types.go:CreateTenantResponse (lines 64-67)

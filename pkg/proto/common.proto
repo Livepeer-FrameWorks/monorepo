@@ -50,6 +50,25 @@ message TimeRange {
 }
 
 // ============================================================================
+// Signup Attribution
+// ============================================================================
+
+message SignupAttribution {
+  string signup_channel = 1;
+  string signup_method = 2;
+  string utm_source = 3;
+  string utm_medium = 4;
+  string utm_campaign = 5;
+  string utm_content = 6;
+  string utm_term = 7;
+  string http_referer = 8;
+  string landing_page = 9;
+  string referral_code = 10;
+  bool is_agent = 11;
+  string metadata_json = 12;
+}
+
+// ============================================================================
 // Sort Order
 // ============================================================================
 
