@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_skipper/internal/metering"
 	"frameworks/pkg/clients/decklog"
-	"frameworks/pkg/clients/purser"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
@@ -21,12 +21,10 @@ import (
 )
 
 type ChatHandler struct {
-	Conversations     *ConversationStore
-	Orchestrator      *Orchestrator
-	Purser            *purser.GRPCClient
-	Decklog           *decklog.BatchedClient
-	Logger            logging.Logger
-	RequiredTierLevel int
+	Conversations *ConversationStore
+	Orchestrator  *Orchestrator
+	Decklog       *decklog.BatchedClient
+	Logger        logging.Logger
 }
 
 type ChatRequest struct {
@@ -59,21 +57,14 @@ type sseDone struct {
 func NewChatHandler(
 	conversations *ConversationStore,
 	orchestrator *Orchestrator,
-	purserClient *purser.GRPCClient,
 	decklogClient *decklog.BatchedClient,
 	logger logging.Logger,
-	requiredTierLevel int,
 ) *ChatHandler {
-	if requiredTierLevel <= 0 {
-		requiredTierLevel = 1
-	}
 	return &ChatHandler{
-		Conversations:     conversations,
-		Orchestrator:      orchestrator,
-		Purser:            purserClient,
-		Decklog:           decklogClient,
-		Logger:            logger,
-		RequiredTierLevel: requiredTierLevel,
+		Conversations: conversations,
+		Orchestrator:  orchestrator,
+		Decklog:       decklogClient,
+		Logger:        logger,
 	}
 }
 
@@ -111,11 +102,6 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 	userID := c.GetString(string(ctxkeys.KeyUserID))
 
 	ctx := h.buildContext(c.Request.Context(), tenantID, userID, c.GetHeader("Authorization"))
-
-	if err := h.requirePremiumTier(ctx, tenantID); err != nil {
-		c.JSON(http.StatusPaymentRequired, gin.H{"error": err.Error()})
-		return
-	}
 
 	conversationID := strings.TrimSpace(req.ConversationID)
 	if conversationID == "" {
@@ -177,6 +163,7 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 	}
 
 	h.logUsage(ctx, tenantID, userID, startedAt, result.TokenCounts, false)
+	metering.RecordLLMUsage(ctx, result.TokenCounts.Input, result.TokenCounts.Output)
 }
 
 func buildPromptMessages(history []Message, userMessage string) []llm.Message {
@@ -217,25 +204,6 @@ func bearerToken(header string) string {
 		return parts[1]
 	}
 	return ""
-}
-
-func (h *ChatHandler) requirePremiumTier(ctx context.Context, tenantID string) error {
-	if h.Purser == nil {
-		return errors.New("billing service unavailable")
-	}
-	status, err := h.Purser.GetBillingStatus(ctx, tenantID)
-	if err != nil {
-		h.Logger.WithError(err).Warn("Failed to fetch billing status for Skipper")
-		return errors.New("billing status unavailable")
-	}
-	tier := status.GetTier()
-	if tier == nil {
-		return errors.New("billing tier required for Skipper access")
-	}
-	if int(tier.TierLevel) < h.RequiredTierLevel {
-		return fmt.Errorf("skipper requires tier level %d or higher", h.RequiredTierLevel)
-	}
-	return nil
 }
 
 func buildMeta(result OrchestratorResult) sseMeta {

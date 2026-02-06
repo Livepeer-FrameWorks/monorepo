@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/api_skipper/internal/chat"
 	skipperconfig "frameworks/api_skipper/internal/config"
 	"frameworks/api_skipper/internal/heartbeat"
 	"frameworks/api_skipper/internal/knowledge"
+	"frameworks/api_skipper/internal/metering"
 	"frameworks/pkg/auth"
 	commodoreclient "frameworks/pkg/clients/commodore"
 	deckhandclient "frameworks/pkg/clients/deckhand"
@@ -56,6 +58,39 @@ func main() {
 		"DATABASE_URL": cfg.DatabaseURL,
 		"JWT_SECRET":   jwtSecret,
 	}))
+
+	var usagePublisher *metering.Publisher
+	if len(cfg.KafkaBrokers) > 0 {
+		publisher, err := metering.NewPublisher(metering.PublisherConfig{
+			Brokers:   cfg.KafkaBrokers,
+			ClusterID: cfg.KafkaClusterID,
+			Topic:     cfg.BillingKafkaTopic,
+			Source:    "skipper",
+			Logger:    logger,
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create billing Kafka publisher - usage events disabled")
+		} else {
+			usagePublisher = publisher
+			defer func() { _ = usagePublisher.Close() }()
+		}
+	} else {
+		logger.Warn("KAFKA_BROKERS not set - billing usage events disabled")
+	}
+
+	clusterID := strings.TrimSpace(config.GetEnv("CLUSTER_ID", ""))
+	usageTracker := metering.NewUsageTracker(metering.UsageTrackerConfig{
+		DB:            db,
+		Publisher:     usagePublisher,
+		Logger:        logger,
+		Model:         cfg.LLMModel,
+		ClusterID:     clusterID,
+		FlushInterval: time.Minute,
+	})
+	usageTracker.Start()
+	defer usageTracker.Stop()
+
+	rateLimiter := metering.NewRateLimiter(cfg.ChatRateLimitHour, cfg.RateLimitOverrides)
 
 	// Create Periscope gRPC client for diagnostics
 	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
@@ -202,7 +237,7 @@ func main() {
 		Embedder:    embedder,
 		Periscope:   periscopeClient,
 	})
-	chatHandler := chat.NewChatHandler(conversationStore, orchestrator, purserClient, decklogClient, logger, cfg.RequiredTierLevel)
+	chatHandler := chat.NewChatHandler(conversationStore, orchestrator, decklogClient, logger)
 
 	heartbeatInterval := config.GetEnv("HEARTBEAT_INTERVAL", "30m")
 	heartbeatDuration, err := time.ParseDuration(heartbeatInterval)
@@ -229,6 +264,13 @@ func main() {
 	router := server.SetupServiceRouter(logger, "skipper", healthChecker, metricsCollector)
 	apiGroup := router.Group("/api/skipper")
 	apiGroup.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
+	apiGroup.Use(metering.AccessMiddleware(metering.AccessMiddlewareConfig{
+		Purser:            purserClient,
+		RequiredTierLevel: cfg.RequiredTierLevel,
+		RateLimiter:       rateLimiter,
+		Tracker:           usageTracker,
+		Logger:            logger,
+	}))
 	chat.RegisterRoutes(apiGroup, chatHandler)
 
 	store := knowledge.NewStore(db)

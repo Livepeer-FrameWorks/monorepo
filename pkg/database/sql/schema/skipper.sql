@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_usage (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     event_type TEXT,
+    event_count INT NOT NULL DEFAULT 1,
     tokens_input INT,
     tokens_output INT,
     model TEXT,

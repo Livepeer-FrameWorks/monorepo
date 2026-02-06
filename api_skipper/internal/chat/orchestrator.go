@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/api_skipper/internal/knowledge"
+	"frameworks/api_skipper/internal/metering"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"
@@ -283,6 +284,8 @@ func (o *Orchestrator) searchKnowledge(ctx context.Context, arguments string) (T
 	if err != nil {
 		return ToolOutcome{}, err
 	}
+	metering.RecordEmbedding(ctx)
+	metering.RecordSearchQuery(ctx)
 
 	var chunks []knowledge.Chunk
 	for _, tenantID := range tenantIDs {
