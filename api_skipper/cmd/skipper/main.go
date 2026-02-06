@@ -6,12 +6,14 @@ import (
 	"time"
 
 	skipperconfig "frameworks/api_skipper/internal/config"
+	"frameworks/api_skipper/internal/knowledge"
 	commodoreclient "frameworks/pkg/clients/commodore"
 	deckhandclient "frameworks/pkg/clients/deckhand"
 	periscopeclient "frameworks/pkg/clients/periscope"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
+	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
@@ -103,6 +105,30 @@ func main() {
 
 	// Setup router with unified monitoring (health/metrics only)
 	router := server.SetupServiceRouter(logger, "skipper", healthChecker, metricsCollector)
+
+	embedderClient, err := llm.NewEmbeddingClient(llm.Config{
+		Provider: cfg.LLMProvider,
+		Model:    cfg.LLMModel,
+		APIKey:   cfg.LLMAPIKey,
+		APIURL:   cfg.LLMAPIURL,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize embedding client")
+	}
+	embedder, err := knowledge.NewEmbedder(embedderClient)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize knowledge embedder")
+	}
+	store := knowledge.NewStore(db)
+	crawler, err := knowledge.NewCrawler(nil, embedder, store)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize knowledge crawler")
+	}
+	adminAPI, err := knowledge.NewAdminAPI(store, embedder, crawler, logger)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize knowledge admin API")
+	}
+	adminAPI.RegisterRoutes(router, []byte(jwtSecret))
 
 	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("skipper", cfg.Port)
