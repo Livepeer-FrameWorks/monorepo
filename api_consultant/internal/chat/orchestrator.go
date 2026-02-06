@@ -8,20 +8,23 @@ import (
 	"io"
 	"sort"
 	"strings"
-	"time"
 
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/metering"
-	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
-	"frameworks/pkg/globalid"
 	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
 	"frameworks/pkg/tenants"
 )
 
 const defaultMaxToolRounds = 5
+
+// GatewayToolCaller invokes tools on the Gateway MCP server.
+type GatewayToolCaller interface {
+	AvailableTools() []llm.Tool
+	HasTool(name string) bool
+	CallTool(ctx context.Context, name string, arguments json.RawMessage) (string, error)
+}
 
 type OrchestratorConfig struct {
 	LLMProvider llm.Provider
@@ -29,7 +32,7 @@ type OrchestratorConfig struct {
 	SearchWeb   *SearchWebTool
 	Knowledge   KnowledgeSearcher
 	Embedder    KnowledgeEmbedder
-	Periscope   PeriscopeClient
+	Gateway     GatewayToolCaller
 	MaxRounds   int
 }
 
@@ -39,7 +42,7 @@ type Orchestrator struct {
 	searchWeb   *SearchWebTool
 	knowledge   KnowledgeSearcher
 	embedder    KnowledgeEmbedder
-	periscope   PeriscopeClient
+	gateway     GatewayToolCaller
 	tools       []llm.Tool
 	maxRounds   int
 }
@@ -82,22 +85,19 @@ type KnowledgeEmbedder interface {
 	EmbedQuery(ctx context.Context, query string) ([]float32, error)
 }
 
-type PeriscopeClient interface {
-	GetRebufferingEvents(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetRebufferingEventsResponse, error)
-	GetStreamHealth5m(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetStreamHealth5MResponse, error)
-	GetClientMetrics5m(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetClientMetrics5MResponse, error)
-	GetRoutingEvents(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error)
-	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error)
-}
-
 func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
-	tools := make([]llm.Tool, 0, len(ToolDefinitions))
+	// Start with local tool definitions (search_knowledge, search_web).
+	tools := make([]llm.Tool, 0, len(ToolDefinitions)+10)
 	for _, tool := range ToolDefinitions {
 		tools = append(tools, llm.Tool{
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
 			Parameters:  tool.Function.Parameters,
 		})
+	}
+	// Append Gateway MCP tools (diagnostics, streams, billing, etc.).
+	if cfg.Gateway != nil {
+		tools = append(tools, cfg.Gateway.AvailableTools()...)
 	}
 	maxRounds := cfg.MaxRounds
 	if maxRounds <= 0 {
@@ -109,7 +109,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 		searchWeb:   cfg.SearchWeb,
 		knowledge:   cfg.Knowledge,
 		embedder:    cfg.Embedder,
-		periscope:   cfg.Periscope,
+		gateway:     cfg.Gateway,
 		tools:       tools,
 		maxRounds:   maxRounds,
 	}
@@ -237,21 +237,38 @@ func (o *Orchestrator) executeTool(ctx context.Context, call llm.ToolCall) (Tool
 		return o.searchKnowledge(ctx, call.Arguments)
 	case "search_web":
 		return o.searchWebTool(ctx, call.Arguments)
-	case "diagnose_rebuffering":
-		return o.diagnoseRebuffering(ctx, call.Arguments)
-	case "diagnose_buffer_health":
-		return o.diagnoseBufferHealth(ctx, call.Arguments)
-	case "diagnose_packet_loss":
-		return o.diagnosePacketLoss(ctx, call.Arguments)
-	case "diagnose_routing":
-		return o.diagnoseRouting(ctx, call.Arguments)
-	case "get_stream_health_summary":
-		return o.getStreamHealthSummary(ctx, call.Arguments)
-	case "get_anomaly_report":
-		return o.getAnomalyReport(ctx, call.Arguments)
 	default:
+		return o.callGatewayTool(ctx, call)
+	}
+}
+
+func (o *Orchestrator) callGatewayTool(ctx context.Context, call llm.ToolCall) (ToolOutcome, error) {
+	if o.gateway == nil {
+		return ToolOutcome{}, fmt.Errorf("tool %q unavailable: gateway not configured", call.Name)
+	}
+	if !o.gateway.HasTool(call.Name) {
 		return ToolOutcome{}, fmt.Errorf("unknown tool %q", call.Name)
 	}
+
+	content, err := o.gateway.CallTool(ctx, call.Name, json.RawMessage(call.Arguments))
+	if err != nil {
+		return ToolOutcome{}, err
+	}
+
+	var payload any
+	if json.Valid([]byte(content)) {
+		payload = json.RawMessage(content)
+	} else {
+		payload = map[string]string{"result": content}
+	}
+
+	return ToolOutcome{
+		Content: content,
+		Detail: ToolDetail{
+			Title:   fmt.Sprintf("Tool call: %s", call.Name),
+			Payload: payload,
+		},
+	}, nil
 }
 
 type SearchKnowledgeInput struct {
@@ -420,493 +437,6 @@ func (o *Orchestrator) searchWebTool(ctx context.Context, arguments string) (Too
 	}, nil
 }
 
-type diagnosticInput struct {
-	StreamID    string `json:"stream_id"`
-	TimeRange   string `json:"time_range,omitempty"`
-	Sensitivity string `json:"sensitivity,omitempty"`
-}
-
-type DiagnosticResult struct {
-	Status          string         `json:"status"`
-	Metrics         map[string]any `json:"metrics"`
-	Analysis        string         `json:"analysis"`
-	Recommendations []string       `json:"recommendations,omitempty"`
-}
-
-func (o *Orchestrator) diagnoseRebuffering(ctx context.Context, arguments string) (ToolOutcome, error) {
-	if o.periscope == nil {
-		return ToolOutcome{}, errors.New("diagnostics unavailable")
-	}
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return ToolOutcome{}, errors.New("tenant_id is required")
-	}
-	input, err := parseDiagnosticInput(arguments)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	streamID, err := decodeStreamID(input.StreamID)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-
-	timeRangeLabel, timeRange := normalizeTimeRange(input.TimeRange)
-	resp, err := o.periscope.GetRebufferingEvents(ctx, tenantID, &streamID, nil, timeRange, &periscope.CursorPaginationOpts{First: 200})
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-
-	rebufferCount := len(resp.Events)
-	var totalDurationMs int64
-	for _, evt := range resp.Events {
-		if evt.RebufferStart != nil && evt.RebufferEnd != nil {
-			totalDurationMs += evt.RebufferEnd.AsTime().Sub(evt.RebufferStart.AsTime()).Milliseconds()
-		}
-	}
-	avgDurationMs := int64(0)
-	if rebufferCount > 0 {
-		avgDurationMs = totalDurationMs / int64(rebufferCount)
-	}
-
-	status := "healthy"
-	analysis := "No rebuffering detected in the time range."
-	if rebufferCount > 0 {
-		status = "warning"
-		analysis = fmt.Sprintf("Detected %d rebuffer events with an average duration of %dms.", rebufferCount, avgDurationMs)
-		if rebufferCount > 20 || avgDurationMs > 3000 {
-			status = "critical"
-			analysis = fmt.Sprintf("Critical rebuffering detected. %d events with avg duration %dms.", rebufferCount, avgDurationMs)
-		}
-	}
-
-	result := DiagnosticResult{
-		Status: status,
-		Metrics: map[string]any{
-			"rebuffer_count":           rebufferCount,
-			"avg_rebuffer_duration_ms": avgDurationMs,
-			"total_rebuffer_time_ms":   totalDurationMs,
-			"time_range":               timeRangeLabel,
-		},
-		Analysis: analysis,
-	}
-	return diagnosticOutcome("diagnose_rebuffering", result)
-}
-
-func (o *Orchestrator) diagnoseBufferHealth(ctx context.Context, arguments string) (ToolOutcome, error) {
-	if o.periscope == nil {
-		return ToolOutcome{}, errors.New("diagnostics unavailable")
-	}
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return ToolOutcome{}, errors.New("tenant_id is required")
-	}
-	input, err := parseDiagnosticInput(arguments)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	streamID, err := decodeStreamID(input.StreamID)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	timeRangeLabel, timeRange := normalizeTimeRange(input.TimeRange)
-	rollupResp, err := o.periscope.GetStreamHealth5m(ctx, tenantID, streamID, timeRange, nil)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	if len(rollupResp.Records) == 0 {
-		result := DiagnosticResult{
-			Status: "no_data",
-			Metrics: map[string]any{
-				"time_range": timeRangeLabel,
-			},
-			Analysis: "No buffer health data available for this stream in the specified time range.",
-		}
-		return diagnosticOutcome("diagnose_buffer_health", result)
-	}
-	var totalBufferHealth float32
-	var totalDryCount int32
-	var minBufferHealth float32 = 1.0
-	for _, record := range rollupResp.Records {
-		totalBufferHealth += record.AvgBufferHealth
-		totalDryCount += record.BufferDryCount
-		if record.AvgBufferHealth < minBufferHealth {
-			minBufferHealth = record.AvgBufferHealth
-		}
-	}
-	avgBufferHealth := totalBufferHealth / float32(len(rollupResp.Records))
-
-	status := "healthy"
-	analysis := fmt.Sprintf("Average buffer health %.1f%% with %d dry events.", avgBufferHealth*100, totalDryCount)
-	if avgBufferHealth < 0.6 || totalDryCount > 3 {
-		status = "warning"
-		analysis = fmt.Sprintf("Buffer health degraded. Avg %.1f%% with %d dry events.", avgBufferHealth*100, totalDryCount)
-	}
-	if avgBufferHealth < 0.3 || totalDryCount > 10 {
-		status = "critical"
-		analysis = fmt.Sprintf("Critical buffer issues. Min health %.1f%% with %d dry events.", minBufferHealth*100, totalDryCount)
-	}
-
-	result := DiagnosticResult{
-		Status: status,
-		Metrics: map[string]any{
-			"avg_buffer_health": avgBufferHealth,
-			"min_buffer_health": minBufferHealth,
-			"buffer_dry_count":  totalDryCount,
-			"time_range":        timeRangeLabel,
-		},
-		Analysis: analysis,
-	}
-	return diagnosticOutcome("diagnose_buffer_health", result)
-}
-
-func (o *Orchestrator) diagnosePacketLoss(ctx context.Context, arguments string) (ToolOutcome, error) {
-	if o.periscope == nil {
-		return ToolOutcome{}, errors.New("diagnostics unavailable")
-	}
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return ToolOutcome{}, errors.New("tenant_id is required")
-	}
-	input, err := parseDiagnosticInput(arguments)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	streamID, err := decodeStreamID(input.StreamID)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	timeRangeLabel, timeRange := normalizeTimeRange(input.TimeRange)
-	clientResp, err := o.periscope.GetClientMetrics5m(ctx, tenantID, &streamID, nil, timeRange, &periscope.CursorPaginationOpts{First: 200})
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-
-	var lossSum float64
-	var maxLoss float64
-	lossSamples := 0
-	for _, record := range clientResp.Records {
-		if record.PacketLossRate != nil {
-			v := float64(*record.PacketLossRate)
-			lossSum += v
-			lossSamples++
-			if v > maxLoss {
-				maxLoss = v
-			}
-		}
-	}
-	if lossSamples == 0 {
-		result := DiagnosticResult{
-			Status: "no_data",
-			Metrics: map[string]any{
-				"time_range": timeRangeLabel,
-			},
-			Analysis: "No packet loss samples available for this stream in the specified time range.",
-		}
-		return diagnosticOutcome("diagnose_packet_loss", result)
-	}
-	avgLoss := lossSum / float64(lossSamples)
-
-	status := packetLossStatus(protocolTypeUnknown, avgLoss)
-	analysis := fmt.Sprintf("Average packet loss %.2f%% with max %.2f%%.", avgLoss*100, maxLoss*100)
-	result := DiagnosticResult{
-		Status: status,
-		Metrics: map[string]any{
-			"avg_loss_percent": avgLoss * 100,
-			"max_loss_percent": maxLoss * 100,
-			"samples":          lossSamples,
-			"time_range":       timeRangeLabel,
-		},
-		Analysis: analysis,
-	}
-	return diagnosticOutcome("diagnose_packet_loss", result)
-}
-
-func (o *Orchestrator) diagnoseRouting(ctx context.Context, arguments string) (ToolOutcome, error) {
-	if o.periscope == nil {
-		return ToolOutcome{}, errors.New("diagnostics unavailable")
-	}
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return ToolOutcome{}, errors.New("tenant_id is required")
-	}
-	input, err := parseDiagnosticInput(arguments)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	streamID, err := decodeStreamID(input.StreamID)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	timeRangeLabel, timeRange := normalizeTimeRange(input.TimeRange)
-	resp, err := o.periscope.GetRoutingEvents(ctx, tenantID, &streamID, timeRange, nil, []string{tenantID}, nil, nil)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-
-	analysis := fmt.Sprintf("Routing events: %d in %s.", len(resp.Events), timeRangeLabel)
-	if len(resp.Events) == 0 {
-		analysis = "No routing events available for this stream."
-	}
-	result := DiagnosticResult{
-		Status: "healthy",
-		Metrics: map[string]any{
-			"routing_events": len(resp.Events),
-			"time_range":     timeRangeLabel,
-		},
-		Analysis: analysis,
-	}
-	return diagnosticOutcome("diagnose_routing", result)
-}
-
-func (o *Orchestrator) getStreamHealthSummary(ctx context.Context, arguments string) (ToolOutcome, error) {
-	if o.periscope == nil {
-		return ToolOutcome{}, errors.New("diagnostics unavailable")
-	}
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return ToolOutcome{}, errors.New("tenant_id is required")
-	}
-	input, err := parseDiagnosticInput(arguments)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	streamID, err := decodeStreamID(input.StreamID)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	timeRangeLabel, timeRange := normalizeTimeRange(input.TimeRange)
-	resp, err := o.periscope.GetStreamHealthSummary(ctx, tenantID, &streamID, timeRange)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	summary := resp.GetSummary()
-	if summary == nil {
-		result := DiagnosticResult{
-			Status: "no_data",
-			Metrics: map[string]any{
-				"time_range": timeRangeLabel,
-			},
-			Analysis: "No stream health summary available for this stream.",
-		}
-		return diagnosticOutcome("get_stream_health_summary", result)
-	}
-	result := DiagnosticResult{
-		Status: "healthy",
-		Metrics: map[string]any{
-			"issue_count": summary.TotalIssueCount,
-			"avg_bitrate": summary.AvgBitrate,
-			"avg_fps":     summary.AvgFps,
-			"time_range":  timeRangeLabel,
-		},
-		Analysis: "Stream health summary retrieved.",
-	}
-	return diagnosticOutcome("get_stream_health_summary", result)
-}
-
-func (o *Orchestrator) getAnomalyReport(ctx context.Context, arguments string) (ToolOutcome, error) {
-	if o.periscope == nil {
-		return ToolOutcome{}, errors.New("diagnostics unavailable")
-	}
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return ToolOutcome{}, errors.New("tenant_id is required")
-	}
-	input, err := parseDiagnosticInput(arguments)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	streamID, err := decodeStreamID(input.StreamID)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-
-	_, recentRange := normalizeTimeRange("last_1h")
-	_, baselineRange := normalizeTimeRange("last_24h")
-	recentHealth, err := o.periscope.GetStreamHealth5m(ctx, tenantID, streamID, recentRange, nil)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-	baselineHealth, err := o.periscope.GetStreamHealth5m(ctx, tenantID, streamID, baselineRange, nil)
-	if err != nil {
-		return ToolOutcome{}, err
-	}
-
-	if len(recentHealth.Records) == 0 || len(baselineHealth.Records) == 0 {
-		result := DiagnosticResult{
-			Status: "no_data",
-			Metrics: map[string]any{
-				"recent_samples":   len(recentHealth.Records),
-				"baseline_samples": len(baselineHealth.Records),
-			},
-			Analysis: "Insufficient data to detect anomalies.",
-		}
-		return diagnosticOutcome("get_anomaly_report", result)
-	}
-
-	var baselineBitrate int64
-	var baselineIssues int32
-	for _, r := range baselineHealth.Records {
-		baselineBitrate += int64(r.AvgBitrate)
-		baselineIssues += r.IssueCount
-	}
-	baselineBitrate /= int64(len(baselineHealth.Records))
-	baselineIssueRate := float64(baselineIssues) / float64(len(baselineHealth.Records))
-
-	var recentBitrate int64
-	var recentIssues int32
-	for _, r := range recentHealth.Records {
-		recentBitrate += int64(r.AvgBitrate)
-		recentIssues += r.IssueCount
-	}
-	recentBitrate /= int64(len(recentHealth.Records))
-	recentIssueRate := float64(recentIssues) / float64(len(recentHealth.Records))
-
-	threshold := 0.25
-	switch input.Sensitivity {
-	case "low":
-		threshold = 0.5
-	case "high":
-		threshold = 0.1
-	}
-
-	bitrateChange := float64(recentBitrate-baselineBitrate) / float64(baselineBitrate)
-	issueChange := recentIssueRate - baselineIssueRate
-	anomalies := []string{}
-	if bitrateChange < -threshold {
-		anomalies = append(anomalies, fmt.Sprintf("Bitrate dropped %.0f%% from baseline", -bitrateChange*100))
-	}
-	if issueChange > threshold && baselineIssueRate > 0 {
-		anomalies = append(anomalies, fmt.Sprintf("Issue rate increased by %.1fx", recentIssueRate/baselineIssueRate))
-	}
-
-	status := "healthy"
-	analysis := "No anomalies detected."
-	if len(anomalies) > 0 {
-		status = "warning"
-		analysis = fmt.Sprintf("Detected %d anomalies: %v", len(anomalies), anomalies)
-	}
-
-	result := DiagnosticResult{
-		Status: status,
-		Metrics: map[string]any{
-			"baseline_bitrate_kbps":  baselineBitrate / 1000,
-			"recent_bitrate_kbps":    recentBitrate / 1000,
-			"bitrate_change_percent": bitrateChange * 100,
-			"baseline_issue_rate":    baselineIssueRate,
-			"recent_issue_rate":      recentIssueRate,
-			"anomalies_detected":     len(anomalies),
-			"sensitivity":            input.Sensitivity,
-		},
-		Analysis: analysis,
-	}
-	return diagnosticOutcome("get_anomaly_report", result)
-}
-
-func parseDiagnosticInput(arguments string) (diagnosticInput, error) {
-	var input diagnosticInput
-	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
-		return diagnosticInput{}, fmt.Errorf("parse diagnostic arguments: %w", err)
-	}
-	input.StreamID = strings.TrimSpace(input.StreamID)
-	if input.StreamID == "" {
-		return diagnosticInput{}, errors.New("stream_id is required")
-	}
-	input.TimeRange = strings.TrimSpace(input.TimeRange)
-	input.Sensitivity = strings.TrimSpace(input.Sensitivity)
-	if input.Sensitivity == "" {
-		input.Sensitivity = "medium"
-	}
-	return input, nil
-}
-
-func diagnosticOutcome(name string, result DiagnosticResult) (ToolOutcome, error) {
-	payload, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return ToolOutcome{}, fmt.Errorf("format diagnostic result: %w", err)
-	}
-	return ToolOutcome{
-		Content: string(payload),
-		Detail: ToolDetail{
-			Title:   fmt.Sprintf("Tool call: %s", name),
-			Payload: result,
-		},
-	}, nil
-}
-
-func normalizeTimeRange(tr string) (string, *periscope.TimeRangeOpts) {
-	if tr == "" {
-		tr = "last_1h"
-	}
-	now := time.Now()
-	var start time.Time
-	switch tr {
-	case "last_6h":
-		start = now.Add(-6 * time.Hour)
-	case "last_24h":
-		start = now.Add(-24 * time.Hour)
-	case "last_7d":
-		start = now.Add(-7 * 24 * time.Hour)
-	default:
-		start = now.Add(-1 * time.Hour)
-	}
-	return tr, &periscope.TimeRangeOpts{StartTime: start, EndTime: now}
-}
-
-const (
-	protocolTypeRealtime  = "realtime"
-	protocolTypeStreaming = "streaming"
-	protocolTypeUnknown   = "unknown"
-)
-
-const (
-	packetLossRealtimeHealthy  = 0.005
-	packetLossRealtimeWarning  = 0.01
-	packetLossStreamingHealthy = 0.01
-	packetLossStreamingWarning = 0.05
-)
-
-func packetLossStatus(protocolType string, avgLoss float64) string {
-	switch protocolType {
-	case protocolTypeRealtime:
-		if avgLoss <= packetLossRealtimeHealthy {
-			return "healthy"
-		}
-		if avgLoss <= packetLossRealtimeWarning {
-			return "warning"
-		}
-		return "critical"
-	case protocolTypeStreaming:
-		if avgLoss <= packetLossStreamingHealthy {
-			return "healthy"
-		}
-		if avgLoss <= packetLossStreamingWarning {
-			return "warning"
-		}
-		return "critical"
-	default:
-		if avgLoss <= packetLossStreamingHealthy {
-			return "healthy"
-		}
-		if avgLoss <= packetLossStreamingWarning {
-			return "warning"
-		}
-		return "critical"
-	}
-}
-
-func decodeStreamID(input string) (string, error) {
-	if input == "" {
-		return "", errors.New("stream_id is required")
-	}
-	if typ, id, ok := globalid.Decode(input); ok {
-		if typ != globalid.TypeStream {
-			return "", fmt.Errorf("invalid stream relay ID type: %s", typ)
-		}
-		return id, nil
-	}
-	return input, nil
-}
-
 type confidenceStreamFilter struct {
 	streamer  TokenStreamer
 	pending   string
@@ -1032,7 +562,7 @@ func parseSourcesBlock(block string) []Source {
 }
 
 func splitSourceLine(line string) (string, string) {
-	parts := strings.SplitN(line, "—", 2)
+	parts := strings.SplitN(line, "\u2014", 2)
 	if len(parts) == 2 {
 		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 	}

@@ -15,6 +15,10 @@
     "methods": ["wallet", "x402", "bearer"],
     "wallet_message_format": "FrameWorks Login\nTimestamp: {ISO8601}\nNonce: {random}"
   },
+  "files": {
+    "skill": "https://frameworks.network/skill.md",
+    "heartbeat": "https://frameworks.network/heartbeat.md"
+  },
   "endpoints": {
     "mcp": "GET /.well-known/mcp.json",
     "mcp_rpc": "POST /mcp",

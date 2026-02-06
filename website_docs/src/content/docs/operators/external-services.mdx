@@ -5,7 +5,7 @@ sidebar:
   order: 9
 ---
 
-FrameWorks automates much of the heavy lifting for external integrations. While the platform manages the complexity, you'll need to provide the credentials and API keys for these services to function.
+External service credentials required by the platform.
 
 ## Setting Up DNS
 
@@ -22,15 +22,7 @@ FrameWorks automates much of the heavy lifting for external integrations. While 
 - Domain added to Cloudflare
   - Required permissions: **Zone.DNS (Edit)** and **Account.Load Balancers (Edit)** (for multi-node)
 
-**What Navigator Automates:**
-
-- DNS record creation/updates based on Quartermaster node inventory
-- Smart routing: single node → A record, multiple nodes → load balancer pool
-- Pool and origin management
-- Geographic routing via Cloudflare load balancers
-- Removes origins that are no longer in inventory
-
-Navigator skips changes if no nodes are returned for a service type to avoid wiping DNS during transient outages.
+Navigator automates DNS record management based on inventory. See [DNS Automation](/operators/dns) for details.
 
 **Manual Steps:**
 
@@ -59,14 +51,9 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 
 **Managed By:** Navigator (`api_dns`) - handles ACME certificate issuance and renewal
 
-**What Navigator Automates:**
+Navigator handles ACME certificate issuance and renewal via DNS-01. See [DNS Automation](/operators/dns) for details.
 
-- Certificate issuance via ACME (Let's Encrypt) with DNS-01 validation
-- Automatic renewal (monitors expiration, renews when < 30 days remaining)
-- Certificate caching in PostgreSQL
-- Background renewal worker
-
-**Required Setup:** Navigator still needs Cloudflare credentials plus an allowed domain suffix list (`NAVIGATOR_CERT_ALLOWED_SUFFIXES`) or `NAVIGATOR_ROOT_DOMAIN`. In dev, the allowlist can be left empty to allow all.
+**Required Setup:** Navigator needs Cloudflare credentials plus `NAVIGATOR_CERT_ALLOWED_SUFFIXES` or `NAVIGATOR_ROOT_DOMAIN`. In dev, the allowlist can be left empty.
 
 **Alternative Options:**
 
@@ -195,61 +182,3 @@ Navigator skips changes if no nodes are returned for a service type to avoid wip
 | GeoIP    | MaxMind / DB-IP / IP2Location | Recommended | Operator-managed (MMDB file) |
 | SMTP     | Any provider                  | Optional    | Platform (email delivery)    |
 | Payments | Stripe, Mollie                | Optional    | Purser (webhook handling)    |
-
----
-
-## Environment Variables
-
-Complete list of required environment variables:
-
-```bash
-# DNS (Required - used by Navigator)
-export CLOUDFLARE_API_TOKEN="your-cloudflare-token"
-export CLOUDFLARE_ZONE_ID="your-zone-id"
-export CLOUDFLARE_ACCOUNT_ID="your-account-id"
-export NAVIGATOR_ROOT_DOMAIN="example.com"
-export BRAND_DOMAIN="example.com"
-
-# Navigator DNS / cert behavior (optional)
-export NAVIGATOR_PROXY_SERVICES="app,website,docs"
-export NAVIGATOR_CERT_ALLOWED_SUFFIXES="example.com"
-export ACME_ENV="production"
-
-# GeoIP (Recommended)
-export GEOIP_MMDB_PATH="/var/lib/GeoIP/GeoLite2-City.mmdb"
-
-# Email (Optional for billing/auth; required for Forms)
-export SMTP_HOST="smtp.provider.com"
-export SMTP_PORT="587"
-export SMTP_USER="username"
-export SMTP_PASSWORD="password"
-export FROM_EMAIL="noreply@yourdomain.com"
-export FROM_NAME="FrameWorks"
-export TO_EMAIL="ops@yourdomain.com"
-
-# Stripe (Optional - only if using billing)
-export STRIPE_SECRET_KEY="sk_live_..."
-export STRIPE_WEBHOOK_SECRET="whsec_..."
-
-# Mollie (Optional)
-export MOLLIE_API_KEY="live_xxx"
-export MOLLIE_WEBHOOK_SECRET="mollie_secret"
-```
-
-Store these securely using:
-
-- Environment files (`.env`)
-- Secrets manager (production)
-- CI/CD secrets (automated deployments)
-
----
-
-## Next Steps
-
-1. Set up required external services (DNS, SSL automated)
-2. Configure optional services as needed (Email, GeoIP, Payments)
-3. Set environment variables
-4. Verify CLI can access external APIs
-5. Proceed with cluster provisioning
-
-For DNS operations, see [DNS Automation](/operators/dns)

@@ -11,11 +11,12 @@ import (
 	skipperconfig "frameworks/api_consultant/internal/config"
 	"frameworks/api_consultant/internal/heartbeat"
 	"frameworks/api_consultant/internal/knowledge"
+	"frameworks/api_consultant/internal/mcpclient"
+	"frameworks/api_consultant/internal/mcpspoke"
 	"frameworks/api_consultant/internal/metering"
 	"frameworks/api_consultant/internal/notify"
 	"frameworks/pkg/auth"
 	commodoreclient "frameworks/pkg/clients/commodore"
-	deckhandclient "frameworks/pkg/clients/deckhand"
 	decklogclient "frameworks/pkg/clients/decklog"
 	periscopeclient "frameworks/pkg/clients/periscope"
 	purserclient "frameworks/pkg/clients/purser"
@@ -98,7 +99,7 @@ func main() {
 	rateLimiter := metering.NewRateLimiter(cfg.ChatRateLimitHour, cfg.RateLimitOverrides)
 	rateLimiter.StartCleanup(context.Background())
 
-	// Create Periscope gRPC client for diagnostics
+	// Periscope gRPC client — used by the heartbeat agent for direct diagnostics.
 	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
 	periscopeClient, err := periscopeclient.NewGRPCClient(periscopeclient.GRPCConfig{
 		GRPCAddr:     periscopeGRPCAddr,
@@ -114,23 +115,7 @@ func main() {
 		logger.WithField("addr", periscopeGRPCAddr).Info("Connected to Periscope gRPC")
 	}
 
-	// Create Deckhand gRPC client for support context
-	deckhandGRPCAddr := config.GetEnv("DECKHAND_GRPC_ADDR", "deckhand:19006")
-	deckhandClient, err := deckhandclient.NewGRPCClient(deckhandclient.GRPCConfig{
-		GRPCAddr:     deckhandGRPCAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
-	})
-	if err != nil {
-		logger.WithError(err).Warn("Failed to create Deckhand gRPC client - support context disabled")
-		deckhandClient = nil
-	} else {
-		defer func() { _ = deckhandClient.Close() }()
-		logger.WithField("addr", deckhandGRPCAddr).Info("Connected to Deckhand gRPC")
-	}
-
-	// Create Commodore gRPC client for tenant context
+	// Commodore gRPC client — used by the heartbeat agent for tenant/stream context.
 	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
 	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
 		GRPCAddr:     commodoreGRPCAddr,
@@ -232,6 +217,26 @@ func main() {
 		searchProvider = nil
 	}
 
+	// Connect to the Gateway MCP for platform tools (diagnostics, streams, etc.).
+	var gatewayClient *mcpclient.GatewayClient
+	if mcpURL := cfg.GatewayMCPURL(); mcpURL != "" {
+		var connectErr error
+		gatewayClient, connectErr = mcpclient.New(context.Background(), mcpclient.Config{
+			GatewayURL:   mcpURL,
+			ServiceToken: serviceToken,
+			ToolDenylist: []string{"search_knowledge", "search_web"},
+			Logger:       logger,
+		})
+		if connectErr != nil {
+			logger.WithError(connectErr).Warn("Failed to connect to Gateway MCP - platform tools disabled")
+			gatewayClient = nil
+		} else {
+			defer func() { _ = gatewayClient.Close() }()
+		}
+	} else {
+		logger.Warn("GATEWAY_PUBLIC_URL not set - platform tools disabled")
+	}
+
 	conversationStore := chat.NewConversationStore(db)
 	knowledgeStore := knowledge.NewStore(db)
 	searchTool := chat.NewSearchWebTool(searchProvider)
@@ -241,7 +246,7 @@ func main() {
 		SearchWeb:   searchTool,
 		Knowledge:   knowledgeStore,
 		Embedder:    embedder,
-		Periscope:   periscopeClient,
+		Gateway:     gatewayClient,
 	})
 	chatHandler := chat.NewChatHandler(conversationStore, orchestrator, decklogClient, logger)
 
@@ -306,15 +311,15 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Warn("Skipping knowledge admin API: embedding client not configured")
 	} else {
-		embedder, embedderErr := knowledge.NewEmbedder(embedderClient)
+		adminEmbedder, embedderErr := knowledge.NewEmbedder(embedderClient)
 		if embedderErr != nil {
 			logger.WithError(embedderErr).Warn("Skipping knowledge admin API: failed to initialize knowledge embedder")
 		} else {
-			crawler, crawlerErr := knowledge.NewCrawler(nil, embedder, knowledgeStore)
+			crawler, crawlerErr := knowledge.NewCrawler(nil, adminEmbedder, knowledgeStore)
 			if crawlerErr != nil {
 				logger.WithError(crawlerErr).Warn("Skipping knowledge admin API: failed to initialize knowledge crawler")
 			} else {
-				adminAPI, adminErr := knowledge.NewAdminAPI(db, knowledgeStore, embedder, crawler, logger)
+				adminAPI, adminErr := knowledge.NewAdminAPI(db, knowledgeStore, adminEmbedder, crawler, logger)
 				if adminErr != nil {
 					logger.WithError(adminErr).Warn("Skipping knowledge admin API: failed to initialize knowledge admin API")
 				} else {
@@ -323,6 +328,26 @@ func main() {
 			}
 		}
 	}
+
+	// Spoke MCP endpoint — exposes search_knowledge and search_web for the Gateway hub.
+	spokeMCPServer := mcpspoke.NewServer(mcpspoke.Config{
+		Knowledge:      knowledgeStore,
+		Embedder:       embedder,
+		SearchProvider: searchProvider,
+		Logger:         logger,
+	})
+	spokeHandler := mcp.NewStreamableHTTPHandler(
+		func(r *http.Request) *mcp.Server {
+			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if token == "" || token != serviceToken {
+				return nil
+			}
+			return spokeMCPServer
+		},
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+	router.Any("/mcp/spoke", gin.WrapH(http.Handler(spokeHandler)))
+	router.Any("/mcp/spoke/*path", gin.WrapH(http.Handler(spokeHandler)))
 
 	// MCP notification endpoint — per-tenant server for tenant-isolated sessions.
 	jwtSecretBytes := []byte(jwtSecret)

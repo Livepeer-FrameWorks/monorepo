@@ -10,15 +10,6 @@ MistServer → Helmsman → Foghorn → Decklog → Kafka → Periscope-Ingest �
 
 It is written as a “how the system works” reference (vs an audit checklist).
 
-## Related Docs / Source of Truth
-
-- Units + semantics: `docs/standards/metrics.md`
-- Trigger + realtime contracts: `pkg/proto/ipc.proto`
-- Analytics query API (gRPC): `pkg/proto/periscope.proto`
-- ClickHouse schema + MVs: `pkg/database/sql/clickhouse/periscope.sql`
-- GraphQL schema: `pkg/graphql/schema.graphql`
-- Gateway gqlgen mapping: `api_gateway/gqlgen.yml`
-
 ## Glossary (Fields That Show Up Everywhere)
 
 - `tenant_id`: Tenant UUID. **All analytics data must be partitioned and queried by tenant_id.**
@@ -295,14 +286,11 @@ Notes:
 - Use `docs/standards/metrics.md` for unit conversions (`_bps`, `_gb`, `_bytes`, etc.).
 - “Peak bandwidth” must be derived from a rate table/rollup (e.g., `client_qoe_5m.avg_bw_out`), not cumulative byte counters.
 
-## Known Gotchas (From the End-to-End Audit)
+## Gotchas
 
-- **Tenant isolation**: All writes/reads must include `tenant_id`; avoid “zero UUID” sink behavior for missing tenants.
-- **ClickHouse placeholders**: Use `?` placeholders consistently; `$1/$2/...` style is driver-incompatible in this codebase.
 - **Session vs envelope event types**: Kafka uses `viewer_connect`/`viewer_disconnect`, but `viewer_connection_events.event_type` stores `connect`/`disconnect`.
-- **Clip stages**: ClickHouse stores lowercase stages (`done`, `failed`, …); don’t query for enum strings like `STAGE_DONE`.
-- **Materialized view semantics**: If an MV is meant to merge rows (connect+disconnect), the storage engine and ORDER BY must match the merge strategy.
-- **Privacy**: Storing raw client IPs for internal analysis is acceptable, but API layers must redact them before exposing to tenants/users.
+- **Clip stages**: ClickHouse stores lowercase stages (`done`, `failed`, …); don't query for enum strings like `STAGE_DONE`.
+- **ClickHouse placeholders**: Use `?` placeholders; `$1/$2/...` style is driver-incompatible in this codebase.
 
 ## Verification / Debugging Playbook
 
@@ -342,18 +330,3 @@ If billing or analytics data appears to “freeze”, check:
 
 - consumer group lag for the relevant group (Periscope Ingest, Purser)
 - service logs around handler errors (schema mismatches often show here first)
-
-## Extending Analytics (New Field / New Event)
-
-Use this checklist when adding new analytics fields end-to-end:
-
-1. Update protobuf contract (`pkg/proto/ipc.proto` or `pkg/proto/periscope.proto`)
-2. Run `make proto`
-3. Emit/populate the new field in the producing service (Helmsman/Foghorn/etc.)
-4. Update ClickHouse schema (`pkg/database/sql/clickhouse/periscope.sql`) if needed
-5. Update Periscope Ingest handlers to insert the new field
-6. Update Periscope Query to select + return the new field
-7. Update GraphQL schema (`pkg/graphql/schema.graphql`) if the field is exposed to UI
-8. Run `make graphql` (server codegen) and implement resolver stubs
-9. Update demo generators if applicable (`api_gateway/internal/demo/generators.go`)
-10. Update frontend queries and run codegen in `website_application`

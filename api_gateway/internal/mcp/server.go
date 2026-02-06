@@ -39,6 +39,7 @@ type Server struct {
 	tenantCache    *middleware.TenantCache
 	usageTracker   *middleware.UsageTracker
 	trustedProxies *middleware.TrustedProxies
+	skipperClient  tools.SkipperCaller
 }
 
 // Config holds configuration for the MCP server.
@@ -52,6 +53,7 @@ type Config struct {
 	TenantCache    *middleware.TenantCache
 	UsageTracker   *middleware.UsageTracker
 	TrustedProxies *middleware.TrustedProxies
+	SkipperClient  tools.SkipperCaller
 }
 
 // NewServer creates a new MCP server with all resources, tools, and prompts registered.
@@ -81,6 +83,7 @@ func NewServer(cfg Config) (*Server, error) {
 		tenantCache:    cfg.TenantCache,
 		usageTracker:   cfg.UsageTracker,
 		trustedProxies: cfg.TrustedProxies,
+		skipperClient:  cfg.SkipperClient,
 	}
 
 	// Register resources
@@ -162,6 +165,9 @@ func (s *Server) registerTools() {
 
 	// API integration assistant tools (schema introspection, query generation)
 	tools.RegisterAPIAssistantTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
+
+	// Skipper proxy tools (knowledge search, web search — forwarded to Skipper spoke)
+	tools.RegisterSkipperTools(s.mcpServer, s.skipperClient, s.logger)
 }
 
 // registerPrompts registers all MCP prompts.

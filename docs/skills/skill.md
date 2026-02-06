@@ -154,13 +154,6 @@ Authentication: same wallet headers or bearer token.
 - Prepaid balance must be positive to run billable operations.
 - Use MCP `billing://balance` or GraphQL `balance` query to monitor balance and drain rate.
 
-## Authentication Best Practices
-
-- **Wallet-first.** Use EIP-191 wallet auth for initial login. It auto-provisions a tenant — no signup form needed.
-- **Cache the JWT.** Wallet login returns a JWT. Reuse it for subsequent requests instead of re-signing every call.
-- **Refresh before expiry.** JWTs expire. Use `POST /auth/refresh` proactively.
-- **x402 for one-off payments.** If the human hasn't pre-funded the account, use x402 to pay per-request with USDC. Works on Base and Arbitrum.
-
 ## Streaming Best Practices
 
 - **Check balance before creating streams.** Active streams drain balance continuously. Use `billing://balance` (MCP) or `balance` query (GraphQL) to check drain rate.
@@ -177,13 +170,6 @@ Authentication: same wallet headers or bearer token.
 - Billing details are missing and you can't proceed
 - x402 payment settlement fails
 - Wallet signature is rejected (may need re-signing)
-
-**Don't alert:**
-
-- Routine balance checks
-- Normal stream health readings
-- Successful operations
-- JWT refresh cycles
 
 ## Heartbeat (Periodic Check)
 
@@ -214,33 +200,9 @@ Free operations (reads, listing, health checks) skip preflight entirely.
 
 ## Example: First Stream
 
-### 1. Authenticate (REST)
-
-- Sign an EIP-191 message: `"FrameWorks Login\nTimestamp: <ISO8601>\nNonce: <random>"`
-- `POST /auth/wallet-login` with wallet headers → receive JWT + tenant auto-provisioned.
-
-### 2. Connect (MCP or GraphQL)
-
-- **MCP**: `POST /mcp` with `Authorization: Bearer <jwt>` or wallet headers.
-- **GraphQL**: `POST /graphql` with same auth headers.
-
-### 3. Resolve Blockers
-
-- Read `account://status` (MCP) or query `me` (GraphQL) → check `blockers` array.
-- If `BILLING_DETAILS_MISSING`: call `update_billing_details`.
-- If `INSUFFICIENT_BALANCE`: use x402 (`X-PAYMENT` header with USDC on Base/Arbitrum) or `topup_balance`.
-
-### 4. Create & Stream
-
-- Call `create_stream` → capture `stream_key` + `rtmp_url`.
-- Push RTMP: `rtmp://<ingest>/live/<stream_key>`.
-
-### 5. Monitor
-
-- Read `streams://{id}/health` periodically (or subscribe via GraphQL WebSocket).
-- If issues: run QoE diagnostic tools (`diagnose_rebuffering`, `diagnose_buffer_health`).
-
-### 6. Wrap Up
-
-- `delete_stream` or leave for later.
-- Check `billing://balance` to see what it cost.
+1. **Authenticate** — Sign EIP-191 message (`"FrameWorks Login\nTimestamp: <ISO8601>\nNonce: <random>"`), call `POST /auth/wallet-login` → receive JWT + tenant auto-provisioned.
+2. **Connect** — `POST /mcp` or `POST /graphql` with `Authorization: Bearer <jwt>` or wallet headers.
+3. **Resolve blockers** — Read `account://status` → check `blockers`. Fix `BILLING_DETAILS_MISSING` with `update_billing_details`, `INSUFFICIENT_BALANCE` with x402 or `topup_balance`.
+4. **Create & stream** — `create_stream` → capture `stream_key` + `rtmp_url`. Push RTMP: `rtmp://<ingest>/live/<stream_key>`.
+5. **Monitor** — Read `streams://{id}/health` periodically. If issues: `diagnose_rebuffering`, `diagnose_buffer_health`.
+6. **Wrap up** — `delete_stream` or leave. Check `billing://balance` for cost.

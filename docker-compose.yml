@@ -48,6 +48,7 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       USAGE_HASH_SECRET: ${USAGE_HASH_SECRET}
       CLUSTER_ID: ${CLUSTER_ID}
+      SKIPPER_SPOKE_URL: http://skipper:18018/mcp/spoke
     ports:
       - "18000:18000"
     depends_on:
@@ -819,7 +820,6 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
-      DECKHAND_GRPC_ADDR: ${DECKHAND_GRPC_ADDR}
       PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
       QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
       SKIPPER_HOST: ${SKIPPER_HOST:-skipper}
@@ -831,6 +831,7 @@ services:
       SEARCH_PROVIDER: ${SEARCH_PROVIDER}
       SEARCH_API_KEY: ${SEARCH_API_KEY}
       SEARCH_API_URL: ${SEARCH_API_URL}
+      GATEWAY_PUBLIC_URL: http://${BRIDGE_HOST}:${BRIDGE_PORT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -840,7 +841,7 @@ services:
         condition: service_started
       periscope-query:
         condition: service_started
-      deckhand:
+      bridge:
         condition: service_started
     networks:
       - frameworks
@@ -854,7 +855,7 @@ services:
         max-file: "3"
     healthcheck:
       test:
-        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18016/health"]
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18018/health"]
       interval: 10s
       timeout: 5s
       retries: 3

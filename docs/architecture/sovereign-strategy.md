@@ -56,8 +56,6 @@ Viewers watch at: https://customer.frameworks.network/play/{playback-id}/hls/ind
 | **4** | Self-hosted DNS (PowerDNS)                 | See `rfcs/dns-anycast.md` |
 | **5** | Bring-your-own-certificate support         | Planned                   |
 
-**Implementation Note**: Use battle-tested ACME libraries (`github.com/go-acme/lego`), don't implement ACME from scratch.
-
 ---
 
 ## Why Privateer Exists
@@ -131,67 +129,6 @@ FrameWorks infrastructure spans central services, regional services, and edge no
 | **3** | Local DNS for mesh hostnames   | Implemented                  |
 | **4** | WireGuard-OSPF dynamic routing | See `rfcs/wireguard-ospf.md` |
 | **5** | Per-tenant mesh segments       | See `rfcs/mesh-isolation.md` |
-
----
-
-## Decision Records
-
-### ADR-001: Build Navigator vs Use Terraform
-
-**Context**: Need to manage DNS and certificates for platform-managed tenant subdomains.
-
-**Decision**: Build Navigator.
-
-**Rationale**:
-
-- Terraform requires human intervention (`terraform apply`)
-- Tenants self-service provision subdomains
-- Dynamic DNS based on node health
-- Per-tenant certificate lifecycle
-
-**Consequences**:
-
-- Custom development effort
-- Must use battle-tested ACME libraries
-- Enables self-service tenant subdomains
-
-### ADR-002: Build Privateer vs Use Tailscale/Headscale
-
-**Context**: Need secure mesh networking for distributed infrastructure.
-
-**Decision**: Build Privateer.
-
-**Rationale**:
-
-- Tailscale is SaaS (sovereignty violation)
-- Headscale introduces external dependency
-- Future need for per-tenant network isolation
-- Must work on air-gapped customer premises
-
-**Consequences**:
-
-- Custom development effort
-- Full control over mesh topology
-- Enables B2B dedicated clusters
-- Enables self-hosted deployments
-
-### ADR-003: Defer Support Services
-
-**Context**: Need incident management, support ticketing, chat.
-
-**Decision**: Use existing tools, defer custom services.
-
-**Rationale**:
-
-- Not core differentiators
-- Mature solutions exist (Prometheus, Chatwoot)
-- Limited engineering resources
-
-**Consequences**:
-
-- Lookout: Use Prometheus/Grafana/Alertmanager
-- Deckhand: Integrate Chatwoot (see `docs/architecture/deckhand.md`)
-- Parlor: Defer to Q2 2026
 
 ---
 

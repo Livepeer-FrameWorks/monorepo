@@ -2,16 +2,13 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"testing"
 
 	"frameworks/api_consultant/internal/knowledge"
-	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/llm"
-	pb "frameworks/pkg/proto"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeStream struct {
@@ -49,66 +46,41 @@ func (p *fakeProvider) Complete(ctx context.Context, messages []llm.Message, too
 	return stream, nil
 }
 
-type fakePeriscope struct {
-	streamID string
+type fakeGateway struct {
+	tools     []llm.Tool
+	toolIndex map[string]struct{}
+	calls     []gatewayCall
 }
 
-func (p *fakePeriscope) GetRebufferingEvents(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetRebufferingEventsResponse, error) {
-	_ = ctx
-	_ = tenantID
-	_ = nodeID
-	_ = timeRange
-	_ = opts
-	if streamID != nil {
-		p.streamID = *streamID
+type gatewayCall struct {
+	Name      string
+	Arguments json.RawMessage
+}
+
+func newFakeGateway(toolNames ...string) *fakeGateway {
+	tools := make([]llm.Tool, 0, len(toolNames))
+	idx := make(map[string]struct{}, len(toolNames))
+	for _, name := range toolNames {
+		tools = append(tools, llm.Tool{
+			Name:        name,
+			Description: "fake " + name,
+			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		})
+		idx[name] = struct{}{}
 	}
-	return &pb.GetRebufferingEventsResponse{
-		Events: []*pb.RebufferingEvent{
-			{
-				RebufferStart: timestamppb.Now(),
-				RebufferEnd:   timestamppb.Now(),
-			},
-		},
-	}, nil
+	return &fakeGateway{tools: tools, toolIndex: idx}
 }
 
-func (p *fakePeriscope) GetStreamHealth5m(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetStreamHealth5MResponse, error) {
-	_ = ctx
-	_ = tenantID
-	_ = streamID
-	_ = timeRange
-	_ = opts
-	return &pb.GetStreamHealth5MResponse{}, nil
+func (g *fakeGateway) AvailableTools() []llm.Tool { return g.tools }
+
+func (g *fakeGateway) HasTool(name string) bool {
+	_, ok := g.toolIndex[name]
+	return ok
 }
 
-func (p *fakePeriscope) GetClientMetrics5m(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetClientMetrics5MResponse, error) {
-	_ = ctx
-	_ = tenantID
-	_ = streamID
-	_ = nodeID
-	_ = timeRange
-	_ = opts
-	return &pb.GetClientMetrics5MResponse{}, nil
-}
-
-func (p *fakePeriscope) GetRoutingEvents(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
-	_ = ctx
-	_ = tenantID
-	_ = streamID
-	_ = timeRange
-	_ = opts
-	_ = relatedTenantIDs
-	_ = subjectTenantID
-	_ = clusterID
-	return &pb.GetRoutingEventsResponse{}, nil
-}
-
-func (p *fakePeriscope) GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error) {
-	_ = ctx
-	_ = tenantID
-	_ = streamID
-	_ = timeRange
-	return &pb.GetStreamHealthSummaryResponse{}, nil
+func (g *fakeGateway) CallTool(_ context.Context, name string, arguments json.RawMessage) (string, error) {
+	g.calls = append(g.calls, gatewayCall{Name: name, Arguments: arguments})
+	return `{"status":"ok","summary":"diagnostics complete"}`, nil
 }
 
 type fakeEmbeddingClient struct{}
@@ -151,7 +123,7 @@ func TestOrchestratorGroundingConfidenceAndSources(t *testing.T) {
 		sequences: [][]llm.Chunk{
 			{
 				{
-					Content: "[confidence:verified]\nUse the Skipper runbook.\n[sources]\n- Skipper KB — https://example.com/docs\n[/sources]\n",
+					Content: "[confidence:verified]\nUse the Skipper runbook.\n[sources]\n- Skipper KB \u2014 https://example.com/docs\n[/sources]\n",
 				},
 			},
 		},
@@ -175,8 +147,8 @@ func TestOrchestratorGroundingConfidenceAndSources(t *testing.T) {
 	}
 }
 
-func TestOrchestratorDiagnosticsUsesPeriscopeTool(t *testing.T) {
-	periscopeClient := &fakePeriscope{}
+func TestOrchestratorDiagnosticsUsesGatewayTool(t *testing.T) {
+	gateway := newFakeGateway("diagnose_rebuffering")
 	provider := &fakeProvider{
 		sequences: [][]llm.Chunk{
 			{
@@ -197,7 +169,7 @@ func TestOrchestratorDiagnosticsUsesPeriscopeTool(t *testing.T) {
 	}
 	orchestrator := NewOrchestrator(OrchestratorConfig{
 		LLMProvider: provider,
-		Periscope:   periscopeClient,
+		Gateway:     gateway,
 	})
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
@@ -205,8 +177,11 @@ func TestOrchestratorDiagnosticsUsesPeriscopeTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run orchestrator: %v", err)
 	}
-	if periscopeClient.streamID != "stream-123" {
-		t.Fatalf("expected periscope to receive stream-123, got %s", periscopeClient.streamID)
+	if len(gateway.calls) != 1 {
+		t.Fatalf("expected 1 gateway call, got %d", len(gateway.calls))
+	}
+	if gateway.calls[0].Name != "diagnose_rebuffering" {
+		t.Fatalf("expected gateway call to diagnose_rebuffering, got %s", gateway.calls[0].Name)
 	}
 	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "diagnose_rebuffering" {
 		t.Fatalf("expected diagnose_rebuffering tool call, got %+v", result.ToolCalls)

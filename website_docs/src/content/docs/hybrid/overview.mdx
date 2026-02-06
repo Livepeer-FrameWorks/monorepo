@@ -19,25 +19,7 @@ import { Aside } from "@astrojs/starlight/components";
   infrastructure nodes.
 </Aside>
 
-The vision for FrameWorks' hybrid deployment is to offer the best of both worlds: the control of self-hosted infrastructure with the convenience of managed services. This will enable you to do the heavy lifting on your own hardware, while the FrameWorks network handles crucial services like load balancing, analytics, and orchestration.
-
-## The Hybrid Vision
-
-Our goal for hybrid deployment is to empower you with:
-
-**Leveraging your own hardware:**
-
-- The ability to run edge nodes anywhere you have servers.
-- Flexibility to ingest streams locally or route them through the network.
-- Optimized delivery by serving viewers from your nodes when they are geographically closest.
-- Integrated analytics and monitoring without the need for you to build it yourself.
-
-**Seamless integration with the FrameWorks network:**
-
-- The core Control Plane services (Commodore, Quartermaster) remain centrally managed.
-- Analytics ingestion and storage are handled by the FrameWorks platform.
-- Load balancer decisions (Foghorn) are orchestrated by the network.
-- Full access to the dashboard and API is maintained.
+Run your own edge nodes for ingest and delivery while the FrameWorks network handles the control plane, analytics, and orchestration.
 
 ## How It Works
 
@@ -88,29 +70,6 @@ Hardware minimums:
   - 8 GB RAM
   - 100 GB storage (more if you're doing recordings)
   - 1 Gbps network
-
-## Future Implementation Steps
-
-Once hybrid deployment is stable, these guides will help you:
-
-1.  Set up your edge node (install Docker, run preflight checks).
-2.  Connect to the network (enroll your node with Quartermaster).
-3.  Manage your node (update, monitor, troubleshoot).
-
-## Envisioned Use Cases
-
-**Hybrid deployment will be a strong consideration if:**
-
-- You possess existing, underutilized server capacity.
-- Your primary viewer base is concentrated in a geographic region not optimally served by our existing edge network.
-- Compliance regulations necessitate keeping stream data on-premise.
-- You require ultra-low latency streaming, surpassing what our nearest edge nodes can provide.
-
-**Conversely, hybrid deployment might not be the most suitable option if:**
-
-- You lack the operational capacity or expertise to maintain server infrastructure.
-- Your viewer base is broadly distributed globally, where our comprehensive network coverage is already optimized.
-- Your primary goal is to stream with minimal infrastructure management overhead.
 
 ## What's Different from Full Self-Hosting
 

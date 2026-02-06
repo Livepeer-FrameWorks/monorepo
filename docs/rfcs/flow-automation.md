@@ -196,91 +196,9 @@ The `ai.*` triggers integrate with the processing pipeline:
          └────────▶ Foghorn (processing jobs)
 ```
 
-### Database Schema
+### Storage
 
-```sql
-CREATE TABLE commodore.workflows (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT,
-    definition JSONB NOT NULL,       -- Full workflow YAML/JSON
-    enabled BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE commodore.workflow_executions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    workflow_id UUID REFERENCES commodore.workflows(id),
-    trigger_event JSONB NOT NULL,    -- Event that triggered
-    status TEXT NOT NULL,            -- 'running', 'completed', 'failed'
-    actions_executed JSONB,          -- Results of each action
-    error_message TEXT,
-    started_at TIMESTAMPTZ DEFAULT NOW(),
-    completed_at TIMESTAMPTZ
-);
-
-CREATE INDEX idx_workflow_executions_workflow ON commodore.workflow_executions(workflow_id);
-CREATE INDEX idx_workflow_executions_started ON commodore.workflow_executions(started_at);
-```
-
-### GraphQL API
-
-```graphql
-type Workflow {
-  id: ID!
-  name: String!
-  description: String
-  definition: JSON!
-  enabled: Boolean!
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  executions(input: ConnectionInput): WorkflowExecutionConnection!
-}
-
-type WorkflowExecution {
-  id: ID!
-  workflow: Workflow!
-  triggerEvent: JSON!
-  status: WorkflowExecutionStatus!
-  actionsExecuted: JSON
-  errorMessage: String
-  startedAt: DateTime!
-  completedAt: DateTime
-}
-
-enum WorkflowExecutionStatus {
-  RUNNING
-  COMPLETED
-  FAILED
-}
-
-extend type Query {
-  workflow(id: ID!): Workflow
-  workflows(input: ConnectionInput): WorkflowConnection!
-  workflowTriggerTypes: [WorkflowTriggerType!]! # Available triggers including AI
-  workflowActionTypes: [WorkflowActionType!]! # Available actions
-}
-
-extend type Mutation {
-  workflowCreate(input: WorkflowCreateInput!): WorkflowPayload!
-  workflowUpdate(id: ID!, input: WorkflowUpdateInput!): WorkflowPayload!
-  workflowDelete(id: ID!): WorkflowPayload!
-  workflowEnable(id: ID!): WorkflowPayload!
-  workflowDisable(id: ID!): WorkflowPayload!
-  workflowTest(id: ID!, sampleEvent: JSON!): WorkflowExecutionPayload!
-}
-```
-
-### Visual Builder (Webapp)
-
-- Drag-and-drop trigger selection
-- AI model and label picker for AI triggers
-- Condition builder with field autocomplete
-- Action configuration forms
-- Test mode with sample events
-- Execution history and logs
+Two Commodore tables: `workflows` (tenant-scoped JSONB definitions) and `workflow_executions` (audit trail with trigger event, actions executed, status). GraphQL CRUD + test execution mutation.
 
 ## Impact / Dependencies
 

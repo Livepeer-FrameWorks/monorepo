@@ -25,6 +25,16 @@ type Config struct {
 	BillingKafkaTopic  string
 	KafkaBrokers       []string
 	KafkaClusterID     string
+	GatewayPublicURL   string
+}
+
+// GatewayMCPURL returns the MCP endpoint URL derived from the gateway base.
+// Returns empty string when GatewayPublicURL is unset.
+func (c Config) GatewayMCPURL() string {
+	if c.GatewayPublicURL == "" {
+		return ""
+	}
+	return strings.TrimRight(c.GatewayPublicURL, "/") + "/mcp"
 }
 
 // LoadConfig loads the Skipper configuration from environment variables.
@@ -57,6 +67,7 @@ func LoadConfig() Config {
 		BillingKafkaTopic:  config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports"),
 		KafkaBrokers:       brokers,
 		KafkaClusterID:     config.GetEnv("KAFKA_CLUSTER_ID", "local"),
+		GatewayPublicURL:   config.GetEnv("GATEWAY_PUBLIC_URL", ""),
 	}
 }
 

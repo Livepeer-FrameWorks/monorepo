@@ -12,7 +12,7 @@ import { Card, CardGrid, LinkCard, Aside } from "@astrojs/starlight/components";
   formats may change. Proceed with caution for production environments.
 </Aside>
 
-Deploying FrameWorks gives you full ownership of your video infrastructure. While currently in active development, our CLI-driven approach aims to make self-hosting as simple as running a few commands.
+Deploying FrameWorks gives you full ownership of your video infrastructure.
 
 ## Quick Start
 
@@ -103,19 +103,6 @@ For operators who cannot or choose not to use the CLI:
 
 For detailed architecture documentation including service tables, ports, deployment tiers, and data flow diagrams, see [Architecture Overview](/operators/architecture).
 
-**Quick Reference - Deployment Tiers:**
-
-- **Central Tier**: Commodore, Quartermaster, Purser, Periscope Query, Deckhand, Forms, Listmonk, Chatwoot + Redis, PostgreSQL-compatible DB (YugabyteDB recommended), ClickHouse
-- **Regional Tier**: Bridge, Foghorn, Decklog, Periscope Ingest, Signalman + Kafka
-- **Edge Tier**: MistServer, Helmsman, Livepeer Gateway
-
-**External Dependencies:**
-
-- [Cloudflare](/operators/external-services#cloudflare) - DNS management, geographic load balancing (self-hosted anycast DNS planned)
-- [SSL/TLS](/operators/external-services#ssl-certificates) - Let's Encrypt (Navigator for central via DNS-01, Caddy for edge via HTTP-01)
-- [SMTP](/operators/external-services#email) - Email notifications
-- [Stripe](/operators/external-services#stripe) - Payment processing (optional)
-
 ## Security
 
 ### Network Security
@@ -142,80 +129,4 @@ For detailed architecture documentation including service tables, ports, deploym
 - API rate limiting is enforced at the gateway.
 - SSH key-based authentication for deployments
 
-## Monitoring & Observability
-
-### Metrics Collection
-
-- **VictoriaMetrics (or Prometheus)** - Scrape exporters and remote_write to VictoriaMetrics
-- **Grafana** - Dashboards with VictoriaMetrics, ClickHouse, PostgreSQL datasources
-- **Custom Metrics** - Business KPIs and streaming analytics
-
-### Health Checks
-
-Use CLI commands for health monitoring:
-
-```bash
-# Comprehensive health check
-frameworks cluster doctor --manifest cluster.yaml
-
-# Detect service state
-frameworks cluster detect --manifest cluster.yaml
-
-# Diagnose network connectivity
-frameworks cluster diagnose network --manifest cluster.yaml
-
-# Check resource usage
-frameworks cluster diagnose resources --manifest cluster.yaml
-```
-
-### Logging
-
-- Structured JSON logging across all services
-- View logs via CLI: `frameworks cluster logs <service> --follow`
-- Log rotation and retention policies
-
-## Operations
-
-### Backup & Restore
-
-```bash
-# Backup all components
-frameworks cluster backup all --output /backups
-
-# Backup specific component
-frameworks cluster backup postgres --output /backups
-
-# Restore from backup
-frameworks cluster restore postgres --from /backups/postgres.sql
-```
-
-See [CLI Reference](/operators/cli-reference) for full command documentation.
-
-### Service Management
-
-```bash
-# View logs
-frameworks cluster logs commodore --follow
-
-# Restart service
-frameworks cluster restart bridge
-
-# Upgrade to new version
-frameworks cluster upgrade commodore --version stable
-```
-
-### Diagnostics
-
-```bash
-# Network connectivity test
-frameworks cluster diagnose network
-
-# Resource usage check
-frameworks cluster diagnose resources
-
-# Port conflict detection
-frameworks cluster diagnose ports
-
-# Kafka health check
-frameworks cluster diagnose kafka
-```
+For monitoring, operations, and CLI commands, see [CLI Reference](/operators/cli-reference) and [Operations](/operators/operations).

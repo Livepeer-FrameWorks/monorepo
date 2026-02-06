@@ -1,12 +1,6 @@
 # Service Events Backbone
 
-**Status**: Active (2025-12-27)
-**Owners**: Platform Architecture
-**Scope**: Service-plane telemetry, audit trail, and API usage metering
-
----
-
-## 1. Purpose
+## Purpose
 
 The Service Events backbone provides a unified, typed telemetry stream across core services. It supports:
 

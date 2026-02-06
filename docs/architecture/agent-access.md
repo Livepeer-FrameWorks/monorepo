@@ -1,10 +1,8 @@
 # Agent Access Architecture
 
-This document describes the programmatic access system that enables AI agents and autonomous clients to interact with FrameWorks via wallet authentication, prepaid billing, x402 payments, and MCP integration.
+Programmatic access for AI agents and autonomous clients: wallet auth, prepaid billing, x402 payments, MCP integration.
 
 ## Overview
-
-The agent access system provides:
 
 1. **Wallet-based authentication** - Cryptographic identity via EVM wallet signatures
 2. **Prepaid balance system** - Pay-as-you-go credits for wallet/agent accounts (postpaid exists for verified email)
@@ -21,25 +19,32 @@ The agent access system provides:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        AI Agent / Client                        │
+│                   AI Agent / Client / Claude Code                │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      MCP Server Adapter                         │
-│  (Integrated in Gateway - exposes tools/resources)              │
+│                   Gateway MCP (Hub)  bridge:18000/mcp           │
+│                                                                 │
+│  27 own tools + 2 proxied from Skipper spoke                    │
+│  (search_knowledge, search_web)                                 │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      API Gateway (Bridge)                       │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │ Wallet Auth │  │ JWT/Token   │  │ Prepaid Balance Check   │  │
-│  │ Middleware  │  │ Middleware  │  │ + x402 Middleware       │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-         ┌────────────────────┼────────────────────┐
+         │                    │                    │
+         │        consumes ◄──┼──► provides        │
+         │                    │                    │
+         │   ┌────────────────┴──────────────┐     │
+         │   ▼                               ▼     │
+         │  ┌───────────────────────────────────┐  │
+         │  │       Skipper (Spoke)              │  │
+         │  │       skipper:18018                │  │
+         │  │                                   │  │
+         │  │  MCP Client ──► Gateway tools     │  │
+         │  │  MCP Spoke  ──► search_knowledge  │  │
+         │  │                  search_web        │  │
+         │  │  Knowledge store (local pgvector)  │  │
+         │  │  Heartbeat agent (direct gRPC)     │  │
+         │  └───────────────────────────────────┘  │
+         │                                         │
          ▼                    ▼                    ▼
 ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
 │   Commodore     │  │     Purser      │  │   Periscope     │
@@ -178,28 +183,7 @@ When a new wallet authenticates:
 
 Resource-based billing with prepaid credits. API requests are free; costs are for bandwidth/viewer hours, storage, and processing/transcoding.
 
-### Database Schema
-
-```sql
--- Current balance per tenant
-CREATE TABLE purser.prepaid_balances (
-    tenant_id UUID NOT NULL,
-    balance_cents BIGINT NOT NULL DEFAULT 0,
-    currency VARCHAR(3) DEFAULT 'USD',
-    low_balance_threshold_cents BIGINT DEFAULT 500,
-    UNIQUE(tenant_id, currency)
-);
-
--- Audit trail
-CREATE TABLE purser.balance_transactions (
-    tenant_id UUID NOT NULL,
-    amount_cents BIGINT NOT NULL,        -- Positive = topup, negative = usage
-    balance_after_cents BIGINT NOT NULL,
-    transaction_type VARCHAR(20) NOT NULL, -- 'topup', 'usage', 'refund', 'adjustment'
-    description TEXT,
-    reference_id UUID
-);
-```
+Schema: `pkg/database/sql/schema/purser.sql` (`prepaid_balances`, `balance_transactions`)
 
 ### Enforcement
 
@@ -298,113 +282,26 @@ Single private key used on all EVM chains (same address everywhere):
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
 
-**Summary**: 27 tools (11 categories), 18 resources (9 categories), 8 prompts.
+**Summary**: 29 tools (12 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 27 tools directly and proxies 2 tools from the Skipper spoke.
 
-| Category        | Tools                                                                              | Resources                                                            |
-| --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Account & Auth  | `update_billing_details`                                                           | `account://status`                                                   |
-| Payment         | `get_payment_options`, `submit_payment`                                            | —                                                                    |
-| Billing         | `topup_balance`, `check_topup`                                                     | `billing://balance`, `billing://pricing`, `billing://transactions`   |
-| Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`            | `streams://list`, `streams://{id}`, `streams://{id}/health`          |
-| Clips           | `create_clip`, `delete_clip`                                                       | —                                                                    |
-| DVR             | `start_dvr`, `stop_dvr`                                                            | —                                                                    |
-| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset` | `vod://list`, `vod://{artifact_hash}`                                |
-| Playback        | `resolve_playback_endpoint`                                                        | —                                                                    |
-| Analytics       | —                                                                                  | `analytics://usage`, `analytics://viewers`, `analytics://geographic` |
-| QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)          | —                                                                    |
-| Support         | `search_support_history`                                                           | `support://conversations`, `support://conversations/{id}`            |
-| Knowledge       | —                                                                                  | `knowledge://sources`                                                |
-| Schema          | `introspect_schema`, `generate_query`                                              | `schema://catalog`                                                   |
-| Infrastructure  | —                                                                                  | `nodes://list`, `nodes://{id}`                                       |
+| Category        | Tools                                                                              | Resources                                                            | Source        |
+| --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------- |
+| Account & Auth  | `update_billing_details`                                                           | `account://status`                                                   | Gateway       |
+| Payment         | `get_payment_options`, `submit_payment`                                            | —                                                                    | Gateway       |
+| Billing         | `topup_balance`, `check_topup`                                                     | `billing://balance`, `billing://pricing`, `billing://transactions`   | Gateway       |
+| Streams         | `create_stream`, `update_stream`, `delete_stream`, `refresh_stream_key`            | `streams://list`, `streams://{id}`, `streams://{id}/health`          | Gateway       |
+| Clips           | `create_clip`, `delete_clip`                                                       | —                                                                    | Gateway       |
+| DVR             | `start_dvr`, `stop_dvr`                                                            | —                                                                    | Gateway       |
+| VOD             | `create_vod_upload`, `complete_vod_upload`, `abort_vod_upload`, `delete_vod_asset` | `vod://list`, `vod://{artifact_hash}`                                | Gateway       |
+| Playback        | `resolve_playback_endpoint`                                                        | —                                                                    | Gateway       |
+| Analytics       | —                                                                                  | `analytics://usage`, `analytics://viewers`, `analytics://geographic` | Gateway       |
+| QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)          | —                                                                    | Gateway       |
+| Support         | `search_support_history`                                                           | `support://conversations`, `support://conversations/{id}`            | Gateway       |
+| Knowledge       | `search_knowledge`, `search_web`                                                   | `knowledge://sources`                                                | Skipper spoke |
+| Schema          | `introspect_schema`, `generate_query`                                              | `schema://catalog`                                                   | Gateway       |
+| Infrastructure  | —                                                                                  | `nodes://list`, `nodes://{id}`                                       | Gateway       |
 
-For full tool parameters, preflight error formats, and prompt details, see the [public docs](https://docs.frameworks.network/agents/mcp/).
-
-### Structure
-
-```
-api_gateway/internal/mcp/
-├── server.go           # MCP server setup
-├── preflight/
-│   └── checks.go       # Billing/balance checks with x402 integration
-├── resources/
-│   ├── account.go      # account://status
-│   ├── analytics.go    # analytics://usage, analytics://viewers, analytics://geographic
-│   ├── api_schema.go   # schema://catalog
-│   ├── billing.go      # billing://balance, billing://pricing, billing://transactions
-│   ├── knowledge.go    # knowledge://sources
-│   ├── nodes.go        # nodes://list, nodes://{id}
-│   ├── streams.go      # streams://list, streams://{id}
-│   ├── support.go      # support://conversations, support://conversations/{id}
-│   └── vod.go          # vod://list, vod://{artifact_hash}
-├── tools/
-│   ├── account.go      # update_billing_details
-│   ├── api_assistant.go# introspect_schema, generate_query
-│   ├── billing.go      # topup_balance, check_topup
-│   ├── clips.go        # create_clip, delete_clip
-│   ├── dvr.go          # start_dvr, stop_dvr
-│   ├── payment.go      # get_payment_options, submit_payment
-│   ├── playback.go     # resolve_playback_endpoint
-│   ├── qoe.go          # diagnose_* + health/anomaly tools
-│   ├── streams.go      # create_stream, update_stream, delete_stream, refresh_stream_key
-│   ├── support.go      # search_support_history
-│   └── vod.go          # create_vod_upload, complete_vod_upload, abort_vod_upload, delete_vod_asset
-└── prompts/
-    └── prompts.go      # Auth guidance
-```
-
-### Resources (Read-Only)
-
-| URI Pattern                    | Description                                   |
-| ------------------------------ | --------------------------------------------- |
-| `account://status`             | Account readiness, blockers, and capabilities |
-| `streams://list`               | List all streams                              |
-| `streams://{id}`               | Stream details                                |
-| `streams://{id}/health`        | Stream health metrics                         |
-| `nodes://list`                 | Infrastructure nodes                          |
-| `billing://balance`            | Prepaid balance                               |
-| `billing://pricing`            | Current pricing rates                         |
-| `billing://transactions`       | Balance transaction history                   |
-| `analytics://usage`            | Usage aggregates                              |
-| `analytics://viewers`          | Viewer metrics                                |
-| `analytics://geographic`       | Geographic distribution                       |
-| `support://conversations`      | Support conversation list                     |
-| `support://conversations/{id}` | Support conversation detail                   |
-| `knowledge://sources`          | Curated external documentation sources        |
-| `schema://catalog`             | GraphQL schema catalog + templates            |
-| `vod://list`                   | VOD assets                                    |
-| `vod://{artifact_hash}`        | VOD asset details                             |
-
-### Tools (Actions)
-
-| Tool                        | Description                                   |
-| --------------------------- | --------------------------------------------- |
-| `update_billing_details`    | Set billing address and VAT details           |
-| `topup_balance`             | Request crypto deposit address                |
-| `check_topup`               | Check deposit status                          |
-| `get_payment_options`       | Fetch x402 payment options (payTo + networks) |
-| `submit_payment`            | Submit an x402 payment (auth-only or top-up)  |
-| `create_stream`             | Create new live stream                        |
-| `update_stream`             | Update stream settings                        |
-| `delete_stream`             | Delete a stream                               |
-| `refresh_stream_key`        | Rotate a stream key                           |
-| `create_clip`               | Create clip from stream                       |
-| `delete_clip`               | Delete clip                                   |
-| `start_dvr`                 | Start DVR recording                           |
-| `stop_dvr`                  | Stop DVR recording                            |
-| `create_vod_upload`         | Begin VOD upload                              |
-| `complete_vod_upload`       | Complete VOD upload                           |
-| `abort_vod_upload`          | Abort VOD upload                              |
-| `delete_vod_asset`          | Delete VOD asset                              |
-| `resolve_playback_endpoint` | Resolve playback URLs for content             |
-| `diagnose_rebuffering`      | QoE rebuffer analysis                         |
-| `diagnose_buffer_health`    | QoE buffer state analysis                     |
-| `diagnose_packet_loss`      | Packet loss analysis                          |
-| `diagnose_routing`          | Routing decision analysis                     |
-| `get_stream_health_summary` | Aggregated health metrics                     |
-| `get_anomaly_report`        | Stream anomaly detection                      |
-| `search_support_history`    | Search support conversations                  |
-| `introspect_schema`         | Explore GraphQL schema                        |
-| `generate_query`            | Generate GraphQL queries from templates       |
+Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://docs.frameworks.network/agents/mcp/).
 
 ### Preflight Checks
 
@@ -428,26 +325,17 @@ type Blocker struct {
 }
 ```
 
-### MCP Consultant (Phase 1)
+### Hub-and-Spoke Architecture
 
-Phase 1 is implemented and focuses on:
+The Gateway MCP acts as the **hub** — the single unified tool surface for external agents. Skipper (the AI Video Consultant) is a **spoke** that both consumes and provides tools through MCP.
 
-- Curated knowledge sources (`knowledge://sources`).
-- QoE diagnostics (`diagnose_*` tools) backed by Periscope.
-- Support history access (`support://conversations`).
+**Gateway → Skipper (spoke)**: The Gateway proxies `search_knowledge` and `search_web` from Skipper's spoke endpoint (`/mcp/spoke`). The spoke authenticates via service token. The Gateway injects `tenant_id` from the caller's JWT context into forwarded arguments.
 
-See: `api_gateway/internal/mcp/resources/*` and `api_gateway/internal/mcp/tools/*` for the authoritative list.
+**Skipper → Gateway (client)**: Skipper's chat orchestrator consumes Gateway tools (QoE diagnostics, stream management, etc.) via an MCP client connection. Per-call JWT injection ensures each tool invocation carries the end user's auth context.
 
----
+**Heartbeat agent**: Skipper's background heartbeat agent still uses direct gRPC clients (Periscope, Commodore, Purser, Quartermaster) for proactive health monitoring. These run as system-level operations without user JWT context.
 
-## Example: Agent Streaming Workflow
-
-1. **Authenticate** with wallet headers and call `account://status`.
-2. **Resolve blockers** (e.g., `update_billing_details`) if any are returned.
-3. **Fund balance** using x402 `submit_payment` or `topup_balance`.
-4. **Create stream** via `create_stream` and capture `stream_key`.
-5. **Push RTMP** and monitor `streams://{id}/health`.
-6. **Watch balance** via `billing://balance` to avoid unexpected shutdowns.
+Both directions degrade gracefully — if the other service is unavailable at startup, the dependent features log a warning and remain disabled.
 
 ---
 
@@ -466,89 +354,6 @@ Two pieces required for VAT rate determination:
 1. IP geolocation
 2. Wallet network (chain)
 
-### Key Tables
+Schema: `pkg/database/sql/schema/purser.sql` (`simplified_invoices`)
 
-```sql
-CREATE TABLE purser.simplified_invoices (
-    invoice_number VARCHAR(50) NOT NULL UNIQUE,
-    tenant_id UUID NOT NULL,
-    reference_type VARCHAR(20) NOT NULL,     -- x402_payment
-    reference_id VARCHAR(255) NOT NULL,      -- tx_hash
-    gross_amount_cents BIGINT NOT NULL,
-    net_amount_cents BIGINT NOT NULL,
-    vat_amount_cents BIGINT NOT NULL,
-    vat_rate_bps INTEGER NOT NULL,
-    currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
-    amount_eur_cents BIGINT NOT NULL,
-    ecb_rate DECIMAL(10,6),
-    evidence_ip_country VARCHAR(2),
-    evidence_wallet_network VARCHAR(20),
-    supplier_name VARCHAR(255) NOT NULL,
-    supplier_address TEXT NOT NULL,
-    supplier_vat_number VARCHAR(50) NOT NULL,
-    issued_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
-
----
-
-## Configuration
-
-### Environment Variables
-
-```bash
-# Gas wallet (same key = same address on all chains)
-X402_GAS_WALLET_PRIVKEY=0x...
-X402_GAS_WALLET_ADDRESS=0x...   # Optional override
-X402_INCLUDE_TESTNETS=true      # Dev only — no balance isolation, never use in production
-
-# RPC endpoints
-ETH_RPC_ENDPOINT=https://eth.publicnode.com
-BASE_RPC_ENDPOINT=https://base.publicnode.com
-ARBITRUM_RPC_ENDPOINT=https://arb1.arbitrum.io/rpc
-BASE_SEPOLIA_RPC_ENDPOINT=https://base-sepolia.publicnode.com
-ARBITRUM_SEPOLIA_RPC_ENDPOINT=https://sepolia-rollup.arbitrum.io/rpc
-
-# Block explorer API keys (for deposit monitoring)
-ETHERSCAN_API_KEY=...
-BASESCAN_API_KEY=...
-ARBISCAN_API_KEY=...
-CRYPTO_INCLUDE_TESTNETS=true    # Dev only — no balance isolation, never use in production
-
-# HD Wallet (for deposit addresses)
-HD_WALLET_XPUB=xpub...
-
-# Supplier info for invoicing (REQUIRED)
-SUPPLIER_NAME=Your Company B.V.
-SUPPLIER_ADDRESS=City, Country
-SUPPLIER_VAT_NUMBER=XX123456789
-
-# GeoIP database (for VAT country detection)
-GEOIP_MMDB_PATH=/path/to/GeoLite2-City.mmdb
-```
-
-### VAT Handling
-
-VAT rates are determined using a hybrid approach:
-
-1. **Billing country** - If tenant has billing address, use that country
-2. **GeoIP** - Fall back to client IP geolocation
-3. **B2B exemption** - If tenant has valid EU VAT number, apply 0% (reverse charge)
-4. **Non-EU** - Export exempt (0% VAT)
-
-EUR conversion uses ECB daily rates (24h cache via frankfurter.app API).
-
----
-
-## Key Design Decisions
-
-| Decision             | Choice                | Rationale                                          |
-| -------------------- | --------------------- | -------------------------------------------------- |
-| Wallet billing model | Mandatory prepaid     | Sybil resistance via economic barriers             |
-| MCP hosting          | Integrated in Gateway | Shares auth context, simpler than separate service |
-| x402 facilitator     | Self-hosted in Purser | No CDP dependency; L2 gas costs vary               |
-| x402 tokens          | USDC only             | EIP-3009 required (ETH/LPT use deposit flow)       |
-| x402 networks        | Base + Arbitrum       | Both L2s have cheap gas                            |
-| Balance expiry       | Never                 | Prepaid credits don't expire                       |
-| API request billing  | Free                  | Costs are resource-based (viewer hours, etc.)      |
-| Minimum top-up       | None                  | Accept any positive amount                         |
+Configuration: See `docker-compose.yml` and `api_billing/internal/config/config.go` for environment variables.

@@ -508,6 +508,17 @@ func main() {
 
 	// No separate public route; PublicOrJWTAuth handles allowlisted unauthenticated queries
 
+	// Lazy-connect to Skipper spoke MCP for proxying search_knowledge/search_web.
+	// The actual connection is deferred until the first tool call so bridge can
+	// start before skipper without losing tool registrations.
+	skipperSpokeURL := config.GetEnv("SKIPPER_SPOKE_URL", "http://skipper:18018/mcp/spoke")
+	skipperClient := mcpserver.NewLazySkipperClient(mcpserver.SkipperClientConfig{
+		SpokeURL:     skipperSpokeURL,
+		ServiceToken: serviceToken,
+		Logger:       logger,
+	}, logger)
+	defer func() { _ = skipperClient.Close() }()
+
 	// MCP (Model Context Protocol) endpoint for AI agent access
 	// Auth is handled inside the MCP server via request headers
 	mcpServer, err := mcpserver.NewServer(mcpserver.Config{
@@ -520,6 +531,7 @@ func main() {
 		TenantCache:    tenantCache,
 		UsageTracker:   usageTracker,
 		TrustedProxies: trustedProxies,
+		SkipperClient:  skipperClient,
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to initialize MCP server")

@@ -22,21 +22,6 @@ Payment Provider    API Gateway (public)         Internal Service (mesh only)
      │<───────────────────│                              │
 ```
 
-## Design Decisions
-
-### Why Route Through Gateway?
-
-1. **Single Public Entry Point**: Only Gateway is exposed to the internet
-2. **Internal Services Stay on Mesh**: Purser, Quartermaster, etc. only accept gRPC from trusted mesh services
-3. **Consistent Security Model**: All external traffic goes through Gateway auth/rate-limiting infrastructure
-4. **Signature Verification Stays Internal**: Webhook secrets never leave the target service
-
-### Why Not Verify Signatures in Gateway?
-
-1. **Secrets Stay Internal**: Each service owns its webhook secrets/credentials (STRIPE_WEBHOOK_SECRET, provider API keys)
-2. **Provider-Specific Logic**: Different providers use different verification (Stripe HMAC, Mollie API fetch)
-3. **Single Responsibility**: Gateway just routes; services own business logic
-
 ## Implementation Details
 
 ### Gateway Webhook Router
@@ -100,44 +85,6 @@ func (s *PurserServer) ProcessWebhook(ctx context.Context, req *pb.WebhookReques
 }
 ```
 
-## Adding Webhooks for a New Service
-
-1. **Define WebhookService in Proto**
-
-   Add to your service's proto file:
-
-   ```protobuf
-   import "shared.proto";
-
-   service WebhookService {
-     rpc ProcessWebhook(shared.WebhookRequest) returns (shared.WebhookResponse);
-   }
-   ```
-
-2. **Implement ProcessWebhook**
-
-   In your gRPC server:
-
-   ```go
-   func (s *MyServer) ProcessWebhook(ctx context.Context, req *pb.WebhookRequest) (*pb.WebhookResponse, error) {
-       // Verify signature using req.Headers and req.Body
-       // Process webhook
-       // Return appropriate status
-   }
-   ```
-
-3. **Register with Gateway**
-
-   In `api_gateway/cmd/bridge/main.go`:
-
-   ```go
-   webhookRouter.RegisterService("myservice", serviceClients.MyService)
-   ```
-
-4. **Configure Webhook URL with Provider**
-
-   Use: `https://your-gateway-domain.com/webhooks/myservice/provider-name`
-
 ## Supported Providers
 
 ### Stripe (`/webhooks/billing/stripe`)
@@ -169,52 +116,6 @@ Events handled:
 
 ## Idempotency
 
-Webhook events are tracked in `purser.webhook_events`:
+Webhook events are deduplicated via `purser.webhook_events` (keyed on `provider` + `event_id`). Schema: `pkg/database/sql/schema/purser.sql`.
 
-```sql
-CREATE TABLE purser.webhook_events (
-    id UUID PRIMARY KEY,
-    provider VARCHAR(50) NOT NULL,
-    event_id VARCHAR(255) NOT NULL,
-    event_type VARCHAR(100),
-    processed_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(provider, event_id)
-);
-```
-
-Before processing, check if event was already handled:
-
-```go
-// Check idempotency
-exists, err := s.checkWebhookEventExists(ctx, provider, eventID)
-if exists {
-    return &pb.WebhookResponse{Success: true, StatusCode: 200}, nil // Already processed
-}
-```
-
-## Testing Webhooks
-
-### Stripe CLI
-
-```bash
-# Forward webhooks to local gateway
-stripe listen --forward-to localhost:18000/webhooks/billing/stripe
-
-# Trigger test events
-stripe trigger checkout.session.completed
-```
-
-### Mollie
-
-1. Use ngrok to expose local gateway
-2. Configure webhook URL in Mollie dashboard
-3. Use Mollie test mode for sandbox transactions
-
-## Security Considerations
-
-1. **No Authentication Middleware**: Webhook routes skip JWT auth (providers can't authenticate)
-2. **Verification Required**: Stripe signatures require `STRIPE_WEBHOOK_SECRET`; Mollie signatures are verified when `MOLLIE_WEBHOOK_SECRET` is set, otherwise we confirm by fetching from the Mollie API
-3. **Log Source IP**: Track source IPs for debugging and potential IP allowlisting
-4. **Rate Limiting**: Gateway enforces per-IP rate limits on webhook routes
-5. **Payload Limits**: Gateway rejects webhook payloads larger than 1MB
-6. **Timeout Handling**: Webhooks have short timeouts; process quickly or queue for async
+**Security**: Webhook routes skip JWT auth (providers can't authenticate). Signature verification happens in the target service, not Gateway. Gateway enforces per-IP rate limits and rejects payloads >1MB.

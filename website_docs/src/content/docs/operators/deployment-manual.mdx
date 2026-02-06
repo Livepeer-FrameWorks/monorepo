@@ -616,11 +616,14 @@ Deploy per region. Each region needs its own set of these services.
 ### Build Binaries
 
 ```bash
-go build -o /opt/frameworks/bin/bridge ./api_gateway/cmd/bridge/
-go build -o /opt/frameworks/bin/foghorn ./api_balancing/cmd/foghorn/
-go build -o /opt/frameworks/bin/decklog ./api_firehose/cmd/decklog/
-go build -o /opt/frameworks/bin/periscope-ingest ./api_analytics_ingest/cmd/periscope/
-go build -o /opt/frameworks/bin/signalman ./api_realtime/cmd/signalman/
+make build-bin-bridge
+make build-bin-foghorn
+make build-bin-decklog
+make build-bin-periscope-ingest
+make build-bin-signalman
+
+install -d /opt/frameworks/bin
+cp bin/{bridge,foghorn,decklog,periscope-ingest,signalman} /opt/frameworks/bin/
 ```
 
 ### Environment Configuration
@@ -898,7 +901,8 @@ Deploy on each edge node.
 ### Build Helmsman
 
 ```bash
-go build -o /opt/frameworks/bin/helmsman ./api_sidecar/cmd/helmsman/
+make build-bin-helmsman
+cp bin/helmsman /opt/frameworks/bin/
 ```
 
 ### Environment Configuration
@@ -1009,7 +1013,8 @@ Navigator automatically syncs DNS records based on your node inventory. It also 
 ### Build Navigator
 
 ```bash
-go build -o /opt/frameworks/bin/navigator ./api_dns/cmd/navigator/
+make build-bin-navigator
+cp bin/navigator /opt/frameworks/bin/
 ```
 
 ### Environment Configuration

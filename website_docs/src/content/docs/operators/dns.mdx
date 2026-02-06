@@ -7,22 +7,13 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-<Aside type="tip" title="Automated DNS Management">
-**Navigator (`api_dns`)** provides automated DNS management for FrameWorks. It syncs DNS records based on Quartermaster node inventory (nodes with external IPs):
-- **Single node** → A record (direct IP)
-- **Multiple nodes** → Cloudflare load balancer pool with geo-routing
-
-Navigator also handles ACME certificate issuance via DNS-01 validation (platform-managed subdomains only).
-
-</Aside>
-
-FrameWorks automates the complex dance of DNS records and SSL certificates so you don't have to. Using the Navigator service, the platform ensures your public endpoints are always in sync with your active infrastructure.
+Navigator automates DNS record management and certificate issuance for your infrastructure.
 
 ---
 
 ## DNS Architecture
 
-Robust DNS is the first line of defense for reliability and performance. FrameWorks uses a two-layer routing strategy:
+FrameWorks uses a two-layer routing strategy:
 
 - **DNS layer (Cloudflare)**: Infrastructure-level geo-routing to nearest region
 - **Application layer (Foghorn)**: Capacity-aware routing to optimal edge node
@@ -127,27 +118,4 @@ NAVIGATOR_PROXY_SERVICES="app,website,docs"
 # Certificate issuance
 ACME_ENV="production"              # or "staging"
 NAVIGATOR_CERT_ALLOWED_SUFFIXES="example.com"
-```
-
----
-
-## Verifying DNS Configuration
-
-```bash
-frameworks dns doctor --domain yourdomain.com
-
-# Output:
-# DOMAIN                EXPECTED IPs    ACTUAL IPs      STATUS
-# edge.example.com      192.0.2.10,..   192.0.2.10,..   ✅ OK
-# api.example.com       192.0.2.20      192.0.2.20      ✅ OK
-```
-
-You can also verify DNS resolution manually:
-
-```bash
-# Check A records
-dig +short edge.example.com
-
-# Check Cloudflare load balancer
-dig +short play.example.com
 ```
