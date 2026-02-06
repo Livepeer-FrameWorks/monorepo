@@ -121,7 +121,11 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 	}
 	snapshot, err := t.Agent.loadSnapshot(ctx, incident.TenantID)
 	if err != nil {
-		return err
+		if t.Logger != nil {
+			t.Logger.WithError(err).WithField("tenant_id", incident.TenantID).Warn("Lookout snapshot load failed")
+		}
+		// Do not block the consumer partition on transient upstream failures.
+		return nil
 	}
 	reason := strings.TrimSpace(incident.Summary)
 	if reason == "" {
