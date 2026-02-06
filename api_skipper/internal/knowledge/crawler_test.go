@@ -8,6 +8,7 @@ import (
 )
 
 type fakeStore struct {
+	tenantID string
 	upserted [][]Chunk
 }
 
@@ -16,7 +17,7 @@ func (f *fakeStore) Upsert(_ context.Context, chunks []Chunk) error {
 	return nil
 }
 
-func (f *fakeStore) DeleteBySource(_ context.Context, _ string) error {
+func (f *fakeStore) DeleteBySource(_ context.Context, _, _ string) error {
 	return nil
 }
 
@@ -30,7 +31,8 @@ func (f *fakeEmbedder) EmbedDocument(_ context.Context, url, title, content stri
 }
 
 func TestCrawlerSitemapAndFetch(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/robots.txt":
 			w.WriteHeader(http.StatusOK)
@@ -88,7 +90,8 @@ func TestCrawlerSitemapAndFetch(t *testing.T) {
 }
 
 func TestCrawlerCrawlAndEmbed(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/robots.txt":
 			w.WriteHeader(http.StatusOK)
@@ -115,7 +118,7 @@ func TestCrawlerCrawlAndEmbed(t *testing.T) {
 		t.Fatalf("new crawler: %v", err)
 	}
 
-	if err := crawler.CrawlAndEmbed(context.Background(), server.URL+"/sitemap.xml"); err != nil {
+	if err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml"); err != nil {
 		t.Fatalf("crawl and embed: %v", err)
 	}
 	if embedder.calls != 1 {

@@ -130,9 +130,9 @@ func TestStoreDeleteBySource(t *testing.T) {
 
 	store := NewStore(db)
 
-	mock.ExpectExec("DELETE FROM skipper\\.skipper_knowledge").WithArgs("https://example.com").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM skipper\\.skipper_knowledge").WithArgs("tenant", "https://example.com").WillReturnResult(sqlmock.NewResult(1, 1))
 
-	if err := store.DeleteBySource(context.Background(), "https://example.com"); err != nil {
+	if err := store.DeleteBySource(context.Background(), "tenant", "https://example.com"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

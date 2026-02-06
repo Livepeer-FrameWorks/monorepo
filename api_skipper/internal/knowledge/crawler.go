@@ -28,7 +28,7 @@ type DocumentEmbedder interface {
 
 type KnowledgeStore interface {
 	Upsert(ctx context.Context, chunks []Chunk) error
-	DeleteBySource(ctx context.Context, sourceURL string) error
+	DeleteBySource(ctx context.Context, tenantID, sourceURL string) error
 }
 
 type Crawler struct {
@@ -83,9 +83,7 @@ func (c *Crawler) CrawlSitemap(ctx context.Context, sitemapURL string) ([]Page, 
 		if err != nil {
 			return nil, fmt.Errorf("parse sitemap %s: %w", current, err)
 		}
-		for _, link := range sitemapLinks {
-			queue = append(queue, link)
-		}
+		queue = append(queue, sitemapLinks...)
 		for _, link := range urlLinks {
 			pages = append(pages, Page{URL: link})
 		}
@@ -109,7 +107,11 @@ func (c *Crawler) FetchPage(ctx context.Context, pageURL string) (string, string
 	return extractTitle(node), extractReadableText(node), nil
 }
 
-func (c *Crawler) CrawlAndEmbed(ctx context.Context, sitemapURL string) error {
+func (c *Crawler) CrawlAndEmbed(ctx context.Context, tenantID, sitemapURL string) error {
+	if strings.TrimSpace(tenantID) == "" {
+		return errors.New("tenant id is required")
+	}
+
 	pages, err := c.CrawlSitemap(ctx, sitemapURL)
 	if err != nil {
 		return err
@@ -144,6 +146,9 @@ func (c *Crawler) CrawlAndEmbed(ctx context.Context, sitemapURL string) error {
 		chunks, err := c.embedder.EmbedDocument(ctx, page.URL, title, content)
 		if err != nil {
 			return err
+		}
+		for i := range chunks {
+			chunks[i].TenantID = tenantID
 		}
 		if err := c.store.Upsert(ctx, chunks); err != nil {
 			return err

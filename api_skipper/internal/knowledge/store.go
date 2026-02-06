@@ -115,11 +115,11 @@ func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
 	}()
 
 	for sourceURL, tenantID := range bySource {
-		if _, err := tx.ExecContext(ctx, `
+		if _, execErr := tx.ExecContext(ctx, `
 			DELETE FROM skipper.skipper_knowledge
 			WHERE tenant_id = $1 AND source_url = $2
-		`, tenantID, sourceURL); err != nil {
-			return fmt.Errorf("delete existing chunks: %w", err)
+		`, tenantID, sourceURL); execErr != nil {
+			return fmt.Errorf("delete existing chunks: %w", execErr)
 		}
 	}
 
@@ -165,14 +165,17 @@ func (s *Store) Upsert(ctx context.Context, chunks []Chunk) error {
 	return nil
 }
 
-func (s *Store) DeleteBySource(ctx context.Context, sourceURL string) error {
+func (s *Store) DeleteBySource(ctx context.Context, tenantID, sourceURL string) error {
+	if tenantID == "" {
+		return errors.New("tenant id is required")
+	}
 	if sourceURL == "" {
 		return errors.New("source url is required")
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		DELETE FROM skipper.skipper_knowledge
-		WHERE source_url = $1
-	`, sourceURL); err != nil {
+		WHERE tenant_id = $1 AND source_url = $2
+	`, tenantID, sourceURL); err != nil {
 		return fmt.Errorf("delete by source: %w", err)
 	}
 	return nil
