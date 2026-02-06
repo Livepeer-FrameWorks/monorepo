@@ -778,6 +778,20 @@ func parseUUID(value string) uuid.UUID {
 	return parsed
 }
 
+func parseUUIDOrNil(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	parsed, err := uuid.Parse(value)
+	if err != nil {
+		return nil
+	}
+	if parsed == uuid.Nil {
+		return nil
+	}
+	return parsed
+}
+
 func (h *AnalyticsHandler) isDuplicateEvent(ctx context.Context, table string, eventID uuid.UUID, eventType string) bool {
 	if eventID == uuid.Nil {
 		return false
@@ -3052,7 +3066,7 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 	if err := chBatch.Append(
 		event.Timestamp,
 		parseUUID(event.TenantID),
-		nilIfEmptyString(event.UserID),
+		parseUUIDOrNil(event.UserID),
 		signupChannel,
 		getString(attr, "signup_method"),
 		nilIfEmptyString(getString(attr, "utm_source")),
