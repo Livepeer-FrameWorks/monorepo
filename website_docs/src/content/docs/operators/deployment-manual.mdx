@@ -1174,36 +1174,36 @@ docker build -f website_application/Dockerfile \
   --build-arg VITE_GRAPHQL_HTTP_URL=https://api.your-domain.com/graphql \
   --build-arg VITE_GRAPHQL_WS_URL=wss://api.your-domain.com/graphql/ws \
   # ... (all VITE_* args from reference above)
-  -t frameworks-webapp .
+  -t frameworks-chartroom .
 
-docker run -d --name frameworks-webapp \
+docker run -d --name frameworks-chartroom \
   --restart unless-stopped \
   -p 18030:18030 \
-  frameworks-webapp
+  frameworks-chartroom
 
-# Marketing Site
+# Foredeck (Marketing Site)
 docker build -f website_marketing/Dockerfile \
   --build-arg BUILD_ENV=production \
   --build-arg VITE_APP_URL=https://app.your-domain.com \
   # ... (all VITE_* args)
-  -t frameworks-marketing .
+  -t frameworks-foredeck .
 
-docker run -d --name frameworks-marketing \
+docker run -d --name frameworks-foredeck \
   --restart unless-stopped \
   -p 18031:18031 \
-  frameworks-marketing
+  frameworks-foredeck
 
-# Documentation
+# Logbook (Documentation)
 docker build -f website_docs/Dockerfile \
   --build-arg BUILD_ENV=production \
   --build-arg PUBLIC_DOCS_URL=https://docs.your-domain.com \
   # ... (all PUBLIC_* args)
-  -t frameworks-docs .
+  -t frameworks-logbook .
 
-docker run -d --name frameworks-docs \
+docker run -d --name frameworks-logbook \
   --restart unless-stopped \
   -p 18033:18033 \
-  frameworks-docs
+  frameworks-logbook
 ````
 
 #### Option B: Native Node.js
@@ -1228,9 +1228,9 @@ node build/index.js
 ### Systemd Units (Docker)
 
 ```bash
-# /etc/systemd/system/frameworks-webapp.service
+# /etc/systemd/system/frameworks-chartroom.service
 [Unit]
-Description=FrameWorks Web Console
+Description=FrameWorks Chartroom (Web Console)
 After=docker.service
 Requires=docker.service
 
@@ -1238,10 +1238,10 @@ Requires=docker.service
 Type=simple
 Restart=always
 RestartSec=5
-ExecStartPre=-/usr/bin/docker stop frameworks-webapp
-ExecStartPre=-/usr/bin/docker rm frameworks-webapp
-ExecStart=/usr/bin/docker run --rm --name frameworks-webapp -p 18030:18030 frameworks-webapp
-ExecStop=/usr/bin/docker stop frameworks-webapp
+ExecStartPre=-/usr/bin/docker stop frameworks-chartroom
+ExecStartPre=-/usr/bin/docker rm frameworks-chartroom
+ExecStart=/usr/bin/docker run --rm --name frameworks-chartroom -p 18030:18030 frameworks-chartroom
+ExecStop=/usr/bin/docker stop frameworks-chartroom
 
 [Install]
 WantedBy=multi-user.target

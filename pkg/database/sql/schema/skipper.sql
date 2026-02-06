@@ -80,3 +80,23 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_usage (
 
 CREATE INDEX IF NOT EXISTS skipper_usage_tenant_created_idx
     ON skipper.skipper_usage (tenant_id, created_at);
+
+CREATE INDEX IF NOT EXISTS skipper_conversations_tenant_user_idx
+    ON skipper.skipper_conversations (tenant_id, user_id);
+
+-- ============================================================================
+-- CRAWL JOBS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS skipper.skipper_crawl_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    sitemap_url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    error TEXT,
+    started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS skipper_crawl_jobs_tenant_idx
+    ON skipper.skipper_crawl_jobs (tenant_id, started_at DESC);

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"frameworks/api_skipper/internal/metering"
+	"frameworks/api_consultant/internal/metering"
 	"frameworks/pkg/search"
 )
 

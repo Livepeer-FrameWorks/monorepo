@@ -5,10 +5,10 @@ FROM golang:1.24-alpine AS builder
 RUN apk add --no-cache git ca-certificates tzdata
 
 # Set up workspace with correct relative paths
-WORKDIR /src/frameworks/api_skipper
+WORKDIR /src/frameworks/api_consultant
 
 # Copy go.mod and go.sum first
-COPY api_skipper/go.mod api_skipper/go.sum ./
+COPY api_consultant/go.mod api_consultant/go.sum ./
 
 # Copy shared pkg module go.mod and go.sum (maintain relative path for replace directive)
 COPY pkg/go.mod pkg/go.sum ../pkg/
@@ -22,7 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY pkg/ ../pkg/
 
 # Copy service source code
-COPY api_skipper/ ./
+COPY api_consultant/ ./
 
 # Build the application with version and component injection
 ARG VERSION=dev
@@ -54,7 +54,7 @@ RUN addgroup -g 1001 -S frameworks && \
 WORKDIR /app
 
 # Copy binary from builder stage
-COPY --from=builder /src/frameworks/api_skipper/skipper .
+COPY --from=builder /src/frameworks/api_consultant/skipper .
 
 # Change ownership
 RUN chown frameworks:frameworks /app/skipper

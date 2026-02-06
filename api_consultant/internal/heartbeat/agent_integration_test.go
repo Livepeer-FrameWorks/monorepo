@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"frameworks/api_skipper/internal/chat"
+	"frameworks/api_consultant/internal/chat"
 	"frameworks/pkg/llm"
 	pb "frameworks/pkg/proto"
 )

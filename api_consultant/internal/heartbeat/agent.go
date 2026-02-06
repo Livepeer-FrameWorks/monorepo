@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_skipper/internal/chat"
+	"frameworks/api_consultant/internal/chat"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/llm"

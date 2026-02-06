@@ -1,4 +1,4 @@
-module frameworks/api_skipper
+module frameworks/api_consultant
 
 go 1.24.1
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_skipper/internal/metering"
+	"frameworks/api_consultant/internal/metering"
 	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/llm"

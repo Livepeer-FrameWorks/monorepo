@@ -150,3 +150,35 @@ func (rl *RateLimiter) Allow(tenantID string) (bool, int, int) {
 	}
 	return true, remaining, resetSeconds
 }
+
+func (rl *RateLimiter) Cleanup() {
+	if rl == nil {
+		return
+	}
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	for id, entry := range rl.usage {
+		if now.Sub(entry.windowStart) >= 2*rl.window {
+			delete(rl.usage, id)
+		}
+	}
+}
+
+func (rl *RateLimiter) StartCleanup(ctx context.Context) {
+	if rl == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(rl.window)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rl.Cleanup()
+			}
+		}
+	}()
+}

@@ -4,7 +4,7 @@ Skipper is the AI video consultant service. It provides RAG-grounded, tool-augme
 
 ## Overview
 
-- **Service:** `api_skipper/` (Go)
+- **Service:** `api_consultant/` (Go)
 - **Ports:** 18018 (HTTP), 19007 (gRPC)
 - **Database:** PostgreSQL with pgvector extension
 - **RFC:** `docs/rfcs/mcp-consultant/mcp-consultant.md`

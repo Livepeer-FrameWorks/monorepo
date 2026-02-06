@@ -148,8 +148,8 @@ build-image-bridge: proto
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_gateway/Dockerfile .
 
-build-image-docs:
-	docker build -t frameworks-website-docs:$(VERSION) \
+build-image-logbook:
+	docker build -t frameworks-logbook:$(VERSION) \
 		--build-arg BUILD_ENV=production \
 		-f website_docs/Dockerfile .
 
@@ -172,7 +172,7 @@ build-image-skipper:
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
-		-f api_skipper/Dockerfile .
+		-f api_consultant/Dockerfile .
 
 # Individual service bin builds (explicit)
 build-bin-commodore: proto
@@ -218,7 +218,7 @@ build-bin-forms: proto
 	cd api_forms && go build $(LDFLAGS) -o ../bin/forms cmd/forms/main.go
 
 build-bin-skipper: proto
-	cd api_skipper && go build $(LDFLAGS) -o ../bin/skipper cmd/skipper/main.go
+	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper cmd/skipper/main.go
 
 # Clean build artifacts
 clean:

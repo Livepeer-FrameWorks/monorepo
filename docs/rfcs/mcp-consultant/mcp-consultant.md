@@ -7,7 +7,7 @@ Implemented (Phase 1) | Phase 2 in design
 ## TL;DR
 
 - Phase 1 (implemented): MCP tools/resources/prompts so customer-side LLMs can diagnose streaming issues (BYO LLM).
-- Phase 2 (next): **Skipper** (`api_skipper`) MVP — chat + orchestration (**2A**) and grounding (**2B**: RAG + web search + confidence/citations). Premium, metered feature.
+- Phase 2 (next): **Skipper** (`api_consultant`) MVP — chat + orchestration (**2A**) and grounding (**2B**: RAG + web search + confidence/citations). Premium, metered feature.
 - Phase 3 (deferred): Productization and expansion (**3A** heartbeat/investigations, **3B** metering/billing/tier gating, **3C** extra surfaces like docs-embedded chat + API/SDK polish).
 - Research: `./references/` contains industry analysis backing these decisions.
 
@@ -96,7 +96,7 @@ Phase 2 (Skipper):
              │                               │
              ▼                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Skipper (api_skipper/)                                     │
+│  Skipper (api_consultant/)                                     │
 │                                                             │
 │  ┌─────────────┐  ┌──────────────┐  ┌───────────────────┐  │
 │  │ Chat Handler │  │  Heartbeat   │  │  Metering/Billing │  │
@@ -127,14 +127,14 @@ Phase 2 (Skipper):
 
 ### Phased Approach
 
-| Phase        | Scope                                                                              | Effort  | Dependencies         |
-| ------------ | ---------------------------------------------------------------------------------- | ------- | -------------------- |
-| **Phase 1**  | MCP consultant foundation (tools/resources/prompts; BYO LLM)                       | ~1 week | None                 |
-| **Phase 2A** | Skipper chat + orchestration (api_skipper HTTP+SSE, persistence, dashboard widget) | TBD     | LLM API key          |
-| **Phase 2B** | Grounding layer (pgvector RAG + web search + confidence/citations)                 | TBD     | LLM + search API key |
-| **Phase 3A** | Smart heartbeat agent + investigations + notifications                             | TBD     | Phase 2              |
-| **Phase 3B** | Metering/billing + tier gating + per-tenant rate limits                            | TBD     | Phase 2              |
-| **Phase 3C** | Extra surfaces (docs-embedded chat + API/SDK polish)                               | TBD     | Phase 2              |
+| Phase        | Scope                                                                                 | Effort  | Dependencies         |
+| ------------ | ------------------------------------------------------------------------------------- | ------- | -------------------- |
+| **Phase 1**  | MCP consultant foundation (tools/resources/prompts; BYO LLM)                          | ~1 week | None                 |
+| **Phase 2A** | Skipper chat + orchestration (api_consultant HTTP+SSE, persistence, dashboard widget) | TBD     | LLM API key          |
+| **Phase 2B** | Grounding layer (pgvector RAG + web search + confidence/citations)                    | TBD     | LLM + search API key |
+| **Phase 3A** | Smart heartbeat agent + investigations + notifications                                | TBD     | Phase 2              |
+| **Phase 3B** | Metering/billing + tier gating + per-tenant rate limits                               | TBD     | Phase 2              |
+| **Phase 3C** | Extra surfaces (docs-embedded chat + API/SDK polish)                                  | TBD     | Phase 2              |
 
 ---
 
@@ -358,7 +358,7 @@ guides seeds the KB for faster retrieval of high-value content.
 
 ### 2C: Chat Interface
 
-**`api_skipper/`** service exposing HTTP API. Three surfaces:
+**`api_consultant/`** service exposing HTTP API. Three surfaces:
 
 | Surface                            | Auth                         | Capabilities                               |
 | ---------------------------------- | ---------------------------- | ------------------------------------------ |
@@ -410,28 +410,28 @@ Most heartbeats should be silent (`HEARTBEAT_OK`).
 
 ### Phase 2 Effort Estimate
 
-| Component                                      | Effort           |
-| ---------------------------------------------- | ---------------- |
-| `pkg/llm/` (openai + anthropic + ollama)       | ~1 week          |
-| `pkg/search/` (tavily + brave + searxng)       | ~3-4 days        |
-| pgvector + embedding pipeline                  | ~1 week          |
-| Crawl pipeline (sitemap + re-crawl)            | ~1 week          |
-| `search_knowledge` + `search_web` tools        | ~3-4 days        |
-| `api_skipper/` chat + tool orchestration + SSE | ~2 weeks         |
-| Smart heartbeat + threshold triggers           | ~1.5 weeks       |
-| Billing/metering integration                   | ~1 week          |
-| Admin API (human curation + operator uploads)  | ~3-4 days        |
-| Dashboard chat widget (Svelte)                 | ~1 week          |
-| Docs-embedded chat widget                      | ~3-4 days        |
-| Conversation persistence                       | ~2-3 days        |
-| Notification delivery (email + MCP SSE)        | ~3-4 days        |
-| System prompt + grounding rules                | ~2 days          |
-| Testing + integration                          | ~1 week          |
-| **Total**                                      | **~11-13 weeks** |
+| Component                                         | Effort           |
+| ------------------------------------------------- | ---------------- |
+| `pkg/llm/` (openai + anthropic + ollama)          | ~1 week          |
+| `pkg/search/` (tavily + brave + searxng)          | ~3-4 days        |
+| pgvector + embedding pipeline                     | ~1 week          |
+| Crawl pipeline (sitemap + re-crawl)               | ~1 week          |
+| `search_knowledge` + `search_web` tools           | ~3-4 days        |
+| `api_consultant/` chat + tool orchestration + SSE | ~2 weeks         |
+| Smart heartbeat + threshold triggers              | ~1.5 weeks       |
+| Billing/metering integration                      | ~1 week          |
+| Admin API (human curation + operator uploads)     | ~3-4 days        |
+| Dashboard chat widget (Svelte)                    | ~1 week          |
+| Docs-embedded chat widget                         | ~3-4 days        |
+| Conversation persistence                          | ~2-3 days        |
+| Notification delivery (email + MCP SSE)           | ~3-4 days        |
+| System prompt + grounding rules                   | ~2 days          |
+| Testing + integration                             | ~1 week          |
+| **Total**                                         | **~11-13 weeks** |
 
 ### Phase 2 Infrastructure
 
-- `api_skipper/` — New Go service
+- `api_consultant/` — New Go service
 - pgvector extension in PostgreSQL
 - ollama container in docker-compose.yml (optional, for self-hosted LLM)
 - SearXNG container in docker-compose.yml (optional, for self-hosted search)
@@ -453,7 +453,7 @@ Most heartbeats should be silent (`HEARTBEAT_OK`).
 ## Impact / Dependencies
 
 - Services: api_gateway (MCP), Periscope, Deckhand, Commodore, Purser (billing)
-- New service: `api_skipper/`
+- New service: `api_consultant/`
 - New libraries: `pkg/llm/`, `pkg/search/`
 - pgvector extension in PostgreSQL
 - Soft dependency: Lookout (incidents) — Skipper works without it, integrates when available

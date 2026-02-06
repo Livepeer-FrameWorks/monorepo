@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_skipper/internal/notify"
+	"frameworks/api_consultant/internal/notify"
 	"frameworks/pkg/logging"
 )
 

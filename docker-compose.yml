@@ -806,7 +806,7 @@ services:
     container_name: frameworks-skipper
     build:
       context: .
-      dockerfile: api_skipper/Dockerfile
+      dockerfile: api_consultant/Dockerfile
     ports:
       - "18018:18018"
       - "19007:19007"
@@ -877,10 +877,10 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  # Forms service
-  forms:
+  # Steward (Forms service)
+  steward:
     <<: *default-env
-    container_name: frameworks-forms
+    container_name: frameworks-steward
     build:
       context: .
       dockerfile: api_forms/Dockerfile
@@ -921,9 +921,9 @@ services:
       retries: 3
       start_period: 10s
 
-  # Web Console
-  webapp:
-    container_name: frameworks-webapp
+  # Chartroom (Web Console)
+  chartroom:
+    container_name: frameworks-chartroom
     build:
       context: .
       dockerfile: website_application/Dockerfile
@@ -946,6 +946,8 @@ services:
         - VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
         - VITE_TURNSTILE_AUTH_SITE_KEY=${VITE_TURNSTILE_AUTH_SITE_KEY}
         - BASE_PATH=${BASE_PATH}
+        - VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
+        - VITE_GITHUB_URL=${VITE_GITHUB_URL}
     depends_on:
       commodore:
         condition: service_started
@@ -966,9 +968,9 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  # Marketing Website
-  website:
-    container_name: frameworks-website
+  # Foredeck (Marketing Website)
+  foredeck:
+    container_name: frameworks-foredeck
     build:
       context: .
       dockerfile: website_marketing/Dockerfile
@@ -989,7 +991,7 @@ services:
         - VITE_DOMAIN=${VITE_DOMAIN}
         - VITE_CONTACT_API_URL=${VITE_CONTACT_API_URL}
         - VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
-    hostname: website
+    hostname: foredeck
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${WEBSITE_PORT}
@@ -1018,9 +1020,9 @@ services:
       retries: 3
       start_period: 10s
 
-  # Documentation Website
-  website_docs:
-    container_name: frameworks-website-docs
+  # Logbook (Documentation Website)
+  logbook:
+    container_name: frameworks-logbook
     build:
       context: .
       dockerfile: website_docs/Dockerfile
@@ -1033,11 +1035,15 @@ services:
         - GATEWAY_PUBLIC_URL=${GATEWAY_PUBLIC_URL}
         - STREAMING_INGEST_URL=${STREAMING_INGEST_URL}
         - STREAMING_EDGE_URL=${STREAMING_EDGE_URL}
+        - STREAMING_PLAY_URL=${STREAMING_PLAY_URL}
+        - STREAMING_RTMP_PORT=${STREAMING_RTMP_PORT}
+        - STREAMING_SRT_PORT=${STREAMING_SRT_PORT}
+        - STREAMING_RTMP_PATH=${STREAMING_RTMP_PATH}
         - STREAMING_HLS_PATH=${STREAMING_HLS_PATH}
         - STREAMING_WEBRTC_PATH=${STREAMING_WEBRTC_PATH}
         - DISCORD_URL=${DISCORD_URL}
         - GITHUB_URL=${GITHUB_URL}
-    hostname: website-docs
+    hostname: logbook
     environment:
       - NODE_ENV=${NODE_ENV}
       - PORT=${WEBSITE_DOCS_PORT}
@@ -1090,9 +1096,9 @@ services:
         condition: service_started
       periscope-query:
         condition: service_started
-      webapp:
+      chartroom:
         condition: service_started
-      website:
+      foredeck:
         condition: service_started
       quartermaster:
         condition: service_healthy

@@ -38,10 +38,10 @@ jobs:
             }
           - { name: signalman, context: api_realtime, dockerfile: api_realtime/Dockerfile }
           - { name: helmsman, context: api_sidecar, dockerfile: api_sidecar/Dockerfile }
-          - { name: forms, context: api_forms, dockerfile: api_forms/Dockerfile }
+          - { name: steward, context: api_forms, dockerfile: api_forms/Dockerfile }
           - { name: deckhand, context: api_ticketing, dockerfile: api_ticketing/Dockerfile }
           - { name: navigator, context: api_dns, dockerfile: api_dns/Dockerfile }
-          - { name: skipper, context: api_skipper, dockerfile: api_skipper/Dockerfile }
+          - { name: skipper, context: api_consultant, dockerfile: api_consultant/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -125,9 +125,9 @@ jobs:
       fail-fast: false
       matrix:
         webapp:
-          - { name: webapp, context: website_application, env_prefix: VITE, build_dir: build }
-          - { name: website, context: website_marketing, env_prefix: VITE, build_dir: dist }
-          - { name: docs, context: website_docs, env_prefix: VITE, build_dir: dist }
+          - { name: chartroom, context: website_application, env_prefix: VITE, build_dir: build }
+          - { name: foredeck, context: website_marketing, env_prefix: VITE, build_dir: dist }
+          - { name: logbook, context: website_docs, env_prefix: VITE, build_dir: dist }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -159,7 +159,7 @@ jobs:
 
       - name: Build application
         env:
-          # webapp (website_application) variables
+          # chartroom (website_application) variables
           VITE_AUTH_URL: ${{ secrets.VITE_AUTH_URL }}
           VITE_GRAPHQL_HTTP_URL: ${{ secrets.VITE_GRAPHQL_HTTP_URL }}
           VITE_GRAPHQL_WS_URL: ${{ secrets.VITE_GRAPHQL_WS_URL }}
@@ -176,7 +176,7 @@ jobs:
           VITE_DOCS_SITE_URL: ${{ secrets.VITE_DOCS_SITE_URL }}
           VITE_TURNSTILE_AUTH_SITE_KEY: ${{ secrets.VITE_TURNSTILE_AUTH_SITE_KEY }}
           BASE_PATH: ${{ secrets.BASE_PATH }}
-          # website (website_marketing) variables
+          # foredeck (website_marketing) variables
           VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
           VITE_CONTACT_API_URL: ${{ secrets.VITE_CONTACT_API_URL }}
           VITE_GATEWAY_URL: ${{ secrets.VITE_GATEWAY_URL }}
@@ -190,13 +190,17 @@ jobs:
           VITE_COMPANY_NAME: ${{ secrets.VITE_COMPANY_NAME }}
           VITE_DOMAIN: ${{ secrets.VITE_DOMAIN }}
           VITE_TURNSTILE_FORMS_SITE_KEY: ${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
-          # docs (website_docs) variables
+          # logbook (website_docs) variables
           PUBLIC_DOCS_URL: ${{ secrets.PUBLIC_DOCS_URL }}
           WEBAPP_PUBLIC_URL: ${{ secrets.WEBAPP_PUBLIC_URL }}
           MARKETING_PUBLIC_URL: ${{ secrets.MARKETING_PUBLIC_URL }}
           GATEWAY_PUBLIC_URL: ${{ secrets.GATEWAY_PUBLIC_URL }}
           STREAMING_INGEST_URL: ${{ secrets.STREAMING_INGEST_URL }}
           STREAMING_EDGE_URL: ${{ secrets.STREAMING_EDGE_URL }}
+          STREAMING_PLAY_URL: ${{ secrets.STREAMING_PLAY_URL }}
+          STREAMING_RTMP_PORT: ${{ secrets.STREAMING_RTMP_PORT }}
+          STREAMING_SRT_PORT: ${{ secrets.STREAMING_SRT_PORT }}
+          STREAMING_RTMP_PATH: ${{ secrets.STREAMING_RTMP_PATH }}
           STREAMING_HLS_PATH: ${{ secrets.STREAMING_HLS_PATH }}
           STREAMING_WEBRTC_PATH: ${{ secrets.STREAMING_WEBRTC_PATH }}
           DISCORD_URL: ${{ secrets.DISCORD_URL }}
@@ -276,6 +280,10 @@ jobs:
             GATEWAY_PUBLIC_URL=${{ secrets.GATEWAY_PUBLIC_URL }}
             STREAMING_INGEST_URL=${{ secrets.STREAMING_INGEST_URL }}
             STREAMING_EDGE_URL=${{ secrets.STREAMING_EDGE_URL }}
+            STREAMING_PLAY_URL=${{ secrets.STREAMING_PLAY_URL }}
+            STREAMING_RTMP_PORT=${{ secrets.STREAMING_RTMP_PORT }}
+            STREAMING_SRT_PORT=${{ secrets.STREAMING_SRT_PORT }}
+            STREAMING_RTMP_PATH=${{ secrets.STREAMING_RTMP_PATH }}
             STREAMING_HLS_PATH=${{ secrets.STREAMING_HLS_PATH }}
             STREAMING_WEBRTC_PATH=${{ secrets.STREAMING_WEBRTC_PATH }}
             DISCORD_URL=${{ secrets.DISCORD_URL }}
@@ -375,11 +383,11 @@ jobs:
           - { name: periscope-query, context: api_analytics_query, cmd_path: ./cmd/periscope }
           - { name: signalman, context: api_realtime, cmd_path: ./cmd/signalman }
           - { name: helmsman, context: api_sidecar, cmd_path: ./cmd/helmsman }
-          - { name: forms, context: api_forms, cmd_path: ./cmd/forms }
+          - { name: steward, context: api_forms, cmd_path: ./cmd/forms }
           - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator }
           - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand }
           - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer }
-          - { name: skipper, context: api_skipper, cmd_path: ./cmd/skipper }
+          - { name: skipper, context: api_consultant, cmd_path: ./cmd/skipper }
         arch:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
@@ -493,8 +501,8 @@ jobs:
           echo "services:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
-            # Skip webapp/website/docs - they go in interfaces section
-            if [[ "$name" == "webapp" || "$name" == "website" || "$name" == "docs" ]]; then
+            # Skip interfaces - they go in interfaces section
+            if [[ "$name" == "chartroom" || "$name" == "foredeck" || "$name" == "logbook" ]]; then
               continue
             fi
 
@@ -515,8 +523,8 @@ jobs:
           echo "native_binaries:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
-            # Skip webapp/website/docs - they don't have native binaries
-            if [[ "$name" == "webapp" || "$name" == "website" || "$name" == "docs" ]]; then
+            # Skip interfaces - they don't have native binaries
+            if [[ "$name" == "chartroom" || "$name" == "foredeck" || "$name" == "logbook" ]]; then
               continue
             fi
 
@@ -530,27 +538,20 @@ jobs:
           YAML
           done
 
-          # Interfaces (webapp/website/docs reference implementations)
+          # Interfaces (reference implementations)
           echo "" >> dist/manifest.yaml
           echo "interfaces:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
-            # Only include webapp/website/docs
-            if [[ "$name" != "webapp" && "$name" != "website" && "$name" != "docs" ]]; then
+            # Only include interfaces
+            if [[ "$name" != "chartroom" && "$name" != "foredeck" && "$name" != "logbook" ]]; then
               continue
             fi
 
             image=$(jq -r .image "$f")
             digest=$(jq -r .digest "$f")
 
-            # Determine build dir and bundle name
-            if [[ "$name" == "webapp" ]]; then
-              bundle="webapp-build.tar.gz"
-            elif [[ "$name" == "website" ]]; then
-              bundle="website-build.tar.gz"
-            else
-              bundle="docs-build.tar.gz"
-            fi
+            bundle="${name}-build.tar.gz"
 
             cat >> dist/manifest.yaml <<YAML
             - name: ${name}
@@ -597,20 +598,20 @@ jobs:
           pattern: binary-*
           path: dist/binaries
           merge-multiple: true
-      - name: Download webapp bundle
+      - name: Download chartroom bundle
         uses: actions/download-artifact@v7
         with:
-          name: webapp-bundle
+          name: chartroom-bundle
           path: dist/
-      - name: Download website bundle
+      - name: Download foredeck bundle
         uses: actions/download-artifact@v7
         with:
-          name: website-bundle
+          name: foredeck-bundle
           path: dist/
-      - name: Download docs bundle
+      - name: Download logbook bundle
         uses: actions/download-artifact@v7
         with:
-          name: docs-bundle
+          name: logbook-bundle
           path: dist/
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -622,9 +623,9 @@ jobs:
             dist/manifest.yaml
             dist/cli/*
             dist/binaries/*.tar.gz
-            dist/webapp-build.tar.gz
-            dist/website-build.tar.gz
-            dist/docs-build.tar.gz
+            dist/chartroom-build.tar.gz
+            dist/foredeck-build.tar.gz
+            dist/logbook-build.tar.gz
 
   update-env:
     name: Update GitOps Environment Repo

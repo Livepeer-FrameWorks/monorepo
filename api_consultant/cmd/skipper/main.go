@@ -2,16 +2,17 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"frameworks/api_skipper/internal/chat"
-	skipperconfig "frameworks/api_skipper/internal/config"
-	"frameworks/api_skipper/internal/heartbeat"
-	"frameworks/api_skipper/internal/knowledge"
-	"frameworks/api_skipper/internal/metering"
-	"frameworks/api_skipper/internal/notify"
+	"frameworks/api_consultant/internal/chat"
+	skipperconfig "frameworks/api_consultant/internal/config"
+	"frameworks/api_consultant/internal/heartbeat"
+	"frameworks/api_consultant/internal/knowledge"
+	"frameworks/api_consultant/internal/metering"
+	"frameworks/api_consultant/internal/notify"
 	"frameworks/pkg/auth"
 	commodoreclient "frameworks/pkg/clients/commodore"
 	deckhandclient "frameworks/pkg/clients/deckhand"
@@ -29,6 +30,7 @@ import (
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 
+	"github.com/gin-gonic/gin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -94,6 +96,7 @@ func main() {
 	defer usageTracker.Stop()
 
 	rateLimiter := metering.NewRateLimiter(cfg.ChatRateLimitHour, cfg.RateLimitOverrides)
+	rateLimiter.StartCleanup(context.Background())
 
 	// Create Periscope gRPC client for diagnostics
 	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
@@ -249,14 +252,11 @@ func main() {
 		heartbeatDuration = 30 * time.Minute
 	}
 	notifyConfig := notify.LoadConfig()
-	mcpServer := mcp.NewServer(&mcp.Implementation{
-		Name:    "skipper",
-		Version: version.Version,
-	}, nil)
+	mcpManager := notify.NewTenantMCPManager(logger)
 	dispatcher := notify.NewDispatcher(notify.DispatcherConfig{
 		EmailNotifier:     notify.NewEmailNotifier(notifyConfig, logger),
 		WebsocketNotifier: notify.NewWebsocketNotifier(decklogClient, logger),
-		MCPNotifier:       notify.NewMCPNotifier(mcpServer, logger),
+		MCPNotifier:       notify.NewMCPNotifier(mcpManager, logger),
 		Defaults:          notifyConfig.DefaultPreferences,
 		Logger:            logger,
 	})
@@ -314,7 +314,7 @@ func main() {
 			if crawlerErr != nil {
 				logger.WithError(crawlerErr).Warn("Skipping knowledge admin API: failed to initialize knowledge crawler")
 			} else {
-				adminAPI, adminErr := knowledge.NewAdminAPI(knowledgeStore, embedder, crawler, logger)
+				adminAPI, adminErr := knowledge.NewAdminAPI(db, knowledgeStore, embedder, crawler, logger)
 				if adminErr != nil {
 					logger.WithError(adminErr).Warn("Skipping knowledge admin API: failed to initialize knowledge admin API")
 				} else {
@@ -323,6 +323,24 @@ func main() {
 			}
 		}
 	}
+
+	// MCP notification endpoint — per-tenant server for tenant-isolated sessions.
+	jwtSecretBytes := []byte(jwtSecret)
+	mcpHandler := mcp.NewStreamableHTTPHandler(
+		func(r *http.Request) *mcp.Server {
+			token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if token == "" {
+				return nil
+			}
+			claims, err := auth.ValidateJWT(token, jwtSecretBytes)
+			if err != nil || claims.TenantID == "" {
+				return nil
+			}
+			return mcpManager.ServerForTenant(claims.TenantID)
+		},
+		&mcp.StreamableHTTPOptions{Stateless: false},
+	)
+	router.Any("/mcp/*path", gin.WrapH(http.Handler(mcpHandler)))
 
 	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("skipper", cfg.Port)

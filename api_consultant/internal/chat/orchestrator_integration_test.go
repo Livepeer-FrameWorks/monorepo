@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"frameworks/api_skipper/internal/knowledge"
+	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/llm"

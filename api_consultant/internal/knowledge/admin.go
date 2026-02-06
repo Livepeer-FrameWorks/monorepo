@@ -2,13 +2,14 @@ package knowledge
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"frameworks/pkg/auth"
@@ -18,15 +19,24 @@ import (
 	"github.com/google/uuid"
 )
 
+const maxUploadSize int64 = 10 << 20 // 10 MB
+
+var allowedUploadExtensions = map[string]bool{
+	".txt":  true,
+	".md":   true,
+	".html": true,
+	".csv":  true,
+	".json": true,
+	".xml":  true,
+}
+
 type AdminAPI struct {
+	db       *sql.DB
 	store    *Store
 	embedder *Embedder
 	crawler  *Crawler
 	logger   logging.Logger
 	now      func() time.Time
-
-	jobsMu sync.Mutex
-	jobs   map[string]*CrawlJob
 }
 
 type CrawlJob struct {
@@ -61,7 +71,10 @@ type pageResponse struct {
 	Chunks    int    `json:"chunks"`
 }
 
-func NewAdminAPI(store *Store, embedder *Embedder, crawler *Crawler, logger logging.Logger) (*AdminAPI, error) {
+func NewAdminAPI(db *sql.DB, store *Store, embedder *Embedder, crawler *Crawler, logger logging.Logger) (*AdminAPI, error) {
+	if db == nil {
+		return nil, errors.New("db is required")
+	}
 	if store == nil {
 		return nil, errors.New("store is required")
 	}
@@ -72,12 +85,12 @@ func NewAdminAPI(store *Store, embedder *Embedder, crawler *Crawler, logger logg
 		return nil, errors.New("crawler is required")
 	}
 	return &AdminAPI{
+		db:       db,
 		store:    store,
 		embedder: embedder,
 		crawler:  crawler,
 		logger:   logger,
 		now:      time.Now,
-		jobs:     make(map[string]*CrawlJob),
 	}, nil
 }
 
@@ -87,6 +100,7 @@ func (a *AdminAPI) RegisterRoutes(router *gin.Engine, jwtSecret []byte) {
 	group.Use(operatorOnlyMiddleware())
 
 	group.POST("/crawl", a.handleCrawl)
+	group.GET("/crawl/:id", a.handleCrawlStatus)
 	group.POST("/pages", a.handlePages)
 	group.POST("/upload", a.handleUpload)
 	group.GET("/sources", a.handleListSources)
@@ -110,14 +124,15 @@ func (a *AdminAPI) handleCrawl(c *gin.Context) {
 	}
 
 	jobID := uuid.NewString()
-	job := &CrawlJob{
-		ID:         jobID,
-		SitemapURL: req.SitemapURL,
-		TenantID:   tenantID,
-		Status:     "running",
-		StartedAt:  a.now().UTC(),
+	startedAt := a.now().UTC()
+	_, err := a.db.ExecContext(c.Request.Context(),
+		`INSERT INTO skipper.skipper_crawl_jobs (id, tenant_id, sitemap_url, status, started_at) VALUES ($1, $2, $3, 'running', $4)`,
+		jobID, tenantID, req.SitemapURL, startedAt)
+	if err != nil {
+		a.logger.WithError(err).Warn("Failed to create crawl job")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create crawl job"})
+		return
 	}
-	a.saveJob(job)
 
 	go a.runCrawl(jobID, tenantID, req.SitemapURL)
 
@@ -174,16 +189,35 @@ func (a *AdminAPI) handleUpload(c *gin.Context) {
 	}
 	defer func() { _ = file.Close() }()
 
+	if header != nil && header.Size > maxUploadSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %d MB)", maxUploadSize>>20)})
+		return
+	}
+
+	filename := "upload"
+	if header != nil && header.Filename != "" {
+		filename = filepath.Base(header.Filename)
+	}
+	ext := strings.ToLower(filepath.Ext(filename))
+	if ext != "" && !allowedUploadExtensions[ext] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unsupported file type %q; allowed: .txt, .md, .html, .csv, .json, .xml", ext)})
+		return
+	}
+
 	tenantID, ok := resolveTenantID(c, c.PostForm("tenant_id"))
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required"})
 		return
 	}
 
-	body, err := io.ReadAll(file)
+	body, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
 	if err != nil {
 		a.logger.WithError(err).Warn("Failed to read upload")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read upload"})
+		return
+	}
+	if int64(len(body)) > maxUploadSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file too large (max %d MB)", maxUploadSize>>20)})
 		return
 	}
 	content := strings.TrimSpace(string(body))
@@ -192,10 +226,6 @@ func (a *AdminAPI) handleUpload(c *gin.Context) {
 		return
 	}
 
-	filename := "upload"
-	if header != nil && header.Filename != "" {
-		filename = header.Filename
-	}
 	sourceURL := fmt.Sprintf("upload://%s", filename)
 	extra := map[string]any{"filename": filename}
 
@@ -284,28 +314,50 @@ func (a *AdminAPI) handleDeleteSource(c *gin.Context) {
 
 func (a *AdminAPI) runCrawl(jobID, tenantID, sitemapURL string) {
 	err := a.crawler.CrawlAndEmbed(context.Background(), tenantID, sitemapURL)
-	a.jobsMu.Lock()
-	job, ok := a.jobs[jobID]
-	if ok {
-		finished := a.now().UTC()
-		job.FinishedAt = &finished
-		if err != nil {
-			job.Status = "failed"
-			job.Error = err.Error()
-		} else {
-			job.Status = "completed"
-		}
-	}
-	a.jobsMu.Unlock()
+	finished := a.now().UTC()
+	status := "completed"
+	var errMsg *string
 	if err != nil {
+		status = "failed"
+		s := err.Error()
+		errMsg = &s
 		a.logger.WithError(err).Warn("Admin crawl failed")
+	}
+	if _, dbErr := a.db.ExecContext(context.Background(),
+		`UPDATE skipper.skipper_crawl_jobs SET status = $1, error = $2, finished_at = $3 WHERE id = $4`,
+		status, errMsg, finished, jobID); dbErr != nil {
+		a.logger.WithError(dbErr).WithField("job_id", jobID).Warn("Failed to update crawl job status")
 	}
 }
 
-func (a *AdminAPI) saveJob(job *CrawlJob) {
-	a.jobsMu.Lock()
-	a.jobs[job.ID] = job
-	a.jobsMu.Unlock()
+func (a *AdminAPI) handleCrawlStatus(c *gin.Context) {
+	jobID := c.Param("id")
+	if strings.TrimSpace(jobID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "job id is required"})
+		return
+	}
+	var job CrawlJob
+	var errMsg sql.NullString
+	var finishedAt sql.NullTime
+	err := a.db.QueryRowContext(c.Request.Context(),
+		`SELECT id, tenant_id, sitemap_url, status, error, started_at, finished_at FROM skipper.skipper_crawl_jobs WHERE id = $1`,
+		jobID).Scan(&job.ID, &job.TenantID, &job.SitemapURL, &job.Status, &errMsg, &job.StartedAt, &finishedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+	if err != nil {
+		a.logger.WithError(err).Warn("Failed to fetch crawl job")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch job"})
+		return
+	}
+	if errMsg.Valid {
+		job.Error = errMsg.String
+	}
+	if finishedAt.Valid {
+		job.FinishedAt = &finishedAt.Time
+	}
+	c.JSON(http.StatusOK, job)
 }
 
 func operatorOnlyMiddleware() gin.HandlerFunc {

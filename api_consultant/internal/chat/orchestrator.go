@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_skipper/internal/knowledge"
-	"frameworks/api_skipper/internal/metering"
+	"frameworks/api_consultant/internal/knowledge"
+	"frameworks/api_consultant/internal/metering"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/globalid"

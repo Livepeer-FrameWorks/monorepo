@@ -54,7 +54,7 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - Navigator (`api_dns`): public DNS automation & certificate issuance
   - Privateer (`api_mesh`): WireGuard mesh agent & local DNS
 - AI
-  - Skipper (`api_skipper`): AI video consultant with RAG, tool-use, and SSE streaming
+  - Skipper (`api_consultant`): AI video consultant with RAG, tool-use, and SSE streaming
 - Realtime
   - Signalman (`api_realtime`): WebSocket hub for live updates
 - Interfaces
