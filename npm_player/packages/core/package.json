@@ -24,8 +24,14 @@
       "import": "./dist/esm/vanilla.js",
       "require": "./dist/cjs/vanilla.js"
     },
-    "./player.css": "./dist/player.css",
-    "./styles.css": "./dist/player.css"
+    "./player.css": {
+      "source": "./src/styles/player.css",
+      "default": "./dist/player.css"
+    },
+    "./styles.css": {
+      "source": "./src/styles/player.css",
+      "default": "./dist/player.css"
+    }
   },
   "scripts": {
     "build": "pnpm run build:css && pnpm run build:types && NODE_ENV=production rollup -c",

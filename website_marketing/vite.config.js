@@ -24,6 +24,7 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     resolve: {
+      conditions: ["source"],
       alias: {
         "@": path.resolve(__dirname, "./src"),
       },
