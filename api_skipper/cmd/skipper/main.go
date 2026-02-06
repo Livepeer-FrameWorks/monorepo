@@ -106,6 +106,10 @@ func main() {
 	// Setup router with unified monitoring (health/metrics only)
 	router := server.SetupServiceRouter(logger, "skipper", healthChecker, metricsCollector)
 
+	store := knowledge.NewStore(db)
+
+	// Knowledge admin endpoints require an embedding client. Do not hard-fail startup
+	// when LLM config is unset; keep the base service (health/metrics) running.
 	embedderClient, err := llm.NewEmbeddingClient(llm.Config{
 		Provider: cfg.LLMProvider,
 		Model:    cfg.LLMModel,
@@ -113,22 +117,25 @@ func main() {
 		APIURL:   cfg.LLMAPIURL,
 	})
 	if err != nil {
-		logger.WithError(err).Fatal("Failed to initialize embedding client")
+		logger.WithError(err).Warn("Skipping knowledge admin API: embedding client not configured")
+	} else {
+		embedder, embedderErr := knowledge.NewEmbedder(embedderClient)
+		if embedderErr != nil {
+			logger.WithError(embedderErr).Warn("Skipping knowledge admin API: failed to initialize knowledge embedder")
+		} else {
+			crawler, crawlerErr := knowledge.NewCrawler(nil, embedder, store)
+			if crawlerErr != nil {
+				logger.WithError(crawlerErr).Warn("Skipping knowledge admin API: failed to initialize knowledge crawler")
+			} else {
+				adminAPI, adminErr := knowledge.NewAdminAPI(store, embedder, crawler, logger)
+				if adminErr != nil {
+					logger.WithError(adminErr).Warn("Skipping knowledge admin API: failed to initialize knowledge admin API")
+				} else {
+					adminAPI.RegisterRoutes(router, []byte(jwtSecret))
+				}
+			}
+		}
 	}
-	embedder, err := knowledge.NewEmbedder(embedderClient)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to initialize knowledge embedder")
-	}
-	store := knowledge.NewStore(db)
-	crawler, err := knowledge.NewCrawler(nil, embedder, store)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to initialize knowledge crawler")
-	}
-	adminAPI, err := knowledge.NewAdminAPI(store, embedder, crawler, logger)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to initialize knowledge admin API")
-	}
-	adminAPI.RegisterRoutes(router, []byte(jwtSecret))
 
 	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("skipper", cfg.Port)
