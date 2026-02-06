@@ -263,8 +263,6 @@
     --hero-after-rotate: -6deg;
     --hero-after-scale: 1.08;
     --hero-after-opacity: 0.55;
-    --hero-surface-primary: var(--fx-surface-strong);
-    --hero-surface-secondary: var(--fx-surface-mid);
     --hero-beam-stripe: rgba(var(--accent-rgb) / 0.18);
     --hero-beam-highlight: rgba(var(--accent-rgb) / 0.28);
     --hero-spotlight: rgba(var(--accent-rgb) / 0.22);
