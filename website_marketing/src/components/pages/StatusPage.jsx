@@ -174,7 +174,14 @@ const StatusPage = () => {
 
       <Section className="bg-brand-surface">
         <SectionContainer>
-          <MarketingBand preset="foundation" texture="broadcast">
+          <MarketingBand
+            preset="foundation"
+            texturePattern="pinlines"
+            textureNoise="grain"
+            textureBeam="soft"
+            textureMotion="drift"
+            textureStrength="soft"
+          >
             <HeadlineStack
               eyebrow="Health"
               title="Services"

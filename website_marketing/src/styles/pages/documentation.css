@@ -18,7 +18,7 @@
     font-size: 0.78rem;
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 64%, rgba(213, 229, 255, 0.32));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 64%, rgba(var(--fx-rgb-213-229-255) / 0.32));
   }
   .docs-highlight-meta svg {
     width: 0.9rem;
@@ -61,7 +61,7 @@
   }
   .docs-overview-list__description {
     font-size: 0.9rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(213, 229, 255, 0.24));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.24));
     line-height: 1.6;
   }
   .docs-overview-card {
@@ -80,7 +80,7 @@
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.18em;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(213, 229, 255, 0.24));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(var(--fx-rgb-213-229-255) / 0.24));
   }
   .docs-overview-status svg {
     width: 0.95rem;

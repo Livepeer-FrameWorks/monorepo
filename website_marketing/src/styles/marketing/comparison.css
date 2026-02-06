@@ -10,7 +10,7 @@
     font-size: 0.82rem;
     text-transform: uppercase;
     letter-spacing: 0.18em;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 62%, rgba(213, 229, 255, 0.28));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 62%, rgba(var(--fx-rgb-213-229-255) / 0.28));
   }
 
   .comparison-table {
@@ -31,12 +31,12 @@
   }
 
   .comparison-table__head .comparison-table__cell {
-    background: linear-gradient(180deg, rgba(18, 22, 36, 0.92), rgba(12, 16, 28, 0.82));
+    background: linear-gradient(180deg, rgba(var(--fx-rgb-18-22-36) / 0.92), rgba(var(--fx-rgb-12-16-28) / 0.82));
     border-bottom: 1px solid var(--comparison-divider-strong);
     font-size: 0.78rem;
     text-transform: uppercase;
     letter-spacing: 0.18em;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 60%, rgba(213, 229, 255, 0.32));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 60%, rgba(var(--fx-rgb-213-229-255) / 0.32));
   }
 
   .comparison-table__row:last-child .comparison-table__cell {
@@ -54,7 +54,7 @@
     border-bottom: 1px solid var(--comparison-divider);
     border-right: 1px solid rgba(var(--accent-rgb) / 0.14);
     font-size: 0.92rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(213, 229, 255, 0.26));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.26));
   }
 
   .comparison-table__cell--label {
@@ -81,8 +81,8 @@
     font-size: 0.78rem;
     text-transform: uppercase;
     letter-spacing: 0.18em;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 60%, rgba(213, 229, 255, 0.32));
-    background: linear-gradient(140deg, rgba(18, 20, 34, 0.92), rgba(12, 16, 28, 0.84));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 60%, rgba(var(--fx-rgb-213-229-255) / 0.32));
+    background: linear-gradient(140deg, rgba(var(--fx-rgb-18-20-34) / 0.92), rgba(var(--fx-rgb-12-16-28) / 0.84));
     border-bottom: 1px solid rgba(var(--accent-rgb) / 0.18);
   }
 
@@ -97,7 +97,7 @@
     display: grid;
     gap: 0.35rem;
     padding: clamp(0.85rem, 1.1vw, 1rem) clamp(1rem, 1.35vw, 1.15rem);
-    background: rgba(16, 20, 32, 0.55);
+    background: rgba(var(--fx-rgb-16-20-32) / 0.55);
   }
 
   .comparison-table__mobile-item + .comparison-table__mobile-item {
@@ -114,7 +114,7 @@
   .comparison-table__mobile-value {
     margin: 0;
     font-size: 0.88rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 76%, rgba(213, 229, 255, 0.26));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 76%, rgba(var(--fx-rgb-213-229-255) / 0.26));
   }
 
   .comparison-table__mobile-value p {

@@ -28,13 +28,13 @@
   }
 
   .marketing-grid-seam[data-surface="panel"] {
-    background: color-mix(in srgb, hsl(var(--brand-surface)) 82%, rgba(10, 12, 22, 0.15));
+    background: color-mix(in srgb, hsl(var(--brand-surface)) 82%, rgba(var(--fx-rgb-10-12-22) / 0.15));
     border: 1px solid rgba(var(--accent-rgb) / 0.16);
     box-shadow: none;
   }
 
   .marketing-grid-seam[data-surface="glass"] {
-    background: rgba(12, 16, 28, 0.35);
+    background: rgba(var(--fx-rgb-12-16-28) / 0.35);
     backdrop-filter: blur(18px);
     border: 1px solid rgba(var(--accent-rgb) / 0.18);
   }

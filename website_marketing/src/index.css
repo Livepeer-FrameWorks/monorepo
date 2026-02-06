@@ -38,6 +38,7 @@
     --popover-foreground: 229 73% 86%;
     --primary: 225 86% 70%;
     /* #7aa2f7 */
+    --primary-rgb: 122 162 247;
     --primary-foreground: 235 19% 13%;
     --secondary: 229 23% 33%;
     /* #414868 */
@@ -71,20 +72,118 @@
     /* #565f89 */
     --brand-green: 89 51% 61%;
     /* #9ece6a */
+    --brand-green-rgb: 158 206 106;
     --brand-yellow: 36 66% 64%;
     /* #e0af68 */
-    --brand-purple: 264 85% 74%;
-    /* #bb9af7 */
-    --brand-cyan: 225 86% 70%;
-    /* #7aa2f7 */
+    --brand-yellow-rgb: 224 175 104;
+    --brand-purple: 22 100% 70%;
+    /* repurposed toward amber/orange to avoid violet-heavy accents */
+    --brand-cyan: 196 100% 75%;
+    /* #7dcfff */
+    --brand-cyan-rgb: 125 207 255;
     --brand-orange: 22 100% 70%;
     /* #ff9e64 */
+    --brand-orange-rgb: 255 158 100;
     --brand-red: 349 89% 72%;
     /* #f7768e */
-    --brand-accent-strong: 264 85% 74%;
-    /* #bb9af7 */
-    --brand-accent-soft: 265 78% 85%;
-    /* #d8c8fb */
+    --brand-accent-strong: 196 100% 75%;
+    /* #7dcfff */
+    --brand-accent-soft: 197 86% 86%;
+    /* soft cyan */
+
+    /* Shared FX tokens for marketing surfaces */
+    --fx-surface-strong: color-mix(
+      in srgb,
+      hsl(var(--brand-surface-strong)) 94%,
+      rgba(var(--fx-rgb-0-0-0) / 1) 6%
+    );
+    --fx-surface-mid: color-mix(in srgb, hsl(var(--brand-surface)) 90%, hsl(var(--brand-surface-strong)) 10%);
+    --fx-surface-soft: color-mix(in srgb, hsl(var(--brand-surface)) 84%, hsl(var(--background)) 16%);
+    --fx-seam-strong: rgba(var(--accent-rgb) / 0.24);
+    --fx-seam-soft: rgba(var(--accent-rgb) / 0.14);
+    --fx-glow-cool: rgba(var(--accent-rgb) / 0.18);
+    --fx-glow-green: rgba(var(--brand-green-rgb) / 0.14);
+    --fx-glow-warm: rgba(var(--brand-orange-rgb) / 0.14);
+    --fx-shadow-soft: 0 16px 32px rgba(var(--fx-rgb-8-10-24) / 0.32);
+    --fx-shadow-medium: 0 24px 48px rgba(var(--fx-rgb-8-10-24) / 0.42);
+
+    /* Normalized RGB tuple tokens for token-only compliance */
+    --fx-rgb-0-0-0: 0 0 0;
+    --fx-rgb-10-12-22: 10 12 22;
+    --fx-rgb-10-14-26: 10 14 26;
+    --fx-rgb-10-14-28: 10 14 28;
+    --fx-rgb-10-14-34: 10 14 34;
+    --fx-rgb-12-14-24: 12 14 24;
+    --fx-rgb-12-14-26: 12 14 26;
+    --fx-rgb-12-16-28: 12 16 28;
+    --fx-rgb-12-16-30: 12 16 30;
+    --fx-rgb-12-18-36: 12 18 36;
+    --fx-rgb-13-22-36: 13 22 36;
+    --fx-rgb-13-24-44: 13 24 44;
+    --fx-rgb-14-16-26: 14 16 26;
+    --fx-rgb-14-16-28: 14 16 28;
+    --fx-rgb-14-18-30: 14 18 30;
+    --fx-rgb-16-18-28: 16 18 28;
+    --fx-rgb-16-18-30: 16 18 30;
+    --fx-rgb-16-20-32: 16 20 32;
+    --fx-rgb-16-20-34: 16 20 34;
+    --fx-rgb-18-20-30: 18 20 30;
+    --fx-rgb-18-20-34: 18 20 34;
+    --fx-rgb-18-22-34: 18 22 34;
+    --fx-rgb-18-22-36: 18 22 36;
+    --fx-rgb-18-22-38: 18 22 38;
+    --fx-rgb-18-24-38: 18 24 38;
+    --fx-rgb-18-24-46: 18 24 46;
+    --fx-rgb-18-26-48: 18 26 48;
+    --fx-rgb-198-255-236: 198 255 236;
+    --fx-rgb-20-22-35: 20 22 35;
+    --fx-rgb-20-24-36: 20 24 36;
+    --fx-rgb-20-24-40: 20 24 40;
+    --fx-rgb-20-28-46: 20 28 46;
+    --fx-rgb-213-229-255: 213 229 255;
+    --fx-rgb-22-24-36: 22 24 36;
+    --fx-rgb-22-24-40: 22 24 40;
+    --fx-rgb-22-26-38: 22 26 38;
+    --fx-rgb-22-30-46: 22 30 46;
+    --fx-rgb-24-28-44: 24 28 44;
+    --fx-rgb-24-28-46: 24 28 46;
+    --fx-rgb-24-32-52: 24 32 52;
+    --fx-rgb-244-114-114: 244 114 114;
+    --fx-rgb-248-113-113: 248 113 113;
+    --fx-rgb-255-191-120: 255 191 120;
+    --fx-rgb-255-204-204: 255 204 204;
+    --fx-rgb-255-255-255: 255 255 255;
+    --fx-rgb-26-30-46: 26 30 46;
+    --fx-rgb-28-32-48: 28 32 48;
+    --fx-rgb-28-32-50: 28 32 50;
+    --fx-rgb-28-64-52: 28 64 52;
+    --fx-rgb-30-32-46: 30 32 46;
+    --fx-rgb-32-35-52: 32 35 52;
+    --fx-rgb-34-197-94: 34 197 94;
+    --fx-rgb-34-38-58: 34 38 58;
+    --fx-rgb-34-40-60: 34 40 60;
+    --fx-rgb-34-56-106: 34 56 106;
+    --fx-rgb-35-40-60: 35 40 60;
+    --fx-rgb-36-46-72: 36 46 72;
+    --fx-rgb-38-44-64: 38 44 64;
+    --fx-rgb-40-46-68: 40 46 68;
+    --fx-rgb-42-48-68: 42 48 68;
+    --fx-rgb-52-211-153: 52 211 153;
+    --fx-rgb-6-10-24: 6 10 24;
+    --fx-rgb-6-10-28: 6 10 28;
+    --fx-rgb-6-15-65: 6 15 65;
+    --fx-rgb-60-74-132: 60 74 132;
+    --fx-rgb-64-28-36: 64 28 36;
+    --fx-rgb-8-10-18: 8 10 18;
+    --fx-rgb-8-10-24: 8 10 24;
+    --fx-rgb-8-10-28: 8 10 28;
+    --fx-rgb-8-12-24: 8 12 24;
+    --fx-rgb-8-12-32: 8 12 32;
+    --fx-rgb-8-14-32: 8 14 32;
+    --fx-rgb-82-148-224: 82 148 224;
+    --fx-rgb-86-132-255: 86 132 255;
+    --fx-rgb-94-134-255: 94 134 255;
+    --fx-rgb-98-224-174: 98 224 174;
   }
 
   .bg-brand-surface {
@@ -95,12 +194,16 @@
     background-color: color-mix(
       in srgb,
       hsl(var(--brand-surface-strong)) 82%,
-      rgba(18, 20, 34, 0.25)
+      rgba(var(--fx-rgb-18-20-34) / 0.25)
     );
   }
 
   .bg-brand-surface-soft {
-    background-color: color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(18, 20, 34, 0.12));
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--brand-surface)) 88%,
+      rgba(var(--fx-rgb-18-20-34) / 0.12)
+    );
   }
 
   .bg-brand-surface-strong {

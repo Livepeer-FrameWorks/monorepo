@@ -96,7 +96,7 @@ const paidTiers = [
   },
   {
     id: "developer",
-    tone: "purple",
+    tone: "cyan",
     name: "Developer",
     price: "€249",
     period: "/month",
@@ -233,7 +233,7 @@ const deploymentOptions = [
     id: "managed-pipeline",
     title: "Fully Hosted (SaaS)",
     tagline: "We run everything",
-    tone: "purple",
+    tone: "accent",
     icon: CloudIcon,
     summary:
       "We operate the control plane, edge, and ops so your team can focus on shipping streams.",
@@ -406,7 +406,7 @@ const pricingHeroHighlights = [
     title: "Zero licensing fees",
     description:
       "Self-host the full stack with no per-seat, per-core, or per-stream licensing. Public domain code.",
-    tone: "purple",
+    tone: "yellow",
     icon: HomeIcon,
   },
   {
@@ -603,7 +603,15 @@ const Pricing = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand preset="foundation" tone="cool" texture="broadcast">
+            <MarketingBand
+              preset="foundation"
+              tone="cool"
+              texturePattern="seams"
+              textureNoise="film"
+              textureBeam="soft"
+              textureMotion="drift"
+              textureStrength="soft"
+            >
               <HeadlineStack
                 eyebrow="Paid tiers"
                 title="Upgrade for more"
@@ -741,7 +749,15 @@ const Pricing = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand preset="foundation" tone="violet" texture="none">
+            <MarketingBand
+              preset="foundation"
+              tone="steel"
+              texturePattern="pinlines"
+              textureNoise="grain"
+              textureBeam="soft"
+              textureMotion="drift"
+              textureStrength="soft"
+            >
               <HeadlineStack
                 eyebrow="GPU-powered features"
                 title="Advanced processing across every tier"
@@ -766,7 +782,13 @@ const Pricing = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand preset="foundation" texture="grid">
+            <MarketingBand
+              preset="foundation"
+              texturePattern="seams"
+              textureNoise="film"
+              textureBeam="soft"
+              textureStrength="soft"
+            >
               <HeadlineStack
                 eyebrow="Operating models"
                 title="SaaS → Hybrid → Fully self-hosted"

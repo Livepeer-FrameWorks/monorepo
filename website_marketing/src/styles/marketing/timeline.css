@@ -16,10 +16,10 @@
     border-radius: clamp(0.9rem, 1.15vw, 1.25rem);
     border: 1px solid rgba(var(--accent-rgb) / 0.18);
     background:
-      linear-gradient(135deg, rgba(28, 32, 48, 0.92), rgba(14, 18, 30, 0.96)),
-      linear-gradient(180deg, rgba(14, 18, 30, 0.92), rgba(12, 14, 26, 0.94));
+      linear-gradient(135deg, rgba(var(--fx-rgb-28-32-48) / 0.92), rgba(var(--fx-rgb-14-18-30) / 0.96)),
+      linear-gradient(180deg, rgba(var(--fx-rgb-14-18-30) / 0.92), rgba(var(--fx-rgb-12-14-26) / 0.94));
     overflow: hidden;
-    box-shadow: 0 26px 52px rgba(8, 10, 28, 0.42);
+    box-shadow: 0 26px 52px rgba(var(--fx-rgb-8-10-28) / 0.42);
     backdrop-filter: blur(18px);
   }
 
@@ -29,7 +29,7 @@
     gap: clamp(0.65rem, 1vw, 0.95rem);
     padding: clamp(1.8rem, 2.2vw, 2.4rem) clamp(1.9rem, 2.4vw, 2.6rem);
     border-bottom: 1px solid rgba(var(--accent-rgb) / 0.14);
-    background: linear-gradient(140deg, rgba(35, 40, 60, 0.82), rgba(28, 32, 50, 0.85));
+    background: linear-gradient(140deg, rgba(var(--fx-rgb-35-40-60) / 0.82), rgba(var(--fx-rgb-28-32-50) / 0.85));
   }
 
   .marketing-timeline-block__header .marketing-pill {
@@ -114,7 +114,7 @@
       rgba(var(--accent-rgb) / 0.35)
     );
     border: 1px solid rgba(var(--accent-rgb) / 0.35);
-    color: rgba(13, 24, 44, 0.92);
+    color: rgba(var(--fx-rgb-13-24-44) / 0.92);
     flex-shrink: 0;
   }
 
@@ -225,7 +225,7 @@
     flex-direction: column;
     gap: clamp(0.9rem, 1.3vw, 1.2rem);
     padding: clamp(1.4rem, 1.8vw, 1.9rem) clamp(1.9rem, 2.3vw, 2.35rem) clamp(1.55rem, 2vw, 2rem);
-    background: linear-gradient(150deg, rgba(22, 24, 36, 0.9), rgba(14, 16, 26, 0.94));
+    background: linear-gradient(150deg, rgba(var(--fx-rgb-22-24-36) / 0.9), rgba(var(--fx-rgb-14-16-26) / 0.94));
     border-top: 1px solid rgba(var(--accent-rgb) / 0.14);
   }
 

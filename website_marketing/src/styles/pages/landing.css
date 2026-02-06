@@ -1,13 +1,175 @@
 /* Page-specific styles for landing */
 @layer components {
   .hero-player-card {
+    --landing-glitch-cool: rgba(var(--accent-rgb) / 0.9);
+    --landing-glitch-warm: rgba(var(--brand-orange-rgb) / 0.88);
+    --landing-glitch-green: rgba(var(--brand-green-rgb) / 0.86);
     width: 100%;
     max-width: 560px;
-    padding: 1.75rem;
-    border: 1px solid hsl(var(--border) / 0.45);
-    border-radius: 1.5rem;
-    background: color-mix(in srgb, hsl(var(--brand-surface)) 94%, rgba(255, 255, 255, 0.02));
-    box-shadow: 0 28px 48px rgba(8, 10, 18, 0.35);
+    border: 1px solid var(--fx-seam-strong);
+    border-radius: 0;
+    background:
+      linear-gradient(160deg, var(--fx-surface-mid), var(--fx-surface-strong)),
+      linear-gradient(120deg, rgba(var(--accent-rgb) / 0.06), transparent 52%);
+    box-shadow: none;
+    overflow: hidden;
+    position: relative;
+  }
+  .hero-player-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      repeating-linear-gradient(
+        0deg,
+        rgba(var(--fx-rgb-255-255-255) / 0.03),
+        rgba(var(--fx-rgb-255-255-255) / 0.03) 1px,
+        transparent 1px,
+        transparent 6px
+      ),
+      linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(var(--brand-cyan-rgb) / 0.1) 18%,
+        transparent 36%,
+        transparent 68%,
+        rgba(var(--brand-cyan-rgb) / 0.08) 86%,
+        transparent 100%
+      ),
+      radial-gradient(circle at 18% 20%, rgba(var(--brand-cyan-rgb) / 0.1), transparent 68%);
+    mix-blend-mode: screen;
+    pointer-events: none;
+    opacity: 0.62;
+    -webkit-mask-image: radial-gradient(
+      circle at 50% 50%,
+      transparent 18%,
+      rgba(var(--fx-rgb-0-0-0) / 1) 74%
+    );
+    mask-image: radial-gradient(
+      circle at 50% 50%,
+      transparent 18%,
+      rgba(var(--fx-rgb-0-0-0) / 1) 74%
+    );
+  }
+  .hero-player-card__layout {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 420px;
+  }
+  .hero-player-card__header {
+    padding: clamp(1.1rem, 2vw, 1.45rem) clamp(1.2rem, 2.2vw, 1.7rem);
+    border-bottom: 1px solid var(--fx-seam-soft);
+    background: linear-gradient(
+      90deg,
+      rgba(var(--brand-cyan-rgb) / 0.09) 0%,
+      rgba(var(--brand-cyan-rgb) / 0.02) 40%,
+      transparent 72%
+    );
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.48rem;
+  }
+  .hero-player-card__title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    min-height: 2.1rem;
+  }
+  .hero-player-card__title-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+  .hero-player-card__dot {
+    width: 0.56rem;
+    height: 0.56rem;
+    flex-shrink: 0;
+    border-radius: 0;
+    background: rgba(var(--brand-cyan-rgb) / 0.72);
+    box-shadow: 0 0 0 1px rgba(var(--brand-cyan-rgb) / 0.3);
+  }
+  .hero-player-card__title {
+    margin: 0;
+    font-size: clamp(1.02rem, 1.6vw, 1.32rem);
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+    font-weight: 650;
+    color: hsl(var(--foreground));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hero-player-card__subhead {
+    margin: 0;
+    font-size: 0.66rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.14));
+  }
+  .hero-player-card__caption {
+    margin: 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 84%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+  }
+  .hero-player-card__viewport {
+    flex: 1;
+    padding: clamp(1rem, 1.8vw, 1.35rem);
+  }
+  .hero-player-card__screen {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--fx-seam-strong);
+    border-radius: 0;
+    overflow: hidden;
+    background: var(--fx-surface-strong);
+  }
+  .hero-player-card__stage {
+    position: relative;
+    width: 100%;
+    height: 320px;
+  }
+  @media (min-width: 640px) {
+    .hero-player-card__stage {
+      height: 380px;
+    }
+  }
+  .hero-player-card__overlay {
+    position: absolute;
+    inset: 0;
+    max-width: 100%;
+    max-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--fx-surface-strong);
+    border-radius: 0;
+    z-index: 50;
+  }
+  .hero-player-card__overlay-logo {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: hsl(var(--brand-surface-strong));
+  }
+  .hero-player-card__overlay-glitch {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
   }
   .hero-visual {
     width: 100%;
@@ -18,13 +180,48 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 999px;
-    padding: 0.35rem 0.8rem;
-    font-size: 0.7rem;
+    border-radius: 0;
+    padding: 0.28rem 0.62rem;
+    font-size: 0.62rem;
     font-weight: 600;
-    letter-spacing: 0.16em;
+    line-height: 1;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    border-width: 1px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .hero-demo-status--muted {
+    border-color: rgba(var(--fx-rgb-82-148-224) / 0.24);
+    background: rgba(var(--fx-rgb-24-32-52) / 0.45);
+    color: hsl(var(--muted-foreground));
+  }
+  .hero-demo-status--active {
+    border-color: rgba(var(--brand-cyan-rgb) / 0.4);
+    background: rgba(var(--brand-cyan-rgb) / 0.14);
+    color: hsl(var(--accent));
+  }
+  .hero-demo-status--warn {
+    border-color: rgba(var(--brand-yellow-rgb) / 0.38);
+    background: rgba(var(--brand-yellow-rgb) / 0.14);
+    color: hsl(var(--brand-yellow));
+  }
+  .hero-demo-status--live {
+    border-color: rgba(var(--brand-green-rgb) / 0.42);
+    background: rgba(var(--brand-green-rgb) / 0.16);
+    color: hsl(var(--brand-green));
+  }
+  .hero-demo-status--degraded {
+    border-color: rgba(var(--brand-orange-rgb) / 0.4);
+    background: rgba(var(--brand-orange-rgb) / 0.14);
+    color: hsl(var(--brand-orange));
+  }
+  @media (max-width: 640px) {
+    .hero-player-card__title-row {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
   }
   .hero-actions {
     display: flex;
@@ -66,16 +263,8 @@
     --hero-after-rotate: -6deg;
     --hero-after-scale: 1.08;
     --hero-after-opacity: 0.55;
-    --hero-surface-primary: color-mix(
-      in srgb,
-      hsl(var(--brand-surface-strong)) 95%,
-      rgba(0, 0, 0, 0.08)
-    );
-    --hero-surface-secondary: color-mix(
-      in srgb,
-      hsl(var(--brand-surface)) 84%,
-      rgba(255, 255, 255, 0.08)
-    );
+    --hero-surface-primary: var(--fx-surface-strong);
+    --hero-surface-secondary: var(--fx-surface-mid);
     --hero-beam-stripe: rgba(var(--accent-rgb) / 0.18);
     --hero-beam-highlight: rgba(var(--accent-rgb) / 0.28);
     --hero-spotlight: rgba(var(--accent-rgb) / 0.22);
@@ -92,21 +281,29 @@
   .landing-hero[data-surface="beams"] .marketing-hero__surface::before {
     background:
       repeating-linear-gradient(
-        135deg,
-        transparent,
-        transparent 28px,
-        rgba(var(--accent-rgb) / 0.18) 28px,
-        rgba(var(--accent-rgb) / 0.18) 52px
+        0deg,
+        rgba(var(--fx-rgb-255-255-255) / 0.04),
+        rgba(var(--fx-rgb-255-255-255) / 0.04) 1px,
+        transparent 1px,
+        transparent 6px
       ),
-      radial-gradient(circle at 18% 24%, rgba(var(--accent-rgb) / 0.28), transparent 70%);
+      repeating-linear-gradient(
+        90deg,
+        rgba(var(--accent-rgb) / 0.09),
+        rgba(var(--accent-rgb) / 0.09) 1px,
+        transparent 1px,
+        transparent 30px
+      ),
+      radial-gradient(circle at 18% 24%, rgba(var(--accent-rgb) / 0.22), transparent 70%);
     opacity: 0.6;
   }
 
   .landing-hero[data-surface="beams"] .marketing-hero__surface::after {
     background:
-      linear-gradient(120deg, rgba(55, 72, 120, 0.38), rgba(18, 22, 38, 0.12)),
-      radial-gradient(circle at 70% 32%, rgba(var(--accent-rgb) / 0.18), transparent 72%);
-    opacity: 0.52;
+      linear-gradient(180deg, rgba(var(--accent-rgb) / 0.14), rgba(var(--accent-rgb) / 0.04)),
+      radial-gradient(circle at 70% 32%, rgba(var(--accent-rgb) / 0.2), transparent 72%),
+      linear-gradient(90deg, transparent 38%, rgba(var(--accent-rgb) / 0.1) 50%, transparent 62%);
+    opacity: 0.54;
   }
 
   .landing-hero .marketing-hero__description {
@@ -114,7 +311,7 @@
     display: inline-block;
     padding-bottom: 0.55rem;
     max-width: clamp(36rem, 58vw, 44rem);
-    color: color-mix(in srgb, hsl(var(--foreground)) 78%, rgba(255, 255, 255, 0.08));
+    color: color-mix(in srgb, hsl(var(--foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.08));
   }
 
   .landing-hero .marketing-hero__description::after {
@@ -153,26 +350,26 @@
 /* Section background textures — subtle color zones per section */
 .landing-section--platform {
   background:
-    linear-gradient(140deg, rgba(122, 162, 247, 0.05), transparent 50%),
-    radial-gradient(ellipse at 20% 0%, rgba(122, 162, 247, 0.08), transparent 50%);
+    linear-gradient(140deg, rgba(var(--primary-rgb) / 0.05), transparent 50%),
+    radial-gradient(ellipse at 20% 0%, rgba(var(--primary-rgb) / 0.08), transparent 50%);
 }
 
 .landing-section--sdk {
   background:
-    radial-gradient(ellipse at 80% 20%, rgba(125, 207, 255, 0.07), transparent 50%),
-    linear-gradient(160deg, rgba(125, 207, 255, 0.03), transparent 40%);
+    radial-gradient(ellipse at 80% 20%, rgba(var(--brand-cyan-rgb) / 0.07), transparent 50%),
+    linear-gradient(160deg, rgba(var(--brand-cyan-rgb) / 0.03), transparent 40%);
 }
 
 .landing-section--agents {
   background:
-    radial-gradient(ellipse at 30% 0%, rgba(187, 154, 247, 0.08), transparent 50%),
-    linear-gradient(150deg, rgba(187, 154, 247, 0.03), transparent 45%);
+    radial-gradient(ellipse at 30% 0%, rgba(var(--brand-orange-rgb) / 0.08), transparent 50%),
+    linear-gradient(150deg, rgba(var(--brand-orange-rgb) / 0.03), transparent 45%);
 }
 
 .landing-section--pricing {
   background:
-    radial-gradient(ellipse at 60% 0%, rgba(158, 206, 106, 0.06), transparent 50%),
-    linear-gradient(170deg, rgba(158, 206, 106, 0.02), transparent 40%);
+    radial-gradient(ellipse at 60% 0%, rgba(var(--brand-green-rgb) / 0.06), transparent 50%),
+    linear-gradient(170deg, rgba(var(--brand-green-rgb) / 0.02), transparent 40%);
 }
 
 /* Hero 3D floating frames — independent orbit + sway */
@@ -189,18 +386,18 @@
 
 /* Base frame — 16:9 glass rectangle */
 .hero-frame {
-  position: absolute;
-  border-radius: 12px;
-  border: 1px solid rgba(var(--frame-color), 0.22);
-  background: linear-gradient(
-    145deg,
+    position: absolute;
+    border-radius: 0;
+    border: 1px solid rgba(var(--frame-color), 0.22);
+    background: linear-gradient(
+      145deg,
     rgba(var(--frame-color), 0.14),
     rgba(var(--frame-color), 0.05) 60%,
     rgba(var(--frame-color), 0.02)
   );
   box-shadow:
-    0 20px 50px rgba(8, 10, 24, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    var(--fx-shadow-medium),
+    inset 0 1px 0 rgba(var(--fx-rgb-255-255-255) / 0.06),
     inset 0 0 0 1px rgba(var(--frame-color), 0.06);
 }
 
@@ -208,7 +405,7 @@
 .hero-frame--xl {
   width: clamp(380px, 50vw, 620px);
   height: clamp(214px, 28vw, 349px);
-  border-radius: 16px;
+  border-radius: 0;
   opacity: 0.92;
 }
 
@@ -216,7 +413,7 @@
 .hero-frame--lg {
   width: clamp(280px, 38vw, 480px);
   height: clamp(158px, 21vw, 270px);
-  border-radius: 14px;
+  border-radius: 0;
   opacity: 0.88;
 }
 
@@ -330,12 +527,12 @@
   33.43%,
   43.23% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff0040);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 var(--landing-glitch-warm));
   }
   66.77%,
   76.57% {
     transform: translateX(var(--glitch-x-2));
-    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 #00ffff);
+    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 var(--landing-glitch-cool));
   }
 }
 
@@ -354,17 +551,17 @@
   25.10%,
   34.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 #ff0040);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 var(--landing-glitch-warm));
   }
   50.10%,
   59.90% {
     transform: translateX(var(--glitch-x-2));
-    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-1px 0 0 #00ffff);
+    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-1px 0 0 var(--landing-glitch-cool));
   }
   75.10%,
   84.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff4000);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 var(--landing-glitch-warm));
   }
 }
 
@@ -383,17 +580,17 @@
   20.10%,
   29.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(3px 0 0 #ff0040);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(3px 0 0 var(--landing-glitch-warm));
   }
   40.10%,
   49.90% {
     transform: translateX(var(--glitch-x-2));
-    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-3px 0 0 #00ffff);
+    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-3px 0 0 var(--landing-glitch-cool));
   }
   70.10%,
   79.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 #ff4000);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 var(--landing-glitch-warm));
   }
 }
 
@@ -412,17 +609,17 @@
   15.10%,
   24.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff0040);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 var(--landing-glitch-warm));
   }
   45.10%,
   54.90% {
     transform: translateX(var(--glitch-x-2));
-    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 #00ffff);
+    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 var(--landing-glitch-cool));
   }
   65.10%,
   74.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(3px 0 0 #ff4000);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(3px 0 0 var(--landing-glitch-warm));
   }
 }
 
@@ -440,17 +637,17 @@
   10.10%,
   19.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 #ff0040);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(1px 0 0 var(--landing-glitch-warm));
   }
   60.10%,
   69.90% {
     transform: translateX(var(--glitch-x-2));
-    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-1px 0 0 #00ffff);
+    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-1px 0 0 var(--landing-glitch-cool));
   }
   90.10%,
   99.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff4000);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 var(--landing-glitch-warm));
   }
 }
 
@@ -471,21 +668,21 @@
   5.10%,
   14.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(4px 0 0 #ff0040);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(4px 0 0 var(--landing-glitch-warm));
   }
   35.10%,
   44.90% {
     transform: translateX(var(--glitch-x-2));
-    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-4px 0 0 #00ffff);
+    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-4px 0 0 var(--landing-glitch-cool));
   }
   55.10%,
   64.90% {
     transform: translateX(var(--glitch-x-1));
-    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 #ff4000);
+    filter: hue-rotate(var(--glitch-hue-1)) drop-shadow(2px 0 0 var(--landing-glitch-warm));
   }
   85.10%,
   94.90% {
     transform: translateX(var(--glitch-x-2));
-    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 #40ff00);
+    filter: hue-rotate(var(--glitch-hue-2)) drop-shadow(-2px 0 0 var(--landing-glitch-green));
   }
 }

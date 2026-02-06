@@ -1,28 +1,28 @@
 /* Marketing component styles: navigation */
 @layer components {
   .nav-surface {
-    background-color: color-mix(in srgb, hsl(var(--background)) 98%, rgba(0, 0, 0, 0.1));
+    background-color: color-mix(in srgb, hsl(var(--background)) 98%, rgba(var(--fx-rgb-0-0-0) / 0.1));
     backdrop-filter: blur(18px);
     border-bottom: 1px solid hsl(var(--border) / 0.45);
-    box-shadow: 0 12px 24px rgba(6, 15, 65, 0.15);
+    box-shadow: 0 12px 24px rgba(var(--fx-rgb-6-15-65) / 0.15);
   }
 
   .nav-mobile-surface {
-    background-color: color-mix(in srgb, hsl(var(--background)) 97%, rgba(0, 0, 0, 0.14));
+    background-color: color-mix(in srgb, hsl(var(--background)) 97%, rgba(var(--fx-rgb-0-0-0) / 0.14));
     backdrop-filter: blur(16px);
     border-top: 1px solid hsl(var(--border) / 0.45);
-    box-shadow: 0 18px 36px rgba(6, 15, 65, 0.28);
+    box-shadow: 0 18px 36px rgba(var(--fx-rgb-6-15-65) / 0.28);
   }
 
   .tooltip-surface {
     background-color: color-mix(
       in srgb,
       hsl(var(--brand-surface-strong)) 94%,
-      rgba(12, 14, 24, 0.94)
+      rgba(var(--fx-rgb-12-14-24) / 0.94)
     );
     color: hsl(var(--foreground));
     border: 1px solid hsl(var(--border) / 0.7);
-    box-shadow: 0 22px 48px rgba(10, 12, 22, 0.48);
+    box-shadow: 0 22px 48px rgba(var(--fx-rgb-10-12-22) / 0.48);
     backdrop-filter: blur(14px);
   }
 
@@ -44,7 +44,7 @@
 
   .nav-trigger:hover,
   .nav-trigger:focus-visible {
-    background-color: color-mix(in srgb, hsl(var(--muted)) 24%, rgba(255, 255, 255, 0.08));
+    background-color: color-mix(in srgb, hsl(var(--muted)) 24%, rgba(var(--fx-rgb-255-255-255) / 0.08));
   }
 
   .nav-link {
@@ -81,9 +81,9 @@
       color-mix(in srgb, hsl(var(--accent)) 76%, hsl(var(--brand-surface)) 24%)
     );
     color: hsl(var(--primary-foreground));
-    text-shadow: 0 1px 2px rgba(20, 22, 35, 0.35);
+    text-shadow: 0 1px 2px rgba(var(--fx-rgb-20-22-35) / 0.35);
     box-shadow:
-      0 10px 22px rgba(34, 56, 106, 0.24),
+      0 10px 22px rgba(var(--fx-rgb-34-56-106) / 0.24),
       0 0 0 1px hsl(var(--accent) / 0.22);
   }
 
@@ -102,18 +102,18 @@
 
   .nav-mobile-link:hover,
   .nav-mobile-link:focus-visible {
-    background-color: color-mix(in srgb, hsl(var(--muted)) 28%, rgba(255, 255, 255, 0.06));
+    background-color: color-mix(in srgb, hsl(var(--muted)) 28%, rgba(var(--fx-rgb-255-255-255) / 0.06));
   }
 
   .nav-mobile-link-active {
     background: linear-gradient(
       135deg,
-      color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(255, 255, 255, 0.08)),
-      color-mix(in srgb, hsl(var(--brand-surface-strong)) 68%, rgba(0, 0, 0, 0.18))
+      color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(var(--fx-rgb-255-255-255) / 0.08)),
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 68%, rgba(var(--fx-rgb-0-0-0) / 0.18))
     );
     color: hsl(var(--accent));
     box-shadow:
       inset 0 0 0 1px hsl(var(--accent) / 0.45),
-      0 12px 26px rgba(6, 15, 65, 0.26);
+      0 12px 26px rgba(var(--fx-rgb-6-15-65) / 0.26);
   }
 }

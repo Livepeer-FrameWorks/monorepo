@@ -12,7 +12,7 @@
 
   .mission-pillars {
     position: relative;
-    padding-top: clamp(1.6rem, 2.4vw, 2.1rem);
+    padding-top: 0;
   }
 
   .mission-pillars .headline-stack {
@@ -70,7 +70,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-green)),
-      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -78,7 +78,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-yellow)),
-      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -86,7 +86,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-purple)),
-      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -109,7 +109,7 @@
     margin: 0;
     font-size: 0.95rem;
     line-height: 1.55;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(255, 255, 255, 0.12));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(var(--fx-rgb-255-255-255) / 0.12));
   }
 
   .marketing-tech-rows {
@@ -133,13 +133,13 @@
     font-size: 0.82rem;
     letter-spacing: 0.22em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(255, 255, 255, 0.12));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(var(--fx-rgb-255-255-255) / 0.12));
   }
 
   .marketing-tech-row__description {
     font-size: 0.95rem;
     line-height: 1.6;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(255, 255, 255, 0.14));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(var(--fx-rgb-255-255-255) / 0.14));
   }
 
   .marketing-tech-row__list {
@@ -165,7 +165,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 14px 30px rgba(10, 14, 34, 0.32);
+    box-shadow: 0 14px 30px rgba(var(--fx-rgb-10-14-34) / 0.32);
     aspect-ratio: 1/1;
   }
 
@@ -173,14 +173,14 @@
     width: 64%;
     height: 64%;
     object-fit: contain;
-    filter: drop-shadow(0 6px 12px rgba(10, 14, 26, 0.35));
+    filter: drop-shadow(0 6px 12px rgba(var(--fx-rgb-10-14-26) / 0.35));
   }
 
   .marketing-tech-row__glyph {
     width: 62%;
     height: 62%;
-    color: color-mix(in srgb, hsl(var(--foreground)) 85%, rgba(255, 255, 255, 0.2));
-    filter: drop-shadow(0 6px 12px rgba(10, 14, 26, 0.35));
+    color: color-mix(in srgb, hsl(var(--foreground)) 85%, rgba(var(--fx-rgb-255-255-255) / 0.2));
+    filter: drop-shadow(0 6px 12px rgba(var(--fx-rgb-10-14-26) / 0.35));
   }
 
   .marketing-tech-row__initial {
@@ -189,13 +189,13 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: color-mix(in srgb, hsl(var(--foreground)) 88%, rgba(255, 255, 255, 0.2));
+    color: color-mix(in srgb, hsl(var(--foreground)) 88%, rgba(var(--fx-rgb-255-255-255) / 0.2));
   }
 
   .marketing-tech-row__text {
     font-size: 0.98rem;
     line-height: 1.5;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 88%, rgba(255, 255, 255, 0.1));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 88%, rgba(var(--fx-rgb-255-255-255) / 0.1));
   }
 
   @media (max-width: 900px) {
@@ -210,7 +210,7 @@
     display: inline-block;
     padding-bottom: 0.55rem;
     max-width: clamp(34rem, 58vw, 44rem);
-    color: color-mix(in srgb, hsl(var(--foreground)) 82%, rgba(255, 255, 255, 0.1));
+    color: color-mix(in srgb, hsl(var(--foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.1));
   }
 
   .about-hero .marketing-hero__description::after {
@@ -241,8 +241,8 @@
   .about-hero .marketing-hero__surface::before {
     opacity: 0.4;
     background:
-      linear-gradient(125deg, rgba(60, 90, 168, 0.32), rgba(18, 22, 38, 0.12)),
+      linear-gradient(160deg, rgba(var(--accent-rgb) / 0.18), rgba(var(--accent-rgb) / 0.05)),
       radial-gradient(ellipse at 14% -8%, rgba(var(--accent-rgb) / 0.22), transparent 58%),
-      radial-gradient(ellipse at 86% 118%, rgba(125, 207, 255, 0.18), transparent 70%);
+      radial-gradient(ellipse at 86% 118%, rgba(var(--brand-green-rgb) / 0.14), transparent 70%);
   }
 }

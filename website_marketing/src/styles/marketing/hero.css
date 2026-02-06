@@ -17,12 +17,12 @@
     --hero-surface-primary: color-mix(
       in srgb,
       hsl(var(--brand-surface-strong)) 92%,
-      rgba(0, 0, 0, 0.08)
+      rgba(var(--fx-rgb-0-0-0) / 0.08)
     );
     --hero-surface-secondary: color-mix(
       in srgb,
       hsl(var(--brand-surface)) 82%,
-      rgba(255, 255, 255, 0.04)
+      rgba(var(--fx-rgb-255-255-255) / 0.04)
     );
     --hero-beam-stripe: rgba(var(--accent-rgb) / 0.12);
     --hero-beam-highlight: rgba(var(--accent-rgb) / 0.22);
@@ -82,12 +82,12 @@
     top: var(--hero-before-top, -240px);
     left: var(--hero-before-left, -320px);
     background:
-      linear-gradient(130deg, rgba(var(--accent-rgb) / 0.28), rgba(26, 32, 54, 0.32)),
+      linear-gradient(130deg, rgba(var(--accent-rgb) / 0.24), color-mix(in srgb, var(--fx-surface-mid) 44%, transparent)),
       radial-gradient(circle at 15% 20%, rgba(var(--accent-rgb) / 0.22), transparent 66%);
     border-radius: 32px;
     transform: rotate(var(--hero-before-rotate, -14deg)) scale(var(--hero-before-scale, 1));
     opacity: var(--hero-before-opacity, 0.52);
-    box-shadow: 0 32px 58px rgba(8, 10, 24, 0.42);
+    box-shadow: var(--fx-shadow-medium);
   }
 
   .marketing-hero[data-surface="gradient"] .marketing-hero__surface::after {
@@ -97,12 +97,12 @@
     top: var(--hero-after-top, -110px);
     right: var(--hero-after-right, -260px);
     background:
-      linear-gradient(200deg, rgba(var(--accent-rgb) / 0.26), rgba(26, 32, 56, 0.18)),
-      linear-gradient(150deg, rgba(18, 22, 38, 0.32), transparent 70%);
+      linear-gradient(200deg, rgba(var(--accent-rgb) / 0.22), color-mix(in srgb, var(--fx-surface-mid) 36%, transparent)),
+      linear-gradient(150deg, color-mix(in srgb, var(--fx-surface-strong) 34%, transparent), transparent 70%);
     border-radius: 28px;
     transform: rotate(var(--hero-after-rotate, -6deg)) scale(var(--hero-after-scale, 1));
     opacity: var(--hero-after-opacity, 0.48);
-    box-shadow: 0 18px 46px rgba(8, 10, 24, 0.32);
+    box-shadow: var(--fx-shadow-soft);
   }
 
   .marketing-hero[data-surface="beams"]::after {
@@ -111,8 +111,8 @@
     inset: 0;
     background: linear-gradient(
       165deg,
-      color-mix(in srgb, var(--hero-surface-primary) 96%, rgba(0, 0, 0, 0.08)),
-      color-mix(in srgb, var(--hero-surface-secondary) 92%, rgba(0, 0, 0, 0.18))
+      color-mix(in srgb, var(--hero-surface-primary) 96%, transparent),
+      color-mix(in srgb, var(--hero-surface-secondary) 92%, rgba(var(--accent-rgb) / 0.06))
     );
     border-bottom: 1px solid rgba(var(--accent-rgb) / 0.22);
     pointer-events: none;
@@ -128,11 +128,18 @@
     left: var(--hero-before-left, -320px);
     background:
       repeating-linear-gradient(
-        135deg,
-        transparent,
-        transparent 32px,
-        var(--hero-beam-stripe) 32px,
-        var(--hero-beam-stripe) 60px
+        0deg,
+        rgba(var(--fx-rgb-255-255-255) / 0.035),
+        rgba(var(--fx-rgb-255-255-255) / 0.035) 1px,
+        transparent 1px,
+        transparent 8px
+      ),
+      repeating-linear-gradient(
+        90deg,
+        rgba(var(--accent-rgb) / 0.07),
+        rgba(var(--accent-rgb) / 0.07) 1px,
+        transparent 1px,
+        transparent 30px
       ),
       radial-gradient(circle at 12% 18%, var(--hero-beam-highlight), transparent 70%);
     border-radius: 36px;
@@ -148,7 +155,7 @@
     top: var(--hero-after-top, -90px);
     right: var(--hero-after-right, -260px);
     background:
-      linear-gradient(120deg, rgba(45, 60, 100, 0.38), rgba(18, 22, 38, 0.12)),
+      linear-gradient(120deg, rgba(var(--accent-rgb) / 0.14), color-mix(in srgb, var(--fx-surface-strong) 18%, transparent)),
       radial-gradient(circle at 68% 28%, rgba(var(--accent-rgb) / 0.14), transparent 72%);
     border-radius: 34px;
     transform: rotate(var(--hero-after-rotate, -8deg)) scale(var(--hero-after-scale, 1.08));
@@ -197,7 +204,7 @@
     border-radius: var(--accent-radius, clamp(28px, 6vw, 48px));
     background: var(
       --accent-fill,
-      linear-gradient(135deg, rgba(var(--accent-rgb) / 0.28), rgba(18, 22, 38, 0.14))
+      linear-gradient(135deg, rgba(var(--accent-rgb) / 0.28), rgba(var(--fx-rgb-18-22-38) / 0.14))
     );
     mix-blend-mode: screen;
     z-index: var(--accent-layer, 1);
@@ -255,10 +262,10 @@
 
   .marketing-hero__media--surface-glow {
     padding: clamp(1.2rem, 2vw, 1.8rem);
-    border-radius: clamp(1.2rem, 1.6vw, 1.8rem);
-    background: linear-gradient(160deg, rgba(24, 28, 46, 0.64), rgba(14, 16, 28, 0.4));
-    border: 1px solid rgba(var(--accent-rgb) / 0.14);
-    box-shadow: 0 24px 48px rgba(6, 12, 32, 0.35);
+    border-radius: 0;
+    background: linear-gradient(160deg, rgba(var(--fx-rgb-24-28-46) / 0.64), rgba(var(--fx-rgb-14-16-28) / 0.4));
+    border: 1px solid rgba(var(--accent-rgb) / 0.2);
+    box-shadow: none;
   }
 
   .marketing-hero__media--surface-none {
@@ -294,7 +301,7 @@
     margin: 0;
     font-size: clamp(1.05rem, 1.8vw, 1.35rem);
     max-width: clamp(36rem, 60vw, 48rem);
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(255, 255, 255, 0.12));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.12));
     line-height: 1.7;
   }
 
@@ -321,12 +328,12 @@
 
   .marketing-hero__support {
     font-size: clamp(1rem, 1.7vw, 1.15rem);
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(255, 255, 255, 0.08));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.08));
   }
 
   .marketing-hero__footnote {
     font-size: 0.85rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(255, 255, 255, 0.14));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.14));
     max-width: 40ch;
   }
 
@@ -335,21 +342,21 @@
   }
 
   .marketing-hero__button.marketing-cta__button--secondary {
-    border-color: rgba(125, 207, 255, 0.32);
-    background-color: rgba(24, 32, 52, 0.6);
+    border-color: rgba(var(--brand-cyan-rgb) / 0.32);
+    background-color: rgba(var(--fx-rgb-24-32-52) / 0.6);
   }
 
   .deployment-panel {
     border-radius: clamp(1.5rem, 2.2vw, 2rem);
-    border: 1px solid rgba(125, 207, 255, 0.18);
-    background: linear-gradient(165deg, rgba(32, 35, 52, 0.96), rgba(16, 18, 30, 0.92));
-    box-shadow: 0 32px 64px rgba(8, 10, 24, 0.45);
+    border: 1px solid rgba(var(--brand-cyan-rgb) / 0.18);
+    background: linear-gradient(165deg, rgba(var(--fx-rgb-32-35-52) / 0.96), rgba(var(--fx-rgb-16-18-30) / 0.92));
+    box-shadow: 0 32px 64px rgba(var(--fx-rgb-8-10-24) / 0.45);
     overflow: hidden;
   }
 
   .deployment-panel__header {
     padding: clamp(1.8rem, 2.4vw, 2.2rem) clamp(2.2rem, 3vw, 3rem) clamp(1.2rem, 1.8vw, 1.6rem);
-    border-bottom: 1px solid rgba(125, 207, 255, 0.16);
+    border-bottom: 1px solid rgba(var(--brand-cyan-rgb) / 0.16);
   }
 
   .deployment-panel__title {
@@ -361,7 +368,7 @@
 
   .deployment-panel .marketing-feature-wall {
     margin: 0;
-    border-top: 1px solid rgba(125, 207, 255, 0.14);
+    border-top: 1px solid rgba(var(--brand-cyan-rgb) / 0.14);
     border-radius: 0;
     overflow: hidden;
   }

@@ -40,7 +40,7 @@
   .hero-eyebrow {
     @apply inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.3em];
     border-color: hsl(var(--border) / 0.4);
-    background-color: color-mix(in srgb, hsl(var(--brand-surface)) 90%, rgba(255, 255, 255, 0.06));
+    background-color: color-mix(in srgb, hsl(var(--brand-surface)) 90%, rgba(var(--fx-rgb-255-255-255) / 0.06));
     color: hsl(var(--muted-foreground));
     letter-spacing: 0.32em;
     text-transform: uppercase;
@@ -61,7 +61,7 @@
 
   .hero-subtitle {
     font-size: clamp(1.125rem, 2vw, 1.4rem);
-    color: color-mix(in srgb, hsl(var(--foreground)) 78%, rgba(255, 255, 255, 0.08));
+    color: color-mix(in srgb, hsl(var(--foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.08));
     position: relative;
     display: inline-block;
     padding-bottom: 0.55rem;
@@ -87,7 +87,7 @@
 
   .hero-support {
     font-size: 1rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(255, 255, 255, 0.08));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.08));
   }
 
   @media (min-width: 768px) {
@@ -108,7 +108,7 @@
 
   .hero-footnote {
     font-size: 0.85rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 80%, rgba(255, 255, 255, 0.12));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 80%, rgba(var(--fx-rgb-255-255-255) / 0.12));
     text-align: center;
   }
 
@@ -188,7 +188,7 @@
   }
 
   .marketing-grid-split--seam .marketing-grid-split__primary {
-    border-right: 1px solid var(--feature-seam-color, rgba(125, 207, 255, 0.22));
+    border-right: 1px solid var(--feature-seam-color, rgba(var(--brand-cyan-rgb) / 0.22));
   }
 
   .marketing-grid-split--seam .marketing-grid-split__secondary {
@@ -245,7 +245,7 @@
 
   .slab-zone__header {
     padding: clamp(1.5rem, 2.5vw, 2rem) clamp(1.5rem, 2.5vw, 2.5rem);
-    border-bottom: 1px solid var(--feature-seam-color-soft, rgba(125, 207, 255, 0.14));
+    border-bottom: 1px solid var(--feature-seam-color-soft, rgba(var(--brand-cyan-rgb) / 0.14));
   }
 
   .slab-zone__body {
@@ -254,7 +254,7 @@
 
   .slab-zone__actions {
     display: flex;
-    border-top: 1px solid var(--feature-seam-color-soft, rgba(125, 207, 255, 0.14));
+    border-top: 1px solid var(--feature-seam-color-soft, rgba(var(--brand-cyan-rgb) / 0.14));
   }
 
   .slab-zone__actions > * {
@@ -263,7 +263,7 @@
   }
 
   .slab-zone__actions > *:not(:last-child) {
-    border-right: 1px solid var(--feature-seam-color-soft, rgba(125, 207, 255, 0.14));
+    border-right: 1px solid var(--feature-seam-color-soft, rgba(var(--brand-cyan-rgb) / 0.14));
   }
 
   /* Flush action buttons - square corners, fill space, no gaps */
@@ -278,13 +278,13 @@
   }
 
   .slab-zone__actions .marketing-cta__button--secondary {
-    background: rgba(24, 32, 52, 0.85);
+    background: rgba(var(--fx-rgb-24-32-52) / 0.85);
     border: none !important;
   }
 
   .slab-zone__actions .marketing-cta__button--secondary:hover,
   .slab-zone__actions .marketing-cta__button--secondary:focus-visible {
-    background: rgba(36, 46, 72, 0.9);
+    background: rgba(var(--fx-rgb-36-46-72) / 0.9);
     border: none !important;
   }
 
@@ -297,24 +297,24 @@
   /* Seam responsive: horizontal seam when stacked */
   .marketing-grid-split--seam.marketing-grid-split--stack-lg .marketing-grid-split__primary {
     border-right: none;
-    border-bottom: 1px solid var(--feature-seam-color-soft, rgba(125, 207, 255, 0.14));
+    border-bottom: 1px solid var(--feature-seam-color-soft, rgba(var(--brand-cyan-rgb) / 0.14));
   }
 
   @media (min-width: 1024px) {
     .marketing-grid-split--seam.marketing-grid-split--stack-lg .marketing-grid-split__primary {
-      border-right: 1px solid var(--feature-seam-color, rgba(125, 207, 255, 0.22));
+      border-right: 1px solid var(--feature-seam-color, rgba(var(--brand-cyan-rgb) / 0.22));
       border-bottom: none;
     }
   }
 
   .marketing-grid-split--seam.marketing-grid-split--stack-md .marketing-grid-split__primary {
     border-right: none;
-    border-bottom: 1px solid var(--feature-seam-color-soft, rgba(125, 207, 255, 0.14));
+    border-bottom: 1px solid var(--feature-seam-color-soft, rgba(var(--brand-cyan-rgb) / 0.14));
   }
 
   @media (min-width: 768px) {
     .marketing-grid-split--seam.marketing-grid-split--stack-md .marketing-grid-split__primary {
-      border-right: 1px solid var(--feature-seam-color, rgba(125, 207, 255, 0.22));
+      border-right: 1px solid var(--feature-seam-color, rgba(var(--brand-cyan-rgb) / 0.22));
       border-bottom: none;
     }
   }

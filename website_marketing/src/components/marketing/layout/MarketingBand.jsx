@@ -1,6 +1,45 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
 
+const TEXTURE_PRESETS = {
+  default: {
+    pattern: "none",
+    noise: "none",
+    beam: "none",
+    motion: "none",
+  },
+  none: {
+    pattern: "none",
+    noise: "none",
+    beam: "none",
+    motion: "none",
+  },
+  grid: {
+    pattern: "seams",
+    noise: "none",
+    beam: "none",
+    motion: "none",
+  },
+  grain: {
+    pattern: "pinlines",
+    noise: "grain",
+    beam: "none",
+    motion: "none",
+  },
+  beams: {
+    pattern: "seams",
+    noise: "film",
+    beam: "soft",
+    motion: "drift",
+  },
+  broadcast: {
+    pattern: "scanlines",
+    noise: "film",
+    beam: "soft",
+    motion: "sweep",
+  },
+};
+
 const BAND_PRESETS = {
   foundation: {
     surface: "panel",
@@ -25,7 +64,7 @@ const BAND_PRESETS = {
   },
   signal: {
     surface: "midnight",
-    tone: "violet",
+    tone: "steel",
     texture: "beams",
     density: "compact",
     flush: true,
@@ -41,8 +80,14 @@ const MarketingBand = forwardRef(
       tone,
       texture,
       density,
+      texturePattern,
+      textureNoise,
+      textureBeam,
+      textureMotion,
+      textureStrength,
       bleed = false,
       flush,
+      layoutClassName,
       contentClassName,
       className,
       children,
@@ -56,6 +101,12 @@ const MarketingBand = forwardRef(
     const resolvedTexture = texture ?? presetConfig?.texture ?? "default";
     const resolvedDensity = density ?? presetConfig?.density ?? "default";
     const resolvedFlush = flush ?? presetConfig?.flush ?? false;
+    const texturePreset = TEXTURE_PRESETS[resolvedTexture] ?? TEXTURE_PRESETS.default;
+    const resolvedTexturePattern = texturePattern ?? texturePreset.pattern;
+    const resolvedTextureNoise = textureNoise ?? texturePreset.noise;
+    const resolvedTextureBeam = textureBeam ?? texturePreset.beam;
+    const resolvedTextureMotion = textureMotion ?? texturePreset.motion;
+    const resolvedTextureStrength = textureStrength ?? "base";
 
     return (
       <Component
@@ -65,16 +116,26 @@ const MarketingBand = forwardRef(
         data-tone={resolvedTone !== "default" ? resolvedTone : undefined}
         data-texture={resolvedTexture !== "default" ? resolvedTexture : undefined}
         data-density={resolvedDensity !== "default" ? resolvedDensity : undefined}
+        data-texture-pattern={
+          resolvedTexturePattern !== "none" ? resolvedTexturePattern : undefined
+        }
+        data-texture-noise={resolvedTextureNoise !== "none" ? resolvedTextureNoise : undefined}
+        data-texture-beam={resolvedTextureBeam !== "none" ? resolvedTextureBeam : undefined}
+        data-texture-motion={resolvedTextureMotion !== "none" ? resolvedTextureMotion : undefined}
+        data-texture-strength={
+          resolvedTextureStrength !== "base" ? resolvedTextureStrength : undefined
+        }
         {...props}
       >
         <div
           className={cn(
             "marketing-band__inner",
+            "marketing-band__layout",
             resolvedFlush && "marketing-band__inner--flush",
-            contentClassName
+            layoutClassName
           )}
         >
-          {children}
+          <div className={cn("marketing-band__content", contentClassName)}>{children}</div>
         </div>
       </Component>
     );

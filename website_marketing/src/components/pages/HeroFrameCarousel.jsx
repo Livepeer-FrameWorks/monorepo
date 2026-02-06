@@ -23,7 +23,7 @@ const FRAMES = [
     swayDur: 22,
   },
   {
-    color: "187, 154, 247",
+    color: "255, 158, 100",
     size: "xl",
     top: "40%",
     left: "38%",
@@ -63,7 +63,7 @@ const FRAMES = [
     swayDur: 28,
   },
   {
-    color: "187, 154, 247",
+    color: "224, 175, 104",
     size: "md",
     top: "50%",
     left: "8%",

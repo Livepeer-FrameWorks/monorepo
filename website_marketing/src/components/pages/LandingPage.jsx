@@ -54,6 +54,23 @@ const LandingPage = () => {
 
   const glitchStripData = useMemo(() => generateGlitchStrips(), []);
 
+  const demoStatusMap = {
+    booting: { label: "INITIALIZING", tone: "muted" },
+    gateway_loading: { label: "RESOLVING GATEWAY", tone: "muted" },
+    gateway_ready: { label: "GATEWAY READY", tone: "active" },
+    gateway_error: { label: "RECONNECTING", tone: "degraded" },
+    no_endpoint: { label: "STANDBY", tone: "muted" },
+    selecting_player: { label: "SELECTING PLAYER", tone: "active" },
+    connecting: { label: "CONNECTING", tone: "active" },
+    buffering: { label: "BUFFERING", tone: "warn" },
+    playing: { label: "LIVE", tone: "live" },
+    paused: { label: "PAUSED", tone: "muted" },
+    ended: { label: "STANDBY", tone: "muted" },
+    error: { label: "DEGRADED", tone: "degraded" },
+    destroyed: { label: "STOPPED", tone: "muted" },
+  };
+  const demoStatus = demoStatusMap[demoState] || demoStatusMap.booting;
+
   useEffect(() => {
     // Preload logo image so glitch strips can start immediately
     const img = new Image();
@@ -100,7 +117,7 @@ const LandingPage = () => {
       description:
         "Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.",
       icon: ServerStackIcon,
-      tone: "purple",
+      tone: "yellow",
       badge: "Core",
     },
   ];
@@ -144,8 +161,8 @@ const LandingPage = () => {
     },
     {
       icon: BanknotesIcon,
-      iconTone: "purple",
-      tone: "purple",
+      iconTone: "yellow",
+      tone: "yellow",
       badge: "Inline",
       title: "Pay",
       description:
@@ -222,7 +239,7 @@ const LandingPage = () => {
     },
     {
       id: "paid",
-      tone: "purple",
+      tone: "cyan",
       badge: "Paid plans",
       name: "Hybrid & Hosted",
       price: "€50+",
@@ -308,86 +325,31 @@ const LandingPage = () => {
             transition={{ duration: 0.8, delay: 0.2 }}
             className="hero-visual"
           >
-            <div className="hero-player-card relative overflow-hidden">
-              <div className="relative z-10 flex flex-col min-h-[420px]">
+            <div className="hero-player-card">
+              <div className="hero-player-card__layout relative z-10">
                 {/* Frame Top */}
-                <div className="frame-top text-center mb-6">
-                  <div className="inline-flex items-center gap-3 mb-2">
-                    <div className="w-3 h-3 bg-brand-comment rounded-full"></div>
-                    <h2 className="text-xl sm:text-2xl font-bold text-foreground">
-                      FrameWorks Demo
-                    </h2>
+                <div className="hero-player-card__header">
+                  <div className="hero-player-card__title-row">
+                    <div className="hero-player-card__title-group">
+                      <span className="hero-player-card__dot" aria-hidden="true" />
+                      <h2 className="hero-player-card__title">FrameWorks Demo</h2>
+                    </div>
+                    <span className={`hero-demo-status hero-demo-status--${demoStatus.tone}`}>
+                      {demoStatus.label}
+                    </span>
                   </div>
-                  <div className="flex justify-center">
-                    {(() => {
-                      const s = demoState;
-                      const map = {
-                        booting: {
-                          label: "BOOTING",
-                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
-                        },
-                        gateway_loading: {
-                          label: "RESOLVING",
-                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
-                        },
-                        gateway_ready: {
-                          label: "ENDPOINT READY",
-                          cls: "bg-primary/20 text-primary border-primary/40",
-                        },
-                        gateway_error: {
-                          label: "GATEWAY ERROR",
-                          cls: "bg-red-500/20 text-red-400 border-red-500/40",
-                        },
-                        no_endpoint: {
-                          label: "WAITING FOR ENDPOINT",
-                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
-                        },
-                        selecting_player: {
-                          label: "SELECTING PLAYER",
-                          cls: "bg-primary/20 text-primary border-primary/40",
-                        },
-                        connecting: {
-                          label: "CONNECTING",
-                          cls: "bg-primary/20 text-primary border-primary/40",
-                        },
-                        buffering: {
-                          label: "BUFFERING",
-                          cls: "bg-yellow-500/20 text-yellow-400 border-yellow-500/40",
-                        },
-                        playing: {
-                          label: "STREAMING",
-                          cls: "bg-green-500/20 text-green-400 border-green-500/40",
-                        },
-                        paused: {
-                          label: "PAUSED",
-                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
-                        },
-                        ended: {
-                          label: "ENDED",
-                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
-                        },
-                        error: {
-                          label: "ERROR",
-                          cls: "bg-red-500/20 text-red-400 border-red-500/40",
-                        },
-                        destroyed: {
-                          label: "STOPPED",
-                          cls: "bg-brand-muted-soft text-brand-muted border-[hsl(var(--brand-comment)/0.4)]",
-                        },
-                      };
-                      const m = map[s] || map.booting;
-                      return <span className={`hero-demo-status ${m.cls}`}>{m.label}</span>;
-                    })()}
-                  </div>
-                  <p className="text-muted-foreground text-sm mt-3">
+                  <p className="hero-player-card__subhead">
+                    Live stream path with automatic recovery
+                  </p>
+                  <p className="hero-player-card__caption">
                     Watch our streaming infrastructure in action.
                   </p>
                 </div>
 
                 {/* Video Player - takes up most space */}
-                <div className="relative flex-1 mb-6">
-                  <div className="w-full h-full rounded-xl overflow-hidden bg-brand-surface-strong shadow-2xl border border-brand-surface">
-                    <div className="relative w-full h-[320px] sm:h-[380px]">
+                <div className="hero-player-card__viewport">
+                  <div className="hero-player-card__screen">
+                    <div className="hero-player-card__stage">
                       <FrameworksPlayer
                         contentId={config.demoStreamName}
                         contentType="live"
@@ -407,7 +369,7 @@ const LandingPage = () => {
               {/* Logo Overlay - dissolves to reveal player */}
               {!logoAnimationComplete && (
                 <motion.div
-                  className="absolute inset-0 max-w-full max-h-full flex items-center justify-center bg-background rounded-xl z-50"
+                  className="hero-player-card__overlay"
                   initial={{ opacity: 1 }}
                   animate={{
                     opacity: showPlayer ? 0 : 1,
@@ -435,7 +397,7 @@ const LandingPage = () => {
                     }}
                   >
                     {/* Main logo - centered vertical lockup */}
-                    <div className="absolute inset-0 w-full h-full rounded-xl shadow-2xl neon-glow flex items-center justify-center overflow-hidden bg-black">
+                    <div className="hero-player-card__overlay-logo neon-glow">
                       <img
                         src="/frameworks-dark-vertical-lockup.svg"
                         alt="FrameWorks"
@@ -446,7 +408,7 @@ const LandingPage = () => {
 
                   {/* Glitch Effect */}
                   <div
-                    className="absolute inset-0 w-full h-full rounded-xl"
+                    className="hero-player-card__overlay-glitch"
                     style={{
                       overflow: "visible",
                       transform: "translateZ(0)",
@@ -493,7 +455,7 @@ const LandingPage = () => {
                         return (
                           <div
                             key={i}
-                            className={`absolute${top === 0 ? " rounded-t-xl" : i === 14 ? " rounded-b-xl" : ""}`}
+                            className="absolute"
                             style={{
                               left: `-${stripExtension}px`,
                               right: `-${stripExtension}px`,
@@ -503,7 +465,7 @@ const LandingPage = () => {
                               backgroundSize: `calc(100% - ${stripExtension * 2}px) auto`,
                               backgroundPosition: `${stripExtension}px -${top}px`,
                               backgroundRepeat: "no-repeat",
-                              overflow: top === 0 || i === 14 ? "hidden" : "visible",
+                              overflow: "visible",
                               "--glitch-x-1": `${glitchX1}px`,
                               "--glitch-x-2": `${glitchX2}px`,
                               "--glitch-hue-1": `${data.glitchHue1}deg`,
@@ -534,7 +496,14 @@ const LandingPage = () => {
         {/* Rest of the sections remain the same */}
         <Section className="bg-brand-surface-muted landing-section--platform">
           <SectionContainer>
-            <MarketingBand preset="beam" texture="broadcast">
+            <MarketingBand
+              preset="beam"
+              texturePattern="seams"
+              textureNoise="film"
+              textureBeam="soft"
+              textureMotion="drift"
+              textureStrength="soft"
+            >
               <HeadlineStack
                 eyebrow="Platform"
                 title="Built Different"
@@ -557,7 +526,7 @@ const LandingPage = () => {
 
         <Section className="bg-brand-surface landing-section--sdk">
           <SectionContainer>
-            <MarketingBand preset="foundation">
+            <MarketingBand preset="foundation" texturePattern="seams" textureNoise="film">
               <MarketingGridSplit align="stretch" stackAt="lg" seam>
                 {/* Left: Text slab with header/body/actions zones */}
                 <div className="slab-zone">
@@ -627,8 +596,12 @@ const LandingPage = () => {
           <SectionContainer>
             <MarketingBand
               surface="panel"
-              tone="violet"
-              texture="broadcast"
+              tone="steel"
+              texturePattern="seams"
+              textureNoise="film"
+              textureBeam="soft"
+              textureMotion="drift"
+              textureStrength="soft"
               density="spacious"
               flush
             >

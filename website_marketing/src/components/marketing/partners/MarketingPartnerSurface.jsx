@@ -18,6 +18,7 @@ const MarketingPartnerSurface = forwardRef(
       columns = 2,
       stackAt = "md",
       variant = "card",
+      surface = "panel",
       surfaceTone = "default",
       surfaceTexture = "default",
       surfaceDensity = "default",
@@ -28,7 +29,7 @@ const MarketingPartnerSurface = forwardRef(
   ) => (
     <MarketingBand
       ref={ref}
-      surface="beam"
+      surface={surface}
       tone={surfaceTone}
       texture={surfaceTexture}
       density={surfaceDensity}

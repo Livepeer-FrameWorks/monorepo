@@ -12,6 +12,7 @@ const MarketingFinalCTA = ({
   variant = "slab",
   className,
 }) => {
+  const isBand = variant === "band";
   const alignmentClass = alignment === "left" ? "marketing-cta--left" : "marketing-cta--center";
   const secondaryActions = Array.isArray(secondaryAction)
     ? secondaryAction
@@ -30,33 +31,47 @@ const MarketingFinalCTA = ({
         intent={intent}
         label={label}
         icon={icon}
-        className={actionClassName}
+        className={cn(actionClassName, isBand && "marketing-cta__button--slab")}
         {...rest}
       />
     );
   };
 
+  const actionItems = [
+    primaryAction ? { action: primaryAction, intent: "primary", index: 0 } : null,
+    ...secondaryActions.map((action, index) => ({
+      action,
+      intent: "secondary",
+      index: index + 1,
+    })),
+  ].filter(Boolean);
+
   const content = (
-    <div
-      className={cn(
-        "marketing-cta",
-        alignmentClass,
-        variant === "band" ? "marketing-cta--band" : null
-      )}
-    >
+    <div className={cn("marketing-cta", alignmentClass, isBand ? "marketing-cta--band" : null)}>
       <div className="marketing-cta__body">
         {eyebrow ? <span className="marketing-pill marketing-cta__pill">{eyebrow}</span> : null}
         {title ? <h2 className="marketing-cta__title">{title}</h2> : null}
         {description ? <p className="marketing-cta__description">{description}</p> : null}
       </div>
-      <div className="marketing-cta__actions">
-        {renderAction(primaryAction, "primary")}
-        {secondaryActions.map((action, index) => renderAction(action, "secondary", index))}
-      </div>
+      {actionItems.length ? (
+        <div className={cn("marketing-cta__actions", isBand && "marketing-cta__actions--slab")}>
+          {actionItems.map(({ action, intent, index }) => (
+            <div
+              key={action.key ?? action.label ?? `cta-action-slot-${intent}-${index}`}
+              className={cn(
+                "marketing-cta__action-cell",
+                isBand && "marketing-cta__action-cell--slab"
+              )}
+            >
+              {renderAction(action, intent, index)}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 
-  if (variant === "band") {
+  if (isBand) {
     return <div className={cn("marketing-cta-band", className)}>{content}</div>;
   }
 

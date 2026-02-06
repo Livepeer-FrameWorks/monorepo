@@ -44,7 +44,7 @@
     gap: clamp(0.65rem, 1vw, 0.9rem);
     padding: clamp(1rem, 1.6vw, 1.4rem);
     border-radius: clamp(0.9rem, 1.3vw, 1.3rem);
-    background: rgba(18, 22, 36, 0.5);
+    background: rgba(var(--fx-rgb-18-22-36) / 0.5);
     border: 1px solid rgba(var(--accent-rgb) / 0.16);
   }
 
@@ -61,38 +61,38 @@
     width: clamp(2.2rem, 2.8vw, 2.6rem);
     height: clamp(2.2rem, 2.8vw, 2.6rem);
     border-radius: 0.8rem;
-    background: linear-gradient(145deg, rgba(var(--accent-rgb) / 0.4), rgba(12, 18, 36, 0.3));
+    background: linear-gradient(145deg, rgba(var(--accent-rgb) / 0.4), rgba(var(--fx-rgb-12-18-36) / 0.3));
     color: hsl(var(--accent));
     flex-shrink: 0;
   }
 
   .marketing-icon-list[data-tone="green"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(158, 206, 106, 0.46), rgba(12, 18, 36, 0.28));
+    background: linear-gradient(145deg, rgba(var(--brand-green-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
     color: hsl(var(--brand-green));
   }
 
   .marketing-icon-list[data-tone="yellow"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(224, 175, 104, 0.46), rgba(12, 18, 36, 0.28));
+    background: linear-gradient(145deg, rgba(var(--brand-yellow-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
     color: hsl(var(--brand-yellow));
   }
 
   .marketing-icon-list[data-tone="purple"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(187, 154, 247, 0.46), rgba(12, 18, 36, 0.28));
+    background: linear-gradient(145deg, rgba(var(--brand-orange-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
     color: hsl(var(--brand-purple));
   }
 
   .marketing-icon-list__item[data-tone="green"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(158, 206, 106, 0.46), rgba(12, 18, 36, 0.28));
+    background: linear-gradient(145deg, rgba(var(--brand-green-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
     color: hsl(var(--brand-green));
   }
 
   .marketing-icon-list__item[data-tone="yellow"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(224, 175, 104, 0.46), rgba(12, 18, 36, 0.28));
+    background: linear-gradient(145deg, rgba(var(--brand-yellow-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
     color: hsl(var(--brand-yellow));
   }
 
   .marketing-icon-list__item[data-tone="purple"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(187, 154, 247, 0.46), rgba(12, 18, 36, 0.28));
+    background: linear-gradient(145deg, rgba(var(--brand-orange-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
     color: hsl(var(--brand-purple));
   }
 
@@ -121,7 +121,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-green)),
-      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -129,7 +129,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-yellow)),
-      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -137,7 +137,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-purple)),
-      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -147,7 +147,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-green)),
-      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -157,7 +157,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-yellow)),
-      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-yellow)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -167,7 +167,7 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-purple)),
-      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
   }
 
@@ -183,7 +183,7 @@
 
   .marketing-icon-list__description {
     margin: clamp(0.4rem, 0.7vw, 0.55rem) 0 0;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(213, 229, 255, 0.26));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.26));
     line-height: 1.6;
   }
 
@@ -194,7 +194,7 @@
     height: 0.55rem;
     border-radius: 999px;
     margin-top: 0.45rem;
-    box-shadow: 0 0 12px rgba(125, 207, 255, 0.35);
+    box-shadow: 0 0 12px rgba(var(--brand-cyan-rgb) / 0.35);
     background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--brand-cyan)));
   }
 
@@ -206,27 +206,27 @@
     background: linear-gradient(
       135deg,
       hsl(var(--brand-green)),
-      color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-green)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
-    box-shadow: 0 0 12px rgba(158, 206, 106, 0.35);
+    box-shadow: 0 0 12px rgba(var(--brand-green-rgb) / 0.35);
   }
 
   .marketing-icon-list__dot[data-tone="yellow"] {
     background: linear-gradient(
       135deg,
       hsl(var(--brand-yellow)),
-      color-mix(in srgb, hsl(var(--brand-yellow)) 72%, white 28%)
+      color-mix(in srgb, hsl(var(--brand-yellow)) 72%, rgba(var(--fx-rgb-255-255-255) / 1) 28%)
     );
-    box-shadow: 0 0 12px rgba(224, 175, 104, 0.35);
+    box-shadow: 0 0 12px rgba(var(--brand-yellow-rgb) / 0.35);
   }
 
   .marketing-icon-list__dot[data-tone="purple"] {
     background: linear-gradient(
       135deg,
       hsl(var(--brand-purple)),
-      color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%)
+      color-mix(in srgb, hsl(var(--brand-purple)) 70%, rgba(var(--fx-rgb-255-255-255) / 1) 30%)
     );
-    box-shadow: 0 0 12px rgba(187, 154, 247, 0.35);
+    box-shadow: 0 0 12px rgba(var(--brand-orange-rgb) / 0.35);
   }
 
   /* List variant - continuous list with dividers instead of separate cards */
@@ -239,11 +239,11 @@
     border-radius: 0;
     background: transparent;
     border: none;
-    border-top: 1px solid rgba(125, 207, 255, 0.12);
+    border-top: 1px solid rgba(var(--brand-cyan-rgb) / 0.12);
   }
 
   .marketing-icon-list--list .marketing-icon-list__item:first-child {
-    border-top: 1px solid rgba(125, 207, 255, 0.16);
+    border-top: 1px solid rgba(var(--brand-cyan-rgb) / 0.16);
     padding-top: clamp(1rem, 1.4vw, 1.3rem);
   }
 

@@ -16,7 +16,7 @@
   .pricing-architecture-modal__backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(6, 10, 24, 0.72);
+    background: color-mix(in srgb, var(--fx-surface-strong) 72%, transparent);
     backdrop-filter: blur(6px);
   }
   .pricing-architecture-modal__panel {
@@ -24,10 +24,10 @@
     width: min(620px, 100%);
     max-height: min(90vh, 720px);
     overflow-y: auto;
-    border-radius: 18px;
-    border: 1px solid rgba(var(--accent-rgb) / 0.28);
-    background: linear-gradient(150deg, rgba(24, 28, 44, 0.96), rgba(18, 20, 32, 0.98));
-    box-shadow: 0 36px 72px rgba(8, 12, 32, 0.72);
+    border-radius: 0;
+    border: 1px solid var(--fx-seam-strong);
+    background: linear-gradient(150deg, var(--fx-surface-mid), var(--fx-surface-strong));
+    box-shadow: var(--fx-shadow-medium);
     padding: clamp(1.9rem, 2.2vw, 2.3rem) clamp(1.6rem, 2vw, 2.2rem);
     display: flex;
     flex-direction: column;
@@ -39,7 +39,7 @@
     right: 16px;
     width: 32px;
     height: 32px;
-    border-radius: 999px;
+    border-radius: 0;
     border: 1px solid rgba(var(--accent-rgb) / 0.32);
     background: rgba(var(--accent-rgb) / 0.18);
     color: hsl(var(--accent));
@@ -59,7 +59,7 @@
     outline: none;
     background: rgba(var(--accent-rgb) / 0.3);
     border-color: rgba(var(--accent-rgb) / 0.45);
-    color: rgba(12, 22, 40, 0.88);
+    color: hsl(var(--background));
   }
   .pricing-architecture-modal__header {
     display: flex;
@@ -84,11 +84,11 @@
     font-size: 0.9rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 65%, rgba(213, 229, 255, 0.28));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 65%, rgba(var(--fx-rgb-255-255-255) / 0.2));
   }
   .pricing-architecture-modal__description {
     margin: 0;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 80%, rgba(213, 229, 255, 0.26));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 80%, rgba(var(--fx-rgb-255-255-255) / 0.14));
     line-height: 1.65;
   }
   .pricing-architecture-modal__list {
@@ -97,7 +97,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(213, 229, 255, 0.28));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.16));
     font-size: 0.95rem;
   }
   .pricing-architecture-modal__list li {
@@ -122,7 +122,7 @@
     margin: 0;
     font-size: 0.95rem;
     line-height: 1.6;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 84%, rgba(213, 229, 255, 0.24));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 84%, rgba(var(--fx-rgb-255-255-255) / 0.12));
   }
   .pricing-tier__shell {
     display: grid;
@@ -263,13 +263,13 @@
   }
   .deployment-option:focus-visible {
     outline: none;
-    background: rgba(42, 54, 82, 0.38);
+    background: color-mix(in srgb, rgba(var(--accent-rgb) / 0.24) 42%, transparent);
   }
   .deployment-option--active {
-    background: rgba(40, 52, 84, 0.34);
+    background: color-mix(in srgb, rgba(var(--accent-rgb) / 0.2) 42%, transparent);
   }
   .deployment-option:hover {
-    background: rgba(36, 46, 76, 0.28);
+    background: color-mix(in srgb, rgba(var(--accent-rgb) / 0.16) 44%, transparent);
   }
   .deployment-option__card {
     position: relative;
@@ -299,11 +299,15 @@
     margin: 0;
     padding: clamp(0.65rem, 1vw, 0.85rem) clamp(0.85rem, 1.2vw, 1rem);
     border-left: 2px solid rgba(var(--accent-rgb) / 0.38);
-    background: linear-gradient(140deg, rgba(var(--accent-rgb) / 0.12), rgba(16, 20, 34, 0.85));
+    background: linear-gradient(
+      140deg,
+      rgba(var(--accent-rgb) / 0.11),
+      color-mix(in srgb, var(--fx-surface-strong) 88%, transparent)
+    );
     font-size: var(--text-sm);
     line-height: 1.6;
     font-style: italic;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 40%, rgba(210, 226, 255, 0.82));
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 40%, rgba(var(--fx-rgb-255-255-255) / 0.58));
   }
   .deployment-option__quote::before {
     content: "\201C";
@@ -333,12 +337,12 @@
   .deployment-option:focus-visible .deployment-option__indicator {
     background: rgba(var(--accent-rgb) / 0.3);
     border-color: rgba(var(--accent-rgb) / 0.38);
-    color: rgba(10, 14, 28, 0.92);
+    color: hsl(var(--background));
   }
   .deployment-option--active .deployment-option__indicator {
     background: rgba(var(--accent-rgb) / 0.36);
     border-color: rgba(var(--accent-rgb) / 0.46);
-    color: rgba(10, 14, 28, 0.92);
+    color: hsl(var(--background));
   }
   .deployment-stack {
     display: flex;
@@ -353,8 +357,8 @@
     border: 1px solid var(--deployment-grid-border);
     background: linear-gradient(
       128deg,
-      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(8, 12, 24, 0.28)) 0%,
-      color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(12, 16, 30, 0.18)) 100%
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(var(--fx-rgb-8-12-24) / 0.28)) 0%,
+      color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(var(--fx-rgb-12-16-30) / 0.18)) 100%
     );
     overflow: hidden;
   }
@@ -363,35 +367,35 @@
   .marketing-outline.pricing-tier {
     --outline-padding-x: clamp(1.6rem, 2vw, 2.2rem);
     --outline-padding-y: clamp(1.45rem, 2vw, 2.05rem);
-    --outline-radius: 12px;
-    --pricing-tier-border: color-mix(in srgb, hsl(var(--accent)) 86%, rgba(125, 207, 255, 0.25));
+    --outline-radius: 0;
+    --pricing-tier-border: color-mix(in srgb, hsl(var(--accent)) 86%, rgba(var(--brand-cyan-rgb) / 0.25));
     --pricing-tier-surface: linear-gradient(
       160deg,
-      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(18, 26, 48, 0.15)),
-      color-mix(in srgb, hsl(var(--brand-surface)) 94%, rgba(10, 14, 26, 0.18))
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(var(--fx-rgb-18-26-48) / 0.15)),
+      color-mix(in srgb, hsl(var(--brand-surface)) 94%, rgba(var(--fx-rgb-10-14-26) / 0.18))
     );
     --pricing-tier-shadow: none;
-    --pricing-tier-divider: rgba(213, 229, 255, 0.26);
+    --pricing-tier-divider: var(--fx-seam-strong);
     --pricing-tier-bullet: linear-gradient(140deg, hsl(var(--brand-green)), hsl(var(--brand-cyan)));
-    --pricing-tier-bullet-shadow: rgba(86, 132, 255, 0.35);
+    --pricing-tier-bullet-shadow: rgba(var(--fx-rgb-86-132-255) / 0.35);
     --pricing-tier-dash: rgba(var(--accent-rgb) / 0.3);
     --pricing-tier-muted: color-mix(
       in srgb,
       hsl(var(--muted-foreground)) 64%,
-      rgba(213, 229, 255, 0.32)
+      rgba(var(--fx-rgb-255-255-255) / 0.2)
     );
     --pricing-tier-text: color-mix(
       in srgb,
       hsl(var(--muted-foreground)) 80%,
-      rgba(213, 229, 255, 0.26)
+      rgba(var(--fx-rgb-255-255-255) / 0.14)
     );
     --pricing-tier-list-text: color-mix(
       in srgb,
       hsl(var(--muted-foreground)) 76%,
-      rgba(213, 229, 255, 0.26)
+      rgba(var(--fx-rgb-255-255-255) / 0.14)
     );
     border: 2px solid var(--pricing-tier-border);
-    border-radius: 12px;
+    border-radius: 0;
     background: var(--pricing-tier-surface);
     box-shadow: var(--pricing-tier-shadow);
     overflow: visible;
@@ -407,36 +411,36 @@
     --pricing-tier-border: color-mix(
       in srgb,
       hsl(var(--brand-yellow)) 74%,
-      rgba(255, 255, 255, 0.18)
+      rgba(var(--fx-rgb-255-255-255) / 0.18)
     );
     --pricing-tier-surface: linear-gradient(
       165deg,
-      color-mix(in srgb, hsl(var(--brand-surface-strong)) 90%, rgba(255, 188, 110, 0.12)),
-      color-mix(in srgb, hsl(var(--brand-surface)) 92%, rgba(18, 20, 34, 0.18))
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 90%, rgba(var(--brand-yellow-rgb) / 0.12)),
+      color-mix(in srgb, hsl(var(--brand-surface)) 92%, rgba(var(--brand-orange-rgb) / 0.08))
     );
     --pricing-tier-shadow: none;
-    --pricing-tier-divider: rgba(255, 214, 170, 0.32);
+    --pricing-tier-divider: rgba(var(--brand-yellow-rgb) / 0.26);
     --pricing-tier-bullet: linear-gradient(
       145deg,
       hsl(var(--brand-orange)),
       hsl(var(--brand-yellow))
     );
-    --pricing-tier-bullet-shadow: rgba(255, 191, 120, 0.38);
-    --pricing-tier-dash: rgba(255, 214, 170, 0.35);
+    --pricing-tier-bullet-shadow: rgba(var(--fx-rgb-255-191-120) / 0.38);
+    --pricing-tier-dash: rgba(var(--brand-yellow-rgb) / 0.28);
     --pricing-tier-muted: color-mix(
       in srgb,
       hsl(var(--muted-foreground)) 60%,
-      rgba(255, 214, 170, 0.38)
+      rgba(var(--brand-yellow-rgb) / 0.28)
     );
     --pricing-tier-text: color-mix(
       in srgb,
       hsl(var(--muted-foreground)) 72%,
-      rgba(255, 214, 170, 0.32)
+      rgba(var(--brand-yellow-rgb) / 0.22)
     );
     --pricing-tier-list-text: color-mix(
       in srgb,
       hsl(var(--muted-foreground)) 68%,
-      rgba(255, 214, 170, 0.34)
+      rgba(var(--brand-yellow-rgb) / 0.24)
     );
   }
 }

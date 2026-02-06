@@ -101,7 +101,7 @@ const Contact = () => {
     },
     {
       icon: ChatBubbleLeftRightIcon,
-      tone: "purple",
+      tone: "yellow",
       title: "Discord Community",
       subtitle: "discord.gg/9J6haUjdAq",
       description: "Join our Discord for ultra low latency chat.",

@@ -11,7 +11,7 @@
     background: linear-gradient(135deg, var(--badge-gradient-start), var(--badge-gradient-end));
     color: var(--badge-foreground);
     border: 1px solid var(--badge-border-color);
-    box-shadow: 0 14px 28px rgba(125, 207, 255, 0.25);
+    box-shadow: 0 14px 28px rgba(var(--brand-cyan-rgb) / 0.25);
     isolation: isolate;
   }
 
@@ -19,7 +19,7 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: radial-gradient(circle at top, rgba(255, 255, 255, 0.35), transparent 55%);
+    background: radial-gradient(circle at top, rgba(var(--fx-rgb-255-255-255) / 0.35), transparent 55%);
     opacity: 0.5;
     pointer-events: none;
     mix-blend-mode: screen;
@@ -28,42 +28,42 @@
   .badge-tone-accent {
     --badge-gradient-start: hsl(202 100% 78%);
     --badge-gradient-end: hsl(218 92% 52%);
-    --badge-foreground: rgba(8, 10, 18, 0.94);
+    --badge-foreground: rgba(var(--fx-rgb-8-10-18) / 0.94);
     --badge-border-color: hsla(218 92% 32% / 0.75);
   }
 
   .badge-tone-purple {
-    --badge-gradient-start: hsl(262 68% 72%);
-    --badge-gradient-end: hsl(258 72% 48%);
-    --badge-foreground: rgba(8, 10, 18, 0.94);
-    --badge-border-color: hsla(258 72% 32% / 0.75);
+    --badge-gradient-start: hsl(30 92% 70%);
+    --badge-gradient-end: hsl(22 88% 48%);
+    --badge-foreground: rgba(var(--fx-rgb-8-10-18) / 0.94);
+    --badge-border-color: hsla(22 88% 32% / 0.75);
   }
 
   .badge-tone-green {
     --badge-gradient-start: hsl(96 55% 66%);
     --badge-gradient-end: hsl(134 52% 44%);
-    --badge-foreground: rgba(8, 10, 18, 0.94);
+    --badge-foreground: rgba(var(--fx-rgb-8-10-18) / 0.94);
     --badge-border-color: hsla(134 52% 28% / 0.75);
   }
 
   .badge-tone-yellow {
     --badge-gradient-start: hsl(38 80% 68%);
     --badge-gradient-end: hsl(32 78% 46%);
-    --badge-foreground: rgba(8, 10, 18, 0.94);
+    --badge-foreground: rgba(var(--fx-rgb-8-10-18) / 0.94);
     --badge-border-color: hsla(32 78% 30% / 0.75);
   }
 
   .badge-tone-cyan {
     --badge-gradient-start: hsl(196 100% 78%);
     --badge-gradient-end: hsl(201 92% 52%);
-    --badge-foreground: rgba(8, 10, 18, 0.94);
+    --badge-foreground: rgba(var(--fx-rgb-8-10-18) / 0.94);
     --badge-border-color: hsla(201 92% 32% / 0.75);
   }
 
   .badge-tone-orange {
     --badge-gradient-start: hsl(28 92% 68%);
     --badge-gradient-end: hsl(20 88% 46%);
-    --badge-foreground: rgba(8, 10, 18, 0.94);
+    --badge-foreground: rgba(var(--fx-rgb-8-10-18) / 0.94);
     --badge-border-color: hsla(20 88% 30% / 0.75);
   }
 
@@ -71,12 +71,12 @@
     --badge-gradient-start: color-mix(
       in srgb,
       hsl(var(--brand-surface-strong)) 90%,
-      rgba(125, 207, 255, 0.1)
+      rgba(var(--brand-cyan-rgb) / 0.1)
     );
     --badge-gradient-end: color-mix(
       in srgb,
       hsl(var(--brand-surface)) 85%,
-      rgba(125, 207, 255, 0.05)
+      rgba(var(--brand-cyan-rgb) / 0.05)
     );
     --badge-foreground: hsl(var(--brand-terminal));
     --badge-border-color: hsl(var(--border) / 0.55);

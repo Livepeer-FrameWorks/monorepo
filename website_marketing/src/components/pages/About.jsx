@@ -127,7 +127,7 @@ const About = () => {
       description:
         "Self-host the entire stack easily. Zero licensing fees. Hybrid mode when you need burst capacity.",
       icon: null,
-      tone: "purple",
+      tone: "yellow",
     },
     {
       title: "Agent-Native Platform",
@@ -158,7 +158,7 @@ const About = () => {
       title: "Multi-stream Compositing",
       badge: "Advanced Feature",
       icon: FilmIcon,
-      tone: "purple",
+      tone: "yellow",
       description:
         "Combine multiple input streams into one composite output with picture-in-picture, overlays, and mixing.",
       status: "pipeline",
@@ -395,7 +395,15 @@ const About = () => {
             viewport={{ once: true }}
             transition={{ duration: 0.6 }}
           >
-            <MarketingBand preset="foundation" tone="cool" texture="broadcast">
+            <MarketingBand
+              preset="foundation"
+              tone="cool"
+              texturePattern="pinlines"
+              textureNoise="film"
+              textureBeam="soft"
+              textureMotion="drift"
+              textureStrength="soft"
+            >
               <HeadlineStack
                 eyebrow="Pipeline"
                 title="Coming Soon"
@@ -489,7 +497,7 @@ const About = () => {
           >
             <TimelineBand
               surface="panel"
-              tone="violet"
+              tone="steel"
               texture="beams"
               eyebrow="Timeline"
               title="Our journey"
@@ -516,8 +524,14 @@ const About = () => {
               eyebrow="Partners"
               subtitle="Video infrastructure expertise backed by the Livepeer treasury"
               variant="flush"
-              surfaceTone="cool"
-              surfaceTexture="beams"
+              surface="panel"
+              surfaceTone="steel"
+              surfaceTexture="none"
+              texturePattern="scanlines"
+              textureNoise="film"
+              textureBeam="soft"
+              textureMotion="drift"
+              textureStrength="soft"
               surfaceDensity="compact"
             />
           </motion.div>
