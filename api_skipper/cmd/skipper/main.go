@@ -6,12 +6,14 @@ import (
 	"time"
 
 	skipperconfig "frameworks/api_skipper/internal/config"
+	"frameworks/api_skipper/internal/knowledge"
 	commodoreclient "frameworks/pkg/clients/commodore"
 	deckhandclient "frameworks/pkg/clients/deckhand"
 	periscopeclient "frameworks/pkg/clients/periscope"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
+	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
@@ -103,6 +105,37 @@ func main() {
 
 	// Setup router with unified monitoring (health/metrics only)
 	router := server.SetupServiceRouter(logger, "skipper", healthChecker, metricsCollector)
+
+	store := knowledge.NewStore(db)
+
+	// Knowledge admin endpoints require an embedding client. Do not hard-fail startup
+	// when LLM config is unset; keep the base service (health/metrics) running.
+	embedderClient, err := llm.NewEmbeddingClient(llm.Config{
+		Provider: cfg.LLMProvider,
+		Model:    cfg.LLMModel,
+		APIKey:   cfg.LLMAPIKey,
+		APIURL:   cfg.LLMAPIURL,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Skipping knowledge admin API: embedding client not configured")
+	} else {
+		embedder, embedderErr := knowledge.NewEmbedder(embedderClient)
+		if embedderErr != nil {
+			logger.WithError(embedderErr).Warn("Skipping knowledge admin API: failed to initialize knowledge embedder")
+		} else {
+			crawler, crawlerErr := knowledge.NewCrawler(nil, embedder, store)
+			if crawlerErr != nil {
+				logger.WithError(crawlerErr).Warn("Skipping knowledge admin API: failed to initialize knowledge crawler")
+			} else {
+				adminAPI, adminErr := knowledge.NewAdminAPI(store, embedder, crawler, logger)
+				if adminErr != nil {
+					logger.WithError(adminErr).Warn("Skipping knowledge admin API: failed to initialize knowledge admin API")
+				} else {
+					adminAPI.RegisterRoutes(router, []byte(jwtSecret))
+				}
+			}
+		}
+	}
 
 	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("skipper", cfg.Port)

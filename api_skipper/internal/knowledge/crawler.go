@@ -147,9 +147,7 @@ func (c *Crawler) CrawlAndEmbed(ctx context.Context, tenantID, sitemapURL string
 		if err != nil {
 			return err
 		}
-		for i := range chunks {
-			chunks[i].TenantID = tenantID
-		}
+		applyIngestionMetadata(chunks, tenantID, sitemapURL, page.URL, "sitemap", time.Now().UTC(), nil)
 		if err := c.store.Upsert(ctx, chunks); err != nil {
 			return err
 		}

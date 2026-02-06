@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -144,5 +145,41 @@ func TestStoreSearchRequiresTenant(t *testing.T) {
 	store := NewStore(&sql.DB{})
 	if _, err := store.Search(context.Background(), "", []float32{0.1}, 1); err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestStoreListSources(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	store := NewStore(db)
+
+	lastCrawl := time.Now().UTC()
+	rows := sqlmock.NewRows([]string{"source_url", "page_count", "last_crawl_at"}).
+		AddRow("https://example.com/docs", 3, lastCrawl)
+
+	mock.ExpectQuery("SELECT\\s+COALESCE").WithArgs("tenant").WillReturnRows(rows)
+
+	sources, err := store.ListSources(context.Background(), "tenant")
+	if err != nil {
+		t.Fatalf("list sources: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(sources))
+	}
+	if sources[0].SourceURL != "https://example.com/docs" {
+		t.Fatalf("unexpected source url: %s", sources[0].SourceURL)
+	}
+	if sources[0].PageCount != 3 {
+		t.Fatalf("unexpected page count: %d", sources[0].PageCount)
+	}
+	if sources[0].LastCrawlAt == nil {
+		t.Fatalf("expected last crawl time")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
 	}
 }
