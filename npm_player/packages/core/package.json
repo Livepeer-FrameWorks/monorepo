@@ -13,14 +13,16 @@
   ],
   "exports": {
     ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/types/index.d.ts",
       "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/types/index.d.ts"
+      "require": "./dist/cjs/index.js"
     },
     "./vanilla": {
+      "source": "./src/vanilla/index.ts",
+      "types": "./dist/types/vanilla/index.d.ts",
       "import": "./dist/esm/vanilla.js",
-      "require": "./dist/cjs/vanilla.js",
-      "types": "./dist/types/vanilla/index.d.ts"
+      "require": "./dist/cjs/vanilla.js"
     },
     "./player.css": "./dist/player.css",
     "./styles.css": "./dist/player.css"

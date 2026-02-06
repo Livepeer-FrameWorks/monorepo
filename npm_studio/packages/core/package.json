@@ -13,14 +13,16 @@
   ],
   "exports": {
     ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/types/index.d.ts",
       "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.cjs",
-      "types": "./dist/types/index.d.ts"
+      "require": "./dist/cjs/index.cjs"
     },
     "./vanilla": {
+      "source": "./src/vanilla/index.ts",
+      "types": "./dist/types/vanilla/index.d.ts",
       "import": "./dist/esm/vanilla.js",
-      "require": "./dist/cjs/vanilla.cjs",
-      "types": "./dist/types/vanilla/index.d.ts"
+      "require": "./dist/cjs/vanilla.cjs"
     },
     "./streamcrafter.css": "./dist/streamcrafter.css",
     "./styles.css": "./dist/streamcrafter.css",
