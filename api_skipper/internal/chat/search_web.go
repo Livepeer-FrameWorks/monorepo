@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"frameworks/api_skipper/internal/metering"
 	"frameworks/pkg/search"
 )
 
@@ -80,6 +81,7 @@ func (t *SearchWebTool) Search(ctx context.Context, input SearchWebInput) (Searc
 	if err != nil {
 		return SearchWebResponse{}, err
 	}
+	metering.RecordSearchQuery(ctx)
 
 	mapped := make([]SearchWebResult, 0, len(results))
 	sources := make([]Source, 0, len(results))
