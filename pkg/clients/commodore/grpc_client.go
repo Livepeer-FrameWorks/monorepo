@@ -633,7 +633,6 @@ func (c *GRPCClient) LinkWallet(ctx context.Context, address, message, signature
 		WalletAddress: address,
 		Message:       message,
 		Signature:     signature,
-		Attribution:   attribution,
 	})
 }
 

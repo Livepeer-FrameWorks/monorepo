@@ -953,8 +953,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 			attribution.GetUtmSource(), attribution.GetUtmMedium(), attribution.GetUtmCampaign(), attribution.GetUtmContent(), attribution.GetUtmTerm(),
 			attribution.GetHttpReferer(), attribution.GetLandingPage(), attribution.GetReferralCode(), attribution.GetIsAgent(), metadataJSON)
 		if err != nil {
-			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to insert tenant attribution")
-			return nil, status.Errorf(codes.Internal, "failed to insert tenant attribution: %v", err)
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to insert tenant attribution")
 		}
 		if attribution.GetReferralCode() != "" {
 			_, _ = tx.ExecContext(ctx, `

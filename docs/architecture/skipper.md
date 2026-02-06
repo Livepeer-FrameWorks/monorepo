@@ -56,15 +56,19 @@ Multi-turn conversations stored in `skipper_conversations` / `skipper_messages` 
 
 ## Environment Variables
 
-| Variable          | Purpose                                    |
-| ----------------- | ------------------------------------------ |
-| `LLM_PROVIDER`    | LLM backend: openai, anthropic, ollama     |
-| `LLM_MODEL`       | Model identifier                           |
-| `LLM_API_KEY`     | API credentials                            |
-| `LLM_API_URL`     | Custom endpoint (OpenRouter, local Ollama) |
-| `SEARCH_PROVIDER` | Search backend: tavily, brave, searxng     |
-| `SEARCH_API_KEY`  | Search API credentials                     |
-| `SEARCH_API_URL`  | Custom search endpoint                     |
+| Variable             | Purpose                                                          |
+| -------------------- | ---------------------------------------------------------------- |
+| `LLM_PROVIDER`       | LLM backend: openai, anthropic, ollama                           |
+| `LLM_MODEL`          | Model identifier                                                 |
+| `LLM_API_KEY`        | API credentials                                                  |
+| `LLM_API_URL`        | Custom endpoint (OpenRouter, local Ollama)                       |
+| `EMBEDDING_PROVIDER` | Embedding backend: openai, ollama (falls back to `LLM_PROVIDER`) |
+| `EMBEDDING_MODEL`    | Embedding model (falls back to `LLM_MODEL`)                      |
+| `EMBEDDING_API_KEY`  | Embedding API credentials (falls back to `LLM_API_KEY`)          |
+| `EMBEDDING_API_URL`  | Embedding endpoint (falls back to `LLM_API_URL`)                 |
+| `SEARCH_PROVIDER`    | Search backend: tavily, brave, searxng                           |
+| `SEARCH_API_KEY`     | Search API credentials                                           |
+| `SEARCH_API_URL`     | Custom search endpoint                                           |
 
 ## Data Flow
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"frameworks/api_gateway/internal/attribution"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/logging"
@@ -53,26 +54,6 @@ func parseBehavior(behaviorStr string) *pb.BehaviorData {
 		Mouse:       b.Mouse,
 		Typed:       b.Typed,
 	}
-}
-
-func isAgentUserAgent(userAgent, agentHeader string) bool {
-	if strings.EqualFold(agentHeader, "true") || strings.EqualFold(agentHeader, "1") {
-		return true
-	}
-	ua := strings.ToLower(userAgent)
-	return strings.Contains(ua, "frameworks-agent") || strings.Contains(ua, "mcp")
-}
-
-func buildSignupAttribution(c *gin.Context, base *pb.SignupAttribution) *pb.SignupAttribution {
-	if base == nil {
-		base = &pb.SignupAttribution{}
-	}
-	base.HttpReferer = c.Request.Referer()
-	if base.LandingPage == "" {
-		base.LandingPage = c.Request.URL.String()
-	}
-	base.IsAgent = isAgentUserAgent(c.Request.UserAgent(), c.GetHeader("X-Frameworks-Agent"))
-	return base
 }
 
 // AuthHandlers handles authentication requests using gRPC client
@@ -202,7 +183,7 @@ func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 			referralCode = c.Query("ref")
 		}
 
-		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature, buildSignupAttribution(c, &pb.SignupAttribution{
+		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature, attribution.Enrich(c.Request, &pb.SignupAttribution{
 			SignupChannel: "wallet",
 			SignupMethod:  "wallet_ethereum",
 			UtmSource:     utmSource,
@@ -314,7 +295,7 @@ func (h *AuthHandlers) Register() gin.HandlerFunc {
 			TurnstileToken: req.TurnstileToken,
 			HumanCheck:     req.HumanCheck,
 			Behavior:       parseBehavior(req.Behavior),
-			Attribution: buildSignupAttribution(c, &pb.SignupAttribution{
+			Attribution: attribution.Enrich(c.Request, &pb.SignupAttribution{
 				SignupChannel: "web",
 				SignupMethod:  "email_password",
 				UtmSource:     utmSource,

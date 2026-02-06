@@ -7,48 +7,12 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_gateway/internal/attribution"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
-	pb "frameworks/pkg/proto"
 )
-
-func isAgentRequest(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	agentHeader := r.Header.Get("X-Frameworks-Agent")
-	if strings.EqualFold(agentHeader, "true") || strings.EqualFold(agentHeader, "1") {
-		return true
-	}
-	ua := strings.ToLower(r.UserAgent())
-	return strings.Contains(ua, "frameworks-agent") || strings.Contains(ua, "mcp")
-}
-
-func buildSignupAttributionFromRequest(r *http.Request, signupChannel, signupMethod string) *pb.SignupAttribution {
-	if r == nil {
-		return nil
-	}
-	query := r.URL.Query()
-	referralCode := query.Get("referral_code")
-	if referralCode == "" {
-		referralCode = query.Get("ref")
-	}
-	return &pb.SignupAttribution{
-		SignupChannel: signupChannel,
-		SignupMethod:  signupMethod,
-		UtmSource:     query.Get("utm_source"),
-		UtmMedium:     query.Get("utm_medium"),
-		UtmCampaign:   query.Get("utm_campaign"),
-		UtmContent:    query.Get("utm_content"),
-		UtmTerm:       query.Get("utm_term"),
-		HttpReferer:   r.Referer(),
-		LandingPage:   r.URL.String(),
-		ReferralCode:  referralCode,
-		IsAgent:       isAgentRequest(r),
-	}
-}
 
 type AuthResult struct {
 	UserID        string
@@ -90,7 +54,7 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 			if payload.GetNetwork() != "" {
 				signupMethod = "x402_" + strings.ToLower(payload.GetNetwork())
 			}
-			attr := buildSignupAttributionFromRequest(r, "x402", signupMethod)
+			attr := attribution.FromRequest(r, "x402", signupMethod)
 			walletResp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "", attr)
 			if err != nil {
 				if logger != nil {
@@ -141,7 +105,7 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 				return nil, fmt.Errorf("missing wallet auth headers")
 			}
 
-			attr := buildSignupAttributionFromRequest(r, "wallet", "wallet_ethereum")
+			attr := attribution.FromRequest(r, "wallet", "wallet_ethereum")
 			resp, err := clients.Commodore.WalletLogin(ctx, walletAddr, message, signature, attr)
 			if err != nil {
 				if logger != nil {

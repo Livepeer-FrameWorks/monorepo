@@ -189,10 +189,10 @@ func main() {
 	}
 
 	embeddingClient, err := llm.NewEmbeddingClient(llm.Config{
-		Provider: cfg.LLMProvider,
-		Model:    cfg.LLMModel,
-		APIKey:   cfg.LLMAPIKey,
-		APIURL:   cfg.LLMAPIURL,
+		Provider: cfg.EmbeddingProvider,
+		Model:    cfg.EmbeddingModel,
+		APIKey:   cfg.EmbeddingAPIKey,
+		APIURL:   cfg.EmbeddingAPIURL,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to initialize embedding client")
@@ -303,10 +303,10 @@ func main() {
 	// Knowledge admin endpoints require an embedding client. Do not hard-fail startup
 	// when LLM config is unset; keep the base service (health/metrics) running.
 	embedderClient, err := llm.NewEmbeddingClient(llm.Config{
-		Provider: cfg.LLMProvider,
-		Model:    cfg.LLMModel,
-		APIKey:   cfg.LLMAPIKey,
-		APIURL:   cfg.LLMAPIURL,
+		Provider: cfg.EmbeddingProvider,
+		Model:    cfg.EmbeddingModel,
+		APIKey:   cfg.EmbeddingAPIKey,
+		APIURL:   cfg.EmbeddingAPIURL,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Skipping knowledge admin API: embedding client not configured")
