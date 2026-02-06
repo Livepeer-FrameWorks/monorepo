@@ -11,6 +11,7 @@ import (
 	"frameworks/api_skipper/internal/heartbeat"
 	"frameworks/api_skipper/internal/knowledge"
 	"frameworks/api_skipper/internal/metering"
+	"frameworks/api_skipper/internal/notify"
 	"frameworks/pkg/auth"
 	commodoreclient "frameworks/pkg/clients/commodore"
 	deckhandclient "frameworks/pkg/clients/deckhand"
@@ -27,6 +28,8 @@ import (
 	"frameworks/pkg/search"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
@@ -245,7 +248,26 @@ func main() {
 		logger.WithError(err).WithField("value", heartbeatInterval).Warn("Invalid HEARTBEAT_INTERVAL; using default")
 		heartbeatDuration = 30 * time.Minute
 	}
-	heartbeatReporter := &heartbeat.Reporter{Logger: logger}
+	notifyConfig := notify.LoadConfig()
+	mcpServer := mcp.NewServer(&mcp.Implementation{
+		Name:    "skipper",
+		Version: version.Version,
+	}, nil)
+	dispatcher := notify.NewDispatcher(notify.DispatcherConfig{
+		EmailNotifier:     notify.NewEmailNotifier(notifyConfig, logger),
+		WebsocketNotifier: notify.NewWebsocketNotifier(decklogClient, logger),
+		MCPNotifier:       notify.NewMCPNotifier(mcpServer, logger),
+		Defaults:          notifyConfig.DefaultPreferences,
+		Logger:            logger,
+	})
+	reportStore := heartbeat.NewReportStore(db)
+	heartbeatReporter := &heartbeat.Reporter{
+		Store:      reportStore,
+		Billing:    purserClient,
+		Dispatcher: dispatcher,
+		Logger:     logger,
+		WebAppURL:  notifyConfig.WebAppURL,
+	}
 	heartbeatAgent := heartbeat.NewAgent(heartbeat.AgentConfig{
 		Interval:          heartbeatDuration,
 		Orchestrator:      orchestrator,
@@ -273,8 +295,6 @@ func main() {
 	}))
 	chat.RegisterRoutes(apiGroup, chatHandler)
 
-	store := knowledge.NewStore(db)
-
 	// Knowledge admin endpoints require an embedding client. Do not hard-fail startup
 	// when LLM config is unset; keep the base service (health/metrics) running.
 	embedderClient, err := llm.NewEmbeddingClient(llm.Config{
@@ -290,11 +310,11 @@ func main() {
 		if embedderErr != nil {
 			logger.WithError(embedderErr).Warn("Skipping knowledge admin API: failed to initialize knowledge embedder")
 		} else {
-			crawler, crawlerErr := knowledge.NewCrawler(nil, embedder, store)
+			crawler, crawlerErr := knowledge.NewCrawler(nil, embedder, knowledgeStore)
 			if crawlerErr != nil {
 				logger.WithError(crawlerErr).Warn("Skipping knowledge admin API: failed to initialize knowledge crawler")
 			} else {
-				adminAPI, adminErr := knowledge.NewAdminAPI(store, embedder, crawler, logger)
+				adminAPI, adminErr := knowledge.NewAdminAPI(knowledgeStore, embedder, crawler, logger)
 				if adminErr != nil {
 					logger.WithError(adminErr).Warn("Skipping knowledge admin API: failed to initialize knowledge admin API")
 				} else {

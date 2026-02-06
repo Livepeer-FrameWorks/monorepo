@@ -9,11 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_skipper/internal/chat"
-	commodoreclient "frameworks/pkg/clients/commodore"
-	decklogclient "frameworks/pkg/clients/decklog"
-	periscopeclient "frameworks/pkg/clients/periscope"
-	purserclient "frameworks/pkg/clients/purser"
-	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
@@ -51,12 +47,12 @@ Use tools when it helps confirm findings.`
 
 type AgentConfig struct {
 	Interval          time.Duration
-	Orchestrator      *chat.Orchestrator
-	Commodore         *commodoreclient.GRPCClient
-	Periscope         *periscopeclient.GRPCClient
-	Purser            *purserclient.GRPCClient
-	Quartermaster     *qmclient.GRPCClient
-	Decklog           *decklogclient.BatchedClient
+	Orchestrator      Orchestrator
+	Commodore         CommodoreClient
+	Periscope         PeriscopeClient
+	Purser            BillingClient
+	Quartermaster     QuartermasterClient
+	Decklog           DecklogClient
 	Reporter          *Reporter
 	Logger            logging.Logger
 	RequiredTierLevel int
@@ -64,12 +60,12 @@ type AgentConfig struct {
 
 type Agent struct {
 	interval          time.Duration
-	orchestrator      *chat.Orchestrator
-	commodore         *commodoreclient.GRPCClient
-	periscope         *periscopeclient.GRPCClient
-	purser            *purserclient.GRPCClient
-	quartermaster     *qmclient.GRPCClient
-	decklog           *decklogclient.BatchedClient
+	orchestrator      Orchestrator
+	commodore         CommodoreClient
+	periscope         PeriscopeClient
+	purser            BillingClient
+	quartermaster     QuartermasterClient
+	decklog           DecklogClient
 	reporter          *Reporter
 	logger            logging.Logger
 	requiredTierLevel int
@@ -88,6 +84,33 @@ type healthSnapshot struct {
 	Window        time.Duration
 	Health        *pb.StreamHealthSummary
 	ClientQoE     *pb.ClientQoeSummary
+}
+
+type Orchestrator interface {
+	Run(ctx context.Context, messages []llm.Message, streamer chat.TokenStreamer) (chat.OrchestratorResult, error)
+}
+
+type CommodoreClient interface {
+	ListStreams(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListStreamsResponse, error)
+}
+
+type PeriscopeClient interface {
+	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error)
+	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetClientQoeSummaryResponse, error)
+}
+
+type BillingClient interface {
+	GetBillingStatus(ctx context.Context, tenantID string) (*pb.BillingStatusResponse, error)
+}
+
+type QuartermasterClient interface {
+	ListActiveTenants(ctx context.Context) ([]string, error)
+	BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error)
+}
+
+type DecklogClient interface {
+	SendServiceEvent(event *pb.ServiceEvent) error
+	Close() error
 }
 
 func NewAgent(cfg AgentConfig) *Agent {
@@ -264,6 +287,7 @@ func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
 	case "flag":
 		if a.reporter != nil {
 			report := Report{
+				Trigger:         "flag",
 				Summary:         decision.Reason,
 				MetricsReviewed: decision.MetricsReviewed,
 				RootCause:       "pending review",
@@ -282,7 +306,7 @@ func (a *Agent) loadSnapshot(ctx context.Context, tenantID string) (*healthSnaps
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	now := time.Now()
 	window := defaultSummaryWindow
-	timeRange := &periscopeclient.TimeRangeOpts{
+	timeRange := &periscope.TimeRangeOpts{
 		StartTime: now.Add(-window),
 		EndTime:   now,
 	}
@@ -346,12 +370,14 @@ func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason strin
 	report, err := parseReport(result.Content)
 	if err != nil {
 		report = Report{
+			Trigger:         trigger,
 			Summary:         result.Content,
 			MetricsReviewed: []string{},
 			RootCause:       "unknown",
 			Recommendations: []Recommendation{},
 		}
 	}
+	report.Trigger = trigger
 	if a.reporter != nil {
 		_ = a.reporter.Send(ctx, tenantID, report)
 	}

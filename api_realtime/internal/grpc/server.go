@@ -439,6 +439,10 @@ func channelToString(ch pb.Channel) string {
 		return "system"
 	case pb.Channel_CHANNEL_ALL:
 		return "all"
+	case pb.Channel_CHANNEL_MESSAGING:
+		return "messaging"
+	case pb.Channel_CHANNEL_AI:
+		return "ai"
 	default:
 		return "unknown"
 	}
@@ -489,6 +493,10 @@ func eventTypeToString(et pb.EventType) string {
 		return "process_billing"
 	case pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
 		return "storage_snapshot"
+	case pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE:
+		return "message_lifecycle"
+	case pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
+		return "skipper_investigation"
 	default:
 		return "unknown"
 	}
