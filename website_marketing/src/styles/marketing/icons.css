@@ -61,38 +61,66 @@
     width: clamp(2.2rem, 2.8vw, 2.6rem);
     height: clamp(2.2rem, 2.8vw, 2.6rem);
     border-radius: 0.8rem;
-    background: linear-gradient(145deg, rgba(var(--accent-rgb) / 0.4), rgba(var(--fx-rgb-12-18-36) / 0.3));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--accent-rgb) / 0.4),
+      rgba(var(--fx-rgb-12-18-36) / 0.3)
+    );
     color: hsl(var(--accent));
     flex-shrink: 0;
   }
 
   .marketing-icon-list[data-tone="green"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(var(--brand-green-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--brand-green-rgb) / 0.46),
+      rgba(var(--fx-rgb-12-18-36) / 0.28)
+    );
     color: hsl(var(--brand-green));
   }
 
   .marketing-icon-list[data-tone="yellow"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(var(--brand-yellow-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--brand-yellow-rgb) / 0.46),
+      rgba(var(--fx-rgb-12-18-36) / 0.28)
+    );
     color: hsl(var(--brand-yellow));
   }
 
   .marketing-icon-list[data-tone="purple"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(var(--brand-orange-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--brand-orange-rgb) / 0.46),
+      rgba(var(--fx-rgb-12-18-36) / 0.28)
+    );
     color: hsl(var(--brand-purple));
   }
 
   .marketing-icon-list__item[data-tone="green"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(var(--brand-green-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--brand-green-rgb) / 0.46),
+      rgba(var(--fx-rgb-12-18-36) / 0.28)
+    );
     color: hsl(var(--brand-green));
   }
 
   .marketing-icon-list__item[data-tone="yellow"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(var(--brand-yellow-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--brand-yellow-rgb) / 0.46),
+      rgba(var(--fx-rgb-12-18-36) / 0.28)
+    );
     color: hsl(var(--brand-yellow));
   }
 
   .marketing-icon-list__item[data-tone="purple"] .marketing-icon-list__icon {
-    background: linear-gradient(145deg, rgba(var(--brand-orange-rgb) / 0.46), rgba(var(--fx-rgb-12-18-36) / 0.28));
+    background: linear-gradient(
+      145deg,
+      rgba(var(--brand-orange-rgb) / 0.46),
+      rgba(var(--fx-rgb-12-18-36) / 0.28)
+    );
     color: hsl(var(--brand-purple));
   }
 
@@ -183,7 +211,11 @@
 
   .marketing-icon-list__description {
     margin: clamp(0.4rem, 0.7vw, 0.55rem) 0 0;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.26));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-213-229-255) / 0.26)
+    );
     line-height: 1.6;
   }
 

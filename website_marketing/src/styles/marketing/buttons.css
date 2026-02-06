@@ -31,7 +31,11 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: radial-gradient(circle at 20% 20%, rgba(var(--fx-rgb-255-255-255) / 0.35), transparent 55%);
+    background: radial-gradient(
+      circle at 20% 20%,
+      rgba(var(--fx-rgb-255-255-255) / 0.35),
+      transparent 55%
+    );
     opacity: 0.75;
     pointer-events: none;
     mix-blend-mode: screen;

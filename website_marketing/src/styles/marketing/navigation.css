@@ -1,14 +1,22 @@
 /* Marketing component styles: navigation */
 @layer components {
   .nav-surface {
-    background-color: color-mix(in srgb, hsl(var(--background)) 98%, rgba(var(--fx-rgb-0-0-0) / 0.1));
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--background)) 98%,
+      rgba(var(--fx-rgb-0-0-0) / 0.1)
+    );
     backdrop-filter: blur(18px);
     border-bottom: 1px solid hsl(var(--border) / 0.45);
     box-shadow: 0 12px 24px rgba(var(--fx-rgb-6-15-65) / 0.15);
   }
 
   .nav-mobile-surface {
-    background-color: color-mix(in srgb, hsl(var(--background)) 97%, rgba(var(--fx-rgb-0-0-0) / 0.14));
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--background)) 97%,
+      rgba(var(--fx-rgb-0-0-0) / 0.14)
+    );
     backdrop-filter: blur(16px);
     border-top: 1px solid hsl(var(--border) / 0.45);
     box-shadow: 0 18px 36px rgba(var(--fx-rgb-6-15-65) / 0.28);
@@ -44,7 +52,11 @@
 
   .nav-trigger:hover,
   .nav-trigger:focus-visible {
-    background-color: color-mix(in srgb, hsl(var(--muted)) 24%, rgba(var(--fx-rgb-255-255-255) / 0.08));
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--muted)) 24%,
+      rgba(var(--fx-rgb-255-255-255) / 0.08)
+    );
   }
 
   .nav-link {
@@ -102,7 +114,11 @@
 
   .nav-mobile-link:hover,
   .nav-mobile-link:focus-visible {
-    background-color: color-mix(in srgb, hsl(var(--muted)) 28%, rgba(var(--fx-rgb-255-255-255) / 0.06));
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--muted)) 28%,
+      rgba(var(--fx-rgb-255-255-255) / 0.06)
+    );
   }
 
   .nav-mobile-link-active {

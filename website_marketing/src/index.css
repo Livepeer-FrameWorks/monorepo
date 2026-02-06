@@ -97,8 +97,16 @@
       hsl(var(--brand-surface-strong)) 94%,
       rgba(var(--fx-rgb-0-0-0) / 1) 6%
     );
-    --fx-surface-mid: color-mix(in srgb, hsl(var(--brand-surface)) 90%, hsl(var(--brand-surface-strong)) 10%);
-    --fx-surface-soft: color-mix(in srgb, hsl(var(--brand-surface)) 84%, hsl(var(--background)) 16%);
+    --fx-surface-mid: color-mix(
+      in srgb,
+      hsl(var(--brand-surface)) 90%,
+      hsl(var(--brand-surface-strong)) 10%
+    );
+    --fx-surface-soft: color-mix(
+      in srgb,
+      hsl(var(--brand-surface)) 84%,
+      hsl(var(--background)) 16%
+    );
     --fx-seam-strong: rgba(var(--accent-rgb) / 0.24);
     --fx-seam-soft: rgba(var(--accent-rgb) / 0.14);
     --fx-glow-cool: rgba(var(--accent-rgb) / 0.18);

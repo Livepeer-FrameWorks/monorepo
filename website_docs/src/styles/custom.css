@@ -240,7 +240,9 @@ code {
   text-transform: uppercase;
   cursor: pointer;
   box-shadow: 0 16px 30px rgba(0, 0, 0, 0.35);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .docs-skipper-toggle:hover {

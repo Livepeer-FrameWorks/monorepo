@@ -4,7 +4,11 @@
   .contact-form-panel {
     gap: clamp(1.4rem, 2vw, 1.8rem);
     padding: clamp(1.6rem, 2.4vw, 2rem) clamp(1.8rem, 2.6vw, 2.4rem);
-    background: linear-gradient(150deg, rgba(var(--fx-rgb-22-26-38) / 0.92), rgba(var(--fx-rgb-16-20-32) / 0.88));
+    background: linear-gradient(
+      150deg,
+      rgba(var(--fx-rgb-22-26-38) / 0.92),
+      rgba(var(--fx-rgb-16-20-32) / 0.88)
+    );
     border-radius: clamp(1rem, 1.6vw, 1.25rem);
     border: 1px solid rgba(var(--accent-rgb) / 0.18);
     box-shadow: 0 30px 60px rgba(var(--fx-rgb-6-10-28) / 0.42);
@@ -28,7 +32,11 @@
     margin: 0;
     font-size: 0.88rem;
     line-height: 1.5;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.2));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-213-229-255) / 0.2)
+    );
   }
 
   .contact-form .space-y-2 > label,
@@ -36,7 +44,11 @@
     font-size: 0.82rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 66%, rgba(var(--fx-rgb-213-229-255) / 0.28));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 66%,
+      rgba(var(--fx-rgb-213-229-255) / 0.28)
+    );
   }
 
   /* Contact method slabs — seam-joined, flush to container */
@@ -141,14 +153,22 @@
     font-size: 0.72rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(var(--fx-rgb-213-229-255) / 0.34));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 68%,
+      rgba(var(--fx-rgb-213-229-255) / 0.34)
+    );
   }
 
   .contact-method-slab__description {
     margin: 0;
     font-size: 0.85rem;
     line-height: 1.5;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.2));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-213-229-255) / 0.2)
+    );
   }
 
   .contact-method-chevron {
@@ -250,7 +270,11 @@
 
   .contact-verification__copy {
     font-size: 0.9rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-213-229-255) / 0.22));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-213-229-255) / 0.22)
+    );
   }
 
   /* Turnstile */
@@ -264,7 +288,11 @@
     font-size: 0.82rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 66%, rgba(var(--fx-rgb-213-229-255) / 0.28));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 66%,
+      rgba(var(--fx-rgb-213-229-255) / 0.28)
+    );
   }
 
   .contact-turnstile__widget {

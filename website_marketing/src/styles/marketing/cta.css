@@ -70,7 +70,11 @@
   .marketing-cta__description {
     margin: 0;
     max-width: clamp(32rem, 60vw, 42rem);
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 82%,
+      rgba(var(--fx-rgb-255-255-255) / 0.12)
+    );
     font-size: clamp(1rem, 1.2vw, 1.25rem);
     line-height: 1.7;
   }
@@ -143,7 +147,11 @@
     border-top: 1px solid var(--fx-seam-strong);
     border-bottom: 1px solid var(--fx-seam-soft);
     background:
-      linear-gradient(152deg, rgba(var(--accent-rgb) / 0.08), rgba(var(--brand-cyan-rgb) / 0.02) 48%),
+      linear-gradient(
+        152deg,
+        rgba(var(--accent-rgb) / 0.08),
+        rgba(var(--brand-cyan-rgb) / 0.02) 48%
+      ),
       linear-gradient(118deg, var(--fx-surface-mid), var(--fx-surface-strong));
     box-shadow: none;
   }
@@ -174,8 +182,16 @@
         transparent 1px,
         transparent 9px
       );
-    mask-image: radial-gradient(circle at 50% 50%, transparent 16%, rgba(var(--fx-rgb-0-0-0) / 1) 72%);
-    -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 16%, rgba(var(--fx-rgb-0-0-0) / 1) 72%);
+    mask-image: radial-gradient(
+      circle at 50% 50%,
+      transparent 16%,
+      rgba(var(--fx-rgb-0-0-0) / 1) 72%
+    );
+    -webkit-mask-image: radial-gradient(
+      circle at 50% 50%,
+      transparent 16%,
+      rgba(var(--fx-rgb-0-0-0) / 1) 72%
+    );
   }
 
   /* Color accents — blue left, green right */
@@ -183,15 +199,32 @@
     background:
       radial-gradient(ellipse at 14% 46%, rgba(var(--primary-rgb) / 0.14), transparent 52%),
       radial-gradient(ellipse at 82% 56%, rgba(var(--brand-green-rgb) / 0.09), transparent 52%),
-      linear-gradient(90deg, transparent 40%, rgba(var(--brand-cyan-rgb) / 0.09) 50%, transparent 60%);
+      linear-gradient(
+        90deg,
+        transparent 40%,
+        rgba(var(--brand-cyan-rgb) / 0.09) 50%,
+        transparent 60%
+      );
     opacity: 0.62;
-    mask-image: radial-gradient(circle at 50% 50%, transparent 12%, rgba(var(--fx-rgb-0-0-0) / 1) 60%);
-    -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 12%, rgba(var(--fx-rgb-0-0-0) / 1) 60%);
+    mask-image: radial-gradient(
+      circle at 50% 50%,
+      transparent 12%,
+      rgba(var(--fx-rgb-0-0-0) / 1) 60%
+    );
+    -webkit-mask-image: radial-gradient(
+      circle at 50% 50%,
+      transparent 12%,
+      rgba(var(--fx-rgb-0-0-0) / 1) 60%
+    );
   }
 
   @keyframes cta-grid-scroll {
-    from { translate: 0 0; }
-    to   { translate: 0 18px; }
+    from {
+      translate: 0 0;
+    }
+    to {
+      translate: 0 18px;
+    }
   }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -258,7 +291,8 @@
     border-color: rgba(var(--accent-rgb) / 0.42) !important;
   }
 
-  .marketing-cta--band .marketing-cta__action-cell--slab:not(:first-child)
+  .marketing-cta--band
+    .marketing-cta__action-cell--slab:not(:first-child)
     .marketing-cta__button--slab {
     background: rgba(var(--fx-rgb-20-28-46) / 0.72);
     color: color-mix(in srgb, hsl(var(--foreground)) 88%, hsl(var(--accent)) 12%);

@@ -84,11 +84,19 @@
     font-size: 0.9rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 65%, rgba(var(--fx-rgb-255-255-255) / 0.2));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 65%,
+      rgba(var(--fx-rgb-255-255-255) / 0.2)
+    );
   }
   .pricing-architecture-modal__description {
     margin: 0;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 80%, rgba(var(--fx-rgb-255-255-255) / 0.14));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 80%,
+      rgba(var(--fx-rgb-255-255-255) / 0.14)
+    );
     line-height: 1.65;
   }
   .pricing-architecture-modal__list {
@@ -97,7 +105,11 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.16));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-255-255-255) / 0.16)
+    );
     font-size: 0.95rem;
   }
   .pricing-architecture-modal__list li {
@@ -122,7 +134,11 @@
     margin: 0;
     font-size: 0.95rem;
     line-height: 1.6;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 84%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 84%,
+      rgba(var(--fx-rgb-255-255-255) / 0.12)
+    );
   }
   .pricing-tier__shell {
     display: grid;
@@ -307,7 +323,11 @@
     font-size: var(--text-sm);
     line-height: 1.6;
     font-style: italic;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 40%, rgba(var(--fx-rgb-255-255-255) / 0.58));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 40%,
+      rgba(var(--fx-rgb-255-255-255) / 0.58)
+    );
   }
   .deployment-option__quote::before {
     content: "\201C";
@@ -357,7 +377,8 @@
     border: 1px solid var(--deployment-grid-border);
     background: linear-gradient(
       128deg,
-      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(var(--fx-rgb-8-12-24) / 0.28)) 0%,
+      color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(var(--fx-rgb-8-12-24) / 0.28))
+        0%,
       color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(var(--fx-rgb-12-16-30) / 0.18)) 100%
     );
     overflow: hidden;
@@ -368,7 +389,11 @@
     --outline-padding-x: clamp(1.6rem, 2vw, 2.2rem);
     --outline-padding-y: clamp(1.45rem, 2vw, 2.05rem);
     --outline-radius: 0;
-    --pricing-tier-border: color-mix(in srgb, hsl(var(--accent)) 86%, rgba(var(--brand-cyan-rgb) / 0.25));
+    --pricing-tier-border: color-mix(
+      in srgb,
+      hsl(var(--accent)) 86%,
+      rgba(var(--brand-cyan-rgb) / 0.25)
+    );
     --pricing-tier-surface: linear-gradient(
       160deg,
       color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(var(--fx-rgb-18-26-48) / 0.15)),
@@ -415,7 +440,11 @@
     );
     --pricing-tier-surface: linear-gradient(
       165deg,
-      color-mix(in srgb, hsl(var(--brand-surface-strong)) 90%, rgba(var(--brand-yellow-rgb) / 0.12)),
+      color-mix(
+        in srgb,
+        hsl(var(--brand-surface-strong)) 90%,
+        rgba(var(--brand-yellow-rgb) / 0.12)
+      ),
       color-mix(in srgb, hsl(var(--brand-surface)) 92%, rgba(var(--brand-orange-rgb) / 0.08))
     );
     --pricing-tier-shadow: none;

@@ -40,7 +40,11 @@
   .hero-eyebrow {
     @apply inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.3em];
     border-color: hsl(var(--border) / 0.4);
-    background-color: color-mix(in srgb, hsl(var(--brand-surface)) 90%, rgba(var(--fx-rgb-255-255-255) / 0.06));
+    background-color: color-mix(
+      in srgb,
+      hsl(var(--brand-surface)) 90%,
+      rgba(var(--fx-rgb-255-255-255) / 0.06)
+    );
     color: hsl(var(--muted-foreground));
     letter-spacing: 0.32em;
     text-transform: uppercase;
@@ -87,7 +91,11 @@
 
   .hero-support {
     font-size: 1rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(var(--fx-rgb-255-255-255) / 0.08));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 78%,
+      rgba(var(--fx-rgb-255-255-255) / 0.08)
+    );
   }
 
   @media (min-width: 768px) {
@@ -108,7 +116,11 @@
 
   .hero-footnote {
     font-size: 0.85rem;
-    color: color-mix(in srgb, hsl(var(--muted-foreground)) 80%, rgba(var(--fx-rgb-255-255-255) / 0.12));
+    color: color-mix(
+      in srgb,
+      hsl(var(--muted-foreground)) 80%,
+      rgba(var(--fx-rgb-255-255-255) / 0.12)
+    );
     text-align: center;
   }
 

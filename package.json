@@ -17,7 +17,7 @@
     "lint": "pnpm -r lint",
     "build": "pnpm -r build",
     "test": "pnpm -r --if-present test",
-    "test:coverage": "pnpm -r --if-present test:coverage",
+    "test:coverage": "pnpm -r --workspace-concurrency=1 --if-present test:coverage",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "lefthook install"
