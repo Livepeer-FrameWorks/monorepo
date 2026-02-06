@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_skipper/internal/chat"
 	skipperconfig "frameworks/api_skipper/internal/config"
+	"frameworks/api_skipper/internal/heartbeat"
 	"frameworks/api_skipper/internal/knowledge"
 	"frameworks/pkg/auth"
 	commodoreclient "frameworks/pkg/clients/commodore"
@@ -104,10 +105,6 @@ func main() {
 		logger.WithField("addr", commodoreGRPCAddr).Info("Connected to Commodore gRPC")
 	}
 
-	_ = periscopeClient
-	_ = deckhandClient
-	_ = commodoreClient
-
 	// Create Purser gRPC client for tier checks
 	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
@@ -137,6 +134,21 @@ func main() {
 		decklogClient = nil
 	} else {
 		defer func() { _ = decklogClient.Close() }()
+	}
+
+	// Create Quartermaster gRPC client for tenant listings
+	qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:     qmGRPCAddr,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - heartbeat disabled")
+		qmClient = nil
+	} else {
+		defer func() { _ = qmClient.Close() }()
 	}
 
 	llmProvider, err := llm.NewProvider(llm.Config{
@@ -192,6 +204,27 @@ func main() {
 	})
 	chatHandler := chat.NewChatHandler(conversationStore, orchestrator, purserClient, decklogClient, logger, cfg.RequiredTierLevel)
 
+	heartbeatInterval := config.GetEnv("HEARTBEAT_INTERVAL", "30m")
+	heartbeatDuration, err := time.ParseDuration(heartbeatInterval)
+	if err != nil {
+		logger.WithError(err).WithField("value", heartbeatInterval).Warn("Invalid HEARTBEAT_INTERVAL; using default")
+		heartbeatDuration = 30 * time.Minute
+	}
+	heartbeatReporter := &heartbeat.Reporter{Logger: logger}
+	heartbeatAgent := heartbeat.NewAgent(heartbeat.AgentConfig{
+		Interval:          heartbeatDuration,
+		Orchestrator:      orchestrator,
+		Commodore:         commodoreClient,
+		Periscope:         periscopeClient,
+		Purser:            purserClient,
+		Quartermaster:     qmClient,
+		Decklog:           decklogClient,
+		Reporter:          heartbeatReporter,
+		Logger:            logger,
+		RequiredTierLevel: cfg.RequiredTierLevel,
+	})
+	go heartbeatAgent.Start(context.Background())
+
 	// Setup router with unified monitoring (health/metrics only)
 	router := server.SetupServiceRouter(logger, "skipper", healthChecker, metricsCollector)
 	apiGroup := router.Group("/api/skipper")
@@ -234,18 +267,10 @@ func main() {
 
 	// Best-effort service registration in Quartermaster (using gRPC)
 	go func() {
-		qmGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
-		qmClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-			GRPCAddr:     qmGRPCAddr,
-			Timeout:      10 * time.Second,
-			Logger:       logger,
-			ServiceToken: serviceToken,
-		})
-		if err != nil {
-			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+		if qmClient == nil {
+			logger.Warn("Quartermaster bootstrap skipped: client unavailable")
 			return
 		}
-		defer func() { _ = qmClient.Close() }()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
