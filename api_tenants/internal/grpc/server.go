@@ -932,6 +932,39 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		return nil, status.Errorf(codes.Internal, "failed to create tenant: %v", err)
 	}
 
+	attribution := req.GetAttribution()
+	if attribution != nil && attribution.GetSignupChannel() != "" {
+		metadataJSON := attribution.GetMetadataJson()
+		if metadataJSON == "" || !json.Valid([]byte(metadataJSON)) {
+			metadataJSON = "{}"
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO quartermaster.tenant_attribution (
+				tenant_id, signup_channel, signup_method,
+				utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+				http_referer, landing_page, referral_code, is_agent, metadata
+			) VALUES (
+				$1, $2, $3,
+				$4, $5, $6, $7, $8,
+				$9, $10, $11, $12, $13
+			)
+			ON CONFLICT (tenant_id) DO NOTHING
+		`, tenantID, attribution.GetSignupChannel(), attribution.GetSignupMethod(),
+			attribution.GetUtmSource(), attribution.GetUtmMedium(), attribution.GetUtmCampaign(), attribution.GetUtmContent(), attribution.GetUtmTerm(),
+			attribution.GetHttpReferer(), attribution.GetLandingPage(), attribution.GetReferralCode(), attribution.GetIsAgent(), metadataJSON)
+		if err != nil {
+			s.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to insert tenant attribution")
+			return nil, status.Errorf(codes.Internal, "failed to insert tenant attribution: %v", err)
+		}
+		if attribution.GetReferralCode() != "" {
+			_, _ = tx.ExecContext(ctx, `
+				UPDATE quartermaster.referral_codes
+				SET current_uses = current_uses + 1
+				WHERE code = $1 AND is_active = true
+			`, attribution.GetReferralCode())
+		}
+	}
+
 	// 2. Find the default cluster for auto-subscription
 	var defaultClusterID sql.NullString
 	err = tx.QueryRowContext(ctx, `
@@ -991,7 +1024,7 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 		changedFields = append(changedFields, "deployment_model")
 	}
 
-	s.emitTenantEvent(ctx, eventTenantCreated, tenantID, userID, changedFields)
+	s.emitTenantEvent(ctx, eventTenantCreated, tenantID, userID, changedFields, req.GetAttribution())
 	if defaultClusterID.Valid {
 		s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, defaultClusterID.String, "cluster", defaultClusterID.String, "", "", "")
 	}
@@ -1100,7 +1133,7 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *pb.UpdateTe
 	}
 
 	if len(changedFields) > 0 {
-		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields)
+		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields, nil)
 	}
 	if req.PrimaryClusterId != nil {
 		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
@@ -1142,7 +1175,7 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *pb.DeleteTe
 	}
 
 	s.logger.WithField("tenant_id", tenantID).Info("Deleted tenant successfully")
-	s.emitTenantEvent(ctx, eventTenantDeleted, tenantID, userID, nil)
+	s.emitTenantEvent(ctx, eventTenantDeleted, tenantID, userID, nil, nil)
 	return &emptypb.Empty{}, nil
 }
 
@@ -1255,7 +1288,7 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 
 	s.logger.WithField("tenant_id", tenantID).Info("Updated tenant cluster successfully")
 	if len(changedFields) > 0 {
-		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields)
+		s.emitTenantEvent(ctx, eventTenantUpdated, tenantID, userID, changedFields, nil)
 	}
 	if req.PrimaryClusterId != nil {
 		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
@@ -3882,10 +3915,11 @@ func (s *QuartermasterServer) emitServiceEvent(ctx context.Context, event *pb.Se
 	}(event)
 }
 
-func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string) {
+func (s *QuartermasterServer) emitTenantEvent(ctx context.Context, eventType, tenantID, userID string, changedFields []string, attribution *pb.SignupAttribution) {
 	payload := &pb.TenantEvent{
 		TenantId:      tenantID,
 		ChangedFields: changedFields,
+		Attribution:   attribution,
 	}
 	event := &pb.ServiceEvent{
 		EventType:    eventType,

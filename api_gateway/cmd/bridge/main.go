@@ -264,7 +264,7 @@ func main() {
 						signature := req.Header.Get("X-Wallet-Signature")
 						message := req.Header.Get("X-Wallet-Message")
 						if signature != "" && message != "" {
-							resp, walletErr := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature)
+							resp, walletErr := serviceClients.Commodore.WalletLogin(ctx, walletAddress, message, signature, nil)
 							if walletErr == nil && resp != nil && resp.User != nil {
 								email := ""
 								if resp.User.Email != nil {

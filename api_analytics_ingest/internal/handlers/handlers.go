@@ -183,6 +183,11 @@ func (h *AnalyticsHandler) HandleServiceEvent(event kafka.ServiceEvent) error {
 	switch event.EventType {
 	case "api_request_batch":
 		err = h.processServiceAPIRequestBatch(ctx, event)
+	case "tenant_created":
+		if err = h.processTenantCreated(ctx, event); err != nil {
+			break
+		}
+		err = h.processServiceEventAudit(ctx, event)
 	default:
 		err = h.processServiceEventAudit(ctx, event)
 	}
@@ -3012,6 +3017,72 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 	return nil
 }
 
+// processTenantCreated handles tenant_created events for acquisition attribution.
+func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka.ServiceEvent) error {
+	if !isValidUUIDString(event.TenantID) {
+		return nil
+	}
+	attr := getMap(event.Data, "attribution")
+	if attr == nil {
+		return nil
+	}
+	signupChannel := getString(attr, "signup_channel")
+	if signupChannel == "" {
+		return nil
+	}
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "attempt").Inc()
+	}
+	eventDataJSON, err := json.Marshal(event.Data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tenant_created event data: %w", err)
+	}
+	chBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO tenant_acquisition_events (
+			timestamp, tenant_id, user_id, signup_channel, signup_method,
+			utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+			http_referer, landing_page, referral_code, is_agent, event_data
+		)`)
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "error").Inc()
+		}
+		return err
+	}
+	if err := chBatch.Append(
+		event.Timestamp,
+		parseUUID(event.TenantID),
+		nilIfEmptyString(event.UserID),
+		signupChannel,
+		getString(attr, "signup_method"),
+		nilIfEmptyString(getString(attr, "utm_source")),
+		nilIfEmptyString(getString(attr, "utm_medium")),
+		nilIfEmptyString(getString(attr, "utm_campaign")),
+		nilIfEmptyString(getString(attr, "utm_content")),
+		nilIfEmptyString(getString(attr, "utm_term")),
+		nilIfEmptyString(getString(attr, "http_referer")),
+		nilIfEmptyString(getString(attr, "landing_page")),
+		nilIfEmptyString(getString(attr, "referral_code")),
+		boolToUInt8(getBool(attr, "is_agent")),
+		string(eventDataJSON),
+	); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "error").Inc()
+		}
+		return err
+	}
+	if err := chBatch.Send(); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "error").Inc()
+		}
+		return err
+	}
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("tenant_acquisition_events", "success").Inc()
+	}
+	return nil
+}
+
 // processServiceEventAudit inserts service events into the api_events audit table.
 func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event kafka.ServiceEvent) error {
 	if !isValidUUIDString(event.TenantID) {
@@ -3094,6 +3165,49 @@ func allowlistEventData(data map[string]interface{}, keys []string) map[string]i
 	}
 
 	return out
+}
+
+func getMap(data map[string]interface{}, key string) map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+	if value, ok := data[key]; ok {
+		if cast, ok := value.(map[string]interface{}); ok {
+			return cast
+		}
+	}
+	return nil
+}
+
+func getString(data map[string]interface{}, key string) string {
+	if data == nil {
+		return ""
+	}
+	if value, ok := data[key]; ok {
+		if cast, ok := value.(string); ok {
+			return cast
+		}
+	}
+	return ""
+}
+
+func getBool(data map[string]interface{}, key string) bool {
+	if data == nil {
+		return false
+	}
+	if value, ok := data[key]; ok {
+		if cast, ok := value.(bool); ok {
+			return cast
+		}
+	}
+	return false
+}
+
+func boolToUInt8(value bool) uint8 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 // Helper functions for optional pointer fields

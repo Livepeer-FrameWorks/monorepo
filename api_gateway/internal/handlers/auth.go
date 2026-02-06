@@ -55,6 +55,26 @@ func parseBehavior(behaviorStr string) *pb.BehaviorData {
 	}
 }
 
+func isAgentUserAgent(userAgent, agentHeader string) bool {
+	if strings.EqualFold(agentHeader, "true") || strings.EqualFold(agentHeader, "1") {
+		return true
+	}
+	ua := strings.ToLower(userAgent)
+	return strings.Contains(ua, "frameworks-agent") || strings.Contains(ua, "mcp")
+}
+
+func buildSignupAttribution(c *gin.Context, base *pb.SignupAttribution) *pb.SignupAttribution {
+	if base == nil {
+		base = &pb.SignupAttribution{}
+	}
+	base.HttpReferer = c.Request.Referer()
+	if base.LandingPage == "" {
+		base.LandingPage = c.Request.URL.String()
+	}
+	base.IsAgent = isAgentUserAgent(c.Request.UserAgent(), c.GetHeader("X-Frameworks-Agent"))
+	return base
+}
+
 // AuthHandlers handles authentication requests using gRPC client
 type AuthHandlers struct {
 	commodore *commodore.GRPCClient
@@ -138,16 +158,61 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Address   string `json:"address" binding:"required"`
-			Message   string `json:"message" binding:"required"`
-			Signature string `json:"signature" binding:"required"`
+			Address      string `json:"address" binding:"required"`
+			Message      string `json:"message" binding:"required"`
+			Signature    string `json:"signature" binding:"required"`
+			UTMSource    string `json:"utm_source"`
+			UTMMedium    string `json:"utm_medium"`
+			UTMCampaign  string `json:"utm_campaign"`
+			UTMContent   string `json:"utm_content"`
+			UTMTerm      string `json:"utm_term"`
+			ReferralCode string `json:"referral_code"`
+			LandingPage  string `json:"landing_page"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
 			return
 		}
 
-		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature)
+		utmSource := req.UTMSource
+		if utmSource == "" {
+			utmSource = c.Query("utm_source")
+		}
+		utmMedium := req.UTMMedium
+		if utmMedium == "" {
+			utmMedium = c.Query("utm_medium")
+		}
+		utmCampaign := req.UTMCampaign
+		if utmCampaign == "" {
+			utmCampaign = c.Query("utm_campaign")
+		}
+		utmContent := req.UTMContent
+		if utmContent == "" {
+			utmContent = c.Query("utm_content")
+		}
+		utmTerm := req.UTMTerm
+		if utmTerm == "" {
+			utmTerm = c.Query("utm_term")
+		}
+		referralCode := req.ReferralCode
+		if referralCode == "" {
+			referralCode = c.Query("referral_code")
+		}
+		if referralCode == "" {
+			referralCode = c.Query("ref")
+		}
+
+		resp, err := h.commodore.WalletLogin(c.Request.Context(), req.Address, req.Message, req.Signature, buildSignupAttribution(c, &pb.SignupAttribution{
+			SignupChannel: "wallet",
+			SignupMethod:  "wallet_ethereum",
+			UtmSource:     utmSource,
+			UtmMedium:     utmMedium,
+			UtmCampaign:   utmCampaign,
+			UtmContent:    utmContent,
+			UtmTerm:       utmTerm,
+			ReferralCode:  referralCode,
+			LandingPage:   req.LandingPage,
+		}))
 		if err != nil {
 			h.logger.WithError(err).Debug("Wallet login failed")
 			errMsg := gatewayerrors.SanitizeGRPCError(err, "wallet authentication failed", walletLoginAllowedErrors)
@@ -200,12 +265,46 @@ func (h *AuthHandlers) Register() gin.HandlerFunc {
 			TurnstileToken string `json:"turnstile_token"`
 			HumanCheck     string `json:"human_check"`
 			Behavior       string `json:"behavior"`
+			UTMSource      string `json:"utm_source"`
+			UTMMedium      string `json:"utm_medium"`
+			UTMCampaign    string `json:"utm_campaign"`
+			UTMContent     string `json:"utm_content"`
+			UTMTerm        string `json:"utm_term"`
+			ReferralCode   string `json:"referral_code"`
+			LandingPage    string `json:"landing_page"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request: " + err.Error()})
 			return
 		}
 
+		utmSource := req.UTMSource
+		if utmSource == "" {
+			utmSource = c.Query("utm_source")
+		}
+		utmMedium := req.UTMMedium
+		if utmMedium == "" {
+			utmMedium = c.Query("utm_medium")
+		}
+		utmCampaign := req.UTMCampaign
+		if utmCampaign == "" {
+			utmCampaign = c.Query("utm_campaign")
+		}
+		utmContent := req.UTMContent
+		if utmContent == "" {
+			utmContent = c.Query("utm_content")
+		}
+		utmTerm := req.UTMTerm
+		if utmTerm == "" {
+			utmTerm = c.Query("utm_term")
+		}
+		referralCode := req.ReferralCode
+		if referralCode == "" {
+			referralCode = c.Query("referral_code")
+		}
+		if referralCode == "" {
+			referralCode = c.Query("ref")
+		}
 		resp, err := h.commodore.Register(c.Request.Context(), &pb.RegisterRequest{
 			Email:          req.Email,
 			Password:       req.Password,
@@ -215,6 +314,17 @@ func (h *AuthHandlers) Register() gin.HandlerFunc {
 			TurnstileToken: req.TurnstileToken,
 			HumanCheck:     req.HumanCheck,
 			Behavior:       parseBehavior(req.Behavior),
+			Attribution: buildSignupAttribution(c, &pb.SignupAttribution{
+				SignupChannel: "web",
+				SignupMethod:  "email_password",
+				UtmSource:     utmSource,
+				UtmMedium:     utmMedium,
+				UtmCampaign:   utmCampaign,
+				UtmContent:    utmContent,
+				UtmTerm:       utmTerm,
+				ReferralCode:  referralCode,
+				LandingPage:   req.LandingPage,
+			}),
 		})
 		if err != nil {
 			h.logger.WithError(err).Error("Registration failed")

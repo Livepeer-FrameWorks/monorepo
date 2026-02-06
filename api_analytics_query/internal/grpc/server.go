@@ -5695,3 +5695,234 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 		return resp, grpcutil.SanitizeError(err)
 	}
 }
+
+// GetNetworkUsage returns network-wide usage totals grouped by period.
+func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *pb.GetNetworkUsageRequest) (*pb.GetNetworkUsageResponse, error) {
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	periodExpr := "day"
+	switch req.GetGroupBy() {
+	case pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_WEEK:
+		periodExpr = "toStartOfWeek(day)"
+	case pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_MONTH:
+		periodExpr = "toStartOfMonth(day)"
+	case pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_DAY, pb.NetworkUsageGroupBy_NETWORK_USAGE_GROUP_BY_UNSPECIFIED:
+		periodExpr = "day"
+	}
+
+	query := fmt.Sprintf(`
+		WITH viewer AS (
+			SELECT
+				%s AS period_start,
+				sum(viewer_hours) AS viewer_hours,
+				sum(egress_gb) AS egress_gb,
+				sum(total_sessions) AS total_sessions,
+				sum(unique_viewers) AS unique_viewers
+			FROM tenant_viewer_daily
+			WHERE day BETWEEN ? AND ?
+			GROUP BY period_start
+		),
+		processing AS (
+			SELECT
+				%s AS period_start,
+				sum(livepeer_seconds) AS livepeer_seconds,
+				sum(native_av_seconds) AS native_av_seconds
+			FROM processing_daily
+			WHERE day BETWEEN ? AND ?
+			GROUP BY period_start
+		),
+		api_usage AS (
+			SELECT
+				%s AS period_start,
+				sumMerge(total_requests) AS total_requests,
+				sumMerge(total_errors) AS total_errors
+			FROM api_usage_daily
+			WHERE day BETWEEN ? AND ?
+			GROUP BY period_start
+		)
+		SELECT
+			viewer.period_start,
+			viewer.viewer_hours,
+			viewer.egress_gb,
+			viewer.total_sessions,
+			viewer.unique_viewers,
+			coalesce(processing.livepeer_seconds, 0) AS livepeer_seconds,
+			coalesce(processing.native_av_seconds, 0) AS native_av_seconds,
+			coalesce(api_usage.total_requests, 0) AS total_requests,
+			coalesce(api_usage.total_errors, 0) AS total_errors
+		FROM viewer
+		LEFT JOIN processing USING period_start
+		LEFT JOIN api_usage USING period_start
+		ORDER BY viewer.period_start
+	`, periodExpr, periodExpr, periodExpr)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, startTime, endTime, startTime, endTime, startTime, endTime)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to query network usage: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	resp := &pb.GetNetworkUsageResponse{}
+	for rows.Next() {
+		var period time.Time
+		var viewerHours, egressGb, livepeerSeconds, nativeAvSeconds float64
+		var totalSessions, uniqueViewers, totalRequests, totalErrors uint64
+		if err := rows.Scan(&period, &viewerHours, &egressGb, &totalSessions, &uniqueViewers, &livepeerSeconds, &nativeAvSeconds, &totalRequests, &totalErrors); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to scan network usage row: %v", err)
+		}
+		resp.Records = append(resp.Records, &pb.NetworkUsageRecord{
+			PeriodStart:      timestamppb.New(period),
+			ViewerHours:      viewerHours,
+			EgressGb:         egressGb,
+			TotalSessions:    totalSessions,
+			UniqueViewers:    uniqueViewers,
+			LivepeerSeconds:  livepeerSeconds,
+			NativeAvSeconds:  nativeAvSeconds,
+			TotalApiRequests: totalRequests,
+			TotalApiErrors:   totalErrors,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to iterate network usage rows: %v", err)
+	}
+
+	return resp, nil
+}
+
+// GetAcquisitionFunnel returns signup counts grouped by channel/method/UTM/referral.
+func (s *PeriscopeServer) GetAcquisitionFunnel(ctx context.Context, req *pb.GetAcquisitionFunnelRequest) (*pb.GetAcquisitionFunnelResponse, error) {
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	query := `
+		SELECT
+			signup_channel,
+			signup_method,
+			utm_source,
+			utm_medium,
+			utm_campaign,
+			referral_code,
+			is_agent,
+			countDistinct(tenant_id) AS tenant_count
+		FROM tenant_acquisition_events
+		WHERE timestamp BETWEEN ? AND ?
+		GROUP BY signup_channel, signup_method, utm_source, utm_medium, utm_campaign, referral_code, is_agent
+		ORDER BY tenant_count DESC
+	`
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, startTime, endTime)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to query acquisition funnel: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	resp := &pb.GetAcquisitionFunnelResponse{}
+	for rows.Next() {
+		var signupChannel, signupMethod string
+		var utmSource, utmMedium, utmCampaign, referralCode sql.NullString
+		var isAgent uint8
+		var tenantCount uint64
+		if err := rows.Scan(&signupChannel, &signupMethod, &utmSource, &utmMedium, &utmCampaign, &referralCode, &isAgent, &tenantCount); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to scan acquisition funnel row: %v", err)
+		}
+		entry := &pb.AcquisitionFunnelEntry{
+			SignupChannel: signupChannel,
+			SignupMethod:  signupMethod,
+			UtmSource:     utmSource.String,
+			UtmMedium:     utmMedium.String,
+			UtmCampaign:   utmCampaign.String,
+			ReferralCode:  referralCode.String,
+			IsAgent:       isAgent == 1,
+			TenantCount:   tenantCount,
+		}
+		resp.Entries = append(resp.Entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to iterate acquisition funnel rows: %v", err)
+	}
+
+	return resp, nil
+}
+
+// GetAcquisitionCohortUsage returns usage totals grouped by acquisition cohorts.
+func (s *PeriscopeServer) GetAcquisitionCohortUsage(ctx context.Context, req *pb.GetAcquisitionCohortUsageRequest) (*pb.GetAcquisitionCohortUsageResponse, error) {
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+
+	params := []interface{}{startTime, endTime}
+	filters := ""
+	if req.SignupChannel != nil && *req.SignupChannel != "" {
+		filters += " AND cohort.signup_channel = ?"
+		params = append(params, *req.SignupChannel)
+	}
+	if req.CohortMonth != nil {
+		cohortMonth := req.CohortMonth.AsTime()
+		filters += " AND cohort.cohort_month = ?"
+		params = append(params, cohortMonth)
+	}
+
+	query := fmt.Sprintf(`
+		WITH cohort AS (
+			SELECT
+				tenant_id,
+				toStartOfMonth(min(timestamp)) AS cohort_month,
+				any(signup_channel) AS signup_channel
+			FROM tenant_acquisition_events
+			GROUP BY tenant_id
+		)
+		SELECT
+			viewer.day AS day,
+			cohort.signup_channel,
+			cohort.cohort_month,
+			sum(viewer.viewer_hours) AS viewer_hours,
+			sum(viewer.egress_gb) AS egress_gb,
+			sum(ifNull(processing.livepeer_seconds, 0) + ifNull(processing.native_av_seconds, 0)) AS processing_seconds
+		FROM tenant_viewer_daily AS viewer
+		INNER JOIN cohort ON cohort.tenant_id = viewer.tenant_id
+		LEFT JOIN processing_daily AS processing
+			ON processing.tenant_id = viewer.tenant_id AND processing.day = viewer.day
+		WHERE viewer.day BETWEEN ? AND ?%s
+		GROUP BY day, cohort.signup_channel, cohort.cohort_month
+		ORDER BY day, cohort.signup_channel, cohort.cohort_month
+	`, filters)
+
+	rows, err := s.clickhouse.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to query acquisition cohort usage: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	resp := &pb.GetAcquisitionCohortUsageResponse{}
+	for rows.Next() {
+		var day time.Time
+		var signupChannel string
+		var cohortMonth time.Time
+		var viewerHours, egressGb, processingSeconds float64
+		if err := rows.Scan(&day, &signupChannel, &cohortMonth, &viewerHours, &egressGb, &processingSeconds); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to scan acquisition cohort usage row: %v", err)
+		}
+		resp.Records = append(resp.Records, &pb.AcquisitionCohortUsageRecord{
+			Day:               timestamppb.New(day),
+			SignupChannel:     signupChannel,
+			CohortMonth:       timestamppb.New(cohortMonth),
+			ViewerHours:       viewerHours,
+			EgressGb:          egressGb,
+			ProcessingSeconds: processingSeconds,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to iterate acquisition cohort usage rows: %v", err)
+	}
+
+	return resp, nil
+}

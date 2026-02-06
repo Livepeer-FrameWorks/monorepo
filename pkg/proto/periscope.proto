@@ -1056,6 +1056,76 @@ message GetLiveUsageSummaryResponse {
   LiveUsageSummary summary = 1;
 }
 
+// ============================================================================
+// Network Usage + Acquisition Analytics
+// ============================================================================
+
+enum NetworkUsageGroupBy {
+  NETWORK_USAGE_GROUP_BY_UNSPECIFIED = 0;
+  NETWORK_USAGE_GROUP_BY_DAY = 1;
+  NETWORK_USAGE_GROUP_BY_WEEK = 2;
+  NETWORK_USAGE_GROUP_BY_MONTH = 3;
+}
+
+message GetNetworkUsageRequest {
+  common.TimeRange time_range = 1;
+  NetworkUsageGroupBy group_by = 2;
+}
+
+message NetworkUsageRecord {
+  google.protobuf.Timestamp period_start = 1;
+  double viewer_hours = 2;
+  double egress_gb = 3;
+  uint64 total_sessions = 4;
+  uint64 unique_viewers = 5;
+  double livepeer_seconds = 6;
+  double native_av_seconds = 7;
+  uint64 total_api_requests = 8;
+  uint64 total_api_errors = 9;
+}
+
+message GetNetworkUsageResponse {
+  repeated NetworkUsageRecord records = 1;
+}
+
+message GetAcquisitionFunnelRequest {
+  common.TimeRange time_range = 1;
+}
+
+message AcquisitionFunnelEntry {
+  string signup_channel = 1;
+  string signup_method = 2;
+  string utm_source = 3;
+  string utm_medium = 4;
+  string utm_campaign = 5;
+  string referral_code = 6;
+  bool is_agent = 7;
+  uint64 tenant_count = 8;
+}
+
+message GetAcquisitionFunnelResponse {
+  repeated AcquisitionFunnelEntry entries = 1;
+}
+
+message GetAcquisitionCohortUsageRequest {
+  common.TimeRange time_range = 1;
+  optional string signup_channel = 2;
+  optional google.protobuf.Timestamp cohort_month = 3;
+}
+
+message AcquisitionCohortUsageRecord {
+  google.protobuf.Timestamp day = 1;
+  string signup_channel = 2;
+  google.protobuf.Timestamp cohort_month = 3;
+  double viewer_hours = 4;
+  double egress_gb = 5;
+  double processing_seconds = 6;
+}
+
+message GetAcquisitionCohortUsageResponse {
+  repeated AcquisitionCohortUsageRecord records = 1;
+}
+
 // Service for materialized view analytics
 service AggregatedAnalyticsService {
   rpc GetStreamConnectionHourly(GetStreamConnectionHourlyRequest) returns (GetStreamConnectionHourlyResponse);
@@ -1079,6 +1149,9 @@ service AggregatedAnalyticsService {
   rpc GetAPIUsage(GetAPIUsageRequest) returns (GetAPIUsageResponse);
   rpc GetStreamHealthSummary(GetStreamHealthSummaryRequest) returns (GetStreamHealthSummaryResponse);
   rpc GetClientQoeSummary(GetClientQoeSummaryRequest) returns (GetClientQoeSummaryResponse);
+  rpc GetNetworkUsage(GetNetworkUsageRequest) returns (GetNetworkUsageResponse);
+  rpc GetAcquisitionFunnel(GetAcquisitionFunnelRequest) returns (GetAcquisitionFunnelResponse);
+  rpc GetAcquisitionCohortUsage(GetAcquisitionCohortUsageRequest) returns (GetAcquisitionCohortUsageResponse);
 }
 
 // ============================================================================

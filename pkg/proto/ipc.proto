@@ -6,6 +6,7 @@ option go_package = "frameworks/pkg/proto";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
+import "common.proto";
 
 // Coarse geospatial bucket (H3 index + resolution)
 message GeoBucket {
@@ -68,6 +69,7 @@ message AuthEvent {
 message TenantEvent {
   string tenant_id = 1;
   repeated string changed_fields = 2;
+  common.SignupAttribution attribution = 3;
 }
 
 // ClusterRejectReason standardizes rejection reasons for audit trails.

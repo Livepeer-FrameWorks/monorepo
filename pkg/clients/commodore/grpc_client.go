@@ -605,19 +605,21 @@ func (c *GRPCClient) GetNewsletterStatus(ctx context.Context) (bool, error) {
 // ============================================================================
 
 // WalletLogin authenticates a user via wallet signature, auto-provisioning if new
-func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signature string) (*pb.AuthResponse, error) {
+func (c *GRPCClient) WalletLogin(ctx context.Context, address, message, signature string, attribution *pb.SignupAttribution) (*pb.AuthResponse, error) {
 	return c.user.WalletLogin(ctx, &pb.WalletLoginRequest{
 		WalletAddress: address,
 		Message:       message,
 		Signature:     signature,
+		Attribution:   attribution,
 	})
 }
 
 // WalletLoginWithX402 authenticates via x402 payload and returns session token + payment info.
-func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *pb.X402PaymentPayload, clientIP, targetTenantID string) (*pb.WalletLoginWithX402Response, error) {
+func (c *GRPCClient) WalletLoginWithX402(ctx context.Context, payment *pb.X402PaymentPayload, clientIP, targetTenantID string, attribution *pb.SignupAttribution) (*pb.WalletLoginWithX402Response, error) {
 	req := &pb.WalletLoginWithX402Request{
-		Payment:  payment,
-		ClientIp: clientIP,
+		Payment:     payment,
+		ClientIp:    clientIP,
+		Attribution: attribution,
 	}
 	if targetTenantID != "" {
 		req.TargetTenantId = &targetTenantID
@@ -631,6 +633,7 @@ func (c *GRPCClient) LinkWallet(ctx context.Context, address, message, signature
 		WalletAddress: address,
 		Message:       message,
 		Signature:     signature,
+		Attribution:   attribution,
 	})
 }
 

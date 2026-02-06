@@ -161,7 +161,7 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 	clientIP := ctxkeys.GetClientIP(ctx)
 
 	if x402.IsAuthOnlyPayment(payload) {
-		resp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "")
+		resp, err := clients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "", nil)
 		if err != nil {
 			logger.WithError(err).Warn("x402 login failed")
 			return toolError(fmt.Sprintf("x402 login failed: %v", err))

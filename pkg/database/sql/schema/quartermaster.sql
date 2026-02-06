@@ -58,6 +58,51 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
 );
 
 -- ============================================================================
+-- TENANT ATTRIBUTION
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS quartermaster.tenant_attribution (
+    tenant_id UUID PRIMARY KEY REFERENCES quartermaster.tenants(id) ON DELETE CASCADE,
+    signup_channel VARCHAR(50) NOT NULL,
+    signup_method VARCHAR(50),
+    utm_source VARCHAR(255),
+    utm_medium VARCHAR(100),
+    utm_campaign VARCHAR(255),
+    utm_content VARCHAR(255),
+    utm_term VARCHAR(255),
+    http_referer TEXT,
+    landing_page TEXT,
+    referral_code VARCHAR(100),
+    is_agent BOOLEAN DEFAULT FALSE,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_attribution_channel
+    ON quartermaster.tenant_attribution (signup_channel, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_attribution_utm
+    ON quartermaster.tenant_attribution (utm_source)
+    WHERE utm_source IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_tenant_attribution_referral
+    ON quartermaster.tenant_attribution (referral_code)
+    WHERE referral_code IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS quartermaster.referral_codes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code VARCHAR(100) NOT NULL UNIQUE,
+    owner_tenant_id UUID REFERENCES quartermaster.tenants(id),
+    partner_name VARCHAR(255),
+    is_active BOOLEAN DEFAULT TRUE,
+    max_uses INTEGER,
+    current_uses INTEGER DEFAULT 0,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+-- ============================================================================
 -- INFRASTRUCTURE CLUSTERS
 -- ============================================================================
 

@@ -1281,6 +1281,31 @@ FROM api_usage_hourly
 GROUP BY day, tenant_id, auth_type, operation_type, operation_name;
 
 -- ============================================================================
+-- TENANT ACQUISITION EVENTS (signup attribution)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS tenant_acquisition_events (
+    timestamp DateTime,
+    tenant_id UUID,
+    user_id Nullable(UUID),
+    signup_channel LowCardinality(String),
+    signup_method LowCardinality(String),
+    utm_source Nullable(String),
+    utm_medium Nullable(String),
+    utm_campaign Nullable(String),
+    utm_content Nullable(String),
+    utm_term Nullable(String),
+    http_referer Nullable(String),
+    landing_page Nullable(String),
+    referral_code Nullable(String),
+    is_agent UInt8,
+    event_data String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (signup_channel, timestamp, tenant_id)
+TTL timestamp + INTERVAL 730 DAY;
+
+-- ============================================================================
 -- SERVICE EVENT AUDIT LOG (service_events topic)
 -- ============================================================================
 

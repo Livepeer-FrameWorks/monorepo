@@ -20,6 +20,13 @@ interface BotProtectionData {
   human_check?: string;
   phone_number?: string; // Honeypot field
   behavior?: string; // Behavioral data for verification when Turnstile is disabled
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_content?: string;
+  utm_term?: string;
+  referral_code?: string;
+  landing_page?: string;
 }
 
 interface AuthState {

@@ -614,7 +614,7 @@ func (s *Server) applyX402Auth(ctx context.Context, xPayment, clientIP string) c
 		return ctx
 	}
 
-	resp, err := s.serviceClients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "")
+	resp, err := s.serviceClients.Commodore.WalletLoginWithX402(ctx, payload, clientIP, "", nil)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.WithError(err).Warn("X-PAYMENT login failed")
