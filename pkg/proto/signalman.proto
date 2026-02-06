@@ -18,6 +18,7 @@ enum Channel {
   CHANNEL_SYSTEM = 3;
   CHANNEL_ALL = 4;
   CHANNEL_MESSAGING = 5;  // Support messaging updates
+  CHANNEL_AI = 6;         // AI assistant events
 }
 
 enum EventType {
@@ -56,6 +57,9 @@ enum EventType {
 
   // Messaging events (channel: messaging)
   EVENT_TYPE_MESSAGE_LIFECYCLE = 50;
+
+  // AI events (channel: AI)
+  EVENT_TYPE_SKIPPER_INVESTIGATION = 60;
 }
 
 // ============================================================================

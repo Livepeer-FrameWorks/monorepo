@@ -25,8 +25,9 @@ func LoadConfig() Config {
 			FromName: fromName,
 		},
 		DefaultPreferences: PreferenceDefaults{
-			Email: config.GetEnvBool("SKIPPER_NOTIFY_EMAIL", true),
-			MCP:   config.GetEnvBool("SKIPPER_NOTIFY_MCP", true),
+			Email:     config.GetEnvBool("SKIPPER_NOTIFY_EMAIL", true),
+			Websocket: config.GetEnvBool("SKIPPER_NOTIFY_WEBSOCKET", true),
+			MCP:       config.GetEnvBool("SKIPPER_NOTIFY_MCP", true),
 		},
 		WebAppURL: config.GetEnv("WEBAPP_PUBLIC_URL", ""),
 	}

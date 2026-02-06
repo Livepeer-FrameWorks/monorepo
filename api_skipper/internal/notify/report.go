@@ -16,8 +16,9 @@ type Recommendation struct {
 }
 
 type NotificationPreferences struct {
-	Email *bool
-	MCP   *bool
+	Email     *bool
+	Websocket *bool
+	MCP       *bool
 }
 
 type Report struct {

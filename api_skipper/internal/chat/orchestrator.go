@@ -17,6 +17,7 @@ import (
 	"frameworks/pkg/globalid"
 	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/tenants"
 )
 
@@ -26,9 +27,9 @@ type OrchestratorConfig struct {
 	LLMProvider llm.Provider
 	Logger      logging.Logger
 	SearchWeb   *SearchWebTool
-	Knowledge   *knowledge.Store
-	Embedder    *knowledge.Embedder
-	Periscope   *periscope.GRPCClient
+	Knowledge   KnowledgeSearcher
+	Embedder    KnowledgeEmbedder
+	Periscope   PeriscopeClient
 	MaxRounds   int
 }
 
@@ -36,9 +37,9 @@ type Orchestrator struct {
 	llmProvider llm.Provider
 	logger      logging.Logger
 	searchWeb   *SearchWebTool
-	knowledge   *knowledge.Store
-	embedder    *knowledge.Embedder
-	periscope   *periscope.GRPCClient
+	knowledge   KnowledgeSearcher
+	embedder    KnowledgeEmbedder
+	periscope   PeriscopeClient
 	tools       []llm.Tool
 	maxRounds   int
 }
@@ -71,6 +72,22 @@ type ToolOutcome struct {
 	Content string
 	Sources []Source
 	Detail  ToolDetail
+}
+
+type KnowledgeSearcher interface {
+	Search(ctx context.Context, tenantID string, embedding []float32, limit int) ([]knowledge.Chunk, error)
+}
+
+type KnowledgeEmbedder interface {
+	EmbedQuery(ctx context.Context, query string) ([]float32, error)
+}
+
+type PeriscopeClient interface {
+	GetRebufferingEvents(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetRebufferingEventsResponse, error)
+	GetStreamHealth5m(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetStreamHealth5MResponse, error)
+	GetClientMetrics5m(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*pb.GetClientMetrics5MResponse, error)
+	GetRoutingEvents(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error)
+	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error)
 }
 
 func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {

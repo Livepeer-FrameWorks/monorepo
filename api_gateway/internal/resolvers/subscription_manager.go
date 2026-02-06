@@ -527,6 +527,10 @@ func (sm *SubscriptionManager) getChannelForEventType(eventType pb.EventType) st
 		pb.EventType_EVENT_TYPE_PROCESS_BILLING,
 		pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
 		return "ANALYTICS"
+	case pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE:
+		return "MESSAGING"
+	case pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
+		return "AI"
 
 	default:
 		return "ANALYTICS"
@@ -543,6 +547,10 @@ func channelToTenantChannel(channel pb.Channel) string {
 		return "SYSTEM"
 	case pb.Channel_CHANNEL_ALL:
 		return "ALL"
+	case pb.Channel_CHANNEL_MESSAGING:
+		return "MESSAGING"
+	case pb.Channel_CHANNEL_AI:
+		return "AI"
 	default:
 		return "ANALYTICS"
 	}

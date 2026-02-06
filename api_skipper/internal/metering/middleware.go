@@ -1,24 +1,29 @@
 package metering
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
 
-	"frameworks/pkg/clients/purser"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 
 	"github.com/gin-gonic/gin"
 )
 
 type AccessMiddlewareConfig struct {
-	Purser            *purser.GRPCClient
+	Purser            BillingClient
 	RequiredTierLevel int
 	RateLimiter       *RateLimiter
 	Tracker           *UsageTracker
 	Logger            logging.Logger
+}
+
+type BillingClient interface {
+	GetBillingStatus(ctx context.Context, tenantID string) (*pb.BillingStatusResponse, error)
 }
 
 func AccessMiddleware(cfg AccessMiddlewareConfig) gin.HandlerFunc {
