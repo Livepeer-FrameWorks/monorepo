@@ -1,5 +1,6 @@
 // @ts-check
 import { defineConfig } from "astro/config";
+import svelte from "@astrojs/svelte";
 import starlight from "@astrojs/starlight";
 import starlightBlog from "starlight-blog";
 import mermaid from "astro-mermaid";
@@ -148,6 +149,7 @@ export default defineConfig({
       theme: "dark",
       autoTheme: true,
     }),
+    svelte(),
     starlight({
       title: "FrameWorks Docs",
       plugins: [
@@ -161,6 +163,7 @@ export default defineConfig({
       ],
       components: {
         Hero: "./src/components/Hero.astro",
+        PageFrame: "./src/components/DocsPageFrame.astro",
       },
       social: [
         {

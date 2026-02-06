@@ -6,12 +6,18 @@ export default {
   useTabs: false,
   trailingComma: "es5",
   printWidth: 100,
-  plugins: ["prettier-plugin-svelte"],
+  plugins: ["prettier-plugin-svelte", "prettier-plugin-astro"],
   overrides: [
     {
       files: "*.svelte",
       options: {
         parser: "svelte",
+      },
+    },
+    {
+      files: "*.astro",
+      options: {
+        parser: "astro",
       },
     },
   ],
