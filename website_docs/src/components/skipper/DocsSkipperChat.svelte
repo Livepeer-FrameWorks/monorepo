@@ -59,75 +59,81 @@
     isStreaming = true;
     updateMessage(id, { confidence: "best_guess" });
 
-    const response = await fetch("/api/skipper/chat?mode=docs", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify({ message: content }),
-    });
+    try {
+      const response = await fetch("/api/skipper/chat?mode=docs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({ message: content }),
+      });
 
-    if (!response.ok || !response.body) {
+      if (!response.ok || !response.body) {
+        updateMessage(id, {
+          content: "Unable to reach Skipper right now. Please try again soon.",
+          confidence: "unknown",
+        });
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let isDone = false;
+
+      while (!isDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let separatorIndex = buffer.indexOf("\n\n");
+        while (separatorIndex !== -1) {
+          const rawEvent = buffer.slice(0, separatorIndex);
+          buffer = buffer.slice(separatorIndex + 2);
+          const dataLines = rawEvent
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.replace(/^data:\s?/, ""));
+          const data = dataLines.join("\n").trim();
+
+          if (data === "[DONE]") {
+            isDone = true;
+            break;
+          }
+
+          if (data) {
+            const parsed = tryParseJson(data);
+            if (parsed && typeof parsed === "object") {
+              if (parsed.type === "token" && typeof parsed.content === "string") {
+                appendToken(id, parsed.content);
+              } else if (parsed.type === "meta") {
+                updateMessage(id, {
+                  confidence: parsed.confidence as SkipperConfidence,
+                  citations: parsed.citations,
+                  externalLinks: parsed.externalLinks,
+                });
+              } else if (parsed.type === "done") {
+                isDone = true;
+                break;
+              }
+            } else {
+              appendToken(id, data);
+            }
+          }
+
+          separatorIndex = buffer.indexOf("\n\n");
+        }
+
+        await scrollToBottom();
+      }
+    } catch {
       updateMessage(id, {
         content: "Unable to reach Skipper right now. Please try again soon.",
         confidence: "unknown",
       });
+    } finally {
       isStreaming = false;
-      return;
     }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let isDone = false;
-
-    while (!isDone) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let separatorIndex = buffer.indexOf("\n\n");
-      while (separatorIndex !== -1) {
-        const rawEvent = buffer.slice(0, separatorIndex);
-        buffer = buffer.slice(separatorIndex + 2);
-        const dataLines = rawEvent
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.replace(/^data:\s?/, ""));
-        const data = dataLines.join("\n").trim();
-
-        if (data === "[DONE]") {
-          isDone = true;
-          break;
-        }
-
-        if (data) {
-          const parsed = tryParseJson(data);
-          if (parsed && typeof parsed === "object") {
-            if (parsed.type === "token" && typeof parsed.content === "string") {
-              appendToken(id, parsed.content);
-            } else if (parsed.type === "meta") {
-              updateMessage(id, {
-                confidence: parsed.confidence as SkipperConfidence,
-                citations: parsed.citations,
-                externalLinks: parsed.externalLinks,
-              });
-            } else if (parsed.type === "done") {
-              isDone = true;
-              break;
-            }
-          } else {
-            appendToken(id, data);
-          }
-        }
-
-        separatorIndex = buffer.indexOf("\n\n");
-      }
-
-      await scrollToBottom();
-    }
-
-    isStreaming = false;
   }
 
   function appendToken(id: string, token: string) {
