@@ -83,9 +83,11 @@ func (r *Reporter) Send(ctx context.Context, tenantID string, report Report) err
 			if r.Logger != nil {
 				r.Logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to persist heartbeat report")
 			}
-			return err
+			// Best-effort persistence: still attempt notifications so operators get alerts
+			// during transient storage outages.
+		} else {
+			record = stored
 		}
-		record = stored
 	}
 
 	if r.Dispatcher != nil {
