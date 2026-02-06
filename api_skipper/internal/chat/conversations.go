@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -132,7 +133,7 @@ func (s *ConversationStore) AddMessage(
 		tenantID,
 	).Scan(&messageID)
 	if err != nil {
-		if err == database.ErrNoRows {
+		if errors.Is(err, database.ErrNoRows) {
 			return fmt.Errorf("conversation not found")
 		}
 		return fmt.Errorf("add message: %w", err)
