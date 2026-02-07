@@ -34,6 +34,17 @@ func (f *fakeEmbedder) EmbedDocument(_ context.Context, url, title, content stri
 	return []Chunk{{SourceURL: url, SourceTitle: title, Text: content, Index: 0, Embedding: []float32{1}}}, nil
 }
 
+type fakeRenderer struct {
+	html string
+	err  error
+}
+
+func (f *fakeRenderer) Render(_ context.Context, _ string) (string, error) {
+	return f.html, f.err
+}
+
+func (f *fakeRenderer) Close() {}
+
 func TestCrawlerSitemapAndFetch(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +141,41 @@ func TestCrawlerCrawlAndEmbed(t *testing.T) {
 	}
 	if len(store.upserted) != 1 {
 		t.Fatalf("expected store upserted once, got %d", len(store.upserted))
+	}
+}
+
+func TestFetchRenderedIncludesHeadMetadata(t *testing.T) {
+	lastModified := time.Now().UTC().Format(http.TimeFormat)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("ETag", "W/\"etag-1\"")
+			w.Header().Set("Last-Modified", lastModified)
+			w.Header().Set("Content-Length", "42")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	crawler := &Crawler{
+		client:    server.Client(),
+		renderer:  &fakeRenderer{html: "<html><head><title>Title</title></head><body>Text</body></html>"},
+		userAgent: "SkipperBot/1.0",
+	}
+
+	result, err := crawler.fetchRendered(context.Background(), server.URL)
+	if err != nil {
+		t.Fatalf("fetch rendered: %v", err)
+	}
+	if result.ETag != "W/\"etag-1\"" {
+		t.Fatalf("expected etag, got %q", result.ETag)
+	}
+	if result.LastMod != lastModified {
+		t.Fatalf("expected last modified, got %q", result.LastMod)
+	}
+	if result.RawSize != 42 {
+		t.Fatalf("expected raw size 42, got %d", result.RawSize)
 	}
 }
 
