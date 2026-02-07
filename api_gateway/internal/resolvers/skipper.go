@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
@@ -99,7 +100,7 @@ func convertSkipperEvent(evt *pb.SkipperChatEvent) model.SkipperChatEvent {
 		for _, d := range meta.GetDetails() {
 			var payload any
 			if d.GetPayload() != nil {
-				payload = d.GetPayload().AsMap()
+				payload = sanitizeSkipperJSON(d.GetPayload().AsMap())
 			}
 			details = append(details, &model.SkipperToolDet{Title: d.GetTitle(), Payload: payload})
 		}
@@ -184,13 +185,17 @@ func (r *Resolver) DoSkipperConversation(ctx context.Context, id string) (*model
 		if src := m.GetSourcesJson(); src != "" {
 			var parsed any
 			if json.Unmarshal([]byte(src), &parsed) == nil {
-				msg.Sources = parsed
+				if sanitized := sanitizeSkipperJSON(parsed); sanitized != nil {
+					msg.Sources = sanitized
+				}
 			}
 		}
 		if tools := m.GetToolsUsedJson(); tools != "" {
 			var parsed any
 			if json.Unmarshal([]byte(tools), &parsed) == nil {
-				msg.ToolsUsed = parsed
+				if sanitized := sanitizeSkipperJSON(parsed); sanitized != nil {
+					msg.ToolsUsed = sanitized
+				}
 			}
 		}
 		msgs = append(msgs, msg)
@@ -203,6 +208,107 @@ func (r *Resolver) DoSkipperConversation(ctx context.Context, id string) (*model
 		CreatedAt: resp.GetCreatedAt().AsTime(),
 		UpdatedAt: resp.GetUpdatedAt().AsTime(),
 	}, nil
+}
+
+const (
+	skipperMaxDepth             = 6
+	skipperMaxCollectionEntries = 200
+	skipperMaxStringLen         = 4000
+)
+
+var skipperSensitiveKeys = map[string]struct{}{
+	"authorization": {},
+	"auth":          {},
+	"cookie":        {},
+	"internal":      {},
+	"jwt":           {},
+	"password":      {},
+	"secret":        {},
+	"session":       {},
+	"token":         {},
+}
+
+func sanitizeSkipperJSON(value any) any {
+	return sanitizeSkipperJSONDepth(value, 0)
+}
+
+func sanitizeSkipperJSONDepth(value any, depth int) any {
+	if depth > skipperMaxDepth {
+		return nil
+	}
+
+	switch v := value.(type) {
+	case map[string]any:
+		if len(v) == 0 {
+			return nil
+		}
+		out := make(map[string]any, len(v))
+		count := 0
+		for key, val := range v {
+			if isSkipperSensitiveKey(key) {
+				continue
+			}
+			sanitized := sanitizeSkipperJSONDepth(val, depth+1)
+			if sanitized == nil {
+				continue
+			}
+			out[key] = sanitized
+			count++
+			if count >= skipperMaxCollectionEntries {
+				break
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		if len(v) == 0 {
+			return nil
+		}
+		out := make([]any, 0, len(v))
+		for i, val := range v {
+			if i >= skipperMaxCollectionEntries {
+				break
+			}
+			sanitized := sanitizeSkipperJSONDepth(val, depth+1)
+			if sanitized != nil {
+				out = append(out, sanitized)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case string:
+		if len(v) > skipperMaxStringLen {
+			return v[:skipperMaxStringLen]
+		}
+		return v
+	case bool, float64, float32, int, int32, int64, uint, uint32, uint64, nil:
+		return v
+	default:
+		return nil
+	}
+}
+
+func isSkipperSensitiveKey(key string) bool {
+	if key == "" {
+		return true
+	}
+	lower := strings.ToLower(key)
+	if strings.HasPrefix(lower, "_") {
+		return true
+	}
+	if _, ok := skipperSensitiveKeys[lower]; ok {
+		return true
+	}
+	for _, fragment := range []string{"token", "secret", "password", "cookie", "session", "jwt", "bearer"} {
+		if strings.Contains(lower, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // DoDeleteSkipperConversation deletes a Skipper conversation.
