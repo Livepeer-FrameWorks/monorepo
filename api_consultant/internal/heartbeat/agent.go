@@ -278,12 +278,14 @@ func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
 	decision, result, err := a.evaluateDecision(ctx, snapshot)
 	if err != nil {
 		if logErr := a.logUsage(ctx, tenantID, result.TokenCounts, true); logErr != nil {
-			return errors.Join(err, fmt.Errorf("usage logging failed: %w", logErr))
+			// Best-effort usage logging: do not block incident handling on metering outages.
+			a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
 		}
 		return err
 	}
 	if logErr := a.logUsage(ctx, tenantID, result.TokenCounts, false); logErr != nil {
-		return logErr
+		// Best-effort usage logging: do not block incident handling on metering outages.
+		a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
 	}
 
 	action := strings.ToLower(strings.TrimSpace(decision.Action))
@@ -291,7 +293,8 @@ func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
 	case "investigate":
 		report, tokens, err := a.Investigate(ctx, tenantID, "heartbeat", decision.Reason, snapshot)
 		if logErr := a.logUsage(ctx, tenantID, tokens, err != nil); logErr != nil {
-			return logErr
+			// Best-effort usage logging: do not block incident handling on metering outages.
+			a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
 		}
 		if err != nil {
 			return err

@@ -81,10 +81,10 @@ func (t *ThresholdTrigger) Evaluate(ctx context.Context, snapshot *healthSnapsho
 	reason := fmt.Sprintf("threshold warning: %s", strings.Join(yellowReasons, ", "))
 	report, tokens, err := t.agent.Investigate(ctx, snapshot.TenantID, "threshold", reason, snapshot)
 	if logErr := t.agent.logUsage(ctx, snapshot.TenantID, tokens, err != nil); logErr != nil {
+		// Best-effort usage logging: do not block incident handling on metering outages.
 		if t.logger != nil {
 			t.logger.WithError(logErr).WithField("tenant_id", snapshot.TenantID).Warn("Threshold usage logging failed")
 		}
-		return false
 	}
 	if err != nil {
 		if t.logger != nil {
