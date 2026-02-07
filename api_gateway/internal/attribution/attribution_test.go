@@ -29,9 +29,9 @@ func TestSanitizeURL(t *testing.T) {
 			expected: "",
 		},
 		{
-			name:     "returns empty for relative path",
+			name:     "preserves relative path",
 			raw:      "/register?utm_source=ad",
-			expected: "",
+			expected: "/register",
 		},
 	}
 

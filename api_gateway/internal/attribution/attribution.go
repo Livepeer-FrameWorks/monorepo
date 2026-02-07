@@ -77,7 +77,11 @@ func sanitizeURL(raw string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	if parsed.Scheme == "" && parsed.Host == "" {
-		parsed.Path = ""
+		// In net/http handlers, r.URL.String() is typically a relative path.
+		// Preserve the path for attribution, but drop any explicit userinfo.
+		parsed.User = nil
+		return parsed.Path
 	}
+	parsed.User = nil
 	return parsed.String()
 }
