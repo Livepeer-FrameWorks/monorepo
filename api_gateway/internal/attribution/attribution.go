@@ -2,6 +2,7 @@ package attribution
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	pb "frameworks/pkg/proto"
@@ -32,6 +33,7 @@ func FromRequest(r *http.Request, signupChannel, signupMethod string) *pb.Signup
 	if referralCode == "" {
 		referralCode = query.Get("ref")
 	}
+	landingPage := sanitizeURL(r.URL.String())
 	return &pb.SignupAttribution{
 		SignupChannel: signupChannel,
 		SignupMethod:  signupMethod,
@@ -40,8 +42,8 @@ func FromRequest(r *http.Request, signupChannel, signupMethod string) *pb.Signup
 		UtmCampaign:   query.Get("utm_campaign"),
 		UtmContent:    query.Get("utm_content"),
 		UtmTerm:       query.Get("utm_term"),
-		HttpReferer:   r.Referer(),
-		LandingPage:   r.URL.String(),
+		HttpReferer:   sanitizeURL(r.Referer()),
+		LandingPage:   landingPage,
 		ReferralCode:  referralCode,
 		IsAgent:       IsAgent(r),
 	}
@@ -56,10 +58,26 @@ func Enrich(r *http.Request, attr *pb.SignupAttribution) *pb.SignupAttribution {
 	if r == nil {
 		return attr
 	}
-	attr.HttpReferer = r.Referer()
+	attr.HttpReferer = sanitizeURL(r.Referer())
 	if attr.LandingPage == "" {
-		attr.LandingPage = r.URL.String()
+		attr.LandingPage = sanitizeURL(r.URL.String())
 	}
 	attr.IsAgent = IsAgent(r)
 	return attr
+}
+
+func sanitizeURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	if parsed.Scheme == "" && parsed.Host == "" {
+		parsed.Path = ""
+	}
+	return parsed.String()
 }
