@@ -120,13 +120,51 @@ func TestRerankJina(t *testing.T) {
 	}
 }
 
-func TestRerankGeneric(t *testing.T) {
+func TestRerankVoyage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := genericRerankResponse{
-			Results: []struct {
+		if r.URL.Path != "/rerank" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		resp := voyageRerankResponse{
+			Data: []struct {
 				Index          int     `json:"index"`
 				RelevanceScore float64 `json:"relevance_score"`
 			}{
+				{Index: 1, RelevanceScore: 0.91},
+				{Index: 0, RelevanceScore: 0.33},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client, err := NewRerankClient(RerankConfig{
+		Provider: "voyage",
+		Model:    "rerank-2.5",
+		APIKey:   "pa-test",
+		APIURL:   srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	results, err := client.Rerank(context.Background(), "query", []string{"doc A", "doc B"})
+	if err != nil {
+		t.Fatalf("rerank: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Index != 1 || results[0].RelevanceScore != 0.91 {
+		t.Fatalf("unexpected first result: %+v", results[0])
+	}
+}
+
+func TestRerankGeneric(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := genericRerankResponse{
+			Results: []genericRerankItem{
 				{Index: 0, RelevanceScore: 0.75},
 				{Index: 1, RelevanceScore: 0.50},
 			},
@@ -150,6 +188,72 @@ func TestRerankGeneric(t *testing.T) {
 	}
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+}
+
+func TestRerankGenericDataField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate a provider that returns "data" instead of "results" (e.g., Voyage-compatible)
+		resp := genericRerankResponse{
+			Data: []genericRerankItem{
+				{Index: 0, RelevanceScore: 0.80},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client, err := NewRerankClient(RerankConfig{
+		Provider: "generic",
+		APIURL:   srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	results, err := client.Rerank(context.Background(), "query", []string{"doc"})
+	if err != nil {
+		t.Fatalf("rerank: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].RelevanceScore != 0.80 {
+		t.Fatalf("unexpected score: %f", results[0].RelevanceScore)
+	}
+}
+
+func TestRerankGenericScoreField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate a provider that uses "score" instead of "relevance_score" (e.g., Mixedbread)
+		resp := genericRerankResponse{
+			Results: []genericRerankItem{
+				{Index: 0, Score: 0.65},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	client, err := NewRerankClient(RerankConfig{
+		Provider: "generic",
+		APIURL:   srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	results, err := client.Rerank(context.Background(), "query", []string{"doc"})
+	if err != nil {
+		t.Fatalf("rerank: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].RelevanceScore != 0.65 {
+		t.Fatalf("expected score 0.65, got %f", results[0].RelevanceScore)
 	}
 }
 

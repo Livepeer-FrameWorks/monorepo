@@ -155,13 +155,13 @@ Assuming ~2K input tokens and ~500 output tokens per response:
 
 **Retrieval quality:**
 
-| Variable              | Purpose                                                                   | Default              |
-| --------------------- | ------------------------------------------------------------------------- | -------------------- |
-| `RERANKER_PROVIDER`   | Cross-encoder reranker: `cohere`, `jina`, or `generic`                    | — (keyword fallback) |
-| `RERANKER_MODEL`      | Reranker model (e.g. `rerank-v3.5`, `jina-reranker-v2-base-multilingual`) | —                    |
-| `RERANKER_API_KEY`    | Reranker API credentials                                                  | `LLM_API_KEY`        |
-| `RERANKER_API_URL`    | Reranker endpoint (required for `generic` provider)                       | Provider default     |
-| `SKIPPER_ENABLE_HYDE` | Enable Hypothetical Document Embeddings for `search_knowledge`            | `false`              |
+| Variable              | Purpose                                                                                  | Default              |
+| --------------------- | ---------------------------------------------------------------------------------------- | -------------------- |
+| `RERANKER_PROVIDER`   | Cross-encoder reranker: `cohere`, `jina`, `voyage`, or `generic`                         | — (keyword fallback) |
+| `RERANKER_MODEL`      | Reranker model (e.g. `rerank-4-pro`, `rerank-2.5`, `jina-reranker-v2-base-multilingual`) | —                    |
+| `RERANKER_API_KEY`    | Reranker API credentials                                                                 | `LLM_API_KEY`        |
+| `RERANKER_API_URL`    | Reranker endpoint (required for `generic` provider)                                      | Provider default     |
+| `SKIPPER_ENABLE_HYDE` | Enable Hypothetical Document Embeddings for `search_knowledge`                           | `false`              |
 
 **Knowledge base:**
 
@@ -257,9 +257,9 @@ Assuming ~2K input tokens and ~500 output tokens per response:
     SEARCH_PROVIDER=tavily
     SEARCH_API_KEY=tvly-...
 
-    # Reranker — Cohere rerank (best quality, $2/1K queries)
+    # Reranker — Cohere rerank
     RERANKER_PROVIDER=cohere
-    RERANKER_MODEL=rerank-v3.5
+    RERANKER_MODEL=rerank-4-pro
     RERANKER_API_KEY=...
 
     # HyDE — improves search_knowledge quality at ~500-1500ms extra latency
@@ -297,10 +297,23 @@ Assuming ~2K input tokens and ~500 output tokens per response:
     OpenRouter doesn't proxy embeddings or reranking, so use provider APIs directly for those.
 
     ```bash
-    # Reranker — Jina (free tier available, strong multilingual)
-    RERANKER_PROVIDER=jina
-    RERANKER_MODEL=jina-reranker-v2-base-multilingual
-    RERANKER_API_KEY=jina_...
+    # Reranker — pick one:
+
+    # Voyage AI (200M free tokens, instruction-following)
+    RERANKER_PROVIDER=voyage
+    RERANKER_MODEL=rerank-2.5
+    RERANKER_API_KEY=pa-...
+
+    # ZeroEntropy (#1 quality, fastest, half-price)
+    # RERANKER_PROVIDER=generic
+    # RERANKER_MODEL=zerank-2
+    # RERANKER_API_KEY=ze-...
+    # RERANKER_API_URL=https://api.zeroentropy.dev/v1/models
+
+    # Jina (cheapest, strong multilingual)
+    # RERANKER_PROVIDER=jina
+    # RERANKER_MODEL=jina-reranker-v2-base-multilingual
+    # RERANKER_API_KEY=jina_...
     ```
 
   </TabItem>
@@ -330,7 +343,7 @@ Assuming ~2K input tokens and ~500 output tokens per response:
 
     # Reranker — Cohere rerank
     RERANKER_PROVIDER=cohere
-    RERANKER_MODEL=rerank-v3.5
+    RERANKER_MODEL=rerank-4-pro
     RERANKER_API_KEY=...
 
     # HyDE
@@ -412,11 +425,20 @@ Three features improve retrieval accuracy at query time. All are optional and in
 
 **Cross-encoder reranking** (`RERANKER_PROVIDER`) replaces the default keyword-overlap heuristic with a model that scores (query, chunk) pairs together. This understands semantic equivalence that keyword matching cannot — "rebuffering issues" matches "playback stalling", "my stream keeps dying" matches "connection timeout troubleshooting". Applied to both pre-retrieval (every message) and `search_knowledge` tool calls.
 
-| Provider                            | Model                                | Cost                | Notes                        |
-| ----------------------------------- | ------------------------------------ | ------------------- | ---------------------------- |
-| [Cohere](https://cohere.com/rerank) | `rerank-v3.5`                        | ~$2/1K queries      | Best proprietary quality     |
-| [Jina](https://jina.ai/reranker)    | `jina-reranker-v2-base-multilingual` | Free tier available | Strong multilingual support  |
-| Generic                             | Any `/v1/rerank` endpoint            | Varies              | Self-hosted BGE/MXBai models |
+| Provider                                             | Model                                | Quality    | Latency    | Cost             | Notes                                                                                            |
+| ---------------------------------------------------- | ------------------------------------ | ---------- | ---------- | ---------------- | ------------------------------------------------------------------------------------------------ |
+| [Cohere](https://cohere.com/rerank)                  | `rerank-4-pro`                       | #2 ELO     | ~600ms     | ~$2/1K queries   | Incumbent, widest cloud availability (Bedrock, Azure). `rerank-4-fast` trades quality for speed. |
+| [Voyage AI](https://docs.voyageai.com/docs/reranker) | `rerank-2.5`                         | #4 ELO     | ~600ms     | $0.05/1M tokens  | 200M free tokens. Instruction-following. 1K docs/request. Backed by MongoDB.                     |
+| [Jina](https://jina.ai/reranker)                     | `jina-reranker-v2-base-multilingual` | #12 ELO    | ~750ms     | ~$0.02/1M tokens | Cheapest. Strong multilingual and code search. 131K context in v3.                               |
+| [ZeroEntropy](https://www.zeroentropy.dev)           | `zerank-2`                           | **#1 ELO** | **~265ms** | $0.025/1M tokens | Best quality + speed + price. Use `generic` provider.                                            |
+| [Contextual AI](https://contextual.ai)               | `rerank-v2-instruct`                 | #9 ELO     | ~3.3s      | $0.05/1M tokens  | Instruction-following, recency-aware. Use `generic` provider.                                    |
+| Generic                                              | Any `/v1/rerank` endpoint            | Varies     | Varies     | Varies           | Self-hosted BGE/MXBai models, or any compatible API.                                             |
+
+<Aside type="note" title="Quality rankings">
+  ELO ratings from the [Agentset Reranker Leaderboard](https://agentset.ai/leaderboard/rerankers)
+  (Feb 2026), measuring head-to-head RAG retrieval quality. Rankings shift as providers release new
+  models.
+</Aside>
 
 **Query rewriting** (automatic when utility LLM is configured) transforms conversational questions into search-optimized queries before embedding. "My European viewers are buffering a lot" becomes "European CDN edge rebuffering latency troubleshooting". Applied to `search_knowledge` and `search_web` tool calls; skipped for pre-retrieval to keep latency low.
 
