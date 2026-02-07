@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -14,8 +13,12 @@ import (
 // DecklogUsageLogger implements UsageLogger by publishing service events
 // to Decklog for the FrameWorks billing/metering pipeline.
 type DecklogUsageLogger struct {
-	Client *decklog.BatchedClient
+	Client ServiceEventSender
 	Logger logging.Logger
+}
+
+type ServiceEventSender interface {
+	SendServiceEvent(event *pb.ServiceEvent) error
 }
 
 func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEvent) {
@@ -24,6 +27,14 @@ func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEv
 	}
 	duration := uint64(time.Since(event.StartedAt).Milliseconds())
 	totalTokens := uint32(event.TokensIn + event.TokensOut)
+	userHash := event.UserHash
+	if userHash == 0 && event.UserID != "" {
+		userHash = hashIdentifier(event.UserID)
+	}
+	tokenHash := event.TokenHash
+	if tokenHash == 0 {
+		tokenHash = tokenHashFromContext(ctx)
+	}
 	agg := &pb.APIRequestAggregate{
 		TenantId:        event.TenantID,
 		AuthType:        resolveAuthType(ctx),
@@ -34,6 +45,12 @@ func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEv
 		TotalDurationMs: duration,
 		TotalComplexity: totalTokens,
 		Timestamp:       event.StartedAt.Unix(),
+	}
+	if userHash != 0 {
+		agg.UserHashes = []uint64{userHash}
+	}
+	if tokenHash != 0 {
+		agg.TokenHashes = []uint64{tokenHash}
 	}
 	batch := &pb.APIRequestBatch{
 		Timestamp:  time.Now().Unix(),
@@ -46,7 +63,14 @@ func (d *DecklogUsageLogger) LogChatUsage(ctx context.Context, event ChatUsageEv
 		Source:    "skipper",
 		TenantId:  event.TenantID,
 		UserId:    event.UserID,
-		Payload:   &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
+		ResourceType: func() string {
+			if event.ConversationID == "" {
+				return ""
+			}
+			return "skipper_conversation"
+		}(),
+		ResourceId: event.ConversationID,
+		Payload:    &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
 	}
 	if err := d.Client.SendServiceEvent(svcEvent); err != nil && d.Logger != nil {
 		d.Logger.WithError(err).Warn("Failed to emit Skipper usage event")

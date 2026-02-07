@@ -144,16 +144,20 @@ func (ut *UsageTracker) flushLoop() {
 
 // flush sends all aggregates to Decklog and resets counters
 func (ut *UsageTracker) flush() {
-	// Skip flush if service tenant ID not yet set (Quartermaster bootstrap may still be in progress)
-	if ut.config.Decklog != nil {
-		v := ut.serviceTenantID.Load()
-		tenantID, _ := v.(string)
-		if tenantID == "" {
-			if ut.config.Logger != nil {
-				ut.config.Logger.Debug("Skipping usage flush: service tenant ID not yet set")
-			}
-			return
+	if ut.config.Decklog == nil {
+		if ut.config.Logger != nil {
+			ut.config.Logger.Warn("Skipping usage flush: Decklog client unavailable")
 		}
+		return
+	}
+	// Skip flush if service tenant ID not yet set (Quartermaster bootstrap may still be in progress)
+	v := ut.serviceTenantID.Load()
+	tenantID, _ := v.(string)
+	if tenantID == "" {
+		if ut.config.Logger != nil {
+			ut.config.Logger.Debug("Skipping usage flush: service tenant ID not yet set")
+		}
+		return
 	}
 
 	ut.retryFailedBatches()
@@ -220,31 +224,29 @@ func (ut *UsageTracker) flush() {
 		Aggregates: aggregates,
 	}
 
-	if ut.config.Decklog != nil {
-		tenantID := ""
-		if v := ut.serviceTenantID.Load(); v != nil {
-			if s, ok := v.(string); ok && s != "" {
-				tenantID = s
-			}
+	tenantID = ""
+	if v := ut.serviceTenantID.Load(); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			tenantID = s
 		}
-		if tenantID == "" {
-			tenantID = tenants.SystemTenantID.String()
-			if ut.config.Logger != nil {
-				ut.config.Logger.WithField("tenant_id", tenantID).
-					Debug("Usage tracker using system tenant for service event batch")
-			}
+	}
+	if tenantID == "" {
+		tenantID = tenants.SystemTenantID.String()
+		if ut.config.Logger != nil {
+			ut.config.Logger.WithField("tenant_id", tenantID).
+				Debug("Usage tracker using system tenant for service event batch")
 		}
-		event := &pb.ServiceEvent{
-			EventType: "api_request_batch",
-			Timestamp: timestamppb.New(time.Unix(batch.GetTimestamp(), 0)),
-			Source:    "bridge",
-			TenantId:  tenantID,
-			Payload:   &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
-		}
+	}
+	event := &pb.ServiceEvent{
+		EventType: "api_request_batch",
+		Timestamp: timestamppb.New(time.Unix(batch.GetTimestamp(), 0)),
+		Source:    "bridge",
+		TenantId:  tenantID,
+		Payload:   &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
+	}
 
-		if err := ut.sendServiceEvent(event, len(aggregates)); err != nil {
-			ut.enqueueFailedBatch(event, len(aggregates))
-		}
+	if err := ut.sendServiceEvent(event, len(aggregates)); err != nil {
+		ut.enqueueFailedBatch(event, len(aggregates))
 	}
 }
 

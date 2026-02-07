@@ -277,16 +277,25 @@ func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
 
 	decision, result, err := a.evaluateDecision(ctx, snapshot)
 	if err != nil {
-		a.logUsage(ctx, tenantID, result.TokenCounts, true)
+		if logErr := a.logUsage(ctx, tenantID, result.TokenCounts, true); logErr != nil {
+			// Best-effort usage logging: do not block incident handling on metering outages.
+			a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
+		}
 		return err
 	}
-	a.logUsage(ctx, tenantID, result.TokenCounts, false)
+	if logErr := a.logUsage(ctx, tenantID, result.TokenCounts, false); logErr != nil {
+		// Best-effort usage logging: do not block incident handling on metering outages.
+		a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
+	}
 
 	action := strings.ToLower(strings.TrimSpace(decision.Action))
 	switch action {
 	case "investigate":
 		report, tokens, err := a.Investigate(ctx, tenantID, "heartbeat", decision.Reason, snapshot)
-		a.logUsage(ctx, tenantID, tokens, err != nil)
+		if logErr := a.logUsage(ctx, tenantID, tokens, err != nil); logErr != nil {
+			// Best-effort usage logging: do not block incident handling on metering outages.
+			a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
+		}
 		if err != nil {
 			return err
 		}
@@ -391,9 +400,12 @@ func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason strin
 	return report, result.TokenCounts, nil
 }
 
-func (a *Agent) logUsage(ctx context.Context, tenantID string, tokens chat.TokenCounts, hadError bool) {
-	if a.decklog == nil || tenantID == "" {
-		return
+func (a *Agent) logUsage(ctx context.Context, tenantID string, tokens chat.TokenCounts, hadError bool) error {
+	if tenantID == "" {
+		return errors.New("missing tenant id for usage logging")
+	}
+	if a.decklog == nil {
+		return errors.New("decklog client unavailable")
 	}
 	duration := uint64(time.Second.Milliseconds())
 	totalTokens := uint32(tokens.Input + tokens.Output)
@@ -420,9 +432,13 @@ func (a *Agent) logUsage(ctx context.Context, tenantID string, tokens chat.Token
 		TenantId:  tenantID,
 		Payload:   &pb.ServiceEvent_ApiRequestBatch{ApiRequestBatch: batch},
 	}
-	if err := a.decklog.SendServiceEvent(event); err != nil && a.logger != nil {
-		a.logger.WithError(err).Warn("Failed to emit heartbeat usage event")
+	if err := a.decklog.SendServiceEvent(event); err != nil {
+		if a.logger != nil {
+			a.logger.WithError(err).Warn("Failed to emit heartbeat usage event")
+		}
+		return err
 	}
+	return nil
 }
 
 func buildDecisionPrompt(snapshot *healthSnapshot) string {

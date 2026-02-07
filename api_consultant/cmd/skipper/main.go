@@ -668,6 +668,9 @@ func skipperContextBridge() gin.HandlerFunc {
 		if token := c.GetString(string(ctxkeys.KeyJWTToken)); token != "" {
 			ctx = skipper.WithJWTToken(ctx, token)
 		}
+		if tokenHash, ok := c.Get(string(ctxkeys.KeyAPITokenHash)); ok {
+			ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, tokenHash)
+		}
 		if role := c.GetString(string(ctxkeys.KeyRole)); role != "" {
 			ctx = skipper.WithRole(ctx, role)
 		}

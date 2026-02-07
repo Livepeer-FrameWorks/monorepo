@@ -212,6 +212,7 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		h.Logger.WithError(err).Warn("Skipper orchestrator failed")
 		_ = streamer.SendError("An error occurred processing your request.")
 		_ = streamer.SendDone()
+		h.logUsage(ctx, tenantID, userID, conversationID, startedAt, result.TokenCounts, true)
 		return
 	}
 
@@ -237,7 +238,7 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		}
 	}
 
-	h.logUsage(ctx, tenantID, userID, startedAt, result.TokenCounts, false)
+	h.logUsage(ctx, tenantID, userID, conversationID, startedAt, result.TokenCounts, false)
 	metering.RecordLLMUsage(ctx, result.TokenCounts.Input, result.TokenCounts.Output)
 
 	// Generate conversation summary asynchronously when message count crosses a threshold.
@@ -612,16 +613,17 @@ func truncateTitle(message string, maxLen int) string {
 	return truncated + "..."
 }
 
-func (h *ChatHandler) logUsage(ctx context.Context, tenantID, userID string, startedAt time.Time, tokens TokenCounts, hadError bool) {
+func (h *ChatHandler) logUsage(ctx context.Context, tenantID, userID, conversationID string, startedAt time.Time, tokens TokenCounts, hadError bool) {
 	if h.UsageLogger == nil {
 		return
 	}
 	h.UsageLogger.LogChatUsage(ctx, skipper.ChatUsageEvent{
-		TenantID:  tenantID,
-		UserID:    userID,
-		StartedAt: startedAt,
-		TokensIn:  tokens.Input,
-		TokensOut: tokens.Output,
-		HadError:  hadError,
+		TenantID:       tenantID,
+		UserID:         userID,
+		ConversationID: conversationID,
+		StartedAt:      startedAt,
+		TokensIn:       tokens.Input,
+		TokensOut:      tokens.Output,
+		HadError:       hadError,
 	})
 }

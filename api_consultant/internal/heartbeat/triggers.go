@@ -80,7 +80,12 @@ func (t *ThresholdTrigger) Evaluate(ctx context.Context, snapshot *healthSnapsho
 	}
 	reason := fmt.Sprintf("threshold warning: %s", strings.Join(yellowReasons, ", "))
 	report, tokens, err := t.agent.Investigate(ctx, snapshot.TenantID, "threshold", reason, snapshot)
-	t.agent.logUsage(ctx, snapshot.TenantID, tokens, err != nil)
+	if logErr := t.agent.logUsage(ctx, snapshot.TenantID, tokens, err != nil); logErr != nil {
+		// Best-effort usage logging: do not block incident handling on metering outages.
+		if t.logger != nil {
+			t.logger.WithError(logErr).WithField("tenant_id", snapshot.TenantID).Warn("Threshold usage logging failed")
+		}
+	}
 	if err != nil {
 		if t.logger != nil {
 			t.logger.WithError(err).WithField("tenant_id", snapshot.TenantID).Warn("Threshold investigation failed")
@@ -142,7 +147,12 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 		reason = fmt.Sprintf("Lookout incident severity=%s", incident.Severity)
 	}
 	report, tokens, err := t.Agent.Investigate(ctx, incident.TenantID, "lookout", reason, snapshot)
-	t.Agent.logUsage(ctx, incident.TenantID, tokens, err != nil)
+	if logErr := t.Agent.logUsage(ctx, incident.TenantID, tokens, err != nil); logErr != nil {
+		if t.Logger != nil {
+			t.Logger.WithError(logErr).WithField("tenant_id", incident.TenantID).Warn("Lookout usage logging failed")
+		}
+		return logErr
+	}
 	if err != nil {
 		if t.Logger != nil {
 			t.Logger.WithError(err).WithField("tenant_id", incident.TenantID).Warn("Lookout investigation failed")
