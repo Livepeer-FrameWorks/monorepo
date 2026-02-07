@@ -396,8 +396,8 @@ func main() {
 		)
 		pb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
 		logger.WithField("port", cfg.GRPCPort).Info("Starting Skipper gRPC server")
-		if err := grpcSrv.Serve(grpcLis); err != nil {
-			logger.WithError(err).Fatal("Skipper gRPC server failed")
+		if serveErr := grpcSrv.Serve(grpcLis); serveErr != nil {
+			logger.WithError(serveErr).Fatal("Skipper gRPC server failed")
 		}
 	}()
 

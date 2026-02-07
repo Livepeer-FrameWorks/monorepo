@@ -117,6 +117,7 @@ func TestHandleChat_WithTenantIDPassesValidation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	ctx = skipper.WithUserID(ctx, "user-a")
 	c.Request = req.WithContext(ctx)
 
 	store := NewConversationStore(db)
@@ -131,6 +132,31 @@ func TestHandleChat_WithTenantIDPassesValidation(t *testing.T) {
 	// the key assertion is that it does NOT return 401.
 	if w.Code == http.StatusUnauthorized {
 		t.Fatalf("got 401 even though tenant_id was set; body: %s", w.Body.String())
+	}
+}
+
+func TestHandleChat_MissingUserID(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := newTestContext(w)
+
+	body, _ := json.Marshal(ChatRequest{Message: "hello"})
+	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	c.Request = req.WithContext(ctx)
+
+	handler := &ChatHandler{Orchestrator: stubOrchestrator()}
+	handler.HandleChat(c)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d; body: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp["error"] != "user_id missing" {
+		t.Fatalf("expected 'user_id missing', got %q", resp["error"])
 	}
 }
 
@@ -218,7 +244,7 @@ func TestMaxHistoryMessages_ZeroFallsBackToDefault(t *testing.T) {
 // --- buildPromptMessages tests ---
 
 func TestBuildPromptMessages_BasicStructure(t *testing.T) {
-	messages := buildPromptMessages(nil, "hello world", "", "")
+	messages := buildPromptMessages(nil, "hello world", "", "", "")
 
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages (system + user), got %d", len(messages))
@@ -235,7 +261,7 @@ func TestBuildPromptMessages_BasicStructure(t *testing.T) {
 }
 
 func TestBuildPromptMessages_SystemPromptContent(t *testing.T) {
-	messages := buildPromptMessages(nil, "test", "", "")
+	messages := buildPromptMessages(nil, "test", "", "", "")
 
 	if !strings.Contains(messages[0].Content, "Skipper") {
 		t.Fatalf("system prompt should mention Skipper")
@@ -243,7 +269,7 @@ func TestBuildPromptMessages_SystemPromptContent(t *testing.T) {
 }
 
 func TestBuildPromptMessages_DocsMode(t *testing.T) {
-	messages := buildPromptMessages(nil, "test", "", "docs")
+	messages := buildPromptMessages(nil, "test", "", "docs", "")
 
 	if !strings.Contains(messages[0].Content, "Docs mode context") {
 		t.Fatalf("docs mode should append DocsSystemPromptSuffix to system prompt")
@@ -251,7 +277,7 @@ func TestBuildPromptMessages_DocsMode(t *testing.T) {
 }
 
 func TestBuildPromptMessages_NonDocsMode(t *testing.T) {
-	messages := buildPromptMessages(nil, "test", "", "")
+	messages := buildPromptMessages(nil, "test", "", "", "")
 
 	if strings.Contains(messages[0].Content, "Docs mode context") {
 		t.Fatalf("non-docs mode should not include DocsSystemPromptSuffix")
@@ -259,7 +285,7 @@ func TestBuildPromptMessages_NonDocsMode(t *testing.T) {
 }
 
 func TestBuildPromptMessages_PageURL(t *testing.T) {
-	messages := buildPromptMessages(nil, "test", "https://docs.example.com/setup", "")
+	messages := buildPromptMessages(nil, "test", "https://docs.example.com/setup", "", "")
 
 	if !strings.Contains(messages[0].Content, "https://docs.example.com/setup") {
 		t.Fatalf("system prompt should include the page URL")
@@ -269,8 +295,21 @@ func TestBuildPromptMessages_PageURL(t *testing.T) {
 	}
 }
 
+func TestBuildPromptMessages_SummaryInjection(t *testing.T) {
+	summary := "Earlier we discussed ingest setup."
+	messages := buildPromptMessages(nil, "test", "", "", summary)
+
+	system := messages[0].Content
+	if !strings.Contains(system, "Summary of earlier discussion") {
+		t.Fatalf("system prompt should include summary header")
+	}
+	if !strings.Contains(system, summary) {
+		t.Fatalf("system prompt should include summary content")
+	}
+}
+
 func TestBuildPromptMessages_EmptyPageURL(t *testing.T) {
-	messages := buildPromptMessages(nil, "test", "", "")
+	messages := buildPromptMessages(nil, "test", "", "", "")
 
 	if strings.Contains(messages[0].Content, "currently reading") {
 		t.Fatalf("system prompt should not include page URL context when URL is empty")
@@ -286,7 +325,7 @@ func TestBuildPromptMessages_FiltersToolMessages(t *testing.T) {
 		{Role: "assistant", Content: "another answer"},
 	}
 
-	messages := buildPromptMessages(history, "new question", "", "")
+	messages := buildPromptMessages(history, "new question", "", "", "")
 
 	for _, msg := range messages {
 		if msg.Role == "tool" {
@@ -307,7 +346,7 @@ func TestBuildPromptMessages_FiltersEmptyRoleAndContent(t *testing.T) {
 		{Role: "user", Content: "valid message"},
 	}
 
-	messages := buildPromptMessages(history, "new question", "", "")
+	messages := buildPromptMessages(history, "new question", "", "", "")
 
 	// system + 1 valid history + 1 current user = 3
 	if len(messages) != 3 {
@@ -325,7 +364,7 @@ func TestBuildPromptMessages_HistoryOrder(t *testing.T) {
 		{Role: "user", Content: "third"},
 	}
 
-	messages := buildPromptMessages(history, "fourth", "", "")
+	messages := buildPromptMessages(history, "fourth", "", "", "")
 
 	expected := []struct {
 		role    string
@@ -364,7 +403,7 @@ func TestBuildPromptMessages_TokenBudgetTrimsOldest(t *testing.T) {
 		{Role: "assistant", Content: "recent short reply"},
 	}
 
-	messages := buildPromptMessages(history, "new question", "", "")
+	messages := buildPromptMessages(history, "new question", "", "", "")
 
 	// The newest messages should be kept.
 	lastHistory := messages[len(messages)-2]
@@ -394,7 +433,7 @@ func TestBuildPromptMessages_TokenBudgetKeepsNewest(t *testing.T) {
 		{Role: "user", Content: "last"},
 	}
 
-	messages := buildPromptMessages(history, "question", "", "")
+	messages := buildPromptMessages(history, "question", "", "", "")
 
 	found := false
 	for _, msg := range messages {
@@ -409,7 +448,7 @@ func TestBuildPromptMessages_TokenBudgetKeepsNewest(t *testing.T) {
 }
 
 func TestBuildPromptMessages_EmptyHistory(t *testing.T) {
-	messages := buildPromptMessages(nil, "hello", "", "")
+	messages := buildPromptMessages(nil, "hello", "", "", "")
 
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages for empty history, got %d", len(messages))
@@ -429,7 +468,7 @@ func TestBuildPromptMessages_AllToolMessagesFiltered(t *testing.T) {
 		{Role: "tool", Content: "tool output 3"},
 	}
 
-	messages := buildPromptMessages(history, "test", "", "")
+	messages := buildPromptMessages(history, "test", "", "", "")
 
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages when all history is tool messages, got %d", len(messages))
@@ -437,7 +476,7 @@ func TestBuildPromptMessages_AllToolMessagesFiltered(t *testing.T) {
 }
 
 func TestBuildPromptMessages_DocsAndPageURL(t *testing.T) {
-	messages := buildPromptMessages(nil, "test", "https://docs.example.com/page", "docs")
+	messages := buildPromptMessages(nil, "test", "https://docs.example.com/page", "docs", "")
 
 	system := messages[0].Content
 	if !strings.Contains(system, "Docs mode context") {
@@ -454,7 +493,7 @@ func TestBuildPromptMessages_OutputMessageTypes(t *testing.T) {
 		{Role: "assistant", Content: "answer"},
 	}
 
-	messages := buildPromptMessages(history, "follow-up", "", "")
+	messages := buildPromptMessages(history, "follow-up", "", "", "")
 
 	for i, msg := range messages {
 		if msg.Role == "" {
@@ -463,6 +502,7 @@ func TestBuildPromptMessages_OutputMessageTypes(t *testing.T) {
 		if msg.Content == "" {
 			t.Fatalf("message[%d] has empty content", i)
 		}
+		var _ = msg
 	}
 }
 
@@ -473,7 +513,7 @@ func TestBuildPromptMessages_UserMessageAlwaysLast(t *testing.T) {
 	}
 
 	userMsg := "current question"
-	messages := buildPromptMessages(history, userMsg, "", "")
+	messages := buildPromptMessages(history, userMsg, "", "", "")
 
 	last := messages[len(messages)-1]
 	if last.Role != "user" || last.Content != userMsg {
@@ -489,7 +529,7 @@ func TestBuildPromptMessages_BudgetZeroStillWorks(t *testing.T) {
 		{Role: "assistant", Content: "old reply"},
 	}
 
-	messages := buildPromptMessages(history, hugeUserMsg, "", "")
+	messages := buildPromptMessages(history, hugeUserMsg, "", "", "")
 
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages when budget is exhausted, got %d", len(messages))

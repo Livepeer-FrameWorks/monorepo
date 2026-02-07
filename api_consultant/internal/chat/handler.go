@@ -126,6 +126,10 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant_id missing"})
 		return
 	}
+	if err := requireUserOrService(c.Request.Context()); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
 	userID := skipper.GetUserID(c.Request.Context())
 
 	ctx := h.buildContext(c.Request.Context(), tenantID, userID)
@@ -148,11 +152,13 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		return
 	}
 
-	lockVal, _ := h.conversationLocks.LoadOrStore(conversationID, &sync.Mutex{})
+	lockVal, loaded := h.conversationLocks.LoadOrStore(conversationID, &sync.Mutex{})
 	convMu, ok := lockVal.(*sync.Mutex)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal lock error"})
-		return
+	if !ok || convMu == nil {
+		convMu = &sync.Mutex{}
+		if !loaded {
+			h.conversationLocks.Store(conversationID, convMu)
+		}
 	}
 	convMu.Lock()
 	defer func() {
@@ -181,20 +187,11 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		return
 	}
 
-	messages := buildPromptMessages(history, req.Message, req.PageURL, mode)
-
-	// Inject conversation summary into system prompt for long conversations.
+	summary := ""
 	if !isNewConversation && len(history) >= summaryThreshold {
-		summary, _ := h.Conversations.GetSummary(ctx, conversationID)
-		if summary != "" {
-			for i, msg := range messages {
-				if msg.Role == "system" {
-					messages[i].Content += "\n\n--- Summary of earlier discussion ---\n" + summary
-					break
-				}
-			}
-		}
+		summary, _ = h.Conversations.GetSummary(ctx, conversationID)
 	}
+	messages := buildPromptMessages(history, req.Message, req.PageURL, mode, summary)
 
 	streamer, err := newSSEStreamer(c.Writer)
 	if err != nil {
@@ -286,6 +283,10 @@ func (h *ChatHandler) HandleListConversations(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant_id missing"})
 		return
 	}
+	if err := requireUserOrService(c.Request.Context()); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
 	userID := skipper.GetUserID(c.Request.Context())
 	limit := 50
 	offset := 0
@@ -316,6 +317,10 @@ func (h *ChatHandler) HandleGetConversation(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant_id missing"})
 		return
 	}
+	if err := requireUserOrService(c.Request.Context()); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
 	conversationID := c.Param("id")
 	if conversationID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "conversation id is required"})
@@ -337,6 +342,10 @@ func (h *ChatHandler) HandleDeleteConversation(c *gin.Context) {
 	tenantID := skipper.GetTenantID(c.Request.Context())
 	if tenantID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant_id missing"})
+		return
+	}
+	if err := requireUserOrService(c.Request.Context()); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
 	conversationID := c.Param("id")
@@ -363,6 +372,10 @@ func (h *ChatHandler) HandleUpdateConversation(c *gin.Context) {
 	tenantID := skipper.GetTenantID(c.Request.Context())
 	if tenantID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant_id missing"})
+		return
+	}
+	if err := requireUserOrService(c.Request.Context()); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
 	conversationID := c.Param("id")
@@ -395,11 +408,7 @@ func (h *ChatHandler) HandleUpdateConversation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"title": req.Title})
 }
 
-// maxPromptTokenBudget is a rough ceiling for the combined system + history
-// messages. When exceeded, older history messages are trimmed first.
-const maxPromptTokenBudget = 6000
-
-func buildPromptMessages(history []Message, userMessage, pageURL, mode string) []llm.Message {
+func buildPromptMessages(history []Message, userMessage, pageURL, mode, summary string) []llm.Message {
 	systemContent := SystemPrompt
 	if mode == "docs" {
 		systemContent += DocsSystemPromptSuffix
@@ -412,6 +421,9 @@ func buildPromptMessages(history []Message, userMessage, pageURL, mode string) [
 			}
 			systemContent += "\n\nThe user is currently reading the docs page: " + truncated + ". Use this context when relevant to their question."
 		}
+	}
+	if summaryBlock := guardUntrustedContext("Summary of earlier discussion", summary, maxSummaryTokens); summaryBlock != "" {
+		systemContent += "\n\n" + summaryBlock
 	}
 	messages := []llm.Message{
 		{Role: "system", Content: systemContent},
@@ -479,6 +491,18 @@ func (h *ChatHandler) buildContext(ctx context.Context, tenantID, userID string)
 		ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
 	}
 	return ctx
+}
+
+func requireUserOrService(ctx context.Context) error {
+	if skipper.GetUserID(ctx) != "" {
+		return nil
+	}
+	switch skipper.GetAuthType(ctx) {
+	case "service", "admin":
+		return nil
+	default:
+		return errors.New("user_id missing")
+	}
 }
 
 func buildMeta(result OrchestratorResult) sseMeta {
