@@ -15,7 +15,7 @@ Skipper is the platform's AI video streaming consultant. Ask it about live strea
 
 **On the docs site** — floating chat panel (toggle with <kbd>Cmd/Ctrl+J</kbd>). Read-only mode: Skipper can search and explain, but won't modify anything.
 
-**Via MCP** — your AI agent can use the `video_consultant` prompt and Skipper's tools through the [MCP server](/agents/mcp). The `search_knowledge` and `search_web` tools are available to any connected agent.
+**Via MCP** — your AI agent can use `ask_consultant` for full-pipeline answers, or the `video_consultant` prompt for a guided persona, through the [MCP server](/agents/mcp).
 
 ## What It Can Help With
 
@@ -61,12 +61,11 @@ Every answer is tagged so you know how much to trust it:
 
 ## For Agent Developers
 
-If you're building an agent that connects via [MCP](/agents/mcp), Skipper's knowledge is available through two tools:
+If you're building an agent that connects via [MCP](/agents/mcp):
 
-- **`search_knowledge`** — semantic search over the embedded documentation. Pass a `query` and optional `limit`. When configured, queries are automatically rewritten for better retrieval and results are reranked with a cross-encoder model.
-- **`search_web`** — live web search when the knowledge base doesn't cover it. Queries are automatically rewritten for better search results when a utility LLM is configured.
+**`ask_consultant`** — sends a question through the full Skipper pipeline: pre-retrieval, query rewriting, HyDE, multi-round tool loop, and confidence tagging. Returns a structured response with `answer`, `confidence`, `sources`, and `tools_used`. Your agent gets the same quality as the dashboard chat without orchestrating the pipeline itself.
 
-Use the `video_consultant` [prompt](/agents/mcp#prompts) to get a guided streaming expert workflow, or call the tools directly for targeted lookups.
+Use the `video_consultant` [prompt](/agents/mcp#prompts) alongside `ask_consultant` to give your agent a streaming expert persona with knowledge of diagnostic tools and platform capabilities.
 
 Operators can improve retrieval quality with [cross-encoder reranking, query rewriting, and HyDE](/operators/skipper#retrieval-quality).
 

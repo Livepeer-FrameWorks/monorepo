@@ -12,7 +12,7 @@
     "chains": ["base", "arbitrum"],
     "skipper": {
       "prompt": "video_consultant",
-      "tools": ["search_knowledge", "search_web"],
+      "tools": ["ask_consultant"],
       "resource": "knowledge://sources"
     }
   },

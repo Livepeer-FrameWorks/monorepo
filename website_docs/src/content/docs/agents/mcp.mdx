@@ -111,7 +111,7 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 ## Tools
 
-Actions the agent can perform. 30 tools across 12 categories.
+Actions the agent can perform. 29 tools across 12 categories.
 
 | Tool                        | Description                                   | Requires          |
 | --------------------------- | --------------------------------------------- | ----------------- |
@@ -143,8 +143,7 @@ Actions the agent can perform. 30 tools across 12 categories.
 | `introspect_schema`         | Explore the GraphQL schema                    | Auth              |
 | `generate_query`            | Generate a GraphQL query from templates       | Auth              |
 | `execute_query`             | Execute a GraphQL query                       | Auth              |
-| `search_knowledge`          | Semantic search over Skipper's knowledge base | Auth              |
-| `search_web`                | Live web search via configured provider       | Auth              |
+| `ask_consultant`            | Full Skipper pipeline with confidence tagging | Auth              |
 
 Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`.
 
@@ -215,17 +214,12 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 - `query` (required): GraphQL query or mutation to execute
 - `variables`: Variables for the query
 
-**search_knowledge**
+**ask_consultant**
 
-- `query` (required): Search query to run against the knowledge base
-- `limit`: Maximum results to return (default 5)
-- `tenant_scope`: Scope to search — `tenant`, `global`, or `all` (default `all`)
+- `question` (required): Question for the AI video streaming consultant
+- `mode`: Set to `docs` for read-only mode (default `full`)
 
-**search_web**
-
-- `query` (required): Search query to run against the web
-- `limit`: Maximum results to return (default 5)
-- `search_depth`: `basic` or `advanced` (default `basic`)
+Returns a structured response with `answer`, `confidence` (`verified`, `sourced`, `best_guess`, or `unknown`), `sources`, and `tools_used`. This runs the full Skipper pipeline — knowledge retrieval, web search, query rewriting, and multi-step reasoning — so agents get the same quality as the dashboard chat.
 
 ### Preflight Errors
 
@@ -250,7 +244,7 @@ Guided workflows for common tasks.
 
 The MCP server includes [Skipper](/agents/skipper), an expert-level video streaming consultant. Use the `video_consultant` prompt to activate this mode, which guides your AI through available tools and knowledge sources.
 
-Use `search_knowledge` and `search_web` for targeted lookups, or the diagnostic tools below for stream-level troubleshooting.
+Use `ask_consultant` for knowledge lookups with confidence tagging, or the diagnostic tools below for stream-level troubleshooting.
 
 ### Knowledge Sources
 
@@ -269,7 +263,7 @@ Read `knowledge://sources` to get curated entry points for video streaming docum
 
 Your AI can navigate these sitemaps to find codec guides, protocol references, and troubleshooting steps.
 
-Skipper's full knowledge base also includes SRT (Haivision), HLS (RFC 8216), nginx-rtmp, and ecosystem sources (Livepeer, WebRTC, DASH). Use `search_knowledge` to query across all indexed documentation. See the [Skipper operator guide](/operators/skipper#knowledge-base) for the complete source list and how to add custom sources.
+Skipper's full knowledge base also includes SRT (Haivision), HLS (RFC 8216), nginx-rtmp, and ecosystem sources (Livepeer, WebRTC, DASH). Use `ask_consultant` to query the full knowledge base with confidence tagging and source citations. See the [Skipper operator guide](/operators/skipper#knowledge-base) for the complete source list and how to add custom sources.
 
 ### Diagnostic Tools
 
@@ -310,5 +304,5 @@ Access past support conversations to find previous solutions:
 2. AI reads `account://status` and `streams://{id}/health`
 3. AI calls `diagnose_rebuffering` and `diagnose_buffer_health`
 4. AI searches `search_support_history("buffering")` for similar past issues
-5. AI calls `search_knowledge("rebuffering troubleshooting")` for relevant documentation
+5. AI calls `ask_consultant("rebuffering troubleshooting")` for relevant documentation
 6. AI provides root cause analysis and encoder recommendations

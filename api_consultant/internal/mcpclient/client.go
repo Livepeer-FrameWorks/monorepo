@@ -42,7 +42,7 @@ type Config struct {
 	ToolAllowlist []string
 	// ToolDenylist excludes specific tools by name. Takes precedence over
 	// the allowlist. Use this to suppress Gateway tools that the local
-	// orchestrator already implements (e.g. search_knowledge, search_web).
+	// orchestrator already implements (e.g. ask_consultant).
 	ToolDenylist []string
 	Logger       logging.Logger
 }

@@ -15,7 +15,7 @@ import (
 )
 
 // SkipperClient connects to Skipper's spoke MCP endpoint for proxying
-// search_knowledge and search_web tools through the Gateway hub.
+// Skipper tools (ask_consultant) through the Gateway hub.
 type SkipperClient struct {
 	session *sdkmcp.ClientSession
 	logger  logging.Logger

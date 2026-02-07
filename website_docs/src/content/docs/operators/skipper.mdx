@@ -552,7 +552,7 @@ graph TD
     CONF --> RESP["Response with Citations"]
 ```
 
-Skipper runs as the `api_consultant` service (ports 18018 HTTP, 19007 gRPC). It connects to the API Gateway via MCP to access platform tools (diagnostics, stream management, GraphQL). The Gateway proxies Skipper's `search_knowledge` and `search_web` tools to external MCP agents.
+Skipper runs as the `api_consultant` service (ports 18018 HTTP, 19007 gRPC). It connects to the API Gateway via MCP to access platform tools (diagnostics, stream management, GraphQL). The Gateway proxies Skipper's `ask_consultant` tool to external MCP agents, which runs the full orchestrator pipeline internally.
 
 ### Retrieval and Reranking
 

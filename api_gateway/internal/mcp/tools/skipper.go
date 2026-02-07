@@ -16,44 +16,26 @@ type SkipperCaller interface {
 	CallTool(ctx context.Context, name string, arguments json.RawMessage) (string, error)
 }
 
-// RegisterSkipperTools registers Skipper proxy tools (search_knowledge, search_web)
-// on the Gateway MCP. Calls are forwarded to Skipper's spoke endpoint.
-// The skipper client may connect lazily, so tools are always registered;
-// individual calls return an error if the spoke is unreachable.
+// RegisterSkipperTools registers the ask_consultant proxy tool on the Gateway
+// MCP. The call is forwarded to Skipper's spoke endpoint. The skipper client
+// may connect lazily, so the tool is always registered; calls return an error
+// if the spoke is unreachable.
 func RegisterSkipperTools(server *mcp.Server, skipper SkipperCaller, logger logging.Logger) {
 	mcp.AddTool(server,
 		&mcp.Tool{
-			Name:        "search_knowledge",
-			Description: "Search the curated knowledge base for platform-specific guidance and verified documentation.",
+			Name:        "ask_consultant",
+			Description: "Ask the AI video streaming consultant a question. Returns a complete answer with confidence tagging and source citations, powered by the full Skipper pipeline (knowledge retrieval, web search, multi-step reasoning).",
 		},
-		func(ctx context.Context, _ *mcp.CallToolRequest, args SearchKnowledgeInput) (*mcp.CallToolResult, any, error) {
-			return proxyToSkipper(ctx, skipper, "search_knowledge", args, logger)
-		},
-	)
-
-	mcp.AddTool(server,
-		&mcp.Tool{
-			Name:        "search_web",
-			Description: "Search the public web for documentation or references when the knowledge base is insufficient.",
-		},
-		func(ctx context.Context, _ *mcp.CallToolRequest, args SearchWebInput) (*mcp.CallToolResult, any, error) {
-			return proxyToSkipper(ctx, skipper, "search_web", args, logger)
+		func(ctx context.Context, _ *mcp.CallToolRequest, args AskConsultantInput) (*mcp.CallToolResult, any, error) {
+			return proxyToSkipper(ctx, skipper, "ask_consultant", args, logger)
 		},
 	)
 }
 
-// SearchKnowledgeInput is the schema for the proxied search_knowledge tool.
-type SearchKnowledgeInput struct {
-	Query       string `json:"query" jsonschema:"required" jsonschema_description:"Search query to run against the knowledge base"`
-	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 5)"`
-	TenantScope string `json:"tenant_scope,omitempty" jsonschema_description:"Scope to search: tenant, global, or all (default all)"`
-}
-
-// SearchWebInput is the schema for the proxied search_web tool.
-type SearchWebInput struct {
-	Query       string `json:"query" jsonschema:"required" jsonschema_description:"Search query to run against the web"`
-	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 5)"`
-	SearchDepth string `json:"search_depth,omitempty" jsonschema_description:"Search depth: basic or advanced (default basic)"`
+// AskConsultantInput is the schema for the proxied ask_consultant tool.
+type AskConsultantInput struct {
+	Question string `json:"question" jsonschema:"required" jsonschema_description:"Question for the AI video streaming consultant"`
+	Mode     string `json:"mode,omitempty" jsonschema_description:"Set to docs for read-only mode (default full)"`
 }
 
 func proxyToSkipper(ctx context.Context, skipper SkipperCaller, toolName string, args any, logger logging.Logger) (*mcp.CallToolResult, any, error) {

@@ -508,7 +508,7 @@ func main() {
 
 	// No separate public route; PublicOrJWTAuth handles allowlisted unauthenticated queries
 
-	// Lazy-connect to Skipper spoke MCP for proxying search_knowledge/search_web.
+	// Lazy-connect to Skipper spoke MCP for proxying ask_consultant.
 	// The actual connection is deferred until the first tool call so bridge can
 	// start before skipper without losing tool registrations.
 	skipperSpokeURL := config.GetEnv("SKIPPER_SPOKE_URL", "http://skipper:18018/mcp/spoke")

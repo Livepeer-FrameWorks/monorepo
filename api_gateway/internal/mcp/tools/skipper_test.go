@@ -29,11 +29,11 @@ func ctxWithTenant(tenantID string) context.Context {
 }
 
 func TestProxyToSkipper_InjectsTenantID(t *testing.T) {
-	mock := &mockSkipperCaller{result: `{"results":[]}`}
+	mock := &mockSkipperCaller{result: `{"answer":"test","confidence":"verified"}`}
 	ctx := ctxWithTenant("tenant-abc")
 
-	args := SearchKnowledgeInput{Query: "test", Limit: 5}
-	result, _, err := proxyToSkipper(ctx, mock, "search_knowledge", args, nil)
+	args := AskConsultantInput{Question: "How does SRT work?"}
+	result, _, err := proxyToSkipper(ctx, mock, "ask_consultant", args, nil)
 	if err != nil {
 		t.Fatalf("proxyToSkipper error: %v", err)
 	}
@@ -41,7 +41,6 @@ func TestProxyToSkipper_InjectsTenantID(t *testing.T) {
 		t.Fatal("expected success result")
 	}
 
-	// Verify tenant_id was injected into forwarded arguments.
 	var forwarded map[string]any
 	if err := json.Unmarshal(mock.lastArgs, &forwarded); err != nil {
 		t.Fatalf("unmarshal forwarded args: %v", err)
@@ -49,21 +48,20 @@ func TestProxyToSkipper_InjectsTenantID(t *testing.T) {
 	if forwarded["tenant_id"] != "tenant-abc" {
 		t.Fatalf("expected tenant_id=tenant-abc, got %v", forwarded["tenant_id"])
 	}
-	if forwarded["query"] != "test" {
-		t.Fatalf("expected query=test, got %v", forwarded["query"])
+	if forwarded["question"] != "How does SRT work?" {
+		t.Fatalf("expected question preserved, got %v", forwarded["question"])
 	}
-	if mock.lastTool != "search_knowledge" {
-		t.Fatalf("expected tool=search_knowledge, got %s", mock.lastTool)
+	if mock.lastTool != "ask_consultant" {
+		t.Fatalf("expected tool=ask_consultant, got %s", mock.lastTool)
 	}
 }
 
 func TestProxyToSkipper_OverwritesUserTenantID(t *testing.T) {
-	mock := &mockSkipperCaller{result: `{"results":[]}`}
+	mock := &mockSkipperCaller{result: `{"answer":"ok"}`}
 	ctx := ctxWithTenant("real-tenant")
 
-	// Simulate an agent trying to set their own tenant_id.
-	args := SearchKnowledgeInput{Query: "test"}
-	result, _, err := proxyToSkipper(ctx, mock, "search_knowledge", args, nil)
+	args := AskConsultantInput{Question: "test"}
+	result, _, err := proxyToSkipper(ctx, mock, "ask_consultant", args, nil)
 	if err != nil {
 		t.Fatalf("proxyToSkipper error: %v", err)
 	}
@@ -82,10 +80,10 @@ func TestProxyToSkipper_OverwritesUserTenantID(t *testing.T) {
 
 func TestProxyToSkipper_MissingTenantID(t *testing.T) {
 	mock := &mockSkipperCaller{result: `{}`}
-	ctx := context.Background() // No tenant_id in context.
+	ctx := context.Background()
 
-	args := SearchKnowledgeInput{Query: "test"}
-	result, _, err := proxyToSkipper(ctx, mock, "search_knowledge", args, nil)
+	args := AskConsultantInput{Question: "test"}
+	result, _, err := proxyToSkipper(ctx, mock, "ask_consultant", args, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,8 +100,8 @@ func TestProxyToSkipper_SkipperError(t *testing.T) {
 	mock := &mockSkipperCaller{err: fmt.Errorf("connection refused")}
 	ctx := ctxWithTenant("tenant-abc")
 
-	args := SearchWebInput{Query: "test"}
-	result, _, err := proxyToSkipper(ctx, mock, "search_web", args, nil)
+	args := AskConsultantInput{Question: "test"}
+	result, _, err := proxyToSkipper(ctx, mock, "ask_consultant", args, nil)
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
@@ -117,11 +115,12 @@ func TestProxyToSkipper_SkipperError(t *testing.T) {
 }
 
 func TestProxyToSkipper_Success(t *testing.T) {
-	mock := &mockSkipperCaller{result: `{"query":"streaming","results":[{"title":"Docs"}]}`}
+	expected := `{"answer":"SRT uses AES-128","confidence":"verified","sources":[]}`
+	mock := &mockSkipperCaller{result: expected}
 	ctx := ctxWithTenant("tenant-abc")
 
-	args := SearchWebInput{Query: "streaming"}
-	result, _, err := proxyToSkipper(ctx, mock, "search_web", args, nil)
+	args := AskConsultantInput{Question: "How does SRT encryption work?"}
+	result, _, err := proxyToSkipper(ctx, mock, "ask_consultant", args, nil)
 	if err != nil {
 		t.Fatalf("proxyToSkipper error: %v", err)
 	}
@@ -129,8 +128,8 @@ func TestProxyToSkipper_Success(t *testing.T) {
 		t.Fatal("expected success")
 	}
 	text := extractToolText(result)
-	if text != mock.result {
-		t.Fatalf("expected %q, got %q", mock.result, text)
+	if text != expected {
+		t.Fatalf("expected %q, got %q", expected, text)
 	}
 }
 

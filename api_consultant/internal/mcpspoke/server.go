@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_consultant/internal/chat"
 	"frameworks/api_consultant/internal/knowledge"
+	"frameworks/api_consultant/internal/skipper"
+	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/search"
 	"frameworks/pkg/version"
@@ -32,6 +35,12 @@ type SearchProvider interface {
 	Search(ctx context.Context, query string, opts search.SearchOptions) ([]search.Result, error)
 }
 
+// ConsultantOrchestrator runs a question through the full Skipper pipeline
+// (pre-retrieval, query rewriting, HyDE, multi-round tool loop, confidence tagging).
+type ConsultantOrchestrator interface {
+	Run(ctx context.Context, messages []llm.Message, streamer chat.TokenStreamer) (chat.OrchestratorResult, error)
+}
+
 const (
 	defaultGlobalTenantID = "00000000-0000-0000-0000-000000000001"
 	defaultSearchLimit    = 5
@@ -43,6 +52,7 @@ type Config struct {
 	Embedder       KnowledgeEmbedder
 	Reranker       *knowledge.Reranker
 	SearchProvider SearchProvider
+	Orchestrator   ConsultantOrchestrator
 	Logger         logging.Logger
 	GlobalTenantID string
 	SearchLimit    int
@@ -65,6 +75,7 @@ func NewServer(cfg Config) *mcp.Server {
 
 	registerSearchKnowledge(srv, cfg)
 	registerSearchWeb(srv, cfg)
+	registerAskConsultant(srv, cfg)
 
 	return srv
 }
@@ -75,7 +86,7 @@ type searchKnowledgeInput struct {
 	TenantID    string `json:"tenant_id" jsonschema:"required" jsonschema_description:"Tenant ID for scoping the search"`
 	Query       string `json:"query" jsonschema:"required" jsonschema_description:"Search query to run against the knowledge base"`
 	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 8)"`
-	TenantScope string `json:"tenant_scope,omitempty" jsonschema_description:"Scope to search: tenant, global, or all (default all)"`
+	TenantScope string `json:"tenant_scope,omitempty" jsonschema_description:"Scope to search: tenant, global, or all (default tenant)"`
 }
 
 type searchKnowledgeResult struct {
@@ -277,6 +288,106 @@ func handleSearchWeb(ctx context.Context, args searchWebInput, cfg Config) (*mcp
 	}
 
 	resp := searchWebResponse{Query: query, Results: mapped}
+	return spokeSuccess(resp)
+}
+
+// --- ask_consultant ---
+
+type askConsultantInput struct {
+	TenantID string `json:"tenant_id" jsonschema:"required" jsonschema_description:"Tenant ID (injected by Gateway)"`
+	Question string `json:"question" jsonschema:"required" jsonschema_description:"Question for the AI video streaming consultant"`
+	Mode     string `json:"mode,omitempty" jsonschema_description:"Set to docs for read-only mode (default full)"`
+}
+
+type askConsultantSource struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	Type  string `json:"type"`
+}
+
+type askConsultantResponse struct {
+	Answer     string                `json:"answer"`
+	Confidence string                `json:"confidence"`
+	Sources    []askConsultantSource `json:"sources"`
+	ToolsUsed  []string              `json:"tools_used"`
+}
+
+// discardStreamer is a TokenStreamer that discards all tokens.
+// MCP tools return complete results, so streaming is unnecessary.
+type discardStreamer struct{}
+
+func (discardStreamer) SendToken(string) error { return nil }
+
+func registerAskConsultant(srv *mcp.Server, cfg Config) {
+	mcp.AddTool(srv,
+		&mcp.Tool{
+			Name:        "ask_consultant",
+			Description: "Ask the AI video streaming consultant a question. Runs the full Skipper pipeline (knowledge retrieval, web search, reasoning) and returns an answer with confidence tagging and source citations.",
+		},
+		func(ctx context.Context, _ *mcp.CallToolRequest, args askConsultantInput) (*mcp.CallToolResult, any, error) {
+			return handleAskConsultant(ctx, args, cfg)
+		},
+	)
+}
+
+func handleAskConsultant(ctx context.Context, args askConsultantInput, cfg Config) (*mcp.CallToolResult, any, error) {
+	if cfg.Orchestrator == nil {
+		return spokeError("consultant unavailable")
+	}
+	if args.TenantID == "" {
+		return spokeError("tenant_id is required")
+	}
+	question := strings.TrimSpace(args.Question)
+	if question == "" {
+		return spokeError("question is required")
+	}
+
+	// Set tenant context so the orchestrator scopes knowledge search
+	// and Gateway tool calls to the correct tenant.
+	ctx = skipper.WithTenantID(ctx, args.TenantID)
+
+	systemContent := chat.SystemPrompt
+	if strings.EqualFold(strings.TrimSpace(args.Mode), "docs") {
+		systemContent += chat.DocsSystemPromptSuffix
+	}
+
+	messages := []llm.Message{
+		{Role: "system", Content: systemContent},
+		{Role: "user", Content: question},
+	}
+
+	result, err := cfg.Orchestrator.Run(ctx, messages, discardStreamer{})
+	if err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.WithError(err).WithField("question", question).Warn("ask_consultant failed")
+		}
+		return spokeError(fmt.Sprintf("consultant error: %v", err))
+	}
+
+	sources := make([]askConsultantSource, 0, len(result.Sources))
+	for _, s := range result.Sources {
+		sources = append(sources, askConsultantSource{
+			Title: s.Title,
+			URL:   s.URL,
+			Type:  string(s.Type),
+		})
+	}
+	toolsUsed := make([]string, 0, len(result.ToolCalls))
+	seen := make(map[string]bool)
+	for _, tc := range result.ToolCalls {
+		if !seen[tc.Name] {
+			toolsUsed = append(toolsUsed, tc.Name)
+			seen[tc.Name] = true
+		}
+	}
+
+	resp := askConsultantResponse{
+		Answer:     result.Content,
+		Confidence: string(result.Confidence),
+		Sources:    sources,
+		ToolsUsed:  toolsUsed,
+	}
+	spokeSearchQueriesTotal.WithLabelValues("ask_consultant").Inc()
 	return spokeSuccess(resp)
 }
 

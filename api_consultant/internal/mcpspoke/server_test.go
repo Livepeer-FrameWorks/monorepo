@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"frameworks/api_consultant/internal/chat"
 	"frameworks/api_consultant/internal/knowledge"
+	"frameworks/api_consultant/internal/skipper"
+	"frameworks/pkg/llm"
 	"frameworks/pkg/search"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -92,14 +95,13 @@ func TestSpoke_ListTools(t *testing.T) {
 	for _, tool := range result.Tools {
 		names[tool.Name] = true
 	}
-	if !names["search_knowledge"] {
-		t.Fatal("expected search_knowledge tool")
+	for _, expected := range []string{"search_knowledge", "search_web", "ask_consultant"} {
+		if !names[expected] {
+			t.Fatalf("expected %s tool", expected)
+		}
 	}
-	if !names["search_web"] {
-		t.Fatal("expected search_web tool")
-	}
-	if len(result.Tools) != 2 {
-		t.Fatalf("expected 2 tools, got %d", len(result.Tools))
+	if len(result.Tools) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(result.Tools))
 	}
 }
 
@@ -201,6 +203,92 @@ func TestSpoke_SearchWeb(t *testing.T) {
 	}
 	if resp.Results[0].Title != "Docs" {
 		t.Fatalf("expected title 'Docs', got %q", resp.Results[0].Title)
+	}
+}
+
+type fakeOrchestrator struct {
+	result       chat.OrchestratorResult
+	err          error
+	lastTenantID string
+}
+
+func (f *fakeOrchestrator) Run(ctx context.Context, messages []llm.Message, _ chat.TokenStreamer) (chat.OrchestratorResult, error) {
+	f.lastTenantID = skipper.GetTenantID(ctx)
+	if f.err != nil {
+		return chat.OrchestratorResult{}, f.err
+	}
+	return f.result, nil
+}
+
+func TestSpoke_AskConsultant(t *testing.T) {
+	orch := &fakeOrchestrator{
+		result: chat.OrchestratorResult{
+			Content:    "SRT uses AES-128 encryption by default.",
+			Confidence: chat.ConfidenceVerified,
+			Sources: []chat.Source{
+				{Title: "SRT Docs", URL: "https://srt.example.com/encryption", Type: "knowledge"},
+			},
+			ToolCalls: []chat.ToolCallRecord{
+				{Name: "search_knowledge"},
+			},
+		},
+	}
+
+	ts := spokeTestServer(t, Config{Orchestrator: orch})
+	session := spokeClient(t, ts.URL)
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ask_consultant",
+		Arguments: map[string]any{
+			"tenant_id": "tenant-a",
+			"question":  "How does SRT encryption work?",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %+v", result.Content)
+	}
+
+	text := extractText(result)
+	var resp askConsultantResponse
+	if err := json.Unmarshal([]byte(text), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp.Confidence != "verified" {
+		t.Fatalf("expected confidence 'verified', got %q", resp.Confidence)
+	}
+	if len(resp.Sources) != 1 || resp.Sources[0].Title != "SRT Docs" {
+		t.Fatalf("unexpected sources: %+v", resp.Sources)
+	}
+	if len(resp.ToolsUsed) != 1 || resp.ToolsUsed[0] != "search_knowledge" {
+		t.Fatalf("unexpected tools_used: %+v", resp.ToolsUsed)
+	}
+	if resp.Answer == "" {
+		t.Fatal("expected non-empty answer")
+	}
+	if orch.lastTenantID != "tenant-a" {
+		t.Fatalf("expected tenant context 'tenant-a', got %q", orch.lastTenantID)
+	}
+}
+
+func TestSpoke_AskConsultant_NoOrchestrator(t *testing.T) {
+	ts := spokeTestServer(t, Config{})
+	session := spokeClient(t, ts.URL)
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ask_consultant",
+		Arguments: map[string]any{
+			"tenant_id": "tenant-a",
+			"question":  "test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error when orchestrator is nil")
 	}
 }
 

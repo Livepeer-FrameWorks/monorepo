@@ -63,9 +63,9 @@ Multi-tenant live streaming platform with three access layers and crypto-native 
 | QoE Diagnostics | rebuffering, buffer, packet loss, routing     | —                              | —                                   |
 | Support         | search conversations                          | history                        | —                                   |
 | API Exploration | introspect schema, generate & execute queries | schema catalog                 | introspection                       |
-| Knowledge       | search_knowledge, search_web                  | knowledge://sources            | —                                   |
+| Knowledge       | ask_consultant                                | knowledge://sources            | —                                   |
 
-MCP: 30 tools, 18 resources, 8 prompts — full discovery via `tools/list` and `resources/list`.
+MCP: 29 tools, 18 resources, 8 prompts — full discovery via `tools/list` and `resources/list`.
 GraphQL: introspection enabled at `/graphql` — full schema discovery built-in.
 
 ## Security Notes
@@ -174,13 +174,12 @@ Authentication: same wallet headers or bearer token.
 Use the `video_consultant` prompt for expert streaming guidance backed by a curated knowledge base.
 
 - **Prompt**: `video_consultant` — activates expert streaming consultant mode
-- **Tools**: `search_knowledge` (RAG over embedded docs), `search_web` (live web search fallback)
+- **Tools**: `ask_consultant` — full Skipper pipeline with confidence tagging and source citations
 - **Resource**: `knowledge://sources` — lists indexed documentation domains
 - **Knowledge domains**: FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, and ecosystem tools
 - **Confidence tagging**: Every answer tagged as `verified`, `sourced`, `best_guess`, or `unknown` with citations
-- **Retrieval pipeline**: Queries are automatically rewritten for search optimization, optionally embedded via HyDE, and results are reranked with a cross-encoder model when configured
 
-Use `search_knowledge` before searching the web — the embedded docs are faster and pre-verified.
+Use `ask_consultant` for full-quality answers with confidence tagging and citations.
 
 ## When to Alert Your Human
 

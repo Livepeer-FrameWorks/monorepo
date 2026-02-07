@@ -26,8 +26,8 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Gateway MCP (Hub)  bridge:18000/mcp           │
 │                                                                 │
-│  28 own tools + 2 proxied from Skipper spoke                    │
-│  (search_knowledge, search_web)                                 │
+│  28 own tools + 1 proxied from Skipper spoke                    │
+│  (ask_consultant)                                               │
 └─────────────────────────────────────────────────────────────────┘
          │                    │                    │
          │        consumes ◄──┼──► provides        │
@@ -39,8 +39,8 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
          │  │       skipper:18018                │  │
          │  │                                   │  │
          │  │  MCP Client ──► Gateway tools     │  │
-         │  │  MCP Spoke  ──► search_knowledge  │  │
-         │  │                  search_web        │  │
+         │  │  MCP Spoke  ──► ask_consultant     │  │
+         │  │               (+ internal tools)   │  │
          │  │  Knowledge store (local pgvector)  │  │
          │  │  Heartbeat agent (direct gRPC)     │  │
          │  └───────────────────────────────────┘  │
@@ -282,7 +282,7 @@ Single private key used on all EVM chains (same address everywhere):
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
 
-**Summary**: 30 tools (12 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 28 tools directly and proxies 2 tools from the Skipper spoke.
+**Summary**: 29 tools (12 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 28 tools directly and proxies 1 tool from the Skipper spoke.
 
 | Category        | Tools                                                                              | Resources                                                            | Source        |
 | --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------- |
@@ -297,7 +297,7 @@ Model Context Protocol integration for AI agent tool discovery, integrated into 
 | Analytics       | —                                                                                  | `analytics://usage`, `analytics://viewers`, `analytics://geographic` | Gateway       |
 | QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)          | —                                                                    | Gateway       |
 | Support         | `search_support_history`                                                           | `support://conversations`, `support://conversations/{id}`            | Gateway       |
-| Knowledge       | `search_knowledge`, `search_web`                                                   | `knowledge://sources`                                                | Skipper spoke |
+| Knowledge       | `ask_consultant`                                                                   | `knowledge://sources`                                                | Skipper spoke |
 | Schema          | `introspect_schema`, `generate_query`, `execute_query`                             | `schema://catalog`                                                   | Gateway       |
 | Infrastructure  | —                                                                                  | `nodes://list`, `nodes://{id}`                                       | Gateway       |
 
@@ -329,7 +329,7 @@ type Blocker struct {
 
 The Gateway MCP acts as the **hub** — the single unified tool surface for external agents. Skipper (the AI Video Consultant) is a **spoke** that both consumes and provides tools through MCP.
 
-**Gateway → Skipper (spoke)**: The Gateway proxies `search_knowledge` and `search_web` from Skipper's spoke endpoint (`/mcp/spoke`). The spoke authenticates via service token. The Gateway injects `tenant_id` from the caller's JWT context into forwarded arguments.
+**Gateway → Skipper (spoke)**: The Gateway proxies `ask_consultant` from Skipper's spoke endpoint (`/mcp/spoke`). The spoke authenticates via service token. The Gateway injects `tenant_id` from the caller's JWT context into forwarded arguments. The spoke also registers internal tools (`search_knowledge`, `search_web`) used by the orchestrator's pipeline but not exposed to external agents.
 
 **Skipper → Gateway (client)**: Skipper's chat orchestrator consumes Gateway tools (QoE diagnostics, stream management, etc.) via an MCP client connection. Per-call JWT injection ensures each tool invocation carries the end user's auth context.
 

@@ -277,7 +277,7 @@ func main() {
 		gatewayClient, connectErr = mcpclient.New(context.Background(), mcpclient.Config{
 			GatewayURL:   mcpURL,
 			ServiceToken: serviceToken,
-			ToolDenylist: []string{"search_knowledge", "search_web"},
+			ToolDenylist: []string{"ask_consultant"},
 			Logger:       logger,
 		})
 		if connectErr != nil {
@@ -498,6 +498,7 @@ func main() {
 		Embedder:       embedder,
 		Reranker:       reranker,
 		SearchProvider: searchProvider,
+		Orchestrator:   orchestrator,
 		Logger:         logger,
 		GlobalTenantID: globalTenantID,
 		SearchLimit:    cfg.SearchLimit,
