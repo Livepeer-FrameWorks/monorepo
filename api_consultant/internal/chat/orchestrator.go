@@ -168,14 +168,18 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		if userMsg.Role == "user" && strings.TrimSpace(userMsg.Content) != "" {
 			preResult := o.preRetrieve(ctx, userMsg.Content)
 			if preResult.Context != "" {
-				// Inject context into the system message
-				for i, msg := range messages {
-					if msg.Role == "system" {
-						messages[i].Content += "\n\n--- Pre-retrieved knowledge context ---\n" + preResult.Context
-						break
+				contextBlock := guardUntrustedContext("Pre-retrieved knowledge context", preResult.Context, maxPreRetrieveTokens)
+				if contextBlock != "" {
+					// Inject context into the system message
+					for i, msg := range messages {
+						if msg.Role == "system" {
+							messages[i].Content += "\n\n" + contextBlock
+							break
+						}
 					}
+					sources = appendSources(sources, preResult.Sources)
+					messages = trimMessagesToBudget(messages, maxPromptTokenBudget)
 				}
-				sources = appendSources(sources, preResult.Sources)
 			}
 		}
 	}
@@ -841,6 +845,21 @@ func countTokensInMessages(messages []llm.Message) int {
 		total += estimateTokens(msg.Content)
 	}
 	return total
+}
+
+func trimMessagesToBudget(messages []llm.Message, budget int) []llm.Message {
+	if budget <= 0 || len(messages) <= 2 {
+		return messages
+	}
+	total := countTokensInMessages(messages)
+	if total <= budget {
+		return messages
+	}
+	for total > budget && len(messages) > 2 {
+		total -= estimateTokens(messages[1].Content)
+		messages = append(messages[:1], messages[2:]...)
+	}
+	return messages
 }
 
 // mergeToolCalls accumulates tool calls across streaming chunks. If a chunk

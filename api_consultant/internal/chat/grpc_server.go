@@ -63,6 +63,9 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 	if tenantID == "" {
 		return status.Error(codes.Unauthenticated, "tenant_id missing")
 	}
+	if err := requireUserOrService(ctx); err != nil {
+		return status.Error(codes.Unauthenticated, err.Error())
+	}
 	userID := skipper.GetUserID(ctx)
 
 	message := strings.TrimSpace(req.GetMessage())
@@ -102,7 +105,11 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 	if mode != "" {
 		ctx = skipper.WithMode(ctx, mode)
 	}
-	messages := buildPromptMessages(history, message, req.GetPageUrl(), mode)
+	summary := ""
+	if !isNewConversation && len(history) >= summaryThreshold {
+		summary, _ = s.conversations.GetSummary(ctx, conversationID)
+	}
+	messages := buildPromptMessages(history, message, req.GetPageUrl(), mode, summary)
 
 	streamer := &grpcStreamer{stream: stream}
 	result, err := s.orchestrator.Run(ctx, messages, streamer)
@@ -158,6 +165,9 @@ func (s *GRPCServer) ListConversations(ctx context.Context, req *pb.ListSkipperC
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
 	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
 	userID := skipper.GetUserID(ctx)
 
 	limit := int(req.GetLimit())
@@ -188,6 +198,9 @@ func (s *GRPCServer) GetConversation(ctx context.Context, req *pb.GetSkipperConv
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
+	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
 
 	id := req.GetId()
@@ -233,6 +246,9 @@ func (s *GRPCServer) DeleteConversation(ctx context.Context, req *pb.DeleteSkipp
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
 	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
 
 	id := req.GetId()
 	if id == "" {
@@ -254,6 +270,9 @@ func (s *GRPCServer) UpdateConversationTitle(ctx context.Context, req *pb.Update
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
+	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
 
 	id := req.GetId()
@@ -340,6 +359,9 @@ func bridgeAuthContext(ctx context.Context) context.Context {
 	}
 	if v := ctxkeys.GetRole(ctx); v != "" {
 		ctx = skipper.WithRole(ctx, v)
+	}
+	if v := ctxkeys.GetAuthType(ctx); v != "" {
+		ctx = skipper.WithAuthType(ctx, v)
 	}
 	return ctx
 }

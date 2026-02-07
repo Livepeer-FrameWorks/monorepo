@@ -87,6 +87,7 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 		if cfg.ServiceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(cfg.ServiceToken)) == 1 {
 			// Service token is valid - extract tenant/user from metadata if present
 			ctx = extractMetadataToContext(ctx, md, policy, cfg.Logger, info.FullMethod)
+			ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "service")
 
 			if cfg.Logger != nil {
 				cfg.Logger.WithFields(logging.Fields{
@@ -107,6 +108,7 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
+				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
 
 				if cfg.Logger != nil {
 					cfg.Logger.WithFields(logging.Fields{
@@ -178,6 +180,7 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 
 		if cfg.ServiceToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(cfg.ServiceToken)) == 1 {
 			ctx = extractMetadataToContext(ctx, md, policy, cfg.Logger, info.FullMethod)
+			ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "service")
 			if cfg.Logger != nil {
 				cfg.Logger.WithFields(logging.Fields{
 					"method":    info.FullMethod,
@@ -195,6 +198,7 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
+				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
 
 				if cfg.Logger != nil {
 					cfg.Logger.WithFields(logging.Fields{
