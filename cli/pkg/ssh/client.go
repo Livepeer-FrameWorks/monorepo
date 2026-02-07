@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -26,8 +27,9 @@ var (
 
 // Client wraps an SSH connection and implements Runner
 type Client struct {
-	config *ConnectionConfig
-	conn   *ssh.Client
+	config   *ConnectionConfig
+	conn     *ssh.Client
+	pingFunc func(ctx context.Context) error
 }
 
 // NewClient creates a new SSH client
@@ -178,6 +180,21 @@ func trustAndSaveHostKey(knownHostsPath, hostname string, remote net.Addr, key s
 	knownHostsMu.Lock()
 	defer knownHostsMu.Unlock()
 
+	lockFile, err := lockKnownHosts(knownHostsPath)
+	if err != nil {
+		return fmt.Errorf("failed to lock known_hosts: %w", err)
+	}
+	defer unlockKnownHosts(lockFile)
+
+	callback, err := knownhosts.New(knownHostsPath)
+	if err == nil {
+		if err := callback(hostname, remote, key); err == nil {
+			return nil
+		} else if !isKeyNotFoundError(err) {
+			return err
+		}
+	}
+
 	fingerprint := fingerprintSHA256(key)
 
 	// Print warning about trusting new host
@@ -206,6 +223,26 @@ func trustAndSaveHostKey(knownHostsPath, hostname string, remote net.Addr, key s
 	}
 
 	return nil
+}
+
+func lockKnownHosts(knownHostsPath string) (*os.File, error) {
+	f, err := os.OpenFile(knownHostsPath, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func unlockKnownHosts(f *os.File) {
+	if f == nil {
+		return
+	}
+	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	_ = f.Close()
 }
 
 // normalizeHostname formats hostname for known_hosts entry
@@ -239,6 +276,12 @@ func fingerprintSHA256(key ssh.PublicKey) string {
 func RemoveHostKey(knownHostsPath, hostname string) error {
 	knownHostsMu.Lock()
 	defer knownHostsMu.Unlock()
+
+	lockFile, err := lockKnownHosts(knownHostsPath)
+	if err != nil {
+		return fmt.Errorf("failed to lock known_hosts: %w", err)
+	}
+	defer unlockKnownHosts(lockFile)
 
 	// Read existing file
 	data, err := os.ReadFile(knownHostsPath)
@@ -364,6 +407,29 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 	}
 
 	return result, result.Error
+}
+
+// Ping validates the SSH connection is still alive.
+func (c *Client) Ping(ctx context.Context) error {
+	if c.pingFunc != nil {
+		return c.pingFunc(ctx)
+	}
+	if c.conn == nil {
+		return errors.New("ssh connection not initialized")
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := c.conn.SendRequest("keepalive@openssh.com", true, nil)
+		errCh <- err
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
+	}
 }
 
 // RunScript uploads a script to a temp file and executes it
