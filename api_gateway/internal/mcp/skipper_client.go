@@ -120,6 +120,11 @@ type LazySkipperClient struct {
 	logger  logging.Logger
 }
 
+const (
+	skipperConnectTimeout      = 5 * time.Second
+	skipperAvailabilityTimeout = 1 * time.Second
+)
+
 // NewLazySkipperClient creates a lazy-connecting proxy that satisfies
 // SkipperCaller. The actual MCP session is established on first use.
 func NewLazySkipperClient(cfg SkipperClientConfig, logger logging.Logger) *LazySkipperClient {
@@ -142,12 +147,16 @@ func (l *LazySkipperClient) CallTool(ctx context.Context, name string, arguments
 }
 
 func (l *LazySkipperClient) getSession(ctx context.Context) (*SkipperClient, error) {
+	return l.getSessionWithTimeout(ctx, skipperConnectTimeout)
+}
+
+func (l *LazySkipperClient) getSessionWithTimeout(ctx context.Context, timeout time.Duration) (*SkipperClient, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.session != nil {
 		return l.session, nil
 	}
-	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	sc, err := NewSkipperClient(connectCtx, l.cfg)
 	if err != nil {
@@ -158,6 +167,15 @@ func (l *LazySkipperClient) getSession(ctx context.Context) (*SkipperClient, err
 		l.logger.Info("Connected to Skipper spoke MCP")
 	}
 	return sc, nil
+}
+
+// ToolsAvailable checks whether the Skipper spoke is reachable, using a short timeout.
+func (l *LazySkipperClient) ToolsAvailable(ctx context.Context) bool {
+	if l == nil {
+		return false
+	}
+	_, err := l.getSessionWithTimeout(ctx, skipperAvailabilityTimeout)
+	return err == nil
 }
 
 // invalidateSession clears the cached session if it matches the one that

@@ -82,6 +82,8 @@ type UsageTracker struct {
 	mu            sync.Mutex
 	lastFlush     time.Time
 	usageByTenant map[string]*tenantUsage
+	pendingMu     sync.Mutex
+	pending       []models.UsageSummary
 }
 
 type tenantUsage struct {
@@ -186,6 +188,8 @@ func (t *UsageTracker) Flush(ctx context.Context) {
 	}
 	now := time.Now()
 
+	t.retryPendingSummaries(ctx)
+
 	t.mu.Lock()
 	if len(t.usageByTenant) == 0 {
 		t.lastFlush = now
@@ -212,34 +216,51 @@ func (t *UsageTracker) flushTenant(ctx context.Context, tenantID string, usage *
 		return
 	}
 
-	t.persistUsage(ctx, tenantID, usage)
+	if err := t.persistUsage(ctx, tenantID, usage); err != nil {
+		t.requeueUsage(tenantID, usage)
+		return
+	}
 
 	if t.publisher != nil {
 		summary := t.buildUsageSummary(tenantID, usage, windowStart, windowEnd)
-		if err := t.publisher.PublishUsageSummary(summary); err != nil && t.logger != nil {
-			t.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to publish Skipper usage summary")
+		if err := t.publisher.PublishUsageSummary(summary); err != nil {
+			t.enqueueSummary(summary)
+			if t.logger != nil {
+				t.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to publish Skipper usage summary")
+			}
 		}
 	}
 }
 
-func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage *tenantUsage) {
+func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage *tenantUsage) error {
 	if t.db == nil {
-		return
+		return nil
 	}
+	var errs []error
 	if usage.llmCalls > 0 {
-		t.insertUsageRow(ctx, tenantID, "llm_call", usage.llmCalls, usage.inputTokens, usage.outputTokens, t.model)
+		if err := t.insertUsageRow(ctx, tenantID, "llm_call", usage.llmCalls, usage.inputTokens, usage.outputTokens, t.model); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if usage.searches > 0 {
-		t.insertUsageRow(ctx, tenantID, "search_query", usage.searches, 0, 0, "")
+		if err := t.insertUsageRow(ctx, tenantID, "search_query", usage.searches, 0, 0, ""); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if usage.embeddings > 0 {
-		t.insertUsageRow(ctx, tenantID, "embedding", usage.embeddings, 0, 0, "")
+		if err := t.insertUsageRow(ctx, tenantID, "embedding", usage.embeddings, 0, 0, ""); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	if len(errs) > 0 {
+		return fmt.Errorf("persist usage failed with %d error(s)", len(errs))
+	}
+	return nil
 }
 
-func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType string, count, inputTokens, outputTokens int, model string) {
+func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType string, count, inputTokens, outputTokens int, model string) error {
 	if count <= 0 {
-		return
+		return nil
 	}
 	var modelValue sql.NullString
 	if model != "" {
@@ -262,6 +283,7 @@ func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType s
 			"event_type": eventType,
 		}).Warn("Failed to persist Skipper usage")
 	}
+	return err
 }
 
 func (t *UsageTracker) buildUsageSummary(tenantID string, usage *tenantUsage, windowStart, windowEnd time.Time) models.UsageSummary {
@@ -325,4 +347,54 @@ func (t *UsageTracker) ensureTenant(tenantID string) *tenantUsage {
 		t.usageByTenant[tenantID] = usage
 	}
 	return usage
+}
+
+func (t *UsageTracker) requeueUsage(tenantID string, usage *tenantUsage) {
+	if t == nil || tenantID == "" || usage == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	current := t.ensureTenant(tenantID)
+	current.llmCalls += usage.llmCalls
+	current.inputTokens += usage.inputTokens
+	current.outputTokens += usage.outputTokens
+	current.searches += usage.searches
+	current.embeddings += usage.embeddings
+}
+
+func (t *UsageTracker) enqueueSummary(summary models.UsageSummary) {
+	if t == nil {
+		return
+	}
+	t.pendingMu.Lock()
+	t.pending = append(t.pending, summary)
+	t.pendingMu.Unlock()
+}
+
+func (t *UsageTracker) retryPendingSummaries(ctx context.Context) {
+	if t == nil || t.publisher == nil {
+		return
+	}
+	t.pendingMu.Lock()
+	pending := t.pending
+	t.pending = nil
+	t.pendingMu.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+	var remaining []models.UsageSummary
+	for _, summary := range pending {
+		if err := t.publisher.PublishUsageSummary(summary); err != nil {
+			remaining = append(remaining, summary)
+			if t.logger != nil {
+				t.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to retry Skipper usage summary")
+			}
+		}
+	}
+	if len(remaining) > 0 {
+		t.pendingMu.Lock()
+		t.pending = append(t.pending, remaining...)
+		t.pendingMu.Unlock()
+	}
 }
