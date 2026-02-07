@@ -148,9 +148,21 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 	qmGRPCAddr, _ := config.Metadata["quartermaster_grpc_addr"].(string)
 	token, _ := config.Metadata["enrollment_token"].(string)
 	serviceToken, _ := config.Metadata["service_token"].(string)
-	dnsPort, _ := config.Metadata["dns_port"].(string)
-	if dnsPort == "" {
-		dnsPort = "5353"
+
+	dnsPort := "5353"
+	if value, ok := config.Metadata["dns_port"]; ok {
+		switch v := value.(type) {
+		case string:
+			if v != "" {
+				dnsPort = v
+			}
+		case int:
+			dnsPort = strconv.Itoa(v)
+		case int32:
+			dnsPort = strconv.Itoa(int(v))
+		case int64:
+			dnsPort = strconv.Itoa(int(v))
+		}
 	}
 
 	envContent := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s

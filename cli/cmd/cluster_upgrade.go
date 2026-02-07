@@ -357,10 +357,7 @@ func waitForHealth(ctx context.Context, check func() error, interval, timeout ti
 
 		select {
 		case <-ctx.Done():
-			if lastErr != nil {
-				return lastErr
-			}
-			return ctx.Err()
+			return lastErr
 		case <-ticker.C:
 		}
 	}
