@@ -9,6 +9,7 @@ import (
 
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/servicedefs"
 )
 
 // Detector performs multi-method service detection
@@ -245,34 +246,12 @@ func (d *Detector) checkSystemdRunning(ctx context.Context, serviceName string, 
 
 // getDefaultPort returns the default port for a service
 func getDefaultPort(serviceName string) int {
-	ports := map[string]int{
-		"bridge":           18000,
-		"commodore":        18001,
-		"quartermaster":    18002,
-		"purser":           18003,
-		"periscope-query":  18004,
-		"periscope-ingest": 18005,
-		"decklog":          18006,
-		"helmsman":         18007,
-		"foghorn":          18008,
-		"signalman":        18009,
-		"navigator":        18010,
-		"chartroom":        18030,
-		"foredeck":         18031,
-		"steward":          18032,
-		"logbook":          18033,
-		"skipper":          18018,
-		"postgres":         5432,
-		"yugabyte":         5433,
-		"kafka":            9092,
-		"zookeeper":        2181,
-		"clickhouse":       9000,
-		"listmonk":         9001,
-		"nginx":            18090,
-		"prometheus":       9090,
-		"grafana":          3000,
-		"metabase":         3001,
-		"privateer":        18012,
+	if port, ok := servicedefs.DefaultPort(serviceName); ok {
+		return port
 	}
-	return ports[serviceName]
+
+	extraPorts := map[string]int{
+		"yugabyte": 5433,
+	}
+	return extraPorts[serviceName]
 }

@@ -125,6 +125,10 @@ func (m *Manifest) Validate() error {
 		}
 	}
 
+	if err := m.validatePortCollisions(); err != nil {
+		return err
+	}
+
 	return nil
 }
 

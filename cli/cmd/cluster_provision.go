@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -315,12 +316,23 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.Zookeeper.Version != "" {
 					config.Version = manifest.Infrastructure.Zookeeper.Version
 				}
+				if nodeConfig := resolveZookeeperNodeConfig(task.Name, manifest); nodeConfig != nil {
+					if nodeConfig.Port != 0 {
+						config.Port = nodeConfig.Port
+					}
+					if nodeConfig.ServerID != 0 {
+						config.Metadata["server_id"] = nodeConfig.ServerID
+					}
+					if len(nodeConfig.Servers) > 0 {
+						config.Metadata["servers"] = nodeConfig.Servers
+					}
+				}
 			}
 		}
 	}
 
 	// Override for infrastructure
-	if task.Phase == orchestrator.PhaseInfrastructure {
+	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "zookeeper" {
 		config.Mode = "native"
 		config.Version = "latest"
 	}
@@ -331,6 +343,56 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 	}
 
 	return config
+}
+
+type zookeeperNodeConfig struct {
+	ServerID int
+	Port     int
+	Servers  []string
+}
+
+func resolveZookeeperNodeConfig(taskName string, manifest *inventory.Manifest) *zookeeperNodeConfig {
+	if manifest.Infrastructure.Zookeeper == nil {
+		return nil
+	}
+
+	const prefix = "zookeeper-"
+	if !strings.HasPrefix(taskName, prefix) {
+		return nil
+	}
+
+	id, err := strconv.Atoi(strings.TrimPrefix(taskName, prefix))
+	if err != nil {
+		return nil
+	}
+
+	var targetNode *inventory.ZookeeperNode
+	for i := range manifest.Infrastructure.Zookeeper.Ensemble {
+		node := &manifest.Infrastructure.Zookeeper.Ensemble[i]
+		if node.ID == id {
+			targetNode = node
+			break
+		}
+	}
+	if targetNode == nil {
+		return nil
+	}
+
+	servers := []string{}
+	for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
+		host, ok := manifest.GetHost(node.Host)
+		address := node.Host
+		if ok && host.Address != "" {
+			address = host.Address
+		}
+		servers = append(servers, fmt.Sprintf("server.%d=%s:2888:3888", node.ID, address))
+	}
+
+	return &zookeeperNodeConfig{
+		ServerID: targetNode.ID,
+		Port:     targetNode.Port,
+		Servers:  servers,
+	}
 }
 
 // rollbackProvisionedTasks stops previously provisioned services in reverse order

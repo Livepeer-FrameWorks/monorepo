@@ -80,3 +80,20 @@ func DefaultPort(id string) (int, bool) {
 	}
 	return s.DefaultPort, true
 }
+
+var defaultGRPCPorts = map[string]int{
+	"commodore":       19001,
+	"quartermaster":   19002,
+	"purser":          19003,
+	"periscope-query": 19004,
+	"signalman":       19005,
+	"skipper":         19007,
+	"navigator":       18011,
+	"foghorn":         18019,
+}
+
+// DefaultGRPCPort returns the default gRPC port for a canonical ID, if defined.
+func DefaultGRPCPort(id string) (int, bool) {
+	port, ok := defaultGRPCPorts[id]
+	return port, ok
+}

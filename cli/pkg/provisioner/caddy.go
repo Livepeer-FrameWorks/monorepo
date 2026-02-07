@@ -67,6 +67,8 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		}
 	}
 
+	routes = normalizeCaddyRoutes(routes)
+
 	caddyData := CaddyfileData{
 		Email:         email,
 		RootDomain:    rootDomain,
@@ -121,6 +123,28 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 
 	fmt.Printf("✓ Caddy provisioned on %s\n", host.Address)
 	return nil
+}
+
+func normalizeCaddyRoutes(routes map[string]int) map[string]int {
+	normalized := make(map[string]int, len(routes))
+	for key, value := range routes {
+		normalized[key] = value
+	}
+
+	aliases := map[string]string{
+		"foredeck":  "website",
+		"chartroom": "webapp",
+		"logbook":   "docs",
+		"steward":   "forms",
+	}
+
+	for from, to := range aliases {
+		if port, ok := routes[from]; ok {
+			normalized[to] = port
+		}
+	}
+
+	return normalized
 }
 
 // installCaddy uses FlexibleProvisioner's logic for installing Caddy itself
