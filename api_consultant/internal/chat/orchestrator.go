@@ -191,7 +191,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 
 		inputTokens += countTokensInMessages(messages)
 		llmStart := time.Now()
-		stream, err := o.llmProvider.Complete(ctx, messages, o.tools)
+		stream, err := o.llmProvider.Complete(ctx, messages, o.toolsForContext(ctx))
 		if err != nil {
 			llmCallsTotal.WithLabelValues("error").Inc()
 			llmDuration.Observe(time.Since(llmStart).Seconds())
@@ -325,6 +325,23 @@ var docsAllowedTools = map[string]bool{
 	"diagnose_routing":          true,
 	"get_stream_health_summary": true,
 	"get_anomaly_report":        true,
+}
+
+func (o *Orchestrator) toolsForContext(ctx context.Context) []llm.Tool {
+	if skipper.GetMode(ctx) != "docs" {
+		return o.tools
+	}
+	return filterDocsTools(o.tools)
+}
+
+func filterDocsTools(tools []llm.Tool) []llm.Tool {
+	filtered := make([]llm.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if docsAllowedTools[tool.Name] {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
 }
 
 func (o *Orchestrator) executeTool(ctx context.Context, call llm.ToolCall) (ToolOutcome, error) {

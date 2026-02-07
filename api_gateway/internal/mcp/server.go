@@ -42,6 +42,10 @@ type Server struct {
 	skipperClient  tools.SkipperCaller
 }
 
+type skipperToolAvailability interface {
+	ToolsAvailable(ctx context.Context) bool
+}
+
 // Config holds configuration for the MCP server.
 type Config struct {
 	ServiceClients *clients.ServiceClients
@@ -325,6 +329,9 @@ func (s *Server) registerAccessMiddleware() {
 			}
 
 			result, err := next(ctx, method, req)
+			if err == nil && method == "tools/list" {
+				result = filterSkipperTools(ctx, result, s.skipperClient)
+			}
 			if s.usageTracker != nil {
 				durationMs := uint64(time.Since(start).Milliseconds())
 				authType := deriveAuthType(ctx)
@@ -345,6 +352,32 @@ func (s *Server) registerAccessMiddleware() {
 			return result, err
 		}
 	})
+}
+
+func filterSkipperTools(ctx context.Context, result mcp.Result, skipper tools.SkipperCaller) mcp.Result {
+	if result == nil || skipper == nil {
+		return result
+	}
+	listResult, ok := result.(*mcp.ListToolsResult)
+	if !ok || listResult == nil {
+		return result
+	}
+	availability, ok := skipper.(skipperToolAvailability)
+	if !ok || availability.ToolsAvailable(ctx) {
+		return result
+	}
+	filtered := make([]*mcp.Tool, 0, len(listResult.Tools))
+	for _, tool := range listResult.Tools {
+		if tool == nil {
+			continue
+		}
+		if tool.Name == "search_knowledge" || tool.Name == "search_web" {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	listResult.Tools = filtered
+	return listResult
 }
 
 func accessDecisionError(decision middleware.AccessDecision) error {
