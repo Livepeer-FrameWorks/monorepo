@@ -108,6 +108,7 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 	result, err := s.orchestrator.Run(ctx, messages, streamer)
 	if err != nil {
 		s.logger.WithError(err).Warn("Skipper orchestrator failed (gRPC)")
+		s.logUsage(ctx, tenantID, userID, conversationID, startedAt, result.TokenCounts, true)
 		return status.Errorf(codes.Internal, "orchestrator error: %v", err)
 	}
 
@@ -146,7 +147,7 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 		}
 	}
 
-	s.logUsage(ctx, tenantID, userID, startedAt, result.TokenCounts, false)
+	s.logUsage(ctx, tenantID, userID, conversationID, startedAt, result.TokenCounts, false)
 	metering.RecordLLMUsage(ctx, result.TokenCounts.Input, result.TokenCounts.Output)
 
 	return nil
@@ -283,17 +284,18 @@ func (s *GRPCServer) UpdateConversationTitle(ctx context.Context, req *pb.Update
 	return &pb.SkipperConversationSummary{Id: id, Title: title}, nil
 }
 
-func (s *GRPCServer) logUsage(ctx context.Context, tenantID, userID string, startedAt time.Time, tokens TokenCounts, hadError bool) {
+func (s *GRPCServer) logUsage(ctx context.Context, tenantID, userID, conversationID string, startedAt time.Time, tokens TokenCounts, hadError bool) {
 	if s.usageLogger == nil {
 		return
 	}
 	s.usageLogger.LogChatUsage(ctx, skipper.ChatUsageEvent{
-		TenantID:  tenantID,
-		UserID:    userID,
-		StartedAt: startedAt,
-		TokensIn:  tokens.Input,
-		TokensOut: tokens.Output,
-		HadError:  hadError,
+		TenantID:       tenantID,
+		UserID:         userID,
+		ConversationID: conversationID,
+		StartedAt:      startedAt,
+		TokensIn:       tokens.Input,
+		TokensOut:      tokens.Output,
+		HadError:       hadError,
 	})
 }
 

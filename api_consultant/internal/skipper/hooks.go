@@ -13,10 +13,13 @@ type UsageLogger interface {
 }
 
 type ChatUsageEvent struct {
-	TenantID  string
-	UserID    string
-	StartedAt time.Time
-	TokensIn  int
-	TokensOut int
-	HadError  bool
+	TenantID       string
+	UserID         string
+	ConversationID string
+	StartedAt      time.Time
+	TokensIn       int
+	TokensOut      int
+	HadError       bool
+	UserHash       uint64
+	TokenHash      uint64
 }

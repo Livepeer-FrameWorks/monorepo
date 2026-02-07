@@ -396,8 +396,8 @@ func main() {
 		)
 		pb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
 		logger.WithField("port", cfg.GRPCPort).Info("Starting Skipper gRPC server")
-		if err := grpcSrv.Serve(grpcLis); err != nil {
-			logger.WithError(err).Fatal("Skipper gRPC server failed")
+		if serveErr := grpcSrv.Serve(grpcLis); serveErr != nil {
+			logger.WithError(serveErr).Fatal("Skipper gRPC server failed")
 		}
 	}()
 
@@ -666,6 +666,9 @@ func skipperContextBridge() gin.HandlerFunc {
 		ctx = skipper.WithAuthType(ctx, c.GetString(string(ctxkeys.KeyAuthType)))
 		if token := c.GetString(string(ctxkeys.KeyJWTToken)); token != "" {
 			ctx = skipper.WithJWTToken(ctx, token)
+		}
+		if tokenHash, ok := c.Get(string(ctxkeys.KeyAPITokenHash)); ok {
+			ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, tokenHash)
 		}
 		if role := c.GetString(string(ctxkeys.KeyRole)); role != "" {
 			ctx = skipper.WithRole(ctx, role)

@@ -2999,9 +2999,9 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatchAudit(ctx context.Contex
 			tenantID,
 			event.EventType,
 			event.Source,
-			nil,
-			nil,
-			nil,
+			nilIfEmptyString(event.UserID),
+			nilIfEmptyString(event.ResourceType),
+			nilIfEmptyString(event.ResourceID),
 			string(detailsJSON),
 			aggTimestamp,
 		); err != nil {
