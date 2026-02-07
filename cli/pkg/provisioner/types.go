@@ -42,6 +42,7 @@ type ServiceConfig struct {
 	EnvFile    string                 // Path to env file
 	DependsOn  []string               // Service dependencies
 	Metadata   map[string]interface{} // Service-specific config
+	Force      bool                   // Force re-provision even if exists
 }
 
 // ProvisionContext holds context for provisioning operations

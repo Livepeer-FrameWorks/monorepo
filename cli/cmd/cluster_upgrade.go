@@ -275,14 +275,17 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ New version deployed\n")
 
+	if err := prov.Initialize(ctx, host, config); err != nil {
+		return fmt.Errorf("failed to initialize %s: %w", serviceName, err)
+	}
+
 	// Validate health
 	if !skipValidation {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[5/6] Validating health...\n")
 
-		// Wait a moment for service to start
-		time.Sleep(3 * time.Second)
-
-		if err := prov.Validate(ctx, host, config); err != nil {
+		if err := waitForHealth(ctx, func() error {
+			return prov.Validate(ctx, host, config)
+		}, 5*time.Second, 90*time.Second); err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Health check failed: %v\n", err)
 
 			// Attempt rollback unless --no-rollback is set
@@ -294,6 +297,11 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 					Version:  previousVersion,
 					Port:     port,
 					Metadata: make(map[string]interface{}),
+					Force:    true,
+				}
+
+				if cleanupErr := prov.Cleanup(ctx, host, rollbackConfig); cleanupErr != nil {
+					fmt.Fprintf(cmd.OutOrStderr(), "  ⚠ Rollback cleanup warning: %v\n", cleanupErr)
 				}
 
 				if rollbackErr := prov.Provision(ctx, host, rollbackConfig); rollbackErr != nil {
@@ -301,6 +309,18 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 					fmt.Fprintln(cmd.OutOrStderr(), "\nCRITICAL: Service may be in broken state!")
 					fmt.Fprintln(cmd.OutOrStderr(), "Manual intervention required. Check logs with: frameworks cluster logs "+serviceName)
 					return fmt.Errorf("upgrade failed and rollback failed: %w", rollbackErr)
+				}
+
+				if err := prov.Initialize(ctx, host, rollbackConfig); err != nil {
+					fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Rollback initialization failed: %v\n", err)
+					return fmt.Errorf("upgrade failed, rollback initialization failed: %w", err)
+				}
+
+				if err := waitForHealth(ctx, func() error {
+					return prov.Validate(ctx, host, rollbackConfig)
+				}, 5*time.Second, 90*time.Second); err != nil {
+					fmt.Fprintf(cmd.OutOrStderr(), "  ✗ Rollback health check failed: %v\n", err)
+					return fmt.Errorf("upgrade failed, rollback health check failed: %w", err)
 				}
 
 				fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Rolled back to %s\n", previousVersion)
@@ -318,6 +338,32 @@ func runUpgrade(cmd *cobra.Command, manifestPath, serviceName, version string, d
 	fmt.Fprintf(cmd.OutOrStdout(), "✓ %s upgraded from %s to %s\n", serviceName, previousVersion, svcInfo.Version)
 
 	return nil
+}
+
+func waitForHealth(ctx context.Context, check func() error, interval, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		if err := check(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return lastErr
+			}
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // stopService stops a service based on its mode

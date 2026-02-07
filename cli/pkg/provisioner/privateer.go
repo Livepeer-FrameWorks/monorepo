@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"time"
 
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -48,16 +50,36 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 		return fmt.Errorf("failed to configure systemd: %w", err)
 	}
 
-	// 4. Configure Host DNS
-	if err := p.configureDNS(ctx, host, 5353); err != nil { // Hardcoded 5353 to match default
-		return fmt.Errorf("failed to configure DNS: %w", err)
-	}
-
-	// 5. Start Service
+	// 4. Start Service
 	startCmd := "systemctl daemon-reload && systemctl enable frameworks-privateer && systemctl restart frameworks-privateer"
 	result, err := p.RunCommand(ctx, host, startCmd)
 	if err != nil || result.ExitCode != 0 {
 		return fmt.Errorf("failed to start privateer: %w\nStderr: %s", err, result.Stderr)
+	}
+
+	if err := p.WaitForService(ctx, host, "privateer", 30*time.Second); err != nil {
+		return fmt.Errorf("privateer did not become ready: %w", err)
+	}
+
+	dnsPort := 5353
+	if value, ok := config.Metadata["dns_port"]; ok {
+		switch v := value.(type) {
+		case string:
+			if parsed, err := strconv.Atoi(v); err == nil {
+				dnsPort = parsed
+			}
+		case int:
+			dnsPort = v
+		case int32:
+			dnsPort = int(v)
+		case int64:
+			dnsPort = int(v)
+		}
+	}
+
+	// 5. Configure Host DNS after Privateer is ready.
+	if err := p.configureDNS(ctx, host, dnsPort); err != nil {
+		return fmt.Errorf("failed to configure DNS: %w", err)
 	}
 
 	fmt.Printf("✓ Privateer provisioned on %s\n", host.Address)

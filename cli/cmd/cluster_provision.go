@@ -170,7 +170,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			}
 
 			// Build config for this task
-			config := buildTaskConfig(task, manifest, runtimeData)
+			config := buildTaskConfig(task, manifest, runtimeData, force)
 
 			// Provision based on task type
 			if err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData); err != nil {
@@ -214,12 +214,13 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 }
 
 // buildTaskConfig creates a ServiceConfig for a task
-func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}) provisioner.ServiceConfig {
+func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]interface{}, force bool) provisioner.ServiceConfig {
 	config := provisioner.ServiceConfig{
 		Mode:     "docker",
 		Version:  "stable",
 		Port:     provisioner.ServicePorts[task.Type],
 		Metadata: make(map[string]interface{}),
+		Force:    force,
 	}
 
 	config.DeployName = task.Type
@@ -371,7 +372,7 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		return fmt.Errorf("failed to get provisioner: %w", err)
 	}
 
-	config := buildTaskConfig(task, manifest, runtimeData)
+	config := buildTaskConfig(task, manifest, runtimeData, force)
 
 	// Provision
 	if err := prov.Provision(ctx, host, config); err != nil {
