@@ -143,20 +143,7 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 		}
 
 		if authResult.AuthType == "x402" && authResult.JWTToken != "" {
-			c.Header("X-Access-Token", authResult.JWTToken)
-			if authResult.ExpiresAt != nil {
-				c.Header("X-Access-Token-Expires-At", authResult.ExpiresAt.Format(time.RFC3339))
-			}
-
-			isDev := os.Getenv("ENV") == "development" ||
-				os.Getenv("BUILD_ENV") == "development" ||
-				os.Getenv("GO_ENV") == "development"
-			secure := !isDev
-			c.SetSameSite(http.SameSiteLaxMode)
-			c.SetCookie("access_token", authResult.JWTToken, 15*60, "/", "", secure, true)
-			if authResult.TenantID != "" {
-				c.SetCookie("tenant_id", authResult.TenantID, 15*60, "/", "", secure, true)
-			}
+			applyX402Cookies(c, authResult)
 		}
 
 		c.Set(string(ctxkeys.KeyUserID), authResult.UserID)
@@ -186,5 +173,26 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
+	}
+}
+
+func applyX402Cookies(c *gin.Context, authResult *AuthResult) {
+	if authResult == nil || authResult.JWTToken == "" {
+		return
+	}
+	c.Header("X-Access-Token", authResult.JWTToken)
+	if authResult.ExpiresAt != nil {
+		c.Header("X-Access-Token-Expires-At", authResult.ExpiresAt.Format(time.RFC3339))
+	}
+
+	isDev := os.Getenv("ENV") == "development" ||
+		os.Getenv("BUILD_ENV") == "development" ||
+		os.Getenv("GO_ENV") == "development"
+	secure := !isDev
+	cookieDomain := os.Getenv("COOKIE_DOMAIN")
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("access_token", authResult.JWTToken, 15*60, "/", cookieDomain, secure, true)
+	if authResult.TenantID != "" {
+		c.SetCookie("tenant_id", authResult.TenantID, 15*60, "/", cookieDomain, secure, true)
 	}
 }
