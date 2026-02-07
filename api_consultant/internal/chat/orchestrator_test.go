@@ -18,12 +18,12 @@ func (c *capturingLLM) Complete(_ context.Context, _ []llm.Message, tools []llm.
 	return &singleChunkStream{content: ""}, nil
 }
 
-type fakeGateway struct {
+type fakeGatewayUnit struct {
 	tools []llm.Tool
 }
 
-func (g *fakeGateway) AvailableTools() []llm.Tool { return g.tools }
-func (g *fakeGateway) HasTool(name string) bool {
+func (g *fakeGatewayUnit) AvailableTools() []llm.Tool { return g.tools }
+func (g *fakeGatewayUnit) HasTool(name string) bool {
 	for _, tool := range g.tools {
 		if tool.Name == name {
 			return true
@@ -31,12 +31,12 @@ func (g *fakeGateway) HasTool(name string) bool {
 	}
 	return false
 }
-func (g *fakeGateway) CallTool(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+func (g *fakeGatewayUnit) CallTool(_ context.Context, _ string, _ json.RawMessage) (string, error) {
 	return "", nil
 }
 
 func TestDocsModeFiltersToolsBeforeLLM(t *testing.T) {
-	gateway := &fakeGateway{
+	gateway := &fakeGatewayUnit{
 		tools: []llm.Tool{
 			{Name: "create_stream"},
 			{Name: "get_stream"},

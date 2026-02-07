@@ -216,8 +216,10 @@ func (t *UsageTracker) flushTenant(ctx context.Context, tenantID string, usage *
 		return
 	}
 
-	if err := t.persistUsage(ctx, tenantID, usage); err != nil {
-		t.requeueUsage(tenantID, usage)
+	failedUsage, err := t.persistUsage(ctx, tenantID, usage)
+	if err != nil {
+		// Avoid double-counting: only requeue the event types that failed to persist.
+		t.requeueUsage(tenantID, failedUsage)
 		return
 	}
 
@@ -232,30 +234,42 @@ func (t *UsageTracker) flushTenant(ctx context.Context, tenantID string, usage *
 	}
 }
 
-func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage *tenantUsage) error {
+func (t *UsageTracker) persistUsage(ctx context.Context, tenantID string, usage *tenantUsage) (*tenantUsage, error) {
 	if t.db == nil {
-		return nil
+		return nil, nil
 	}
+
+	failed := &tenantUsage{}
 	var errs []error
+
 	if usage.llmCalls > 0 {
 		if err := t.insertUsageRow(ctx, tenantID, "llm_call", usage.llmCalls, usage.inputTokens, usage.outputTokens, t.model); err != nil {
+			err = fmt.Errorf("llm_call: %w", err)
 			errs = append(errs, err)
+			failed.llmCalls = usage.llmCalls
+			failed.inputTokens = usage.inputTokens
+			failed.outputTokens = usage.outputTokens
 		}
 	}
 	if usage.searches > 0 {
 		if err := t.insertUsageRow(ctx, tenantID, "search_query", usage.searches, 0, 0, ""); err != nil {
+			err = fmt.Errorf("search_query: %w", err)
 			errs = append(errs, err)
+			failed.searches = usage.searches
 		}
 	}
 	if usage.embeddings > 0 {
 		if err := t.insertUsageRow(ctx, tenantID, "embedding", usage.embeddings, 0, 0, ""); err != nil {
+			err = fmt.Errorf("embedding: %w", err)
 			errs = append(errs, err)
+			failed.embeddings = usage.embeddings
 		}
 	}
+
 	if len(errs) > 0 {
-		return fmt.Errorf("persist usage failed with %d error(s)", len(errs))
+		return failed, fmt.Errorf("persist usage failed with %d error(s)", len(errs))
 	}
-	return nil
+	return nil, nil
 }
 
 func (t *UsageTracker) insertUsageRow(ctx context.Context, tenantID, eventType string, count, inputTokens, outputTokens int, model string) error {
