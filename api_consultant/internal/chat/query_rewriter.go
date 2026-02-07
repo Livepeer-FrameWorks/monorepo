@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"time"
@@ -49,7 +50,7 @@ func (qr *QueryRewriter) Rewrite(ctx context.Context, query string) string {
 	var result strings.Builder
 	for {
 		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -44,7 +45,7 @@ func generateSummary(ctx context.Context, provider llm.Provider, messages []Mess
 	for {
 		chunk, err := stream.Recv()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			_ = stream.Close()

@@ -15,8 +15,7 @@ import (
 )
 
 func TestSchedulerSkipsFreshSource(t *testing.T) {
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected request to %s — should have been skipped by TTL", r.URL.Path)
 	}))
 	defer server.Close()

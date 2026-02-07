@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -573,7 +574,7 @@ func TestCrawlPagesRespectsContext(t *testing.T) {
 
 	pages := []string{server.URL + "/guide"}
 	err = crawler.CrawlPages(ctx, "tenant", pages, false)
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }

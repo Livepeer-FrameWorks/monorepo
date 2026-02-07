@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ func (h *HyDEGenerator) GenerateAndEmbed(ctx context.Context, query string) ([]f
 	var hypothetical strings.Builder
 	for {
 		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

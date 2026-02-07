@@ -25,7 +25,7 @@ type RerankResult struct {
 
 // RerankConfig configures a reranking provider.
 type RerankConfig struct {
-	Provider string // "cohere", "jina", or "generic"
+	Provider string // "cohere", "jina", "voyage", or "generic"
 	Model    string
 	APIKey   string
 	APIURL   string
@@ -56,6 +56,10 @@ func NewRerankClient(cfg RerankConfig) (RerankClient, error) {
 		if apiURL == "" {
 			apiURL = "https://api.jina.ai/v1"
 		}
+	case "voyage":
+		if apiURL == "" {
+			apiURL = "https://api.voyageai.com/v1"
+		}
 	case "generic":
 		if apiURL == "" {
 			return nil, errors.New("RERANKER_API_URL is required for generic provider")
@@ -82,6 +86,8 @@ func (p *rerankProvider) Rerank(ctx context.Context, query string, documents []s
 		return p.rerankCohere(ctx, query, documents)
 	case "jina":
 		return p.rerankJina(ctx, query, documents)
+	case "voyage":
+		return p.rerankVoyage(ctx, query, documents)
 	case "generic":
 		return p.rerankGeneric(ctx, query, documents)
 	default:
@@ -173,7 +179,43 @@ func (p *rerankProvider) rerankJina(ctx context.Context, query string, documents
 	return results, nil
 }
 
-// Generic /v1/rerank (OpenAI-compatible pattern used by Voyage, SiliconFlow, self-hosted models)
+// Voyage AI rerank API (response uses "data" instead of "results")
+
+type voyageRerankResponse struct {
+	Data []struct {
+		Index          int     `json:"index"`
+		RelevanceScore float64 `json:"relevance_score"`
+	} `json:"data"`
+}
+
+func (p *rerankProvider) rerankVoyage(ctx context.Context, query string, documents []string) ([]RerankResult, error) {
+	payload, err := json.Marshal(genericRerankRequest{
+		Model:     p.model,
+		Query:     query,
+		Documents: documents,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("voyage rerank: marshal: %w", err)
+	}
+
+	body, err := p.doRerank(ctx, p.apiURL+"/rerank", payload)
+	if err != nil {
+		return nil, fmt.Errorf("voyage rerank: %w", err)
+	}
+
+	var resp voyageRerankResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("voyage rerank: decode: %w", err)
+	}
+
+	results := make([]RerankResult, len(resp.Data))
+	for i, r := range resp.Data {
+		results[i] = RerankResult{Index: r.Index, RelevanceScore: r.RelevanceScore}
+	}
+	return results, nil
+}
+
+// Generic /v1/rerank (works with ZeroEntropy, Contextual AI, SiliconFlow, self-hosted models)
 
 type genericRerankRequest struct {
 	Model     string   `json:"model,omitempty"`
@@ -182,10 +224,14 @@ type genericRerankRequest struct {
 }
 
 type genericRerankResponse struct {
-	Results []struct {
-		Index          int     `json:"index"`
-		RelevanceScore float64 `json:"relevance_score"`
-	} `json:"results"`
+	Results []genericRerankItem `json:"results"`
+	Data    []genericRerankItem `json:"data"`
+}
+
+type genericRerankItem struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+	Score          float64 `json:"score"`
 }
 
 func (p *rerankProvider) rerankGeneric(ctx context.Context, query string, documents []string) ([]RerankResult, error) {
@@ -209,9 +255,18 @@ func (p *rerankProvider) rerankGeneric(ctx context.Context, query string, docume
 		return nil, fmt.Errorf("rerank: decode: %w", err)
 	}
 
-	results := make([]RerankResult, len(resp.Results))
-	for i, r := range resp.Results {
-		results[i] = RerankResult{Index: r.Index, RelevanceScore: r.RelevanceScore}
+	items := resp.Results
+	if len(items) == 0 {
+		items = resp.Data
+	}
+
+	results := make([]RerankResult, len(items))
+	for i, r := range items {
+		score := r.RelevanceScore
+		if score == 0 && r.Score != 0 {
+			score = r.Score
+		}
+		results[i] = RerankResult{Index: r.Index, RelevanceScore: score}
 	}
 	return results, nil
 }

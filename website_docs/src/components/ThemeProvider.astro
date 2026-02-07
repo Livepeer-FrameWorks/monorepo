@@ -5,13 +5,13 @@
 
 {/* Intentionally inlined to avoid FOUC — matches Starlight's pattern. */}
 <script is:inline>
-	document.documentElement.dataset.theme = 'dark';
-	if (typeof localStorage !== 'undefined') {
-		localStorage.setItem('starlight-theme', 'dark');
-	}
-	window.StarlightThemeProvider = {
-		updatePickers() {
-			document.documentElement.dataset.theme = 'dark';
-		},
-	};
+  document.documentElement.dataset.theme = "dark";
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem("starlight-theme", "dark");
+  }
+  window.StarlightThemeProvider = {
+    updatePickers() {
+      document.documentElement.dataset.theme = "dark";
+    },
+  };
 </script>

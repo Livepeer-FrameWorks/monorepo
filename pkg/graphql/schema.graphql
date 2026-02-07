@@ -5578,7 +5578,7 @@ enum SkipperMode {
 }
 
 union SkipperChatEvent =
-    SkipperToken
+  | SkipperToken
   | SkipperToolStartEvent
   | SkipperToolEndEvent
   | SkipperMeta

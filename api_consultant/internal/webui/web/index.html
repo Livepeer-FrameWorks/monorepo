@@ -1,42 +1,49 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="skipper-api-url" content="__SKIPPER_API_URL__">
-  <title>Skipper</title>
-  <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <div class="app">
-    <div id="sidebar-overlay" class="sidebar-overlay"></div>
-    <aside id="sidebar" class="sidebar">
-      <div class="sidebar-header">
-        <span class="sidebar-title">Conversations</span>
-        <button id="theme-toggle" class="btn btn-icon" aria-label="Toggle theme">&#9790;</button>
-      </div>
-      <div id="conv-list" class="sidebar-list"></div>
-      <div class="sidebar-footer">
-        <button id="new-chat-btn" class="btn btn-primary">+ New Chat</button>
-      </div>
-    </aside>
-    <main class="main">
-      <div class="main-header">
-        <button id="mobile-menu" class="mobile-toggle" aria-label="Open sidebar">&#9776;</button>
-        <span id="conv-title">New chat</span>
-      </div>
-      <div id="messages" class="messages"></div>
-      <button id="scroll-btn" class="scroll-btn" style="display:none">&darr; Scroll to bottom</button>
-      <div class="input-area">
-        <div class="input-row">
-          <textarea id="chat-input" class="input-field" rows="1" placeholder="Ask Skipper anything..."></textarea>
-          <button id="send-btn" class="send-btn">Send</button>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="skipper-api-url" content="__SKIPPER_API_URL__" />
+    <title>Skipper</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <div id="sidebar-overlay" class="sidebar-overlay"></div>
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">Conversations</span>
+          <button id="theme-toggle" class="btn btn-icon" aria-label="Toggle theme">&#9790;</button>
         </div>
-        <div class="input-hint">Enter to send &middot; Shift+Enter for newline</div>
-      </div>
-    </main>
-  </div>
-  <script src="app.js"></script>
-</body>
+        <div id="conv-list" class="sidebar-list"></div>
+        <div class="sidebar-footer">
+          <button id="new-chat-btn" class="btn btn-primary">+ New Chat</button>
+        </div>
+      </aside>
+      <main class="main">
+        <div class="main-header">
+          <button id="mobile-menu" class="mobile-toggle" aria-label="Open sidebar">&#9776;</button>
+          <span id="conv-title">New chat</span>
+        </div>
+        <div id="messages" class="messages"></div>
+        <button id="scroll-btn" class="scroll-btn" style="display: none">
+          &darr; Scroll to bottom
+        </button>
+        <div class="input-area">
+          <div class="input-row">
+            <textarea
+              id="chat-input"
+              class="input-field"
+              rows="1"
+              placeholder="Ask Skipper anything..."
+            ></textarea>
+            <button id="send-btn" class="send-btn">Send</button>
+          </div>
+          <div class="input-hint">Enter to send &middot; Shift+Enter for newline</div>
+        </div>
+      </main>
+    </div>
+    <script src="app.js"></script>
+  </body>
 </html>

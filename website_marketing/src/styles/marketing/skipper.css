@@ -18,14 +18,13 @@
     content: "";
     position: absolute;
     inset: 0;
-    background:
-      repeating-linear-gradient(
-        0deg,
-        rgba(var(--fx-rgb-255-255-255) / 0.02),
-        rgba(var(--fx-rgb-255-255-255) / 0.02) 1px,
-        transparent 1px,
-        transparent 6px
-      );
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(var(--fx-rgb-255-255-255) / 0.02),
+      rgba(var(--fx-rgb-255-255-255) / 0.02) 1px,
+      transparent 1px,
+      transparent 6px
+    );
     mix-blend-mode: screen;
     pointer-events: none;
     opacity: 0.5;
@@ -38,11 +37,7 @@
     gap: 0.75rem;
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--fx-seam-soft);
-    background: linear-gradient(
-      90deg,
-      rgba(var(--brand-cyan-rgb) / 0.08) 0%,
-      transparent 60%
-    );
+    background: linear-gradient(90deg, rgba(var(--brand-cyan-rgb) / 0.08) 0%, transparent 60%);
   }
 
   .skipper-preview__header-left {
@@ -83,7 +78,9 @@
     border: none;
     border-right: 1px solid var(--fx-seam-soft);
     cursor: pointer;
-    transition: color 0.15s, background 0.15s;
+    transition:
+      color 0.15s,
+      background 0.15s;
   }
 
   .skipper-preview__tab:last-child {
@@ -128,11 +125,7 @@
     max-width: 92%;
     background: rgba(var(--brand-cyan-rgb) / 0.06);
     border: 1px solid var(--fx-seam-soft);
-    color: color-mix(
-      in srgb,
-      hsl(var(--foreground)) 88%,
-      rgba(var(--fx-rgb-255-255-255) / 0.06)
-    );
+    color: color-mix(in srgb, hsl(var(--foreground)) 88%, rgba(var(--fx-rgb-255-255-255) / 0.06));
   }
 
   .skipper-preview__bubble--assistant p {

@@ -512,7 +512,9 @@ func (a *AdminAPI) handleCancelCrawl(c *gin.Context) {
 	}
 
 	if cancelFn, loaded := activeCrawls.LoadAndDelete(jobID); loaded {
-		cancelFn.(context.CancelFunc)()
+		if cancel, ok := cancelFn.(context.CancelFunc); ok {
+			cancel()
+		}
 	}
 
 	now := a.now().UTC()

@@ -372,6 +372,8 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 			h.logger.WithError(err).Debug("Token refresh failed")
 			// Clear invalid cookie
 			c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, false, true)
+			c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, false, true)
+			c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, false, true)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
 			return
 		}

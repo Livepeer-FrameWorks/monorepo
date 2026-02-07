@@ -23,7 +23,7 @@ func TestDoWithRetryRetryCount(t *testing.T) {
 
 	client := &http.Client{}
 	resp, err := doWithRetry(context.Background(), client, func() (*http.Request, error) {
-		return http.NewRequest(http.MethodGet, srv.URL, nil)
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
 	})
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -48,9 +48,12 @@ func TestDoWithRetryAllFailures(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{}
-	_, err := doWithRetry(context.Background(), client, func() (*http.Request, error) {
-		return http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := doWithRetry(context.Background(), client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
 	})
+	if resp != nil {
+		resp.Body.Close()
+	}
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}

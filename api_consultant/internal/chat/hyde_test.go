@@ -83,7 +83,7 @@ func TestHyDE_StreamRecv(t *testing.T) {
 		t.Fatalf("unexpected content: %q", chunk.Content)
 	}
 	_, err = s.Recv()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected EOF, got %v", err)
 	}
 }
