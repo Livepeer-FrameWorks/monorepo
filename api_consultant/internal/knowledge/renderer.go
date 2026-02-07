@@ -3,6 +3,8 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -24,6 +26,14 @@ var blockedResourceTypes = []proto.NetworkResourceType{
 	proto.NetworkResourceTypeFont,
 	proto.NetworkResourceTypeStylesheet,
 	proto.NetworkResourceTypeMedia,
+}
+
+var validatedResourceTypes = []proto.NetworkResourceType{
+	proto.NetworkResourceTypeDocument,
+	proto.NetworkResourceTypeXHR,
+	proto.NetworkResourceTypeFetch,
+	proto.NetworkResourceTypeOther,
+	proto.NetworkResourceTypeScript,
 }
 
 // RodRenderer renders JavaScript-heavy pages via a headless Chromium instance
@@ -85,6 +95,16 @@ func (r *RodRenderer) Render(ctx context.Context, pageURL string) (string, error
 			h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
 		})
 	}
+	for _, rt := range validatedResourceTypes {
+		rt := rt
+		_ = router.Add("*", rt, func(h *rod.Hijack) {
+			if !allowRenderURL(renderCtx, h.Request.URL().String()) {
+				h.Response.Fail(proto.NetworkErrorReasonBlockedByClient)
+				return
+			}
+			h.ContinueRequest(&proto.FetchContinueRequest{})
+		})
+	}
 	go router.Run()
 	defer router.MustStop()
 
@@ -102,6 +122,22 @@ func (r *RodRenderer) Render(ctx context.Context, pageURL string) (string, error
 	}
 
 	return html, nil
+}
+
+func allowRenderURL(ctx context.Context, rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		_, err := validateCrawlURLWithContext(ctx, rawURL)
+		return err == nil
+	case "about", "data", "blob":
+		return true
+	default:
+		return false
+	}
 }
 
 // Close shuts down the headless browser process.

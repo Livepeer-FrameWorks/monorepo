@@ -141,7 +141,7 @@ func (a *AdminAPI) handleCrawl(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "sitemap_url is required"})
 		return
 	}
-	if _, err := validateCrawlURL(req.SitemapURL); err != nil {
+	if _, err := validateCrawlURLWithContext(c.Request.Context(), req.SitemapURL); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid sitemap url: %v", err)})
 		return
 	}
@@ -190,7 +190,7 @@ func (a *AdminAPI) handlePages(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "url is required"})
 		return
 	}
-	if _, err := validateCrawlURL(req.URL); err != nil {
+	if _, err := validateCrawlURLWithContext(c.Request.Context(), req.URL); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid url: %v", err)})
 		return
 	}

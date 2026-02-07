@@ -13,6 +13,8 @@ import (
 // privateCIDRs are pre-computed at package init to avoid re-parsing on every call.
 var privateCIDRs []*net.IPNet
 
+const dnsLookupTimeout = 5 * time.Second
+
 func init() {
 	for _, cidr := range []string{
 		"10.0.0.0/8",
@@ -30,10 +32,8 @@ func init() {
 	}
 }
 
-// validateCrawlURL checks that a URL is safe to crawl: http(s) scheme and
-// non-private destination. This is a fast-path check; the authoritative guard
-// is the SSRF-safe dialer returned by NewSSRFSafeTransport.
-func validateCrawlURL(rawURL string) (*url.URL, error) {
+// validateCrawlURLWithContext performs the same SSRF guard with a bounded DNS lookup.
+func validateCrawlURLWithContext(ctx context.Context, rawURL string) (*url.URL, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
@@ -49,7 +49,12 @@ func validateCrawlURL(rawURL string) (*url.URL, error) {
 		return nil, fmt.Errorf("missing hostname in url")
 	}
 
-	ips, err := net.DefaultResolver.LookupHost(context.Background(), host)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, dnsLookupTimeout)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupHost(lookupCtx, host)
 	if err != nil {
 		return nil, fmt.Errorf("dns lookup failed for %s: %w", host, err)
 	}

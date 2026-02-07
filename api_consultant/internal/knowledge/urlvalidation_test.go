@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"context"
 	"net"
 	"testing"
 )
@@ -29,9 +30,9 @@ func TestValidateCrawlURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := validateCrawlURL(tt.url)
+			_, err := validateCrawlURLWithContext(context.Background(), tt.url)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("validateCrawlURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+				t.Errorf("validateCrawlURLWithContext(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
 			}
 		})
 	}

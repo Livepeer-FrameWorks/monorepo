@@ -191,7 +191,7 @@ func NewCrawler(client *http.Client, embedder DocumentEmbedder, store KnowledgeS
 			return fmt.Errorf("stopped after 5 redirects")
 		}
 		if !c.skipURLValidation {
-			if _, err := validateCrawlURL(req.URL.String()); err != nil {
+			if _, err := validateCrawlURLWithContext(req.Context(), req.URL.String()); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
 			}
 		}
@@ -225,7 +225,7 @@ func (c *Crawler) CrawlSitemap(ctx context.Context, sitemapURL string) ([]Page, 
 		visited[current] = true
 
 		if !c.skipURLValidation {
-			if _, err := validateCrawlURL(current); err != nil {
+			if _, err := validateCrawlURLWithContext(ctx, current); err != nil {
 				if c.logger != nil {
 					c.logger.WithField("url", current).WithField("error", err.Error()).Warn("Sub-sitemap URL blocked by SSRF check, skipping")
 				}
@@ -369,7 +369,7 @@ func (c *Crawler) CrawlAndEmbed(ctx context.Context, tenantID, sitemapURL string
 				continue
 			}
 			if !c.skipURLValidation {
-				if _, valErr := validateCrawlURL(link); valErr != nil {
+				if _, valErr := validateCrawlURLWithContext(ctx, link); valErr != nil {
 					continue
 				}
 			}
@@ -494,7 +494,7 @@ func (c *Crawler) CrawlPages(ctx context.Context, tenantID string, pageURLs []st
 // Returns non-nil error only on context cancellation; page-level errors are logged and skipped.
 func (c *Crawler) processPage(ctx context.Context, tenantID, sourceRoot, pageURL, lastMod, sourceType string, render bool, discovered *linkSet) (PageStatus, error) {
 	if !c.skipURLValidation {
-		if _, err := validateCrawlURL(pageURL); err != nil {
+		if _, err := validateCrawlURLWithContext(ctx, pageURL); err != nil {
 			if c.logger != nil {
 				c.logger.WithField("url", pageURL).WithField("error", err.Error()).Warn("URL blocked by SSRF check, skipping")
 			}
@@ -680,6 +680,7 @@ func (c *Crawler) skipRenderViaHEAD(ctx context.Context, pageURL string, cached 
 // fetchRendered uses the headless browser to render a page and extract content.
 func (c *Crawler) fetchRendered(ctx context.Context, pageURL string) (FetchResult, error) {
 	renderStart := time.Now()
+	meta := c.fetchHeadMetadata(ctx, pageURL)
 	htmlContent, err := c.renderer.Render(ctx, pageURL)
 	renderDuration.Observe(time.Since(renderStart).Seconds())
 	if err != nil {
@@ -689,11 +690,49 @@ func (c *Crawler) fetchRendered(ctx context.Context, pageURL string) (FetchResul
 	renderPagesTotal.WithLabelValues("success").Inc()
 
 	title, content := extractContent([]byte(htmlContent), pageURL)
+	rawSize := meta.RawSize
+	if rawSize <= 0 {
+		rawSize = int64(len(htmlContent))
+	}
 	return FetchResult{
 		Title:       title,
 		Content:     content,
 		ContentHash: contentHash(content),
+		ETag:        meta.ETag,
+		LastMod:     meta.LastModified,
+		RawSize:     rawSize,
 	}, nil
+}
+
+type headMetadata struct {
+	ETag         string
+	LastModified string
+	RawSize      int64
+}
+
+func (c *Crawler) fetchHeadMetadata(ctx context.Context, pageURL string) headMetadata {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, pageURL, nil)
+	if err != nil {
+		return headMetadata{}
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	resp, err := c.doWithRetry(ctx, req)
+	if err != nil {
+		return headMetadata{}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return headMetadata{}
+	}
+	rawSize := resp.ContentLength
+	if rawSize < 0 {
+		rawSize = 0
+	}
+	return headMetadata{
+		ETag:         resp.Header.Get("ETag"),
+		LastModified: resp.Header.Get("Last-Modified"),
+		RawSize:      rawSize,
+	}
 }
 
 func (c *Crawler) fetchPageConditional(ctx context.Context, pageURL string, cached *PageCache) (FetchResult, error) {
