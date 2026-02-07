@@ -33,6 +33,7 @@ var validatedResourceTypes = []proto.NetworkResourceType{
 	proto.NetworkResourceTypeXHR,
 	proto.NetworkResourceTypeFetch,
 	proto.NetworkResourceTypeOther,
+	proto.NetworkResourceTypeScript,
 }
 
 // RodRenderer renders JavaScript-heavy pages via a headless Chromium instance
