@@ -17,6 +17,7 @@
 @import "./styles/marketing/comparison.css";
 @import "./styles/marketing/partners.css";
 @import "./styles/marketing/timeline.css";
+@import "./styles/marketing/skipper.css";
 
 /* Page-specific styles */
 @import "./styles/pages/about.css";

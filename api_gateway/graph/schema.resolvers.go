@@ -2124,6 +2124,16 @@ func (r *mutationResolver) PromoteToPaid(ctx context.Context, tierID string) (mo
 	return r.DoPromoteToPaid(ctx, tierID)
 }
 
+// DeleteSkipperConversation is the resolver for the deleteSkipperConversation field.
+func (r *mutationResolver) DeleteSkipperConversation(ctx context.Context, id string) (bool, error) {
+	return r.Resolver.DoDeleteSkipperConversation(ctx, id)
+}
+
+// UpdateSkipperConversation is the resolver for the updateSkipperConversation field.
+func (r *mutationResolver) UpdateSkipperConversation(ctx context.Context, id string, title string) (*model.SkipperConversationSummary, error) {
+	return r.Resolver.DoUpdateSkipperConversation(ctx, id, title)
+}
+
 // CreateConversation is the resolver for the createConversation field.
 func (r *mutationResolver) CreateConversation(ctx context.Context, input model.CreateConversationInput) (model.CreateConversationResult, error) {
 	resolver := r.Resolver
@@ -3636,6 +3646,16 @@ func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey str
 	return r.DoResolveIngestEndpoint(ctx, streamKey, viewerIP)
 }
 
+// SkipperConversations is the resolver for the skipperConversations field.
+func (r *queryResolver) SkipperConversations(ctx context.Context, limit *int, offset *int) ([]*model.SkipperConversationSummary, error) {
+	return r.Resolver.DoSkipperConversations(ctx, limit, offset)
+}
+
+// SkipperConversation is the resolver for the skipperConversation field.
+func (r *queryResolver) SkipperConversation(ctx context.Context, id string) (*model.SkipperConversation, error) {
+	return r.Resolver.DoSkipperConversation(ctx, id)
+}
+
 // ConversationsConnection is the resolver for the conversationsConnection field.
 func (r *queryResolver) ConversationsConnection(ctx context.Context, page *model.ConnectionInput) (*model.ConversationsConnection, error) {
 	resolver := r.Resolver
@@ -3841,6 +3861,44 @@ func (r *serviceInstanceHealthResolver) LastHealthCheck(ctx context.Context, obj
 	}
 	t := obj.LastHealthCheck.AsTime()
 	return &t, nil
+}
+
+// Sources is the resolver for the sources field.
+func (r *skipperMessageResolver) Sources(ctx context.Context, obj *model.SkipperMessage) (*string, error) {
+	if obj.Sources == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.Sources)
+	if err != nil {
+		return nil, err
+	}
+	s := string(b)
+	return &s, nil
+}
+
+// ToolsUsed is the resolver for the toolsUsed field.
+func (r *skipperMessageResolver) ToolsUsed(ctx context.Context, obj *model.SkipperMessage) (*string, error) {
+	if obj.ToolsUsed == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.ToolsUsed)
+	if err != nil {
+		return nil, err
+	}
+	s := string(b)
+	return &s, nil
+}
+
+// Payload is the resolver for the payload field.
+func (r *skipperToolDetailResolver) Payload(ctx context.Context, obj *model.SkipperToolDet) (string, error) {
+	if obj.Payload == nil {
+		return "{}", nil
+	}
+	b, err := json.Marshal(obj.Payload)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // ID is the resolver for the id field.
@@ -4724,6 +4782,11 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 		r.Metrics.Operations.WithLabelValues("subscription_firehose", "success").Inc()
 	}
 	return ch, nil
+}
+
+// SkipperChat is the resolver for the skipperChat field.
+func (r *subscriptionResolver) SkipperChat(ctx context.Context, input model.SkipperChatInput) (<-chan model.SkipperChatEvent, error) {
+	return r.Resolver.DoSkipperChat(ctx, input)
 }
 
 // LiveMessageReceived is the resolver for the liveMessageReceived field.
@@ -5790,6 +5853,16 @@ func (r *Resolver) ServiceInstanceHealth() generated.ServiceInstanceHealthResolv
 	return &serviceInstanceHealthResolver{r}
 }
 
+// SkipperMessage returns generated.SkipperMessageResolver implementation.
+func (r *Resolver) SkipperMessage() generated.SkipperMessageResolver {
+	return &skipperMessageResolver{r}
+}
+
+// SkipperToolDetail returns generated.SkipperToolDetailResolver implementation.
+func (r *Resolver) SkipperToolDetail() generated.SkipperToolDetailResolver {
+	return &skipperToolDetailResolver{r}
+}
+
 // StorageEvent returns generated.StorageEventResolver implementation.
 func (r *Resolver) StorageEvent() generated.StorageEventResolver { return &storageEventResolver{r} }
 
@@ -5989,6 +6062,8 @@ type rebufferingEventResolver struct{ *Resolver }
 type routingEventResolver struct{ *Resolver }
 type serviceInstanceResolver struct{ *Resolver }
 type serviceInstanceHealthResolver struct{ *Resolver }
+type skipperMessageResolver struct{ *Resolver }
+type skipperToolDetailResolver struct{ *Resolver }
 type storageEventResolver struct{ *Resolver }
 type storageUsageResolver struct{ *Resolver }
 type storageUsageRecordResolver struct{ *Resolver }

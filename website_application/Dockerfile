@@ -86,7 +86,7 @@ COPY pkg/graphql/schema.graphql pkg/graphql/schema.graphql
 COPY pkg/graphql/operations/ pkg/graphql/operations/
 
 # ensure skill files are present in static assets
-RUN cp docs/skills/skill.md website_application/static/skill.md \
+RUN cp docs/skills/SKILL.md website_application/static/SKILL.md \
   && cp docs/skills/skill.json website_application/static/skill.json \
   && cp docs/skills/heartbeat.md website_application/static/heartbeat.md \
   && cp docs/skills/llms.txt website_application/static/llms.txt \

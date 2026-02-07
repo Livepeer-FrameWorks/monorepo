@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"frameworks/pkg/ctxkeys"
+	"frameworks/api_consultant/internal/skipper"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
@@ -17,7 +17,7 @@ func TestConversationAddMessageScopesTenant(t *testing.T) {
 	defer db.Close()
 
 	store := NewConversationStore(db)
-	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
 
 	mock.ExpectQuery("INSERT INTO skipper\\.skipper_messages").WithArgs(
 		"conversation-id",

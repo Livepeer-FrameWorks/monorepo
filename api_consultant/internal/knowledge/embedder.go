@@ -4,14 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
+	"time"
 
 	"frameworks/pkg/llm"
 )
 
 const (
+	// Token limits are expressed in approximate BPE tokens.
+	// estimateBPETokens applies a 1.3x multiplier to word count.
 	defaultTokenLimit   = 500
 	defaultTokenOverlap = 50
+	maxEmbedBatchSize   = 2048
+	minChunkTokens      = 20
+	bpeMultiplier       = 1.3
 )
 
 type EmbedderOption func(*Embedder)
@@ -20,6 +27,7 @@ type Embedder struct {
 	client       llm.EmbeddingClient
 	tokenLimit   int
 	tokenOverlap int
+	summarizer   ContextualSummarizer
 }
 
 func NewEmbedder(client llm.EmbeddingClient, opts ...EmbedderOption) (*Embedder, error) {
@@ -58,19 +66,69 @@ func WithTokenOverlap(overlap int) EmbedderOption {
 	}
 }
 
+func WithContextualRetrieval(s ContextualSummarizer) EmbedderOption {
+	return func(e *Embedder) {
+		e.summarizer = s
+	}
+}
+
 func (e *Embedder) EmbedDocument(ctx context.Context, url, title, content string) ([]Chunk, error) {
 	if content == "" {
 		return nil, errors.New("content is required")
 	}
-	chunks := e.chunkContent(content)
+	allChunks := e.chunkContent(content)
+	// Skip boilerplate chunks, but only when token limit is large enough
+	minTokens := minChunkTokens
+	if e.tokenLimit < minTokens {
+		minTokens = 1
+	}
+	var chunks []string
+	seen := make(map[string]bool)
+	for _, chunk := range allChunks {
+		if estimateBPETokens(chunk) < minTokens {
+			continue
+		}
+		if isNavigationChunk(chunk) {
+			continue
+		}
+		normalized := normalizeForDedup(chunk)
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		chunks = append(chunks, chunk)
+	}
 	if len(chunks) == 0 {
 		return nil, errors.New("content produced no chunks")
 	}
 
-	vectors, err := e.client.Embed(ctx, chunks)
+	// Contextual retrieval: prepend LLM-generated context to each chunk
+	// before embedding, but store the original chunk text for display.
+	embedTexts := chunks
+	if e.summarizer != nil {
+		docPrefix := truncateWords(content, 300)
+		contexts, sumErr := e.summarizer.SummarizeChunks(ctx, title, docPrefix, chunks)
+		if sumErr == nil && len(contexts) == len(chunks) {
+			embedTexts = make([]string, len(chunks))
+			for i := range chunks {
+				if contexts[i] != "" {
+					embedTexts[i] = "Context: " + contexts[i] + "\n\n" + chunks[i]
+				} else {
+					embedTexts[i] = chunks[i]
+				}
+			}
+		}
+		// On error or length mismatch, fall through to embed chunks as-is
+	}
+
+	embedStart := time.Now()
+	vectors, err := e.embedBatched(ctx, embedTexts)
+	embedDuration.Observe(time.Since(embedStart).Seconds())
 	if err != nil {
+		embedCallsTotal.WithLabelValues("error").Inc()
 		return nil, fmt.Errorf("embed document: %w", err)
 	}
+	embedCallsTotal.WithLabelValues("success").Inc()
 	if len(vectors) != len(chunks) {
 		return nil, fmt.Errorf("embedding mismatch: %d chunks, %d vectors", len(chunks), len(vectors))
 	}
@@ -92,6 +150,25 @@ func (e *Embedder) EmbedDocument(ctx context.Context, url, title, content string
 	}
 
 	return result, nil
+}
+
+func (e *Embedder) embedBatched(ctx context.Context, chunks []string) ([][]float32, error) {
+	if len(chunks) <= maxEmbedBatchSize {
+		return e.client.Embed(ctx, chunks)
+	}
+	var all [][]float32
+	for i := 0; i < len(chunks); i += maxEmbedBatchSize {
+		end := i + maxEmbedBatchSize
+		if end > len(chunks) {
+			end = len(chunks)
+		}
+		batch, err := e.client.Embed(ctx, chunks[i:end])
+		if err != nil {
+			return nil, fmt.Errorf("embed batch %d: %w", i/maxEmbedBatchSize, err)
+		}
+		all = append(all, batch...)
+	}
+	return all, nil
 }
 
 func (e *Embedder) EmbedQuery(ctx context.Context, query string) ([]float32, error) {
@@ -125,33 +202,36 @@ func (e *Embedder) chunkContent(content string) []string {
 	}
 
 	for _, block := range blocks {
-		blockTokens := tokenize(block)
-		if len(blockTokens) == 0 {
+		blockTokens := estimateBPETokens(block)
+		if blockTokens == 0 {
 			continue
 		}
-		if len(blockTokens) > e.tokenLimit {
+		if blockTokens > e.tokenLimit {
 			flushCurrent()
-			chunks = append(chunks, splitLargeBlock(blockTokens, e.tokenLimit, e.tokenOverlap)...)
+			// splitLargeBlock works on word arrays; convert BPE limits to word counts
+			wordLimit := int(float64(e.tokenLimit) / bpeMultiplier)
+			wordOverlap := int(float64(e.tokenOverlap) / bpeMultiplier)
+			chunks = append(chunks, splitLargeBlock(tokenize(block), wordLimit, wordOverlap)...)
 			continue
 		}
 
-		if currentTokens+len(blockTokens) <= e.tokenLimit {
+		if currentTokens+blockTokens <= e.tokenLimit {
 			current = append(current, block)
-			currentTokens += len(blockTokens)
+			currentTokens += blockTokens
 			continue
 		}
 
 		flushCurrent()
 		overlapText := overlapTokens(chunks[len(chunks)-1], e.tokenOverlap)
 		if overlapText != "" {
-			current = append(current, overlapText)
-			currentTokens = len(tokenize(overlapText))
-		}
-		if currentTokens+len(blockTokens) > e.tokenLimit {
-			flushCurrent()
+			overlapToks := estimateBPETokens(overlapText)
+			if overlapToks+blockTokens <= e.tokenLimit {
+				current = append(current, overlapText)
+				currentTokens = overlapToks
+			}
 		}
 		current = append(current, block)
-		currentTokens += len(blockTokens)
+		currentTokens += blockTokens
 	}
 
 	flushCurrent()
@@ -162,6 +242,7 @@ func splitBlocks(content string) []string {
 	raw := strings.Split(content, "\n")
 	var blocks []string
 	var current []string
+	var currentHeading string
 
 	flush := func() {
 		if len(current) == 0 {
@@ -169,6 +250,9 @@ func splitBlocks(content string) []string {
 		}
 		block := strings.TrimSpace(strings.Join(current, " "))
 		if block != "" {
+			if currentHeading != "" {
+				block = currentHeading + "\n\n" + block
+			}
 			blocks = append(blocks, block)
 		}
 		current = nil
@@ -182,7 +266,7 @@ func splitBlocks(content string) []string {
 		}
 		if strings.HasPrefix(trimmed, "#") {
 			flush()
-			blocks = append(blocks, trimmed)
+			currentHeading = trimmed
 			continue
 		}
 		current = append(current, trimmed)
@@ -194,6 +278,12 @@ func splitBlocks(content string) []string {
 
 func tokenize(text string) []string {
 	return strings.Fields(text)
+}
+
+// estimateBPETokens returns an approximate BPE token count for text.
+// Word count * 1.3 gives ~75% accuracy vs true BPE tokenizers.
+func estimateBPETokens(text string) int {
+	return int(math.Ceil(float64(len(strings.Fields(text))) * bpeMultiplier))
 }
 
 func splitLargeBlock(tokens []string, limit, overlap int) []string {
@@ -228,4 +318,26 @@ func overlapTokens(text string, overlap int) string {
 		return text
 	}
 	return strings.Join(tokens[len(tokens)-overlap:], " ")
+}
+
+// isNavigationChunk detects chunks that are mostly navigation text (short
+// link-like words). Heuristic: >50% of words are 3 characters or shorter.
+func isNavigationChunk(chunk string) bool {
+	words := strings.Fields(chunk)
+	if len(words) < 5 {
+		return false
+	}
+	short := 0
+	for _, w := range words {
+		if len(w) <= 3 {
+			short++
+		}
+	}
+	return float64(short)/float64(len(words)) > 0.5
+}
+
+// normalizeForDedup returns a lowercased, whitespace-collapsed version of
+// the chunk for near-identical deduplication.
+func normalizeForDedup(chunk string) string {
+	return strings.ToLower(strings.Join(strings.Fields(chunk), " "))
 }

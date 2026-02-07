@@ -6,19 +6,20 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/search"
-	"frameworks/pkg/tenants"
 	"frameworks/pkg/version"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// KnowledgeSearcher queries the knowledge store by vector similarity.
+// KnowledgeSearcher queries the knowledge store.
 type KnowledgeSearcher interface {
 	Search(ctx context.Context, tenantID string, embedding []float32, limit int) ([]knowledge.Chunk, error)
+	HybridSearch(ctx context.Context, tenantID string, embedding []float32, query string, limit int) ([]knowledge.Chunk, error)
 }
 
 // KnowledgeEmbedder generates query embeddings for knowledge search.
@@ -31,17 +32,32 @@ type SearchProvider interface {
 	Search(ctx context.Context, query string, opts search.SearchOptions) ([]search.Result, error)
 }
 
+const (
+	defaultGlobalTenantID = "00000000-0000-0000-0000-000000000001"
+	defaultSearchLimit    = 5
+)
+
 // Config configures the Skipper spoke MCP server.
 type Config struct {
 	Knowledge      KnowledgeSearcher
 	Embedder       KnowledgeEmbedder
+	Reranker       *knowledge.Reranker
 	SearchProvider SearchProvider
 	Logger         logging.Logger
+	GlobalTenantID string
+	SearchLimit    int
 }
 
 // NewServer creates an MCP server exposing Skipper's specialist tools
 // (search_knowledge, search_web) for the Gateway hub to proxy.
 func NewServer(cfg Config) *mcp.Server {
+	if cfg.GlobalTenantID == "" {
+		cfg.GlobalTenantID = defaultGlobalTenantID
+	}
+	if cfg.SearchLimit <= 0 {
+		cfg.SearchLimit = defaultSearchLimit
+	}
+
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "skipper-spoke",
 		Version: version.Version,
@@ -58,15 +74,17 @@ func NewServer(cfg Config) *mcp.Server {
 type searchKnowledgeInput struct {
 	TenantID    string `json:"tenant_id" jsonschema:"required" jsonschema_description:"Tenant ID for scoping the search"`
 	Query       string `json:"query" jsonschema:"required" jsonschema_description:"Search query to run against the knowledge base"`
-	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 5)"`
+	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 8)"`
 	TenantScope string `json:"tenant_scope,omitempty" jsonschema_description:"Scope to search: tenant, global, or all (default all)"`
 }
 
 type searchKnowledgeResult struct {
-	Title      string  `json:"title"`
-	URL        string  `json:"url"`
-	Snippet    string  `json:"snippet,omitempty"`
-	Similarity float64 `json:"similarity,omitempty"`
+	Title          string  `json:"title"`
+	URL            string  `json:"url"`
+	SourceType     string  `json:"source_type,omitempty"`
+	SectionHeading string  `json:"section_heading,omitempty"`
+	Snippet        string  `json:"snippet,omitempty"`
+	Similarity     float64 `json:"similarity,omitempty"`
 }
 
 type searchKnowledgeResponse struct {
@@ -100,28 +118,48 @@ func handleSearchKnowledge(ctx context.Context, args searchKnowledgeInput, cfg C
 
 	limit := args.Limit
 	if limit <= 0 {
-		limit = 5
+		limit = cfg.SearchLimit
 	}
 
-	tenantIDs := resolveKnowledgeTenants(args.TenantID, args.TenantScope)
+	tenantIDs := resolveKnowledgeTenants(args.TenantID, args.TenantScope, cfg.GlobalTenantID)
 	embedding, err := cfg.Embedder.EmbedQuery(ctx, query)
 	if err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.WithError(err).WithField("query", query).Warn("spoke embedding failed")
+		}
 		return spokeError(fmt.Sprintf("embedding failed: %v", err))
 	}
 
+	searchStart := time.Now()
+	fetchLimit := limit * 3
 	var chunks []knowledge.Chunk
 	for _, tid := range tenantIDs {
-		results, err := cfg.Knowledge.Search(ctx, tid, embedding, limit)
+		results, err := cfg.Knowledge.HybridSearch(ctx, tid, embedding, query, fetchLimit)
 		if err != nil {
+			if cfg.Logger != nil {
+				cfg.Logger.WithError(err).WithField("tenant_id", tid).Warn("spoke knowledge search failed")
+			}
 			return spokeError(fmt.Sprintf("knowledge search failed: %v", err))
 		}
 		chunks = append(chunks, results...)
 	}
+	if cfg.Reranker != nil {
+		chunks = cfg.Reranker.Rerank(ctx, query, chunks)
+	} else {
+		chunks = knowledge.Rerank(query, chunks)
+	}
+	chunks = knowledge.DeduplicateBySource(chunks, limit, 2)
 	sort.Slice(chunks, func(i, j int) bool {
 		return chunks[i].Similarity > chunks[j].Similarity
 	})
 	if len(chunks) > limit {
 		chunks = chunks[:limit]
+	}
+	spokeSearchQueriesTotal.WithLabelValues("search_knowledge").Inc()
+	spokeSearchDuration.Observe(time.Since(searchStart).Seconds())
+	spokeSearchResultsCount.Observe(float64(len(chunks)))
+	if cfg.Logger != nil {
+		cfg.Logger.WithField("query", query).WithField("results", len(chunks)).Debug("spoke knowledge search")
 	}
 
 	results := make([]searchKnowledgeResult, 0, len(chunks))
@@ -131,10 +169,12 @@ func handleSearchKnowledge(ctx context.Context, args searchKnowledgeInput, cfg C
 			title = chunk.SourceURL
 		}
 		results = append(results, searchKnowledgeResult{
-			Title:      title,
-			URL:        chunk.SourceURL,
-			Snippet:    truncate(chunk.Text, 320),
-			Similarity: chunk.Similarity,
+			Title:          title,
+			URL:            chunk.SourceURL,
+			SourceType:     chunk.SourceType,
+			SectionHeading: extractSectionHeading(chunk.Text),
+			Snippet:        chunk.Text,
+			Similarity:     chunk.Similarity,
 		})
 	}
 
@@ -142,13 +182,13 @@ func handleSearchKnowledge(ctx context.Context, args searchKnowledgeInput, cfg C
 	return spokeSuccess(resp)
 }
 
-func resolveKnowledgeTenants(tenantID, scope string) []string {
+func resolveKnowledgeTenants(tenantID, scope, globalTenantID string) []string {
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	switch scope {
 	case "global":
-		return []string{tenants.SystemTenantID.String()}
+		return []string{globalTenantID}
 	case "all":
-		return []string{tenantID, tenants.SystemTenantID.String()}
+		return []string{tenantID, globalTenantID}
 	default:
 		return []string{tenantID}
 	}
@@ -158,7 +198,7 @@ func resolveKnowledgeTenants(tenantID, scope string) []string {
 
 type searchWebInput struct {
 	Query       string `json:"query" jsonschema:"required" jsonschema_description:"Search query to run against the web"`
-	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 5)"`
+	Limit       int    `json:"limit,omitempty" jsonschema_description:"Maximum number of results to return (default 8)"`
 	SearchDepth string `json:"search_depth,omitempty" jsonschema_description:"Search depth: basic or advanced (default basic)"`
 }
 
@@ -197,19 +237,29 @@ func handleSearchWeb(ctx context.Context, args searchWebInput, cfg Config) (*mcp
 
 	limit := args.Limit
 	if limit <= 0 {
-		limit = 5
+		limit = cfg.SearchLimit
 	}
 	depth := strings.TrimSpace(args.SearchDepth)
 	if depth == "" {
 		depth = "basic"
 	}
 
+	searchStart := time.Now()
 	results, err := cfg.SearchProvider.Search(ctx, query, search.SearchOptions{
 		Limit:       limit,
 		SearchDepth: depth,
 	})
 	if err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.WithError(err).WithField("query", query).Warn("spoke web search failed")
+		}
 		return spokeError(fmt.Sprintf("web search failed: %v", err))
+	}
+	spokeSearchQueriesTotal.WithLabelValues("search_web").Inc()
+	spokeSearchDuration.Observe(time.Since(searchStart).Seconds())
+	spokeSearchResultsCount.Observe(float64(len(results)))
+	if cfg.Logger != nil {
+		cfg.Logger.WithField("query", query).WithField("results", len(results)).Debug("spoke web search")
 	}
 
 	mapped := make([]searchWebResult, 0, len(results))
@@ -247,6 +297,16 @@ func spokeSuccess(result any) (*mcp.CallToolResult, any, error) {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
 	}, result, nil
+}
+
+func extractSectionHeading(text string) string {
+	for _, line := range strings.SplitN(text, "\n", 5) {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			return strings.TrimSpace(strings.TrimLeft(line, "#"))
+		}
+	}
+	return ""
 }
 
 func truncate(s string, maxRunes int) string {

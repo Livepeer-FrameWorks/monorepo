@@ -44,6 +44,10 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           ws: true,
         },
+        "/api/skipper": {
+          target: env.SKIPPER_URL || "http://localhost:18018",
+          changeOrigin: true,
+        },
       },
       fs: {
         // Allow serving files from the monorepo root (for pkg/graphql/operations/)

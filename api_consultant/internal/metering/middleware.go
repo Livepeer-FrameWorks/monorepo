@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/pkg/ctxkeys"
+	"frameworks/api_consultant/internal/skipper"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
@@ -27,39 +27,42 @@ type BillingClient interface {
 }
 
 func AccessMiddleware(cfg AccessMiddlewareConfig) gin.HandlerFunc {
+	billingRequired := cfg.RequiredTierLevel > 0
 	requiredTier := cfg.RequiredTierLevel
-	if requiredTier <= 0 {
+	if billingRequired && requiredTier <= 0 {
 		requiredTier = 1
 	}
 
 	return func(c *gin.Context) {
-		tenantID := c.GetString(string(ctxkeys.KeyTenantID))
+		tenantID := skipper.GetTenantID(c.Request.Context())
 		if tenantID == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "tenant_id missing"})
 			c.Abort()
 			return
 		}
 
-		if cfg.Purser == nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "billing service unavailable"})
-			c.Abort()
-			return
-		}
-		status, err := cfg.Purser.GetBillingStatus(c.Request.Context(), tenantID)
-		if err != nil {
-			if cfg.Logger != nil {
-				cfg.Logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to fetch billing status for Skipper")
+		if billingRequired {
+			if cfg.Purser == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "billing service unavailable"})
+				c.Abort()
+				return
 			}
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "billing status unavailable"})
-			c.Abort()
-			return
-		}
-		tier := status.GetTier()
-		if tier == nil || int(tier.TierLevel) < requiredTier {
-			message := "Skipper access requires a premium subscription tier. Please upgrade to continue."
-			c.JSON(http.StatusForbidden, gin.H{"error": message})
-			c.Abort()
-			return
+			status, err := cfg.Purser.GetBillingStatus(c.Request.Context(), tenantID)
+			if err != nil {
+				if cfg.Logger != nil {
+					cfg.Logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to fetch billing status for Skipper")
+				}
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "billing status unavailable"})
+				c.Abort()
+				return
+			}
+			tier := status.GetTier()
+			if tier == nil || int(tier.TierLevel) < requiredTier {
+				message := "Skipper access requires a premium subscription tier. Please upgrade to continue."
+				c.JSON(http.StatusForbidden, gin.H{"error": message})
+				c.Abort()
+				return
+			}
 		}
 
 		if cfg.RateLimiter != nil {
@@ -78,7 +81,7 @@ func AccessMiddleware(cfg AccessMiddlewareConfig) gin.HandlerFunc {
 
 		ctx := WithContext(c.Request.Context(), &Context{
 			TenantID: tenantID,
-			UserID:   c.GetString(string(ctxkeys.KeyUserID)),
+			UserID:   skipper.GetUserID(c.Request.Context()),
 			Tracker:  cfg.Tracker,
 		})
 		c.Request = c.Request.WithContext(ctx)
@@ -115,6 +118,7 @@ func (rl *RateLimiter) Allow(tenantID string) (bool, int, int) {
 	if rl == nil || tenantID == "" {
 		return true, 0, 0
 	}
+	// overrides and defaultLimit are immutable after construction — safe to read without lock.
 	limit := rl.defaultLimit
 	if override, ok := rl.overrides[tenantID]; ok {
 		limit = override

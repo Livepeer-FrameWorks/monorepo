@@ -13,10 +13,11 @@ import (
 )
 
 type OpenAIProvider struct {
-	client *http.Client
-	apiKey string
-	apiURL string
-	model  string
+	client    *http.Client
+	apiKey    string
+	apiURL    string
+	model     string
+	maxTokens int
 }
 
 func NewOpenAIProvider(cfg Config) *OpenAIProvider {
@@ -25,10 +26,11 @@ func NewOpenAIProvider(cfg Config) *OpenAIProvider {
 		apiURL = "https://api.openai.com/v1"
 	}
 	return &OpenAIProvider{
-		client: &http.Client{Timeout: 60 * time.Second},
-		apiKey: cfg.APIKey,
-		apiURL: apiURL,
-		model:  cfg.Model,
+		client:    &http.Client{Timeout: 60 * time.Second},
+		apiKey:    cfg.APIKey,
+		apiURL:    apiURL,
+		model:     cfg.Model,
+		maxTokens: cfg.MaxTokens,
 	}
 }
 
@@ -37,9 +39,10 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 		return nil, errors.New("openai model is required")
 	}
 	reqBody := openAIRequest{
-		Model:    p.model,
-		Messages: messages,
-		Stream:   true,
+		Model:     p.model,
+		Messages:  messages,
+		Stream:    true,
+		MaxTokens: p.maxTokens,
 	}
 	if len(tools) > 0 {
 		reqBody.Tools = make([]openAITool, 0, len(tools))
@@ -56,16 +59,17 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/chat/completions", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("openai: create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	}
-
-	resp, err := p.client.Do(req)
+	resp, err := doWithRetry(ctx, p.client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/chat/completions", bytes.NewReader(payload))
+		if err != nil {
+			return nil, fmt.Errorf("openai: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if p.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+p.apiKey)
+		}
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("openai: request failed: %w", err)
 	}
@@ -79,10 +83,11 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 }
 
 type openAIRequest struct {
-	Model    string       `json:"model"`
-	Messages []Message    `json:"messages"`
-	Stream   bool         `json:"stream"`
-	Tools    []openAITool `json:"tools,omitempty"`
+	Model     string       `json:"model"`
+	Messages  []Message    `json:"messages"`
+	Stream    bool         `json:"stream"`
+	MaxTokens int          `json:"max_tokens,omitempty"`
+	Tools     []openAITool `json:"tools,omitempty"`
 }
 
 type openAITool struct {

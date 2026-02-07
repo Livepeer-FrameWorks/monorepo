@@ -17,18 +17,13 @@ import {
   MarketingGridSplit,
   IconList,
   SectionDivider,
+  SkipperConversationPreview,
+  AgentPipelineStrip,
 } from "@/components/marketing";
 import { Section, SectionContainer } from "@/components/ui/section";
 import { useState, useEffect, useMemo } from "react";
 import config from "../../config";
-import {
-  ServerStackIcon,
-  CodeBracketIcon,
-  ChartBarIcon,
-  GlobeAltIcon,
-  CpuChipIcon,
-  BanknotesIcon,
-} from "@heroicons/react/24/outline";
+import { ServerStackIcon, CodeBracketIcon, ChartBarIcon } from "@heroicons/react/24/outline";
 
 const generateGlitchStrips = () => {
   const strips = [];
@@ -133,57 +128,6 @@ const LandingPage = () => {
     stripe: true,
     flush: true,
   }));
-
-  const agentCards = [
-    {
-      icon: GlobeAltIcon,
-      iconTone: "accent",
-      tone: "accent",
-      badge: "Open Standards",
-      title: "Discover",
-      description:
-        "skill.json, llms.txt, MCP discovery, W3C DID, and OAuth metadata. Compatible with OpenClaw, Claude Code, Cursor, Gemini CLI, and 25+ agent frameworks.",
-      hover: "subtle",
-      stripe: true,
-      flush: true,
-    },
-    {
-      icon: CpuChipIcon,
-      iconTone: "green",
-      tone: "green",
-      badge: "Zero Friction",
-      title: "Authenticate",
-      description:
-        "Wallet signature auto-provisions a prepaid tenant. No email, no registration, no API key application.",
-      hover: "subtle",
-      stripe: true,
-      flush: true,
-    },
-    {
-      icon: BanknotesIcon,
-      iconTone: "yellow",
-      tone: "yellow",
-      badge: "Inline",
-      title: "Pay",
-      description:
-        "x402 gasless USDC on Base and Arbitrum. FrameWorks pays the gas. Balance credits instantly. Card and crypto deposits also supported.",
-      hover: "subtle",
-      stripe: true,
-      flush: true,
-    },
-    {
-      icon: ServerStackIcon,
-      iconTone: "yellow",
-      tone: "yellow",
-      badge: "Full Stack",
-      title: "Operate",
-      description:
-        "MCP tools for streams, recordings, analytics, and QoE diagnostics. GraphQL as an alternative. Agent-operated edge nodes coming soon.",
-      hover: "subtle",
-      stripe: true,
-      flush: true,
-    },
-  ];
 
   const freeTierFeatures = [
     "All self-hosted features",
@@ -591,7 +535,7 @@ const LandingPage = () => {
 
         <SectionDivider />
 
-        {/* Agent-Native Section */}
+        {/* Agent-Native Section — Part 1: Skipper + Part 2: Open Agent Infra */}
         <Section className="bg-brand-surface-muted landing-section--agents">
           <SectionContainer>
             <MarketingBand
@@ -605,31 +549,88 @@ const LandingPage = () => {
               density="spacious"
               flush
             >
-              <HeadlineStack
-                eyebrow="Agent-Native"
-                title="Built for Autonomous Agents"
-                subtitle="Agents discover the platform via open standards, authenticate with a wallet, pay inline with USDC, and operate the full stack — no human in the loop."
-                align="left"
-                underlineAlign="start"
-                actionsPlacement="inline"
-                actions={
-                  <CTACluster align="end" wrap>
+              {/* Part 1: Skipper Spotlight */}
+              <MarketingGridSplit align="stretch" stackAt="lg" seam>
+                <div className="slab-zone">
+                  <div className="slab-zone__header">
+                    <HeadlineStack
+                      eyebrow="Video Consultant"
+                      title="Documentation That Talks Back"
+                      subtitle="Like having a video engineer on your team — one that's read every doc and can check your streams in real time."
+                      align="left"
+                      underlineAlign="start"
+                    />
+                  </div>
+
+                  <div className="slab-zone__body">
+                    <IconList
+                      items={[
+                        {
+                          title: "Grounded in real docs",
+                          description:
+                            "FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, and more — searched semantically, not keyword-matched.",
+                        },
+                        {
+                          title: "Live stream diagnostics",
+                          description:
+                            "Rebuffering analysis, packet loss detection, routing checks, and anomaly detection on your running streams.",
+                        },
+                        {
+                          title: "Confidence tagging",
+                          description:
+                            "Every answer tagged verified, sourced, best guess, or unknown — so you know when to act and when to verify.",
+                        },
+                        {
+                          title: "Available everywhere",
+                          description:
+                            "Dashboard, docs site widget, and via MCP for your own AI agents.",
+                        },
+                      ]}
+                      variant="list"
+                      indicator="check"
+                      gap="md"
+                    />
+                  </div>
+
+                  <div className="slab-zone__actions">
                     <MarketingCTAButton
                       intent="primary"
-                      href={`${docsBase}/agents/overview`}
-                      label="Agent Docs"
+                      href={`${docsBase}/agents/skipper`}
+                      label="Skipper Docs"
+                      icon="book"
                       external
                     />
                     <MarketingCTAButton
                       intent="secondary"
-                      href="https://frameworks.network/skill.json"
-                      label="View skill.json"
+                      href={`${config.appUrl}/skipper`}
+                      label="Try in Dashboard"
                       external
                     />
-                  </CTACluster>
-                }
-              />
-              <MarketingFeatureWall columns={4} items={agentCards} />
+                  </div>
+                </div>
+
+                <SkipperConversationPreview />
+              </MarketingGridSplit>
+
+              {/* Part 2: Open Agent Infrastructure — compact footer strip */}
+              <div className="skipper-agent-strip">
+                <div className="skipper-agent-strip__header">
+                  <span className="skipper-agent-strip__eyebrow">Agent-Native</span>
+                  <span className="skipper-agent-strip__title">
+                    Your agents work here too — discover via{" "}
+                    <a
+                      href={`https://${config.domain}/SKILL.md`}
+                      className="skipper-agent-strip__link"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      SKILL.md
+                    </a>
+                    , authenticate, pay, and operate.
+                  </span>
+                </div>
+                <AgentPipelineStrip />
+              </div>
             </MarketingBand>
           </SectionContainer>
         </Section>
@@ -739,8 +740,8 @@ const LandingPage = () => {
                   external: true,
                 },
                 {
-                  label: "Agent Docs",
-                  href: `${docsBase}/agents/overview`,
+                  label: "Ask Skipper",
+                  href: `${config.appUrl}/skipper`,
                   icon: "auto",
                   external: true,
                 },

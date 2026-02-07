@@ -24,10 +24,11 @@ var ServicePorts = map[string]int{
 	"foghorn":          18008,
 	"signalman":        18009,
 	"navigator":        18010,
-	"webapp":           18030,
-	"website":          18031,
-	"forms":            18032,
-	"docs":             18033,
+	"chartroom":        18030,
+	"foredeck":         18031,
+	"steward":          18032,
+	"logbook":          18033,
+	"skipper":          18018,
 	"caddy":            18090,
 	"privateer":        18012,
 }
@@ -76,8 +77,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewFlexibleProvisioner("signalman", port, pool), nil
 	case "purser":
 		return NewFlexibleProvisioner("purser", port, pool), nil
-	case "forms":
-		return NewFlexibleProvisioner("forms", port, pool), nil
+	case "steward":
+		return NewFlexibleProvisioner("steward", port, pool), nil
 	case "navigator":
 		return NewFlexibleProvisioner("navigator", port, pool), nil
 	case "listmonk":
@@ -85,12 +86,14 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 
 	case "caddy":
 		return NewCaddyProvisioner(pool), nil
-	case "webapp":
-		return NewFlexibleProvisioner("webapp", port, pool), nil
-	case "website":
-		return NewFlexibleProvisioner("website", port, pool), nil
-	case "docs":
-		return NewFlexibleProvisioner("docs", port, pool), nil
+	case "chartroom":
+		return NewFlexibleProvisioner("chartroom", port, pool), nil
+	case "foredeck":
+		return NewFlexibleProvisioner("foredeck", port, pool), nil
+	case "logbook":
+		return NewFlexibleProvisioner("logbook", port, pool), nil
+	case "skipper":
+		return NewFlexibleProvisioner("skipper", port, pool), nil
 
 	default:
 		return nil, fmt.Errorf("provisioner not implemented for service: %s", serviceName)

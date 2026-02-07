@@ -2,6 +2,7 @@
 import { defineConfig } from "astro/config";
 import svelte from "@astrojs/svelte";
 import starlight from "@astrojs/starlight";
+import sitemap from "@astrojs/sitemap";
 import starlightBlog from "starlight-blog";
 import mermaid from "astro-mermaid";
 import { visit } from "unist-util-visit";
@@ -145,6 +146,7 @@ export default defineConfig({
     ],
   },
   integrations: [
+    sitemap(),
     mermaid({
       theme: "dark",
       autoTheme: true,
@@ -163,7 +165,10 @@ export default defineConfig({
       ],
       components: {
         Hero: "./src/components/Hero.astro",
+        Header: "./src/components/Header.astro",
+        MobileMenuFooter: "./src/components/MobileMenuFooter.astro",
         PageFrame: "./src/components/DocsPageFrame.astro",
+        ThemeProvider: "./src/components/ThemeProvider.astro",
       },
       social: [
         {

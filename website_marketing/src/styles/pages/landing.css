@@ -368,8 +368,9 @@
 
 .landing-section--agents {
   background:
-    radial-gradient(ellipse at 30% 0%, rgba(var(--brand-orange-rgb) / 0.08), transparent 50%),
-    linear-gradient(150deg, rgba(var(--brand-orange-rgb) / 0.03), transparent 45%);
+    radial-gradient(ellipse at 30% 0%, rgba(var(--brand-cyan-rgb) / 0.08), transparent 50%),
+    radial-gradient(ellipse at 80% 60%, rgba(var(--accent-rgb) / 0.05), transparent 50%),
+    linear-gradient(150deg, rgba(var(--brand-cyan-rgb) / 0.03), transparent 45%);
 }
 
 .landing-section--pricing {

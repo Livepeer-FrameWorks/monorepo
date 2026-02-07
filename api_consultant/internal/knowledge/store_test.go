@@ -29,6 +29,7 @@ func TestStoreSearch(t *testing.T) {
 		"tenant_id",
 		"source_url",
 		"source_title",
+		"source_type",
 		"chunk_text",
 		"chunk_index",
 		"metadata",
@@ -38,13 +39,14 @@ func TestStoreSearch(t *testing.T) {
 		"tenant",
 		"https://example.com",
 		"Title",
+		"crawl",
 		"chunk",
 		1,
 		metadataBytes,
 		0.99,
 	)
 
-	mock.ExpectQuery("SELECT id").WithArgs("tenant", sqlmock.AnyArg(), 2).WillReturnRows(rows)
+	mock.ExpectQuery("SELECT id").WithArgs("tenant", sqlmock.AnyArg(), 2, defaultMinSimilarity).WillReturnRows(rows)
 
 	results, err := store.Search(context.Background(), "tenant", []float32{0.1, 0.2}, 2)
 	if err != nil {
@@ -98,6 +100,8 @@ func TestStoreUpsert(t *testing.T) {
 		"tenant",
 		"https://example.com",
 		"Title",
+		"https://example.com", // source_root falls back to source_url
+		nil,                   // source_type (no metadata key)
 		"chunk one",
 		0,
 		sqlmock.AnyArg(),
@@ -107,6 +111,8 @@ func TestStoreUpsert(t *testing.T) {
 		"tenant",
 		"https://example.com",
 		"Title",
+		"https://example.com", // source_root falls back to source_url
+		nil,                   // source_type (no metadata key)
 		"chunk two",
 		1,
 		sqlmock.AnyArg(),

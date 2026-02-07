@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package skipper;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// ============================================================================
+// SKIPPER AI CONSULTANT - CHAT SERVICE
+//
+// Provides streaming chat and conversation management for the AI consultant.
+// Called by the Bridge (GraphQL gateway) to serve webapp and docs widget.
+// Auth context (tenant_id, user_id) propagated via gRPC metadata.
+// ============================================================================
+
+service SkipperChatService {
+  // Stream chat completion with tool execution.
+  // Creates a new conversation if conversation_id is empty.
+  rpc Chat(SkipperChatRequest) returns (stream SkipperChatEvent);
+
+  rpc ListConversations(ListSkipperConversationsRequest) returns (ListSkipperConversationsResponse);
+  rpc GetConversation(GetSkipperConversationRequest) returns (SkipperConversationDetail);
+  rpc DeleteConversation(DeleteSkipperConversationRequest) returns (DeleteSkipperConversationResponse);
+  rpc UpdateConversationTitle(UpdateSkipperConversationTitleRequest) returns (SkipperConversationSummary);
+}
+
+// ---------------------------------------------------------------------------
+// Chat streaming
+// ---------------------------------------------------------------------------
+
+message SkipperChatRequest {
+  string conversation_id = 1; // optional — creates new if empty
+  string message = 2;         // required
+  string page_url = 3;        // optional doc page context
+  string mode = 4;            // "" (default) or "docs"
+}
+
+message SkipperChatEvent {
+  oneof event {
+    SkipperTokenChunk token = 1;
+    SkipperToolStart tool_start = 2;
+    SkipperToolEnd tool_end = 3;
+    SkipperChatMeta meta = 4;
+    SkipperChatDone done = 5;
+  }
+}
+
+message SkipperTokenChunk {
+  string content = 1;
+}
+
+message SkipperToolStart {
+  string tool_name = 1;
+}
+
+message SkipperToolEnd {
+  string tool_name = 1;
+  string error = 2;
+}
+
+message SkipperChatMeta {
+  string confidence = 1;
+  repeated SkipperCitation citations = 2;
+  repeated SkipperCitation external_links = 3;
+  repeated SkipperToolDetail details = 4;
+}
+
+message SkipperCitation {
+  string label = 1;
+  string url = 2;
+}
+
+message SkipperToolDetail {
+  string title = 1;
+  google.protobuf.Struct payload = 2;
+}
+
+message SkipperChatDone {
+  string conversation_id = 1;
+  int32 tokens_input = 2;
+  int32 tokens_output = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Conversation management
+// ---------------------------------------------------------------------------
+
+message ListSkipperConversationsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+}
+
+message ListSkipperConversationsResponse {
+  repeated SkipperConversationSummary conversations = 1;
+}
+
+message SkipperConversationSummary {
+  string id = 1;
+  string title = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+message GetSkipperConversationRequest {
+  string id = 1;
+}
+
+message SkipperConversationDetail {
+  string id = 1;
+  string title = 2;
+  repeated SkipperChatMessage messages = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+}
+
+message SkipperChatMessage {
+  string id = 1;
+  string role = 2;
+  string content = 3;
+  string confidence = 4;
+  string sources_json = 5;
+  string tools_used_json = 6;
+  int32 token_count_input = 7;
+  int32 token_count_output = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+message DeleteSkipperConversationRequest {
+  string id = 1;
+}
+
+message DeleteSkipperConversationResponse {}
+
+message UpdateSkipperConversationTitleRequest {
+  string id = 1;
+  string title = 2;
+}

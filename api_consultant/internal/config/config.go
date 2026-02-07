@@ -3,33 +3,56 @@ package config
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"frameworks/pkg/config"
 )
 
 // Config stores environment configuration for Skipper.
 type Config struct {
-	Port               string
-	GRPCPort           string
-	DatabaseURL        string
-	LLMProvider        string
-	LLMModel           string
-	LLMAPIKey          string
-	LLMAPIURL          string
-	EmbeddingProvider  string
-	EmbeddingModel     string
-	EmbeddingAPIKey    string
-	EmbeddingAPIURL    string
-	SearchProvider     string
-	SearchAPIKey       string
-	SearchAPIURL       string
-	RequiredTierLevel  int
-	ChatRateLimitHour  int
-	RateLimitOverrides map[string]int
-	BillingKafkaTopic  string
-	KafkaBrokers       []string
-	KafkaClusterID     string
-	GatewayPublicURL   string
+	Port                string
+	GRPCPort            string
+	DatabaseURL         string
+	LLMProvider         string
+	LLMModel            string
+	LLMAPIKey           string
+	LLMAPIURL           string
+	LLMMaxTokens        int
+	EmbeddingProvider   string
+	EmbeddingModel      string
+	EmbeddingAPIKey     string
+	EmbeddingAPIURL     string
+	SearchProvider      string
+	SearchAPIKey        string
+	SearchAPIURL        string
+	RequiredTierLevel   int
+	ChatRateLimitHour   int
+	RateLimitOverrides  map[string]int
+	BillingKafkaTopic   string
+	KafkaBrokers        []string
+	KafkaClusterID      string
+	GatewayPublicURL    string
+	AdminTenantID       string
+	Sitemaps            []string
+	SitemapsDir         string
+	CrawlInterval       time.Duration
+	SearchLimit         int
+	MaxHistoryMessages  int
+	ChunkTokenLimit     int
+	ChunkTokenOverlap   int
+	EnableRendering     bool
+	UtilityLLMProvider  string
+	UtilityLLMModel     string
+	UtilityLLMAPIKey    string
+	UtilityLLMAPIURL    string
+	ContextualRetrieval bool
+	LinkDiscovery       bool
+	AdminAPIKey         string
+	RerankProvider      string
+	RerankModel         string
+	RerankAPIKey        string
+	RerankAPIURL        string
+	EnableHyDE          bool
 }
 
 // GatewayMCPURL returns the MCP endpoint URL derived from the gateway base.
@@ -55,28 +78,73 @@ func LoadConfig() Config {
 	}
 	rateLimitOverrides := parseRateLimitOverrides(config.GetEnv("SKIPPER_CHAT_RATE_LIMIT_OVERRIDES", ""))
 	return Config{
-		Port:               config.GetEnv("PORT", "18018"),
-		GRPCPort:           config.GetEnv("GRPC_PORT", "19007"),
-		DatabaseURL:        config.RequireEnv("DATABASE_URL"),
-		LLMProvider:        config.GetEnv("LLM_PROVIDER", ""),
-		LLMModel:           config.GetEnv("LLM_MODEL", ""),
-		LLMAPIKey:          config.GetEnv("LLM_API_KEY", ""),
-		LLMAPIURL:          config.GetEnv("LLM_API_URL", ""),
-		EmbeddingProvider:  config.GetEnv("EMBEDDING_PROVIDER", config.GetEnv("LLM_PROVIDER", "")),
-		EmbeddingModel:     config.GetEnv("EMBEDDING_MODEL", config.GetEnv("LLM_MODEL", "")),
-		EmbeddingAPIKey:    config.GetEnv("EMBEDDING_API_KEY", config.GetEnv("LLM_API_KEY", "")),
-		EmbeddingAPIURL:    config.GetEnv("EMBEDDING_API_URL", config.GetEnv("LLM_API_URL", "")),
-		SearchProvider:     config.GetEnv("SEARCH_PROVIDER", ""),
-		SearchAPIKey:       config.GetEnv("SEARCH_API_KEY", ""),
-		SearchAPIURL:       config.GetEnv("SEARCH_API_URL", ""),
-		RequiredTierLevel:  config.GetEnvInt("SKIPPER_REQUIRED_TIER_LEVEL", 3),
-		ChatRateLimitHour:  config.GetEnvInt("SKIPPER_CHAT_RATE_LIMIT_PER_HOUR", 0),
-		RateLimitOverrides: rateLimitOverrides,
-		BillingKafkaTopic:  config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports"),
-		KafkaBrokers:       brokers,
-		KafkaClusterID:     config.GetEnv("KAFKA_CLUSTER_ID", "local"),
-		GatewayPublicURL:   config.GetEnv("GATEWAY_PUBLIC_URL", ""),
+		Port:                config.GetEnv("PORT", "18018"),
+		GRPCPort:            config.GetEnv("GRPC_PORT", "19007"),
+		DatabaseURL:         config.RequireEnv("DATABASE_URL"),
+		LLMProvider:         config.GetEnv("LLM_PROVIDER", ""),
+		LLMModel:            config.GetEnv("LLM_MODEL", ""),
+		LLMAPIKey:           config.GetEnv("LLM_API_KEY", ""),
+		LLMAPIURL:           config.GetEnv("LLM_API_URL", ""),
+		LLMMaxTokens:        config.GetEnvInt("LLM_MAX_TOKENS", 4096),
+		EmbeddingProvider:   config.GetEnv("EMBEDDING_PROVIDER", config.GetEnv("LLM_PROVIDER", "")),
+		EmbeddingModel:      config.GetEnv("EMBEDDING_MODEL", config.GetEnv("LLM_MODEL", "")),
+		EmbeddingAPIKey:     config.GetEnv("EMBEDDING_API_KEY", config.GetEnv("LLM_API_KEY", "")),
+		EmbeddingAPIURL:     config.GetEnv("EMBEDDING_API_URL", config.GetEnv("LLM_API_URL", "")),
+		SearchProvider:      config.GetEnv("SEARCH_PROVIDER", ""),
+		SearchAPIKey:        config.GetEnv("SEARCH_API_KEY", ""),
+		SearchAPIURL:        config.GetEnv("SEARCH_API_URL", ""),
+		RequiredTierLevel:   config.GetEnvInt("SKIPPER_REQUIRED_TIER_LEVEL", 3),
+		ChatRateLimitHour:   config.GetEnvInt("SKIPPER_CHAT_RATE_LIMIT_PER_HOUR", 0),
+		RateLimitOverrides:  rateLimitOverrides,
+		BillingKafkaTopic:   config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports"),
+		KafkaBrokers:        brokers,
+		KafkaClusterID:      config.GetEnv("KAFKA_CLUSTER_ID", "local"),
+		GatewayPublicURL:    config.GetEnv("GATEWAY_PUBLIC_URL", ""),
+		AdminTenantID:       config.GetEnv("SKIPPER_ADMIN_TENANT_ID", ""),
+		Sitemaps:            parseSitemapList(config.GetEnv("SITEMAPS", "")),
+		SitemapsDir:         config.GetEnv("SKIPPER_SITEMAPS_DIR", ""),
+		CrawlInterval:       parseDuration(config.GetEnv("CRAWL_INTERVAL", "24h"), 24*time.Hour),
+		SearchLimit:         config.GetEnvInt("SKIPPER_SEARCH_LIMIT", 8),
+		MaxHistoryMessages:  config.GetEnvInt("SKIPPER_MAX_HISTORY_MESSAGES", 20),
+		ChunkTokenLimit:     config.GetEnvInt("CHUNK_TOKEN_LIMIT", 500),
+		ChunkTokenOverlap:   config.GetEnvInt("CHUNK_TOKEN_OVERLAP", 50),
+		EnableRendering:     config.GetEnv("SKIPPER_ENABLE_RENDERING", "") == "true",
+		UtilityLLMProvider:  config.GetEnv("UTILITY_LLM_PROVIDER", config.GetEnv("LLM_PROVIDER", "")),
+		UtilityLLMModel:     config.GetEnv("UTILITY_LLM_MODEL", config.GetEnv("LLM_MODEL", "")),
+		UtilityLLMAPIKey:    config.GetEnv("UTILITY_LLM_API_KEY", config.GetEnv("LLM_API_KEY", "")),
+		UtilityLLMAPIURL:    config.GetEnv("UTILITY_LLM_API_URL", config.GetEnv("LLM_API_URL", "")),
+		ContextualRetrieval: config.GetEnv("SKIPPER_CONTEXTUAL_RETRIEVAL", "") == "true",
+		LinkDiscovery:       config.GetEnv("SKIPPER_LINK_DISCOVERY", "") == "true",
+		AdminAPIKey:         config.GetEnv("SKIPPER_API_KEY", ""),
+		RerankProvider:      config.GetEnv("RERANKER_PROVIDER", ""),
+		RerankModel:         config.GetEnv("RERANKER_MODEL", ""),
+		RerankAPIKey:        config.GetEnv("RERANKER_API_KEY", config.GetEnv("LLM_API_KEY", "")),
+		RerankAPIURL:        config.GetEnv("RERANKER_API_URL", ""),
+		EnableHyDE:          config.GetEnv("SKIPPER_ENABLE_HYDE", "") == "true",
 	}
+}
+
+func parseSitemapList(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var result []string
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func parseDuration(s string, fallback time.Duration) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
 
 func parseRateLimitOverrides(raw string) map[string]int {

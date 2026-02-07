@@ -3,7 +3,7 @@ title: "FrameWorks Network"
 description: "Documentation for FrameWorks - full-stack video services on a sovereign network."
 template: splash
 hero:
-  tagline: "The open-source video infrastructure that gives you full control. Stream, transform, and analyze without the cloud tax."
+  tagline: "The open-source video infrastructure that gives you full control. Stream, transform, analyze, and manage — without the cloud tax."
   image:
     file: ../../assets/frameworks-hero.svg
   actions:
@@ -76,6 +76,73 @@ hero:
         >
           streamcrafter-core
         </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+## Meet Skipper
+
+<section class="skipper-showcase tokyo-night">
+  <div class="skipper-showcase__copy">
+    <div class="skipper-showcase__eyebrow">Video Consultant</div>
+    <div class="skipper-showcase__title">Documentation That Talks Back</div>
+    <div class="skipper-showcase__desc">
+      Skipper is an AI video engineer that searches curated docs, runs live diagnostics on your
+      streams, and tags every answer with a confidence level.
+    </div>
+    <div class="skipper-showcase__pills">
+      <span class="skipper-showcase__pill">Knowledge base grounded</span>
+      <span class="skipper-showcase__pill">Live stream diagnostics</span>
+      <span class="skipper-showcase__pill">Confidence tagging</span>
+    </div>
+    <div class="skipper-showcase__ctas">
+      <a class="skipper-showcase__cta skipper-showcase__cta--primary" href="/agents/skipper">
+        Learn more
+      </a>
+      <button
+        class="skipper-showcase__cta skipper-showcase__cta--secondary"
+        onclick="window.dispatchEvent(new CustomEvent('docs-skipper-open')); document.querySelector('.docs-skipper-toggle')?.click();"
+      >
+        Try it now <kbd>⌘K</kbd>
+      </button>
+    </div>
+  </div>
+  <div class="skipper-showcase__chat">
+    <div class="skipper-showcase__chat-header">
+      <span class="skipper-showcase__chat-dot"></span>
+      <span class="skipper-showcase__chat-name">Skipper</span>
+    </div>
+    <div class="skipper-showcase__chat-body">
+      <div class="skipper-showcase__msg skipper-showcase__msg--user">
+        <p>Why are my European viewers rebuffering?</p>
+      </div>
+      <div class="skipper-showcase__tool">
+        <span class="skipper-showcase__tool-check">✓</span>
+        <span>Analyzed rebuffering</span>
+      </div>
+      <div class="skipper-showcase__msg skipper-showcase__msg--assistant">
+        <span class="skipper-showcase__badge skipper-showcase__badge--verified">verified</span>
+        <p>
+          Your ingest is 6 Mbps with no transcoding enabled — viewers on slower connections can't
+          keep up. Enable Adaptive Bitrate to add lower renditions automatically.
+        </p>
+      </div>
+      <div class="skipper-showcase__citation">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          width="12"
+          height="12"
+        >
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+        </svg>
+        <span>FrameWorks Docs, Stream Management</span>
       </div>
     </div>
   </div>

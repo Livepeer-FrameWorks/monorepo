@@ -3,7 +3,7 @@
   "authorization_servers": ["https://api.frameworks.network"],
   "bearer_methods_supported": ["header"],
   "scopes_supported": [],
-  "resource_documentation": "https://frameworks.network/skill.md",
+  "resource_documentation": "https://frameworks.network/SKILL.md",
   "x_auth_methods": {
     "wallet": {
       "type": "eip191",

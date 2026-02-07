@@ -60,6 +60,26 @@ func handleKnowledgeSources() (*mcp.ReadResourceResult, error) {
 				Description: "OBS Studio setup, streaming configuration, encoder settings, and troubleshooting guides.",
 				Index:       "https://obsproject.com/wiki/",
 			},
+			{
+				Name:        "SRT Alliance",
+				Description: "SRT protocol specification, configuration, and latency tuning.",
+				Index:       "https://www.srtalliance.org/",
+			},
+			{
+				Name:        "HLS Specification",
+				Description: "HTTP Live Streaming (RFC 8216), playlist formats, and segment encoding.",
+				Index:       "https://datatracker.ietf.org/doc/html/rfc8216",
+			},
+			{
+				Name:        "nginx-rtmp",
+				Description: "nginx-rtmp-module configuration, directives, and live streaming setup.",
+				Index:       "https://github.com/arut/nginx-rtmp-module/wiki",
+			},
+			{
+				Name:        "Ecosystem",
+				Description: "Livepeer network, WebRTC standards, DASH specification, and related streaming tools.",
+				Index:       "https://docs.livepeer.org/",
+			},
 		},
 	}
 

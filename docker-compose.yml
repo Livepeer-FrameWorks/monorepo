@@ -43,6 +43,7 @@ services:
       PURSER_GRPC_ADDR: ${PURSER_GRPC_ADDR}
       PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
       SIGNALMAN_GRPC_ADDR: ${SIGNALMAN_GRPC_ADDR}
+      SKIPPER_GRPC_ADDR: ${SKIPPER_GRPC_ADDR:-skipper:19007}
       WS_MAX_CONNECTIONS_PER_TENANT: ${WS_MAX_CONNECTIONS_PER_TENANT}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
@@ -832,10 +833,17 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_API_URL: ${EMBEDDING_API_URL:-}
+      SKIPPER_WEB_UI: ${SKIPPER_WEB_UI:-true}
+      SKIPPER_API_KEY: ${SKIPPER_API_KEY:-}
       SEARCH_PROVIDER: ${SEARCH_PROVIDER}
       SEARCH_API_KEY: ${SEARCH_API_KEY}
       SEARCH_API_URL: ${SEARCH_API_URL}
       GATEWAY_PUBLIC_URL: http://${BRIDGE_HOST}:${BRIDGE_PORT}
+      SITEMAPS: ${SITEMAPS:-}
+      SKIPPER_SITEMAPS_DIR: /etc/skipper/sitemaps
+      CRAWL_INTERVAL: ${CRAWL_INTERVAL:-24h}
+    volumes:
+      - ./config/skipper/sitemaps:/etc/skipper/sitemaps:ro
     depends_on:
       postgres:
         condition: service_healthy

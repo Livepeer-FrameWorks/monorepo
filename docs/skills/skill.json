@@ -9,14 +9,19 @@
     "api_base": "https://api.frameworks.network",
     "graphql": "https://api.frameworks.network/graphql",
     "mcp_discovery": "https://api.frameworks.network/.well-known/mcp.json",
-    "chains": ["base", "arbitrum"]
+    "chains": ["base", "arbitrum"],
+    "skipper": {
+      "prompt": "video_consultant",
+      "tools": ["search_knowledge", "search_web"],
+      "resource": "knowledge://sources"
+    }
   },
   "auth": {
     "methods": ["wallet", "x402", "bearer"],
     "wallet_message_format": "FrameWorks Login\nTimestamp: {ISO8601}\nNonce: {random}"
   },
   "files": {
-    "skill": "https://frameworks.network/skill.md",
+    "skill": "https://frameworks.network/SKILL.md",
     "heartbeat": "https://frameworks.network/heartbeat.md"
   },
   "endpoints": {

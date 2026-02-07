@@ -58,12 +58,12 @@ func (c *CaddyProvisioner) Provision(ctx context.Context, host inventory.Host, c
 		// Fallback: add all standard interfaces if no list provided (e.g. manual run)
 		// This covers the "single host" case without planner updates.
 		routes = map[string]int{ // Initialized here
-			"website":  ServicePorts["website"],
-			"webapp":   ServicePorts["webapp"],
-			"bridge":   ServicePorts["bridge"],
-			"docs":     ServicePorts["docs"],
-			"forms":    ServicePorts["forms"],
-			"listmonk": ServicePorts["listmonk"],
+			"foredeck":  ServicePorts["foredeck"],
+			"chartroom": ServicePorts["chartroom"],
+			"bridge":    ServicePorts["bridge"],
+			"logbook":   ServicePorts["logbook"],
+			"steward":   ServicePorts["steward"],
+			"listmonk":  ServicePorts["listmonk"],
 		}
 	}
 

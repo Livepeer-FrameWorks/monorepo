@@ -20,22 +20,32 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS skipper.skipper_knowledge (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID,
+    tenant_id UUID NOT NULL,
     source_url TEXT NOT NULL,
     source_title TEXT,
+    source_root TEXT,
+    source_type TEXT,
     chunk_text TEXT NOT NULL,
     chunk_index INT,
     embedding vector(1536),
     metadata JSONB,
+    tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', chunk_text)) STORED,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS skipper_knowledge_embedding_idx
-    ON skipper.skipper_knowledge USING ivfflat (embedding vector_cosine_ops);
+    ON skipper.skipper_knowledge USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 24, ef_construction = 256);
 
 CREATE INDEX IF NOT EXISTS skipper_knowledge_tenant_source_idx
     ON skipper.skipper_knowledge (tenant_id, source_url);
+
+CREATE INDEX IF NOT EXISTS skipper_knowledge_source_root_idx
+    ON skipper.skipper_knowledge (tenant_id, source_root);
+
+CREATE INDEX IF NOT EXISTS skipper_knowledge_tsv_idx
+    ON skipper.skipper_knowledge USING GIN (tsv);
 
 -- ============================================================================
 -- CONVERSATIONS
@@ -46,6 +56,7 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_conversations (
     tenant_id UUID NOT NULL,
     user_id UUID,
     title TEXT,
+    summary TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -84,6 +95,9 @@ CREATE INDEX IF NOT EXISTS skipper_usage_tenant_created_idx
 CREATE INDEX IF NOT EXISTS skipper_conversations_tenant_user_idx
     ON skipper.skipper_conversations (tenant_id, user_id);
 
+CREATE INDEX IF NOT EXISTS skipper_messages_conv_created_idx
+    ON skipper.skipper_messages (conversation_id, created_at DESC);
+
 -- ============================================================================
 -- CRAWL JOBS
 -- ============================================================================
@@ -100,3 +114,57 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_crawl_jobs (
 
 CREATE INDEX IF NOT EXISTS skipper_crawl_jobs_tenant_idx
     ON skipper.skipper_crawl_jobs (tenant_id, started_at DESC);
+
+-- ============================================================================
+-- PAGE CACHE (change detection for smart re-crawling)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS skipper.skipper_page_cache (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL,
+    source_root     TEXT NOT NULL,
+    page_url        TEXT NOT NULL,
+    content_hash    TEXT,
+    etag            TEXT,
+    last_modified   TEXT,
+    raw_size        BIGINT,
+    last_fetched_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, page_url)
+);
+
+CREATE INDEX IF NOT EXISTS skipper_page_cache_source_idx
+    ON skipper.skipper_page_cache (tenant_id, source_root);
+
+-- ============================================================================
+-- SCHEMA UPGRADES (idempotent ALTER for existing databases)
+-- ============================================================================
+
+DO $$ BEGIN
+    ALTER TABLE skipper.skipper_knowledge ADD COLUMN source_type TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE skipper.skipper_page_cache ADD COLUMN raw_size BIGINT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE skipper.skipper_knowledge ADD COLUMN source_root TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE skipper.skipper_conversations ADD COLUMN summary TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE skipper.skipper_knowledge
+        ADD COLUMN tsv tsvector
+        GENERATED ALWAYS AS (to_tsvector('english', chunk_text)) STORED;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS skipper_knowledge_tsv_idx
+    ON skipper.skipper_knowledge USING GIN (tsv);

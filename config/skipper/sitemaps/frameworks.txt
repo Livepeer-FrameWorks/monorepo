@@ -1,0 +1,4 @@
+# FrameWorks platform documentation
+${DOCS_PUBLIC_URL}/sitemap-index.xml
+# Marketing site
+${MARKETING_PUBLIC_URL}/sitemap.xml

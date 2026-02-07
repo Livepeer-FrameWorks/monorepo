@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultSearchLimit  = 5
+	defaultSearchLimit  = 8
 	defaultSearchDepth  = "basic"
 	maxSnippetRuneCount = 320
 )
@@ -38,11 +38,19 @@ type SearchWebResponse struct {
 }
 
 type SearchWebTool struct {
-	provider search.Provider
+	provider    search.Provider
+	searchLimit int
 }
 
 func NewSearchWebTool(provider search.Provider) *SearchWebTool {
-	return &SearchWebTool{provider: provider}
+	return &SearchWebTool{provider: provider, searchLimit: defaultSearchLimit}
+}
+
+// SetSearchLimit overrides the default limit for web searches.
+func (t *SearchWebTool) SetSearchLimit(limit int) {
+	if limit > 0 {
+		t.searchLimit = limit
+	}
 }
 
 func (t *SearchWebTool) Call(ctx context.Context, arguments string) (SearchWebResponse, error) {
@@ -66,7 +74,7 @@ func (t *SearchWebTool) Search(ctx context.Context, input SearchWebInput) (Searc
 
 	limit := input.Limit
 	if limit <= 0 {
-		limit = defaultSearchLimit
+		limit = t.searchLimit
 	}
 
 	depth := strings.TrimSpace(input.SearchDepth)

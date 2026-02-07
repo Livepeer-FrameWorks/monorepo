@@ -72,8 +72,9 @@ func (p *Publisher) PublishUsageSummary(summary models.UsageSummary) error {
 		[]byte(summary.TenantID),
 		payload,
 		map[string]string{
-			"source": p.source,
-			"type":   "usage_summary",
+			"source":    p.source,
+			"type":      "usage_summary",
+			"tenant_id": summary.TenantID,
 		},
 	)
 	if err != nil {

@@ -1,0 +1,3 @@
+# HTTP Live Streaming specification (IETF RFCs, server-rendered)
+page:https://datatracker.ietf.org/doc/html/rfc8216
+page:https://datatracker.ietf.org/doc/html/draft-pantos-hls-rfc8216bis

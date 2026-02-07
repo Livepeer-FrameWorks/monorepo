@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Provider string
-	Model    string
-	APIKey   string
-	APIURL   string
+	Provider  string
+	Model     string
+	APIKey    string
+	APIURL    string
+	MaxTokens int
 }
 
 func LoadConfig() Config {

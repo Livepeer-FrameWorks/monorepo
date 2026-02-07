@@ -7,19 +7,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	"frameworks/api_consultant/internal/skipper"
 	"frameworks/pkg/auth"
-	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
-const maxUploadSize int64 = 10 << 20 // 10 MB
+const (
+	maxUploadSize       int64 = 10 << 20 // 10 MB
+	maxCrawlDuration          = 2 * time.Hour
+	maxConcurrentCrawls       = 3
+)
 
 var allowedUploadExtensions = map[string]bool{
 	".txt":  true,
@@ -30,13 +34,20 @@ var allowedUploadExtensions = map[string]bool{
 	".xml":  true,
 }
 
+var (
+	crawlSem     = make(chan struct{}, maxConcurrentCrawls)
+	activeCrawls sync.Map // jobID → context.CancelFunc
+)
+
 type AdminAPI struct {
-	db       *sql.DB
-	store    *Store
-	embedder *Embedder
-	crawler  *Crawler
-	logger   logging.Logger
-	now      func() time.Time
+	db        *sql.DB
+	store     *Store
+	embedder  *Embedder
+	crawler   *Crawler
+	pageCache *PageCacheStore
+	health    *HealthTracker
+	logger    logging.Logger
+	now       func() time.Time
 }
 
 type CrawlJob struct {
@@ -52,6 +63,7 @@ type CrawlJob struct {
 type crawlRequest struct {
 	SitemapURL string `json:"sitemap_url"`
 	TenantID   string `json:"tenant_id"`
+	Render     bool   `json:"render,omitempty"`
 }
 
 type pageRequest struct {
@@ -71,7 +83,7 @@ type pageResponse struct {
 	Chunks    int    `json:"chunks"`
 }
 
-func NewAdminAPI(db *sql.DB, store *Store, embedder *Embedder, crawler *Crawler, logger logging.Logger) (*AdminAPI, error) {
+func NewAdminAPI(db *sql.DB, store *Store, embedder *Embedder, crawler *Crawler, pageCache *PageCacheStore, logger logging.Logger) (*AdminAPI, error) {
 	if db == nil {
 		return nil, errors.New("db is required")
 	}
@@ -85,26 +97,38 @@ func NewAdminAPI(db *sql.DB, store *Store, embedder *Embedder, crawler *Crawler,
 		return nil, errors.New("crawler is required")
 	}
 	return &AdminAPI{
-		db:       db,
-		store:    store,
-		embedder: embedder,
-		crawler:  crawler,
-		logger:   logger,
-		now:      time.Now,
+		db:        db,
+		store:     store,
+		embedder:  embedder,
+		crawler:   crawler,
+		pageCache: pageCache,
+		logger:    logger,
+		now:       time.Now,
 	}, nil
 }
 
-func (a *AdminAPI) RegisterRoutes(router *gin.Engine, jwtSecret []byte) {
+// SetHealth attaches a crawl health tracker to the admin API.
+func (a *AdminAPI) SetHealth(h *HealthTracker) {
+	a.health = h
+}
+
+func (a *AdminAPI) RegisterRoutes(router *gin.Engine, jwtSecret []byte, middleware ...gin.HandlerFunc) {
 	group := router.Group("/api/skipper/admin")
 	group.Use(auth.JWTAuthMiddleware(jwtSecret))
+	for _, mw := range middleware {
+		group.Use(mw)
+	}
 	group.Use(operatorOnlyMiddleware())
 
 	group.POST("/crawl", a.handleCrawl)
+	group.GET("/crawl", a.handleListCrawlJobs)
 	group.GET("/crawl/:id", a.handleCrawlStatus)
+	group.DELETE("/crawl/:id", a.handleCancelCrawl)
 	group.POST("/pages", a.handlePages)
 	group.POST("/upload", a.handleUpload)
 	group.GET("/sources", a.handleListSources)
-	group.DELETE("/sources/:url", a.handleDeleteSource)
+	group.DELETE("/sources", a.handleDeleteSource)
+	group.GET("/health", a.handleHealth)
 }
 
 func (a *AdminAPI) handleCrawl(c *gin.Context) {
@@ -117,29 +141,46 @@ func (a *AdminAPI) handleCrawl(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "sitemap_url is required"})
 		return
 	}
+	if _, err := validateCrawlURL(req.SitemapURL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid sitemap url: %v", err)})
+		return
+	}
 	tenantID, ok := resolveTenantID(c, req.TenantID)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required"})
 		return
 	}
 
+	// Atomic check-and-insert: only creates the job if no running job exists
+	// for this tenant + sitemap, preventing the TOCTOU race of SELECT then INSERT.
 	jobID := uuid.NewString()
 	startedAt := a.now().UTC()
-	_, err := a.db.ExecContext(c.Request.Context(),
-		`INSERT INTO skipper.skipper_crawl_jobs (id, tenant_id, sitemap_url, status, started_at) VALUES ($1, $2, $3, 'running', $4)`,
+	res, err := a.db.ExecContext(c.Request.Context(),
+		`INSERT INTO skipper.skipper_crawl_jobs (id, tenant_id, sitemap_url, status, started_at)
+		 SELECT $1, $2, $3, 'running', $4
+		 WHERE NOT EXISTS (
+		     SELECT 1 FROM skipper.skipper_crawl_jobs
+		     WHERE tenant_id = $2 AND sitemap_url = $3 AND status = 'running'
+		 )`,
 		jobID, tenantID, req.SitemapURL, startedAt)
 	if err != nil {
 		a.logger.WithError(err).Warn("Failed to create crawl job")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create crawl job"})
 		return
 	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "a crawl for this sitemap is already running"})
+		return
+	}
 
-	go a.runCrawl(jobID, tenantID, req.SitemapURL)
+	go a.runCrawl(jobID, tenantID, req.SitemapURL, req.Render)
 
 	c.JSON(http.StatusAccepted, gin.H{"job_id": jobID})
 }
 
 func (a *AdminAPI) handlePages(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20) // 10 MB
 	var req pageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -147,6 +188,10 @@ func (a *AdminAPI) handlePages(c *gin.Context) {
 	}
 	if strings.TrimSpace(req.URL) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "url is required"})
+		return
+	}
+	if _, err := validateCrawlURL(req.URL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid url: %v", err)})
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
@@ -292,14 +337,9 @@ func (a *AdminAPI) handleDeleteSource(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required"})
 		return
 	}
-	rawURL := c.Param("url")
-	if strings.TrimSpace(rawURL) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "url is required"})
-		return
-	}
-	sourceURL, err := url.PathUnescape(rawURL)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid url"})
+	sourceURL := strings.TrimSpace(c.Query("url"))
+	if sourceURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "url query parameter is required"})
 		return
 	}
 
@@ -308,12 +348,38 @@ func (a *AdminAPI) handleDeleteSource(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete source"})
 		return
 	}
+	if a.pageCache != nil {
+		if err := a.pageCache.DeleteBySource(c.Request.Context(), tenantID, sourceURL); err != nil {
+			a.logger.WithError(err).Warn("Failed to delete page cache for source")
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
-func (a *AdminAPI) runCrawl(jobID, tenantID, sitemapURL string) {
-	err := a.crawler.CrawlAndEmbed(context.Background(), tenantID, sitemapURL)
+func (a *AdminAPI) runCrawl(jobID, tenantID, sitemapURL string, render bool) {
+	// Store cancel func before blocking on semaphore so the job can be
+	// cancelled while queued.
+	ctx, cancel := context.WithTimeout(context.Background(), maxCrawlDuration)
+	defer cancel()
+	activeCrawls.Store(jobID, cancel)
+	defer activeCrawls.Delete(jobID)
+
+	crawlSem <- struct{}{}
+	defer func() { <-crawlSem }()
+
+	// If cancelled while waiting for the semaphore, bail out early and
+	// mark the job so it doesn't stay stuck as "running".
+	if ctx.Err() != nil {
+		if _, dbErr := a.db.ExecContext(context.Background(),
+			`UPDATE skipper.skipper_crawl_jobs SET status = $1, error = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
+			"cancelled", "context expired while queued", a.now().UTC(), jobID); dbErr != nil {
+			a.logger.WithError(dbErr).Warn("Failed to update timed-out crawl job")
+		}
+		return
+	}
+
+	_, err := a.crawler.CrawlAndEmbed(ctx, tenantID, sitemapURL, render)
 	finished := a.now().UTC()
 	status := "completed"
 	var errMsg *string
@@ -323,8 +389,9 @@ func (a *AdminAPI) runCrawl(jobID, tenantID, sitemapURL string) {
 		errMsg = &s
 		a.logger.WithError(err).Warn("Admin crawl failed")
 	}
+	// Only update if still 'running' — avoids overwriting 'cancelled' set by handleCancelCrawl.
 	if _, dbErr := a.db.ExecContext(context.Background(),
-		`UPDATE skipper.skipper_crawl_jobs SET status = $1, error = $2, finished_at = $3 WHERE id = $4`,
+		`UPDATE skipper.skipper_crawl_jobs SET status = $1, error = $2, finished_at = $3 WHERE id = $4 AND status = 'running'`,
 		status, errMsg, finished, jobID); dbErr != nil {
 		a.logger.WithError(dbErr).WithField("job_id", jobID).Warn("Failed to update crawl job status")
 	}
@@ -336,12 +403,17 @@ func (a *AdminAPI) handleCrawlStatus(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "job id is required"})
 		return
 	}
+	tenantID, ok := resolveTenantID(c, "")
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required"})
+		return
+	}
 	var job CrawlJob
 	var errMsg sql.NullString
 	var finishedAt sql.NullTime
 	err := a.db.QueryRowContext(c.Request.Context(),
-		`SELECT id, tenant_id, sitemap_url, status, error, started_at, finished_at FROM skipper.skipper_crawl_jobs WHERE id = $1`,
-		jobID).Scan(&job.ID, &job.TenantID, &job.SitemapURL, &job.Status, &errMsg, &job.StartedAt, &finishedAt)
+		`SELECT id, tenant_id, sitemap_url, status, error, started_at, finished_at FROM skipper.skipper_crawl_jobs WHERE id = $1 AND tenant_id = $2`,
+		jobID, tenantID).Scan(&job.ID, &job.TenantID, &job.SitemapURL, &job.Status, &errMsg, &job.StartedAt, &finishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
@@ -360,9 +432,102 @@ func (a *AdminAPI) handleCrawlStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, job)
 }
 
+func (a *AdminAPI) handleListCrawlJobs(c *gin.Context) {
+	tenantID, ok := resolveTenantID(c, c.Query("tenant_id"))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required"})
+		return
+	}
+
+	rows, err := a.db.QueryContext(c.Request.Context(),
+		`SELECT id, tenant_id, sitemap_url, status, error, started_at, finished_at
+		 FROM skipper.skipper_crawl_jobs WHERE tenant_id = $1
+		 ORDER BY started_at DESC LIMIT 50`, tenantID)
+	if err != nil {
+		a.logger.WithError(err).Warn("Failed to list crawl jobs")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list crawl jobs"})
+		return
+	}
+	defer rows.Close()
+
+	var jobs []CrawlJob
+	for rows.Next() {
+		var job CrawlJob
+		var errMsg sql.NullString
+		var finishedAt sql.NullTime
+		if err := rows.Scan(&job.ID, &job.TenantID, &job.SitemapURL, &job.Status, &errMsg, &job.StartedAt, &finishedAt); err != nil {
+			a.logger.WithError(err).Warn("Failed to scan crawl job")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read crawl jobs"})
+			return
+		}
+		if errMsg.Valid {
+			job.Error = errMsg.String
+		}
+		if finishedAt.Valid {
+			job.FinishedAt = &finishedAt.Time
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		a.logger.WithError(err).Warn("Failed to iterate crawl jobs")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read crawl jobs"})
+		return
+	}
+
+	if jobs == nil {
+		jobs = []CrawlJob{}
+	}
+	c.JSON(http.StatusOK, jobs)
+}
+
+func (a *AdminAPI) handleCancelCrawl(c *gin.Context) {
+	jobID := c.Param("id")
+	if strings.TrimSpace(jobID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "job id is required"})
+		return
+	}
+	tenantID, ok := resolveTenantID(c, "")
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tenant_id is required"})
+		return
+	}
+
+	// Verify the job belongs to this tenant
+	var status string
+	err := a.db.QueryRowContext(c.Request.Context(),
+		`SELECT status FROM skipper.skipper_crawl_jobs WHERE id = $1 AND tenant_id = $2`,
+		jobID, tenantID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+	if err != nil {
+		a.logger.WithError(err).Warn("Failed to fetch crawl job for cancellation")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch job"})
+		return
+	}
+	if status != "running" {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("job is %s, not running", status)})
+		return
+	}
+
+	if cancelFn, loaded := activeCrawls.LoadAndDelete(jobID); loaded {
+		cancelFn.(context.CancelFunc)()
+	}
+
+	now := a.now().UTC()
+	if _, dbErr := a.db.ExecContext(c.Request.Context(),
+		`UPDATE skipper.skipper_crawl_jobs SET status = 'cancelled', finished_at = $1 WHERE id = $2 AND status = 'running'`,
+		now, jobID); dbErr != nil {
+		a.logger.WithError(dbErr).Warn("Failed to update cancelled crawl job")
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}
+
 func operatorOnlyMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		role := c.GetString(string(ctxkeys.KeyRole))
+		role := skipper.GetRole(c.Request.Context())
 		if !isOperatorRole(role) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "operator access required"})
 			c.Abort()
@@ -382,14 +547,21 @@ func isOperatorRole(role string) bool {
 }
 
 func resolveTenantID(c *gin.Context, explicit string) (string, bool) {
-	if strings.TrimSpace(explicit) != "" {
-		return strings.TrimSpace(explicit), true
+	ctxTenant := strings.TrimSpace(skipper.GetTenantID(c.Request.Context()))
+	role := strings.ToLower(skipper.GetRole(c.Request.Context()))
+
+	// Only the internal "service" role may target a different tenant.
+	if role == "service" {
+		if t := strings.TrimSpace(explicit); t != "" {
+			return t, true
+		}
+		if t := strings.TrimSpace(c.GetHeader("X-Tenant-Id")); t != "" {
+			return t, true
+		}
 	}
-	if header := strings.TrimSpace(c.GetHeader("X-Tenant-Id")); header != "" {
-		return header, true
-	}
-	if tenantID := strings.TrimSpace(c.GetString(string(ctxkeys.KeyTenantID))); tenantID != "" {
-		return tenantID, true
+
+	if ctxTenant != "" {
+		return ctxTenant, true
 	}
 	return "", false
 }
@@ -409,4 +581,12 @@ func applyIngestionMetadata(chunks []Chunk, tenantID, sourceRoot, pageURL, sourc
 		chunks[i].Metadata["source_type"] = sourceType
 		chunks[i].Metadata["ingested_at"] = ingested
 	}
+}
+
+func (a *AdminAPI) handleHealth(c *gin.Context) {
+	if a.health == nil {
+		c.JSON(http.StatusOK, gin.H{"sources": []any{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sources": a.health.Snapshot()})
 }

@@ -68,7 +68,7 @@ COPY website_marketing/ website_marketing/
 COPY docs/skills/ docs/skills/
 
 # build the marketing site
-RUN cp docs/skills/skill.md website_marketing/public/skill.md \
+RUN cp docs/skills/SKILL.md website_marketing/public/SKILL.md \
   && cp docs/skills/skill.json website_marketing/public/skill.json \
   && cp docs/skills/heartbeat.md website_marketing/public/heartbeat.md \
   && cp docs/skills/llms.txt website_marketing/public/llms.txt \

@@ -12,6 +12,7 @@ import (
 	"frameworks/pkg/clients/purser"
 	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/clients/signalman"
+	skipperclient "frameworks/pkg/clients/skipper"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 )
@@ -25,6 +26,7 @@ type ServiceClients struct {
 	Purser        *purser.GRPCClient
 	Quartermaster *quartermaster.GRPCClient
 	Signalman     *signalman.GRPCClient
+	Skipper       *skipperclient.GRPCClient
 }
 
 // Config represents the configuration for all service clients
@@ -130,6 +132,21 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		}
 	}
 
+	// Initialize Skipper gRPC client (for AI consultant)
+	// Optional: only initialize if SKIPPER_GRPC_ADDR is configured
+	var skipperClient *skipperclient.GRPCClient
+	if skipperAddr := config.GetEnv("SKIPPER_GRPC_ADDR", ""); skipperAddr != "" {
+		skipperClient, err = skipperclient.NewGRPCClient(skipperclient.GRPCConfig{
+			GRPCAddr:     skipperAddr,
+			Timeout:      cfg.Timeout,
+			Logger:       cfg.Logger,
+			ServiceToken: cfg.ServiceToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Skipper gRPC client: %w", err)
+		}
+	}
+
 	return &ServiceClients{
 		Commodore:     commodoreClient,
 		Deckhand:      deckhandClient,
@@ -138,6 +155,7 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		Purser:        purserClient,
 		Quartermaster: quartermasterClient,
 		Signalman:     signalmanClient,
+		Skipper:       skipperClient,
 	}, nil
 }
 
@@ -178,6 +196,11 @@ func (c *ServiceClients) Close() error {
 	if c.Signalman != nil {
 		if err := c.Signalman.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("signalman: %w", err))
+		}
+	}
+	if c.Skipper != nil {
+		if err := c.Skipper.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("skipper: %w", err))
 		}
 	}
 

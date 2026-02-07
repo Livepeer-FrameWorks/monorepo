@@ -55,6 +55,12 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		if c.GetString(string(ctxkeys.KeyUserID)) != "u1" || c.GetString(string(ctxkeys.KeyTenantID)) != "t1" {
 			t.Fatalf("claims not set")
 		}
+		if c.GetString(string(ctxkeys.KeyAuthType)) != "jwt" {
+			t.Fatalf("expected auth_type jwt")
+		}
+		if c.GetString(string(ctxkeys.KeyJWTToken)) == "" {
+			t.Fatalf("expected jwt token in context")
+		}
 		c.String(200, "ok")
 	})
 
@@ -84,6 +90,46 @@ func TestJWTAuthMiddleware(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+}
+
+func TestJWTAuthMiddleware_WithAPIKeyIdentity(t *testing.T) {
+	secret := []byte("secret")
+	apiKey := "skipper-api-key"
+
+	r := gin.New()
+	r.Use(JWTAuthMiddleware(secret, WithAPIKeys(map[string]APIKeyIdentity{
+		apiKey: {
+			TenantID: "tenant-docs",
+			UserID:   "user-docs",
+			Role:     "apikey",
+		},
+	})))
+	r.GET("/ok", func(c *gin.Context) {
+		if c.GetString(string(ctxkeys.KeyUserID)) != "user-docs" {
+			t.Fatalf("expected api-key user")
+		}
+		if c.GetString(string(ctxkeys.KeyTenantID)) != "tenant-docs" {
+			t.Fatalf("expected api-key tenant")
+		}
+		if c.GetString(string(ctxkeys.KeyRole)) != "apikey" {
+			t.Fatalf("expected api-key role")
+		}
+		if c.GetString(string(ctxkeys.KeyAuthType)) != "api_key" {
+			t.Fatalf("expected auth_type api_key")
+		}
+		if c.GetString(string(ctxkeys.KeyJWTToken)) != "" {
+			t.Fatalf("api key auth should not populate jwt token")
+		}
+		c.String(200, "ok")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
 }
 
 func TestJWTAuthMiddleware_WebSocketUpgrade(t *testing.T) {

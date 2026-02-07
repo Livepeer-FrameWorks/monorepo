@@ -1,0 +1,10 @@
+# SRT Protocol documentation (Haivision, GitHub-rendered markdown)
+page:https://github.com/Haivision/srt/blob/master/docs/features/live-streaming.md
+page:https://github.com/Haivision/srt/blob/master/docs/features/encryption.md
+page:https://github.com/Haivision/srt/blob/master/docs/features/handshake.md
+page:https://github.com/Haivision/srt/blob/master/docs/features/access-control.md
+page:https://github.com/Haivision/srt/blob/master/docs/features/bonding-intro.md
+page:https://github.com/Haivision/srt/blob/master/docs/API/API.md
+page:https://github.com/Haivision/srt/blob/master/docs/API/configuration-guidelines.md
+page:https://github.com/Haivision/srt/blob/master/docs/apps/srt-live-transmit.md
+page:https://github.com/Haivision/srt/blob/master/docs/misc/why-srt-was-created.md

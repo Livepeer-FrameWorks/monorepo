@@ -529,6 +529,18 @@ type Query {
     streamKey: String!
   ): IngestEndpointResponse
 
+  # ==================== AI Consultant (Skipper) ====================
+
+  """
+  List Skipper AI consultant conversations for the current user.
+  """
+  skipperConversations(limit: Int, offset: Int): [SkipperConversationSummary!]!
+
+  """
+  Get a single Skipper conversation with full message history.
+  """
+  skipperConversation(id: ID!): SkipperConversation!
+
   # ==================== Support Messaging ====================
 
   """
@@ -1442,6 +1454,18 @@ type Mutation {
     tierId: ID!
   ): PromoteToPaidResult!
 
+  # ==================== AI Consultant (Skipper) ====================
+
+  """
+  Delete a Skipper conversation.
+  """
+  deleteSkipperConversation(id: ID!): Boolean!
+
+  """
+  Update the title of a Skipper conversation.
+  """
+  updateSkipperConversation(id: ID!, title: String!): SkipperConversationSummary!
+
   # ==================== Support Messaging ====================
 
   """
@@ -1634,6 +1658,15 @@ type Subscription {
   Use the type and channel fields to filter/route events client-side.
   """
   liveFirehose: TenantEvent!
+
+  # ==================== AI Consultant (Skipper) ====================
+
+  """
+  Stream chat events from the Skipper AI consultant.
+  Receives token chunks, tool lifecycle events, metadata, and completion signal.
+  Creates a new conversation if conversationId is omitted.
+  """
+  skipperChat(input: SkipperChatInput!): SkipperChatEvent!
 
   # ==================== Support Messaging ====================
 
@@ -5528,4 +5561,88 @@ type MessageEdge {
   Cursor for this edge.
   """
   cursor: String!
+}
+
+# ==================== AI Consultant (Skipper) ====================
+
+input SkipperChatInput {
+  conversationId: ID
+  message: String!
+  pageUrl: String
+  mode: SkipperMode
+}
+
+enum SkipperMode {
+  DEFAULT
+  DOCS
+}
+
+union SkipperChatEvent =
+    SkipperToken
+  | SkipperToolStartEvent
+  | SkipperToolEndEvent
+  | SkipperMeta
+  | SkipperDone
+
+type SkipperToken {
+  content: String!
+}
+
+type SkipperToolStartEvent {
+  tool: String!
+}
+
+type SkipperToolEndEvent {
+  tool: String!
+  error: String
+}
+
+type SkipperMeta {
+  confidence: String!
+  citations: [SkipperCitation!]!
+  externalLinks: [SkipperCitation!]!
+  details: [SkipperToolDetail!]!
+}
+
+type SkipperCitation {
+  label: String!
+  url: String!
+}
+
+type SkipperToolDetail {
+  title: String!
+  payload: JSON!
+}
+
+type SkipperDone {
+  conversationId: ID!
+  tokensInput: Int!
+  tokensOutput: Int!
+}
+
+type SkipperConversation {
+  id: ID!
+  title: String!
+  messages: [SkipperMessage!]!
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type SkipperConversationSummary {
+  id: ID!
+  title: String!
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type SkipperMessage {
+  id: ID!
+  role: String!
+  content: String!
+  confidence: String
+  sources: JSON
+  toolsUsed: JSON
+  tokensInput: Int!
+  tokensOutput: Int!
+  createdAt: Time!
 }

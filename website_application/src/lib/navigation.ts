@@ -249,6 +249,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
     name: "Support",
     icon: "MessageCircle",
     children: {
+      skipper: {
+        name: "Skipper",
+        href: "/skipper",
+        icon: "Bot",
+        active: true,
+        description: "AI video consultant for diagnostics, analytics, and stream help",
+      },
       messages: {
         name: "Messages",
         href: "/messages",

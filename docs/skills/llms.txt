@@ -5,7 +5,9 @@
 ## Docs
 
 - [MCP Integration](https://docs.frameworks.network/streamers/mcp): Resources, tools, prompts, x402 payments
-- [Skill File](https://frameworks.network/skill.md): Agent quick-start guide
+- [Skill File](https://frameworks.network/SKILL.md): Agent quick-start guide
+- [Agent Overview](https://docs.frameworks.network/agents/overview): Discovery, auth, and capabilities
+- [Skipper Video Consultant](https://docs.frameworks.network/agents/skipper): RAG-grounded streaming expertise
 
 ## API
 

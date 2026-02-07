@@ -47,7 +47,7 @@
     "mcp": "https://api.frameworks.network/mcp",
     "graphql": "https://api.frameworks.network/graphql",
     "wallet_login": "https://api.frameworks.network/auth/wallet-login",
-    "skill_md": "https://frameworks.network/skill.md",
+    "skill_md": "https://frameworks.network/SKILL.md",
     "skill_json": "https://frameworks.network/skill.json"
   }
 }

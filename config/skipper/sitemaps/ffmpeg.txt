@@ -1,0 +1,15 @@
+# FFmpeg documentation (server-rendered HTML, large pages)
+page:https://ffmpeg.org/ffmpeg.html
+page:https://ffmpeg.org/ffmpeg-codecs.html
+page:https://ffmpeg.org/ffmpeg-formats.html
+page:https://ffmpeg.org/ffmpeg-protocols.html
+page:https://ffmpeg.org/ffmpeg-filters.html
+page:https://ffmpeg.org/ffmpeg-devices.html
+page:https://ffmpeg.org/ffmpeg-bitstream-filters.html
+page:https://ffmpeg.org/ffmpeg-utils.html
+page:https://ffmpeg.org/ffmpeg-scaler.html
+page:https://ffmpeg.org/ffmpeg-resampler.html
+page:https://ffmpeg.org/ffprobe.html
+page:https://ffmpeg.org/ffplay.html
+page:https://ffmpeg.org/faq.html
+page:https://ffmpeg.org/general.html

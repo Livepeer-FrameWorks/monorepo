@@ -1,9 +1,16 @@
 ---
 name: frameworks-network
-version: 1.0.0
-description: Multi-tenant live streaming. MCP-native with wallet auth and x402 payments.
-homepage: https://frameworks.network
+description: >
+  Connect to FrameWorks live streaming platform via MCP. Create and manage
+  live streams, VOD assets, clips, and DVR recordings. Monitor stream health
+  with QoE diagnostics. Search streaming knowledge with RAG-grounded answers.
+  Handle billing with wallet auth and x402 payments. Use when the user wants
+  to stream video, manage live infrastructure, or integrate with FrameWorks.
+compatibility: Requires network access to api.frameworks.network
 metadata:
+  author: frameworks
+  version: "1.0"
+  homepage: https://frameworks.network
   emoji: "📡"
   category: streaming
   api_base: https://api.frameworks.network
@@ -19,7 +26,7 @@ Multi-tenant live streaming platform with three access layers and crypto-native 
 
 | File          | URL                                                 |
 | ------------- | --------------------------------------------------- |
-| skill.md      | https://frameworks.network/skill.md                 |
+| SKILL.md      | https://frameworks.network/SKILL.md                 |
 | skill.json    | https://frameworks.network/skill.json               |
 | heartbeat.md  | https://frameworks.network/heartbeat.md             |
 | MCP discovery | https://api.frameworks.network/.well-known/mcp.json |
@@ -44,20 +51,21 @@ Multi-tenant live streaming platform with three access layers and crypto-native 
 
 ### What You Can Do
 
-| Category        | MCP Tools                                 | MCP Resources                  | GraphQL                             |
-| --------------- | ----------------------------------------- | ------------------------------ | ----------------------------------- |
-| Streams         | create, update, delete, refresh keys      | list, details, health          | mutations + queries + subscriptions |
-| Clips           | create from live/recorded, delete         | —                              | mutations + queries                 |
-| DVR             | start/stop catch-up recording             | —                              | mutation                            |
-| VOD             | upload, complete, abort, delete           | list, details                  | mutations + queries                 |
-| Playback        | resolve viewer endpoints (geo-routed)     | —                              | query                               |
-| Billing         | top up, submit payment, check deposits    | balance, pricing, transactions | queries                             |
-| Analytics       | —                                         | usage, viewers, geographic     | queries                             |
-| QoE Diagnostics | rebuffering, buffer, packet loss, routing | —                              | —                                   |
-| Support         | search conversations                      | history                        | —                                   |
-| API Exploration | introspect schema, generate queries       | schema catalog                 | introspection                       |
+| Category        | MCP Tools                                     | MCP Resources                  | GraphQL                             |
+| --------------- | --------------------------------------------- | ------------------------------ | ----------------------------------- |
+| Streams         | create, update, delete, refresh keys          | list, details, health          | mutations + queries + subscriptions |
+| Clips           | create from live/recorded, delete             | —                              | mutations + queries                 |
+| DVR             | start/stop catch-up recording                 | —                              | mutation                            |
+| VOD             | upload, complete, abort, delete               | list, details                  | mutations + queries                 |
+| Playback        | resolve viewer endpoints (geo-routed)         | —                              | query                               |
+| Billing         | top up, submit payment, check deposits        | balance, pricing, transactions | queries                             |
+| Analytics       | —                                             | usage, viewers, geographic     | queries                             |
+| QoE Diagnostics | rebuffering, buffer, packet loss, routing     | —                              | —                                   |
+| Support         | search conversations                          | history                        | —                                   |
+| API Exploration | introspect schema, generate & execute queries | schema catalog                 | introspection                       |
+| Knowledge       | search_knowledge, search_web                  | knowledge://sources            | —                                   |
 
-MCP: 27 tools, 18 resources, 8 prompts — full discovery via `tools/list` and `resources/list`.
+MCP: 30 tools, 18 resources, 8 prompts — full discovery via `tools/list` and `resources/list`.
 GraphQL: introspection enabled at `/graphql` — full schema discovery built-in.
 
 ## Security Notes
@@ -160,6 +168,19 @@ Authentication: same wallet headers or bearer token.
 - **Monitor stream health.** Read `streams://{id}/health` periodically during live streams. Use QoE diagnostic tools if viewers report issues.
 - **Top up proactively.** Streams are terminated if balance drops below -$10. Use x402 auto-payment or `topup_balance` to maintain buffer.
 - **Clean up after yourself.** Delete streams, clips, and VOD assets you no longer need. Storage costs are ongoing.
+
+## Video Consultant (Skipper)
+
+Use the `video_consultant` prompt for expert streaming guidance backed by a curated knowledge base.
+
+- **Prompt**: `video_consultant` — activates expert streaming consultant mode
+- **Tools**: `search_knowledge` (RAG over embedded docs), `search_web` (live web search fallback)
+- **Resource**: `knowledge://sources` — lists indexed documentation domains
+- **Knowledge domains**: FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, and ecosystem tools
+- **Confidence tagging**: Every answer tagged as `verified`, `sourced`, `best_guess`, or `unknown` with citations
+- **Retrieval pipeline**: Queries are automatically rewritten for search optimization, optionally embedded via HyDE, and results are reranked with a cross-encoder model when configured
+
+Use `search_knowledge` before searching the web — the embedded docs are faster and pre-verified.
 
 ## When to Alert Your Human
 

@@ -152,6 +152,13 @@ func (a *Agent) Start(ctx context.Context) {
 }
 
 func (a *Agent) runCycle(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			if a.logger != nil {
+				a.logger.WithField("panic", fmt.Sprint(r)).Error("Heartbeat cycle panic")
+			}
+		}
+	}()
 	if a.logger == nil {
 		return
 	}

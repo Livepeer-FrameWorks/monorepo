@@ -21,7 +21,7 @@ func (f fakeEmbeddingClient) Embed(_ context.Context, inputs []string) ([][]floa
 }
 
 func TestEmbedderChunksDocument(t *testing.T) {
-	embedder, err := NewEmbedder(fakeEmbeddingClient{}, WithTokenLimit(5), WithTokenOverlap(2))
+	embedder, err := NewEmbedder(fakeEmbeddingClient{}, WithTokenLimit(7), WithTokenOverlap(3))
 	if err != nil {
 		t.Fatalf("new embedder: %v", err)
 	}

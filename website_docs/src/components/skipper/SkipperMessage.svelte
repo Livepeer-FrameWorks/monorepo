@@ -21,6 +21,8 @@
     details?: SkipperDetail[];
   }
 
+  import DocsSkipperToolResult from "./DocsSkipperToolResult.svelte";
+
   interface Props {
     message: SkipperChatMessage;
   }
@@ -43,17 +45,39 @@
       .replaceAll("'", "&#039;");
   }
 
+  let copyIdCounter = 0;
+
   function renderMarkdown(value: string) {
     const blocks: string[] = [];
     let working = value.replace(/```([\s\S]*?)```/g, (_match, code) => {
       const index = blocks.length;
+      const id = `skipper-code-${copyIdCounter++}`;
       blocks.push(
-        `<pre class=\"docs-skipper-message__code\"><code>${escapeHtml(code.trim())}</code></pre>`
+        `<div class="docs-skipper-message__code-wrap"><pre class="docs-skipper-message__code" id="${id}"><code>${escapeHtml(code.trim())}</code></pre><button class="docs-skipper-message__copy" data-copy-target="${id}" type="button">Copy</button></div>`
       );
       return `__BLOCK_${index}__`;
     });
 
     working = escapeHtml(working);
+
+    // Headings (### before ## before # to avoid greedy match)
+    working = working.replace(
+      /(?:^|\n)#### (.+)/g,
+      '\n<h6 class="docs-skipper-message__heading">$1</h6>'
+    );
+    working = working.replace(
+      /(?:^|\n)### (.+)/g,
+      '\n<h5 class="docs-skipper-message__heading">$1</h5>'
+    );
+    working = working.replace(
+      /(?:^|\n)## (.+)/g,
+      '\n<h4 class="docs-skipper-message__heading">$1</h4>'
+    );
+    working = working.replace(
+      /(?:^|\n)# (.+)/g,
+      '\n<h3 class="docs-skipper-message__heading">$1</h3>'
+    );
+
     working = working.replace(/`([^`]+)`/g, '<code class="docs-skipper-message__inline">$1</code>');
     working = working.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     working = working.replace(/\*([^*]+)\*/g, "<em>$1</em>");
@@ -61,6 +85,27 @@
       /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
       '<a class="docs-skipper-message__link" href="$2" target="_blank" rel="noreferrer">$1</a>'
     );
+
+    // Convert unordered list blocks (consecutive lines starting with - )
+    working = working.replace(/(?:^|\n)((?:- .+(?:\n|$))+)/g, (_match, listBlock: string) => {
+      const items = listBlock
+        .split("\n")
+        .filter((line) => line.startsWith("- "))
+        .map((line) => `<li>${line.slice(2)}</li>`)
+        .join("");
+      return `<ul class="docs-skipper-message__list">${items}</ul>`;
+    });
+
+    // Convert ordered list blocks (consecutive lines starting with N. )
+    working = working.replace(/(?:^|\n)((?:\d+\. .+(?:\n|$))+)/g, (_match, listBlock: string) => {
+      const items = listBlock
+        .split("\n")
+        .filter((line) => /^\d+\. /.test(line))
+        .map((line) => `<li>${line.replace(/^\d+\. /, "")}</li>`)
+        .join("");
+      return `<ol class="docs-skipper-message__list">${items}</ol>`;
+    });
+
     working = working.replace(/\n/g, "<br />");
 
     blocks.forEach((block, index) => {
@@ -68,6 +113,18 @@
     });
 
     return working;
+  }
+
+  function handleCopyClick(e: MouseEvent) {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-copy-target]");
+    if (!btn) return;
+    const pre = document.getElementById(btn.dataset.copyTarget || "");
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.textContent || "");
+    btn.textContent = "Copied!";
+    setTimeout(() => {
+      btn.textContent = "Copy";
+    }, 1500);
   }
 
   function formatDetail(detail: SkipperDetail) {
@@ -81,7 +138,7 @@
     <span class="docs-skipper-message__role">
       {message.role === "assistant" ? "Skipper" : "You"}
     </span>
-    {#if message.role === "assistant" && message.confidence}
+    {#if message.role === "assistant" && message.confidence && message.content}
       <span class="docs-skipper-message__confidence">
         {confidenceLabels[message.confidence]}
       </span>
@@ -93,13 +150,13 @@
     {/if}
   </div>
 
-  {#if message.role === "assistant" && message.confidence === "best_guess"}
+  {#if message.role === "assistant" && message.confidence === "best_guess" && message.content}
     <div class="docs-skipper-message__notice docs-skipper-message__notice--warning">
       Best guess — verify with primary documentation before acting.
     </div>
   {/if}
 
-  {#if message.role === "assistant" && message.confidence === "unknown"}
+  {#if message.role === "assistant" && message.confidence === "unknown" && message.content}
     <div class="docs-skipper-message__notice docs-skipper-message__notice--muted">
       I could not validate a confident answer based on available docs.
     </div>
@@ -110,15 +167,22 @@
       ? "docs-skipper-message__bubble docs-skipper-message__bubble--assistant"
       : "docs-skipper-message__bubble docs-skipper-message__bubble--user"}
   >
-    <div
-      class={message.confidence === "best_guess"
-        ? "docs-skipper-message__content docs-skipper-message__content--dim"
-        : "docs-skipper-message__content"}
-    >
-      <div class="docs-skipper-message__prose">
-        {@html renderMarkdown(message.content)}
+    {#if message.role === "assistant" && message.content === ""}
+      <div class="docs-skipper-message__thinking">
+        <span></span><span></span><span></span>
       </div>
-    </div>
+    {:else}
+      <div
+        class={message.confidence === "best_guess"
+          ? "docs-skipper-message__content docs-skipper-message__content--dim"
+          : "docs-skipper-message__content"}
+      >
+        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+        <div class="docs-skipper-message__prose" onclick={handleCopyClick}>
+          {@html renderMarkdown(message.content)}
+        </div>
+      </div>
+    {/if}
   </div>
 
   {#if message.role === "assistant" && message.citations?.length}
@@ -157,18 +221,8 @@
   {/if}
 
   {#if message.role === "assistant" && message.details?.length}
-    <details class="docs-skipper-message__details">
-      <summary class="docs-skipper-message__details-summary">Details</summary>
-      <div class="docs-skipper-message__details-body">
-        {#each message.details as detail}
-          <div>
-            {#if detail.title}
-              <div class="docs-skipper-message__details-title">{detail.title}</div>
-            {/if}
-            <pre class="docs-skipper-message__details-code">{formatDetail(detail)}</pre>
-          </div>
-        {/each}
-      </div>
-    </details>
+    {#each message.details as detail}
+      <DocsSkipperToolResult {detail} />
+    {/each}
   {/if}
 </div>

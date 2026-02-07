@@ -360,9 +360,9 @@ func main() {
 			})
 		})
 
-		app.GET("/skill.md", func(c *gin.Context) {
+		app.GET("/SKILL.md", func(c *gin.Context) {
 			if skills.skillMD == nil {
-				c.JSON(http.StatusNotFound, gin.H{"error": "skill.md not available"})
+				c.JSON(http.StatusNotFound, gin.H{"error": "SKILL.md not available"})
 				return
 			}
 			c.Header("Access-Control-Allow-Origin", "*")
@@ -640,7 +640,7 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 
 	var dir string
 	for _, candidate := range candidates {
-		if _, err := os.Stat(filepath.Join(candidate, "skill.md")); err == nil {
+		if _, err := os.Stat(filepath.Join(candidate, "SKILL.md")); err == nil {
 			if _, err := os.Stat(filepath.Join(candidate, "skill.json")); err == nil {
 				dir = candidate
 				break
@@ -663,7 +663,7 @@ func loadSkillFiles(logger logging.Logger) skillFiles {
 	}
 
 	sf := skillFiles{
-		skillMD:     readFile("skill.md"),
+		skillMD:     readFile("SKILL.md"),
 		skillJSON:   readFile("skill.json"),
 		heartbeatMD: readFile("heartbeat.md"),
 		mcpJSON:     readFile("mcp.json"),

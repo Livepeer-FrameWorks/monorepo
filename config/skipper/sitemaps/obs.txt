@@ -1,0 +1,24 @@
+# OBS Studio Knowledge Base (server-rendered HTML)
+page:https://obsproject.com/kb/quick-start-guide
+page:https://obsproject.com/kb/system-requirements
+page:https://obsproject.com/kb/obs-studio-overview
+page:https://obsproject.com/kb/sources-guide
+page:https://obsproject.com/kb/filters-guide
+page:https://obsproject.com/kb/audio-mixer-guide
+page:https://obsproject.com/kb/stream-connection-troubleshooting
+page:https://obsproject.com/kb/encoding-performance-troubleshooting
+page:https://obsproject.com/kb/transcodes-transcoding
+page:https://obsproject.com/kb/srt-protocol-streaming-guide
+page:https://obsproject.com/kb/rist-protocol-streaming-guide
+page:https://obsproject.com/kb/whip-streaming-guide
+page:https://obsproject.com/kb/game-capture-source
+page:https://obsproject.com/kb/video-capture-sources
+page:https://obsproject.com/kb/window-capture-sources
+page:https://obsproject.com/kb/media-sources
+page:https://obsproject.com/kb/image-sources
+page:https://obsproject.com/kb/application-audio-capture-guide
+page:https://obsproject.com/kb/multiple-audio-track-recording-guide
+page:https://obsproject.com/kb/game-capture-setup-guide
+page:https://obsproject.com/kb/aspect-ratio-guide
+page:https://obsproject.com/kb/gpu-selection-guide
+page:https://obsproject.com/kb/virtual-camera-troubleshooting

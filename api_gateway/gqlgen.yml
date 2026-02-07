@@ -732,6 +732,47 @@ models:
     model:
       - frameworks/pkg/proto.CryptoAsset
 
+  # AI Consultant (Skipper) types - manual model types (union members need marker interfaces)
+  SkipperChatEvent:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperChatEvent
+  SkipperToken:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperToken
+  SkipperToolStartEvent:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperToolStartEvent
+  SkipperToolEndEvent:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperToolEndEvent
+  SkipperMeta:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperMeta
+  SkipperCitation:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperCitation
+  SkipperToolDetail:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperToolDet
+  SkipperDone:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperDone
+  SkipperConversation:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperConversation
+  SkipperConversationSummary:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperConversationSummary
+  SkipperMessage:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperMessage
+  SkipperChatInput:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperChatInput
+  SkipperMode:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperMode
+
   # Support messaging enums - bound to proto types
   ConversationStatus:
     model:

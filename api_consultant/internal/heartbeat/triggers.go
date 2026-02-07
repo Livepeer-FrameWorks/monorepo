@@ -106,6 +106,13 @@ func (t *LookoutTrigger) Start(ctx context.Context) error {
 }
 
 func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) error {
+	defer func() {
+		if r := recover(); r != nil {
+			if t != nil && t.Logger != nil {
+				t.Logger.WithField("panic", fmt.Sprint(r)).Error("Lookout incident handler panic")
+			}
+		}
+	}()
 	if t == nil || t.Agent == nil {
 		return nil
 	}
@@ -117,6 +124,9 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 		return nil
 	}
 	if incident.TenantID == "" {
+		return nil
+	}
+	if !t.Agent.isSkipperEnabled(ctx, incident.TenantID) {
 		return nil
 	}
 	snapshot, err := t.Agent.loadSnapshot(ctx, incident.TenantID)

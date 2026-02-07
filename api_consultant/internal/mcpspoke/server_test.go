@@ -18,6 +18,14 @@ type fakeKnowledgeStore struct {
 }
 
 func (s *fakeKnowledgeStore) Search(_ context.Context, tenantID string, _ []float32, limit int) ([]knowledge.Chunk, error) {
+	return s.search(tenantID, limit)
+}
+
+func (s *fakeKnowledgeStore) HybridSearch(_ context.Context, tenantID string, _ []float32, _ string, limit int) ([]knowledge.Chunk, error) {
+	return s.search(tenantID, limit)
+}
+
+func (s *fakeKnowledgeStore) search(tenantID string, limit int) ([]knowledge.Chunk, error) {
 	if limit <= 0 {
 		limit = 5
 	}

@@ -237,6 +237,10 @@
     .marketing-cta__actions {
       flex-direction: column;
     }
+
+    .marketing-cta--band .marketing-cta__actions {
+      flex-direction: row;
+    }
   }
 
   .marketing-cta-band .marketing-cta {
@@ -264,6 +268,7 @@
 
   .marketing-cta--band .marketing-cta__action-cell--slab {
     flex: 1 1 0;
+    overflow: hidden;
   }
 
   .marketing-cta--band .marketing-cta__action-cell--slab + .marketing-cta__action-cell--slab {
@@ -272,6 +277,7 @@
 
   .marketing-cta--band .marketing-cta__button--slab {
     width: 100%;
+    min-width: 0;
     min-height: clamp(3.1rem, 5vw, 3.6rem);
     border-radius: 0 !important;
     border: none !important;
@@ -280,6 +286,8 @@
     transform: none !important;
     text-transform: uppercase;
     letter-spacing: 0.08em;
+    white-space: nowrap;
+    font-size: clamp(0.72rem, 1vw, 0.82rem);
   }
 
   .marketing-cta--band .marketing-cta__action-cell--slab:first-child .marketing-cta__button--slab {
@@ -316,6 +324,10 @@
 
     .marketing-cta--band .marketing-cta__actions {
       flex-direction: column;
+    }
+
+    .marketing-cta--band .marketing-cta__action-cell--slab {
+      width: 100%;
     }
 
     .marketing-cta--band .marketing-cta__action-cell--slab + .marketing-cta__action-cell--slab {

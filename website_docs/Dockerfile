@@ -57,7 +57,7 @@ COPY website_docs/ website_docs/
 COPY docs/skills/ docs/skills/
 
 # build the docs site
-RUN cp docs/skills/skill.md website_docs/public/skill.md \
+RUN cp docs/skills/SKILL.md website_docs/public/SKILL.md \
   && cp docs/skills/skill.json website_docs/public/skill.json \
   && cp docs/skills/heartbeat.md website_docs/public/heartbeat.md \
   && cp docs/skills/llms.txt website_docs/public/llms.txt \

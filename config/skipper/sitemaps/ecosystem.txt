@@ -1,0 +1,24 @@
+# === Sites with XML sitemaps ===
+
+# MistServer documentation (our streaming server)
+https://docs.mistserver.org/sitemap.xml
+# Livepeer network documentation
+https://docs.livepeer.org/sitemap.xml
+# Livepeer Daydream (AI video generation)
+https://docs.daydream.live/sitemap.xml
+# WebRTC protocol documentation
+https://webrtc.org/sitemap.xml
+# DASH Industry Forum (DASH specs and guidelines)
+https://dashif.org/sitemap.xml
+
+# === Curated page lists (no sitemap available) ===
+
+# Streamplace documentation
+page:https://stream.place/docs/
+page:https://stream.place/docs/guides/start-streaming/obs/
+page:https://stream.place/docs/guides/start-streaming/embed/
+page:https://stream.place/docs/guides/start-streaming/discord-hooks/
+page:https://stream.place/docs/guides/start-contributing/streamplace-dev-setup/
+page:https://stream.place/docs/guides/start-contributing/streaming-in-development/
+page:https://stream.place/docs/components/player/
+page:https://stream.place/docs/components/custom_ui/

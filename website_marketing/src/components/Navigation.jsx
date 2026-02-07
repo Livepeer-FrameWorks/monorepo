@@ -164,6 +164,14 @@ const Navigation = () => {
                         Roadmap
                       </a>
                     </SheetClose>
+                    <SheetClose asChild>
+                      <a
+                        href={`${config.docsUrl.replace(/\/+$/, "")}/agents/skipper`}
+                        className={linkClasses(null, "mobile")}
+                      >
+                        Skipper
+                      </a>
+                    </SheetClose>
                   </div>
                 </div>
 

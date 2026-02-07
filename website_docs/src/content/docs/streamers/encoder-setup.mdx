@@ -146,6 +146,38 @@ Hardware encoders reduce the load on your CPU, leaving more resources for your g
 
 In OBS Studio, you can select your encoder under **Settings → Output → Encoder**.
 
+## Adaptive Bitrate (ABR)
+
+FrameWorks automatically generates lower-quality renditions of your stream so viewers on slower connections can watch without buffering. This is powered by the Livepeer transcoding network and requires no configuration on your part.
+
+### How It Works
+
+When you go live, the platform detects your input resolution and adds renditions dynamically:
+
+| Input Resolution | Added Renditions                                   |
+| ---------------- | -------------------------------------------------- |
+| Above 1280×720   | 720p (1024 kbps, 25 fps) + 480p (512 kbps, 15 fps) |
+| Above 850×480    | 480p (512 kbps, 15 fps)                            |
+| Below 850×480    | No transcoding (source streamed as-is)             |
+
+Audio is transcoded between AAC and Opus as needed for WebRTC-HLS compatibility — if you ingest with AAC, an Opus track is generated for WebRTC viewers, and vice versa.
+
+### What This Means for You
+
+- **Stream at the highest quality your upload supports.** ABR handles delivering to viewers on weaker connections.
+- **Viewers automatically get the best quality their connection supports** via the HLS/DASH adaptive player.
+- **No extra cost on managed clusters.** Transcoding is included in delivery pricing. Self-hosted operators manage their own Livepeer gateway or use local MistServer transcoding.
+
+<Aside type="note" title="When ABR Is Available">
+  ABR renditions are generated when a Livepeer transcoding gateway is available to the cluster. On
+  managed FrameWorks, this is always the case. Self-hosted operators need to configure a Livepeer
+  gateway for ABR to activate.
+</Aside>
+
+### Future: Custom Transcoding Profiles
+
+Per-stream transcoding configuration (custom rendition ladders, codec selection, local MistServer transcoding pipeline) is on the roadmap. Today the Livepeer-backed ladder is applied uniformly.
+
 ## Avoid Common Pitfalls
 
 **Ensure Your Bitrate Matches Your Upload Speed**

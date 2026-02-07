@@ -55,7 +55,7 @@ verify: proto graphql
 		(cd $$service_dir && \
 			go mod tidy && \
 			go fmt ./... && \
-			go vet ./... && \
+			go vet $$(go list ./... | grep -v '/graph/generated') && \
 			go test ./... -race -count=1 && \
 			go build ./...) || failed=1; \
 		if [ -f "$$service_dir/Dockerfile" ]; then \
@@ -219,6 +219,7 @@ build-bin-forms: proto
 
 build-bin-skipper: proto
 	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper cmd/skipper/main.go
+
 
 # Clean build artifacts
 clean:

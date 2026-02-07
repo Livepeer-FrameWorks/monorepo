@@ -417,6 +417,50 @@ func isScalarOrEnum(typeName string, typeIndex map[string]*FullType) bool {
 	return false
 }
 
+// ExecuteQuery runs an arbitrary GraphQL query against the endpoint using the
+// caller's auth context. Authorization is enforced by the GraphQL resolvers.
+func (c *Client) ExecuteQuery(ctx context.Context, query string, variables map[string]any) (json.RawMessage, error) {
+	authHeader, err := authHeaderFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	body := map[string]any{"query": query}
+	if len(variables) > 0 {
+		body["variables"] = variables
+	}
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.graphqlURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("query request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("query returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return json.RawMessage(respBody), nil
+}
+
 func authHeaderFromContext(ctx context.Context) (string, error) {
 	if ctx == nil {
 		return "", fmt.Errorf("missing auth context")

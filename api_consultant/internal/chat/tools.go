@@ -28,7 +28,7 @@ var ToolDefinitions = []ToolDefinition{
 					},
 					"limit": map[string]any{
 						"type":        "integer",
-						"description": "Maximum number of results to return (default 5).",
+						"description": "Maximum number of results to return (default 8).",
 					},
 					"tenant_scope": map[string]any{
 						"type":        "string",
@@ -52,7 +52,7 @@ var ToolDefinitions = []ToolDefinition{
 					},
 					"limit": map[string]any{
 						"type":        "integer",
-						"description": "Maximum number of results to return (default 5).",
+						"description": "Maximum number of results to return (default 8).",
 					},
 					"search_depth": map[string]any{
 						"type":        "string",

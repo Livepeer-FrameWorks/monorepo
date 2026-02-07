@@ -111,37 +111,40 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 ## Tools
 
-Actions the agent can perform. 27 tools across 11 categories.
+Actions the agent can perform. 30 tools across 12 categories.
 
-| Tool                        | Description                               | Requires          |
-| --------------------------- | ----------------------------------------- | ----------------- |
-| `update_billing_details`    | Set billing address                       | Auth              |
-| `get_payment_options`       | Get x402 payment options                  | None              |
-| `submit_payment`            | Submit x402 payment (auth-only or top-up) | None              |
-| `topup_balance`             | Request crypto deposit address            | Billing details   |
-| `check_topup`               | Check crypto payment status               | Auth              |
-| `create_stream`             | Create a new stream                       | Billing + Balance |
-| `update_stream`             | Update stream settings                    | Auth              |
-| `delete_stream`             | Delete a stream                           | Auth              |
-| `refresh_stream_key`        | Generate new stream key                   | Auth              |
-| `create_clip`               | Create clip from stream                   | Billing + Balance |
-| `delete_clip`               | Delete a clip                             | Auth              |
-| `start_dvr`                 | Start DVR recording                       | Billing + Balance |
-| `stop_dvr`                  | Stop DVR recording                        | Auth              |
-| `create_vod_upload`         | Start a VOD upload                        | Billing + Balance |
-| `complete_vod_upload`       | Finalize a VOD upload                     | Auth              |
-| `abort_vod_upload`          | Cancel an upload                          | Auth              |
-| `delete_vod_asset`          | Delete a VOD asset                        | Auth              |
-| `resolve_playback_endpoint` | Get viewer playback URLs                  | None              |
-| `diagnose_rebuffering`      | Analyze rebuffering events                | Auth              |
-| `diagnose_buffer_health`    | Analyze buffer health and dry events      | Auth              |
-| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)      | Auth              |
-| `diagnose_routing`          | Analyze CDN routing decisions             | Auth              |
-| `get_stream_health_summary` | Aggregated stream health metrics          | Auth              |
-| `get_anomaly_report`        | Detect anomalies vs baseline              | Auth              |
-| `search_support_history`    | Search support conversations              | Auth              |
-| `introspect_schema`         | Explore the GraphQL schema                | Auth              |
-| `generate_query`            | Generate a GraphQL query from templates   | Auth              |
+| Tool                        | Description                                   | Requires          |
+| --------------------------- | --------------------------------------------- | ----------------- |
+| `update_billing_details`    | Set billing address                           | Auth              |
+| `get_payment_options`       | Get x402 payment options                      | None              |
+| `submit_payment`            | Submit x402 payment (auth-only or top-up)     | None              |
+| `topup_balance`             | Request crypto deposit address                | Billing details   |
+| `check_topup`               | Check crypto payment status                   | Auth              |
+| `create_stream`             | Create a new stream                           | Billing + Balance |
+| `update_stream`             | Update stream settings                        | Auth              |
+| `delete_stream`             | Delete a stream                               | Auth              |
+| `refresh_stream_key`        | Generate new stream key                       | Auth              |
+| `create_clip`               | Create clip from stream                       | Billing + Balance |
+| `delete_clip`               | Delete a clip                                 | Auth              |
+| `start_dvr`                 | Start DVR recording                           | Billing + Balance |
+| `stop_dvr`                  | Stop DVR recording                            | Auth              |
+| `create_vod_upload`         | Start a VOD upload                            | Billing + Balance |
+| `complete_vod_upload`       | Finalize a VOD upload                         | Auth              |
+| `abort_vod_upload`          | Cancel an upload                              | Auth              |
+| `delete_vod_asset`          | Delete a VOD asset                            | Auth              |
+| `resolve_playback_endpoint` | Get viewer playback URLs                      | None              |
+| `diagnose_rebuffering`      | Analyze rebuffering events                    | Auth              |
+| `diagnose_buffer_health`    | Analyze buffer health and dry events          | Auth              |
+| `diagnose_packet_loss`      | Analyze packet loss (protocol-aware)          | Auth              |
+| `diagnose_routing`          | Analyze CDN routing decisions                 | Auth              |
+| `get_stream_health_summary` | Aggregated stream health metrics              | Auth              |
+| `get_anomaly_report`        | Detect anomalies vs baseline                  | Auth              |
+| `search_support_history`    | Search support conversations                  | Auth              |
+| `introspect_schema`         | Explore the GraphQL schema                    | Auth              |
+| `generate_query`            | Generate a GraphQL query from templates       | Auth              |
+| `execute_query`             | Execute a GraphQL query                       | Auth              |
+| `search_knowledge`          | Semantic search over Skipper's knowledge base | Auth              |
+| `search_web`                | Live web search via configured provider       | Auth              |
 
 Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`.
 
@@ -207,6 +210,23 @@ QoE tool responses use a consistent status enum: `healthy | warning | critical |
 - `field` (required): Field name or dot-separated path (e.g., `streams`, `stream.health`)
 - `operation`: `query`, `mutation`, or `subscription` (default `query`)
 
+**execute_query**
+
+- `query` (required): GraphQL query or mutation to execute
+- `variables`: Variables for the query
+
+**search_knowledge**
+
+- `query` (required): Search query to run against the knowledge base
+- `limit`: Maximum results to return (default 5)
+- `tenant_scope`: Scope to search — `tenant`, `global`, or `all` (default `all`)
+
+**search_web**
+
+- `query` (required): Search query to run against the web
+- `limit`: Maximum results to return (default 5)
+- `search_depth`: `basic` or `advanced` (default `basic`)
+
 ### Preflight Errors
 
 Billable tools check requirements before executing. See [Payments — Preflight Errors](/agents/payments#preflight-errors) for details on `BILLING_DETAILS_MISSING` and `INSUFFICIENT_BALANCE` responses.
@@ -228,13 +248,9 @@ Guided workflows for common tasks.
 
 ## Video Consultant
 
-The MCP server includes expert-level video streaming diagnostics. Use the `video_consultant` prompt to activate this mode, which guides your AI through available tools and knowledge sources.
+The MCP server includes [Skipper](/agents/skipper), an expert-level video streaming consultant. Use the `video_consultant` prompt to activate this mode, which guides your AI through available tools and knowledge sources.
 
-<Aside type="tip" title="Work in progress">
-  This is just the initial implementation of our MCP video consultant. There are follow-up RFC's
-  that will greatly enhance the knowledge and understanding of video tech for our integrated AI
-  assistant.
-</Aside>
+Use `search_knowledge` and `search_web` for targeted lookups, or the diagnostic tools below for stream-level troubleshooting.
 
 ### Knowledge Sources
 
@@ -252,6 +268,8 @@ Read `knowledge://sources` to get curated entry points for video streaming docum
 ```
 
 Your AI can navigate these sitemaps to find codec guides, protocol references, and troubleshooting steps.
+
+Skipper's full knowledge base also includes SRT (Haivision), HLS (RFC 8216), nginx-rtmp, and ecosystem sources (Livepeer, WebRTC, DASH). Use `search_knowledge` to query across all indexed documentation. See the [Skipper operator guide](/operators/skipper#knowledge-base) for the complete source list and how to add custom sources.
 
 ### Diagnostic Tools
 
@@ -292,5 +310,5 @@ Access past support conversations to find previous solutions:
 2. AI reads `account://status` and `streams://{id}/health`
 3. AI calls `diagnose_rebuffering` and `diagnose_buffer_health`
 4. AI searches `search_support_history("buffering")` for similar past issues
-5. AI reads relevant docs from `knowledge://sources`
+5. AI calls `search_knowledge("rebuffering troubleshooting")` for relevant documentation
 6. AI provides root cause analysis and encoder recommendations

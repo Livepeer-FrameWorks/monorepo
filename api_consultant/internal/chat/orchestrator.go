@@ -6,15 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
+
+	"time"
 
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/metering"
-	"frameworks/pkg/ctxkeys"
+	"frameworks/api_consultant/internal/skipper"
 	"frameworks/pkg/llm"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/tenants"
 )
 
 const defaultMaxToolRounds = 5
@@ -27,24 +27,36 @@ type GatewayToolCaller interface {
 }
 
 type OrchestratorConfig struct {
-	LLMProvider llm.Provider
-	Logger      logging.Logger
-	SearchWeb   *SearchWebTool
-	Knowledge   KnowledgeSearcher
-	Embedder    KnowledgeEmbedder
-	Gateway     GatewayToolCaller
-	MaxRounds   int
+	LLMProvider    llm.Provider
+	Logger         logging.Logger
+	SearchWeb      *SearchWebTool
+	Knowledge      KnowledgeSearcher
+	Embedder       KnowledgeEmbedder
+	Reranker       *knowledge.Reranker
+	QueryRewriter  *QueryRewriter
+	HyDE           *HyDEGenerator
+	Gateway        GatewayToolCaller
+	MaxRounds      int
+	SearchLimit    int
+	GlobalTenantID string
 }
 
+const defaultGlobalTenantID = "00000000-0000-0000-0000-000000000001"
+
 type Orchestrator struct {
-	llmProvider llm.Provider
-	logger      logging.Logger
-	searchWeb   *SearchWebTool
-	knowledge   KnowledgeSearcher
-	embedder    KnowledgeEmbedder
-	gateway     GatewayToolCaller
-	tools       []llm.Tool
-	maxRounds   int
+	llmProvider    llm.Provider
+	logger         logging.Logger
+	searchWeb      *SearchWebTool
+	knowledge      KnowledgeSearcher
+	embedder       KnowledgeEmbedder
+	reranker       *knowledge.Reranker
+	queryRewriter  *QueryRewriter
+	hyde           *HyDEGenerator
+	gateway        GatewayToolCaller
+	tools          []llm.Tool
+	maxRounds      int
+	searchLimit    int
+	globalTenantID string
 }
 
 type ToolDetail struct {
@@ -71,6 +83,14 @@ type TokenStreamer interface {
 	SendToken(token string) error
 }
 
+// ToolEventStreamer is an optional extension of TokenStreamer that allows the
+// orchestrator to emit tool lifecycle events during streaming. Implementations
+// that also satisfy this interface will receive tool_start/tool_end calls.
+type ToolEventStreamer interface {
+	SendToolStart(toolName string) error
+	SendToolEnd(toolName string, errMsg string) error
+}
+
 type ToolOutcome struct {
 	Content string
 	Sources []Source
@@ -79,6 +99,7 @@ type ToolOutcome struct {
 
 type KnowledgeSearcher interface {
 	Search(ctx context.Context, tenantID string, embedding []float32, limit int) ([]knowledge.Chunk, error)
+	HybridSearch(ctx context.Context, tenantID string, embedding []float32, query string, limit int) ([]knowledge.Chunk, error)
 }
 
 type KnowledgeEmbedder interface {
@@ -103,15 +124,28 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	if maxRounds <= 0 {
 		maxRounds = defaultMaxToolRounds
 	}
+	searchLimit := cfg.SearchLimit
+	if searchLimit <= 0 {
+		searchLimit = defaultSearchLimit
+	}
+	globalTenantID := cfg.GlobalTenantID
+	if globalTenantID == "" {
+		globalTenantID = defaultGlobalTenantID
+	}
 	return &Orchestrator{
-		llmProvider: cfg.LLMProvider,
-		logger:      cfg.Logger,
-		searchWeb:   cfg.SearchWeb,
-		knowledge:   cfg.Knowledge,
-		embedder:    cfg.Embedder,
-		gateway:     cfg.Gateway,
-		tools:       tools,
-		maxRounds:   maxRounds,
+		llmProvider:    cfg.LLMProvider,
+		logger:         cfg.Logger,
+		searchWeb:      cfg.SearchWeb,
+		knowledge:      cfg.Knowledge,
+		embedder:       cfg.Embedder,
+		reranker:       cfg.Reranker,
+		queryRewriter:  cfg.QueryRewriter,
+		hyde:           cfg.HyDE,
+		gateway:        cfg.Gateway,
+		tools:          tools,
+		maxRounds:      maxRounds,
+		searchLimit:    searchLimit,
+		globalTenantID: globalTenantID,
 	}
 }
 
@@ -127,14 +161,36 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 	inputTokens := 0
 	filter := newConfidenceStreamFilter(streamer)
 
+	// Pre-retrieval: auto-search knowledge base using the user's last message
+	// before the first LLM call to save a round-trip.
+	if o.knowledge != nil && o.embedder != nil && len(messages) > 0 {
+		userMsg := messages[len(messages)-1]
+		if userMsg.Role == "user" && strings.TrimSpace(userMsg.Content) != "" {
+			preResult := o.preRetrieve(ctx, userMsg.Content)
+			if preResult.Context != "" {
+				// Inject context into the system message
+				for i, msg := range messages {
+					if msg.Role == "system" {
+						messages[i].Content += "\n\n--- Pre-retrieved knowledge context ---\n" + preResult.Context
+						break
+					}
+				}
+				sources = appendSources(sources, preResult.Sources)
+			}
+		}
+	}
+
 	for round := 0; round < o.maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return OrchestratorResult{}, err
 		}
 
 		inputTokens += countTokensInMessages(messages)
+		llmStart := time.Now()
 		stream, err := o.llmProvider.Complete(ctx, messages, o.tools)
 		if err != nil {
+			llmCallsTotal.WithLabelValues("error").Inc()
+			llmDuration.Observe(time.Since(llmStart).Seconds())
 			return OrchestratorResult{}, err
 		}
 
@@ -160,6 +216,8 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			}
 		}
 		_ = stream.Close()
+		llmCallsTotal.WithLabelValues("success").Inc()
+		llmDuration.Observe(time.Since(llmStart).Seconds())
 		if err := filter.Flush(); err != nil {
 			return OrchestratorResult{}, err
 		}
@@ -168,17 +226,23 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			break
 		}
 
+		tes, _ := streamer.(ToolEventStreamer)
 		for _, call := range pendingToolCalls {
+			if tes != nil {
+				_ = tes.SendToolStart(call.Name)
+			}
 			outcome, err := o.executeTool(ctx, call)
 			record := ToolCallRecord{Name: call.Name}
 			if call.Arguments != "" {
 				record.Arguments = json.RawMessage(call.Arguments)
 			}
+			errMsg := ""
 			if err != nil {
 				if o.logger != nil {
 					o.logger.WithError(err).WithField("tool", call.Name).Warn("Skipper tool execution failed")
 				}
 				record.Error = err.Error()
+				errMsg = err.Error()
 				outcome = ToolOutcome{
 					Content: fmt.Sprintf("Tool %s failed: %v", call.Name, err),
 					Detail: ToolDetail{
@@ -186,6 +250,9 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 						Payload: map[string]any{"error": err.Error()},
 					},
 				}
+			}
+			if tes != nil {
+				_ = tes.SendToolEnd(call.Name, errMsg)
 			}
 			toolCalls = append(toolCalls, record)
 			if outcome.Content != "" {
@@ -218,6 +285,10 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		confidence = ConfidenceUnknown
 	}
 
+	outputTokens := estimateTokens(content)
+	llmTokensTotal.WithLabelValues("input").Add(float64(inputTokens))
+	llmTokensTotal.WithLabelValues("output").Add(float64(outputTokens))
+
 	return OrchestratorResult{
 		Content:    content,
 		Confidence: confidence,
@@ -226,12 +297,38 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		Details:    details,
 		TokenCounts: TokenCounts{
 			Input:  inputTokens,
-			Output: estimateTokens(content),
+			Output: outputTokens,
 		},
 	}, nil
 }
 
+// docsAllowedTools lists tools permitted when mode=docs.
+// Read-only search, introspection, stream reads, and diagnostic tools only;
+// all mutation tools blocked.
+var docsAllowedTools = map[string]bool{
+	"search_knowledge":          true,
+	"search_web":                true,
+	"introspect_schema":         true,
+	"generate_query":            true,
+	"get_stream":                true,
+	"list_streams":              true,
+	"get_stream_health":         true,
+	"get_stream_metrics":        true,
+	"check_stream_health":       true,
+	"diagnose_rebuffering":      true,
+	"diagnose_buffer_health":    true,
+	"diagnose_packet_loss":      true,
+	"diagnose_routing":          true,
+	"get_stream_health_summary": true,
+	"get_anomaly_report":        true,
+}
+
 func (o *Orchestrator) executeTool(ctx context.Context, call llm.ToolCall) (ToolOutcome, error) {
+	if skipper.GetMode(ctx) == "docs" && !docsAllowedTools[call.Name] {
+		return ToolOutcome{
+			Content: fmt.Sprintf("Tool %q is not available in documentation mode.", call.Name),
+		}, nil
+	}
 	switch call.Name {
 	case "search_knowledge":
 		return o.searchKnowledge(ctx, call.Arguments)
@@ -278,10 +375,12 @@ type SearchKnowledgeInput struct {
 }
 
 type SearchKnowledgeResult struct {
-	Title      string  `json:"title"`
-	URL        string  `json:"url"`
-	Snippet    string  `json:"snippet,omitempty"`
-	Similarity float64 `json:"similarity,omitempty"`
+	Title          string  `json:"title"`
+	URL            string  `json:"url"`
+	Snippet        string  `json:"snippet,omitempty"`
+	Similarity     float64 `json:"similarity,omitempty"`
+	SourceType     string  `json:"source_type,omitempty"`
+	SectionHeading string  `json:"section_heading,omitempty"`
 }
 
 type SearchKnowledgeResponse struct {
@@ -289,6 +388,42 @@ type SearchKnowledgeResponse struct {
 	Context string                  `json:"context"`
 	Results []SearchKnowledgeResult `json:"results"`
 	Sources []Source                `json:"sources"`
+}
+
+// preRetrieve runs a quick knowledge search using the user's message and
+// returns formatted context. Errors are silently ignored — pre-retrieval is
+// best-effort and the LLM can still call search_knowledge explicitly.
+func (o *Orchestrator) preRetrieve(ctx context.Context, query string) SearchKnowledgeResponse {
+	start := time.Now()
+	embedding, err := o.embedder.EmbedQuery(ctx, query)
+	if err != nil {
+		return SearchKnowledgeResponse{}
+	}
+	tenantIDs := o.resolveKnowledgeTenants(ctx, "all")
+	if len(tenantIDs) == 0 {
+		return SearchKnowledgeResponse{}
+	}
+	var chunks []knowledge.Chunk
+	for _, tid := range tenantIDs {
+		results, err := o.knowledge.HybridSearch(ctx, tid, embedding, query, 5)
+		if err != nil {
+			continue
+		}
+		chunks = append(chunks, results...)
+	}
+	if o.reranker != nil {
+		chunks = o.reranker.Rerank(ctx, query, chunks)
+	} else {
+		chunks = knowledge.Rerank(query, chunks)
+	}
+	chunks = knowledge.DeduplicateBySource(chunks, 3, 2)
+	searchQueriesTotal.WithLabelValues("pre_retrieval").Inc()
+	searchDuration.Observe(time.Since(start).Seconds())
+	searchResultsCount.Observe(float64(len(chunks)))
+	if len(chunks) == 0 {
+		return SearchKnowledgeResponse{}
+	}
+	return mapKnowledgeResponse(query, chunks)
 }
 
 func (o *Orchestrator) searchKnowledge(ctx context.Context, arguments string) (ToolOutcome, error) {
@@ -306,35 +441,59 @@ func (o *Orchestrator) searchKnowledge(ctx context.Context, arguments string) (T
 
 	limit := input.Limit
 	if limit <= 0 {
-		limit = defaultSearchLimit
+		limit = o.searchLimit
 	}
 
-	tenantIDs := resolveKnowledgeTenants(ctx, input.TenantScope)
+	tenantIDs := o.resolveKnowledgeTenants(ctx, input.TenantScope)
 	if len(tenantIDs) == 0 {
 		return ToolOutcome{}, errors.New("tenant id is required")
 	}
 
-	embedding, err := o.embedder.EmbedQuery(ctx, query)
-	if err != nil {
-		return ToolOutcome{}, err
+	// Rewrite the conversational query into a search-optimized form.
+	searchQuery := query
+	if o.queryRewriter != nil {
+		searchQuery = o.queryRewriter.Rewrite(ctx, query)
+	}
+
+	searchStart := time.Now()
+
+	// Use HyDE embedding when enabled; fall back to regular query embedding.
+	var embedding []float32
+	if o.hyde != nil {
+		hydeVec, hydeErr := o.hyde.GenerateAndEmbed(ctx, searchQuery)
+		if hydeErr == nil && hydeVec != nil {
+			embedding = hydeVec
+		}
+	}
+	if embedding == nil {
+		var err error
+		embedding, err = o.embedder.EmbedQuery(ctx, searchQuery)
+		if err != nil {
+			return ToolOutcome{}, err
+		}
 	}
 	metering.RecordEmbedding(ctx)
 	metering.RecordSearchQuery(ctx)
 
+	// Over-fetch 3x to allow source-level deduplication and reranking.
+	fetchLimit := limit * 3
 	var chunks []knowledge.Chunk
 	for _, tenantID := range tenantIDs {
-		results, err := o.knowledge.Search(ctx, tenantID, embedding, limit)
+		results, err := o.knowledge.HybridSearch(ctx, tenantID, embedding, searchQuery, fetchLimit)
 		if err != nil {
 			return ToolOutcome{}, err
 		}
 		chunks = append(chunks, results...)
 	}
-	sort.Slice(chunks, func(i, j int) bool {
-		return chunks[i].Similarity > chunks[j].Similarity
-	})
-	if len(chunks) > limit {
-		chunks = chunks[:limit]
+	if o.reranker != nil {
+		chunks = o.reranker.Rerank(ctx, searchQuery, chunks)
+	} else {
+		chunks = knowledge.Rerank(searchQuery, chunks)
 	}
+	chunks = knowledge.DeduplicateBySource(chunks, limit, 2)
+	searchQueriesTotal.WithLabelValues("tool_call").Inc()
+	searchDuration.Observe(time.Since(searchStart).Seconds())
+	searchResultsCount.Observe(float64(len(chunks)))
 
 	response := mapKnowledgeResponse(query, chunks)
 	return ToolOutcome{
@@ -347,19 +506,19 @@ func (o *Orchestrator) searchKnowledge(ctx context.Context, arguments string) (T
 	}, nil
 }
 
-func resolveKnowledgeTenants(ctx context.Context, scope string) []string {
-	tenantID := ctxkeys.GetTenantID(ctx)
+func (o *Orchestrator) resolveKnowledgeTenants(ctx context.Context, scope string) []string {
+	tenantID := skipper.GetTenantID(ctx)
 	scope = strings.ToLower(strings.TrimSpace(scope))
 	switch scope {
 	case "global":
-		return []string{tenants.SystemTenantID.String()}
+		return []string{o.globalTenantID}
 	case "all":
 		if tenantID == "" {
-			return []string{tenants.SystemTenantID.String()}
+			return []string{o.globalTenantID}
 		}
 		return []string{
 			tenantID,
-			tenants.SystemTenantID.String(),
+			o.globalTenantID,
 		}
 	default:
 		if tenantID == "" {
@@ -377,12 +536,18 @@ func mapKnowledgeResponse(query string, chunks []knowledge.Chunk) SearchKnowledg
 		if title == "" {
 			title = chunk.SourceURL
 		}
-		snippet := snippetFromContent(chunk.Text)
+		sourceType := "Knowledge Base"
+		if st, ok := chunk.Metadata["source_type"].(string); ok && st != "" {
+			sourceType = st
+		}
+		heading := extractSectionHeading(chunk.Text)
 		results = append(results, SearchKnowledgeResult{
-			Title:      title,
-			URL:        chunk.SourceURL,
-			Snippet:    snippet,
-			Similarity: chunk.Similarity,
+			Title:          title,
+			URL:            chunk.SourceURL,
+			Snippet:        chunk.Text,
+			Similarity:     chunk.Similarity,
+			SourceType:     sourceType,
+			SectionHeading: heading,
 		})
 		sources = append(sources, Source{
 			Title: title,
@@ -398,22 +563,40 @@ func mapKnowledgeResponse(query string, chunks []knowledge.Chunk) SearchKnowledg
 	}
 }
 
+func extractSectionHeading(text string) string {
+	for _, line := range strings.SplitN(text, "\n", 5) {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			return strings.TrimSpace(strings.TrimLeft(line, "#"))
+		}
+	}
+	return ""
+}
+
 func formatKnowledgeContext(results []SearchKnowledgeResult) string {
 	if len(results) == 0 {
 		return "No knowledge base results found."
 	}
 	var builder strings.Builder
-	builder.WriteString("Knowledge base results:\n")
+	builder.WriteString("Knowledge base results:\n\n")
 	for i, result := range results {
-		fmt.Fprintf(&builder, "%d. %s\n", i+1, result.Title)
+		label := result.Title
+		if result.SourceType != "" {
+			label = result.SourceType + ": " + label
+		}
+		if result.SectionHeading != "" {
+			label += " > " + result.SectionHeading
+		}
+		fmt.Fprintf(&builder, "[%d. %s | Relevance: %.2f]\n", i+1, label, result.Similarity)
 		if result.URL != "" {
-			fmt.Fprintf(&builder, "URL: %s\n", result.URL)
+			fmt.Fprintf(&builder, "Source: %s\n", result.URL)
 		}
 		if result.Snippet != "" {
-			fmt.Fprintf(&builder, "Snippet: %s\n", result.Snippet)
+			builder.WriteString(result.Snippet)
+			builder.WriteString("\n")
 		}
 		if i < len(results)-1 {
-			builder.WriteString("\n")
+			builder.WriteString("---\n")
 		}
 	}
 	return strings.TrimSpace(builder.String())
@@ -422,6 +605,26 @@ func formatKnowledgeContext(results []SearchKnowledgeResult) string {
 func (o *Orchestrator) searchWebTool(ctx context.Context, arguments string) (ToolOutcome, error) {
 	if o.searchWeb == nil {
 		return ToolOutcome{}, errors.New("search provider unavailable")
+	}
+	// Rewrite the query before passing to the web search provider.
+	if o.queryRewriter != nil {
+		var input struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &input); err == nil && input.Query != "" {
+			rewritten := o.queryRewriter.Rewrite(ctx, input.Query)
+			if rewritten != input.Query {
+				var raw map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(arguments), &raw); err == nil {
+					if b, err := json.Marshal(rewritten); err == nil {
+						raw["query"] = b
+						if patched, err := json.Marshal(raw); err == nil {
+							arguments = string(patched)
+						}
+					}
+				}
+			}
+		}
 	}
 	response, err := o.searchWeb.Call(ctx, arguments)
 	if err != nil {

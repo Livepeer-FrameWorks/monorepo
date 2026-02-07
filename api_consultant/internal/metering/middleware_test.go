@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"frameworks/pkg/ctxkeys"
+	"frameworks/api_consultant/internal/skipper"
 	pb "frameworks/pkg/proto"
 
 	"github.com/gin-gonic/gin"
@@ -27,7 +27,7 @@ func TestAccessMiddlewareRejectsNonPremium(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set(string(ctxkeys.KeyTenantID), "tenant-a")
+		c.Request = c.Request.WithContext(skipper.WithTenantID(c.Request.Context(), "tenant-a"))
 		c.Next()
 	})
 
@@ -56,7 +56,7 @@ func TestAccessMiddlewareRateLimits(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set(string(ctxkeys.KeyTenantID), "tenant-a")
+		c.Request = c.Request.WithContext(skipper.WithTenantID(c.Request.Context(), "tenant-a"))
 		c.Next()
 	})
 
@@ -84,5 +84,55 @@ func TestAccessMiddlewareRateLimits(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d", rec.Code)
+	}
+}
+
+func TestAccessMiddlewareFailsClosedWhenPurserNilButTierRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(skipper.WithTenantID(c.Request.Context(), "tenant-a"))
+		c.Next()
+	})
+
+	router.Use(AccessMiddleware(AccessMiddlewareConfig{
+		Purser:            nil,
+		RequiredTierLevel: 3,
+	}))
+	router.GET("/api/skipper/chat", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/skipper/chat", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when Purser nil but tier required, got %d", rec.Code)
+	}
+}
+
+func TestAccessMiddlewareSkipsBillingWhenTierNotRequired(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(skipper.WithTenantID(c.Request.Context(), "tenant-a"))
+		c.Next()
+	})
+
+	router.Use(AccessMiddleware(AccessMiddlewareConfig{
+		Purser:            nil,
+		RequiredTierLevel: 0,
+	}))
+	router.GET("/api/skipper/chat", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/skipper/chat", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 when billing disabled (tier=0, Purser=nil), got %d", rec.Code)
 	}
 }

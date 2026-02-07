@@ -317,6 +317,9 @@ func computeDerived(env map[string]string) error {
 	if errSet := setGRPCAddr(env, "DECKHAND_GRPC_ADDR", "DECKHAND_HOST", "DECKHAND_GRPC_PORT"); errSet != nil {
 		return errSet
 	}
+	if errSet := setGRPCAddr(env, "SKIPPER_GRPC_ADDR", "SKIPPER_HOST", "SKIPPER_GRPC_PORT"); errSet != nil {
+		return errSet
+	}
 
 	foghornControlPort, err := require(env, "FOGHORN_CONTROL_PORT")
 	if err != nil {

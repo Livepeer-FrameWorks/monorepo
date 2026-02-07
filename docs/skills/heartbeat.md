@@ -1,7 +1,7 @@
 # FrameWorks Heartbeat
 
 Periodic check routine for agents managing live streaming infrastructure.
-Load this file on demand — the summary in [skill.md](https://frameworks.network/skill.md) is sufficient for most sessions.
+Load this file on demand — the summary in [skill.md](https://frameworks.network/SKILL.md) is sufficient for most sessions.
 
 ## Schedule
 
@@ -50,7 +50,7 @@ Read `streams://list` (MCP) or query `streams` (GraphQL). For each stream where 
 
 Fetch `skill.json` and compare `version` field against last known version.
 
-- If version changed, re-read `skill.md` to pick up new capabilities or behavioral changes.
+- If version changed, re-read `SKILL.md` to pick up new capabilities or behavioral changes.
 - This check is low-priority — once per day is sufficient.
 
 ## Output Rules

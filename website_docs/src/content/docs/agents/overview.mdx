@@ -17,6 +17,7 @@ FrameWorks is an MCP-native live streaming platform. AI agents can discover, aut
   />
   <LinkCard title="Payments" href="/agents/payments" description="x402 and crypto top-ups." />
   <LinkCard title="MCP Reference" href="/agents/mcp" description="Tools, resources, and prompts." />
+  <LinkCard title="Skipper" href="/agents/skipper" description="AI video streaming consultant." />
 </CardGrid>
 
 ## Quick Start
@@ -42,7 +43,7 @@ FrameWorks publishes metadata following the [Agent Skills](https://agentskills.i
 | [`/.well-known/oauth-protected-resource`](%GATEWAY_URL%/.well-known/oauth-protected-resource) | RFC 8707     | OAuth resource metadata with wallet and x402 extensions                 |
 | [`/.well-known/security.txt`](%GATEWAY_URL%/.well-known/security.txt)                         | RFC 9116     | Security contact and advisories                                         |
 | [`/skill.json`](%MARKETING_URL%/skill.json)                                                   | Agent Skills | Machine-readable skill metadata (name, auth, endpoints, keywords)       |
-| [`/skill.md`](%MARKETING_URL%/skill.md)                                                       | Agent Skills | Human/LLM-readable quick-start guide                                    |
+| [`/SKILL.md`](%MARKETING_URL%/SKILL.md)                                                       | Agent Skills | Human/LLM-readable quick-start guide                                    |
 | [`/llms.txt`](%MARKETING_URL%/llms.txt)                                                       | Emerging     | LLM-friendly documentation index                                        |
 | `/robots.txt`                                                                                 | Standard     | Crawler directives (allows AI bots)                                     |
 
@@ -57,6 +58,29 @@ The primary machine-readable entry point. Compatible with [OpenClaw](https://doc
 Agents that speak MCP can use `/.well-known/mcp.json` directly for full server discovery — endpoint, transports, auth schemes, public operations, and capabilities.
 
 > **Live file:** [`%GATEWAY_URL%/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json)
+
+### Local Skill Installation
+
+Install as a local skill for coding agents:
+
+```bash
+# Claude Code
+mkdir -p ~/.claude/skills/frameworks-network
+curl -o ~/.claude/skills/frameworks-network/SKILL.md %MARKETING_URL%/SKILL.md
+
+# OpenClaw (via ClawHub)
+clawhub install frameworks-network
+
+# OpenClaw (manual)
+mkdir -p ~/.openclaw/skills/frameworks-network
+curl -o ~/.openclaw/skills/frameworks-network/SKILL.md %MARKETING_URL%/SKILL.md
+
+# Gemini CLI / Cursor / other Agent Skills consumers
+mkdir -p ./skills/frameworks-network
+curl -o ./skills/frameworks-network/SKILL.md %MARKETING_URL%/SKILL.md
+```
+
+Once installed, the agent can activate the skill on demand to connect to and operate FrameWorks.
 
 ## Authentication Methods
 
@@ -85,4 +109,4 @@ What agents can do via MCP:
 | **Support**         | Search past conversations                                   |
 | **API Exploration** | Introspect GraphQL schema, generate queries from templates  |
 
-See the full [MCP Reference](/agents/mcp) for all 27 tools, 18 resources, and 8 prompts.
+See the full [MCP Reference](/agents/mcp) for all 30 tools, 18 resources, and 8 prompts.

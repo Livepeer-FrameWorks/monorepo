@@ -43,6 +43,10 @@ func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) err
 		fromHeader = fmt.Sprintf("%s <%s>", s.config.FromName, s.config.From)
 	}
 
+	fromHeader = sanitizeHeader(fromHeader)
+	to = sanitizeHeader(to)
+	subject = sanitizeHeader(subject)
+
 	msg := []string{
 		fmt.Sprintf("From: %s", fromHeader),
 		fmt.Sprintf("To: %s", to),
@@ -89,4 +93,10 @@ func (s *Sender) SendMail(ctx context.Context, to, subject, htmlBody string) err
 	}
 
 	return c.Quit()
+}
+
+func sanitizeHeader(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	return s
 }

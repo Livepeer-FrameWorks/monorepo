@@ -12,6 +12,7 @@ profiles:
     - navigator
     - helmsman
     - steward
+    - skipper
     - chartroom
     - foredeck
     - logbook
@@ -153,6 +154,16 @@ services:
       protocol: http
       path: /health
       port: 18032
+  skipper:
+    name: skipper
+    title: Skipper (AI Consultant)
+    role: support
+    image: ghcr.io/livepeer-frameworks/frameworks-skipper:latest
+    ports: ["18018:18018", "19007:19007"]
+    health:
+      protocol: http
+      path: /health
+      port: 18018
   chartroom:
     name: chartroom
     title: Chartroom (Dashboard)

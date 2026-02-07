@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Provider interface {
@@ -82,6 +84,90 @@ func (s *sseStream) Recv() (Chunk, error) {
 		}
 		return chunk, nil
 	}
+}
+
+const (
+	maxRetries     = 3
+	retryBaseDelay = 1 * time.Second
+)
+
+func isRetryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests ||
+		code == http.StatusInternalServerError ||
+		code == http.StatusBadGateway ||
+		code == http.StatusServiceUnavailable ||
+		code == http.StatusGatewayTimeout
+}
+
+// doWithRetry executes an HTTP request with exponential backoff on retryable
+// errors (429, 500-504, connection errors). It respects the Retry-After
+// header and the context deadline.
+func doWithRetry(ctx context.Context, client *http.Client, buildReq func() (*http.Request, error)) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		req, err := buildReq()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				backoff(ctx, attempt, nil)
+				continue
+			}
+			return nil, err
+		}
+		if !isRetryableStatus(resp.StatusCode) {
+			return resp, nil
+		}
+		lastErr = &retryableError{statusCode: resp.StatusCode}
+		retryAfter := resp.Header.Get("Retry-After")
+		_ = resp.Body.Close()
+		if attempt < maxRetries {
+			backoff(ctx, attempt, parseRetryAfter(retryAfter))
+		}
+	}
+	return nil, lastErr
+}
+
+type retryableError struct {
+	statusCode int
+}
+
+func (e *retryableError) Error() string {
+	return "retryable HTTP status: " + strconv.Itoa(e.statusCode)
+}
+
+func backoff(ctx context.Context, attempt int, retryAfter *time.Duration) {
+	delay := retryBaseDelay * (1 << attempt)
+	if retryAfter != nil && *retryAfter > delay {
+		delay = *retryAfter
+	}
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+}
+
+func parseRetryAfter(value string) *time.Duration {
+	if value == "" {
+		return nil
+	}
+	seconds, err := strconv.Atoi(value)
+	if err == nil && seconds > 0 {
+		d := time.Duration(seconds) * time.Second
+		return &d
+	}
+	return nil
 }
 
 func (s *sseStream) readEvent() ([]byte, error) {

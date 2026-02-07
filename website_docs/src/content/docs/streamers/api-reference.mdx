@@ -2,7 +2,7 @@
 title: "API Reference"
 description: "Integrate with FrameWorks using our GraphQL API."
 sidebar:
-  order: 4
+  order: 5
 ---
 
 import { Aside } from "@astrojs/starlight/components";
@@ -244,22 +244,38 @@ Common codes:
 - `NOT_FOUND` - Resource doesn't exist
 - `VALIDATION_ERROR` - Invalid input
 
-## SDKs
+## Building Queries
 
-No official GraphQL SDK yet. Use any GraphQL client in your language of choice. An API Client SDK is planned (see **Developer → SDKs**).
+The fastest way to build queries for your integration:
 
-JavaScript example with `graphql-request`:
+1. **API Explorer** — Go to **Developer → API** in the dashboard. The built-in GraphQL explorer has full schema docs, autocompletion, and lets you run queries against your account. Copy working queries directly into your code.
+2. **Ask Skipper** — Tell Skipper what you want to do (e.g. "create a stream from Python" or "list my clips with curl") and it will generate a working snippet in your language, using the live schema.
+
+Both tools stay in sync with the actual schema, so the queries they produce always work.
+
+### Quick Reference
+
+The examples below show the general pattern for calling the API from common languages. For the exact query fields you need, use the API Explorer or ask Skipper.
+
+**curl:**
+
+```bash
+curl -X POST %GATEWAY_URL%/graphql \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"query": "{ streamsConnection(page: { first: 5 }) { edges { node { id name playbackId } } } }"}'
+```
+
+**JavaScript** (using `graphql-request`):
 
 ```javascript
 import { GraphQLClient, gql } from "graphql-request";
 
 const client = new GraphQLClient("%GATEWAY_URL%/graphql", {
-  headers: {
-    Authorization: "Bearer YOUR_TOKEN",
-  },
+  headers: { Authorization: "Bearer YOUR_TOKEN" },
 });
 
-const query = gql`
+const data = await client.request(gql`
   query {
     streamsConnection(page: { first: 5 }) {
       edges {
@@ -271,15 +287,39 @@ const query = gql`
       }
     }
   }
-`;
-
-const data = await client.request(query);
-console.log(data.streamsConnection.edges.map((e) => e.node));
+`);
 ```
+
+**Python** (using `httpx` or `requests`):
+
+```python
+import httpx
+
+resp = httpx.post(
+    "%GATEWAY_URL%/graphql",
+    headers={"Authorization": "Bearer YOUR_TOKEN"},
+    json={"query": "{ streamsConnection(page: { first: 5 }) { edges { node { id name playbackId } } } }"},
+)
+print(resp.json()["data"])
+```
+
+**Go:**
+
+```go
+body, _ := json.Marshal(map[string]string{
+    "query": `{ streamsConnection(page: { first: 5 }) { edges { node { id name playbackId } } } }`,
+})
+req, _ := http.NewRequest("POST", "%GATEWAY_URL%/graphql", bytes.NewReader(body))
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("Authorization", "Bearer YOUR_TOKEN")
+resp, _ := http.DefaultClient.Do(req)
+```
+
+No official GraphQL SDK yet — use any GraphQL client in your language. An API Client SDK is planned.
 
 ## Schema Reference
 
-The full schema is available via introspection. In any GraphQL client, run:
+The full schema is available via introspection:
 
 ```graphql
 {
@@ -292,4 +332,4 @@ The full schema is available via introspection. In any GraphQL client, run:
 }
 ```
 
-Or use the dashboard's API Explorer which shows docs inline.
+Or use the dashboard's **API Explorer** (Developer → API) which shows docs inline.

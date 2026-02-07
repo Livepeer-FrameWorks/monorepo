@@ -58,15 +58,20 @@ func parseBehavior(behaviorStr string) *pb.BehaviorData {
 
 // AuthHandlers handles authentication requests using gRPC client
 type AuthHandlers struct {
-	commodore *commodore.GRPCClient
-	logger    logging.Logger
+	commodore    *commodore.GRPCClient
+	logger       logging.Logger
+	cookieDomain string
 }
 
-// NewAuthHandlers creates a new auth handlers instance
+// NewAuthHandlers creates a new auth handlers instance.
+// COOKIE_DOMAIN controls the Domain attribute on auth cookies.
+// Leave empty for single-domain deployments (default).
+// Set to ".example.com" for cross-subdomain cookie sharing (e.g. docs site).
 func NewAuthHandlers(commodoreClient *commodore.GRPCClient, logger logging.Logger) *AuthHandlers {
 	return &AuthHandlers{
-		commodore: commodoreClient,
-		logger:    logger,
+		commodore:    commodoreClient,
+		logger:       logger,
+		cookieDomain: os.Getenv("COOKIE_DOMAIN"),
 	}
 }
 
@@ -112,19 +117,19 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 		// Access token - short-lived, httpOnly
 		if resp.Token != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(accessTokenCookie, resp.Token, accessTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(accessTokenCookie, resp.Token, accessTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Refresh token - long-lived, httpOnly
 		if resp.RefreshToken != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(refreshTokenCookie, resp.RefreshToken, refreshTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(refreshTokenCookie, resp.RefreshToken, refreshTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Tenant ID - needed for multi-tenant isolation, httpOnly
 		if resp.User != nil && resp.User.TenantId != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(tenantIDCookie, resp.User.TenantId, accessTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(tenantIDCookie, resp.User.TenantId, accessTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Return user data (no tokens in body for security)
@@ -211,19 +216,19 @@ func (h *AuthHandlers) WalletLogin() gin.HandlerFunc {
 		// Access token - short-lived, httpOnly
 		if resp.Token != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(accessTokenCookie, resp.Token, accessTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(accessTokenCookie, resp.Token, accessTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Refresh token - long-lived, httpOnly
 		if resp.RefreshToken != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(refreshTokenCookie, resp.RefreshToken, refreshTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(refreshTokenCookie, resp.RefreshToken, refreshTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Tenant ID - needed for multi-tenant isolation, httpOnly
 		if resp.User != nil && resp.User.TenantId != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(tenantIDCookie, resp.User.TenantId, accessTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(tenantIDCookie, resp.User.TenantId, accessTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Return user data (no tokens in body for security)
@@ -340,10 +345,10 @@ func (h *AuthHandlers) Logout() gin.HandlerFunc {
 			return
 		}
 
-		// Clear all auth cookies
-		c.SetCookie(accessTokenCookie, "", -1, "/", "", false, true)
-		c.SetCookie(refreshTokenCookie, "", -1, "/", "", false, true)
-		c.SetCookie(tenantIDCookie, "", -1, "/", "", false, true)
+		// Clear all auth cookies (must match domain to actually clear)
+		c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, false, true)
+		c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, false, true)
+		c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, false, true)
 
 		c.JSON(http.StatusOK, gin.H{
 			"success": resp.Success,
@@ -366,7 +371,7 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 		if err != nil {
 			h.logger.WithError(err).Debug("Token refresh failed")
 			// Clear invalid cookie
-			c.SetCookie(refreshTokenCookie, "", -1, "/", "", false, true)
+			c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, false, true)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
 			return
 		}
@@ -382,19 +387,19 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 		// Access token - short-lived, httpOnly
 		if resp.Token != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(accessTokenCookie, resp.Token, accessTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(accessTokenCookie, resp.Token, accessTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Refresh token - token rotation for security
 		if resp.RefreshToken != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(refreshTokenCookie, resp.RefreshToken, refreshTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(refreshTokenCookie, resp.RefreshToken, refreshTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Tenant ID - refresh in case user switched tenants
 		if resp.User != nil && resp.User.TenantId != "" {
 			c.SetSameSite(sameSite)
-			c.SetCookie(tenantIDCookie, resp.User.TenantId, accessTokenMaxAge, "/", "", secure, true)
+			c.SetCookie(tenantIDCookie, resp.User.TenantId, accessTokenMaxAge, "/", h.cookieDomain, secure, true)
 		}
 
 		// Return user data (no tokens in body for security)

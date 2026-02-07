@@ -26,7 +26,7 @@ Programmatic access for AI agents and autonomous clients: wallet auth, prepaid b
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Gateway MCP (Hub)  bridge:18000/mcp           │
 │                                                                 │
-│  27 own tools + 2 proxied from Skipper spoke                    │
+│  28 own tools + 2 proxied from Skipper spoke                    │
 │  (search_knowledge, search_web)                                 │
 └─────────────────────────────────────────────────────────────────┘
          │                    │                    │
@@ -70,7 +70,7 @@ Public metadata served by the API gateway for agent and skill discovery. Source 
 | `/.well-known/oauth-protected-resource` | RFC 8707     | OAuth resource metadata with wallet/x402 extensions   |
 | `/.well-known/security.txt`             | RFC 9116     | Security contact and advisories                       |
 | `/skill.json`                           | Agent Skills | Machine-readable skill metadata                       |
-| `/skill.md`                             | Agent Skills | Human/LLM-readable quick-start guide                  |
+| `/SKILL.md`                             | Agent Skills | Human/LLM-readable quick-start guide                  |
 | `/llms.txt`                             | Emerging     | LLM-friendly documentation index                      |
 | `/robots.txt`                           | Standard     | Crawler directives (allows AI bots)                   |
 
@@ -282,7 +282,7 @@ Single private key used on all EVM chains (same address everywhere):
 
 Model Context Protocol integration for AI agent tool discovery, integrated into Gateway.
 
-**Summary**: 29 tools (12 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 27 tools directly and proxies 2 tools from the Skipper spoke.
+**Summary**: 30 tools (12 categories), 18 resources (9 categories), 8 prompts. The Gateway acts as a **hub** — it owns 28 tools directly and proxies 2 tools from the Skipper spoke.
 
 | Category        | Tools                                                                              | Resources                                                            | Source        |
 | --------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------- |
@@ -298,7 +298,7 @@ Model Context Protocol integration for AI agent tool discovery, integrated into 
 | QoE Diagnostics | 6 tools (`diagnose_*`, `get_stream_health_summary`, `get_anomaly_report`)          | —                                                                    | Gateway       |
 | Support         | `search_support_history`                                                           | `support://conversations`, `support://conversations/{id}`            | Gateway       |
 | Knowledge       | `search_knowledge`, `search_web`                                                   | `knowledge://sources`                                                | Skipper spoke |
-| Schema          | `introspect_schema`, `generate_query`                                              | `schema://catalog`                                                   | Gateway       |
+| Schema          | `introspect_schema`, `generate_query`, `execute_query`                             | `schema://catalog`                                                   | Gateway       |
 | Infrastructure  | —                                                                                  | `nodes://list`, `nodes://{id}`                                       | Gateway       |
 
 Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://docs.frameworks.network/agents/mcp/).

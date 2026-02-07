@@ -156,6 +156,7 @@ func (p *PostgresProvisioner) initializeDatabase(ctx context.Context, host inven
 		"purser":        "schema/purser.sql",
 		"listmonk":      "schema/listmonk.sql",
 		"navigator":     "schema/navigator.sql",
+		"skipper":       "schema/skipper.sql",
 	}
 
 	if schemaFile, ok := schemaFiles[dbName]; ok {

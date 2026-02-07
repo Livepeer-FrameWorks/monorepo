@@ -4,7 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 type fakeStore struct {
@@ -64,7 +68,7 @@ func TestCrawlerSitemapAndFetch(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(server.Client(), embedder, store)
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
@@ -113,12 +117,12 @@ func TestCrawlerCrawlAndEmbed(t *testing.T) {
 
 	store := &fakeStore{}
 	embedder := &fakeEmbedder{}
-	crawler, err := NewCrawler(server.Client(), embedder, store)
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
 	if err != nil {
 		t.Fatalf("new crawler: %v", err)
 	}
 
-	if err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml"); err != nil {
+	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
 		t.Fatalf("crawl and embed: %v", err)
 	}
 	if embedder.calls != 1 {
@@ -126,5 +130,483 @@ func TestCrawlerCrawlAndEmbed(t *testing.T) {
 	}
 	if len(store.upserted) != 1 {
 		t.Fatalf("expected store upserted once, got %d", len(store.upserted))
+	}
+}
+
+func TestCrawlerSkipsOn304(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset><url><loc>` + server.URL + `/page.html</loc></url></urlset>`))
+		case "/page.html":
+			if r.Header.Get("If-None-Match") == "\"etag-1\"" {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("ETag", "\"etag-1\"")
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Page</title></head><body><p>Content.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	fakeS := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	cache := NewPageCacheStore(db)
+	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	pageURL := server.URL + "/page.html"
+
+	// Return cached entry with matching ETag
+	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
+		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
+			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, "oldhash", "\"etag-1\"", nil, nil, time.Now().Add(-1*time.Hour)),
+	)
+
+	// After 304, update last_fetched_at
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
+		t.Fatalf("crawl and embed: %v", err)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("expected 0 embed calls (304 skip), got %d", embedder.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestCrawlerSkipsUnchangedContentHash(t *testing.T) {
+	pageContent := `<!doctype html><html><head><title>Page</title></head><body><p>Static content.</p></body></html>`
+
+	// Pre-compute the hash by running the same extraction pipeline the crawler uses
+	precomputedHash := func() string {
+		_, content := extractContent([]byte(pageContent), "https://example.com/page")
+		return contentHash(content)
+	}()
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset><url><loc>` + server.URL + `/page.html</loc></url></urlset>`))
+		case "/page.html":
+			_, _ = w.Write([]byte(pageContent))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	fakeS := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	cache := NewPageCacheStore(db)
+	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	pageURL := server.URL + "/page.html"
+
+	// Return cached entry with matching content hash
+	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
+		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
+			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, precomputedHash, nil, nil, nil, time.Now().Add(-1*time.Hour)),
+	)
+
+	// After hash match, update cache
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
+		t.Fatalf("crawl and embed: %v", err)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("expected 0 embed calls (hash match), got %d", embedder.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestCrawlerSitemapLastmod(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>` + server.URL + `/page.html</loc><lastmod>2024-01-01T00:00:00Z</lastmod></url>
+</urlset>`))
+		case "/page.html":
+			t.Fatal("should not fetch page — lastmod is older than cached")
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	fakeS := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	cache := NewPageCacheStore(db)
+	crawler, err := NewCrawler(server.Client(), embedder, fakeS, WithPageCache(cache), withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	pageURL := server.URL + "/page.html"
+
+	// Return cached entry with LastFetchedAt after the sitemap lastmod
+	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
+		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
+			AddRow("tenant", server.URL+"/sitemap.xml", pageURL, "hash", nil, nil, nil, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)),
+	)
+
+	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false); err != nil {
+		t.Fatalf("crawl and embed: %v", err)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("expected 0 embed calls (lastmod skip), got %d", embedder.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestContentHash(t *testing.T) {
+	h1 := contentHash("hello world")
+	h2 := contentHash("hello world")
+	h3 := contentHash("different content")
+
+	if h1 != h2 {
+		t.Fatalf("same content should produce same hash")
+	}
+	if h1 == h3 {
+		t.Fatalf("different content should produce different hash")
+	}
+	if len(h1) != 64 {
+		t.Fatalf("expected 64-char hex string, got %d chars", len(h1))
+	}
+}
+
+func TestCrawlDelayFloor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	parsed, _ := url.Parse(server.URL + "/sitemap.xml")
+	rules := crawler.getRobotsRules(context.Background(), parsed)
+	if rules.delay < defaultMinCrawlDelay {
+		t.Fatalf("expected delay >= %v, got %v", defaultMinCrawlDelay, rules.delay)
+	}
+}
+
+func TestCrawlDelayCap(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/robots.txt" {
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 3600"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	parsed, _ := url.Parse(server.URL + "/sitemap.xml")
+	rules := crawler.getRobotsRules(context.Background(), parsed)
+	if rules.delay > maxCrawlDelay {
+		t.Fatalf("expected delay <= %v, got %v", maxCrawlDelay, rules.delay)
+	}
+}
+
+func TestCrawlerContinuesOn404(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><urlset>
+				<url><loc>` + server.URL + `/missing.html</loc></url>
+				<url><loc>` + server.URL + `/page.html</loc></url>
+			</urlset>`))
+		case "/page.html":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>OK</title></head><body><p>Content.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	_, err = crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false)
+	if err != nil {
+		t.Fatalf("expected no error (should skip 404), got: %v", err)
+	}
+	if embedder.calls != 1 {
+		t.Fatalf("expected 1 embed call (skipped 404, embedded good page), got %d", embedder.calls)
+	}
+}
+
+func TestCrawlPagesEmbedsDirectURLs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/guide-a":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Guide A</title></head><body><p>Guide A content.</p></body></html>`))
+		case "/guide-b":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Guide B</title></head><body><p>Guide B content.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	pages := []string{server.URL + "/guide-a", server.URL + "/guide-b"}
+	if err := crawler.CrawlPages(context.Background(), "tenant", pages, false); err != nil {
+		t.Fatalf("crawl pages: %v", err)
+	}
+	if embedder.calls != 2 {
+		t.Fatalf("expected 2 embed calls, got %d", embedder.calls)
+	}
+	if len(store.upserted) != 2 {
+		t.Fatalf("expected 2 upserts, got %d", len(store.upserted))
+	}
+}
+
+func TestCrawlPagesSkipsUnchangedHash(t *testing.T) {
+	pageContent := `<!doctype html><html><head><title>Guide</title></head><body><p>Unchanged content.</p></body></html>`
+	precomputedHash := func() string {
+		_, content := extractContent([]byte(pageContent), "https://example.com/page")
+		return contentHash(content)
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/guide":
+			_, _ = w.Write([]byte(pageContent))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	cache := NewPageCacheStore(db)
+	crawler, err := NewCrawler(server.Client(), embedder, store, WithPageCache(cache), withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	pageURL := server.URL + "/guide"
+
+	// Return cached entry with matching content hash
+	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
+		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
+			AddRow("tenant", "pagelist://direct", pageURL, precomputedHash, nil, nil, nil, time.Now().Add(-1*time.Hour)),
+	)
+
+	// After hash match, update cache
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	pages := []string{pageURL}
+	if err := crawler.CrawlPages(context.Background(), "tenant", pages, false); err != nil {
+		t.Fatalf("crawl pages: %v", err)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("expected 0 embed calls (hash match), got %d", embedder.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestCrawlPagesRespectsContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/guide":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Guide</title></head><body><p>Content.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	pages := []string{server.URL + "/guide"}
+	err = crawler.CrawlPages(ctx, "tenant", pages, false)
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestParseSitemapPriority(t *testing.T) {
+	data := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>https://example.com/low</loc><priority>0.3</priority><changefreq>monthly</changefreq></url>
+  <url><loc>https://example.com/high</loc><priority>0.9</priority><changefreq>daily</changefreq></url>
+  <url><loc>https://example.com/mid</loc><priority>0.5</priority></url>
+  <url><loc>https://example.com/default</loc></url>
+</urlset>`)
+
+	_, pages, err := parseSitemapXML(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(pages) != 4 {
+		t.Fatalf("expected 4 pages, got %d", len(pages))
+	}
+	if pages[0].Priority != 0.3 || pages[0].ChangeFreq != "monthly" {
+		t.Fatalf("unexpected first page: %+v", pages[0])
+	}
+	if pages[1].Priority != 0.9 || pages[1].ChangeFreq != "daily" {
+		t.Fatalf("unexpected second page: %+v", pages[1])
+	}
+	if pages[2].Priority != 0.5 {
+		t.Fatalf("unexpected third page priority: %f", pages[2].Priority)
+	}
+	if pages[3].Priority != 0 {
+		t.Fatalf("expected default priority 0, got %f", pages[3].Priority)
+	}
+}
+
+func TestExtractLinks(t *testing.T) {
+	html := []byte(`<!doctype html><html><head><title>Test</title></head><body>
+		<a href="/about">About</a>
+		<a href="https://example.com/docs">Docs</a>
+		<a href="https://other.com/ext">External</a>
+		<a href="#section">Anchor</a>
+		<a href="mailto:x@y.com">Email</a>
+		<a href="/about">Duplicate</a>
+		<a href="https://example.com/docs?q=1">Query stripped</a>
+	</body></html>`)
+
+	links := extractLinks(html, "https://example.com/page")
+	expected := map[string]bool{
+		"https://example.com/about": true,
+		"https://example.com/docs":  true,
+	}
+	if len(links) != len(expected) {
+		t.Fatalf("expected %d links, got %d: %v", len(expected), len(links), links)
+	}
+	for _, l := range links {
+		if !expected[l] {
+			t.Fatalf("unexpected link: %s", l)
+		}
+	}
+}
+
+func TestExtractLinksEmpty(t *testing.T) {
+	links := extractLinks(nil, "https://example.com")
+	if len(links) != 0 {
+		t.Fatalf("expected 0 links from nil data, got %d", len(links))
+	}
+}
+
+func TestCrawlPagesEmptyList(t *testing.T) {
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(http.DefaultClient, embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	if err := crawler.CrawlPages(context.Background(), "tenant", nil, false); err != nil {
+		t.Fatalf("expected nil error for empty list, got %v", err)
+	}
+	if embedder.calls != 0 {
+		t.Fatalf("expected 0 embed calls, got %d", embedder.calls)
 	}
 }

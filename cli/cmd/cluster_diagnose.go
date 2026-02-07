@@ -182,6 +182,7 @@ func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		18010: "Navigator",
 		18011: "Navigator gRPC",
 		18012: "Privateer",
+		18018: "Skipper",
 		18019: "Foghorn Control",
 		18030: "Chartroom",
 		18031: "Foredeck",
@@ -193,6 +194,7 @@ func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 		19003: "Purser gRPC",
 		19004: "Periscope gRPC",
 		19005: "Signalman gRPC",
+		19007: "Skipper gRPC",
 	}
 
 	for hostname, host := range manifest.Hosts {

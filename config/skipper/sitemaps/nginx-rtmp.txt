@@ -1,0 +1,7 @@
+# nginx-rtmp-module wiki (GitHub-rendered HTML)
+page:https://github.com/arut/nginx-rtmp-module/wiki/Directives
+page:https://github.com/arut/nginx-rtmp-module/wiki/Getting-started-with-nginx-rtmp
+page:https://github.com/arut/nginx-rtmp-module/wiki/Examples
+page:https://github.com/arut/nginx-rtmp-module/wiki/Control-module
+page:https://github.com/arut/nginx-rtmp-module/wiki/FAQ
+page:https://github.com/arut/nginx-rtmp-module/wiki/Tutorial

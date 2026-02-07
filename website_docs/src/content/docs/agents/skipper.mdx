@@ -1,0 +1,76 @@
+---
+title: "Skipper — AI Video Consultant"
+description: "AI-powered streaming consultant with RAG-grounded answers, diagnostics, and stream management."
+sidebar:
+  order: 5
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Skipper is the platform's AI video streaming consultant. Ask it about live streaming architecture, codecs, encoding, CDN behavior, protocols, deploying your own media servers, or troubleshoot a specific stream — and get answers grounded in curated documentation with source citations.
+
+## Where to Find It
+
+**In the dashboard** — full-page chat at `/skipper` with conversation history, stream diagnostics, and management actions.
+
+**On the docs site** — floating chat panel (toggle with <kbd>Cmd/Ctrl+J</kbd>). Read-only mode: Skipper can search and explain, but won't modify anything.
+
+**Via MCP** — your AI agent can use the `video_consultant` prompt and Skipper's tools through the [MCP server](/agents/mcp). The `search_knowledge` and `search_web` tools are available to any connected agent.
+
+## What It Can Help With
+
+**Documentation questions** — "How do I configure SRT encryption in MistServer?", "What codec settings does OBS recommend for 1080p streaming?"
+
+**Troubleshooting** — "My viewers are buffering on the European edge" triggers diagnostic tools that analyze rebuffering patterns, packet loss, buffer health, and CDN routing for your stream.
+
+**Platform operations** — "Create a stream called Weekly Standup with DVR enabled" or "Show me my current billing usage" — Skipper has full access to the platform API through the Gateway.
+
+**General streaming knowledge** — codecs, protocols, bitrate planning, latency tradeoffs. Answers from general knowledge are tagged as `best_guess` so you know when to verify.
+
+## Knowledge Base
+
+Skipper's answers are grounded in curated documentation:
+
+| Domain     | Sources                                                       |
+| ---------- | ------------------------------------------------------------- |
+| FrameWorks | Platform docs, marketing site                                 |
+| MistServer | Full documentation sitemap                                    |
+| FFmpeg     | Core tools, codecs, formats, protocols, filters               |
+| OBS Studio | Knowledge base articles — encoding, capture, streaming        |
+| SRT        | Haivision protocol docs — encryption, handshake, bonding, API |
+| HLS        | RFC 8216 and draft RFC 8216bis                                |
+| nginx-rtmp | Wiki — directives, control module, examples                   |
+| Ecosystem  | Livepeer, Daydream, WebRTC, DASH references                   |
+
+Operators can extend the knowledge base with custom sources. See the [operator guide](/operators/skipper).
+
+## Confidence Tagging
+
+Every answer is tagged so you know how much to trust it:
+
+- **verified** — grounded in knowledge base documentation, with source URLs
+- **sourced** — backed by live web search results
+- **best_guess** — from the model's general knowledge, not verified against a source
+- **unknown** — no supporting sources found
+
+<Aside type="tip">
+  Skipper always searches the knowledge base before answering factual questions. If it can't find
+  relevant documentation, it falls back to web search, then general knowledge — and tells you which
+  it used.
+</Aside>
+
+## For Agent Developers
+
+If you're building an agent that connects via [MCP](/agents/mcp), Skipper's knowledge is available through two tools:
+
+- **`search_knowledge`** — semantic search over the embedded documentation. Pass a `query` and optional `limit`. When configured, queries are automatically rewritten for better retrieval and results are reranked with a cross-encoder model.
+- **`search_web`** — live web search when the knowledge base doesn't cover it. Queries are automatically rewritten for better search results when a utility LLM is configured.
+
+Use the `video_consultant` [prompt](/agents/mcp#prompts) to get a guided streaming expert workflow, or call the tools directly for targeted lookups.
+
+Operators can improve retrieval quality with [cross-encoder reranking, query rewriting, and HyDE](/operators/skipper#retrieval-quality).
+
+## Learn More
+
+- [MCP Reference](/agents/mcp) — full tool, resource, and prompt catalog
+- [Skipper Operator Guide](/operators/skipper) — model selection, deployment, knowledge base setup, cost estimates

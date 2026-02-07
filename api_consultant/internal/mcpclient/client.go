@@ -22,6 +22,7 @@ type GatewayClient struct {
 	client  *mcp.Client
 	session *mcp.ClientSession
 	logger  logging.Logger
+	cfg     Config
 
 	mu        sync.RWMutex
 	tools     []llm.Tool
@@ -89,6 +90,7 @@ func New(ctx context.Context, cfg Config) (*GatewayClient, error) {
 		client:    client,
 		session:   session,
 		logger:    cfg.Logger,
+		cfg:       cfg,
 		allowlist: allowlist,
 		denylist:  denylist,
 	}
@@ -121,6 +123,13 @@ func (gc *GatewayClient) HasTool(name string) bool {
 // ctx (via ctxkeys.KeyJWTToken) and injected into the HTTP request so the
 // Gateway authenticates the call for the correct tenant.
 func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
+	gc.mu.RLock()
+	_, allowed := gc.toolIndex[name]
+	gc.mu.RUnlock()
+	if !allowed {
+		return "", fmt.Errorf("tool %q is not available", name)
+	}
+
 	var args map[string]any
 	if len(arguments) > 0 {
 		if err := json.Unmarshal(arguments, &args); err != nil {
@@ -133,7 +142,15 @@ func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments js
 		Arguments: args,
 	})
 	if err != nil {
-		return "", fmt.Errorf("mcpclient: call %s: %w", name, err)
+		if reconnErr := gc.tryReconnect(ctx); reconnErr == nil {
+			result, err = gc.session.CallTool(ctx, &mcp.CallToolParams{
+				Name:      name,
+				Arguments: args,
+			})
+		}
+		if err != nil {
+			return "", fmt.Errorf("mcpclient: call %s: %w", name, err)
+		}
 	}
 
 	if result.IsError {
@@ -145,6 +162,43 @@ func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments js
 	}
 
 	return extractTextContent(result), nil
+}
+
+// tryReconnect attempts a single reconnect to the Gateway MCP server.
+func (gc *GatewayClient) tryReconnect(ctx context.Context) error {
+	if gc.logger != nil {
+		gc.logger.Info("MCP session error — attempting reconnect")
+	}
+	transport := &mcp.StreamableClientTransport{
+		Endpoint: gc.cfg.GatewayURL,
+		HTTPClient: &http.Client{
+			Transport: &authTransport{
+				base:         http.DefaultTransport,
+				serviceToken: gc.cfg.ServiceToken,
+			},
+		},
+	}
+	session, err := gc.client.Connect(ctx, transport, nil)
+	if err != nil {
+		if gc.logger != nil {
+			gc.logger.WithField("error", err.Error()).Warn("MCP reconnect failed")
+		}
+		return err
+	}
+	gc.mu.Lock()
+	old := gc.session
+	gc.session = session
+	gc.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	if err := gc.refreshTools(ctx); err != nil {
+		if gc.logger != nil {
+			gc.logger.WithField("error", err.Error()).Warn("MCP reconnect tool refresh failed")
+		}
+		return err
+	}
+	return nil
 }
 
 // Close shuts down the MCP client session.

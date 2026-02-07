@@ -44,8 +44,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Runtime stage
 FROM alpine:3.19
 
-# Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata curl
+ARG ENABLE_RENDERING=false
+
+# Install runtime dependencies; add chromium when JS rendering is enabled
+RUN apk add --no-cache ca-certificates tzdata curl && \
+    if [ "$ENABLE_RENDERING" = "true" ]; then apk add --no-cache chromium; fi
 
 # Create non-root user
 RUN addgroup -g 1001 -S frameworks && \

@@ -14,22 +14,30 @@ import (
 )
 
 type AnthropicProvider struct {
-	client *http.Client
-	apiKey string
-	apiURL string
-	model  string
+	client    *http.Client
+	apiKey    string
+	apiURL    string
+	model     string
+	maxTokens int
 }
+
+const defaultAnthropicMaxTokens = 4096
 
 func NewAnthropicProvider(cfg Config) *AnthropicProvider {
 	apiURL := strings.TrimRight(cfg.APIURL, "/")
 	if apiURL == "" {
 		apiURL = "https://api.anthropic.com"
 	}
+	maxTokens := cfg.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = defaultAnthropicMaxTokens
+	}
 	return &AnthropicProvider{
-		client: &http.Client{Timeout: 60 * time.Second},
-		apiKey: cfg.APIKey,
-		apiURL: apiURL,
-		model:  cfg.Model,
+		client:    &http.Client{Timeout: 60 * time.Second},
+		apiKey:    cfg.APIKey,
+		apiURL:    apiURL,
+		model:     cfg.Model,
+		maxTokens: maxTokens,
 	}
 }
 
@@ -39,7 +47,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, messages []Message, to
 	}
 	reqBody := anthropicRequest{
 		Model:     p.model,
-		MaxTokens: 1024,
+		MaxTokens: p.maxTokens,
 		Stream:    true,
 	}
 	reqBody.Messages, reqBody.System = anthropicMessagesFrom(messages)
@@ -59,17 +67,18 @@ func (p *AnthropicProvider) Complete(ctx context.Context, messages []Message, to
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/v1/messages", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if p.apiKey != "" {
-		req.Header.Set("X-API-Key", p.apiKey)
-	}
-	req.Header.Set("Anthropic-Version", "2023-06-01")
-
-	resp, err := p.client.Do(req)
+	resp, err := doWithRetry(ctx, p.client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/v1/messages", bytes.NewReader(payload))
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if p.apiKey != "" {
+			req.Header.Set("X-API-Key", p.apiKey)
+		}
+		req.Header.Set("Anthropic-Version", "2023-06-01")
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: request failed: %w", err)
 	}

@@ -1,0 +1,409 @@
+---
+title: "Recordings, Clips & VOD"
+description: "Record live streams, create clips, and upload video-on-demand content."
+sidebar:
+  order: 4
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Record your live streams, extract clips, and upload pre-recorded content for on-demand playback.
+
+## DVR (Live Recording)
+
+DVR records your live stream and preserves the broadcast for later playback. Crucially, DVR content is playable **while the stream is still live** — viewers can seek back through the buffer, pause, and catch up. This makes DVR ideal for live events, conferences, and sports where viewers join at different times or want to rewind key moments.
+
+### Enabling Recording
+
+**When creating a stream:**
+
+Set `record: true` in the create mutation:
+
+```graphql
+mutation {
+  createStream(input: { name: "My Stream", record: true }) {
+    __typename
+    ... on Stream {
+      id
+      streamKey
+      playbackId
+      record
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+  }
+}
+```
+
+**On an existing stream:**
+
+Toggle recording in the dashboard on the stream detail page, or update via the API:
+
+```graphql
+mutation {
+  updateStream(input: { record: true }, id: "stream-global-id") {
+    __typename
+    ... on Stream {
+      id
+      record
+    }
+  }
+}
+```
+
+### Starting and Stopping DVR
+
+Recording begins automatically when a stream with `record: true` goes live. You can also start and stop recording manually during a broadcast:
+
+```graphql
+# Start recording
+mutation {
+  startDVR(streamId: "stream-global-id") {
+    __typename
+    ... on DVRRequest {
+      dvrHash
+      playbackId
+      createdAt
+    }
+    ... on ValidationError {
+      message
+    }
+  }
+}
+
+# Stop recording
+mutation {
+  stopDVR(dvrHash: "dvr-hash") {
+    __typename
+    ... on DeleteSuccess {
+      success
+    }
+  }
+}
+```
+
+### Playback
+
+DVR recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports two parallel viewing modes:
+
+- **Live** (`streamPlaybackId`) — real-time, no seeking
+- **DVR** (`dvrPlaybackId`) — seekable, growing buffer, slight latency cost
+
+DVR playback URLs follow the same `/play/{playbackId}` pattern:
+
+```
+HLS:    %PLAY_URL%/play/{dvrPlaybackId}/hls/index.m3u8
+DASH:   %PLAY_URL%/play/{dvrPlaybackId}/cmaf/index.mpd
+MP4:    %PLAY_URL%/play/{dvrPlaybackId}.mp4
+```
+
+With the Player SDK, use `contentType="dvr"`. The player enables full seeking, skip, and speed controls:
+
+```tsx
+<Player
+  contentType="dvr"
+  contentId="pk_dvr_..."
+  options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }}
+/>
+```
+
+### Live Time-Shift
+
+While a stream is live, the DVR buffer grows continuously. Viewers using the DVR playback ID can:
+
+- **Seek back** through the entire buffer — DVR windows can span weeks of continuous recording
+- **Pause and resume** without losing their position
+- **Jump to live** to catch up to the real-time edge
+
+The trade-off is latency — DVR playback goes through HLS/DASH segments, so it's higher latency than a direct live WebRTC connection. But for live events, conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching hours late and catch up.
+
+<Aside type="tip" title="Always-On Streams">
+  DVR buffers can span weeks of continuous streaming. This makes it ideal for always-on cameras,
+  24/7 broadcasts, and long-running live events where viewers drop in at any time and want to scrub
+  through everything that's happened.
+</Aside>
+
+### Retention
+
+Recordings are retained for 30 days on the free tier. Paid tiers have longer retention (see [Billing](/streamers/billing)). Expired recordings are automatically cleaned up.
+
+### Listing Recordings
+
+```graphql
+query {
+  dvrRecordingsConnection(streamId: "stream-global-id", page: { first: 10 }) {
+    edges {
+      node {
+        dvrHash
+        playbackId
+        title
+        createdAt
+        durationSeconds
+        sizeBytes
+        status
+        isExpired
+      }
+    }
+  }
+}
+```
+
+---
+
+## Clips
+
+Clips are short video segments extracted from a live stream's DVR buffer. Use them to capture highlights, key moments, or shareable previews.
+
+### Creating Clips from the Dashboard
+
+On a live stream's detail page, open the **Clips** section and click **Create Clip**. Choose your time range and hit save.
+
+### Creating Clips via the API
+
+The `createClip` mutation supports four time modes:
+
+| Mode       | Use Case                          | Required Fields            |
+| ---------- | --------------------------------- | -------------------------- |
+| `CLIP_NOW` | Clip the last N seconds from live | `duration`                 |
+| `DURATION` | Start time + duration             | `startUnix` + `duration`   |
+| `ABSOLUTE` | Exact start and stop timestamps   | `startUnix` + `stopUnix`   |
+| `RELATIVE` | Seconds from stream start         | `startMedia` + `stopMedia` |
+
+**Clip the last 30 seconds (most common):**
+
+```graphql
+mutation {
+  createClip(
+    input: { streamId: "stream-global-id", title: "Great moment", mode: CLIP_NOW, duration: 30 }
+  ) {
+    __typename
+    ... on Clip {
+      id
+      clipHash
+      playbackId
+      status
+      duration
+    }
+    ... on ValidationError {
+      message
+      field
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+**Clip with absolute timestamps:**
+
+```graphql
+mutation {
+  createClip(
+    input: {
+      streamId: "stream-global-id"
+      title: "Keynote intro"
+      mode: ABSOLUTE
+      startUnix: 1706000000
+      stopUnix: 1706000060
+    }
+  ) {
+    __typename
+    ... on Clip {
+      id
+      playbackId
+      status
+    }
+  }
+}
+```
+
+<Aside type="note" title="DVR Required">
+  Clips are extracted from the DVR buffer. The stream must have recording enabled (`record: true`)
+  and be currently live or have a recent DVR recording available.
+</Aside>
+
+### Clip Processing
+
+After creation, clips go through a processing pipeline:
+
+1. **queued** — Waiting to be processed
+2. **processing** — Extracting and encoding the segment
+3. **ready** — Available for playback
+4. **failed** — Something went wrong (check `errorMessage`)
+
+Track progress in real time with the `liveClipLifecycle` subscription:
+
+```graphql
+subscription {
+  liveClipLifecycle(streamId: "stream-global-id") {
+    clipHash
+    stage
+    playbackId
+    progressPercent
+    error
+  }
+}
+```
+
+### Clip Playback
+
+Once ready, clips are playable at the same URLs as any other content:
+
+```
+%PLAY_URL%/play/{playbackId}/hls/index.m3u8
+%PLAY_URL%/play/{playbackId}.mp4
+```
+
+### Managing Clips
+
+```graphql
+# List clips for a stream
+query {
+  clipsConnection(streamId: "stream-global-id", page: { first: 20 }) {
+    edges {
+      node {
+        id
+        title
+        playbackId
+        duration
+        status
+        createdAt
+        sizeBytes
+      }
+    }
+  }
+}
+
+# Delete a clip
+mutation {
+  deleteClip(id: "clip-global-id") {
+    __typename
+    ... on DeleteSuccess {
+      success
+    }
+  }
+}
+```
+
+---
+
+## VOD Uploads
+
+Upload pre-recorded video files for on-demand playback. VOD uploads use S3-compatible multipart uploads for reliable handling of large files.
+
+### Upload Flow
+
+1. **Initiate** — Create an upload session to get presigned URLs
+2. **Upload parts** — PUT each file chunk to its presigned URL
+3. **Complete** — Finalize the upload with part ETags
+
+```graphql
+# Step 1: Create upload session
+mutation {
+  createVodUpload(
+    input: { filename: "keynote.mp4", sizeBytes: 524288000, title: "Keynote Recording" }
+  ) {
+    __typename
+    ... on VodUploadSession {
+      id
+      playbackId
+      partSize
+      expiresAt
+      parts {
+        partNumber
+        presignedUrl
+      }
+    }
+    ... on ValidationError {
+      message
+    }
+  }
+}
+```
+
+Upload each part with an HTTP PUT to the presigned URL, then complete:
+
+```graphql
+# Step 3: Complete upload
+mutation {
+  completeVodUpload(
+    input: {
+      uploadId: "upload-session-id"
+      parts: [{ partNumber: 1, etag: "\"abc123\"" }, { partNumber: 2, etag: "\"def456\"" }]
+    }
+  ) {
+    __typename
+    ... on VodAsset {
+      id
+      playbackId
+      status
+    }
+  }
+}
+```
+
+<Aside type="tip" title="Presigned URL Expiry">
+  Presigned URLs expire after approximately 2 hours. For very large uploads, start uploading
+  promptly after creating the session.
+</Aside>
+
+### VOD Processing
+
+After upload completion, the asset goes through validation:
+
+- **UPLOADING** → **PROCESSING** → **READY**
+- If validation fails: **FAILED**
+
+Track progress with the `liveVodLifecycle` subscription.
+
+### VOD Playback
+
+Same URL pattern as all other content:
+
+```tsx
+<Player contentType="vod" contentId="pk_..." options={{ gatewayUrl: "%GATEWAY_URL%/graphql" }} />
+```
+
+### Managing VOD Assets
+
+```graphql
+# List all VOD assets
+query {
+  vodAssetsConnection(page: { first: 20 }) {
+    edges {
+      node {
+        id
+        playbackId
+        title
+        status
+        sizeBytes
+        durationSeconds
+        createdAt
+      }
+    }
+  }
+}
+
+# Delete a VOD asset
+mutation {
+  deleteVodAsset(id: "vod-global-id") {
+    __typename
+    ... on DeleteSuccess {
+      success
+    }
+  }
+}
+
+# Abort an in-progress upload
+mutation {
+  abortVodUpload(uploadId: "upload-session-id") {
+    __typename
+    ... on DeleteSuccess {
+      success
+    }
+  }
+}
+```

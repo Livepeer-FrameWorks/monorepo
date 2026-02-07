@@ -66,6 +66,17 @@ func RegisterAPIAssistantTools(server *mcp.Server, clients *clients.ServiceClien
 			return handleGenerateQuery(ctx, args, logger)
 		},
 	)
+
+	// execute_query - Execute a GraphQL query
+	mcp.AddTool(server,
+		&mcp.Tool{
+			Name:        "execute_query",
+			Description: "Execute a GraphQL query or mutation against the API. Use generate_query or introspect_schema first to discover available fields. Authorization is enforced by the API — results are scoped to the caller's tenant.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args ExecuteQueryInput) (*mcp.CallToolResult, any, error) {
+			return handleExecuteQuery(ctx, args, logger)
+		},
+	)
 }
 
 // IntrospectSchemaInput represents input for introspect_schema tool.
@@ -173,6 +184,30 @@ func handleGenerateQuery(ctx context.Context, args GenerateQueryInput, logger lo
 	}
 
 	return toolError(fmt.Sprintf("No template found for %s.%s. Use introspect_schema to explore the schema or update templates in pkg/graphql/operations.", opType, fieldPath))
+}
+
+// ExecuteQueryInput represents input for execute_query tool.
+type ExecuteQueryInput struct {
+	Query     string         `json:"query" jsonschema:"required" jsonschema_description:"GraphQL query or mutation to execute"`
+	Variables map[string]any `json:"variables,omitempty" jsonschema_description:"Variables for the query"`
+}
+
+func handleExecuteQuery(ctx context.Context, args ExecuteQueryInput, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	query := strings.TrimSpace(args.Query)
+	if query == "" {
+		return toolError("query is required")
+	}
+
+	result, err := introspectionClient.ExecuteQuery(ctx, query, args.Variables)
+	if err != nil {
+		return toolError(fmt.Sprintf("Query execution failed: %v", err))
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(result)},
+		},
+	}, result, nil
 }
 
 // findSimilarFields finds fields with similar names.

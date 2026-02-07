@@ -48,11 +48,15 @@ _Rotating highlight of recently shipped, production‑ready capabilities. For fu
   - Account, billing, stream, and analytics resources
   - Stream management tools (create, configure, playback)
   - Onboarding and troubleshooting prompts
-- **MCP Video Consultant (Phase 1)**: Expert-level video streaming diagnostics via MCP. [RFC: MCP Consultant]
-  - Knowledge sources (curated doc site indexes for FrameWorks, MistServer, FFmpeg, OBS)
-  - QoE diagnostic tools (rebuffering, buffer health, routing, anomaly detection)
-  - Support history access and search
-  - `video_consultant` and `diagnose_quality_issue` prompts
+- **Skipper AI Video Consultant**: RAG-grounded streaming expert with full tool orchestration. [User Guide](/agents/skipper), [Operator Guide](/operators/skipper)
+  - Knowledge base: 10+ curated documentation domains (FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, Livepeer, WebRTC, DASH) with pgvector semantic search
+  - QoE diagnostic tools (rebuffering, buffer health, packet loss, routing, anomaly detection)
+  - Stream management, billing, and GraphQL introspection via tool orchestration
+  - Confidence tagging (verified / sourced / best_guess / unknown) with source citations
+  - Web search fallback (Tavily, Brave, SearXNG)
+  - Background heartbeat monitoring with proactive alerts and notifications
+  - Billing and metering integration
+  - Available in dashboard, docs site widget, and via MCP for external agents
 - **Support Messaging**: Deckhand integration with Chatwoot for in-app support.
 - **Protocols**: x402 for machine-to-machine payments.
 
@@ -100,14 +104,6 @@ _Design and prototype phase. Early access may be available._
 
 - **QoE**: Comprehensive Quality of Experience metrics. [RFC: QoE Analytics]
 
-### Developer Experience
-
-- **MCP Video Consultant (Phase 2)**: Background monitoring and semantic knowledge search. [RFC: MCP Consultant]
-  - RAG knowledge base with pgvector for semantic doc search
-  - Background monitor service ("Lookout") polling for QoE anomalies
-  - SSE push notifications for proactive alerts
-  - `search_knowledge` tool with context-aware retrieval
-
 ---
 
 ## Planned
@@ -132,7 +128,3 @@ _Backlog items for future development cycles._
 - **Webhooks**: Outbound event notifications.
 - **SDKs**: Official JS/TS clients.
 - **Status Page**: Public incident tracking (Lookout). [RFC: Lookout Incidents]
-- **MCP Video Consultant (Phase 3)**: Server-side AI agent for autonomous diagnostics. [RFC: MCP Consultant]
-  - Local LLM (ollama with qwen2.5) for server-side reasoning
-  - Proactive issue detection and automated recommendations
-  - AI-generated insights (not template-based)
