@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -76,7 +77,7 @@ func (s *LLMContextualSummarizer) SummarizeChunks(ctx context.Context, title, do
 	var content strings.Builder
 	for {
 		chunk, recvErr := stream.Recv()
-		if recvErr == io.EOF {
+		if errors.Is(recvErr, io.EOF) {
 			break
 		}
 		if recvErr != nil {

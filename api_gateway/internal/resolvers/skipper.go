@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -52,7 +53,7 @@ func (r *Resolver) DoSkipperChat(ctx context.Context, input model.SkipperChatInp
 		for {
 			evt, err := stream.Recv()
 			if err != nil {
-				if err != io.EOF {
+				if !errors.Is(err, io.EOF) {
 					r.Logger.WithError(err).Warn("Skipper gRPC stream error")
 				}
 				return

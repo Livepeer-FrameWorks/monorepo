@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/llm"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
@@ -464,7 +463,6 @@ func TestBuildPromptMessages_OutputMessageTypes(t *testing.T) {
 		if msg.Content == "" {
 			t.Fatalf("message[%d] has empty content", i)
 		}
-		var _ llm.Message = msg
 	}
 }
 

@@ -473,7 +473,9 @@ code {
   background: transparent;
   color: hsl(var(--primary));
   cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
 }
 
 .docs-skipper-input__submit:hover:not(:disabled) {
@@ -1238,7 +1240,9 @@ h6.docs-skipper-message__heading {
   letter-spacing: 0.08em;
   text-decoration: none;
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .skipper-showcase__cta--primary {

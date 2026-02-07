@@ -60,9 +60,9 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 	}
 
 	resp, err := doWithRetry(ctx, p.client, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/chat/completions", bytes.NewReader(payload))
-		if err != nil {
-			return nil, fmt.Errorf("openai: create request: %w", err)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/chat/completions", bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, fmt.Errorf("openai: create request: %w", reqErr)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if p.apiKey != "" {

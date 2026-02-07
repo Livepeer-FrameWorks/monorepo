@@ -68,9 +68,9 @@ func (p *AnthropicProvider) Complete(ctx context.Context, messages []Message, to
 	}
 
 	resp, err := doWithRetry(ctx, p.client, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/v1/messages", bytes.NewReader(payload))
-		if err != nil {
-			return nil, fmt.Errorf("anthropic: create request: %w", err)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL+"/v1/messages", bytes.NewReader(payload))
+		if reqErr != nil {
+			return nil, fmt.Errorf("anthropic: create request: %w", reqErr)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if p.apiKey != "" {

@@ -49,7 +49,7 @@ func validateCrawlURL(rawURL string) (*url.URL, error) {
 		return nil, fmt.Errorf("missing hostname in url")
 	}
 
-	ips, err := net.LookupHost(host)
+	ips, err := net.DefaultResolver.LookupHost(context.Background(), host)
 	if err != nil {
 		return nil, fmt.Errorf("dns lookup failed for %s: %w", host, err)
 	}

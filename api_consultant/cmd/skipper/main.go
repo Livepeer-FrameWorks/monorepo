@@ -381,9 +381,9 @@ func main() {
 		SkipMethods:  []string{"/grpc.health.v1.Health/Check", "/grpc.health.v1.Health/Watch"},
 	}
 	go func() {
-		grpcLis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
-		if err != nil {
-			logger.WithError(err).Fatal("Failed to listen on gRPC port")
+		grpcLis, listenErr := net.Listen("tcp", ":"+cfg.GRPCPort)
+		if listenErr != nil {
+			logger.WithError(listenErr).Fatal("Failed to listen on gRPC port")
 		}
 		grpcSrv := grpc.NewServer(
 			grpc.ChainUnaryInterceptor(

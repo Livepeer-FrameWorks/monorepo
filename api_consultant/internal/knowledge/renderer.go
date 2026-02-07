@@ -88,8 +88,8 @@ func (r *RodRenderer) Render(ctx context.Context, pageURL string) (string, error
 	go router.Run()
 	defer router.MustStop()
 
-	if err := page.Navigate(pageURL); err != nil {
-		return "", fmt.Errorf("navigate to %s: %w", pageURL, err)
+	if navErr := page.Navigate(pageURL); navErr != nil {
+		return "", fmt.Errorf("navigate to %s: %w", pageURL, navErr)
 	}
 
 	// WaitStable waits until the page DOM stops changing for the given
