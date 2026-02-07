@@ -189,7 +189,7 @@ func applyX402Cookies(c *gin.Context, authResult *AuthResult) {
 		os.Getenv("BUILD_ENV") == "development" ||
 		os.Getenv("GO_ENV") == "development"
 	secure := !isDev
-	cookieDomain := os.Getenv("COOKIE_DOMAIN")
+	cookieDomain := strings.TrimPrefix(os.Getenv("COOKIE_DOMAIN"), ".")
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("access_token", authResult.JWTToken, 15*60, "/", cookieDomain, secure, true)
 	if authResult.TenantID != "" {

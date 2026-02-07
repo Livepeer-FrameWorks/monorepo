@@ -93,7 +93,7 @@ func TestApplyX402CookiesUsesCookieDomain(t *testing.T) {
 	if accessCookie == nil || tenantCookie == nil {
 		t.Fatalf("expected access_token and tenant_id cookies, got %d", len(cookies))
 	}
-	if accessCookie.Domain != ".example.com" || tenantCookie.Domain != ".example.com" {
-		t.Fatalf("expected cookie domain .example.com, got %q and %q", accessCookie.Domain, tenantCookie.Domain)
+	if accessCookie.Domain != "example.com" || tenantCookie.Domain != "example.com" {
+		t.Fatalf("expected cookie domain example.com, got %q and %q", accessCookie.Domain, tenantCookie.Domain)
 	}
 }
