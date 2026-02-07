@@ -502,6 +502,7 @@ func TestBuildPromptMessages_OutputMessageTypes(t *testing.T) {
 		if msg.Content == "" {
 			t.Fatalf("message[%d] has empty content", i)
 		}
+		var _ = msg
 	}
 }
 

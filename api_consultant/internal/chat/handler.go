@@ -152,11 +152,13 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		return
 	}
 
-	lockVal, _ := h.conversationLocks.LoadOrStore(conversationID, &sync.Mutex{})
+	lockVal, loaded := h.conversationLocks.LoadOrStore(conversationID, &sync.Mutex{})
 	convMu, ok := lockVal.(*sync.Mutex)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal lock error"})
-		return
+	if !ok || convMu == nil {
+		convMu = &sync.Mutex{}
+		if !loaded {
+			h.conversationLocks.Store(conversationID, convMu)
+		}
 	}
 	convMu.Lock()
 	defer func() {

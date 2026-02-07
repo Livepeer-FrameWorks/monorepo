@@ -291,15 +291,16 @@ func (s *GRPCServer) UpdateConversationTitle(ctx context.Context, req *pb.Update
 		return nil, status.Errorf(codes.Internal, "failed to update conversation: %v", err)
 	}
 
-	if convo, fetchErr := s.conversations.GetConversation(ctx, id); fetchErr == nil {
-		return &pb.SkipperConversationSummary{
-			Id:        id,
-			Title:     title,
-			CreatedAt: timestamppb.New(convo.CreatedAt),
-			UpdatedAt: timestamppb.New(convo.UpdatedAt),
-		}, nil
+	convo, getErr := s.conversations.GetConversation(ctx, id)
+	if getErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to load conversation: %v", getErr)
 	}
-	return &pb.SkipperConversationSummary{Id: id, Title: title}, nil
+	return &pb.SkipperConversationSummary{
+		Id:        id,
+		Title:     title,
+		CreatedAt: timestamppb.New(convo.CreatedAt),
+		UpdatedAt: timestamppb.New(convo.UpdatedAt),
+	}, nil
 }
 
 func (s *GRPCServer) logUsage(ctx context.Context, tenantID, userID string, startedAt time.Time, tokens TokenCounts, hadError bool) {
