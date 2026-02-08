@@ -512,6 +512,16 @@ func DefaultManager() *StreamStateManager {
 	return defaultManager
 }
 
+// ResetDefaultManagerForTests replaces the default manager with a fresh instance.
+// It is intended for unit tests to ensure isolation between cases.
+func ResetDefaultManagerForTests() *StreamStateManager {
+	if defaultManager != nil {
+		defaultManager.Shutdown()
+	}
+	defaultManager = NewStreamStateManager()
+	return defaultManager
+}
+
 func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -590,10 +600,17 @@ func (sm *StreamStateManager) addViewerBandwidthPenalty(nodeID string, _ string,
 		toAdd = 1024 * 1024 // maximum 8 mbps (1 MB/s)
 	}
 
-	node.AddBandwidth += toAdd
+	node.AddBandwidth = saturatingAddBandwidth(node.AddBandwidth, toAdd)
 
 	// Recompute scores since bandwidth penalty changed
 	sm.recomputeNodeScoresLocked(node)
+}
+
+func saturatingAddBandwidth(current, delta uint64) uint64 {
+	if ^uint64(0)-current < delta {
+		return ^uint64(0)
+	}
+	return current + delta
 }
 
 func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, trackListJSON string) {
@@ -2546,7 +2563,7 @@ func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP s
 
 	// Update node's pending count and add bandwidth
 	node.PendingRedirects++
-	node.AddBandwidth += estBW
+	node.AddBandwidth = saturatingAddBandwidth(node.AddBandwidth, estBW)
 
 	// Recompute scores since AddBandwidth changed
 	sm.recomputeNodeScoresLocked(node)
