@@ -287,6 +287,16 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.Postgres.Port != 0 {
 					config.Port = manifest.Infrastructure.Postgres.Port
 				}
+				if len(manifest.Infrastructure.Postgres.Databases) > 0 {
+					databases := make([]map[string]string, 0, len(manifest.Infrastructure.Postgres.Databases))
+					for _, db := range manifest.Infrastructure.Postgres.Databases {
+						databases = append(databases, map[string]string{
+							"name":  db.Name,
+							"owner": db.Owner,
+						})
+					}
+					config.Metadata["databases"] = databases
+				}
 			}
 		case "clickhouse":
 			if manifest.Infrastructure.ClickHouse != nil {
