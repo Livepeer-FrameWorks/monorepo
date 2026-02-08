@@ -12,7 +12,10 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"frameworks/pkg/ctxkeys"
+
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -300,4 +303,65 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 	expectQuery("storage_scope = 'hot'", []string{"clip_bytes", "dvr_bytes", "vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
 	expectQuery("storage_scope = 'cold'", []string{"frozen_clip_bytes", "frozen_dvr_bytes", "frozen_vod_bytes"}, []any{uint64(0), uint64(0), uint64(0)})
 	expectQuery("FROM storage_events", []string{"freeze_count", "freeze_bytes", "defrost_count", "defrost_bytes"}, []any{uint32(0), uint64(0), uint32(0), uint64(0)})
+}
+
+func TestRequireTenantID(t *testing.T) {
+	t.Run("missing tenant context", func(t *testing.T) {
+		_, err := requireTenantID(context.Background(), "")
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected invalid argument, got %v", err)
+		}
+	})
+
+	t.Run("uses context tenant when present", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		tenantID, err := requireTenantID(ctx, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tenantID != "tenant-a" {
+			t.Fatalf("expected tenant-a, got %s", tenantID)
+		}
+	})
+
+	t.Run("rejects mismatched tenant id", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		_, err := requireTenantID(ctx, "tenant-b")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected permission denied, got %v", err)
+		}
+	})
+
+	t.Run("allows request tenant for service calls", func(t *testing.T) {
+		tenantID, err := requireTenantID(context.Background(), "tenant-service")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tenantID != "tenant-service" {
+			t.Fatalf("expected tenant-service, got %s", tenantID)
+		}
+	})
+}
+
+func TestValidateRelatedTenantIDs(t *testing.T) {
+	t.Run("allows empty related list", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		if err := validateRelatedTenantIDs(ctx, nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects related list for authenticated tenant", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		err := validateRelatedTenantIDs(ctx, []string{"tenant-b"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected permission denied, got %v", err)
+		}
+	})
+
+	t.Run("allows related list for service calls", func(t *testing.T) {
+		if err := validateRelatedTenantIDs(context.Background(), []string{"tenant-b"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }

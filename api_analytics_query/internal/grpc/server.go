@@ -71,13 +71,30 @@ func parseEventPayload(eventData string) *structpb.Struct {
 	return s
 }
 
-// getTenantID extracts tenant_id from request or context.
-// Prefers the request body value, falls back to context (set by auth interceptor).
-func getTenantID(ctx context.Context, reqTenantID string) string {
-	if reqTenantID != "" {
-		return reqTenantID
+// requireTenantID extracts tenant_id from request or context.
+// Ensures authenticated tenant IDs cannot be overridden by request payloads.
+func requireTenantID(ctx context.Context, reqTenantID string) (string, error) {
+	ctxTenantID := middleware.GetTenantID(ctx)
+	if ctxTenantID != "" {
+		if reqTenantID != "" && reqTenantID != ctxTenantID {
+			return "", status.Error(codes.PermissionDenied, "tenant_id mismatch")
+		}
+		return ctxTenantID, nil
 	}
-	return middleware.GetTenantID(ctx)
+	if reqTenantID == "" {
+		return "", status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	return reqTenantID, nil
+}
+
+func validateRelatedTenantIDs(ctx context.Context, relatedIDs []string) error {
+	if len(relatedIDs) == 0 {
+		return nil
+	}
+	if middleware.GetTenantID(ctx) != "" {
+		return status.Error(codes.PermissionDenied, "related_tenant_ids require service credentials")
+	}
+	return nil
 }
 
 // validateTimeRangeProto validates time range from proto message
@@ -280,9 +297,9 @@ func (s *PeriscopeServer) countAsync(ctx context.Context, query string, args ...
 // ============================================================================
 
 func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStreamEventsRequest) (*pb.GetStreamEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	streamID := req.GetStreamId()
@@ -468,9 +485,9 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *pb.GetStream
 }
 
 func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBufferEventsRequest) (*pb.GetBufferEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	streamID := req.GetStreamId()
@@ -581,9 +598,9 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *pb.GetBuffer
 }
 
 func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.GetStreamHealthMetricsRequest) (*pb.GetStreamHealthMetricsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -753,9 +770,9 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 // GetStreamStatus returns operational state for a single stream (Control/Data plane separation)
 // This is the source of truth for stream status - queries stream_state_current directly
 func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStreamStatusRequest) (*pb.StreamStatusResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	streamID := req.GetStreamId()
@@ -780,7 +797,7 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 	var uploadedBytes, downloadedBytes, viewerSeconds *uint64
 	var packetsSent, packetsLost, packetsRetransmitted *uint64
 
-	err := s.clickhouse.QueryRowContext(ctx, `
+	err = s.clickhouse.QueryRowContext(ctx, `
 		SELECT status, current_viewers, started_at, updated_at,
 			buffer_state, quality_tier, primary_width, primary_height,
 			primary_fps, primary_codec, primary_bitrate, has_issues, issues_description,
@@ -836,9 +853,9 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *pb.GetStream
 // GetStreamsStatus returns operational state for multiple streams (batch lookup)
 // Queries stream_state_current directly - no JOINs needed
 func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *pb.GetStreamsStatusRequest) (*pb.StreamsStatusResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	streamIDs := req.GetStreamIds()
@@ -953,9 +970,9 @@ func nullInt64Value(v sql.NullInt64) int64 {
 // ============================================================================
 
 func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewerMetricsRequest) (*pb.GetViewerMetricsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1070,9 +1087,9 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *pb.GetViewe
 }
 
 func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.GetViewerCountTimeSeriesRequest) (*pb.GetViewerCountTimeSeriesResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1149,9 +1166,9 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *pb.
 }
 
 func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb.GetGeographicDistributionRequest) (*pb.GetGeographicDistributionResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1308,9 +1325,9 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 // ============================================================================
 
 func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTrackListEventsRequest) (*pb.GetTrackListEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	streamID := req.GetStreamId()
@@ -1435,9 +1452,9 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *pb.GetTra
 // ============================================================================
 
 func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetConnectionEventsRequest) (*pb.GetConnectionEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1580,9 +1597,9 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *pb.GetCo
 // ============================================================================
 
 func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMetricsRequest) (*pb.GetNodeMetricsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1685,9 +1702,9 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *pb.GetNodeMet
 }
 
 func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeMetrics1HRequest) (*pb.GetNodeMetrics1HResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1788,9 +1805,9 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 
 // GetNodeMetricsAggregated returns per-node aggregates for the requested time range.
 func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.GetNodeMetricsAggregatedRequest) (*pb.GetNodeMetricsAggregatedResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -1848,9 +1865,12 @@ func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *pb.
 // This is the source of truth for real-time node status - simple SELECT, no time-series
 // Supports multi-tenant access for subscribed clusters via related_tenant_ids
 func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodesRequest) (*pb.GetLiveNodesResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); err != nil {
+		return nil, err
 	}
 
 	// Support querying across multiple tenants (e.g. self + subscribed clusters)
@@ -1934,9 +1954,12 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 // ============================================================================
 
 func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRoutingEventsRequest) (*pb.GetRoutingEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -2184,9 +2207,9 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 
 // GetRoutingEfficiency returns pre-aggregated routing decision stats from routing_decisions.
 func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *pb.GetRoutingEfficiencyRequest) (*pb.GetRoutingEfficiencyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -2270,9 +2293,9 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *pb.GetR
 // ============================================================================
 
 func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPlatformOverviewRequest) (*pb.GetPlatformOverviewResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	// Parse time range from request (defaults to last 24h via validateTimeRangeProto)
@@ -2410,9 +2433,9 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 // ============================================================================
 
 func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEventsRequest) (*pb.GetClipEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -2542,9 +2565,9 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *pb.GetClipEven
 
 // GetArtifactState returns the current state of a single artifact (clip/DVR)
 func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtifactStateRequest) (*pb.GetArtifactStateResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	requestID := req.GetRequestId()
@@ -2571,7 +2594,7 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 	var expiresAt *time.Time
 	var progressPercent uint8
 
-	err := s.clickhouse.QueryRowContext(ctx, query, tenantID, requestID).Scan(
+	err = s.clickhouse.QueryRowContext(ctx, query, tenantID, requestID).Scan(
 		&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 		&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 		&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
@@ -2611,9 +2634,9 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *pb.GetArtif
 
 // GetArtifactStates returns a list of artifact states with optional filtering
 func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArtifactStatesRequest) (*pb.GetArtifactStatesResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	params, err := getCursorPagination(req.GetPagination())
@@ -2770,9 +2793,9 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *pb.GetArti
 
 // GetStreamConnectionHourly returns hourly connection aggregates from stream_connection_hourly MV
 func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb.GetStreamConnectionHourlyRequest) (*pb.GetStreamConnectionHourlyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -2884,9 +2907,9 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pb
 
 // GetClientMetrics5M returns 5-minute client metrics aggregates from client_qoe_5m MV
 func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetClientMetrics5MRequest) (*pb.GetClientMetrics5MResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -3022,9 +3045,9 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 
 // GetQualityTierDaily returns daily quality tier distribution from quality_tier_daily MV
 func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQualityTierDailyRequest) (*pb.GetQualityTierDailyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -3150,9 +3173,9 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 
 // GetStreamAnalyticsSummary returns range aggregates derived from materialized views only.
 func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb.GetStreamAnalyticsSummaryRequest) (*pb.GetStreamAnalyticsSummaryResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	streamID := req.GetStreamId()
@@ -3342,9 +3365,9 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pb
 // This aggregates data from multiple MVs for all streams in a tenant, sorted by the requested field.
 // Uses keyset pagination with raw integer sort keys (egress_bytes, viewer_seconds) for precision.
 func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *pb.GetStreamAnalyticsSummariesRequest) (*pb.GetStreamAnalyticsSummariesResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -3601,9 +3624,9 @@ func buildStreamSummaryCursor(summary *pb.StreamAnalyticsSummary, sortField stri
 
 // GetStorageUsage returns storage usage records from storage_snapshots table
 func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorageUsageRequest) (*pb.GetStorageUsageResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -3726,9 +3749,9 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *pb.GetStorag
 
 // GetStorageEvents returns storage lifecycle events (freeze/defrost operations) from storage_events table
 func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStorageEventsRequest) (*pb.GetStorageEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -3863,9 +3886,9 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *pb.GetStora
 
 // GetStreamHealth5M returns 5-minute aggregated health metrics from stream_health_5m MV
 func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStreamHealth5MRequest) (*pb.GetStreamHealth5MResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	streamID := req.GetStreamId()
@@ -3980,9 +4003,9 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *pb.GetStre
 
 // GetStreamHealthSummary returns pre-aggregated health stats from stream_health_5m.
 func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *pb.GetStreamHealthSummaryRequest) (*pb.GetStreamHealthSummaryResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -4036,9 +4059,9 @@ func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *pb.Ge
 
 // GetClientQoeSummary returns pre-aggregated client QoE stats from client_qoe_5m.
 func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetClientQoeSummaryRequest) (*pb.GetClientQoeSummaryResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -4099,9 +4122,9 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *pb.GetCl
 
 // GetNodePerformance5M returns 5-minute aggregated node performance from node_performance_5m MV
 func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetNodePerformance5MRequest) (*pb.GetNodePerformance5MResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -4212,9 +4235,9 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *pb.GetN
 
 // GetViewerHoursHourly returns hourly viewer hours aggregates from viewer_hours_hourly MV
 func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetViewerHoursHourlyRequest) (*pb.GetViewerHoursHourlyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -4324,9 +4347,9 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *pb.GetV
 
 // GetViewerGeoHourly returns hourly geographic breakdown from viewer_geo_hourly MV
 func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetViewerGeoHourlyRequest) (*pb.GetViewerGeoHourlyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -4420,9 +4443,9 @@ func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *pb.GetVie
 
 // GetTenantDailyStats returns daily tenant statistics from tenant_viewer_daily for PlatformOverview.dailyStats
 func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTenantDailyStatsRequest) (*pb.GetTenantDailyStatsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	days := req.GetDays()
@@ -4487,9 +4510,9 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *pb.GetTe
 
 // GetProcessingUsage returns processing usage records and/or daily summaries for billing
 func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetProcessingUsageRequest) (*pb.GetProcessingUsageResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -4795,9 +4818,9 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *pb.GetPro
 // GetLiveUsageSummary returns a near-real-time usage summary for billing dashboards.
 // Structure matches UsageSummary for consistency between live and finalized invoices.
 func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLiveUsageSummaryRequest) (*pb.GetLiveUsageSummaryResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -5111,9 +5134,9 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *pb.GetLi
 
 // GetRebufferingEvents returns buffer state transition events
 func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetRebufferingEventsRequest) (*pb.GetRebufferingEventsResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -5231,9 +5254,9 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *pb.GetR
 
 // GetTenantAnalyticsDaily returns daily tenant-level analytics rollups
 func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.GetTenantAnalyticsDailyRequest) (*pb.GetTenantAnalyticsDailyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -5327,9 +5350,9 @@ func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *pb.G
 
 // GetStreamAnalyticsDaily returns daily stream-level analytics rollups
 func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.GetStreamAnalyticsDailyRequest) (*pb.GetStreamAnalyticsDailyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -5430,9 +5453,9 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *pb.G
 
 // GetAPIUsage returns API usage records and/or daily summaries
 func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *pb.GetAPIUsageRequest) (*pb.GetAPIUsageResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
