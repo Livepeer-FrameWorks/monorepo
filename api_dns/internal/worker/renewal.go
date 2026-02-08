@@ -6,26 +6,48 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_dns/internal/logic"
 	"frameworks/api_dns/internal/store"
 	"frameworks/pkg/logging"
 )
 
 // RenewalWorker handles background certificate renewal
 type RenewalWorker struct {
-	store       *store.Store
-	certManager *logic.CertManager
+	store       renewalStore
+	certManager certIssuer
 	logger      logging.Logger
 	interval    time.Duration
+	sleep       sleepFunc
+}
+
+type renewalStore interface {
+	ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]store.Certificate, error)
+}
+
+type certIssuer interface {
+	IssueCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error)
+}
+
+type sleepFunc func(ctx context.Context, duration time.Duration) error
+
+func defaultSleep(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // NewRenewalWorker creates a new renewal worker
-func NewRenewalWorker(s *store.Store, cm *logic.CertManager, l logging.Logger) *RenewalWorker {
+func NewRenewalWorker(s renewalStore, cm certIssuer, l logging.Logger) *RenewalWorker {
 	return &RenewalWorker{
 		store:       s,
 		certManager: cm,
 		logger:      l,
 		interval:    24 * time.Hour, // Check daily
+		sleep:       defaultSleep,
 	}
 }
 
@@ -101,13 +123,9 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 			}
 
 			backoff := time.Duration(30<<uint(attempt-1)) * time.Second
-			timer := time.NewTimer(backoff)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				log.WithError(ctx.Err()).Warn("Renewal interrupted")
+			if err := w.sleep(ctx, backoff); err != nil {
+				log.WithError(err).Warn("Renewal interrupted")
 				return
-			case <-timer.C:
 			}
 		}
 
