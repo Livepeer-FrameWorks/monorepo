@@ -171,11 +171,12 @@ func verifyStripeSignature(payload []byte, signature, secret string) bool {
 
 // sendPaymentStatusEmail sends email notification for payment status changes
 func sendPaymentStatusEmail(invoiceID, provider, status string) {
+	ctx := context.Background()
 	// Get invoice and tenant subscription info (billing email is in subscription)
 	var tenantID string
 	var amount float64
 	var currency, billingEmail, tenantName string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT bi.tenant_id, bi.amount, bi.currency, ts.billing_email
 		FROM purser.billing_invoices bi
 		JOIN purser.tenant_subscriptions ts ON bi.tenant_id = ts.tenant_id
@@ -236,7 +237,7 @@ func sendTenantPaymentStatusEmail(tenantID, invoiceRef, provider, status string,
 	}
 
 	var billingEmail string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(context.Background(), `
 		SELECT billing_email FROM purser.tenant_subscriptions
 		WHERE tenant_id = $1
 	`, tenantID).Scan(&billingEmail)
@@ -329,7 +330,7 @@ func ProcessStripeWebhookGRPC(body []byte, headers map[string]string) (bool, str
 	case payload.Type == "payment_intent.succeeded" || payload.Type == "payment_intent.payment_failed":
 		err = handleStripePaymentIntentGRPC(payload)
 	case payload.Type == "checkout.session.completed":
-		err = DispatchStripeCheckoutCompleted(payload.Data.Object)
+		err = DispatchStripeCheckoutCompleted(context.Background(), payload.Data.Object)
 	case strings.HasPrefix(payload.Type, "customer.subscription."):
 		err = handleStripeSubscriptionEvent(payload)
 	case payload.Type == "invoice.paid":
@@ -356,7 +357,7 @@ func isWebhookAlreadyProcessed(provider, eventID string) bool {
 		return false
 	}
 	var exists bool
-	err := db.QueryRow(`
+	err := db.QueryRowContext(context.Background(), `
 		SELECT EXISTS(SELECT 1 FROM purser.webhook_events WHERE provider = $1 AND event_id = $2)
 	`, provider, eventID).Scan(&exists)
 	return err == nil && exists
@@ -367,7 +368,7 @@ func markWebhookProcessed(provider, eventID, eventType string) {
 	if db == nil {
 		return
 	}
-	_, err := db.Exec(`
+	_, err := db.ExecContext(context.Background(), `
 		INSERT INTO purser.webhook_events (provider, event_id, event_type)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (provider, event_id) DO NOTHING
@@ -390,12 +391,13 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 		return nil
 	}
 
+	ctx := context.Background()
 	status := "confirmed"
 	if payload.Type == "payment_intent.payment_failed" {
 		status = "failed"
 	}
 
-	_, err := db.Exec(`
+	_, err := db.ExecContext(ctx, `
 		UPDATE purser.billing_payments
 		SET status = $1, updated_at = NOW(), confirmed_at = CASE WHEN $1 = 'confirmed' THEN NOW() ELSE confirmed_at END
 		WHERE invoice_id = $2 AND method = 'stripe'
@@ -414,7 +416,7 @@ func handleStripePaymentIntentGRPC(payload StripeWebhookPayload) error {
 
 	var paymentID, tenantID, currency string
 	var amount float64
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(ctx, `
 		SELECT p.id, i.tenant_id, p.amount, p.currency
 		FROM purser.billing_payments p
 		JOIN purser.billing_invoices i ON p.invoice_id = i.id
@@ -449,6 +451,7 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 		return fmt.Errorf("failed to parse subscription: %w", err)
 	}
 
+	ctx := context.Background()
 	ourStatus := MapStripeSubscriptionStatus(obj.Status, obj.CancelAtPeriodEnd)
 
 	// Get period end from subscription items
@@ -467,12 +470,12 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 
 	// Find tenant by Stripe subscription ID
 	var tenantID string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_subscription_id = $1
 	`, obj.ID).Scan(&tenantID)
 	if err != nil {
 		// Try to find by customer ID if subscription ID not found
-		err = db.QueryRow(`
+		err = db.QueryRowContext(ctx, `
 			SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id = $1
 		`, obj.CustomerID).Scan(&tenantID)
 		if err != nil {
@@ -486,7 +489,7 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 		}
 	}
 
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET stripe_subscription_status = $1,
 		    status = $2,
@@ -506,7 +509,7 @@ func handleStripeSubscriptionEvent(payload StripeWebhookPayload) error {
 	}).Info("Updated subscription status from Stripe webhook")
 
 	subscriptionID := ""
-	_ = db.QueryRow(`SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&subscriptionID)
+	_ = db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&subscriptionID)
 	if subscriptionID == "" {
 		subscriptionID = obj.ID
 	}
@@ -530,9 +533,10 @@ func handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 		return fmt.Errorf("failed to parse invoice: %w", err)
 	}
 
+	ctx := context.Background()
 	// Find tenant by Stripe customer ID
 	var tenantID string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id = $1
 	`, obj.CustomerID).Scan(&tenantID)
 	if err != nil {
@@ -545,7 +549,7 @@ func handleStripeInvoicePaid(payload StripeWebhookPayload) error {
 	}
 
 	// Reset dunning attempts on successful payment
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET dunning_attempts = 0, updated_at = NOW()
 		WHERE tenant_id = $1
@@ -578,9 +582,10 @@ func handleStripeInvoiceFailed(payload StripeWebhookPayload) error {
 		return fmt.Errorf("failed to parse invoice: %w", err)
 	}
 
+	ctx := context.Background()
 	// Find tenant by Stripe customer ID
 	var tenantID string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT tenant_id FROM purser.tenant_subscriptions WHERE stripe_customer_id = $1
 	`, obj.CustomerID).Scan(&tenantID)
 	if err != nil {
@@ -593,7 +598,7 @@ func handleStripeInvoiceFailed(payload StripeWebhookPayload) error {
 	}
 
 	// Increment dunning attempts
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET dunning_attempts = dunning_attempts + 1, updated_at = NOW()
 		WHERE tenant_id = $1
@@ -640,7 +645,8 @@ func MapStripeSubscriptionStatus(status string, cancelAtPeriodEnd bool) string {
 }
 
 func updateClusterSubscriptionFromStripe(obj StripeSubscriptionObject, ourStatus string, periodEnd *time.Time) error {
-	res, err := db.Exec(`
+	ctx := context.Background()
+	res, err := db.ExecContext(ctx, `
 		UPDATE purser.cluster_subscriptions
 		SET stripe_subscription_status = $1,
 		    status = $2,
@@ -654,7 +660,7 @@ func updateClusterSubscriptionFromStripe(obj StripeSubscriptionObject, ourStatus
 
 	updated, _ := res.RowsAffected()
 	if updated == 0 && obj.Metadata.TenantID != "" && obj.Metadata.ClusterID != "" {
-		_, err = db.Exec(`
+		_, err = db.ExecContext(ctx, `
 			UPDATE purser.cluster_subscriptions
 			SET stripe_subscription_id = $1,
 			    stripe_subscription_status = $2,
@@ -670,7 +676,7 @@ func updateClusterSubscriptionFromStripe(obj StripeSubscriptionObject, ourStatus
 
 	if ourStatus == "cancelled" && qmClient != nil {
 		var tenantID, clusterID string
-		err = db.QueryRow(`
+		err = db.QueryRowContext(ctx, `
 			SELECT tenant_id, cluster_id FROM purser.cluster_subscriptions
 			WHERE stripe_subscription_id = $1
 		`, obj.ID).Scan(&tenantID, &clusterID)
@@ -833,7 +839,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 			return "", fmt.Errorf("missing Mollie customer or mandate ID")
 		}
 
-		_, _ = db.Exec(`
+		_, _ = db.ExecContext(ctx, `
 			INSERT INTO purser.mollie_customers (tenant_id, mollie_customer_id)
 			VALUES ($1, $2)
 			ON CONFLICT (tenant_id) DO UPDATE SET mollie_customer_id = $2
@@ -864,7 +870,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := handlePrepaidCheckoutCompleted(payment.ID, tenantID, topupID, amountCents, currency, ProviderMollie); err != nil {
+		if err := handlePrepaidCheckoutCompleted(ctx, payment.ID, tenantID, topupID, amountCents, currency, ProviderMollie); err != nil {
 			return "", err
 		}
 		return eventID, nil
@@ -879,7 +885,7 @@ func handleMolliePaymentWebhook(paymentID string) (string, error) {
 
 	if newStatus == "confirmed" || newStatus == "failed" {
 		if tenantID == "" && invoiceID != "" {
-			_ = db.QueryRow(`SELECT tenant_id FROM purser.billing_invoices WHERE id = $1`, invoiceID).Scan(&tenantID)
+			_ = db.QueryRowContext(ctx, `SELECT tenant_id FROM purser.billing_invoices WHERE id = $1`, invoiceID).Scan(&tenantID)
 		}
 		if tenantID != "" {
 			amountCents, currency, err := mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
@@ -909,7 +915,7 @@ func handleMollieSubscriptionWebhook(subscriptionID string) (string, error) {
 	}
 
 	var tenantID string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(context.Background(), `
 		SELECT tenant_id FROM purser.tenant_subscriptions WHERE mollie_subscription_id = $1
 	`, subscriptionID).Scan(&tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -920,7 +926,7 @@ func handleMollieSubscriptionWebhook(subscriptionID string) (string, error) {
 	}
 
 	var mollieCustomerID string
-	err = db.QueryRow(`
+	err = db.QueryRowContext(context.Background(), `
 		SELECT mollie_customer_id FROM purser.mollie_customers WHERE tenant_id = $1
 	`, tenantID).Scan(&mollieCustomerID)
 	if err != nil {
@@ -942,7 +948,7 @@ func handleMollieSubscriptionWebhook(subscriptionID string) (string, error) {
 	}
 
 	ourStatus := mapMollieSubscriptionStatus(info.Status)
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET mollie_subscription_id = $1,
 		    status = $2,
@@ -1042,7 +1048,8 @@ func mapMollieSubscriptionStatus(status string) string {
 func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) error {
 	var paymentID string
 	var foundInvoiceID string
-	err := db.QueryRow(`
+	ctx := context.Background()
+	err := db.QueryRowContext(ctx, `
 		SELECT id, invoice_id FROM purser.billing_payments
 		WHERE tx_id = $1 AND method = $2
 	`, txID, provider).Scan(&paymentID, &foundInvoiceID)
@@ -1062,7 +1069,7 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) err
 		confirmedAt = &now
 	}
 
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 		UPDATE purser.billing_payments
 		SET status = $1, confirmed_at = $2, updated_at = NOW()
 		WHERE id = $3
@@ -1076,7 +1083,7 @@ func updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) err
 	}
 
 	if newStatus == "confirmed" {
-		_, err = db.Exec(`
+		_, err = db.ExecContext(ctx, `
 			UPDATE purser.billing_invoices
 			SET status = 'paid', paid_at = $1, updated_at = NOW()
 			WHERE id = $2 AND status IN ('pending', 'overdue')
@@ -1107,7 +1114,7 @@ func upsertMollieMandate(tenantID string, info billingmollie.MandateInfo) error 
 		return fmt.Errorf("failed to serialize Mollie mandate details: %w", err)
 	}
 
-	_, err = db.Exec(`
+	_, err = db.ExecContext(context.Background(), `
 		INSERT INTO purser.mollie_mandates (
 			tenant_id, mollie_customer_id, mollie_mandate_id,
 			status, method, details, created_at, updated_at
