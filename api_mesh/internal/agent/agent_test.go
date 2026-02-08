@@ -14,6 +14,8 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -118,6 +120,25 @@ func (f *fakeDNS) UpdateRecords(records map[string][]string) error {
 	}
 	f.updates = append(f.updates, copied)
 	return f.updateErr
+}
+
+func newTestMetrics() *Metrics {
+	return &Metrics{
+		SyncOperations: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "test_sync_operations_total",
+				Help: "mesh sync operations",
+			},
+			[]string{"status"},
+		),
+		PeersConnected: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "test_peers_connected",
+				Help: "connected peers",
+			},
+			[]string{},
+		),
+	}
 }
 
 func newTestAgent(t *testing.T, client *fakeMeshClient, wg *fakeWireguard, dns *fakeDNS) *Agent {
@@ -488,5 +509,103 @@ func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
 
 	if agent.consecutiveFails.Load() != 1 {
 		t.Fatalf("expected consecutive failure count to be 1, got %d", agent.consecutiveFails.Load())
+	}
+}
+
+func TestAgentSyncTimeoutRecordsFailure(t *testing.T) {
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{err: context.DeadlineExceeded},
+		},
+	}
+	wg := &fakeWireguard{pubKey: "pub", privKey: "priv"}
+	dns := &fakeDNS{}
+	metrics := newTestMetrics()
+	agent := newTestAgent(t, client, wg, dns)
+	agent.metrics = metrics
+
+	agent.sync()
+
+	if got := testutil.ToFloat64(metrics.SyncOperations.WithLabelValues("failed")); got != 1 {
+		t.Fatalf("expected failed sync counter to be 1, got %v", got)
+	}
+	if agent.consecutiveFails.Load() != 1 {
+		t.Fatalf("expected consecutive failures to be 1, got %d", agent.consecutiveFails.Load())
+	}
+	if agent.lastSyncSuccess.Load() != 0 {
+		t.Fatalf("expected last sync success to be 0, got %d", agent.lastSyncSuccess.Load())
+	}
+}
+
+func TestAgentSyncReconcilesStaleState(t *testing.T) {
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+				Peers: []*pb.InfrastructurePeer{
+					{
+						PublicKey:  "peer-key",
+						Endpoint:   "1.2.3.4:51820",
+						AllowedIps: []string{"10.0.0.2/32"},
+						KeepAlive:  25,
+						NodeName:   "peer-one",
+					},
+				},
+				ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+					"metrics": {Ips: []string{"10.0.0.5"}},
+				},
+			}},
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+			}},
+		},
+	}
+	wg := &fakeWireguard{pubKey: "pub", privKey: "priv"}
+	dns := &fakeDNS{}
+	metrics := newTestMetrics()
+	agent := newTestAgent(t, client, wg, dns)
+	agent.metrics = metrics
+
+	agent.sync()
+	agent.sync()
+
+	if len(dns.updates) != 2 {
+		t.Fatalf("expected dns records updated twice, got %d", len(dns.updates))
+	}
+	if len(dns.updates[1]) != 0 {
+		t.Fatalf("expected second dns update to clear records, got %v", dns.updates[1])
+	}
+	if got := testutil.ToFloat64(metrics.PeersConnected.WithLabelValues()); got != 0 {
+		t.Fatalf("expected peers connected to be 0 after reconciliation, got %v", got)
+	}
+	if len(wg.applied) != 2 {
+		t.Fatalf("expected wireguard apply to be called twice, got %d", len(wg.applied))
+	}
+	if len(wg.applied[1].Peers) != 0 {
+		t.Fatalf("expected wireguard config peers to be empty after reconciliation, got %v", wg.applied[1].Peers)
+	}
+}
+
+func TestAgentSyncApplyFailurePropagates(t *testing.T) {
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+			}},
+		},
+	}
+	wg := &fakeWireguard{pubKey: "pub", privKey: "priv", applyErr: errors.New("apply failed")}
+	dns := &fakeDNS{}
+	metrics := newTestMetrics()
+	agent := newTestAgent(t, client, wg, dns)
+	agent.metrics = metrics
+
+	agent.sync()
+
+	if got := testutil.ToFloat64(metrics.SyncOperations.WithLabelValues("failed")); got != 1 {
+		t.Fatalf("expected failed sync counter to be 1, got %v", got)
 	}
 }
