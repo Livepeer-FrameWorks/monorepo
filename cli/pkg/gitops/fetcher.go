@@ -224,8 +224,8 @@ func (f *Fetcher) loadFromCache(channel, version string) (*Manifest, time.Time, 
 	}
 
 	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, time.Time{}, err
+	if unmarshalErr := yaml.Unmarshal(data, &manifest); unmarshalErr != nil {
+		return nil, time.Time{}, unmarshalErr
 	}
 
 	fetchedAt, err := f.readMetadata(metaPath)
@@ -463,8 +463,8 @@ func (f *Fetcher) fetchFromLocal(channel, version string) (*Manifest, error) {
 	}
 
 	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	if unmarshalErr := yaml.Unmarshal(data, &manifest); unmarshalErr != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", unmarshalErr)
 	}
 
 	return &manifest, nil

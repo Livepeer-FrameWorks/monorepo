@@ -94,14 +94,14 @@ func TestFetchStaleCacheFallbackOnFetchFailure(t *testing.T) {
 	}
 
 	cachePath, metaPath := fetcher.cachePaths("stable", "v1.2.3")
-	if err := os.MkdirAll(filepath.Dir(cachePath), 0755); err != nil {
-		t.Fatalf("failed to create cache dir: %v", err)
+	if mkdirErr := os.MkdirAll(filepath.Dir(cachePath), 0755); mkdirErr != nil {
+		t.Fatalf("failed to create cache dir: %v", mkdirErr)
 	}
-	if err := os.WriteFile(cachePath, manifestYAML, 0644); err != nil {
-		t.Fatalf("failed to write cache: %v", err)
+	if writeErr := os.WriteFile(cachePath, manifestYAML, 0644); writeErr != nil {
+		t.Fatalf("failed to write cache: %v", writeErr)
 	}
-	if err := fetcher.writeMetadata(metaPath, time.Now().Add(-2*time.Second)); err != nil {
-		t.Fatalf("failed to write metadata: %v", err)
+	if metaErr := fetcher.writeMetadata(metaPath, time.Now().Add(-2*time.Second)); metaErr != nil {
+		t.Fatalf("failed to write metadata: %v", metaErr)
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -133,8 +133,8 @@ func TestFetchUsesNormalizedVersionCacheKey(t *testing.T) {
 	}
 
 	manifest := &Manifest{PlatformVersion: "v1.2.3"}
-	if err := fetcher.saveToCache("stable", "v1.2.3", manifest); err != nil {
-		t.Fatalf("failed to save cache: %v", err)
+	if saveErr := fetcher.saveToCache("stable", "v1.2.3", manifest); saveErr != nil {
+		t.Fatalf("failed to save cache: %v", saveErr)
 	}
 
 	got, err := fetcher.Fetch("stable", "1.2.3")
