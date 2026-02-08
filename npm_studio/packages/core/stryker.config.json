@@ -8,10 +8,12 @@
   "mutate": [
     "src/**/*.ts",
     "!src/**/*.d.ts",
-    "!src/**/index.ts",
+    "!src/index.ts",
+    "!src/vanilla/index.ts",
     "!src/styles/**",
     "!src/workers/**"
   ],
+  "ignoreStatic": true,
   "reporters": ["html", "clear-text", "progress"],
   "coverageAnalysis": "perTest",
   "thresholds": {

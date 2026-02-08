@@ -48,6 +48,8 @@ describe("SceneManager", () => {
       const sm = new SceneManager();
       const scene = sm.createScene("Green", "#00ff00");
       expect(scene.backgroundColor).toBe("#00ff00");
+      expect(scene.name).toBe("Green");
+      expect(scene.layers).toEqual([]);
     });
 
     it("createScene emits sceneCreated event", () => {
@@ -67,6 +69,7 @@ describe("SceneManager", () => {
 
     it("getScene returns undefined for unknown id", () => {
       const sm = new SceneManager();
+      sm.createScene("A");
       expect(sm.getScene("nonexistent")).toBeUndefined();
     });
 
@@ -114,7 +117,9 @@ describe("SceneManager", () => {
   describe("active scene", () => {
     it("getActiveScene returns undefined initially", () => {
       const sm = new SceneManager();
+      sm.createScene("A");
       expect(sm.getActiveScene()).toBeUndefined();
+      expect(sm.getAllScenes()).toHaveLength(1);
     });
 
     it("setActiveScene sets the active scene", () => {
@@ -152,11 +157,16 @@ describe("SceneManager", () => {
       const scene2 = sm.createScene("B");
 
       sm.setActiveScene(scene1.id);
-      sm.setActiveScene(scene2.id);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0].previousSceneId).toBeNull();
 
-      const lastCall = handler.mock.calls[handler.mock.calls.length - 1][0];
+      sm.setActiveScene(scene2.id);
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      const lastCall = handler.mock.calls[1][0];
       expect(lastCall.scene.id).toBe(scene2.id);
       expect(lastCall.previousSceneId).toBe(scene1.id);
+      expect(sm.getActiveScene()).toBe(scene2);
     });
   });
 
@@ -362,6 +372,7 @@ describe("SceneManager", () => {
     it("returns false before initialize", () => {
       const sm = new SceneManager();
       expect(sm.isInitialized()).toBe(false);
+      expect(sm.getConfig()).toBeDefined();
     });
   });
 });

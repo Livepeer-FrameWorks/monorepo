@@ -141,6 +141,8 @@ describe("AudioMixer", () => {
       const mixer = new AudioMixer({ sampleRate: 44100, channelCount: 1 });
       await mixer.initialize();
       expect(globalThis.AudioContext).toHaveBeenCalledWith({ sampleRate: 44100 });
+      const destNode = mockCtx.createMediaStreamDestination.mock.results[0].value;
+      expect(destNode.channelCount).toBe(1);
       mixer.destroy();
     });
   });
@@ -182,8 +184,11 @@ describe("AudioMixer", () => {
       await mixer.initialize();
 
       mixer.addSource("mic", createMockTrack());
+      const firstSourceNode = mockCtx.createMediaStreamSource.mock.results[0].value;
+
       mixer.addSource("mic", createMockTrack());
       expect(mixer.getSourceCount()).toBe(1);
+      expect(firstSourceNode.disconnect).toHaveBeenCalled();
       mixer.destroy();
     });
 
@@ -204,7 +209,11 @@ describe("AudioMixer", () => {
     it("removeSource is no-op for unknown ID", async () => {
       const mixer = new AudioMixer();
       await mixer.initialize();
-      expect(() => mixer.removeSource("unknown")).not.toThrow();
+      mixer.addSource("mic", createMockTrack());
+
+      mixer.removeSource("unknown");
+      expect(mixer.getSourceCount()).toBe(1);
+      expect(mixer.hasSource("mic")).toBe(true);
       mixer.destroy();
     });
   });

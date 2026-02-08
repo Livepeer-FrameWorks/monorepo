@@ -91,12 +91,20 @@ describe("EncoderManager", () => {
       expect(config.video.bitrate).toBe(8_000_000);
       expect(config.video.width).toBe(1920);
       expect(config.video.height).toBe(1080);
+      expect(config.video.framerate).toBe(30);
+      expect(config.video.codec).toBe("avc1.64002a");
+      expect(config.audio.codec).toBe("opus");
+      expect(config.audio.sampleRate).toBe(48000);
+      expect(config.audio.numberOfChannels).toBe(2);
     });
 
     it("conference profile", () => {
       const config = createEncoderConfig("conference");
       expect(config.video.width).toBe(1280);
       expect(config.video.height).toBe(720);
+      expect(config.video.bitrate).toBe(2_500_000);
+      expect(config.video.framerate).toBe(30);
+      expect(config.audio.codec).toBe("opus");
     });
 
     it("low profile", () => {
@@ -141,6 +149,8 @@ describe("EncoderManager", () => {
         video: { framerate: 60 },
       });
       expect(config.video.framerate).toBe(60);
+      expect(config.video.width).toBe(1920);
+      expect(config.video.height).toBe(1080);
     });
 
     // H.264 codec level selection via createEncoderConfig

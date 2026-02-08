@@ -121,7 +121,8 @@ describe("TransitionEngine", () => {
       now = 1500;
       engine.update();
       // ease-in: t^2, at t=0.5 → 0.25
-      expect(engine.getProgress()).toBeCloseTo(0.25, 2);
+      expect(engine.getProgress()).toBeCloseTo(0.25, 5);
+      expect(engine.getProgress()).toBeLessThan(engine.getRawProgress());
     });
 
     it("ease-out: progress > raw at midpoint", () => {
@@ -129,7 +130,8 @@ describe("TransitionEngine", () => {
       now = 1500;
       engine.update();
       // ease-out: t*(2-t), at t=0.5 → 0.75
-      expect(engine.getProgress()).toBeCloseTo(0.75, 2);
+      expect(engine.getProgress()).toBeCloseTo(0.75, 5);
+      expect(engine.getProgress()).toBeGreaterThan(engine.getRawProgress());
     });
 
     it("ease-in-out: progress ≈ 0.5 at midpoint", () => {
@@ -137,7 +139,7 @@ describe("TransitionEngine", () => {
       now = 1500;
       engine.update();
       // ease-in-out at t=0.5: 2*(0.5)^2 = 0.5
-      expect(engine.getProgress()).toBeCloseTo(0.5, 2);
+      expect(engine.getProgress()).toBeCloseTo(0.5, 5);
     });
 
     it("linear: progress = raw progress", () => {

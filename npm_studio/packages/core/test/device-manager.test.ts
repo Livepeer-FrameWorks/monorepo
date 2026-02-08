@@ -432,6 +432,7 @@ describe("DeviceManager", () => {
 
       const result = await mgr.replaceVideoTrack("no-track-device");
       expect(result).toBeNull();
+      expect(mgr.getStream()).toBe(stream);
     });
   });
 
@@ -470,6 +471,7 @@ describe("DeviceManager", () => {
 
       const result = await mgr.replaceAudioTrack("no-track-device");
       expect(result).toBeNull();
+      expect(mgr.getStream()).toBe(stream);
     });
   });
 
