@@ -568,11 +568,20 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 
 	// 1. Update pending_topup status
 	var currentStatus string
+	var storedTenantID string
 	err = tx.QueryRow(`
-		SELECT status FROM purser.pending_topups WHERE id = $1
-	`, topupID).Scan(&currentStatus)
+		SELECT status, tenant_id FROM purser.pending_topups WHERE id = $1
+	`, topupID).Scan(&currentStatus, &storedTenantID)
 	if err != nil {
 		return fmt.Errorf("failed to find pending topup: %w", err)
+	}
+	if storedTenantID != tenantID {
+		logger.WithFields(logging.Fields{
+			"topup_id":         topupID,
+			"tenant_id":        tenantID,
+			"stored_tenant_id": storedTenantID,
+		}).Warn("Pending top-up tenant mismatch")
+		return fmt.Errorf("pending top-up tenant mismatch")
 	}
 
 	if currentStatus != "pending" {
