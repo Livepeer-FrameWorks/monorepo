@@ -319,7 +319,7 @@ func (c *Client) sendLoop() {
 			}
 			if msg == nil {
 				c.logger.Warn("Skipping nil server message")
-				return
+				continue
 			}
 			if err := c.stream.Send(msg); err != nil {
 				c.logger.WithError(err).Error("Failed to send message to client")
