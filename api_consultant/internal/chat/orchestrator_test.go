@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"frameworks/api_consultant/internal/knowledge"
-	"frameworks/pkg/skipper"
+	"frameworks/api_consultant/internal/skipper"
 )
 
 type fakeKnowledgeStore struct {
