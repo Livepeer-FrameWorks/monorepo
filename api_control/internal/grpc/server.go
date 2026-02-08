@@ -1630,7 +1630,8 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 	var tenantID string
 	if s.quartermasterClient != nil {
 		resp, createErr := s.quartermasterClient.CreateTenant(ctx, &pb.CreateTenantRequest{
-			Name: email, // Use email as initial tenant name
+			Name:        email, // Use email as initial tenant name
+			Attribution: req.GetAttribution(),
 		})
 		if createErr != nil {
 			s.logger.WithError(createErr).Error("Failed to create tenant via Quartermaster")
