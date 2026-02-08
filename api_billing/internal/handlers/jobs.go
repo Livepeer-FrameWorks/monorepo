@@ -1528,6 +1528,23 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	now := time.Now()
 	periodStart, periodEnd := loadSubscriptionPeriod(jm.db, tenantID, now)
 
+	var finalizedCount int
+	if err := jm.db.QueryRow(`
+		SELECT COUNT(*) FROM purser.billing_invoices
+		WHERE tenant_id = $1
+		  AND period_start = $2
+		  AND status != 'draft'
+	`, tenantID, periodStart).Scan(&finalizedCount); err != nil {
+		return fmt.Errorf("failed to check finalized invoices: %w", err)
+	}
+	if finalizedCount > 0 {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id":      tenantID,
+			"billing_period": periodStart.Format("2006-01"),
+		}).Info("Finalized invoice exists; skipping draft update")
+		return nil
+	}
+
 	// Aggregate usage for current billing period
 	// Only aggregate rollup-able metrics - uniques come from Periscope enrichment
 	rows, err := jm.db.Query(`
