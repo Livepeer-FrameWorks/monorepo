@@ -31,11 +31,22 @@ type Metrics struct {
 	WireGuardResyncs *prometheus.CounterVec
 }
 
+type meshClient interface {
+	SyncMesh(ctx context.Context, req *pb.InfrastructureSyncRequest) (*pb.InfrastructureSyncResponse, error)
+	BootstrapInfrastructureNode(ctx context.Context, req *pb.BootstrapInfrastructureNodeRequest) (*pb.BootstrapInfrastructureNodeResponse, error)
+}
+
+type dnsService interface {
+	Start()
+	Stop()
+	UpdateRecords(records map[string][]string)
+}
+
 type Agent struct {
 	logger           logging.Logger
-	client           *qmclient.GRPCClient
+	client           meshClient
 	wgManager        wireguard.Manager
-	dnsServer        *dns.Server
+	dnsServer        dnsService
 	nodeID           string
 	nodeName         string
 	nodeType         string
@@ -69,6 +80,9 @@ type Config struct {
 	DNSPort               int
 	Logger                logging.Logger
 	Metrics               *Metrics
+	MeshClient            meshClient
+	WireGuardManager      wireguard.Manager
+	DNSService            dnsService
 }
 
 func New(cfg Config) (*Agent, error) {
@@ -97,24 +111,35 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	// Initialize WireGuard Manager
-	wg, err := wireguard.NewManager(cfg.InterfaceName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create wireguard manager: %w", err)
+	wg := cfg.WireGuardManager
+	if wg == nil {
+		var err error
+		wg, err = wireguard.NewManager(cfg.InterfaceName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create wireguard manager: %w", err)
+		}
 	}
 
 	// Initialize gRPC API Client
-	client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:     cfg.QuartermasterGRPCAddr,
-		ServiceToken: cfg.ServiceToken,
-		Logger:       cfg.Logger,
-		Timeout:      10 * time.Second,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create quartermaster gRPC client: %w", err)
+	client := cfg.MeshClient
+	if client == nil {
+		var err error
+		client, err = qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:     cfg.QuartermasterGRPCAddr,
+			ServiceToken: cfg.ServiceToken,
+			Logger:       cfg.Logger,
+			Timeout:      10 * time.Second,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create quartermaster gRPC client: %w", err)
+		}
 	}
 
 	// Initialize DNS Server
-	dnsSrv := dns.NewServer(cfg.Logger, cfg.DNSPort)
+	dnsSrv := cfg.DNSService
+	if dnsSrv == nil {
+		dnsSrv = dns.NewServer(cfg.Logger, cfg.DNSPort)
+	}
 
 	return &Agent{
 		logger:          cfg.Logger,
@@ -251,6 +276,7 @@ func (a *Agent) sync() {
 			}
 
 			// Retry sync after successful bootstrap
+			req.NodeId = a.nodeID
 			retryCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
 			resp, err = a.client.SyncMesh(retryCtx, req)
 			cancel()
