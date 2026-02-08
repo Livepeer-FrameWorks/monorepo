@@ -68,6 +68,56 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 	}
 }
 
+func TestProcessStripeWebhookGRPCMissingSecret(t *testing.T) {
+	body := []byte(`{"id":"evt_missing_secret"}`)
+	headers := map[string]string{
+		"Stripe-Signature": "t=123,v1=deadbeef",
+	}
+
+	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
+	if ok {
+		t.Fatalf("expected ok=false, got true (msg=%q)", msg)
+	}
+	if code != 503 {
+		t.Fatalf("expected 503, got %d (msg=%q)", code, msg)
+	}
+}
+
+func TestProcessStripeWebhookGRPCInvalidSignature(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "unit-test-secret")
+
+	body := []byte(`{"id":"evt_invalid_signature"}`)
+	headers := map[string]string{
+		"Stripe-Signature": "t=123,v1=deadbeef",
+	}
+
+	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
+	if ok {
+		t.Fatalf("expected ok=false, got true (msg=%q)", msg)
+	}
+	if code != 401 {
+		t.Fatalf("expected 401, got %d (msg=%q)", code, msg)
+	}
+}
+
+func TestProcessStripeWebhookGRPCInvalidPayload(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "unit-test-secret")
+
+	body := []byte(`not-json`)
+	signature := stripeSignatureHeader(body, "unit-test-secret", time.Now().Unix())
+	headers := map[string]string{
+		"Stripe-Signature": signature,
+	}
+
+	ok, msg, code := ProcessStripeWebhookGRPC(body, headers)
+	if ok {
+		t.Fatalf("expected ok=false, got true (msg=%q)", msg)
+	}
+	if code != 400 {
+		t.Fatalf("expected 400, got %d (msg=%q)", code, msg)
+	}
+}
+
 func stripeSignatureHeader(payload []byte, secret string, timestamp int64) string {
 	signedPayload := fmt.Sprintf("%d.%s", timestamp, payload)
 	mac := hmac.New(sha256.New, []byte(secret))
