@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"frameworks/cli/pkg/ansible"
 	"frameworks/cli/pkg/detect"
@@ -104,6 +105,14 @@ func (p *PostgresProvisioner) Validate(ctx context.Context, host inventory.Host,
 		return fmt.Errorf("postgres health check failed: %s", result.Error)
 	}
 
+	dbNames := databaseNamesFromMetadata(config.Metadata)
+	if len(dbNames) > 0 {
+		dbResult := checker.CheckDatabases(host.Address, config.Port, dbNames)
+		if !dbResult.OK {
+			return fmt.Errorf("postgres database readiness failed: %s", dbResult.Error)
+		}
+	}
+
 	return nil
 }
 
@@ -196,4 +205,62 @@ func (p *PostgresProvisioner) executeEmbeddedSQL(ctx context.Context, host inven
 		host.Address, port, dbName)
 
 	return ExecuteSQLFile(ctx, connStr, string(sqlContent))
+}
+
+func databaseNamesFromMetadata(metadata map[string]interface{}) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["databases"]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	names := map[string]struct{}{}
+	addName := func(name string) {
+		trimmed := strings.TrimSpace(name)
+		if trimmed != "" {
+			names[trimmed] = struct{}{}
+		}
+	}
+
+	switch v := raw.(type) {
+	case []string:
+		for _, name := range v {
+			addName(name)
+		}
+	case []map[string]string:
+		for _, entry := range v {
+			addName(entry["name"])
+		}
+	case []map[string]interface{}:
+		for _, entry := range v {
+			if name, ok := entry["name"].(string); ok {
+				addName(name)
+			}
+		}
+	case []interface{}:
+		for _, entry := range v {
+			switch typed := entry.(type) {
+			case string:
+				addName(typed)
+			case map[string]string:
+				addName(typed["name"])
+			case map[string]interface{}:
+				if name, ok := typed["name"].(string); ok {
+					addName(name)
+				}
+			}
+		}
+	}
+
+	if len(names) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	return out
 }

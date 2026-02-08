@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
@@ -19,7 +20,11 @@ import (
 	pb "frameworks/pkg/proto"
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
-	"sync"
+)
+
+const (
+	minDiskFreeBytes   = 20 * 1024 * 1024 * 1024
+	minDiskFreePercent = 10.0
 )
 
 func newEdgeCmd() *cobra.Command {
@@ -53,6 +58,8 @@ func newEdgePreflightCmd() *cobra.Command {
 		results = append(results, preflight.ShmSize())
 		results = append(results, preflight.UlimitNoFile())
 		results = append(results, preflight.PortChecks()...)
+		results = append(results, preflight.DiskSpace("/", minDiskFreeBytes, minDiskFreePercent))
+		results = append(results, preflight.DiskSpace("/var/lib", minDiskFreeBytes, minDiskFreePercent))
 
 		// Print
 		okCount := 0
@@ -646,6 +653,31 @@ func runRemotePreflight(cmd *cobra.Command, sshTarget, sshKey string) error {
 		if len(lines) >= 2 {
 			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ /dev/shm: available\n")
 		}
+	}
+
+	checkDisk := func(path string) error {
+		_, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "df", []string{"-Pk", path}, "")
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "  ✗ %s: %s\n", path, strings.TrimSpace(errOut))
+			return fmt.Errorf("disk check failed for %s", path)
+		}
+		result := preflight.DiskSpaceFromDF(out, path, minDiskFreeBytes, minDiskFreePercent)
+		if result.OK {
+			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ %s: %s\n", path, result.Detail)
+			return nil
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ %s: %s\n", path, result.Detail)
+		if result.Error != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "    %s\n", result.Error)
+		}
+		return fmt.Errorf("insufficient disk space on %s", path)
+	}
+
+	if err := checkDisk("/"); err != nil {
+		return err
+	}
+	if err := checkDisk("/var/lib"); err != nil {
+		return err
 	}
 
 	return nil
