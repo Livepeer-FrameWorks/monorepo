@@ -256,10 +256,6 @@ test: proto graphql
 		exit 1; \
 	fi
 
-test-api-sidecar:
-	@echo "Running api_sidecar unit tests..."
-	@cd api_sidecar && go test ./... -count=1
-
 # Run unit tests with JUnit XML output for Codecov Test Analytics
 test-junit: proto graphql
 	@echo "Running unit tests with JUnit output for all Go modules..."

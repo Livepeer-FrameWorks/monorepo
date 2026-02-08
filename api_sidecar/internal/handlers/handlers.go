@@ -604,6 +604,7 @@ func HandleStreamSource(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
+	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_SOURCE", "forward_error")
@@ -705,6 +706,7 @@ func HandlePushEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
+	applyTenantContext(mistTrigger)
 	_, err = sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_END", "forward_error")
@@ -749,6 +751,7 @@ func HandlePushOutStart(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
+	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_OUT_START", "forward_error")
@@ -815,6 +818,7 @@ func HandleStreamBuffer(c *gin.Context) {
 	}
 
 	// Forward enriched trigger to Foghorn via gRPC (non-blocking)
+	applyTenantContext(mistTrigger)
 	_, err = sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_BUFFER", "forward_error")
@@ -864,6 +868,7 @@ func HandleStreamEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
+	applyTenantContext(mistTrigger)
 	_, err = sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_END", "forward_error")
