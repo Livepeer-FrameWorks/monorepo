@@ -176,49 +176,49 @@ build-image-skipper:
 
 # Individual service bin builds (explicit)
 build-bin-commodore: proto
-	cd api_control && go build $(LDFLAGS) -o ../bin/commodore cmd/commodore/main.go
+	cd api_control && go build $(LDFLAGS) -o ../bin/commodore ./cmd/commodore
 
 build-bin-quartermaster: proto
-	cd api_tenants && go build $(LDFLAGS) -o ../bin/quartermaster cmd/quartermaster/main.go
+	cd api_tenants && go build $(LDFLAGS) -o ../bin/quartermaster ./cmd/quartermaster
 
 build-bin-purser: proto
-	cd api_billing && go build $(LDFLAGS) -o ../bin/purser cmd/purser/main.go
+	cd api_billing && go build $(LDFLAGS) -o ../bin/purser ./cmd/purser
 
 build-bin-decklog: proto
-	cd api_firehose && go build $(LDFLAGS) -o ../bin/decklog cmd/decklog/main.go
+	cd api_firehose && go build $(LDFLAGS) -o ../bin/decklog ./cmd/decklog
 
 build-bin-foghorn: proto
-	cd api_balancing && go build $(LDFLAGS) -o ../bin/foghorn cmd/foghorn/main.go
+	cd api_balancing && go build $(LDFLAGS) -o ../bin/foghorn ./cmd/foghorn
 
 build-bin-helmsman: proto
-	cd api_sidecar && go build $(LDFLAGS) -o ../bin/helmsman cmd/helmsman/main.go
+	cd api_sidecar && go build $(LDFLAGS) -o ../bin/helmsman ./cmd/helmsman
 
 build-bin-periscope-ingest: proto
-	cd api_analytics_ingest && go build $(LDFLAGS) -o ../bin/periscope-ingest cmd/periscope/main.go
+	cd api_analytics_ingest && go build $(LDFLAGS) -o ../bin/periscope-ingest ./cmd/periscope
 
 build-bin-periscope-query: proto
-	cd api_analytics_query && go build $(LDFLAGS) -o ../bin/periscope-query cmd/periscope/main.go
+	cd api_analytics_query && go build $(LDFLAGS) -o ../bin/periscope-query ./cmd/periscope
 
 build-bin-signalman: proto
-	cd api_realtime && go build $(LDFLAGS) -o ../bin/signalman cmd/signalman/main.go
+	cd api_realtime && go build $(LDFLAGS) -o ../bin/signalman ./cmd/signalman
 
 build-bin-bridge: proto
-	cd api_gateway && go build $(LDFLAGS) -o ../bin/bridge cmd/bridge/main.go
+	cd api_gateway && go build $(LDFLAGS) -o ../bin/bridge ./cmd/bridge
 
 build-bin-navigator: proto
-	cd api_dns && go build $(LDFLAGS) -o ../bin/navigator cmd/navigator/main.go
+	cd api_dns && go build $(LDFLAGS) -o ../bin/navigator ./cmd/navigator
 
 build-bin-privateer: proto
-	cd api_mesh && go build $(LDFLAGS) -o ../bin/privateer cmd/privateer/main.go
+	cd api_mesh && go build $(LDFLAGS) -o ../bin/privateer ./cmd/privateer
 
 build-bin-deckhand: proto
-	cd api_ticketing && go build $(LDFLAGS) -o ../bin/deckhand cmd/deckhand/main.go
+	cd api_ticketing && go build $(LDFLAGS) -o ../bin/deckhand ./cmd/deckhand
 
 build-bin-forms: proto
-	cd api_forms && go build $(LDFLAGS) -o ../bin/forms cmd/forms/main.go
+	cd api_forms && go build $(LDFLAGS) -o ../bin/forms ./cmd/forms
 
 build-bin-skipper: proto
-	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper cmd/skipper/main.go
+	cd api_consultant && go build $(LDFLAGS) -o ../bin/skipper ./cmd/skipper
 
 
 # Clean build artifacts
