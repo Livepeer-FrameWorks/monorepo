@@ -83,9 +83,15 @@ type ServiceInfo struct {
 
 // FetchOptions configures manifest fetching
 type FetchOptions struct {
-	Channel    string // stable | rc
-	Version    string // v1.2.3 | latest
-	CacheDir   string // Local cache directory
-	Offline    bool   // Use cache only, don't fetch
-	Repository string // GitOps repository URL (or local path)
+	Channel        string        // stable | rc
+	Version        string        // v1.2.3 | latest
+	CacheDir       string        // Local cache directory
+	Offline        bool          // Use cache only, don't fetch
+	Repository     string        // GitOps repository URL (or local path)
+	LatestTTL      time.Duration // Cache TTL for latest (channel) manifests
+	LatestMaxStale time.Duration // Maximum staleness for latest manifests
+	PinnedTTL      time.Duration // Cache TTL for pinned versions
+	PinnedMaxStale time.Duration // Maximum staleness for pinned versions
+	RetryCount     int           // Retry attempts for remote fetch
+	RetryDelay     time.Duration // Base retry delay for remote fetch
 }
