@@ -512,6 +512,14 @@ func DefaultManager() *StreamStateManager {
 	return defaultManager
 }
 
+func ResetDefaultManagerForTests() *StreamStateManager {
+	if defaultManager != nil {
+		defaultManager.Shutdown()
+	}
+	defaultManager = NewStreamStateManager()
+	return defaultManager
+}
+
 func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
