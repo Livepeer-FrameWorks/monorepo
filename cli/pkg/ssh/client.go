@@ -188,10 +188,10 @@ func trustAndSaveHostKey(knownHostsPath, hostname string, remote net.Addr, key s
 
 	callback, err := knownhosts.New(knownHostsPath)
 	if err == nil {
-		if err := callback(hostname, remote, key); err == nil {
+		if cbErr := callback(hostname, remote, key); cbErr == nil {
 			return nil
-		} else if !isKeyNotFoundError(err) {
-			return err
+		} else if !isKeyNotFoundError(cbErr) {
+			return cbErr
 		}
 	}
 
@@ -426,6 +426,9 @@ func (c *Client) Ping(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		// If the underlying connection is wedged, SendRequest may block indefinitely.
+		// Closing the connection forces the goroutine to unblock, avoiding leaks.
+		_ = c.conn.Close()
 		return ctx.Err()
 	case err := <-errCh:
 		return err

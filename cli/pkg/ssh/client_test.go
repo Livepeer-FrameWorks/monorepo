@@ -29,7 +29,7 @@ func TestTrustAndSaveHostKeyConcurrent(t *testing.T) {
 		t.Fatalf("failed to create signer: %v", err)
 	}
 
-	host := "example.com"
+	host := "example.com:22"
 	remote := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 22}
 	publicKey := signer.PublicKey()
 
@@ -40,8 +40,8 @@ func TestTrustAndSaveHostKeyConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := trustAndSaveHostKey(knownHostsPath, host, remote, publicKey); err != nil {
-				errs <- err
+			if saveErr := trustAndSaveHostKey(knownHostsPath, host, remote, publicKey); saveErr != nil {
+				errs <- saveErr
 			}
 		}()
 	}
