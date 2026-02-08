@@ -2,11 +2,13 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/skipper"
+	"frameworks/pkg/llm"
 )
 
 type fakeKnowledgeStore struct {
@@ -73,4 +75,56 @@ func TestSearchKnowledgeFallsBackOnTenantFailure(t *testing.T) {
 	if !strings.Contains(outcome.Content, "Knowledge base results") {
 		t.Fatalf("expected knowledge context, got %q", outcome.Content)
 	}
+}
+
+type countingGateway struct {
+	tools []llm.Tool
+	calls int
+}
+
+func (g *countingGateway) AvailableTools() []llm.Tool { return g.tools }
+func (g *countingGateway) HasTool(name string) bool {
+	for _, tool := range g.tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+func (g *countingGateway) CallTool(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+	g.calls++
+	return "called", nil
+}
+
+func TestDocsModeBlocksMutatingToolExecution(t *testing.T) {
+	gateway := &countingGateway{
+		tools: []llm.Tool{
+			{Name: "delete_stream"},
+		},
+	}
+	orchestrator := &Orchestrator{gateway: gateway}
+
+	ctx := skipper.WithMode(context.Background(), "docs")
+	outcome, err := orchestrator.executeTool(ctx, llm.ToolCall{
+		Name:      "delete_stream",
+		Arguments: "{}",
+	})
+	if err != nil {
+		t.Fatalf("executeTool: %v", err)
+	}
+	if gateway.calls != 0 {
+		t.Fatalf("expected gateway to be skipped, got %d calls", gateway.calls)
+	}
+	if !strings.Contains(outcome.Content, "not available in documentation mode") {
+		t.Fatalf("expected docs mode denial message, got %q", outcome.Content)
+	}
+}
+
+func hasTool(tools []llm.Tool, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
