@@ -41,7 +41,7 @@ func NewClient(baseURL, username, password string, opts ...Option) *Client {
 		username:     username,
 		password:     password,
 		client:       &http.Client{Timeout: 10 * time.Second},
-		httpExecutor: clients.NewHTTPExecutor(defaultConfig),
+		httpExecutor: clients.NewHTTPExecutor(defaultConfig), //nolint:bodyclose // generic type parameter, not an HTTP response
 		shouldRetry:  defaultConfig.ShouldRetry,
 	}
 	for _, opt := range opts {
@@ -60,7 +60,7 @@ func WithHTTPClient(httpClient *http.Client) Option {
 
 func WithHTTPExecutorConfig(cfg clients.HTTPExecutorConfig) Option {
 	return func(c *Client) {
-		c.httpExecutor = clients.NewHTTPExecutor(cfg)
+		c.httpExecutor = clients.NewHTTPExecutor(cfg) //nolint:bodyclose // generic type parameter, not an HTTP response
 		c.shouldRetry = cfg.ShouldRetry
 	}
 }
@@ -126,9 +126,9 @@ func (c *Client) Subscribe(ctx context.Context, email, name string, listID int, 
 	}
 
 	resp, err := c.doRequest(ctx, func(ctx context.Context) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-		if err != nil {
-			return nil, err
+		req, reqErr := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+		if reqErr != nil {
+			return nil, reqErr
 		}
 
 		req.SetBasicAuth(c.username, c.password)
@@ -162,9 +162,9 @@ func (c *Client) Blocklist(ctx context.Context, email string) error {
 	}
 
 	resp, err := c.doRequest(ctx, func(ctx context.Context) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-		if err != nil {
-			return nil, err
+		req, reqErr := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+		if reqErr != nil {
+			return nil, reqErr
 		}
 
 		req.SetBasicAuth(c.username, c.password)
@@ -279,9 +279,9 @@ func (c *Client) Unsubscribe(ctx context.Context, subscriberID int, listID int) 
 	}
 
 	resp, err := c.doRequest(ctx, func(ctx context.Context) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, "PUT", reqURL, bytes.NewBuffer(jsonBody))
-		if err != nil {
-			return nil, err
+		req, reqErr := http.NewRequestWithContext(ctx, "PUT", reqURL, bytes.NewBuffer(jsonBody))
+		if reqErr != nil {
+			return nil, reqErr
 		}
 
 		req.SetBasicAuth(c.username, c.password)

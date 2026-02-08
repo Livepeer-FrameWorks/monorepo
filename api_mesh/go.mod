@@ -9,7 +9,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/miekg/dns v1.1.68
 	github.com/prometheus/client_golang v1.23.2
-	github.com/sirupsen/logrus v1.9.4
 	google.golang.org/grpc v1.78.0
 )
 
@@ -49,6 +48,7 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.57.0 // indirect
+	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/twmb/franz-go v1.20.6 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.12.0 // indirect
