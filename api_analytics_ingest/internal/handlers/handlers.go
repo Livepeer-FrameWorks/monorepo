@@ -2840,10 +2840,22 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 	}
 
 	if rowCount == 0 {
-		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+		// If everything was filtered out (empty/invalid payload), treat as a no-op.
+		// Returning an error would cause the Kafka consumer to retry forever and stall the partition.
+		if appendErrors > 0 {
+			if h.metrics != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			}
+			return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 		}
-		return fmt.Errorf("api_request_batch has no valid aggregates to insert")
+
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "skip").Inc()
+		}
+		h.logger.WithFields(logging.Fields{
+			"source_node": sourceNode,
+		}).Debug("api_request_batch had no valid aggregates; skipping")
+		return nil
 	}
 
 	if appendErrors > 0 {
@@ -2969,10 +2981,22 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 	}
 
 	if rowCount == 0 {
-		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+		// If everything was filtered out (empty/invalid payload), treat as a no-op.
+		// Returning an error would cause the Kafka consumer to retry forever and stall the partition.
+		if appendErrors > 0 {
+			if h.metrics != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			}
+			return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 		}
-		return fmt.Errorf("api_request_batch has no valid aggregates to insert")
+
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "skip").Inc()
+		}
+		h.logger.WithFields(logging.Fields{
+			"source_node": sourceNode,
+		}).Debug("api_request_batch had no valid aggregates; skipping")
+		return nil
 	}
 
 	if appendErrors > 0 {
