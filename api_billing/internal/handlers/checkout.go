@@ -351,7 +351,7 @@ func (c *httpClient) doRequest(ctx context.Context, method, url string, body *st
 
 // DispatchStripeCheckoutCompleted routes a completed checkout session to the
 // appropriate handler based on the purpose in metadata.
-func DispatchStripeCheckoutCompleted(sessionData []byte) error {
+func DispatchStripeCheckoutCompleted(ctx context.Context, sessionData []byte) error {
 	var sess struct {
 		ID           string `json:"id"`
 		CustomerID   string `json:"customer"`
@@ -394,6 +394,7 @@ func DispatchStripeCheckoutCompleted(sessionData []byte) error {
 	switch purpose {
 	case PurposeSubscription:
 		return handleSubscriptionCheckoutCompleted(
+			ctx,
 			sess.ID,
 			sess.Metadata.TenantID,
 			sess.Metadata.ReferenceID,
@@ -402,12 +403,14 @@ func DispatchStripeCheckoutCompleted(sessionData []byte) error {
 		)
 	case PurposeInvoice:
 		return handleInvoiceCheckoutCompleted(
+			ctx,
 			sess.ID,
 			sess.Metadata.TenantID,
 			sess.Metadata.ReferenceID,
 		)
 	case PurposePrepaid:
 		return handlePrepaidCheckoutCompleted(
+			ctx,
 			sess.ID,
 			sess.Metadata.TenantID,
 			sess.Metadata.ReferenceID,
@@ -424,6 +427,7 @@ func DispatchStripeCheckoutCompleted(sessionData []byte) error {
 			clusterID = sess.Metadata.TierID
 		}
 		return handleClusterSubscriptionCheckoutCompleted(
+			ctx,
 			sess.ID,
 			sess.Metadata.TenantID,
 			clusterID,
@@ -437,14 +441,14 @@ func DispatchStripeCheckoutCompleted(sessionData []byte) error {
 }
 
 // handleSubscriptionCheckoutCompleted handles tier subscription activation
-func handleSubscriptionCheckoutCompleted(sessionID, tenantID, tierID, customerID, subscriptionID string) error {
+func handleSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantID, tierID, customerID, subscriptionID string) error {
 	if tenantID == "" {
 		logger.WithField("session_id", sessionID).Warn("No tenant_id in subscription checkout metadata")
 		return nil
 	}
 
 	// Update tenant subscription with Stripe IDs
-	_, err := db.Exec(`
+	_, err := db.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET stripe_customer_id = $1,
 		    stripe_subscription_id = $2,
@@ -468,7 +472,7 @@ func handleSubscriptionCheckoutCompleted(sessionID, tenantID, tierID, customerID
 }
 
 // handleClusterSubscriptionCheckoutCompleted handles paid cluster subscription activation
-func handleClusterSubscriptionCheckoutCompleted(sessionID, tenantID, clusterID, customerID, subscriptionID string) error {
+func handleClusterSubscriptionCheckoutCompleted(ctx context.Context, sessionID, tenantID, clusterID, customerID, subscriptionID string) error {
 	if tenantID == "" || clusterID == "" {
 		logger.WithFields(logging.Fields{
 			"session_id": sessionID,
@@ -478,7 +482,7 @@ func handleClusterSubscriptionCheckoutCompleted(sessionID, tenantID, clusterID, 
 		return nil
 	}
 
-	_, err := db.Exec(`
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO purser.cluster_subscriptions (
 			tenant_id, cluster_id, status, stripe_customer_id, stripe_subscription_id,
 			stripe_subscription_status, checkout_session_id, created_at, updated_at
@@ -519,14 +523,14 @@ func handleClusterSubscriptionCheckoutCompleted(sessionID, tenantID, clusterID, 
 }
 
 // handleInvoiceCheckoutCompleted handles invoice payment completion
-func handleInvoiceCheckoutCompleted(sessionID, tenantID, invoiceID string) error {
+func handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, tenantID, invoiceID string) error {
 	if invoiceID == "" {
 		logger.WithField("session_id", sessionID).Debug("No invoice_id in checkout metadata, skipping")
 		return nil
 	}
 
 	now := time.Now()
-	_, err := db.Exec(`
+	_, err := db.ExecContext(ctx, `
 		UPDATE purser.billing_invoices
 		SET status = 'paid', paid_at = $1, updated_at = NOW()
 		WHERE id = $2 AND status IN ('pending', 'overdue')
@@ -547,7 +551,7 @@ func handleInvoiceCheckoutCompleted(sessionID, tenantID, invoiceID string) error
 }
 
 // handlePrepaidCheckoutCompleted handles prepaid balance top-up completion
-func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountCents int64, currency string, provider CheckoutProvider) error {
+func handlePrepaidCheckoutCompleted(ctx context.Context, sessionID, tenantID, topupID string, amountCents int64, currency string, provider CheckoutProvider) error {
 	if topupID == "" || tenantID == "" {
 		logger.WithFields(logging.Fields{
 			"session_id": sessionID,
@@ -560,7 +564,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 	now := time.Now()
 
 	// Start transaction
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
@@ -569,7 +573,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 	// 1. Update pending_topup status
 	var currentStatus string
 	var storedTenantID string
-	err = tx.QueryRow(`
+	err = tx.QueryRowContext(ctx, `
 		SELECT status, tenant_id FROM purser.pending_topups WHERE id = $1
 	`, topupID).Scan(&currentStatus, &storedTenantID)
 	if err != nil {
@@ -595,7 +599,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 	// 2. Credit prepaid balance
 	var balanceID string
 	var currentBalance int64
-	err = tx.QueryRow(`
+	err = tx.QueryRowContext(ctx, `
 		SELECT id, balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 		FOR UPDATE
@@ -603,7 +607,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Create balance if doesn't exist
-		err = tx.QueryRow(`
+		err = tx.QueryRowContext(ctx, `
 			INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
 			VALUES ($1, $2, $3)
 			RETURNING id, balance_cents
@@ -617,7 +621,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 	} else {
 		// Update existing balance
 		newBalance := currentBalance + amountCents
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 			UPDATE purser.prepaid_balances
 			SET balance_cents = $1, updated_at = NOW()
 			WHERE id = $2
@@ -630,7 +634,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 
 	// 3. Create balance transaction
 	var txID string
-	err = tx.QueryRow(`
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			tenant_id, amount_cents, balance_after_cents,
 			transaction_type, description, reference_id
@@ -643,7 +647,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 	}
 
 	// 4. Update pending_topup to completed
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		UPDATE purser.pending_topups
 		SET status = 'completed', completed_at = $1,
 		    balance_transaction_id = $2, updated_at = NOW()
@@ -654,7 +658,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 	}
 
 	// 5. If tenant was suspended due to balance, unsuspend
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(ctx, `
 		UPDATE purser.tenant_subscriptions
 		SET status = 'active', updated_at = NOW()
 		WHERE tenant_id = $1 AND status = 'suspended'

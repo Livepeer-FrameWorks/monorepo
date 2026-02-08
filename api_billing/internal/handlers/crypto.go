@@ -118,7 +118,7 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 	// Query all active wallets - both invoice and prepaid
 	// For invoice: join with billing_invoices to get expected amount
 	// For prepaid: use expected_amount_cents directly
-	rows, err := cm.db.Query(`
+	rows, err := cm.db.QueryContext(ctx, `
 		SELECT
 			cw.id,
 			cw.tenant_id,
@@ -190,14 +190,12 @@ func (cm *CryptoMonitor) checkPendingPayments(ctx context.Context) {
 			wallet.InvoiceCurrency = &invoiceCurrency.String
 		}
 
-		cm.checkWalletForPayments(wallet)
+		cm.checkWalletForPayments(ctx, wallet)
 	}
 }
 
 // checkWalletForPayments checks a specific wallet address for payments
-func (cm *CryptoMonitor) checkWalletForPayments(wallet PendingWallet) {
-	ctx := context.Background()
-
+func (cm *CryptoMonitor) checkWalletForPayments(ctx context.Context, wallet PendingWallet) {
 	// Get network config
 	network, ok := Networks[wallet.Network]
 	if !ok {
@@ -384,9 +382,9 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 
 	switch wallet.Purpose {
 	case "invoice":
-		err = cm.confirmInvoicePayment(dbTx, wallet, tx, txAmount, now)
+		err = cm.confirmInvoicePayment(ctx, dbTx, wallet, tx, txAmount, now)
 	case "prepaid":
-		err = cm.confirmPrepaidTopup(dbTx, wallet, tx, txAmount, now)
+		err = cm.confirmPrepaidTopup(ctx, dbTx, wallet, tx, txAmount, now)
 	default:
 		err = fmt.Errorf("unknown wallet purpose: %s", wallet.Purpose)
 	}
@@ -401,7 +399,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	}
 
 	// Mark wallet as used
-	_, err = dbTx.Exec(`
+	_, err = dbTx.ExecContext(ctx, `
 		UPDATE purser.crypto_wallets
 		SET status = 'used',
 			confirmed_tx_hash = $2,
@@ -431,7 +429,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 	if wallet.Purpose == "invoice" && wallet.InvoiceID != nil {
 		var paymentID, currency string
 		var amount float64
-		if err := cm.db.QueryRow(`
+		if err := cm.db.QueryRowContext(ctx, `
 			SELECT id, amount, currency
 			FROM purser.billing_payments
 			WHERE invoice_id = $1 AND status = 'confirmed'
@@ -467,7 +465,7 @@ func (cm *CryptoMonitor) confirmPayment(wallet PendingWallet, tx CryptoTransacti
 }
 
 // confirmInvoicePayment marks an invoice as paid
-func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
+func (cm *CryptoMonitor) confirmInvoicePayment(ctx context.Context, dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
 	if wallet.InvoiceID == nil {
 		return fmt.Errorf("invoice_id is nil for invoice wallet")
 	}
@@ -475,7 +473,7 @@ func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWalle
 	paymentID := uuid.New().String()
 
 	// Create payment record
-	_, err := dbTx.Exec(`
+	_, err := dbTx.ExecContext(ctx, `
 		INSERT INTO purser.billing_payments (
 			id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at,
 			actual_tx_amount, asset_type, network, block_number
@@ -497,7 +495,7 @@ func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWalle
 	}
 
 	// Mark invoice as paid
-	_, err = dbTx.Exec(`
+	_, err = dbTx.ExecContext(ctx, `
 		UPDATE purser.billing_invoices
 		SET status = 'paid', paid_at = $1, updated_at = NOW()
 		WHERE id = $2 AND status IN ('pending', 'overdue')
@@ -511,7 +509,7 @@ func (cm *CryptoMonitor) confirmInvoicePayment(dbTx *sql.Tx, wallet PendingWalle
 }
 
 // confirmPrepaidTopup credits a tenant's prepaid balance
-func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
+func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, wallet PendingWallet, tx CryptoTransaction, txAmount float64, now time.Time) error {
 	if wallet.ExpectedAmountCents == nil {
 		return fmt.Errorf("expected_amount_cents is nil for prepaid wallet")
 	}
@@ -528,7 +526,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet,
 
 	// Get current balance (or 0 if not exists)
 	var currentBalance int64
-	err := dbTx.QueryRow(`
+	err := dbTx.QueryRowContext(ctx, `
 		SELECT balance_cents FROM purser.prepaid_balances
 		WHERE tenant_id = $1 AND currency = $2
 	`, wallet.TenantID, currency).Scan(&currentBalance)
@@ -542,7 +540,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet,
 	newBalance := currentBalance + amountCents
 
 	// Upsert prepaid balance
-	_, err = dbTx.Exec(`
+	_, err = dbTx.ExecContext(ctx, `
 		INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency, updated_at)
 		VALUES ($1, $2, $3, NOW())
 		ON CONFLICT (tenant_id, currency)
@@ -555,7 +553,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(dbTx *sql.Tx, wallet PendingWallet,
 
 	// Record transaction in audit trail
 	transactionID := uuid.New().String()
-	_, err = dbTx.Exec(`
+	_, err = dbTx.ExecContext(ctx, `
 		INSERT INTO purser.balance_transactions (
 			id, tenant_id, amount_cents, balance_after_cents,
 			transaction_type, description, reference_id, reference_type, created_at

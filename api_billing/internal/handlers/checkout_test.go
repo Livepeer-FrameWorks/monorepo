@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -26,7 +27,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectRollback()
 
-	if err := handlePrepaidCheckoutCompleted("sess-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe); err == nil {
+	if err := handlePrepaidCheckoutCompleted(context.Background(), "sess-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe); err == nil {
 		t.Fatal("expected error")
 	}
 

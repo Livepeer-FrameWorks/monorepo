@@ -300,7 +300,7 @@ func (s *Server) ListMessages(ctx context.Context, req *pb.ListMessagesRequest) 
 		return nil, status.Error(codes.InvalidArgument, "invalid conversation_id")
 	}
 
-	if err := s.verifyConversationTenantByID(ctx, convID); err != nil {
+	if err = s.verifyConversationTenantByID(ctx, convID); err != nil {
 		s.metrics.GRPCRequests.WithLabelValues("ListMessages", "forbidden").Inc()
 		return nil, err
 	}
@@ -343,7 +343,7 @@ func (s *Server) SendMessage(ctx context.Context, req *pb.SendMessageRequest) (*
 		return nil, status.Error(codes.InvalidArgument, "content required")
 	}
 
-	if err := s.verifyConversationTenantByID(ctx, convID); err != nil {
+	if err = s.verifyConversationTenantByID(ctx, convID); err != nil {
 		s.metrics.GRPCRequests.WithLabelValues("SendMessage", "forbidden").Inc()
 		return nil, err
 	}
