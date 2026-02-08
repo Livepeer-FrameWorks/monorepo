@@ -97,3 +97,22 @@ func TestApplyX402CookiesUsesCookieDomain(t *testing.T) {
 		t.Fatalf("expected cookie domain example.com, got %q and %q", accessCookie.Domain, tenantCookie.Domain)
 	}
 }
+
+func TestPublicOrJWTAuthRejectsUnauthenticatedMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	body := []byte("mutation { updateStream(id: \"1\") { id } }")
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
