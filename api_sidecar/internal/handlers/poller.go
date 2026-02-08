@@ -1686,7 +1686,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 
 	// Node is healthy if: we got MistServer data AND CPU <= 90% AND RAM <= 90% AND SHM <= 90%
 	hasMistData := jsonData != nil
-	isHealthy := hasMistData && cpuPercent <= 90 && memPercent <= 90 && shmPercent <= 90
+	isHealthy := evaluateNodeHealth(hasMistData, cpuPercent, memPercent, shmPercent)
 	nodeUpdate.IsHealthy = isHealthy
 
 	logger.WithFields(logging.Fields{
@@ -1782,6 +1782,13 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 			NodeLifecycleUpdate: nodeUpdate,
 		},
 	}
+}
+
+func evaluateNodeHealth(hasMistData bool, cpuPercent, memPercent, shmPercent float64) bool {
+	if !hasMistData {
+		return false
+	}
+	return cpuPercent <= 90 && memPercent <= 90 && shmPercent <= 90
 }
 
 // getDiskUsage returns total and used bytes for the file system containing path
