@@ -1,12 +1,16 @@
 package grpc
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"frameworks/pkg/ctxkeys"
 	pb "frameworks/pkg/proto"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -86,6 +90,67 @@ func TestValidateTimeRangeProto(t *testing.T) {
 		}
 		if !end.Equal(endTime) {
 			t.Fatalf("expected end %v, got %v", endTime, end)
+		}
+	})
+}
+
+func TestRequireTenantID(t *testing.T) {
+	t.Run("missing tenant context", func(t *testing.T) {
+		_, err := requireTenantID(context.Background(), "")
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected invalid argument, got %v", err)
+		}
+	})
+
+	t.Run("uses context tenant when present", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		tenantID, err := requireTenantID(ctx, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tenantID != "tenant-a" {
+			t.Fatalf("expected tenant-a, got %s", tenantID)
+		}
+	})
+
+	t.Run("rejects mismatched tenant id", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		_, err := requireTenantID(ctx, "tenant-b")
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected permission denied, got %v", err)
+		}
+	})
+
+	t.Run("allows request tenant for service calls", func(t *testing.T) {
+		tenantID, err := requireTenantID(context.Background(), "tenant-service")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if tenantID != "tenant-service" {
+			t.Fatalf("expected tenant-service, got %s", tenantID)
+		}
+	})
+}
+
+func TestValidateRelatedTenantIDs(t *testing.T) {
+	t.Run("allows empty related list", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		if err := validateRelatedTenantIDs(ctx, nil); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects related list for authenticated tenant", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+		err := validateRelatedTenantIDs(ctx, []string{"tenant-b"})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected permission denied, got %v", err)
+		}
+	})
+
+	t.Run("allows related list for service calls", func(t *testing.T) {
+		if err := validateRelatedTenantIDs(context.Background(), []string{"tenant-b"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }
