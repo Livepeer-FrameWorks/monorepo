@@ -263,17 +263,28 @@ test-junit: proto graphql
 	@rm -f $(CURDIR)/test-results/go-junit.xml
 	go install github.com/jstemmer/go-junit-report/v2@latest
 	@failed=0; \
+	failed_modules=""; \
 	for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
 		echo "==> $$service_name"; \
 		(cd $$service_dir && \
 			go mod tidy && \
-			go test ./... -race -count=1 -v 2>&1) | go-junit-report -set-exit-code >> $(CURDIR)/test-results/go-junit.xml || failed=1; \
+			go test ./... -race -count=1 -v) > $(CURDIR)/test-results/$$service_name.out 2>&1; \
+		test_exit=$$?; \
+		go-junit-report < $(CURDIR)/test-results/$$service_name.out >> $(CURDIR)/test-results/go-junit.xml 2>/dev/null; \
+		if [ $$test_exit -ne 0 ]; then \
+			echo "  FAILED: $$service_name"; \
+			grep -E -- "--- FAIL:|^FAIL\b|^panic:" $(CURDIR)/test-results/$$service_name.out || tail -20 $(CURDIR)/test-results/$$service_name.out; \
+			failed=1; \
+			failed_modules="$$failed_modules $$service_name"; \
+		else \
+			rm -f $(CURDIR)/test-results/$$service_name.out; \
+		fi; \
 	done; \
 	if [ $$failed -eq 0 ]; then \
 		echo "✓ Unit tests passed"; \
 	else \
-		echo "✗ Unit tests failed"; \
+		echo "✗ Unit tests failed:$$failed_modules"; \
 		exit 1; \
 	fi
 	@echo "JUnit report saved to $(CURDIR)/test-results/go-junit.xml"
