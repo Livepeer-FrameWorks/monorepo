@@ -85,8 +85,10 @@ func (c *Client) doRequest(method, path string, body interface{}) (*APIResponse,
 		cfg := clients.DefaultHTTPExecutorConfig()
 		cfg.MaxRetries = 0
 		executor = clients.NewHTTPExecutor(cfg) //nolint:bodyclose
-	} else if executor == nil {
-		executor = clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig()) //nolint:bodyclose
+	}
+	if executor == nil {
+		cfg := clients.DefaultHTTPExecutorConfig()
+		executor = clients.NewHTTPExecutor(cfg) //nolint:bodyclose
 	}
 
 	resp, err := clients.ExecuteHTTP(ctx, executor, execute)
