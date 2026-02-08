@@ -2,11 +2,15 @@ package gitops
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -19,9 +23,20 @@ const (
 
 // Fetcher fetches and caches manifests from the gitops repository
 type Fetcher struct {
-	repository string
-	cacheDir   string
-	client     *http.Client
+	repository     string
+	cacheDir       string
+	client         *http.Client
+	offline        bool
+	latestTTL      time.Duration
+	latestMaxStale time.Duration
+	pinnedTTL      time.Duration
+	pinnedMaxStale time.Duration
+	retryCount     int
+	retryDelay     time.Duration
+}
+
+type cacheMetadata struct {
+	FetchedAt time.Time `json:"fetched_at"`
 }
 
 // NewFetcher creates a new manifest fetcher
@@ -42,9 +57,41 @@ func NewFetcher(opts FetchOptions) (*Fetcher, error) {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
+	latestTTL := opts.LatestTTL
+	if latestTTL == 0 {
+		latestTTL = 15 * time.Minute
+	}
+	latestMaxStale := opts.LatestMaxStale
+	if latestMaxStale == 0 {
+		latestMaxStale = 1 * time.Hour
+	}
+	pinnedTTL := opts.PinnedTTL
+	if pinnedTTL == 0 {
+		pinnedTTL = 24 * time.Hour
+	}
+	pinnedMaxStale := opts.PinnedMaxStale
+	if pinnedMaxStale == 0 {
+		pinnedMaxStale = 7 * 24 * time.Hour
+	}
+	retryCount := opts.RetryCount
+	if retryCount == 0 {
+		retryCount = 3
+	}
+	retryDelay := opts.RetryDelay
+	if retryDelay == 0 {
+		retryDelay = 250 * time.Millisecond
+	}
+
 	return &Fetcher{
-		repository: repo,
-		cacheDir:   cacheDir,
+		repository:     repo,
+		cacheDir:       cacheDir,
+		offline:        opts.Offline,
+		latestTTL:      latestTTL,
+		latestMaxStale: latestMaxStale,
+		pinnedTTL:      pinnedTTL,
+		pinnedMaxStale: pinnedMaxStale,
+		retryCount:     retryCount,
+		retryDelay:     retryDelay,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -59,21 +106,41 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 	}
 
 	// Default version
-	if version == "" || version == "latest" {
+	if version == "" {
 		version = "latest"
 	}
+	version = normalizeVersion(version)
+
+	ttl, maxStale := f.cachePolicy(version)
 
 	// Check cache first
-	cached, err := f.loadFromCache(channel, version)
-	if err == nil {
-		return cached, nil
+	cached, cachedAt, cacheErr := f.loadFromCache(channel, version)
+	if cacheErr == nil {
+		age := time.Since(cachedAt)
+		if age <= ttl {
+			return cached, nil
+		}
+		if f.offline && age <= maxStale {
+			return cached, nil
+		}
+	}
+
+	if f.offline {
+		return nil, fmt.Errorf("offline and no usable cache for %s/%s", channel, version)
 	}
 
 	// Check if repository is a local path
 	if f.isLocalPath(f.repository) {
 		manifest, errFetch := f.fetchFromLocal(channel, version)
 		if errFetch != nil {
+			if cacheErr == nil && time.Since(cachedAt) <= maxStale {
+				fmt.Printf("Warning: using stale cached manifest after local fetch failure: %v\n", errFetch)
+				return cached, nil
+			}
 			return nil, fmt.Errorf("failed to fetch from local path: %w", errFetch)
+		}
+		if err := f.saveToCache(channel, version, manifest); err != nil {
+			fmt.Printf("Warning: failed to cache manifest: %v\n", err)
 		}
 		return manifest, nil
 	}
@@ -81,6 +148,10 @@ func (f *Fetcher) Fetch(channel, version string) (*Manifest, error) {
 	// Fetch from repository
 	manifest, err := f.fetchFromRepo(channel, version)
 	if err != nil {
+		if cacheErr == nil && time.Since(cachedAt) <= maxStale {
+			fmt.Printf("Warning: using stale cached manifest after fetch failure: %v\n", err)
+			return cached, nil
+		}
 		return nil, fmt.Errorf("failed to fetch manifest: %w", err)
 	}
 
@@ -98,51 +169,76 @@ func (f *Fetcher) fetchFromRepo(channel, version string) (*Manifest, error) {
 	// Build URL: https://raw.githubusercontent.com/Livepeer-FrameWorks/gitops/main/manifests/{channel}/{version}.yaml
 	url := fmt.Sprintf("%s/manifests/%s/%s.yaml", f.repository, channel, version)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build request: %w", err)
+	var lastErr error
+	for attempt := 1; attempt <= f.retryCount; attempt++ {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build request: %w", err)
+		}
+
+		resp, err := f.client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to download manifest: %w", err)
+		} else {
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				lastErr = fmt.Errorf("manifest not found: %s (HTTP %d)", url, resp.StatusCode)
+				if !shouldRetryStatus(resp.StatusCode) {
+					return nil, lastErr
+				}
+			} else {
+				// Read body
+				data, err := io.ReadAll(resp.Body)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read manifest: %w", err)
+				}
+
+				// Parse YAML
+				var manifest Manifest
+				if err := yaml.Unmarshal(data, &manifest); err != nil {
+					return nil, fmt.Errorf("failed to parse manifest: %w", err)
+				}
+
+				return &manifest, nil
+			}
+		}
+
+		if attempt < f.retryCount {
+			if delay := f.retryDelay * time.Duration(attempt); delay > 0 {
+				time.Sleep(delay)
+			}
+		}
 	}
 
-	resp, err := f.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download manifest: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("manifest not found: %s (HTTP %d)", url, resp.StatusCode)
-	}
-
-	// Read body
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read manifest: %w", err)
-	}
-
-	// Parse YAML
-	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
-	}
-
-	return &manifest, nil
+	return nil, lastErr
 }
 
 // loadFromCache loads a manifest from local cache
-func (f *Fetcher) loadFromCache(channel, version string) (*Manifest, error) {
-	cachePath := filepath.Join(f.cacheDir, channel, fmt.Sprintf("%s.yaml", version))
+func (f *Fetcher) loadFromCache(channel, version string) (*Manifest, time.Time, error) {
+	cachePath, metaPath := f.cachePaths(channel, version)
 
 	data, err := os.ReadFile(cachePath)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 
 	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, err
+	if unmarshalErr := yaml.Unmarshal(data, &manifest); unmarshalErr != nil {
+		return nil, time.Time{}, unmarshalErr
 	}
 
-	return &manifest, nil
+	fetchedAt, err := f.readMetadata(metaPath)
+	if err != nil {
+		info, statErr := os.Stat(cachePath)
+		if statErr == nil {
+			fetchedAt = info.ModTime()
+		} else {
+			fetchedAt = time.Time{}
+		}
+	}
+
+	return &manifest, fetchedAt, nil
 }
 
 // saveToCache saves a manifest to local cache
@@ -152,18 +248,26 @@ func (f *Fetcher) saveToCache(channel, version string, manifest *Manifest) error
 		return err
 	}
 
-	cachePath := filepath.Join(channelDir, fmt.Sprintf("%s.yaml", version))
+	cachePath, metaPath := f.cachePaths(channel, version)
 
 	data, err := yaml.Marshal(manifest)
 	if err != nil {
 		return err
 	}
 
-	return os.WriteFile(cachePath, data, 0644)
+	if err := os.WriteFile(cachePath, data, 0644); err != nil {
+		return err
+	}
+
+	return f.writeMetadata(metaPath, time.Now().UTC())
 }
 
 // ResolveVersion resolves a version string to channel and version
 func ResolveVersion(versionStr string) (channel, version string) {
+	if versionStr == "" {
+		return "stable", "latest"
+	}
+
 	// If it looks like a version tag (v1.2.3), use stable channel
 	if len(versionStr) > 0 && versionStr[0] == 'v' {
 		return "stable", versionStr
@@ -173,9 +277,11 @@ func ResolveVersion(versionStr string) (channel, version string) {
 	switch versionStr {
 	case "stable", "rc":
 		return versionStr, "latest"
+	case "latest":
+		return "stable", "latest"
 	default:
 		// Default to stable channel with specific version
-		return "stable", versionStr
+		return "stable", normalizeVersion(versionStr)
 	}
 }
 
@@ -242,6 +348,71 @@ func (f *Fetcher) isLocalPath(path string) bool {
 	return len(path) > 0 && (path[0] == '/' || path[0] == '.' || path[0] == '~')
 }
 
+func (f *Fetcher) cachePolicy(version string) (time.Duration, time.Duration) {
+	if version == "latest" {
+		return f.latestTTL, f.latestMaxStale
+	}
+	return f.pinnedTTL, f.pinnedMaxStale
+}
+
+func (f *Fetcher) cachePaths(channel, version string) (string, string) {
+	channelDir := filepath.Join(f.cacheDir, channel)
+	cachePath := filepath.Join(channelDir, fmt.Sprintf("%s.yaml", version))
+	metaPath := filepath.Join(channelDir, fmt.Sprintf("%s.meta.json", version))
+	return cachePath, metaPath
+}
+
+func (f *Fetcher) readMetadata(path string) (time.Time, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	var meta cacheMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return time.Time{}, err
+	}
+
+	return meta.FetchedAt, nil
+}
+
+func (f *Fetcher) writeMetadata(path string, fetchedAt time.Time) error {
+	meta := cacheMetadata{FetchedAt: fetchedAt}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func normalizeVersion(version string) string {
+	if version == "" || version == "latest" {
+		return "latest"
+	}
+	if version == "stable" || version == "rc" {
+		return version
+	}
+	if strings.HasPrefix(version, "v") {
+		return version
+	}
+	if looksLikeSemver(version) {
+		return "v" + version
+	}
+	return version
+}
+
+func looksLikeSemver(version string) bool {
+	semverPattern := regexp.MustCompile(`^\d+\.\d+\.\d+`)
+	return semverPattern.MatchString(version)
+}
+
+func shouldRetryStatus(status int) bool {
+	if status == http.StatusTooManyRequests {
+		return true
+	}
+	return status >= http.StatusInternalServerError
+}
+
 // fetchFromLocal loads a manifest from local filesystem
 func (f *Fetcher) fetchFromLocal(channel, version string) (*Manifest, error) {
 	// For local paths, support two patterns:
@@ -263,10 +434,16 @@ func (f *Fetcher) fetchFromLocal(channel, version string) (*Manifest, error) {
 
 			// Find latest release (simple heuristic: last file alphabetically)
 			var latestFile string
+			var releaseFiles []string
 			for _, file := range files {
 				if !file.IsDir() && filepath.Ext(file.Name()) == ".yaml" {
-					latestFile = file.Name()
+					releaseFiles = append(releaseFiles, file.Name())
 				}
+			}
+
+			if len(releaseFiles) > 0 {
+				sort.Strings(releaseFiles)
+				latestFile = releaseFiles[len(releaseFiles)-1]
 			}
 
 			if latestFile == "" {
@@ -286,8 +463,8 @@ func (f *Fetcher) fetchFromLocal(channel, version string) (*Manifest, error) {
 	}
 
 	var manifest Manifest
-	if err := yaml.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	if unmarshalErr := yaml.Unmarshal(data, &manifest); unmarshalErr != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", unmarshalErr)
 	}
 
 	return &manifest, nil
