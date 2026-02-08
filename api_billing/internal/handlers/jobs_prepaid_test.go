@@ -12,14 +12,14 @@ import (
 )
 
 func TestDeductPrepaidBalanceForUsage_AppliesAndLocksBalance(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	jm := &JobManager{
-		db:     db,
+		db:     mockDB,
 		logger: logging.NewLogger(),
 	}
 
@@ -67,14 +67,14 @@ func TestDeductPrepaidBalanceForUsage_AppliesAndLocksBalance(t *testing.T) {
 }
 
 func TestDeductPrepaidBalanceForUsage_DuplicateSummaryNoOp(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	jm := &JobManager{
-		db:     db,
+		db:     mockDB,
 		logger: logging.NewLogger(),
 	}
 

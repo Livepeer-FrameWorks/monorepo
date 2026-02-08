@@ -14,14 +14,14 @@ import (
 )
 
 func TestUpdateInvoiceDraftSkipsWhenFinalizedInvoiceExists(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	jm := &JobManager{
-		db:     db,
+		db:     mockDB,
 		logger: logging.NewLogger(),
 	}
 
@@ -78,14 +78,14 @@ func TestUpdateInvoiceDraftSkipsWhenFinalizedInvoiceExists(t *testing.T) {
 }
 
 func TestUpdateInvoiceDraftAppliesPrepaidCredit(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	jm := &JobManager{
-		db:     db,
+		db:     mockDB,
 		logger: logging.NewLogger(),
 	}
 
@@ -188,14 +188,14 @@ func TestUpdateInvoiceDraftAppliesPrepaidCredit(t *testing.T) {
 }
 
 func TestGenerateMonthlyInvoicesUpdatesDraftWithOverlappingUsage(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	jm := &JobManager{
-		db:     db,
+		db:     mockDB,
 		logger: logging.NewLogger(),
 	}
 
