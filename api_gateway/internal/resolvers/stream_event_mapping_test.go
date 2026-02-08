@@ -15,7 +15,7 @@ import (
 
 func TestProtoPayloadJSONRedactsInternalFields(t *testing.T) {
 	msg := &pb.StreamLifecycleUpdate{
-		StreamId:     "stream-1",
+		NodeId:       "node-1",
 		InternalName: "secret-name",
 	}
 
@@ -32,8 +32,8 @@ func TestProtoPayloadJSONRedactsInternalFields(t *testing.T) {
 	if _, exists := parsed["internalName"]; exists {
 		t.Fatalf("expected internalName to be redacted, got %v", parsed["internalName"])
 	}
-	if got, ok := parsed["streamId"].(string); !ok || got != "stream-1" {
-		t.Fatalf("expected streamId to be preserved, got %v", parsed["streamId"])
+	if got, ok := parsed["nodeId"].(string); !ok || got != "node-1" {
+		t.Fatalf("expected nodeId to be preserved, got %v", parsed["nodeId"])
 	}
 }
 
