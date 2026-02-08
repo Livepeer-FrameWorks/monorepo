@@ -302,6 +302,10 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 		Blocking:    true,
 	}
 
+	hook := make(chan struct{}, 1)
+	disconnectSubscribedHook = hook
+	t.Cleanup(func() { disconnectSubscribedHook = nil })
+
 	resultCh := make(chan *MistTriggerResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
@@ -312,6 +316,14 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 
 	<-stream1.sendCh
 	waitForPendingTrigger(t, trigger.RequestId)
+
+	select {
+	case <-hook:
+		// ok
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for disconnect subscription")
+	}
+
 	notifyDisconnect()
 
 	currentStream = stream2

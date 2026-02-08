@@ -59,6 +59,9 @@ var (
 	disconnectNotify   = make(chan struct{})
 	disconnectNotifyMu sync.Mutex
 
+	// test-only hook to avoid flake in disconnect retry tests
+	disconnectSubscribedHook chan struct{}
+
 	jitterRandMu sync.Mutex
 	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
 )
@@ -247,6 +250,14 @@ func waitForMistTriggerResponseWithDisconnect(requestID string, timeout time.Dur
 	disconnectNotifyMu.Lock()
 	disconnectCh := disconnectNotify
 	disconnectNotifyMu.Unlock()
+
+	// test hook: allow tests to synchronize on subscription to disconnect notifications
+	if disconnectSubscribedHook != nil {
+		select {
+		case disconnectSubscribedHook <- struct{}{}:
+		default:
+		}
+	}
 
 	// Wait for response, disconnect, or timeout
 	select {
