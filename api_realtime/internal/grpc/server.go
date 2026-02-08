@@ -313,7 +313,14 @@ func (c *Client) sendLoop() {
 		select {
 		case <-c.done:
 			return
-		case msg := <-c.send:
+		case msg, ok := <-c.send:
+			if !ok {
+				return
+			}
+			if msg == nil {
+				c.logger.Warn("Skipping nil server message")
+				return
+			}
 			if err := c.stream.Send(msg); err != nil {
 				c.logger.WithError(err).Error("Failed to send message to client")
 				return
