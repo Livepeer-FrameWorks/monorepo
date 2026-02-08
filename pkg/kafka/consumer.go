@@ -92,75 +92,87 @@ func (c *Consumer) Start(ctx context.Context) error {
 			}
 
 			iter := fetches.RecordIter()
-			type topicPartition struct {
-				topic     string
-				partition int32
-			}
-			blocked := make(map[topicPartition]bool)
-			lastSuccess := make(map[topicPartition]*kgo.Record)
-
+			records := make([]*kgo.Record, 0)
 			for !iter.Done() {
-				record := iter.Next()
-				tp := topicPartition{topic: record.Topic, partition: record.Partition}
-				if blocked[tp] {
-					// A prior message in this topic/partition failed. We must not
-					// process or commit later offsets, otherwise we'd skip the failed
-					// message on restart.
-					continue
-				}
-
-				c.mu.RLock()
-				handler, exists := c.handlers[record.Topic]
-				c.mu.RUnlock()
-
-				if !exists {
-					// No handler registered - still commit to avoid reprocessing
-					c.logger.WithField("topic", record.Topic).Warn("No handler registered for topic")
-					lastSuccess[tp] = record
-					continue
-				}
-
-				hdrs := make(map[string]string, len(record.Headers))
-				for _, h := range record.Headers {
-					hdrs[h.Key] = string(h.Value)
-				}
-
-				msg := Message{
-					Key:       record.Key,
-					Value:     record.Value,
-					Headers:   hdrs,
-					Topic:     record.Topic,
-					Partition: record.Partition,
-					Offset:    record.Offset,
-					Timestamp: record.Timestamp,
-				}
-
-				if err := handler(ctx, msg); err != nil {
-					c.logger.WithError(err).WithFields(logrus.Fields{
-						"topic":     record.Topic,
-						"partition": record.Partition,
-						"offset":    record.Offset,
-					}).Error("Failed to handle message - will retry on restart")
-					// Block this partition to avoid committing offsets beyond the failed message.
-					blocked[tp] = true
-					continue
-				}
-
-				lastSuccess[tp] = record
+				records = append(records, iter.Next())
 			}
 
-			if len(lastSuccess) > 0 {
-				records := make([]*kgo.Record, 0, len(lastSuccess))
-				for _, r := range lastSuccess {
-					records = append(records, r)
-				}
-
-				if err := c.client.CommitRecords(ctx, records...); err != nil {
+			commitRecords := c.processRecords(ctx, records)
+			if len(commitRecords) > 0 {
+				if err := c.client.CommitRecords(ctx, commitRecords...); err != nil {
 					c.logger.WithError(err).Error("failed to commit records")
 				}
 			}
 		}
 	}
+}
+
+func (c *Consumer) processRecords(ctx context.Context, records []*kgo.Record) []*kgo.Record {
+	type topicPartition struct {
+		topic     string
+		partition int32
+	}
+	blocked := make(map[topicPartition]bool)
+	lastSuccess := make(map[topicPartition]*kgo.Record)
+
+	for _, record := range records {
+		tp := topicPartition{topic: record.Topic, partition: record.Partition}
+		if blocked[tp] {
+			// A prior message in this topic/partition failed. We must not
+			// process or commit later offsets, otherwise we'd skip the failed
+			// message on restart.
+			continue
+		}
+
+		c.mu.RLock()
+		handler, exists := c.handlers[record.Topic]
+		c.mu.RUnlock()
+
+		if !exists {
+			// No handler registered - still commit to avoid reprocessing
+			c.logger.WithField("topic", record.Topic).Warn("No handler registered for topic")
+			lastSuccess[tp] = record
+			continue
+		}
+
+		hdrs := make(map[string]string, len(record.Headers))
+		for _, h := range record.Headers {
+			hdrs[h.Key] = string(h.Value)
+		}
+
+		msg := Message{
+			Key:       record.Key,
+			Value:     record.Value,
+			Headers:   hdrs,
+			Topic:     record.Topic,
+			Partition: record.Partition,
+			Offset:    record.Offset,
+			Timestamp: record.Timestamp,
+		}
+
+		if err := handler(ctx, msg); err != nil {
+			c.logger.WithError(err).WithFields(logrus.Fields{
+				"topic":     record.Topic,
+				"partition": record.Partition,
+				"offset":    record.Offset,
+			}).Error("Failed to handle message - will retry on restart")
+			// Block this partition to avoid committing offsets beyond the failed message.
+			blocked[tp] = true
+			continue
+		}
+
+		lastSuccess[tp] = record
+	}
+
+	if len(lastSuccess) == 0 {
+		return nil
+	}
+
+	commitRecords := make([]*kgo.Record, 0, len(lastSuccess))
+	for _, record := range lastSuccess {
+		commitRecords = append(commitRecords, record)
+	}
+	return commitRecords
 }
 
 // HealthCheck pings the broker
