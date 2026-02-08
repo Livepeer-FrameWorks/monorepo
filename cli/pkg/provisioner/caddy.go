@@ -378,13 +378,14 @@ func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, co
 		return fmt.Errorf("caddy admin API health check failed: %s", result.Error)
 	}
 
-	publicHTTP := &health.HTTPChecker{
-		Path:    "/health",
+	// For the public listener, a TCP connect is safer than hard-coding an HTTP path.
+	// Edge Caddy commonly redirects :80 -> :443 and templates may not define /health.
+	publicHTTP := &health.TCPChecker{
 		Timeout: 5 * time.Second,
 	}
 	httpResult := publicHTTP.Check(host.Address, 80)
 	if !httpResult.OK {
-		return fmt.Errorf("caddy public HTTP check failed: %s", httpResult.Error)
+		return fmt.Errorf("caddy public HTTP port check failed: %s", httpResult.Error)
 	}
 
 	publicTLS := &health.TCPChecker{

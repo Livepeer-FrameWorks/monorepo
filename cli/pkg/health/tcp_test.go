@@ -1,13 +1,15 @@
 package health
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
 )
 
 func TestTCPChecker(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
