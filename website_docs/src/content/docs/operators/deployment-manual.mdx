@@ -71,25 +71,25 @@ Do **not** add edge nodes here unless they are on the mesh.
 
 ```bash
 # FrameWorks Internal Mesh (example - adjust IPs to your mesh)
-10.x.0.1   central quartermaster commodore purser periscope-query deckhand forms
+10.x.0.1   central quartermaster commodore purser periscope-query deckhand forms navigator privateer skipper
 10.x.2.11  yuga1 postgres
 10.x.2.12  yuga2
 10.x.2.13  yuga3
 10.x.3.11  clickhouse1
 10.x.3.12  clickhouse2
 10.x.3.13  clickhouse3
-10.x.1.21  regional-eu bridge-eu foghorn-eu decklog-eu periscope-ingest-eu signalman-eu
-10.x.1.22  regional-us bridge-us foghorn-us decklog-us periscope-ingest-us signalman-us
+10.x.1.21  regional-eu bridge-eu foghorn-eu decklog-eu periscope-ingest-eu signalman-eu privateer-eu
+10.x.1.22  regional-us bridge-us foghorn-us decklog-us periscope-ingest-us signalman-us privateer-us
 ```
 
 ### Server Inventory (Example)
 
-| Role          | WireGuard IP | Services                                                           |
-| ------------- | ------------ | ------------------------------------------------------------------ |
-| Central       | 10.x.0.1     | Quartermaster, Commodore, Purser, Periscope Query, Deckhand, Forms |
-| Database (×3) | 10.x.2.11-13 | PostgreSQL/YugabyteDB, ClickHouse                                  |
-| Regional (×N) | 10.x.1.21+   | Bridge, Foghorn, Decklog, Periscope Ingest, Signalman              |
-| Edge (×N)     | N/A          | MistServer, Helmsman                                               |
+| Role          | WireGuard IP | Services                                                                                          |
+| ------------- | ------------ | ------------------------------------------------------------------------------------------------- |
+| Central       | 10.x.0.1     | Quartermaster, Commodore, Purser, Periscope Query, Deckhand, Forms, Navigator, Privateer, Skipper |
+| Database (×3) | 10.x.2.11-13 | PostgreSQL/YugabyteDB, ClickHouse                                                                 |
+| Regional (×N) | 10.x.1.21+   | Bridge, Foghorn, Decklog, Periscope Ingest, Signalman, Privateer                                  |
+| Edge (×N)     | N/A          | MistServer, Helmsman                                                                              |
 
 ### Directory Structure
 
@@ -178,6 +178,8 @@ Run schemas in order:
 \i pkg/database/sql/schema/purser.sql
 \i pkg/database/sql/schema/foghorn.sql
 \i pkg/database/sql/schema/periscope.sql
+\i pkg/database/sql/schema/navigator.sql
+\i pkg/database/sql/schema/skipper.sql
 \i pkg/database/sql/schema/listmonk.sql
 \i pkg/database/sql/schema/chatwoot.sql
 
