@@ -3721,6 +3721,63 @@ func (s *PurserServer) recordBalanceTransaction(
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
+	txID := uuid.New().String()
+	now := time.Now()
+	insertedWithReference := false
+
+	if referenceID != nil && referenceType != nil {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO purser.balance_transactions
+			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at)
+			VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8)
+		`, txID, tenantID, amountCents, txType, description, referenceID, referenceType, now)
+		if err != nil {
+			var pqErr *pq.Error
+			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+				var existingTxn pb.BalanceTransaction
+				var createdAt time.Time
+				var existingRefID, existingRefType sql.NullString
+				err := tx.QueryRowContext(ctx, `
+					SELECT id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at
+					FROM purser.balance_transactions
+					WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
+					ORDER BY created_at DESC
+					LIMIT 1
+				`, tenantID, *referenceType, *referenceID).Scan(
+					&existingTxn.Id,
+					&existingTxn.TenantId,
+					&existingTxn.AmountCents,
+					&existingTxn.BalanceAfterCents,
+					&existingTxn.TransactionType,
+					&existingTxn.Description,
+					&existingRefID,
+					&existingRefType,
+					&createdAt,
+				)
+				if err != nil {
+					if errors.Is(err, sql.ErrNoRows) {
+						return nil, status.Error(codes.Internal, "duplicate transaction detected but existing record missing")
+					}
+					s.logger.WithError(err).Error("Failed to load existing balance transaction")
+					return nil, status.Error(codes.Internal, "failed to load existing transaction")
+				}
+
+				existingTxn.CreatedAt = timestamppb.New(createdAt)
+				if existingRefID.Valid {
+					existingTxn.ReferenceId = &existingRefID.String
+				}
+				if existingRefType.Valid {
+					existingTxn.ReferenceType = &existingRefType.String
+				}
+
+				return &existingTxn, nil
+			}
+			s.logger.WithError(err).Error("Failed to insert balance transaction")
+			return nil, status.Error(codes.Internal, "failed to record transaction")
+		}
+		insertedWithReference = true
+	}
+
 	// Update balance and get new balance in one query
 	var newBalance int64
 	err = tx.QueryRowContext(ctx, `
@@ -3738,18 +3795,26 @@ func (s *PurserServer) recordBalanceTransaction(
 	}
 	previousBalance := newBalance - amountCents
 
-	// Insert transaction record
-	txID := uuid.New().String()
-	now := time.Now()
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO purser.balance_transactions
-		(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, txID, tenantID, amountCents, newBalance, txType, description, referenceID, referenceType, now)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to insert transaction")
-		return nil, status.Error(codes.Internal, "failed to record transaction")
+	if insertedWithReference {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE purser.balance_transactions
+			SET balance_after_cents = $1
+			WHERE id = $2
+		`, newBalance, txID)
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to update balance transaction")
+			return nil, status.Error(codes.Internal, "failed to record transaction")
+		}
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO purser.balance_transactions
+			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`, txID, tenantID, amountCents, newBalance, txType, description, referenceID, referenceType, now)
+		if err != nil {
+			s.logger.WithError(err).Error("Failed to insert transaction")
+			return nil, status.Error(codes.Internal, "failed to record transaction")
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
