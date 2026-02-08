@@ -1,8 +1,10 @@
 package health
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -24,11 +26,12 @@ func (c *TCPChecker) Check(address string, port int) *CheckResult {
 		timeout = 5 * time.Second
 	}
 
-	target := fmt.Sprintf("%s:%d", address, port)
+	target := net.JoinHostPort(address, strconv.Itoa(port))
 	result.Metadata["address"] = target
 
+	dialer := &net.Dialer{Timeout: timeout}
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", target, timeout)
+	conn, err := dialer.DialContext(context.Background(), "tcp", target)
 	result.Latency = time.Since(start)
 	if err != nil {
 		result.OK = false

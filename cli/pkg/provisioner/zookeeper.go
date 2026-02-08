@@ -68,14 +68,14 @@ func (z *ZookeeperProvisioner) Provision(ctx context.Context, host inventory.Hos
 
 	envFileContent := GenerateEnvFile("zookeeper", envVars)
 	tmpEnvFile := filepath.Join(os.TempDir(), "zookeeper.env")
-	if err := os.WriteFile(tmpEnvFile, []byte(envFileContent), 0600); err != nil {
-		return err
+	if writeErr := os.WriteFile(tmpEnvFile, []byte(envFileContent), 0600); writeErr != nil {
+		return writeErr
 	}
 	defer os.Remove(tmpEnvFile)
 
 	remoteEnvFile := "/etc/frameworks/zookeeper.env"
-	if err := z.UploadFile(ctx, host, ssh.UploadOptions{LocalPath: tmpEnvFile, RemotePath: remoteEnvFile, Mode: 0600}); err != nil {
-		return err
+	if uploadErr := z.UploadFile(ctx, host, ssh.UploadOptions{LocalPath: tmpEnvFile, RemotePath: remoteEnvFile, Mode: 0600}); uploadErr != nil {
+		return uploadErr
 	}
 
 	composeData := DockerComposeData{
