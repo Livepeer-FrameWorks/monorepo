@@ -34,14 +34,14 @@ func (m *mockCommodoreClient) GetTenantPrimaryUser(ctx context.Context, tenantID
 }
 
 func TestEnforcePrepaidThresholds_ZeroCrossingInvalidatesCache(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{}
-	enforcer := NewThresholdEnforcer(db, logging.NewLogger(), commodore, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), commodore, nil)
 	tenantID := "tenant-123"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
@@ -65,13 +65,13 @@ func TestEnforcePrepaidThresholds_ZeroCrossingInvalidatesCache(t *testing.T) {
 }
 
 func TestEnforcePrepaidThresholds_SuspendsBelowThreshold(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
-	enforcer := NewThresholdEnforcer(db, logging.NewLogger(), nil, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil)
 	tenantID := "tenant-456"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
@@ -92,13 +92,13 @@ func TestEnforcePrepaidThresholds_SuspendsBelowThreshold(t *testing.T) {
 }
 
 func TestEnforcePrepaidThresholds_DoesNotSuspendAtThreshold(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
-	defer db.Close()
+	defer mockDB.Close()
 
-	enforcer := NewThresholdEnforcer(db, logging.NewLogger(), nil, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil)
 	tenantID := "tenant-789"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).

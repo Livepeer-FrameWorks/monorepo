@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"frameworks/api_dns/internal/provider/cloudflare"
-	"frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/proto"
 )
 
 // MonitorConfig holds Cloudflare health monitor settings
@@ -21,8 +21,8 @@ type MonitorConfig struct {
 
 // DNSManager handles DNS synchronization logic
 type DNSManager struct {
-	cfClient      *cloudflare.Client
-	qmClient      *quartermaster.GRPCClient
+	cfClient      cloudflareClient
+	qmClient      quartermasterClient
 	logger        logging.Logger
 	domain        string // Root domain e.g. frameworks.network
 	proxy         map[string]bool
@@ -33,8 +33,32 @@ type DNSManager struct {
 	servicePorts  map[string]int // Service type -> HTTP health check port
 }
 
+type cloudflareClient interface {
+	ListLoadBalancers() ([]cloudflare.LoadBalancer, error)
+	DeleteLoadBalancer(loadBalancerID string) error
+	ListDNSRecords(recordType, name string) ([]cloudflare.DNSRecord, error)
+	UpdateDNSRecord(recordID string, record cloudflare.DNSRecord) (*cloudflare.DNSRecord, error)
+	DeleteDNSRecord(recordID string) error
+	CreateARecord(name, content string, proxied bool, ttl int) (*cloudflare.DNSRecord, error)
+	GetPool(poolID string) (*cloudflare.Pool, error)
+	RemoveOriginFromPool(poolID, originIP string) (*cloudflare.Pool, error)
+	AddOriginToPool(poolID string, origin cloudflare.Origin) (*cloudflare.Pool, error)
+	CreateLoadBalancer(lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error)
+	GetLoadBalancer(lbID string) (*cloudflare.LoadBalancer, error)
+	UpdateLoadBalancer(lbID string, lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error)
+	ListMonitors() ([]cloudflare.Monitor, error)
+	CreateMonitor(monitor cloudflare.Monitor) (*cloudflare.Monitor, error)
+	ListPools() ([]cloudflare.Pool, error)
+	UpdatePool(poolID string, pool cloudflare.Pool) (*cloudflare.Pool, error)
+	CreatePool(pool cloudflare.Pool) (*cloudflare.Pool, error)
+}
+
+type quartermasterClient interface {
+	ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int) (*proto.ListHealthyNodesForDNSResponse, error)
+}
+
 // NewDNSManager creates a new DNSManager
-func NewDNSManager(cf *cloudflare.Client, qm *quartermaster.GRPCClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration, monitorConfig MonitorConfig) *DNSManager {
+func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration, monitorConfig MonitorConfig) *DNSManager {
 	return &DNSManager{
 		cfClient:      cf,
 		qmClient:      qm,
