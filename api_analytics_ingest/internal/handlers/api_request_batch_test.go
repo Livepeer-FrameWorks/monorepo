@@ -15,30 +15,30 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-type fakeClickhouse struct {
-	batch      *fakeBatch
+type apiBatchFakeClickhouse struct {
+	batch      *apiBatchFakeBatch
 	prepareErr error
 }
 
-func (f *fakeClickhouse) PrepareBatch(_ context.Context, _ string) (clickhouseBatch, error) {
+func (f *apiBatchFakeClickhouse) PrepareBatch(_ context.Context, _ string) (clickhouseBatch, error) {
 	if f.prepareErr != nil {
 		return nil, f.prepareErr
 	}
 	return f.batch, nil
 }
 
-func (f *fakeClickhouse) Query(_ context.Context, _ string, _ ...interface{}) (clickhouseRows, error) {
-	return &fakeRows{}, nil
+func (f *apiBatchFakeClickhouse) Query(_ context.Context, _ string, _ ...interface{}) (clickhouseRows, error) {
+	return &apiBatchFakeRows{}, nil
 }
 
-type fakeBatch struct {
+type apiBatchFakeBatch struct {
 	appendErrAt int
 	appendCalls int
 	sendErr     error
 	sendCalled  bool
 }
 
-func (f *fakeBatch) Append(_ ...interface{}) error {
+func (f *apiBatchFakeBatch) Append(_ ...interface{}) error {
 	f.appendCalls++
 	if f.appendErrAt > 0 && f.appendCalls == f.appendErrAt {
 		return errors.New("append failed")
@@ -46,20 +46,20 @@ func (f *fakeBatch) Append(_ ...interface{}) error {
 	return nil
 }
 
-func (f *fakeBatch) Send() error {
+func (f *apiBatchFakeBatch) Send() error {
 	f.sendCalled = true
 	return f.sendErr
 }
 
-type fakeRows struct{}
+type apiBatchFakeRows struct{}
 
-func (f *fakeRows) Next() bool   { return false }
-func (f *fakeRows) Close() error { return nil }
+func (f *apiBatchFakeRows) Next() bool   { return false }
+func (f *apiBatchFakeRows) Close() error { return nil }
 
 func TestProcessAPIRequestBatchAppendFailureReturnsError(t *testing.T) {
-	batch := &fakeBatch{appendErrAt: 2}
+	batch := &apiBatchFakeBatch{appendErrAt: 2}
 	handler := &AnalyticsHandler{
-		clickhouse: &fakeClickhouse{batch: batch},
+		clickhouse: &apiBatchFakeClickhouse{batch: batch},
 		logger:     logging.NewLoggerWithService("test"),
 	}
 
@@ -77,9 +77,9 @@ func TestProcessAPIRequestBatchAppendFailureReturnsError(t *testing.T) {
 }
 
 func TestProcessAPIRequestBatchSendFailureReturnsError(t *testing.T) {
-	batch := &fakeBatch{sendErr: errors.New("send failed")}
+	batch := &apiBatchFakeBatch{sendErr: errors.New("send failed")}
 	handler := &AnalyticsHandler{
-		clickhouse: &fakeClickhouse{batch: batch},
+		clickhouse: &apiBatchFakeClickhouse{batch: batch},
 		logger:     logging.NewLoggerWithService("test"),
 	}
 
@@ -96,9 +96,9 @@ func TestProcessAPIRequestBatchSendFailureReturnsError(t *testing.T) {
 }
 
 func TestProcessServiceAPIRequestBatchAppendFailureReturnsError(t *testing.T) {
-	batch := &fakeBatch{appendErrAt: 1}
+	batch := &apiBatchFakeBatch{appendErrAt: 1}
 	handler := &AnalyticsHandler{
-		clickhouse: &fakeClickhouse{batch: batch},
+		clickhouse: &apiBatchFakeClickhouse{batch: batch},
 		logger:     logging.NewLoggerWithService("test"),
 	}
 
