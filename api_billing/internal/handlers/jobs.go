@@ -1529,7 +1529,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	periodStart, periodEnd := loadSubscriptionPeriod(jm.db, tenantID, now)
 
 	var finalizedCount int
-	if countErr := jm.db.QueryRow(`
+	if countErr := jm.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM purser.billing_invoices
 		WHERE tenant_id = $1
 		  AND period_start = $2
