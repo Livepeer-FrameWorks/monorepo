@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeSignalmanStream struct {
@@ -307,5 +308,220 @@ func TestSendLoopStopsOnClosedChannel(t *testing.T) {
 
 	if stream.sawNilSend() {
 		t.Fatal("sendLoop attempted to send nil message")
+	}
+}
+
+func TestHubBroadcastTenantIsolation(t *testing.T) {
+	t.Parallel()
+
+	logger := logging.NewLogger()
+	hub := &Hub{
+		clients: make(map[*Client]bool),
+		logger:  logger,
+	}
+
+	tenantA := "tenant-a"
+	tenantB := "tenant-b"
+
+	clientA := &Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		tenantID: tenantA,
+		send:     make(chan *pb.ServerMessage, 2),
+		logger:   logger,
+	}
+	clientB := &Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		tenantID: tenantB,
+		send:     make(chan *pb.ServerMessage, 2),
+		logger:   logger,
+	}
+	systemClient := &Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
+		tenantID: tenantA,
+		send:     make(chan *pb.ServerMessage, 2),
+		logger:   logger,
+	}
+
+	hub.clients[clientA] = true
+	hub.clients[clientB] = true
+	hub.clients[systemClient] = true
+
+	tenantEvent := &pb.SignalmanEvent{
+		EventType: pb.EventType_EVENT_TYPE_STREAM_END,
+		Channel:   pb.Channel_CHANNEL_STREAMS,
+		TenantId:  &tenantA,
+		Timestamp: timestamppb.New(time.Now()),
+	}
+	hub.broadcastEvent(tenantEvent)
+
+	select {
+	case <-clientA.send:
+	default:
+		t.Fatal("expected tenant A client to receive event")
+	}
+
+	select {
+	case <-clientB.send:
+		t.Fatal("tenant B client should not receive tenant A event")
+	default:
+	}
+
+	infraEvent := &pb.SignalmanEvent{
+		EventType: pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
+		Channel:   pb.Channel_CHANNEL_SYSTEM,
+		Timestamp: timestamppb.New(time.Now()),
+	}
+	hub.broadcastEvent(infraEvent)
+
+	select {
+	case <-systemClient.send:
+	default:
+		t.Fatal("expected system client to receive infrastructure event")
+	}
+
+	streamInfra := &pb.SignalmanEvent{
+		EventType: pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
+		Channel:   pb.Channel_CHANNEL_STREAMS,
+		Timestamp: timestamppb.New(time.Now()),
+	}
+	hub.broadcastEvent(streamInfra)
+
+	select {
+	case <-clientA.send:
+		t.Fatal("tenant client should not receive infrastructure event on non-system channel")
+	default:
+	}
+}
+
+func TestClientSubscribeSuppressesDuplicates(t *testing.T) {
+	t.Parallel()
+
+	logger := logging.NewLogger()
+	client := &Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		send:     make(chan *pb.ServerMessage, 1),
+		logger:   logger,
+	}
+
+	client.handleSubscribe(&pb.SubscribeRequest{
+		Channels: []pb.Channel{
+			pb.Channel_CHANNEL_STREAMS,
+			pb.Channel_CHANNEL_ANALYTICS,
+			pb.Channel_CHANNEL_STREAMS,
+		},
+	})
+
+	if len(client.channels) != 2 {
+		t.Fatalf("expected 2 unique channels, got %d", len(client.channels))
+	}
+
+	if client.channels[0] != pb.Channel_CHANNEL_STREAMS || client.channels[1] != pb.Channel_CHANNEL_ANALYTICS {
+		t.Fatalf("unexpected channel order: %#v", client.channels)
+	}
+
+	select {
+	case msg := <-client.send:
+		confirmation := msg.GetSubscriptionConfirmed()
+		if confirmation == nil {
+			t.Fatal("expected subscription confirmation message")
+		}
+		if len(confirmation.SubscribedChannels) != 2 {
+			t.Fatalf("expected 2 subscribed channels in confirmation, got %d", len(confirmation.SubscribedChannels))
+		}
+	default:
+		t.Fatal("expected subscription confirmation to be sent")
+	}
+}
+
+func TestHubBroadcastOrdering(t *testing.T) {
+	t.Parallel()
+
+	logger := logging.NewLogger()
+	hub := &Hub{
+		clients: make(map[*Client]bool),
+		logger:  logger,
+	}
+
+	tenantID := "tenant-order"
+	client := &Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		tenantID: tenantID,
+		send:     make(chan *pb.ServerMessage, 2),
+		logger:   logger,
+	}
+	hub.clients[client] = true
+
+	first := &pb.SignalmanEvent{
+		EventType: pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST,
+		Channel:   pb.Channel_CHANNEL_STREAMS,
+		TenantId:  &tenantID,
+		Timestamp: timestamppb.New(time.Now()),
+	}
+	second := &pb.SignalmanEvent{
+		EventType: pb.EventType_EVENT_TYPE_STREAM_END,
+		Channel:   pb.Channel_CHANNEL_STREAMS,
+		TenantId:  &tenantID,
+		Timestamp: timestamppb.New(time.Now().Add(time.Second)),
+	}
+
+	hub.broadcastEvent(first)
+	hub.broadcastEvent(second)
+
+	msg1 := <-client.send
+	msg2 := <-client.send
+
+	if msg1.GetEvent().EventType != pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST {
+		t.Fatalf("expected first event to be track list, got %v", msg1.GetEvent().EventType)
+	}
+	if msg2.GetEvent().EventType != pb.EventType_EVENT_TYPE_STREAM_END {
+		t.Fatalf("expected second event to be stream end, got %v", msg2.GetEvent().EventType)
+	}
+}
+
+func TestHubBroadcastBackpressureDropsWhenFull(t *testing.T) {
+	t.Parallel()
+
+	logger := logging.NewLogger()
+	hub := &Hub{
+		clients: make(map[*Client]bool),
+		logger:  logger,
+	}
+
+	tenantID := "tenant-backpressure"
+	client := &Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		tenantID: tenantID,
+		send:     make(chan *pb.ServerMessage, 1),
+		logger:   logger,
+	}
+	hub.clients[client] = true
+
+	client.send <- &pb.ServerMessage{
+		Message: &pb.ServerMessage_Pong{
+			Pong: &pb.Pong{TimestampMs: time.Now().UnixMilli()},
+		},
+	}
+
+	event := &pb.SignalmanEvent{
+		EventType: pb.EventType_EVENT_TYPE_STREAM_BUFFER,
+		Channel:   pb.Channel_CHANNEL_STREAMS,
+		TenantId:  &tenantID,
+		Timestamp: timestamppb.New(time.Now()),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		hub.broadcastEvent(event)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("broadcastEvent blocked with full client buffer")
+	}
+
+	if len(client.send) != 1 {
+		t.Fatalf("expected buffer to remain full, got %d", len(client.send))
 	}
 }
