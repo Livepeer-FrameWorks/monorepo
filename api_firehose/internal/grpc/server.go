@@ -76,7 +76,12 @@ func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, 
 		EmitUnpopulated: false,
 	}
 
-	jsonBytes, err := marshaler.Marshal(msg.(proto.Message))
+	protoMsg, ok := msg.(proto.Message)
+	if !ok {
+		return nil, fmt.Errorf("unexpected message type %T", msg)
+	}
+
+	jsonBytes, err := marshaler.Marshal(protoMsg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal protobuf message: %w", err)
 	}

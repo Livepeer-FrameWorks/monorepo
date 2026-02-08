@@ -46,8 +46,7 @@ func (f *fakeProducer) PublishTypedBatch(events []kafka.AnalyticsEvent) error {
 		return f.err
 	}
 	for i := range events {
-		event := events[i]
-		f.typed = append(f.typed, &event)
+		f.typed = append(f.typed, &events[i])
 	}
 	return nil
 }
@@ -208,7 +207,7 @@ func TestSendEventTenantRoutingInvariant(t *testing.T) {
 
 	missingTenant := &pb.MistTrigger{
 		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSource{},
+			StreamSource: &pb.StreamSourceTrigger{},
 		},
 	}
 

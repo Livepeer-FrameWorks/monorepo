@@ -48,8 +48,8 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create Kafka producer")
 	}
 	defer func() {
-		if err := producer.Close(); err != nil {
-			logger.WithError(err).Error("Failed to close Kafka producer")
+		if closeErr := producer.Close(); closeErr != nil {
+			logger.WithError(closeErr).Error("Failed to close Kafka producer")
 		}
 	}()
 
