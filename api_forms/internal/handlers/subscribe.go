@@ -7,6 +7,7 @@ import (
 	"frameworks/pkg/clients/listmonk"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/turnstile"
+	"net"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -109,7 +110,7 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 	normalizedEmail := strings.ToLower(strings.TrimSpace(req.Email))
 	if info, exists, err := h.listmonkClient.GetSubscriber(ctx, normalizedEmail); err != nil {
 		h.logger.WithError(err).Error("Listmonk lookup failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Subscription failed"})
+		respondListmonkError(c, err)
 		return
 	} else if exists {
 		if info.Status == "blocklisted" {
@@ -135,9 +136,25 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 			return
 		}
 		h.logger.WithError(err).Error("Listmonk subscribe failed")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Subscription failed"})
+		respondListmonkError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func respondListmonkError(c *gin.Context, err error) {
+	if isTimeoutError(err) {
+		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "Subscription service timeout"})
+		return
+	}
+	c.JSON(http.StatusBadGateway, gin.H{"error": "Subscription service unavailable"})
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
