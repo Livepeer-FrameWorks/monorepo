@@ -34,6 +34,8 @@ type Hub struct {
 	logger     logging.Logger
 	metrics    *metrics.Metrics
 	mutex      sync.RWMutex
+
+	maxConnectionsPerTenant int
 }
 
 // Client represents a connected gRPC streaming client
@@ -74,6 +76,37 @@ func NewSignalmanServer(logger logging.Logger, m *metrics.Metrics) *SignalmanSer
 // GetHub returns the hub for external event broadcasting (e.g., from Kafka consumer)
 func (s *SignalmanServer) GetHub() *Hub {
 	return s.hub
+}
+
+// SetMaxConnectionsPerTenant configures the maximum number of active connections per tenant.
+// A value <= 0 disables the limit.
+func (h *Hub) SetMaxConnectionsPerTenant(limit int) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	h.maxConnectionsPerTenant = limit
+}
+
+func (h *Hub) tenantConnectionCount(tenantID string) int {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+
+	if tenantID == "" {
+		return 0
+	}
+
+	count := 0
+	for client := range h.clients {
+		if client.tenantID == tenantID {
+			count++
+		}
+	}
+	return count
+}
+
+func (h *Hub) tenantConnectionLimit() int {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+	return h.maxConnectionsPerTenant
 }
 
 // run is the main event loop for the hub
@@ -156,6 +189,13 @@ func redactSensitiveData(event *pb.SignalmanEvent) {
 
 // broadcastEvent sends an event to all relevant clients
 func (h *Hub) broadcastEvent(event *pb.SignalmanEvent) {
+	if event == nil {
+		h.logger.Warn("Skipping broadcast of nil event")
+		return
+	}
+	if event.Timestamp == nil {
+		event.Timestamp = timestamppb.Now()
+	}
 	// Redact sensitive fields before broadcasting
 	redactSensitiveData(event)
 
@@ -264,11 +304,23 @@ func (c *Client) shouldReceive(event *pb.SignalmanEvent) bool {
 // Subscribe implements bidirectional streaming for realtime events
 func (s *SignalmanServer) Subscribe(stream pb.SignalmanService_SubscribeServer) error {
 	ctx := stream.Context()
+	userID := ctxkeys.GetUserID(ctx)
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if limit := s.hub.tenantConnectionLimit(); limit > 0 && tenantID != "" {
+		if s.hub.tenantConnectionCount(tenantID) >= limit {
+			s.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID,
+				"limit":     limit,
+			}).Warn("Tenant connection limit reached")
+			return status.Error(codes.ResourceExhausted, "tenant connection limit reached")
+		}
+	}
+
 	client := &Client{
 		stream:   stream,
 		channels: []pb.Channel{},
-		userID:   ctxkeys.GetUserID(ctx),
-		tenantID: ctxkeys.GetTenantID(ctx),
+		userID:   userID,
+		tenantID: tenantID,
 		send:     make(chan *pb.ServerMessage, 256),
 		done:     make(chan struct{}),
 		logger:   s.logger,
