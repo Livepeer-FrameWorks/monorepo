@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+type APIError struct {
+	StatusCode int
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("listmonk returned status: %d", e.StatusCode)
+}
+
 type Client struct {
 	baseURL  string
 	username string
@@ -69,7 +77,7 @@ func (c *Client) Subscribe(ctx context.Context, email, name string, listID int, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("listmonk returned status: %d", resp.StatusCode)
+		return &APIError{StatusCode: resp.StatusCode}
 	}
 
 	return nil
@@ -104,7 +112,7 @@ func (c *Client) Blocklist(ctx context.Context, email string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("listmonk returned status: %d", resp.StatusCode)
+		return &APIError{StatusCode: resp.StatusCode}
 	}
 
 	return nil
@@ -145,7 +153,7 @@ func (c *Client) GetSubscriber(ctx context.Context, email string) (*SubscriberIn
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
-		return nil, false, fmt.Errorf("listmonk returned status: %d", resp.StatusCode)
+		return nil, false, &APIError{StatusCode: resp.StatusCode}
 	}
 
 	var result struct {
