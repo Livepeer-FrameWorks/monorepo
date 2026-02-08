@@ -305,6 +305,84 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 	}
 }
 
+func TestApplyJitterZeroPercent(t *testing.T) {
+	d := 5 * time.Second
+	got := applyJitter(d, 0)
+	if got != d {
+		t.Fatalf("expected %v, got %v", d, got)
+	}
+}
+
+func TestApplyJitterNegativePercent(t *testing.T) {
+	d := 5 * time.Second
+	got := applyJitter(d, -10)
+	if got != d {
+		t.Fatalf("expected %v, got %v", d, got)
+	}
+}
+
+func TestApplyJitterBounds(t *testing.T) {
+	base := 10 * time.Second
+	pct := 25
+	minExpected := time.Duration(float64(base) * (1 - float64(pct)/100))
+	maxExpected := time.Duration(float64(base) * (1 + float64(pct)/100))
+
+	for i := 0; i < 100; i++ {
+		got := applyJitter(base, pct)
+		if got < minExpected || got > maxExpected {
+			t.Fatalf("iteration %d: %v outside [%v, %v]", i, got, minExpected, maxExpected)
+		}
+	}
+}
+
+func TestSendDVRStartRequestDisconnected(t *testing.T) {
+	clearConn()
+	err := SendDVRStartRequest("tenant-1", "stream-1", "user-1", 7, "mp4", 10)
+	if err == nil {
+		t.Fatal("expected error for disconnected stream")
+	}
+}
+
+func TestSendArtifactDeletedDisconnected(t *testing.T) {
+	clearConn()
+	err := SendArtifactDeleted("hash-1", "/path/file", "manual", "clip", 1024)
+	if err == nil {
+		t.Fatal("expected error for disconnected stream")
+	}
+}
+
+func TestSendFreezeProgressDisconnected(t *testing.T) {
+	clearConn()
+	err := SendFreezeProgress("req-1", "hash-1", 50, 1024)
+	if err == nil {
+		t.Fatal("expected error for disconnected stream")
+	}
+}
+
+func TestSendDefrostProgressDisconnected(t *testing.T) {
+	clearConn()
+	err := SendDefrostProgress("req-1", "hash-1", 50, 1024, 5, 10, "downloading")
+	if err == nil {
+		t.Fatal("expected error for disconnected stream")
+	}
+}
+
+func TestSendStorageLifecycleDisconnected(t *testing.T) {
+	clearConn()
+	err := SendStorageLifecycle(&pb.StorageLifecycleData{})
+	if err == nil {
+		t.Fatal("expected error for disconnected stream")
+	}
+}
+
+func TestSendProcessBillingEventDisconnected(t *testing.T) {
+	clearConn()
+	err := SendProcessBillingEvent(&pb.ProcessBillingEvent{ProcessType: "test_disconnect"})
+	if err == nil {
+		t.Fatal("expected error for disconnected stream")
+	}
+}
+
 func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 	resetControlState(t)
 

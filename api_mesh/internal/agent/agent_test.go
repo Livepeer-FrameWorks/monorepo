@@ -157,6 +157,51 @@ func newTestAgent(t *testing.T, client *fakeMeshClient, wg *fakeWireguard, dns *
 	}
 }
 
+func TestIsHealthyNotStarted(t *testing.T) {
+	agent := &Agent{}
+	if agent.IsHealthy() {
+		t.Fatal("expected unhealthy when not started")
+	}
+}
+
+func TestIsHealthyTooManyFailures(t *testing.T) {
+	agent := &Agent{}
+	agent.healthy.Store(true)
+	agent.consecutiveFails.Store(4)
+	if agent.IsHealthy() {
+		t.Fatal("expected unhealthy when consecutiveFails > 3")
+	}
+}
+
+func TestIsHealthyBoundary(t *testing.T) {
+	agent := &Agent{}
+	agent.healthy.Store(true)
+	agent.consecutiveFails.Store(3)
+	if !agent.IsHealthy() {
+		t.Fatal("expected healthy when consecutiveFails == 3 (threshold)")
+	}
+}
+
+func TestIsHealthyStaleSync(t *testing.T) {
+	agent := &Agent{}
+	agent.healthy.Store(true)
+	agent.consecutiveFails.Store(0)
+	agent.lastSyncSuccess.Store(time.Now().Unix() - 301)
+	if agent.IsHealthy() {
+		t.Fatal("expected unhealthy when last sync is older than 5 minutes")
+	}
+}
+
+func TestIsHealthyRecentSync(t *testing.T) {
+	agent := &Agent{}
+	agent.healthy.Store(true)
+	agent.consecutiveFails.Store(0)
+	agent.lastSyncSuccess.Store(time.Now().Unix() - 60)
+	if !agent.IsHealthy() {
+		t.Fatal("expected healthy when last sync was 60 seconds ago")
+	}
+}
+
 func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
 	logger := logging.NewLogger()
 	nodeIDPath := filepath.Join(t.TempDir(), "node_id")

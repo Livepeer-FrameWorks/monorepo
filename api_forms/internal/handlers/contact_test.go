@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -278,6 +279,66 @@ func TestContactHandlerTurnstileErrorMapsToBadGateway(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(metrics.ContactRequests.WithLabelValues("turnstile_error")); got != 1.0 {
 		t.Fatalf("expected turnstile_error metric 1.0, got %f", got)
+	}
+}
+
+func TestGetRemoteIPCFHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c := gin.CreateTestContextOnly(w, gin.New())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request.Header.Set("CF-Connecting-IP", "1.2.3.4")
+
+	got := getRemoteIP(c)
+	if got != "1.2.3.4" {
+		t.Fatalf("expected 1.2.3.4, got %s", got)
+	}
+}
+
+func TestGetRemoteIPXForwardedFor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c := gin.CreateTestContextOnly(w, gin.New())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request.Header.Set("X-Forwarded-For", "5.6.7.8, 9.10.11.12")
+
+	got := getRemoteIP(c)
+	if got != "5.6.7.8" {
+		t.Fatalf("expected 5.6.7.8, got %s", got)
+	}
+}
+
+func TestGetRemoteIPFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c := gin.CreateTestContextOnly(w, gin.New())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+	got := getRemoteIP(c)
+	expected := c.ClientIP()
+	if got != expected {
+		t.Fatalf("expected %s, got %s", expected, got)
+	}
+}
+
+func TestBuildEmailHTMLWithCompany(t *testing.T) {
+	html := buildEmailHTML("Jane", "jane@example.com", "ACME", "Hello", "1.2.3.4")
+	if !strings.Contains(html, "ACME") {
+		t.Fatalf("expected output to contain ACME, got %s", html)
+	}
+}
+
+func TestBuildEmailHTMLWithoutCompany(t *testing.T) {
+	html := buildEmailHTML("Jane", "jane@example.com", "", "Hello", "1.2.3.4")
+	if !strings.Contains(html, "Not provided") {
+		t.Fatalf("expected output to contain 'Not provided', got %s", html)
+	}
+}
+
+func TestBuildEmailHTMLNewlines(t *testing.T) {
+	html := buildEmailHTML("Jane", "jane@example.com", "ACME", "line1\nline2", "1.2.3.4")
+	if !strings.Contains(html, "<br>") {
+		t.Fatalf("expected output to contain <br>, got %s", html)
 	}
 }
 

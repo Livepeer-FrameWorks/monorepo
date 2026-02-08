@@ -160,6 +160,108 @@ func TestJWTAuthMiddleware_WebSocketUpgrade(t *testing.T) {
 	}
 }
 
+func TestJWTAuthMiddleware_CookieFallback(t *testing.T) {
+	secret := []byte("secret")
+	token, err := GenerateJWT("u1", "t1", "u@example.com", "admin", secret)
+	if err != nil {
+		t.Fatalf("GenerateJWT: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(JWTAuthMiddleware(secret))
+	r.GET("/ok", func(c *gin.Context) {
+		c.String(200, "ok")
+	})
+
+	t.Run("valid cookie without Authorization header proceeds", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+		req.AddCookie(&http.Cookie{Name: "access_token", Value: token})
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 with valid cookie, got %d", w.Code)
+		}
+	})
+
+	t.Run("empty cookie without Authorization header returns 401", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+		req.AddCookie(&http.Cookie{Name: "access_token", Value: ""})
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 with empty cookie, got %d", w.Code)
+		}
+	})
+
+	t.Run("no cookie and no Authorization header returns 401", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 with no cookie and no header, got %d", w.Code)
+		}
+	})
+}
+
+func TestJWTAuthMiddleware_ServiceTokenFallback(t *testing.T) {
+	secret := []byte("secret")
+	serviceToken := "test-service-token-xyz"
+	t.Setenv("SERVICE_TOKEN", serviceToken)
+
+	r := gin.New()
+	r.Use(JWTAuthMiddleware(secret))
+	r.GET("/ok", func(c *gin.Context) {
+		if c.GetString(string(ctxkeys.KeyUserID)) != "00000000-0000-0000-0000-000000000000" {
+			t.Fatalf("expected service user ID")
+		}
+		if c.GetString(string(ctxkeys.KeyTenantID)) != "00000000-0000-0000-0000-000000000001" {
+			t.Fatalf("expected service tenant ID")
+		}
+		if c.GetString(string(ctxkeys.KeyEmail)) != "service@internal" {
+			t.Fatalf("expected service email")
+		}
+		if c.GetString(string(ctxkeys.KeyRole)) != "service" {
+			t.Fatalf("expected service role")
+		}
+		if c.GetString(string(ctxkeys.KeyAuthType)) != "service" {
+			t.Fatalf("expected auth_type service")
+		}
+		c.String(200, "ok")
+	})
+
+	t.Run("invalid JWT with valid service token succeeds", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 with service token, got %d", w.Code)
+		}
+	})
+
+	t.Run("invalid JWT with empty service token returns 401", func(t *testing.T) {
+		t.Setenv("SERVICE_TOKEN", "")
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+		req.Header.Set("Authorization", "Bearer not-a-valid-jwt")
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 with empty service token env, got %d", w.Code)
+		}
+	})
+
+	t.Run("invalid JWT with wrong service token returns 401", func(t *testing.T) {
+		t.Setenv("SERVICE_TOKEN", "correct-token")
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequestWithContext(context.Background(), "GET", "/ok", nil)
+		req.Header.Set("Authorization", "Bearer wrong-token")
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 with wrong service token, got %d", w.Code)
+		}
+	})
+}
+
 func TestJWTAuthMiddleware_WebSocketBypass(t *testing.T) {
 	secret := []byte("secret")
 	r := gin.New()

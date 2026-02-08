@@ -928,3 +928,169 @@ func makePaymentHeader(value string) string {
 	data, _ := json.Marshal(payload)
 	return base64.StdEncoding.EncodeToString(data)
 }
+
+// assertCtxTimeout checks that the context deadline is within [expected-margin, expected+margin].
+func assertCtxTimeout(t *testing.T, ctx context.Context, expected time.Duration) {
+	t.Helper()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected context to have a deadline")
+	}
+	remaining := time.Until(deadline)
+	low := expected - 2*time.Second
+	high := expected + 2*time.Second
+	if remaining < low || remaining > high {
+		t.Fatalf("expected context timeout ~%v, got remaining %v", expected, remaining)
+	}
+}
+
+func TestSettleX402Payment_VerifyTimeout(t *testing.T) {
+	purser := &mockPurser{
+		verifyFn: func(ctx context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			assertCtxTimeout(t, ctx, 10*time.Second)
+			return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+		},
+		settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+			return &pb.SettleX402PaymentResponse{Success: true}, nil
+		},
+	}
+	_, err := SettleX402Payment(context.Background(), SettlementOptions{
+		Purser:       purser,
+		Payload:      paymentPayload("10"),
+		AuthTenantID: "tenant-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSettleX402Payment_SettleTimeout(t *testing.T) {
+	purser := &mockPurser{
+		verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+			return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+		},
+		settleFn: func(ctx context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+			assertCtxTimeout(t, ctx, 30*time.Second)
+			return &pb.SettleX402PaymentResponse{Success: true}, nil
+		},
+	}
+	_, err := SettleX402Payment(context.Background(), SettlementOptions{
+		Purser:       purser,
+		Payload:      paymentPayload("10"),
+		AuthTenantID: "tenant-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveResource_IngestTimeout(t *testing.T) {
+	commodore := &mockCommodore{
+		validateStreamKeyFn: func(ctx context.Context, _ string) (*pb.ValidateStreamKeyResponse, error) {
+			assertCtxTimeout(t, ctx, 2*time.Second)
+			return &pb.ValidateStreamKeyResponse{Valid: true, TenantId: "t1", StreamId: "s1"}, nil
+		},
+	}
+	_, err := ResolveResource(context.Background(), "ingest:key", commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveResource_ViewerTimeout(t *testing.T) {
+	commodore := &mockCommodore{
+		resolveArtifactPlaybackIDFn: func(ctx context.Context, _ string) (*pb.ResolveArtifactPlaybackIDResponse, error) {
+			assertCtxTimeout(t, ctx, 2*time.Second)
+			return &pb.ResolveArtifactPlaybackIDResponse{Found: true, TenantId: "t1"}, nil
+		},
+	}
+	_, err := ResolveResource(context.Background(), "viewer://pb-id", commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveResource_ClipTimeout(t *testing.T) {
+	commodore := &mockCommodore{
+		resolveClipHashFn: func(ctx context.Context, _ string) (*pb.ResolveClipHashResponse, error) {
+			assertCtxTimeout(t, ctx, 2*time.Second)
+			return &pb.ResolveClipHashResponse{TenantId: "t1"}, nil
+		},
+	}
+	_, err := ResolveResource(context.Background(), "clip://clip-hash", commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveResource_DVRTimeout(t *testing.T) {
+	commodore := &mockCommodore{
+		resolveDVRHashFn: func(ctx context.Context, _ string) (*pb.ResolveDVRHashResponse, error) {
+			assertCtxTimeout(t, ctx, 2*time.Second)
+			return &pb.ResolveDVRHashResponse{TenantId: "t1"}, nil
+		},
+	}
+	_, err := ResolveResource(context.Background(), "dvr://dvr-hash", commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveResource_StreamTimeout(t *testing.T) {
+	commodore := &mockCommodore{
+		resolveIdentifierFn: func(ctx context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
+			assertCtxTimeout(t, ctx, 2*time.Second)
+			return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "t1"}, nil
+		},
+	}
+	_, err := ResolveResource(context.Background(), "stream://s1", commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveResource_VodTimeout(t *testing.T) {
+	vodID := uuid.New().String()
+	commodore := &mockCommodore{
+		resolveVodIDFn: func(ctx context.Context, _ string) (*pb.ResolveVodIDResponse, error) {
+			assertCtxTimeout(t, ctx, 2*time.Second)
+			return &pb.ResolveVodIDResponse{Found: true, TenantId: "t1"}, nil
+		},
+	}
+	_, err := ResolveResource(context.Background(), "vod://"+vodID, commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveResource_FallbackIdentifierTimeout(t *testing.T) {
+	commodore := &mockCommodore{
+		resolveIdentifierFn: func(ctx context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
+			assertCtxTimeout(t, ctx, 2*time.Second)
+			return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: "t1"}, nil
+		},
+	}
+	// Pass a bare identifier (no scheme prefix) that is not a relay ID.
+	res, err := ResolveResource(context.Background(), "some-bare-identifier", commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Resolved {
+		t.Fatal("expected Resolved to be true when TenantID is set")
+	}
+}
+
+func TestResolveResource_FallbackIdentifierEmptyTenant(t *testing.T) {
+	commodore := &mockCommodore{
+		resolveIdentifierFn: func(_ context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
+			return &pb.ResolveIdentifierResponse{Found: true, IdentifierType: "stream_id", TenantId: ""}, nil
+		},
+	}
+	res, err := ResolveResource(context.Background(), "some-bare-identifier", commodore)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Resolved {
+		t.Fatal("expected Resolved to be false when TenantID is empty")
+	}
+}

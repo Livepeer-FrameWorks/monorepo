@@ -269,6 +269,42 @@ func TestValidateWalletMessageTimestampBoundaries(t *testing.T) {
 			t.Error("expected error for expired timestamp before epoch")
 		}
 	})
+
+	t.Run("exactly 1 minute in the future is allowed", func(t *testing.T) {
+		// After RFC3339 truncation, the effective future offset is slightly
+		// less than 60s, so age > -60s and the check passes.
+		future := time.Now().UTC().Add(60 * time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", future.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err != nil {
+			t.Errorf("timestamp ~1 minute in the future should be allowed: %v", err)
+		}
+	})
+
+	t.Run("61 seconds in the future is rejected", func(t *testing.T) {
+		future := time.Now().UTC().Truncate(time.Second).Add(61 * time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", future.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("timestamp 61 seconds in the future should be rejected")
+		}
+	})
+
+	t.Run("exactly 5 minutes old is allowed", func(t *testing.T) {
+		// Use Truncate so the RFC3339 format preserves the exact second.
+		// Add 1s so the effective age is just under 5m after test execution delay.
+		past := time.Now().UTC().Truncate(time.Second).Add(-5*time.Minute + time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err != nil {
+			t.Errorf("timestamp just under 5 minutes old should be allowed: %v", err)
+		}
+	})
+
+	t.Run("5 minutes and 1 second old is rejected", func(t *testing.T) {
+		past := time.Now().UTC().Truncate(time.Second).Add(-5*time.Minute - time.Second)
+		msg := fmt.Sprintf("FrameWorks Login\nTimestamp: %s\nNonce: abc123", past.Format(time.RFC3339))
+		if err := ValidateWalletMessageTimestamp(msg); err == nil {
+			t.Error("timestamp 5 minutes and 1 second old should be rejected")
+		}
+	})
 }
 
 func TestGenerateWalletAuthMessage(t *testing.T) {

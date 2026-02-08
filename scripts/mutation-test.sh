@@ -25,11 +25,27 @@ set -e
 
 # Critical modules to test with --all
 CRITICAL_PACKAGES=(
+    # Core / security
     "pkg/auth"
     "pkg/x402"
+    "pkg/clients/listmonk"
     "api_gateway/internal/errors"
     "api_gateway/internal/webhooks"
     "api_gateway/internal/middleware"
+    # Service business logic
+    "api_firehose/internal/grpc"
+    "api_dns/internal/logic"
+    "api_dns/internal/store"
+    "api_dns/internal/provider/cloudflare"
+    "api_dns/internal/worker"
+    "api_sidecar/internal/control"
+    "api_sidecar/internal/handlers"
+    "api_mesh/internal/agent"
+    "api_mesh/internal/dns"
+    "api_mesh/internal/wireguard"
+    "api_realtime/internal/grpc"
+    "api_forms/internal/handlers"
+    "api_forms/internal/validation"
 )
 
 # Colors

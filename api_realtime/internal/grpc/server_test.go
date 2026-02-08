@@ -815,3 +815,308 @@ func TestSendLoopLogsSendFailure(t *testing.T) {
 		t.Fatalf("expected error field, got %v", errValue)
 	}
 }
+
+// --- Tests (redaction, helpers, hub stats) ---
+
+func TestRedactSensitiveData(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ViewerConnect", func(t *testing.T) {
+		event := &pb.SignalmanEvent{
+			Data: &pb.EventData{
+				Payload: &pb.EventData_ViewerConnect{
+					ViewerConnect: &pb.ViewerConnectTrigger{
+						Host:       "1.2.3.4",
+						StreamName: "test-stream",
+					},
+				},
+			},
+		}
+		redactSensitiveData(event)
+		if event.Data.GetViewerConnect().Host != "" {
+			t.Fatalf("expected Host to be redacted, got %q", event.Data.GetViewerConnect().Host)
+		}
+		if event.Data.GetViewerConnect().StreamName != "test-stream" {
+			t.Fatal("expected StreamName to be preserved")
+		}
+	})
+
+	t.Run("ViewerDisconnect", func(t *testing.T) {
+		event := &pb.SignalmanEvent{
+			Data: &pb.EventData{
+				Payload: &pb.EventData_ViewerDisconnect{
+					ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+						Host:      "1.2.3.4",
+						SessionId: "sess-1",
+					},
+				},
+			},
+		}
+		redactSensitiveData(event)
+		if event.Data.GetViewerDisconnect().Host != "" {
+			t.Fatalf("expected Host to be redacted, got %q", event.Data.GetViewerDisconnect().Host)
+		}
+		if event.Data.GetViewerDisconnect().SessionId != "sess-1" {
+			t.Fatal("expected SessionId to be preserved")
+		}
+	})
+
+	t.Run("ClientLifecycle", func(t *testing.T) {
+		event := &pb.SignalmanEvent{
+			Data: &pb.EventData{
+				Payload: &pb.EventData_ClientLifecycle{
+					ClientLifecycle: &pb.ClientLifecycleUpdate{
+						Host:   "1.2.3.4",
+						NodeId: "node-1",
+					},
+				},
+			},
+		}
+		redactSensitiveData(event)
+		if event.Data.GetClientLifecycle().Host != "" {
+			t.Fatalf("expected Host to be redacted, got %q", event.Data.GetClientLifecycle().Host)
+		}
+		if event.Data.GetClientLifecycle().NodeId != "node-1" {
+			t.Fatal("expected NodeId to be preserved")
+		}
+	})
+
+	t.Run("MessageLifecycle", func(t *testing.T) {
+		content := "secret message"
+		subject := "private subject"
+		event := &pb.SignalmanEvent{
+			Data: &pb.EventData{
+				Payload: &pb.EventData_MessageLifecycle{
+					MessageLifecycle: &pb.MessageLifecycleData{
+						Content:        &content,
+						Subject:        &subject,
+						ConversationId: "conv-1",
+					},
+				},
+			},
+		}
+		redactSensitiveData(event)
+		if event.Data.GetMessageLifecycle().Content != nil {
+			t.Fatalf("expected Content to be nil, got %v", event.Data.GetMessageLifecycle().Content)
+		}
+		if event.Data.GetMessageLifecycle().Subject != nil {
+			t.Fatalf("expected Subject to be nil, got %v", event.Data.GetMessageLifecycle().Subject)
+		}
+		if event.Data.GetMessageLifecycle().ConversationId != "conv-1" {
+			t.Fatal("expected ConversationId to be preserved")
+		}
+	})
+
+	t.Run("NilEvent", func(t *testing.T) {
+		redactSensitiveData(nil)
+	})
+
+	t.Run("NilData", func(t *testing.T) {
+		redactSensitiveData(&pb.SignalmanEvent{Data: nil})
+	})
+
+	t.Run("InfrastructureNotRedacted", func(t *testing.T) {
+		lbEvent := &pb.SignalmanEvent{
+			Data: &pb.EventData{
+				Payload: &pb.EventData_LoadBalancing{
+					LoadBalancing: &pb.LoadBalancingData{
+						SelectedNode: "node-1",
+						ClientIp:     "10.0.0.1",
+					},
+				},
+			},
+		}
+		redactSensitiveData(lbEvent)
+		if lbEvent.Data.GetLoadBalancing().SelectedNode != "node-1" {
+			t.Fatal("expected SelectedNode to be preserved")
+		}
+		if lbEvent.Data.GetLoadBalancing().ClientIp != "10.0.0.1" {
+			t.Fatal("expected ClientIp to be preserved on infrastructure event")
+		}
+
+		nodeEvent := &pb.SignalmanEvent{
+			Data: &pb.EventData{
+				Payload: &pb.EventData_NodeLifecycle{
+					NodeLifecycle: &pb.NodeLifecycleUpdate{
+						NodeId:  "node-2",
+						BaseUrl: "https://node-2.example.com",
+					},
+				},
+			},
+		}
+		redactSensitiveData(nodeEvent)
+		if nodeEvent.Data.GetNodeLifecycle().NodeId != "node-2" {
+			t.Fatal("expected NodeId to be preserved")
+		}
+		if nodeEvent.Data.GetNodeLifecycle().BaseUrl != "https://node-2.example.com" {
+			t.Fatal("expected BaseUrl to be preserved on infrastructure event")
+		}
+	})
+}
+
+func TestChannelToStringAllValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		channel pb.Channel
+		want    string
+	}{
+		{pb.Channel_CHANNEL_STREAMS, "streams"},
+		{pb.Channel_CHANNEL_ANALYTICS, "analytics"},
+		{pb.Channel_CHANNEL_SYSTEM, "system"},
+		{pb.Channel_CHANNEL_ALL, "all"},
+		{pb.Channel_CHANNEL_MESSAGING, "messaging"},
+		{pb.Channel_CHANNEL_AI, "ai"},
+		{pb.Channel(9999), "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := channelToString(tt.channel)
+			if got != tt.want {
+				t.Fatalf("channelToString(%v) = %q, want %q", tt.channel, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEventTypeToStringAllValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		eventType pb.EventType
+		want      string
+	}{
+		{pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, "stream_lifecycle_update"},
+		{pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST, "stream_track_list"},
+		{pb.EventType_EVENT_TYPE_STREAM_BUFFER, "stream_buffer"},
+		{pb.EventType_EVENT_TYPE_STREAM_END, "stream_end"},
+		{pb.EventType_EVENT_TYPE_STREAM_SOURCE, "stream_source"},
+		{pb.EventType_EVENT_TYPE_PLAY_REWRITE, "play_rewrite"},
+		{pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE, "node_lifecycle_update"},
+		{pb.EventType_EVENT_TYPE_LOAD_BALANCING, "load_balancing"},
+		{pb.EventType_EVENT_TYPE_VIEWER_CONNECT, "viewer_connect"},
+		{pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT, "viewer_disconnect"},
+		{pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE, "client_lifecycle_update"},
+		{pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE, "clip_lifecycle"},
+		{pb.EventType_EVENT_TYPE_DVR_LIFECYCLE, "dvr_lifecycle"},
+		{pb.EventType_EVENT_TYPE_PUSH_REWRITE, "push_rewrite"},
+		{pb.EventType_EVENT_TYPE_PUSH_OUT_START, "push_out_start"},
+		{pb.EventType_EVENT_TYPE_PUSH_END, "push_end"},
+		{pb.EventType_EVENT_TYPE_RECORDING_COMPLETE, "recording_complete"},
+		{pb.EventType_EVENT_TYPE_STORAGE_LIFECYCLE, "storage_lifecycle"},
+		{pb.EventType_EVENT_TYPE_PROCESS_BILLING, "process_billing"},
+		{pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT, "storage_snapshot"},
+		{pb.EventType_EVENT_TYPE_MESSAGE_LIFECYCLE, "message_lifecycle"},
+		{pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION, "skipper_investigation"},
+		{pb.EventType(9999), "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := eventTypeToString(tt.eventType)
+			if got != tt.want {
+				t.Fatalf("eventTypeToString(%v) = %q, want %q", tt.eventType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetHubStats(t *testing.T) {
+	t.Parallel()
+
+	logger := logging.NewLogger()
+	server := NewSignalmanServer(logger, nil)
+
+	server.hub.mutex.Lock()
+	server.hub.clients[&Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS, pb.Channel_CHANNEL_ANALYTICS},
+		tenantID: "tenant-1",
+		send:     make(chan *pb.ServerMessage, 1),
+		logger:   logger,
+	}] = true
+	server.hub.clients[&Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		tenantID: "tenant-2",
+		send:     make(chan *pb.ServerMessage, 1),
+		logger:   logger,
+	}] = true
+	server.hub.clients[&Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
+		tenantID: "tenant-1",
+		send:     make(chan *pb.ServerMessage, 1),
+		logger:   logger,
+	}] = true
+	server.hub.mutex.Unlock()
+
+	stats, err := server.GetHubStats(context.Background(), &pb.GetHubStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetHubStats returned error: %v", err)
+	}
+
+	if stats.TotalConnections != 3 {
+		t.Fatalf("expected TotalConnections=3, got %d", stats.TotalConnections)
+	}
+	if stats.TotalClients != 3 {
+		t.Fatalf("expected TotalClients=3, got %d", stats.TotalClients)
+	}
+
+	wantSubs := map[string]int32{
+		"streams":   2,
+		"analytics": 1,
+		"system":    1,
+	}
+	for ch, want := range wantSubs {
+		got := stats.ChannelSubscriptions[ch]
+		if got != want {
+			t.Fatalf("expected ChannelSubscriptions[%q]=%d, got %d", ch, want, got)
+		}
+	}
+	if len(stats.ChannelSubscriptions) != len(wantSubs) {
+		t.Fatalf("expected %d channel entries, got %d", len(wantSubs), len(stats.ChannelSubscriptions))
+	}
+}
+
+func TestBroadcastEventNilEvent(t *testing.T) {
+	logger, hook := logrustest.NewNullLogger()
+
+	hub := &Hub{
+		clients: make(map[*Client]bool),
+		logger:  logger,
+	}
+	hub.clients[&Client{
+		channels: []pb.Channel{pb.Channel_CHANNEL_STREAMS},
+		tenantID: "tenant-1",
+		send:     make(chan *pb.ServerMessage, 1),
+		logger:   logger,
+	}] = true
+
+	hub.broadcastEvent(nil)
+
+	deadline := time.After(500 * time.Millisecond)
+	for hook.LastEntry() == nil {
+		select {
+		case <-deadline:
+			t.Fatal("expected warning log for nil event broadcast")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	entry := hook.LastEntry()
+	if entry.Level != logrus.WarnLevel {
+		t.Fatalf("expected warn level, got %v", entry.Level)
+	}
+	if entry.Message != "Skipping broadcast of nil event" {
+		t.Fatalf("unexpected log message: %s", entry.Message)
+	}
+
+	// Verify no message was sent to the client
+	for c := range hub.clients {
+		select {
+		case msg := <-c.send:
+			t.Fatalf("expected no message to be sent, got %v", msg)
+		default:
+		}
+	}
+}
