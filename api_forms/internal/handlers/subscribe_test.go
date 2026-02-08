@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -12,9 +13,11 @@ import (
 
 	"frameworks/pkg/clients"
 	"frameworks/pkg/clients/listmonk"
-	"frameworks/pkg/logging"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/sirupsen/logrus/hooks/test"
 )
 
 // --- Stub-based unit tests ---
@@ -57,7 +60,8 @@ func setupSubscribeHandler() *subscribeHarness {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	stub := &listmonkStub{}
-	handler := NewSubscribeHandler(stub, nil, 99, false, logging.NewLogger())
+	logger, _ := test.NewNullLogger()
+	handler := NewSubscribeHandler(stub, nil, 99, false, logger, nil)
 	router.POST("/api/subscribe", handler.Handle)
 	return &subscribeHarness{router: router, stub: stub}
 }
@@ -263,6 +267,78 @@ func TestSubscribeHandlesListmonkConflict(t *testing.T) {
 	}
 }
 
+// --- Observability tests ---
+
+func TestSubscribeHandlerTurnstileErrorMapsToBadGateway(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+	metrics := &FormMetrics{
+		SubscribeRequests: prometheus.NewCounterVec(
+			prometheus.CounterOpts{Name: "subscribe_turnstile_total", Help: "subscribe requests"},
+			[]string{"status"},
+		),
+	}
+
+	handler := NewSubscribeHandler(
+		&listmonkStub{},
+		&fakeTurnstile{err: errors.New("turnstile down")},
+		1,
+		true,
+		logger,
+		metrics,
+	)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/subscribe", handler.Handle)
+
+	body := newSubscribeBody(t, "user@example.com")
+	w := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewBuffer(body))
+	httpReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, httpReq)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, w.Code)
+	}
+	if got := testutil.ToFloat64(metrics.SubscribeRequests.WithLabelValues("turnstile_error")); got != 1.0 {
+		t.Fatalf("expected turnstile_error metric 1.0, got %f", got)
+	}
+}
+
+func TestSubscribeHandlerListmonkErrorMapsToBadGateway(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+	metrics := &FormMetrics{
+		SubscribeRequests: prometheus.NewCounterVec(
+			prometheus.CounterOpts{Name: "subscribe_listmonk_total", Help: "subscribe requests"},
+			[]string{"status"},
+		),
+	}
+
+	handler := NewSubscribeHandler(
+		&listmonkStub{subscribeErr: errors.New("listmonk down")},
+		nil,
+		1,
+		false,
+		logger,
+		metrics,
+	)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/subscribe", handler.Handle)
+
+	body := newSubscribeBody(t, "user@example.com")
+	w := httptest.NewRecorder()
+	httpReq := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewBuffer(body))
+	httpReq.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, httpReq)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected status %d, got %d", http.StatusBadGateway, w.Code)
+	}
+	if got := testutil.ToFloat64(metrics.SubscribeRequests.WithLabelValues("listmonk_error")); got != 1.0 {
+		t.Fatalf("expected listmonk_error metric 1.0, got %f", got)
+	}
+}
+
 // --- Integration tests (real listmonk client with httptest servers) ---
 
 func TestSubscribeRetriesWithBackoff(t *testing.T) {
@@ -307,8 +383,9 @@ func TestSubscribeRetriesWithBackoff(t *testing.T) {
 		listmonk.WithHTTPClient(httpClient),
 		listmonk.WithHTTPExecutorConfig(executorCfg),
 	)
+	logger, _ := test.NewNullLogger()
 
-	handler := NewSubscribeHandler(lmClient, nil, 42, false, logging.NewLogger())
+	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil)
 	router := gin.New()
 	router.POST("/api/subscribe", handler.Handle)
 
@@ -367,8 +444,9 @@ func TestSubscribeSuppressesDuplicateSubmission(t *testing.T) {
 		"pass",
 		listmonk.WithHTTPClient(httpClient),
 	)
+	logger, _ := test.NewNullLogger()
 
-	handler := NewSubscribeHandler(lmClient, nil, 42, false, logging.NewLogger())
+	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil)
 	router := gin.New()
 	router.POST("/api/subscribe", handler.Handle)
 
@@ -438,8 +516,9 @@ func TestSubscribeTimeoutReturnsGatewayTimeout(t *testing.T) {
 		listmonk.WithHTTPClient(httpClient),
 		listmonk.WithHTTPExecutorConfig(executorCfg),
 	)
+	logger, _ := test.NewNullLogger()
 
-	handler := NewSubscribeHandler(lmClient, nil, 42, false, logging.NewLogger())
+	handler := NewSubscribeHandler(lmClient, nil, 42, false, logger, nil)
 	router := gin.New()
 	router.POST("/api/subscribe", handler.Handle)
 

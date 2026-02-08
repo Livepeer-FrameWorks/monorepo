@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"frameworks/api_forms/internal/validation"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/turnstile"
 	"net/http"
 	"strings"
 	"time"
@@ -19,14 +18,7 @@ type ContactHandler struct {
 	toEmail            string
 	turnstileEnabled   bool
 	logger             logging.Logger
-}
-
-type EmailSender interface {
-	SendMail(ctx context.Context, to, subject, htmlBody string) error
-}
-
-type TurnstileVerifier interface {
-	Verify(ctx context.Context, token, remoteIP string) (*turnstile.VerifyResponse, error)
+	metrics            *FormMetrics
 }
 
 func NewContactHandler(
@@ -35,6 +27,7 @@ func NewContactHandler(
 	toEmail string,
 	turnstileEnabled bool,
 	logger logging.Logger,
+	metrics *FormMetrics,
 ) *ContactHandler {
 	return &ContactHandler{
 		emailSender:        emailSender,
@@ -42,12 +35,14 @@ func NewContactHandler(
 		toEmail:            toEmail,
 		turnstileEnabled:   turnstileEnabled,
 		logger:             logger,
+		metrics:            metrics,
 	}
 }
 
 func (h *ContactHandler) Handle(c *gin.Context) {
 	var req validation.ContactRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		h.metrics.IncContact("bad_request")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error":   "Invalid request format",
@@ -63,12 +58,13 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 
 		verification, err := h.turnstileValidator.Verify(ctx, req.TurnstileToken, remoteIP)
 		if err != nil {
+			h.metrics.IncContact("turnstile_error")
 			h.logger.WithFields(logging.Fields{
 				"error": err.Error(),
 				"ip":    remoteIP,
 			}).Error("Turnstile verification error")
 
-			c.JSON(http.StatusInternalServerError, gin.H{
+			c.JSON(http.StatusBadGateway, gin.H{
 				"success": false,
 				"error":   "Verification service error",
 			})
@@ -76,6 +72,7 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 		}
 
 		if !verification.Success {
+			h.metrics.IncContact("turnstile_failed")
 			h.logger.WithFields(logging.Fields{
 				"error_codes": verification.ErrorCodes,
 				"ip":          remoteIP,
@@ -93,11 +90,12 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 	validationErrors := validation.ValidateSubmission(&req, h.turnstileEnabled)
 
 	if len(validationErrors) > 0 {
+		h.metrics.IncContact("validation_failed")
 		h.logger.WithFields(logging.Fields{
 			"ip":     remoteIP,
 			"errors": validationErrors,
-			"name":   req.Name,
-			"email":  req.Email,
+			"name":   redactName(req.Name),
+			"email":  redactEmail(req.Email),
 		}).Warn("Blocked submission")
 
 		response := gin.H{
@@ -120,22 +118,24 @@ func (h *ContactHandler) Handle(c *gin.Context) {
 	defer cancel()
 
 	if err := h.emailSender.SendMail(ctx, h.toEmail, emailSubject, emailBody); err != nil {
+		h.metrics.IncContact("email_error")
 		h.logger.WithFields(logging.Fields{
 			"error": err.Error(),
-			"name":  req.Name,
-			"email": req.Email,
+			"name":  redactName(req.Name),
+			"email": redactEmail(req.Email),
 		}).Error("Failed to send email")
 
-		c.JSON(http.StatusInternalServerError, gin.H{
+		c.JSON(http.StatusBadGateway, gin.H{
 			"success": false,
 			"error":   "Failed to send email",
 		})
 		return
 	}
 
+	h.metrics.IncContact("success")
 	h.logger.WithFields(logging.Fields{
-		"name":    req.Name,
-		"email":   req.Email,
+		"name":    redactName(req.Name),
+		"email":   redactEmail(req.Email),
 		"company": req.Company,
 	}).Info("Email sent successfully")
 
