@@ -3726,55 +3726,62 @@ func (s *PurserServer) recordBalanceTransaction(
 	insertedWithReference := false
 
 	if referenceID != nil && referenceType != nil {
-		_, err = tx.ExecContext(ctx, `
+		// Idempotency: use ON CONFLICT DO NOTHING so we can safely query in-tx
+		// without aborting the transaction.
+		var insertedID string
+		insertErr := tx.QueryRowContext(ctx, `
 			INSERT INTO purser.balance_transactions
 			(id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at)
 			VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8)
-		`, txID, tenantID, amountCents, txType, description, referenceID, referenceType, now)
-		if err != nil {
-			var pqErr *pq.Error
-			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
-				var existingTxn pb.BalanceTransaction
-				var createdAt time.Time
-				var existingRefID, existingRefType sql.NullString
-				err := tx.QueryRowContext(ctx, `
-					SELECT id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at
-					FROM purser.balance_transactions
-					WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
-					ORDER BY created_at DESC
-					LIMIT 1
-				`, tenantID, *referenceType, *referenceID).Scan(
-					&existingTxn.Id,
-					&existingTxn.TenantId,
-					&existingTxn.AmountCents,
-					&existingTxn.BalanceAfterCents,
-					&existingTxn.TransactionType,
-					&existingTxn.Description,
-					&existingRefID,
-					&existingRefType,
-					&createdAt,
-				)
-				if err != nil {
-					if errors.Is(err, sql.ErrNoRows) {
-						return nil, status.Error(codes.Internal, "duplicate transaction detected but existing record missing")
-					}
-					s.logger.WithError(err).Error("Failed to load existing balance transaction")
-					return nil, status.Error(codes.Internal, "failed to load existing transaction")
-				}
-
-				existingTxn.CreatedAt = timestamppb.New(createdAt)
-				if existingRefID.Valid {
-					existingTxn.ReferenceId = &existingRefID.String
-				}
-				if existingRefType.Valid {
-					existingTxn.ReferenceType = &existingRefType.String
-				}
-
-				return &existingTxn, nil
+			ON CONFLICT (tenant_id, reference_type, reference_id) DO NOTHING
+			RETURNING id
+		`, txID, tenantID, amountCents, txType, description, referenceID, referenceType, now).Scan(&insertedID)
+		if insertErr != nil {
+			if !errors.Is(insertErr, sql.ErrNoRows) {
+				s.logger.WithError(insertErr).Error("Failed to insert balance transaction")
+				return nil, status.Error(codes.Internal, "failed to record transaction")
 			}
-			s.logger.WithError(err).Error("Failed to insert balance transaction")
-			return nil, status.Error(codes.Internal, "failed to record transaction")
+
+			// Conflict: return the existing transaction (and do NOT mutate balance again).
+			var existingTxn pb.BalanceTransaction
+			var createdAt time.Time
+			var existingRefID, existingRefType sql.NullString
+			scanErr := tx.QueryRowContext(ctx, `
+				SELECT id, tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type, created_at
+				FROM purser.balance_transactions
+				WHERE tenant_id = $1 AND reference_type = $2 AND reference_id = $3
+				ORDER BY created_at DESC
+				LIMIT 1
+			`, tenantID, *referenceType, *referenceID).Scan(
+				&existingTxn.Id,
+				&existingTxn.TenantId,
+				&existingTxn.AmountCents,
+				&existingTxn.BalanceAfterCents,
+				&existingTxn.TransactionType,
+				&existingTxn.Description,
+				&existingRefID,
+				&existingRefType,
+				&createdAt,
+			)
+			if scanErr != nil {
+				if errors.Is(scanErr, sql.ErrNoRows) {
+					return nil, status.Error(codes.Internal, "duplicate transaction detected but existing record missing")
+				}
+				s.logger.WithError(scanErr).Error("Failed to load existing balance transaction")
+				return nil, status.Error(codes.Internal, "failed to load existing transaction")
+			}
+
+			existingTxn.CreatedAt = timestamppb.New(createdAt)
+			if existingRefID.Valid {
+				existingTxn.ReferenceId = &existingRefID.String
+			}
+			if existingRefType.Valid {
+				existingTxn.ReferenceType = &existingRefType.String
+			}
+
+			return &existingTxn, nil
 		}
+
 		insertedWithReference = true
 	}
 

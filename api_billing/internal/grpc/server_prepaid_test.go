@@ -2,12 +2,12 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 
 	"frameworks/pkg/logging"
 )
@@ -33,9 +33,9 @@ func TestRecordBalanceTransaction_DuplicateReferenceReturnsExisting(t *testing.T
 	referenceType := "usage_summary"
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO purser.balance_transactions").
+	mock.ExpectQuery("INSERT INTO purser.balance_transactions").
 		WithArgs(sqlmock.AnyArg(), tenantID, amountCents, txType, description, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnError(&pq.Error{Code: "23505"})
+		WillReturnError(sql.ErrNoRows)
 
 	createdAt := time.Now().Add(-1 * time.Minute)
 	rows := sqlmock.NewRows([]string{
