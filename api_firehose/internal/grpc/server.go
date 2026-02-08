@@ -361,6 +361,12 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 	if s.metrics != nil {
 		s.metrics.GRPCRequests.WithLabelValues("SendEvent", "requested").Inc()
 	}
+	if trigger == nil {
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "invalid_request").Inc()
+		}
+		return nil, fmt.Errorf("mist trigger cannot be nil")
+	}
 
 	// Unwrap inner payload and determine event type + tenant
 	msg, eventType, tenantID := s.unwrapMistTrigger(trigger)

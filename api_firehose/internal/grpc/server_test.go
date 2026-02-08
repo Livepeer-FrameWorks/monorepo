@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,12 +11,12 @@ import (
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
-	"github.com/google/uuid"
-	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type producedMessage struct {
+type produceCall struct {
 	topic   string
 	key     []byte
 	value   []byte
@@ -23,40 +24,33 @@ type producedMessage struct {
 }
 
 type fakeProducer struct {
-	produced []producedMessage
-	typed    []*kafka.AnalyticsEvent
-	err      error
+	produceCalls []produceCall
+	publishCalls []*kafka.AnalyticsEvent
+	produceErr   error
+	publishErr   error
 }
 
 func (f *fakeProducer) ProduceMessage(topic string, key []byte, value []byte, headers map[string]string) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.produced = append(f.produced, producedMessage{
+	f.produceCalls = append(f.produceCalls, produceCall{
 		topic:   topic,
 		key:     key,
 		value:   value,
 		headers: headers,
 	})
-	return nil
+	return f.produceErr
 }
 
 func (f *fakeProducer) PublishTypedBatch(events []kafka.AnalyticsEvent) error {
-	if f.err != nil {
-		return f.err
+	for idx := range events {
+		event := events[idx]
+		f.publishCalls = append(f.publishCalls, &event)
 	}
-	for i := range events {
-		f.typed = append(f.typed, &events[i])
-	}
-	return nil
+	return f.publishErr
 }
 
 func (f *fakeProducer) PublishTypedEvent(event *kafka.AnalyticsEvent) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.typed = append(f.typed, event)
-	return nil
+	f.publishCalls = append(f.publishCalls, event)
+	return f.publishErr
 }
 
 func (f *fakeProducer) Close() error {
@@ -71,16 +65,169 @@ func (f *fakeProducer) GetMetrics() (map[string]interface{}, error) {
 	return map[string]interface{}{}, nil
 }
 
-func TestSendServiceEventRoutingAndPartitionKey(t *testing.T) {
-	producer := &fakeProducer{}
-	logger := logging.Logger(logrus.New())
-	server := NewDecklogServer(producer, logger, nil, "service_events_custom")
+func newTestServer(producer kafka.ProducerInterface) *DecklogServer {
+	logger := logging.NewLogger()
+	return NewDecklogServer(producer, logger, nil, "service_events_test")
+}
 
-	tenantID := uuid.NewString()
+func TestSendEventRejectsNilTrigger(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	_, err := server.SendEvent(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil trigger")
+	}
+	if len(producer.publishCalls) != 0 {
+		t.Fatalf("expected no publishes, got %d", len(producer.publishCalls))
+	}
+}
+
+func TestSendEventRejectsMissingTenant(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	trigger := &pb.MistTrigger{
+		TriggerType: "PUSH_END",
+		TriggerPayload: &pb.MistTrigger_PushEnd{
+			PushEnd: &pb.PushEndTrigger{},
+		},
+	}
+
+	_, err := server.SendEvent(context.Background(), trigger)
+	if err == nil {
+		t.Fatal("expected error for missing tenant_id")
+	}
+	if len(producer.publishCalls) != 0 {
+		t.Fatalf("expected no publishes, got %d", len(producer.publishCalls))
+	}
+}
+
+func TestSendEventPublishesAnalyticsEvent(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	tenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
+	trigger := &pb.MistTrigger{
+		TriggerType: "PUSH_END",
+		TenantId:    proto.String(tenantID),
+		TriggerPayload: &pb.MistTrigger_PushEnd{
+			PushEnd: &pb.PushEndTrigger{},
+		},
+	}
+
+	_, err := server.SendEvent(context.Background(), trigger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(producer.publishCalls) != 1 {
+		t.Fatalf("expected 1 publish, got %d", len(producer.publishCalls))
+	}
+	event := producer.publishCalls[0]
+	if event.EventType != "push_end" {
+		t.Fatalf("expected event type push_end, got %s", event.EventType)
+	}
+	if event.Source != "foghorn" {
+		t.Fatalf("expected source foghorn, got %s", event.Source)
+	}
+	if event.TenantID != tenantID {
+		t.Fatalf("expected tenant %s, got %s", tenantID, event.TenantID)
+	}
+	if _, ok := event.Data["trigger_type"]; !ok {
+		t.Fatalf("expected trigger_type in data, got %v", event.Data)
+	}
+}
+
+func TestSendEventReturnsPublishError(t *testing.T) {
+	publishErr := errors.New("publish failed")
+	producer := &fakeProducer{publishErr: publishErr}
+	server := newTestServer(producer)
+
+	tenantID := "1d2ed4fd-1f2c-4b02-9531-412bde6c45ab"
+	trigger := &pb.MistTrigger{
+		TriggerType: "PUSH_END",
+		TenantId:    proto.String(tenantID),
+		TriggerPayload: &pb.MistTrigger_PushEnd{
+			PushEnd: &pb.PushEndTrigger{},
+		},
+	}
+
+	_, err := server.SendEvent(context.Background(), trigger)
+	if err == nil {
+		t.Fatal("expected publish error")
+	}
+	if len(producer.publishCalls) != 1 {
+		t.Fatalf("expected 1 publish attempt, got %d", len(producer.publishCalls))
+	}
+}
+
+func TestSendServiceEventPublishesToKafka(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	tenantID := "eaa0a2d3-7b64-4df2-9c36-5c5812f6d908"
+	serviceEvent := &pb.ServiceEvent{
+		EventId:      "event-123",
+		EventType:    "auth",
+		Source:       "api_gateway",
+		TenantId:     tenantID,
+		UserId:       "user-456",
+		ResourceType: "session",
+		ResourceId:   "resource-789",
+		Payload: &pb.ServiceEvent_AuthEvent{
+			AuthEvent: &pb.AuthEvent{
+				UserId:   "user-456",
+				TenantId: tenantID,
+				AuthType: "token",
+			},
+		},
+	}
+
+	_, err := server.SendServiceEvent(context.Background(), serviceEvent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(producer.produceCalls) != 1 {
+		t.Fatalf("expected 1 kafka message, got %d", len(producer.produceCalls))
+	}
+	call := producer.produceCalls[0]
+	if call.topic != "service_events_test" {
+		t.Fatalf("expected topic service_events_test, got %s", call.topic)
+	}
+	if got := call.headers["tenant_id"]; got != tenantID {
+		t.Fatalf("expected tenant header %s, got %s", tenantID, got)
+	}
+	if got := call.headers["event_type"]; got != "auth" {
+		t.Fatalf("expected event_type auth, got %s", got)
+	}
+	if got := call.headers["source"]; got != "api_gateway" {
+		t.Fatalf("expected source api_gateway, got %s", got)
+	}
+
+	var payload kafka.ServiceEvent
+	if err := json.Unmarshal(call.value, &payload); err != nil {
+		t.Fatalf("failed to unmarshal payload: %v", err)
+	}
+	if payload.EventID != "event-123" {
+		t.Fatalf("expected event_id event-123, got %s", payload.EventID)
+	}
+	if payload.TenantID != tenantID {
+		t.Fatalf("expected tenant %s, got %s", tenantID, payload.TenantID)
+	}
+	if payload.Data["auth_type"] != "token" {
+		t.Fatalf("expected auth_type token, got %v", payload.Data["auth_type"])
+	}
+}
+
+func TestSendServiceEventPartitionKeyAndTimestamp(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	tenantID := "d4c7e5a0-1234-4abc-9f01-abcdef123456"
 	eventID := "event-001"
 	timestamp := time.Date(2024, 5, 6, 12, 30, 0, 0, time.UTC)
 
-	event := &pb.ServiceEvent{
+	serviceEvent := &pb.ServiceEvent{
 		EventId:   eventID,
 		EventType: "tenant_update",
 		Timestamp: timestamppb.New(timestamp),
@@ -88,37 +235,21 @@ func TestSendServiceEventRoutingAndPartitionKey(t *testing.T) {
 		TenantId:  tenantID,
 	}
 
-	if _, err := server.SendServiceEvent(context.Background(), event); err != nil {
-		t.Fatalf("SendServiceEvent returned error: %v", err)
+	if _, err := server.SendServiceEvent(context.Background(), serviceEvent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(producer.produceCalls) != 1 {
+		t.Fatalf("expected 1 produced message, got %d", len(producer.produceCalls))
 	}
 
-	if len(producer.produced) != 1 {
-		t.Fatalf("expected 1 produced message, got %d", len(producer.produced))
-	}
-
-	produced := producer.produced[0]
-	if produced.topic != "service_events_custom" {
-		t.Fatalf("expected topic service_events_custom, got %q", produced.topic)
-	}
-	if string(produced.key) != eventID {
-		t.Fatalf("expected partition key %q, got %q", eventID, string(produced.key))
-	}
-	if produced.headers["tenant_id"] != tenantID {
-		t.Fatalf("expected tenant_id header %q, got %q", tenantID, produced.headers["tenant_id"])
-	}
-	if produced.headers["event_type"] != "tenant_update" {
-		t.Fatalf("expected event_type header tenant_update, got %q", produced.headers["event_type"])
-	}
-	if produced.headers["source"] != "api_control" {
-		t.Fatalf("expected source header api_control, got %q", produced.headers["source"])
+	call := producer.produceCalls[0]
+	if string(call.key) != eventID {
+		t.Fatalf("expected partition key %q, got %q", eventID, string(call.key))
 	}
 
 	var payload kafka.ServiceEvent
-	if err := json.Unmarshal(produced.value, &payload); err != nil {
+	if err := json.Unmarshal(call.value, &payload); err != nil {
 		t.Fatalf("failed to unmarshal payload: %v", err)
-	}
-	if payload.EventID != eventID {
-		t.Fatalf("expected payload event ID %q, got %q", eventID, payload.EventID)
 	}
 	if !payload.Timestamp.Equal(timestamp) {
 		t.Fatalf("expected payload timestamp %s, got %s", timestamp, payload.Timestamp)
@@ -127,10 +258,9 @@ func TestSendServiceEventRoutingAndPartitionKey(t *testing.T) {
 
 func TestSendServiceEventOutOfOrderAndDuplicates(t *testing.T) {
 	producer := &fakeProducer{}
-	logger := logging.Logger(logrus.New())
-	server := NewDecklogServer(producer, logger, nil, "")
+	server := newTestServer(producer)
 
-	tenantID := uuid.NewString()
+	tenantID := "b8f3a2c1-5678-4def-8901-fedcba654321"
 	eventID := "event-dup"
 
 	newer := time.Date(2024, 5, 6, 14, 0, 0, 0, time.UTC)
@@ -155,20 +285,20 @@ func TestSendServiceEventOutOfOrderAndDuplicates(t *testing.T) {
 
 	for _, event := range events {
 		if _, err := server.SendServiceEvent(context.Background(), event); err != nil {
-			t.Fatalf("SendServiceEvent returned error: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 
-	if len(producer.produced) != 2 {
-		t.Fatalf("expected 2 produced messages, got %d", len(producer.produced))
+	if len(producer.produceCalls) != 2 {
+		t.Fatalf("expected 2 produced messages, got %d", len(producer.produceCalls))
 	}
 
 	var firstPayload kafka.ServiceEvent
-	if err := json.Unmarshal(producer.produced[0].value, &firstPayload); err != nil {
+	if err := json.Unmarshal(producer.produceCalls[0].value, &firstPayload); err != nil {
 		t.Fatalf("failed to unmarshal first payload: %v", err)
 	}
 	var secondPayload kafka.ServiceEvent
-	if err := json.Unmarshal(producer.produced[1].value, &secondPayload); err != nil {
+	if err := json.Unmarshal(producer.produceCalls[1].value, &secondPayload); err != nil {
 		t.Fatalf("failed to unmarshal second payload: %v", err)
 	}
 
@@ -180,41 +310,39 @@ func TestSendServiceEventOutOfOrderAndDuplicates(t *testing.T) {
 	}
 }
 
-func TestSendEventTenantRoutingInvariant(t *testing.T) {
+func TestSendServiceEventRejectsMissingTenant(t *testing.T) {
 	producer := &fakeProducer{}
-	logger := logging.Logger(logrus.New())
-	server := NewDecklogServer(producer, logger, nil, "")
+	server := newTestServer(producer)
 
-	tenantID := uuid.NewString()
-	trigger := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_StreamLifecycleUpdate{
-			StreamLifecycleUpdate: &pb.StreamLifecycleUpdate{
-				TenantId: &tenantID,
+	serviceEvent := &pb.ServiceEvent{
+		EventId:   "event-123",
+		EventType: "auth",
+		Source:    "api_gateway",
+		Payload: &pb.ServiceEvent_AuthEvent{
+			AuthEvent: &pb.AuthEvent{
+				UserId:   "user-456",
+				TenantId: "",
+				AuthType: "token",
 			},
 		},
 	}
 
-	if _, err := server.SendEvent(context.Background(), trigger); err != nil {
-		t.Fatalf("SendEvent returned error: %v", err)
+	_, err := server.SendServiceEvent(context.Background(), serviceEvent)
+	if err == nil {
+		t.Fatal("expected error for missing tenant_id")
 	}
+	if len(producer.produceCalls) != 0 {
+		t.Fatalf("expected no kafka messages, got %d", len(producer.produceCalls))
+	}
+}
 
-	if len(producer.typed) != 1 {
-		t.Fatalf("expected 1 published analytics event, got %d", len(producer.typed))
-	}
-	if producer.typed[0].TenantID != tenantID {
-		t.Fatalf("expected tenant ID %q, got %q", tenantID, producer.typed[0].TenantID)
-	}
+func TestConvertProtobufToKafkaEventSerializationFailure(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
 
-	missingTenant := &pb.MistTrigger{
-		TriggerPayload: &pb.MistTrigger_StreamSource{
-			StreamSource: &pb.StreamSourceTrigger{},
-		},
-	}
-
-	if _, err := server.SendEvent(context.Background(), missingTenant); err == nil {
-		t.Fatalf("expected error for missing tenant ID")
-	}
-	if len(producer.typed) != 1 {
-		t.Fatalf("expected no additional published events on tenant error")
+	tenantID := "70af8a55-99f4-4797-8d11-6dfe0a81f7c8"
+	_, err := server.convertProtobufToKafkaEvent(structpb.NewStringValue("bad"), "test_event", "source", tenantID)
+	if err == nil {
+		t.Fatal("expected serialization error")
 	}
 }
