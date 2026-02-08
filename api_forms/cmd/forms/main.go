@@ -42,12 +42,26 @@ func main() {
 
 	app := server.SetupServiceRouter(logger, "forms", healthChecker, metricsCollector)
 
+	formMetrics := &handlers.FormMetrics{
+		ContactRequests: metricsCollector.NewCounter(
+			"contact_requests_total",
+			"Contact form requests handled",
+			[]string{"status"},
+		),
+		SubscribeRequests: metricsCollector.NewCounter(
+			"subscribe_requests_total",
+			"Subscribe form requests handled",
+			[]string{"status"},
+		),
+	}
+
 	contactHandler := handlers.NewContactHandler(
 		emailSender,
 		turnstileValidator,
 		config.GetEnv("TO_EMAIL", "contact@frameworks.network"),
 		turnstileEnabled,
 		logger,
+		formMetrics,
 	)
 
 	app.POST("/api/contact", contactHandler.Handle)
@@ -60,7 +74,7 @@ func main() {
 	listID, _ := strconv.Atoi(listIDStr)
 
 	lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkPass)
-	subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger)
+	subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics)
 	app.POST("/api/subscribe", subHandler.Handle)
 
 	serverConfig := server.DefaultConfig("forms", port)

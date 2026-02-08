@@ -6,7 +6,6 @@ import (
 	"frameworks/api_forms/internal/validation"
 	"frameworks/pkg/clients/listmonk"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/turnstile"
 	"net"
 	"net/http"
 	"net/mail"
@@ -27,23 +26,20 @@ type SubscribeRequest struct {
 
 type SubscribeHandler struct {
 	listmonkClient     ListmonkClient
-	turnstileValidator *turnstile.Validator
+	turnstileValidator TurnstileVerifier
 	defaultListID      int
 	turnstileEnabled   bool
 	logger             logging.Logger
-}
-
-type ListmonkClient interface {
-	Subscribe(ctx context.Context, email, name string, listID int, preconfirm bool) error
-	GetSubscriber(ctx context.Context, email string) (*listmonk.SubscriberInfo, bool, error)
+	metrics            *FormMetrics
 }
 
 func NewSubscribeHandler(
 	client ListmonkClient,
-	validator *turnstile.Validator,
+	validator TurnstileVerifier,
 	defaultListID int,
 	turnstileEnabled bool,
 	logger logging.Logger,
+	metrics *FormMetrics,
 ) *SubscribeHandler {
 	return &SubscribeHandler{
 		listmonkClient:     client,
@@ -51,12 +47,14 @@ func NewSubscribeHandler(
 		defaultListID:      defaultListID,
 		turnstileEnabled:   turnstileEnabled,
 		logger:             logger,
+		metrics:            metrics,
 	}
 }
 
 func (h *SubscribeHandler) Handle(c *gin.Context) {
 	var req SubscribeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		h.metrics.IncSubscribe("bad_request")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
@@ -75,7 +73,17 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
 		ver, err := h.turnstileValidator.Verify(ctx, req.TurnstileToken, remoteIP)
-		if err != nil || !ver.Success {
+		if err != nil {
+			h.metrics.IncSubscribe("turnstile_error")
+			h.logger.WithFields(logging.Fields{
+				"error": err.Error(),
+				"ip":    remoteIP,
+			}).Error("Turnstile verification error on subscribe")
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Verification service error"})
+			return
+		}
+		if !ver.Success {
+			h.metrics.IncSubscribe("turnstile_failed")
 			h.logger.WithFields(logging.Fields{"ip": remoteIP}).Warn("Bot detected on subscribe")
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Bot verification failed"})
 			return
@@ -88,6 +96,7 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 			Behavior:    req.Behavior,
 		})
 		if len(errors) > 0 {
+			h.metrics.IncSubscribe("validation_failed")
 			h.logger.WithFields(logging.Fields{
 				"ip":     remoteIP,
 				"errors": errors,
@@ -99,6 +108,7 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 
 	// 2. Validate Email
 	if _, err := mail.ParseAddress(req.Email); err != nil {
+		h.metrics.IncSubscribe("invalid_email")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid email"})
 		return
 	}
@@ -110,6 +120,7 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 	normalizedEmail := strings.ToLower(strings.TrimSpace(req.Email))
 	if info, exists, err := h.listmonkClient.GetSubscriber(ctx, normalizedEmail); err != nil {
 		h.logger.WithError(err).Error("Listmonk lookup failed")
+		h.metrics.IncSubscribe("listmonk_error")
 		respondListmonkError(c, err)
 		return
 	} else if exists {
@@ -135,11 +146,13 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"success": true})
 			return
 		}
+		h.metrics.IncSubscribe("listmonk_error")
 		h.logger.WithError(err).Error("Listmonk subscribe failed")
 		respondListmonkError(c, err)
 		return
 	}
 
+	h.metrics.IncSubscribe("success")
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
