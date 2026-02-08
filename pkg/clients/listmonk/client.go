@@ -9,6 +9,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"frameworks/pkg/clients"
+
+	"github.com/failsafe-go/failsafe-go"
 )
 
 type APIError struct {
@@ -20,19 +24,78 @@ func (e *APIError) Error() string {
 }
 
 type Client struct {
-	baseURL  string
-	username string
-	password string
-	client   *http.Client
+	baseURL      string
+	username     string
+	password     string
+	client       *http.Client
+	httpExecutor failsafe.Executor[*http.Response]
+	shouldRetry  func(resp *http.Response, err error) bool
 }
 
-func NewClient(baseURL, username, password string) *Client {
-	return &Client{
-		baseURL:  baseURL,
-		username: username,
-		password: password,
-		client:   &http.Client{Timeout: 10 * time.Second},
+type Option func(*Client)
+
+func NewClient(baseURL, username, password string, opts ...Option) *Client {
+	defaultConfig := clients.DefaultHTTPExecutorConfig()
+	c := &Client{
+		baseURL:      baseURL,
+		username:     username,
+		password:     password,
+		client:       &http.Client{Timeout: 10 * time.Second},
+		httpExecutor: clients.NewHTTPExecutor(defaultConfig),
+		shouldRetry:  defaultConfig.ShouldRetry,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+func WithHTTPClient(httpClient *http.Client) Option {
+	return func(c *Client) {
+		if httpClient != nil {
+			c.client = httpClient
+		}
+	}
+}
+
+func WithHTTPExecutorConfig(cfg clients.HTTPExecutorConfig) Option {
+	return func(c *Client) {
+		c.httpExecutor = clients.NewHTTPExecutor(cfg)
+		c.shouldRetry = cfg.ShouldRetry
+	}
+}
+
+func WithHTTPExecutor(executor failsafe.Executor[*http.Response], shouldRetry func(resp *http.Response, err error) bool) Option {
+	return func(c *Client) {
+		if executor != nil {
+			c.httpExecutor = executor
+			c.shouldRetry = shouldRetry
+		}
+	}
+}
+
+func (c *Client) doRequest(ctx context.Context, build func(ctx context.Context) (*http.Request, error)) (*http.Response, error) {
+	if c.httpExecutor == nil {
+		req, err := build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return c.client.Do(req)
+	}
+
+	return clients.ExecuteHTTP(ctx, c.httpExecutor, func() (*http.Response, error) {
+		req, err := build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := c.client.Do(req)
+		if c.shouldRetry != nil && c.shouldRetry(resp, err) {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+		}
+		return resp, err
+	})
 }
 
 type SubscriberRequest struct {
@@ -62,15 +125,16 @@ func (c *Client) Subscribe(ctx context.Context, email, name string, listID int, 
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return err
-	}
+	resp, err := c.doRequest(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return nil, err
+		}
 
-	req.SetBasicAuth(c.username, c.password)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
+		req.SetBasicAuth(c.username, c.password)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}
@@ -97,15 +161,16 @@ func (c *Client) Blocklist(ctx context.Context, email string) error {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return err
-	}
+	resp, err := c.doRequest(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return nil, err
+		}
 
-	req.SetBasicAuth(c.username, c.password)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
+		req.SetBasicAuth(c.username, c.password)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}
@@ -139,14 +204,15 @@ func (c *Client) GetSubscriber(ctx context.Context, email string) (*SubscriberIn
 	query := fmt.Sprintf("subscribers.email='%s'", escapedEmail)
 	reqURL := fmt.Sprintf("%s/api/subscribers?query=%s", c.baseURL, url.QueryEscape(query))
 
-	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
-	if err != nil {
-		return nil, false, err
-	}
+	resp, err := c.doRequest(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+		if err != nil {
+			return nil, err
+		}
 
-	req.SetBasicAuth(c.username, c.password)
-
-	resp, err := c.client.Do(req)
+		req.SetBasicAuth(c.username, c.password)
+		return req, nil
+	})
 	if err != nil {
 		return nil, false, err
 	}
@@ -212,15 +278,16 @@ func (c *Client) Unsubscribe(ctx context.Context, subscriberID int, listID int) 
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", reqURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return err
-	}
+	resp, err := c.doRequest(ctx, func(ctx context.Context) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "PUT", reqURL, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return nil, err
+		}
 
-	req.SetBasicAuth(c.username, c.password)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
+		req.SetBasicAuth(c.username, c.password)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return err
 	}
