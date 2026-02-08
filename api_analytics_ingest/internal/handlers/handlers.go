@@ -151,6 +151,7 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		if errors.Is(err, errMissingTenantID) {
 			return err
 		}
+		h.writeIngestError(ctx, event, "", "handler_error", err)
 		h.logger.WithError(err).WithFields(logging.Fields{
 			"event_type": event.EventType,
 			"event_id":   event.EventID,
@@ -597,8 +598,12 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	var nodeBucketH3 interface{}
 	var nodeBucketRes interface{}
 
+	payloadIsConnect := false
+	payloadType := ""
 	switch p := mt.GetTriggerPayload().(type) {
 	case *pb.MistTrigger_ViewerConnect:
+		payloadIsConnect = true
+		payloadType = "viewer_connect"
 		vc := p.ViewerConnect
 		streamName = vc.GetStreamName()
 		sessionID = vc.GetSessionId()
@@ -627,6 +632,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 			nodeBucketRes = uint8(bucket.Resolution)
 		}
 	case *pb.MistTrigger_ViewerDisconnect:
+		payloadIsConnect = false
+		payloadType = "viewer_disconnect"
 		vd := p.ViewerDisconnect
 		streamName = vd.GetStreamName()
 		sessionID = vd.GetSessionId()
@@ -659,6 +666,10 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		}
 	default:
 		return fmt.Errorf("unexpected payload for viewer connection")
+	}
+	if payloadIsConnect != isConnect {
+		expectedType := map[bool]string{true: "viewer_connect", false: "viewer_disconnect"}[isConnect]
+		return fmt.Errorf("viewer connection payload mismatch: expected %s, got %s", expectedType, payloadType)
 	}
 
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys

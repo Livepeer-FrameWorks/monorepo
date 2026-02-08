@@ -1,14 +1,22 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"frameworks/pkg/kafka"
+	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func TestMax64(t *testing.T) {
@@ -672,6 +680,355 @@ func TestParseProtobufData(t *testing.T) {
 			t.Fatal("expected error for marshal failure")
 		}
 	})
+}
+
+func TestHandleAnalyticsEventMissingTenantIDWritesIngestError(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_connect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  "",
+		Data:      map[string]interface{}{"ignored": true},
+	}
+
+	err := handler.HandleAnalyticsEvent(event)
+	if !errors.Is(err, errMissingTenantID) {
+		t.Fatalf("expected errMissingTenantID, got %v", err)
+	}
+
+	batch := conn.batches["ingest_errors"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected 1 ingest_errors row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[2] != event.EventType {
+		t.Fatalf("expected event_type %q, got %#v", event.EventType, row[2])
+	}
+	if row[4] != event.TenantID {
+		t.Fatalf("expected tenant_id %q, got %#v", event.TenantID, row[4])
+	}
+	if reason, ok := row[6].(string); !ok || !strings.Contains(reason, "missing_or_invalid_tenant_id") {
+		t.Fatalf("expected missing tenant reason, got %#v", row[6])
+	}
+}
+
+func TestHandleAnalyticsEventMalformedPayloadWritesIngestError(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_connect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data: map[string]interface{}{
+			"streamName": 123,
+		},
+	}
+
+	err := handler.HandleAnalyticsEvent(event)
+	if err == nil {
+		t.Fatal("expected error for malformed payload")
+	}
+
+	batch := conn.batches["ingest_errors"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected 1 ingest_errors row, got %#v", batch)
+	}
+	if reason, ok := batch.rows[0][6].(string); !ok || !strings.Contains(reason, "handler_error") {
+		t.Fatalf("expected handler_error reason, got %#v", batch.rows[0][6])
+	}
+}
+
+func TestViewerConnectionPayloadMismatch(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: streamID,
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				StreamName: "live+demo",
+				SessionId:  "sess-1",
+				Connector:  "hls",
+				Host:       "1.2.3.4",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_connect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      data,
+	}
+
+	err := handler.HandleAnalyticsEvent(event)
+	if err == nil || !strings.Contains(err.Error(), "payload mismatch") {
+		t.Fatalf("expected payload mismatch error, got %v", err)
+	}
+
+	batch := conn.batches["ingest_errors"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected ingest_errors row, got %#v", batch)
+	}
+}
+
+func TestViewerConnectTenantAttribution(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: streamID,
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName: "live+demo",
+				SessionId:  "sess-1",
+				Connector:  "hls",
+				Host:       "1.2.3.4",
+				RequestUrl: "https://example.com/stream",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_connect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["viewer_connection_events"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[2] != tenantID {
+		t.Fatalf("expected tenant_id %q, got %#v", tenantID, row[2])
+	}
+	if row[4] != "demo" {
+		t.Fatalf("expected internal_name demo, got %#v", row[4])
+	}
+	if row[18] != "connect" {
+		t.Fatalf("expected event_type connect, got %#v", row[18])
+	}
+}
+
+func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: streamID,
+		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
+			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
+				StreamName:       "live+demo",
+				SessionId:        "sess-2",
+				Connector:        "hls",
+				Host:             "1.2.3.4",
+				SecondsConnected: 42,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_disconnect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["viewer_connection_events"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[18] != "disconnect" {
+		t.Fatalf("expected event_type disconnect, got %#v", row[18])
+	}
+	if row[19] != uint32(42) {
+		t.Fatalf("expected session_duration 42, got %#v", row[19])
+	}
+}
+
+func TestViewerConnectionDuplicateEventSkipped(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	eventID := uuid.New()
+	conn.addDuplicate("viewer_connection_events", eventID)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId: streamID,
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName: "live+demo",
+				SessionId:  "sess-3",
+				Connector:  "hls",
+				Host:       "1.2.3.4",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   eventID.String(),
+		EventType: "viewer_connect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if batch := conn.batches["viewer_connection_events"]; batch != nil {
+		t.Fatalf("expected duplicate event to skip insert, got %#v", batch.rows)
+	}
+}
+
+func mustMistTriggerData(t *testing.T, mt *pb.MistTrigger) map[string]interface{} {
+	t.Helper()
+	bytes, err := protojson.Marshal(mt)
+	if err != nil {
+		t.Fatalf("failed to marshal MistTrigger: %v", err)
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		t.Fatalf("failed to unmarshal MistTrigger JSON: %v", err)
+	}
+	return data
+}
+
+type fakeClickhouseConn struct {
+	batches    map[string]*fakeBatch
+	duplicates map[string]map[uuid.UUID]bool
+}
+
+func newFakeClickhouseConn() *fakeClickhouseConn {
+	return &fakeClickhouseConn{
+		batches:    make(map[string]*fakeBatch),
+		duplicates: make(map[string]map[uuid.UUID]bool),
+	}
+}
+
+func (f *fakeClickhouseConn) addDuplicate(table string, eventID uuid.UUID) {
+	if f.duplicates[table] == nil {
+		f.duplicates[table] = make(map[uuid.UUID]bool)
+	}
+	f.duplicates[table][eventID] = true
+}
+
+func (f *fakeClickhouseConn) Contributors() []string { return nil }
+func (f *fakeClickhouseConn) ServerVersion() (*driver.ServerVersion, error) {
+	return nil, nil
+}
+func (f *fakeClickhouseConn) Select(ctx context.Context, dest any, query string, args ...any) error {
+	return nil
+}
+func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	table := tableFromQuery(query, "from")
+	var eventID uuid.UUID
+	if len(args) > 0 {
+		if parsed, ok := args[0].(uuid.UUID); ok {
+			eventID = parsed
+		}
+	}
+	dup := false
+	if f.duplicates[table] != nil && f.duplicates[table][eventID] {
+		dup = true
+	}
+	return &fakeRows{next: dup}, nil
+}
+func (f *fakeClickhouseConn) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
+	return &fakeRow{}
+}
+func (f *fakeClickhouseConn) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
+	table := tableFromQuery(query, "into")
+	batch := &fakeBatch{table: table}
+	f.batches[table] = batch
+	return batch, nil
+}
+func (f *fakeClickhouseConn) Exec(ctx context.Context, query string, args ...any) error {
+	return nil
+}
+func (f *fakeClickhouseConn) AsyncInsert(ctx context.Context, query string, wait bool, args ...any) error {
+	return nil
+}
+func (f *fakeClickhouseConn) Ping(ctx context.Context) error { return nil }
+func (f *fakeClickhouseConn) Stats() driver.Stats            { return driver.Stats{} }
+func (f *fakeClickhouseConn) Close() error                   { return nil }
+
+type fakeBatch struct {
+	table string
+	rows  [][]any
+	sent  bool
+}
+
+func (f *fakeBatch) Abort() error                  { return nil }
+func (f *fakeBatch) Append(v ...any) error         { f.rows = append(f.rows, v); return nil }
+func (f *fakeBatch) AppendStruct(v any) error      { return nil }
+func (f *fakeBatch) Column(int) driver.BatchColumn { return &fakeBatchColumn{} }
+func (f *fakeBatch) Flush() error                  { return nil }
+func (f *fakeBatch) Send() error                   { f.sent = true; return nil }
+func (f *fakeBatch) IsSent() bool                  { return f.sent }
+func (f *fakeBatch) Rows() int                     { return len(f.rows) }
+func (f *fakeBatch) Columns() []column.Interface   { return nil }
+func (f *fakeBatch) Close() error                  { return nil }
+
+type fakeBatchColumn struct{}
+
+func (f *fakeBatchColumn) Append(any) error    { return nil }
+func (f *fakeBatchColumn) AppendRow(any) error { return nil }
+
+type fakeRows struct {
+	next bool
+}
+
+func (f *fakeRows) Next() bool {
+	if f.next {
+		f.next = false
+		return true
+	}
+	return false
+}
+func (f *fakeRows) Scan(dest ...any) error           { return nil }
+func (f *fakeRows) ScanStruct(dest any) error        { return nil }
+func (f *fakeRows) ColumnTypes() []driver.ColumnType { return nil }
+func (f *fakeRows) Totals(dest ...any) error         { return nil }
+func (f *fakeRows) Columns() []string                { return nil }
+func (f *fakeRows) Close() error                     { return nil }
+func (f *fakeRows) Err() error                       { return nil }
+
+type fakeRow struct{}
+
+func (f *fakeRow) Err() error                { return nil }
+func (f *fakeRow) Scan(dest ...any) error    { return nil }
+func (f *fakeRow) ScanStruct(dest any) error { return nil }
+
+func tableFromQuery(query string, keyword string) string {
+	fields := strings.Fields(query)
+	for i, field := range fields {
+		if strings.EqualFold(field, keyword) && i+1 < len(fields) {
+			return strings.Trim(fields[i+1], "`")
+		}
+	}
+	return ""
 }
 
 func assertInterfaceValue[T comparable](t *testing.T, got interface{}, expected *T) {
