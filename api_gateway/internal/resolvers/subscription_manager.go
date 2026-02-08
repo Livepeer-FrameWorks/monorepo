@@ -557,8 +557,11 @@ func channelToTenantChannel(channel pb.Channel) string {
 }
 
 func tenantMismatch(tenantID string, event *pb.SignalmanEvent) bool {
-	if tenantID == "" || event == nil || event.TenantId == nil {
+	if tenantID == "" || event == nil {
 		return false
+	}
+	if event.TenantId == nil {
+		return true
 	}
 	return *event.TenantId != tenantID
 }
