@@ -332,7 +332,17 @@ func (c *Client) sendLoop() {
 // handleSubscribe processes a subscribe request
 func (c *Client) handleSubscribe(req *pb.SubscribeRequest) {
 	c.mutex.Lock()
-	c.channels = append(c.channels, req.Channels...)
+	existing := make(map[pb.Channel]struct{}, len(c.channels))
+	for _, ch := range c.channels {
+		existing[ch] = struct{}{}
+	}
+	for _, ch := range req.Channels {
+		if _, ok := existing[ch]; ok {
+			continue
+		}
+		existing[ch] = struct{}{}
+		c.channels = append(c.channels, ch)
+	}
 	currentChannels := make([]pb.Channel, len(c.channels))
 	copy(currentChannels, c.channels)
 	c.mutex.Unlock()
@@ -364,12 +374,13 @@ func (c *Client) handleUnsubscribe(req *pb.UnsubscribeRequest) {
 	c.mutex.Lock()
 	// Remove channels
 	for _, toRemove := range req.Channels {
-		for i, ch := range c.channels {
-			if ch == toRemove {
-				c.channels = append(c.channels[:i], c.channels[i+1:]...)
-				break
+		filtered := c.channels[:0]
+		for _, ch := range c.channels {
+			if ch != toRemove {
+				filtered = append(filtered, ch)
 			}
 		}
+		c.channels = filtered
 	}
 	currentChannels := make([]pb.Channel, len(c.channels))
 	copy(currentChannels, c.channels)
