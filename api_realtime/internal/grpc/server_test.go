@@ -662,6 +662,22 @@ func TestSubscribeTenantLimit(t *testing.T) {
 		t.Fatalf("expected first subscribe to succeed, got %v", err)
 	}
 
+	// Wait for first connection to be registered by performing a handshake
+	err = stream.Send(&pb.ClientMessage{
+		Message: &pb.ClientMessage_Subscribe{
+			Subscribe: &pb.SubscribeRequest{
+				Channels: []pb.Channel{pb.Channel_CHANNEL_SYSTEM},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to send subscribe: %v", err)
+	}
+	_, err = stream.Recv() // Wait for confirmation
+	if err != nil {
+		t.Fatalf("failed to receive confirmation: %v", err)
+	}
+
 	ctx2 := metadata.NewOutgoingContext(
 		context.Background(),
 		metadata.Pairs(
