@@ -748,7 +748,7 @@ func TestViewerConnectionPayloadMismatch(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	streamID := uuid.NewString()
 	data := mustMistTriggerData(t, &pb.MistTrigger{
-		StreamId: streamID,
+		StreamId: &streamID,
 		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
 			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
 				StreamName: "live+demo",
@@ -784,7 +784,7 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 	data := mustMistTriggerData(t, &pb.MistTrigger{
-		StreamId: streamID,
+		StreamId: &streamID,
 		TriggerPayload: &pb.MistTrigger_ViewerConnect{
 			ViewerConnect: &pb.ViewerConnectTrigger{
 				StreamName: "live+demo",
@@ -829,15 +829,16 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
+	secondsConnected := uint64(42)
 	data := mustMistTriggerData(t, &pb.MistTrigger{
-		StreamId: streamID,
+		StreamId: &streamID,
 		TriggerPayload: &pb.MistTrigger_ViewerDisconnect{
 			ViewerDisconnect: &pb.ViewerDisconnectTrigger{
 				StreamName:       "live+demo",
 				SessionId:        "sess-2",
 				Connector:        "hls",
 				Host:             "1.2.3.4",
-				SecondsConnected: 42,
+				SecondsConnected: &secondsConnected,
 			},
 		},
 	})
@@ -874,7 +875,7 @@ func TestViewerConnectionDuplicateEventSkipped(t *testing.T) {
 	eventID := uuid.New()
 	conn.addDuplicate("viewer_connection_events", eventID)
 	data := mustMistTriggerData(t, &pb.MistTrigger{
-		StreamId: streamID,
+		StreamId: &streamID,
 		TriggerPayload: &pb.MistTrigger_ViewerConnect{
 			ViewerConnect: &pb.ViewerConnectTrigger{
 				StreamName: "live+demo",
@@ -949,10 +950,7 @@ func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...an
 			eventID = parsed
 		}
 	}
-	dup := false
-	if f.duplicates[table] != nil && f.duplicates[table][eventID] {
-		dup = true
-	}
+	dup := f.duplicates[table] != nil && f.duplicates[table][eventID]
 	return &fakeRows{next: dup}, nil
 }
 func (f *fakeClickhouseConn) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
