@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -39,7 +40,7 @@ type meshClient interface {
 type dnsService interface {
 	Start()
 	Stop()
-	UpdateRecords(records map[string][]string)
+	UpdateRecords(records map[string][]string) error
 }
 
 type Agent struct {
@@ -62,6 +63,8 @@ type Agent struct {
 	healthy          atomic.Bool
 	lastSyncSuccess  atomic.Int64 // Unix timestamp of last successful sync
 	consecutiveFails atomic.Int32
+	lastConfigMu     sync.Mutex
+	lastAppliedCfg   *wireguard.Config
 }
 
 type Config struct {
@@ -341,7 +344,14 @@ func (a *Agent) sync() {
 	}
 
 	// 5. Update DNS Records
-	a.dnsServer.UpdateRecords(dnsRecords)
+	if err := a.dnsServer.UpdateRecords(dnsRecords); err != nil {
+		a.logger.WithError(err).Error("Failed to update DNS records")
+		a.rollbackWireGuardConfig()
+		a.syncFailed()
+		return
+	}
+
+	a.setLastAppliedConfig(cfg)
 
 	// Update metrics
 	if a.metrics != nil && a.metrics.PeersConnected != nil {
@@ -350,6 +360,55 @@ func (a *Agent) sync() {
 
 	a.syncSucceeded()
 	a.logger.Info("Successfully applied wireguard config")
+}
+
+func (a *Agent) rollbackWireGuardConfig() {
+	previous := a.getLastAppliedConfig()
+	if previous == nil {
+		a.logger.Warn("No previous WireGuard config to roll back to")
+		return
+	}
+	if err := a.wgManager.Apply(*previous); err != nil {
+		a.logger.WithError(err).Error("Failed to roll back WireGuard config")
+	}
+}
+
+func (a *Agent) getLastAppliedConfig() *wireguard.Config {
+	a.lastConfigMu.Lock()
+	defer a.lastConfigMu.Unlock()
+	if a.lastAppliedCfg == nil {
+		return nil
+	}
+	cfgCopy := cloneConfig(*a.lastAppliedCfg)
+	return &cfgCopy
+}
+
+func (a *Agent) setLastAppliedConfig(cfg wireguard.Config) {
+	a.lastConfigMu.Lock()
+	defer a.lastConfigMu.Unlock()
+	cfgCopy := cloneConfig(cfg)
+	a.lastAppliedCfg = &cfgCopy
+}
+
+func cloneConfig(cfg wireguard.Config) wireguard.Config {
+	peersCopy := make([]wireguard.Peer, len(cfg.Peers))
+	for i, peer := range cfg.Peers {
+		allowedCopy := make([]string, len(peer.AllowedIPs))
+		copy(allowedCopy, peer.AllowedIPs)
+		peersCopy[i] = wireguard.Peer{
+			PublicKey:  peer.PublicKey,
+			Endpoint:   peer.Endpoint,
+			AllowedIPs: allowedCopy,
+			KeepAlive:  peer.KeepAlive,
+		}
+	}
+
+	return wireguard.Config{
+		PrivateKey: cfg.PrivateKey,
+		Address:    cfg.Address,
+		ListenPort: cfg.ListenPort,
+		Peers:      peersCopy,
+	}
 }
 
 func (a *Agent) bootstrapNode(ctx context.Context) error {

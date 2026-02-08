@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"text/template"
 )
 
 type linuxManager struct {
@@ -92,23 +91,12 @@ func (m *linuxManager) GetPrivateKey() (string, error) {
 func (m *linuxManager) Apply(cfg Config) error {
 	ctx := context.Background()
 	// 1. Write config to temp file
-	tmpl := `[Interface]
-PrivateKey = {{.PrivateKey}}
-ListenPort = {{.ListenPort}}
-
-{{range .Peers}}
-[Peer]
-PublicKey = {{.PublicKey}}
-Endpoint = {{.Endpoint}}
-AllowedIPs = {{range $i, $ip := .AllowedIPs}}{{if $i}}, {{end}}{{$ip}}{{end}}
-PersistentKeepalive = {{.KeepAlive}}
-{{end}}
-`
-	t := template.Must(template.New("wg-config").Parse(tmpl))
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, cfg); err != nil {
+	configText, err := renderConfig(cfg)
+	if err != nil {
 		return err
 	}
+	var buf bytes.Buffer
+	buf.WriteString(configText)
 
 	tmpFile, err := os.CreateTemp("", "wg-conf-")
 	if err != nil {

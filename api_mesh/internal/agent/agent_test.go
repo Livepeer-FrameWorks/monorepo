@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"frameworks/api_mesh/internal/wireguard"
 	"frameworks/pkg/logging"
@@ -52,21 +56,26 @@ func (f *fakeMeshClient) BootstrapInfrastructureNode(_ context.Context, req *pb.
 }
 
 type fakeWireguard struct {
-	initCalls int
-	applyErr  error
-	pubKey    string
-	privKey   string
-	applied   []wireguard.Config
+	mu       sync.Mutex
+	applyErr error
+	pubKey   string
+	privKey  string
+	applied  []wireguard.Config
+	sequence *[]string
 }
 
 func (f *fakeWireguard) Init() error {
-	f.initCalls++
 	return nil
 }
 
 func (f *fakeWireguard) Apply(cfg wireguard.Config) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.applyErr != nil {
 		return f.applyErr
+	}
+	if f.sequence != nil {
+		*f.sequence = append(*f.sequence, "apply")
 	}
 	f.applied = append(f.applied, cfg)
 	return nil
@@ -85,14 +94,22 @@ func (f *fakeWireguard) GetPrivateKey() (string, error) {
 }
 
 type fakeDNS struct {
-	updates []map[string][]string
+	mu        sync.Mutex
+	updates   []map[string][]string
+	updateErr error
+	sequence  *[]string
 }
 
 func (f *fakeDNS) Start() {}
 
 func (f *fakeDNS) Stop() {}
 
-func (f *fakeDNS) UpdateRecords(records map[string][]string) {
+func (f *fakeDNS) UpdateRecords(records map[string][]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sequence != nil {
+		*f.sequence = append(*f.sequence, "dns")
+	}
 	copied := make(map[string][]string, len(records))
 	for key, values := range records {
 		valueCopy := make([]string, len(values))
@@ -100,6 +117,23 @@ func (f *fakeDNS) UpdateRecords(records map[string][]string) {
 		copied[key] = valueCopy
 	}
 	f.updates = append(f.updates, copied)
+	return f.updateErr
+}
+
+func newTestAgent(t *testing.T, client *fakeMeshClient, wg *fakeWireguard, dns *fakeDNS) *Agent {
+	t.Helper()
+	return &Agent{
+		logger:       logging.NewLogger(),
+		client:       client,
+		wgManager:    wg,
+		dnsServer:    dns,
+		nodeID:       "node-1",
+		nodeName:     "node-1",
+		listenPort:   51820,
+		syncTimeout:  2 * time.Second,
+		syncInterval: 2 * time.Second,
+		stopChan:     make(chan struct{}),
+	}
 }
 
 func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
@@ -343,5 +377,116 @@ func TestAgentSyncRetryDoesNotApplyOnFailure(t *testing.T) {
 	}
 	if got := agent.consecutiveFails.Load(); got != 1 {
 		t.Fatalf("expected consecutiveFails 1, got %d", got)
+	}
+}
+
+func TestSyncAppliesConfigBeforeDNSUpdate(t *testing.T) {
+	resp := &pb.InfrastructureSyncResponse{
+		WireguardIp:   "10.200.0.5",
+		WireguardPort: 51820,
+		Peers: []*pb.InfrastructurePeer{
+			{
+				PublicKey:  "peer-1",
+				Endpoint:   "10.0.0.1:51820",
+				AllowedIps: []string{"10.0.0.2/32"},
+				KeepAlive:  25,
+				NodeName:   "edge-1",
+			},
+		},
+		ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+			"router": {Ips: []string{"10.0.0.10"}},
+		},
+	}
+
+	client := &fakeMeshClient{syncResponses: []meshSyncResult{{resp: resp}}}
+	sequence := make([]string, 0, 2)
+	wg := &fakeWireguard{
+		pubKey:   "public-key",
+		privKey:  "private-key",
+		sequence: &sequence,
+	}
+	dns := &fakeDNS{sequence: &sequence}
+	agent := newTestAgent(t, client, wg, dns)
+
+	agent.sync()
+
+	if !reflect.DeepEqual(sequence, []string{"apply", "dns"}) {
+		t.Fatalf("expected apply then dns sequence, got %v", sequence)
+	}
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected one apply call, got %d", len(wg.applied))
+	}
+	if len(dns.updates) != 1 {
+		t.Fatalf("expected one dns update, got %d", len(dns.updates))
+	}
+
+	dnsRecords := dns.updates[0]
+	expectedIP := "10.0.0.2"
+	if got := dnsRecords["edge-1"]; len(got) != 1 || got[0] != expectedIP {
+		t.Fatalf("expected dns record for edge-1 to be %s, got %v", expectedIP, got)
+	}
+}
+
+func TestSyncRollsBackWireGuardOnDNSFailure(t *testing.T) {
+	initialResp := &pb.InfrastructureSyncResponse{
+		WireguardIp:   "10.200.0.5",
+		WireguardPort: 51820,
+		Peers: []*pb.InfrastructurePeer{
+			{
+				PublicKey:  "peer-1",
+				Endpoint:   "10.0.0.1:51820",
+				AllowedIps: []string{"10.0.0.2/32"},
+				KeepAlive:  25,
+				NodeName:   "edge-1",
+			},
+		},
+	}
+	rotatedResp := &pb.InfrastructureSyncResponse{
+		WireguardIp:   "10.200.0.6",
+		WireguardPort: 51821,
+		Peers: []*pb.InfrastructurePeer{
+			{
+				PublicKey:  "peer-2",
+				Endpoint:   "10.0.0.2:51820",
+				AllowedIps: []string{"10.0.0.3/32"},
+				KeepAlive:  25,
+				NodeName:   "edge-2",
+			},
+		},
+	}
+
+	client := &fakeMeshClient{syncResponses: []meshSyncResult{
+		{resp: initialResp},
+		{resp: rotatedResp},
+	}}
+	wg := &fakeWireguard{
+		pubKey:  "public-key",
+		privKey: "private-key",
+	}
+	dns := &fakeDNS{}
+	agent := newTestAgent(t, client, wg, dns)
+
+	agent.sync()
+
+	dns.updateErr = errors.New("dns update failed")
+	agent.sync()
+
+	if len(wg.applied) != 3 {
+		t.Fatalf("expected three apply calls (initial, rotated, rollback), got %d", len(wg.applied))
+	}
+
+	rolledBack := wg.applied[2]
+	expected := wg.applied[0]
+	if !reflect.DeepEqual(rolledBack, expected) {
+		t.Fatalf("expected rollback to apply previous config, got %+v vs %+v", rolledBack, expected)
+	}
+
+	lastCfg := agent.getLastAppliedConfig()
+	if lastCfg == nil || !reflect.DeepEqual(*lastCfg, expected) {
+		t.Fatalf("expected last applied config to remain initial config, got %+v", lastCfg)
+	}
+
+	if agent.consecutiveFails.Load() != 1 {
+		t.Fatalf("expected consecutive failure count to be 1, got %d", agent.consecutiveFails.Load())
 	}
 }
