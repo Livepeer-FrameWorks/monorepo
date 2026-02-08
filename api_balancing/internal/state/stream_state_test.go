@@ -322,3 +322,154 @@ func TestNewNodeStartsStaleUntilHeartbeat(t *testing.T) {
 		t.Fatal("expected LastHeartbeat to be zero before heartbeat")
 	}
 }
+
+func TestConfirmVirtualViewerByID_MultiTabCorrelation(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-multi-tab"
+	streamName := "stream-multi-tab"
+	clientIP := "10.10.0.5"
+
+	viewerA := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+	viewerB := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+
+	confirmed := sm.ConfirmVirtualViewerByID(viewerB, nodeID, streamName, clientIP, "mist-session-b")
+	if !confirmed {
+		t.Fatal("expected viewerB to be confirmed by ID")
+	}
+
+	sm.mu.RLock()
+	viewerAState := sm.virtualViewers[viewerA].State
+	viewerBState := sm.virtualViewers[viewerB].State
+	pending := sm.nodes[nodeID].PendingRedirects
+	sm.mu.RUnlock()
+
+	if viewerBState != VirtualViewerActive {
+		t.Fatalf("expected viewerB to be active, got %s", viewerBState)
+	}
+	if viewerAState != VirtualViewerPending {
+		t.Fatalf("expected viewerA to remain pending, got %s", viewerAState)
+	}
+	if pending != 1 {
+		t.Fatalf("expected 1 pending redirect remaining, got %d", pending)
+	}
+}
+
+func TestConfirmVirtualViewer_OldestPendingWins(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-oldest"
+	streamName := "stream-oldest"
+	clientIP := "192.0.2.10"
+
+	viewerOld := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+	viewerNew := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+
+	sm.mu.Lock()
+	sm.virtualViewers[viewerOld].RedirectTime = time.Now().Add(-2 * time.Minute)
+	sm.virtualViewers[viewerNew].RedirectTime = time.Now().Add(-1 * time.Minute)
+	sm.mu.Unlock()
+
+	confirmed := sm.ConfirmVirtualViewer(nodeID, streamName, clientIP)
+	if !confirmed {
+		t.Fatal("expected confirmation for oldest pending viewer")
+	}
+
+	sm.mu.RLock()
+	oldState := sm.virtualViewers[viewerOld].State
+	newState := sm.virtualViewers[viewerNew].State
+	sm.mu.RUnlock()
+
+	if oldState != VirtualViewerActive {
+		t.Fatalf("expected oldest viewer to be active, got %s", oldState)
+	}
+	if newState != VirtualViewerPending {
+		t.Fatalf("expected newest viewer to remain pending, got %s", newState)
+	}
+}
+
+func TestConfirmVirtualViewer_DuplicateUserNewDoesNotUnderflow(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-duplicate"
+	streamName := "stream-duplicate"
+	clientIP := "198.51.100.9"
+
+	viewerID := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+
+	first := sm.ConfirmVirtualViewerByID(viewerID, nodeID, streamName, clientIP, "mist-session-dup")
+	if !first {
+		t.Fatal("expected first confirmation to succeed")
+	}
+	second := sm.ConfirmVirtualViewerByID(viewerID, nodeID, streamName, clientIP, "mist-session-dup")
+	if second {
+		t.Fatal("expected duplicate confirmation to be ignored")
+	}
+
+	sm.mu.RLock()
+	pending := sm.nodes[nodeID].PendingRedirects
+	state := sm.virtualViewers[viewerID].State
+	sm.mu.RUnlock()
+
+	if pending != 0 {
+		t.Fatalf("expected pending redirects to remain at 0, got %d", pending)
+	}
+	if state != VirtualViewerActive {
+		t.Fatalf("expected viewer to remain active, got %s", state)
+	}
+}
+
+func TestDisconnectVirtualViewer_OutOfOrderUserEndAbandonsPending(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-out-of-order"
+	streamName := "stream-out-of-order"
+	clientIP := "203.0.113.7"
+
+	viewerID := sm.CreateVirtualViewer(nodeID, streamName, clientIP)
+
+	sm.DisconnectVirtualViewerBySessionID("", nodeID, streamName, clientIP)
+
+	sm.mu.RLock()
+	state := sm.virtualViewers[viewerID].State
+	pending := sm.nodes[nodeID].PendingRedirects
+	sm.mu.RUnlock()
+
+	if state != VirtualViewerAbandoned {
+		t.Fatalf("expected pending viewer to be abandoned, got %s", state)
+	}
+	if pending != 0 {
+		t.Fatalf("expected pending redirects to decrement to 0, got %d", pending)
+	}
+}
+
+func TestStreamStateTransitionsAndTenantIsolation(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "node-streams"
+	streamA := "live+tenantA"
+	streamB := "live+tenantB"
+	tenantA := "tenant-a"
+	tenantB := "tenant-b"
+
+	if err := sm.UpdateStreamFromBuffer(streamA, "tenantA", nodeID, tenantA, "BUFFERING", ""); err != nil {
+		t.Fatalf("unexpected error updating stream A: %v", err)
+	}
+	if err := sm.UpdateStreamFromBuffer(streamB, "tenantB", nodeID, tenantB, "READY", ""); err != nil {
+		t.Fatalf("unexpected error updating stream B: %v", err)
+	}
+
+	streamsForA := sm.GetStreamsByTenant(tenantA)
+	if len(streamsForA) != 1 {
+		t.Fatalf("expected 1 stream for tenant A, got %d", len(streamsForA))
+	}
+	if streamsForA[0].TenantID != tenantA {
+		t.Fatalf("expected tenant A stream, got %s", streamsForA[0].TenantID)
+	}
+
+	sm.SetOffline("tenantA", nodeID)
+	streamsForA = sm.GetStreamsByTenant(tenantA)
+	if len(streamsForA) != 0 {
+		t.Fatalf("expected no live streams for tenant A after offline, got %d", len(streamsForA))
+	}
+}
