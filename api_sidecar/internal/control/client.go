@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
@@ -41,10 +42,39 @@ type DeleteDVRFunc func(dvrHash string) (uint64, error)
 // DeleteVodFunc is the function type for VOD deletion
 type DeleteVodFunc func(vodHash string) (uint64, error)
 
+type streamConn struct {
+	stream pb.HelmsmanControl_ConnectClient
+	nodeID string
+}
+
+var activeConn atomic.Pointer[streamConn]
+
+func getStream() pb.HelmsmanControl_ConnectClient {
+	c := activeConn.Load()
+	if c == nil {
+		return nil
+	}
+	return c.stream
+}
+
+func getNodeID() string {
+	c := activeConn.Load()
+	if c == nil {
+		return ""
+	}
+	return c.nodeID
+}
+
+func storeConn(stream pb.HelmsmanControl_ConnectClient, nodeID string) {
+	activeConn.Store(&streamConn{stream: stream, nodeID: nodeID})
+}
+
+func clearConn() {
+	activeConn.Store(nil)
+}
+
 // Global state for metrics streaming
 var (
-	currentStream  pb.HelmsmanControl_ConnectClient
-	currentNodeID  string
 	currentConfig  *sidecarcfg.HelmsmanConfig
 	onSeed         func()
 	onStorageWrite func()
@@ -58,6 +88,9 @@ var (
 
 	disconnectNotify   = make(chan struct{})
 	disconnectNotifyMu sync.Mutex
+
+	// test-only hook to avoid flake in disconnect retry tests
+	disconnectSubscribedHook chan struct{}
 
 	jitterRandMu sync.Mutex
 	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -122,7 +155,7 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 
 // GetCurrentNodeID returns the current node ID for building triggers
 func GetCurrentNodeID() string {
-	return currentNodeID
+	return getNodeID()
 }
 
 // MistTriggerResult carries the full response from Foghorn for blocking triggers
@@ -154,7 +187,7 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (*MistT
 			break
 		}
 
-		stream := currentStream
+		stream := getStream()
 		if stream == nil && blockingGraceMs > 0 {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
@@ -214,7 +247,7 @@ var (
 var errStreamDisconnected = errors.New("gRPC control stream disconnected")
 
 func sendMistTriggerOnce(triggerType string, mistTrigger *pb.MistTrigger) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
 		return fmt.Errorf("gRPC control stream not connected")
@@ -247,6 +280,14 @@ func waitForMistTriggerResponseWithDisconnect(requestID string, timeout time.Dur
 	disconnectNotifyMu.Lock()
 	disconnectCh := disconnectNotify
 	disconnectNotifyMu.Unlock()
+
+	// test hook: allow tests to synchronize on subscription to disconnect notifications
+	if disconnectSubscribedHook != nil {
+		select {
+		case disconnectSubscribedHook <- struct{}{}:
+		default:
+		}
+	}
 
 	// Wait for response, disconnect, or timeout
 	select {
@@ -300,19 +341,17 @@ func notifyDisconnect() {
 }
 
 func waitForReconnection(timeout time.Duration) pb.HelmsmanControl_ConnectClient {
-	streamReconnectedM.Lock()
-	reconnectCh := streamReconnected
-	s := currentStream
-	streamReconnectedM.Unlock()
-
-	// Re-check after grabbing the channel: if we're already connected, don't wait.
-	if s != nil {
+	if s := getStream(); s != nil {
 		return s
 	}
 
+	streamReconnectedM.Lock()
+	reconnectCh := streamReconnected
+	streamReconnectedM.Unlock()
+
 	select {
 	case <-reconnectCh:
-		return currentStream
+		return getStream()
 	case <-time.After(timeout):
 		return nil
 	}
@@ -334,7 +373,7 @@ func applyJitter(backoff time.Duration, jitterPct int) time.Duration {
 
 // SendDVRStartRequest sends a DVR start notification to Foghorn via the gRPC control stream
 func SendDVRStartRequest(tenantID, internalName, userID string, retentionDays int, format string, segmentDuration int) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -362,7 +401,7 @@ func SendDVRStartRequest(tenantID, internalName, userID string, retentionDays in
 
 // SendArtifactDeleted notifies Foghorn that an artifact has been deleted
 func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, sizeBytes uint64) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -373,7 +412,7 @@ func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, si
 		ArtifactType: artifactType,
 		FilePath:     filePath,
 		Reason:       reason,
-		NodeId:       currentNodeID,
+		NodeId:       getNodeID(),
 		SizeBytes:    sizeBytes,
 	}
 
@@ -454,16 +493,14 @@ func runClient(addr string, logger logging.Logger) error {
 	}
 
 	// Store current stream for external access
-	currentStream = stream
-	currentNodeID = nodeID
+	storeConn(stream, nodeID)
 	ControlStreamStatus.Set(1)
 	streamReconnectedM.Lock()
 	close(streamReconnected)
 	streamReconnected = make(chan struct{})
 	streamReconnectedM.Unlock()
 	defer func() {
-		currentStream = nil
-		currentNodeID = ""
+		clearConn()
 		ControlStreamStatus.Set(0)
 		notifyDisconnect()
 	}()
@@ -530,7 +567,7 @@ func runClient(addr string, logger logging.Logger) error {
 					sidecarcfg.ApplySeed(x.ConfigSeed)
 					// Adopt canonical node_id from seed if provided
 					if nid := x.ConfigSeed.GetNodeId(); nid != "" {
-						currentNodeID = nid
+						storeConn(getStream(), nid)
 					}
 				}
 			case *pb.ControlMessage_FreezePermissionResponse:
@@ -922,7 +959,7 @@ func handleClipDelete(logger logging.Logger, req *pb.ClipDeleteRequest, send fun
 			ArtifactHash: clipHash,
 			ArtifactType: "clip",
 			Reason:       "manual",
-			NodeId:       currentNodeID,
+			NodeId:       getNodeID(),
 			SizeBytes:    sizeBytes,
 		}}})
 	}
@@ -1011,7 +1048,7 @@ func handleVodDelete(logger logging.Logger, req *pb.VodDeleteRequest, send func(
 			ArtifactHash: vodHash,
 			ArtifactType: "vod",
 			Reason:       "manual",
-			NodeId:       currentNodeID,
+			NodeId:       getNodeID(),
 			SizeBytes:    sizeBytes,
 		}}})
 	}
@@ -1024,7 +1061,7 @@ func handleVodDelete(logger logging.Logger, req *pb.VodDeleteRequest, send func(
 
 // SendDVRStreamEndNotification notifies Foghorn that a stream has ended and DVR recording should stop
 func SendDVRStreamEndNotification(internalName, nodeID string) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1075,7 +1112,7 @@ func SetDtshSyncRequestHandler(handler DtshSyncRequestHandler) {
 // RequestFreezePermission asks Foghorn for permission and presigned URL to freeze an asset.
 // This is a blocking call that waits for Foghorn's response.
 func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error) {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return nil, fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1095,7 +1132,7 @@ func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPat
 		AssetHash: assetHash,
 		LocalPath: localPath,
 		SizeBytes: sizeBytes,
-		NodeId:    currentNodeID,
+		NodeId:    getNodeID(),
 		Filenames: filenames,
 	}
 
@@ -1144,7 +1181,7 @@ func handleFreezePermissionResponse(response *pb.FreezePermissionResponse) {
 
 // SendFreezeProgress sends upload progress to Foghorn
 func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUploaded uint64) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1162,7 +1199,7 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 
 // SendFreezeComplete sends freeze completion status to Foghorn
 func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1182,7 +1219,7 @@ func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes ui
 
 // SendDefrostProgress sends download progress to Foghorn
 func SendDefrostProgress(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1203,7 +1240,7 @@ func SendDefrostProgress(requestID, assetHash string, percent uint32, bytesDownl
 
 // SendDefrostComplete sends defrost completion status to Foghorn
 func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1215,7 +1252,7 @@ func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeByt
 		LocalPath: localPath,
 		SizeBytes: sizeBytes,
 		Error:     errMsg,
-		NodeId:    currentNodeID,
+		NodeId:    getNodeID(),
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostComplete{DefrostComplete: complete}}
@@ -1225,7 +1262,7 @@ func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeByt
 // SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics)
 // StorageLifecycleData is sent via MistTrigger payload
 func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1234,7 +1271,7 @@ func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
 	trigger := &pb.MistTrigger{
 		TriggerType: "storage_lifecycle",
 		RequestId:   uuid.New().String(),
-		NodeId:      currentNodeID,
+		NodeId:      getNodeID(),
 		Blocking:    false,
 		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
 			StorageLifecycleData: data,
@@ -1249,7 +1286,7 @@ func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
 // ProcessBillingEvent tracks transcoding usage for Livepeer and native processes
 func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
 	processType := event.ProcessType
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		BillingEventsSent.WithLabelValues(processType, "stream_disconnected").Inc()
 		return fmt.Errorf("gRPC control stream not connected")
@@ -1257,13 +1294,13 @@ func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
 
 	// Ensure node_id is set
 	if event.NodeId == "" {
-		event.NodeId = currentNodeID
+		event.NodeId = getNodeID()
 	}
 
 	trigger := &pb.MistTrigger{
 		TriggerType: "process_billing",
 		RequestId:   uuid.New().String(),
-		NodeId:      currentNodeID,
+		NodeId:      getNodeID(),
 		Blocking:    false,
 		TriggerPayload: &pb.MistTrigger_ProcessBilling{
 			ProcessBilling: event,
@@ -1285,7 +1322,7 @@ func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
 
 // IsConnected returns true if the control stream is connected
 func IsConnected() bool {
-	return currentStream != nil
+	return getStream() != nil
 }
 
 // ==================== Dual-Storage (Sync/CanDelete) Functions ====================
@@ -1294,7 +1331,7 @@ func IsConnected() bool {
 // Returns true if the asset is synced to S3 and can be safely deleted locally.
 // Also returns warm_duration_ms (how long the asset was cached before eviction).
 func RequestCanDelete(ctx context.Context, assetHash string) (bool, string, int64, error) {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return false, "", 0, fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1309,7 +1346,7 @@ func RequestCanDelete(ctx context.Context, assetHash string) (bool, string, int6
 	// Send request
 	req := &pb.CanDeleteRequest{
 		AssetHash: assetHash,
-		NodeId:    currentNodeID,
+		NodeId:    getNodeID(),
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_CanDeleteRequest{CanDeleteRequest: req}}
@@ -1359,7 +1396,7 @@ func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
 // Called after successfully uploading an artifact to S3 (while keeping the local copy).
 // dtshIncluded indicates whether the .dtsh index file was included in the sync.
 func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool) error {
-	stream := currentStream
+	stream := getStream()
 	if stream == nil {
 		return fmt.Errorf("gRPC control stream not connected")
 	}
@@ -1371,7 +1408,7 @@ func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint
 		S3Url:        s3URL,
 		SizeBytes:    sizeBytes,
 		Error:        errMsg,
-		NodeId:       currentNodeID,
+		NodeId:       getNodeID(),
 		DtshIncluded: dtshIncluded,
 	}
 
