@@ -144,7 +144,7 @@ func (f *fakeInternalService) ValidateAPIToken(ctx context.Context, _ *pb.Valida
 func startInternalService(t *testing.T, server pb.InternalServiceServer) (string, func()) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}

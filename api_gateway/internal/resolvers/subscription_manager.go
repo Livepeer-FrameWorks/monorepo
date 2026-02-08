@@ -560,8 +560,10 @@ func tenantMismatch(tenantID string, event *pb.SignalmanEvent) bool {
 	if tenantID == "" || event == nil {
 		return false
 	}
+	// Some system/infrastructure broadcasts are emitted without a tenant id.
+	// Keep delivering those to tenant-scoped subscribers.
 	if event.TenantId == nil {
-		return true
+		return false
 	}
 	return *event.TenantId != tenantID
 }

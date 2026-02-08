@@ -23,10 +23,10 @@ func TestTenantMismatch(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:     "missing event tenant treated as mismatch",
+			name:     "missing event tenant allowed (infra/system broadcasts)",
 			tenantID: tenant,
 			event:    &pb.SignalmanEvent{},
-			want:     true,
+			want:     false,
 		},
 		{
 			name:     "tenant match passes",
