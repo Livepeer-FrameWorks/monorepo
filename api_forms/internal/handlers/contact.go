@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"frameworks/api_forms/internal/validation"
-	"frameworks/pkg/email"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/turnstile"
 	"net/http"
@@ -15,16 +14,24 @@ import (
 )
 
 type ContactHandler struct {
-	emailSender        *email.Sender
-	turnstileValidator *turnstile.Validator
+	emailSender        EmailSender
+	turnstileValidator TurnstileVerifier
 	toEmail            string
 	turnstileEnabled   bool
 	logger             logging.Logger
 }
 
+type EmailSender interface {
+	SendMail(ctx context.Context, to, subject, htmlBody string) error
+}
+
+type TurnstileVerifier interface {
+	Verify(ctx context.Context, token, remoteIP string) (*turnstile.VerifyResponse, error)
+}
+
 func NewContactHandler(
-	emailSender *email.Sender,
-	turnstileValidator *turnstile.Validator,
+	emailSender EmailSender,
+	turnstileValidator TurnstileVerifier,
 	toEmail string,
 	turnstileEnabled bool,
 	logger logging.Logger,
