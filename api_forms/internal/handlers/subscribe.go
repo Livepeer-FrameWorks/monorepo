@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"frameworks/api_forms/internal/validation"
 	"frameworks/pkg/clients/listmonk"
 	"frameworks/pkg/logging"
@@ -117,7 +118,9 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 		}
 
 		for _, sub := range info.Lists {
-			if sub.ListID == h.defaultListID && sub.Status != "unsubscribed" {
+			// Treat only confirmed entries as already subscribed.
+			// Unconfirmed double-opt-in members should be allowed to retry so they can receive a new confirmation email.
+			if sub.ListID == h.defaultListID && sub.Status == "confirmed" {
 				c.JSON(http.StatusOK, gin.H{"success": true})
 				return
 			}
@@ -126,7 +129,8 @@ func (h *SubscribeHandler) Handle(c *gin.Context) {
 
 	err := h.listmonkClient.Subscribe(ctx, normalizedEmail, strings.TrimSpace(req.Name), h.defaultListID, false)
 	if err != nil {
-		if apiErr, ok := err.(*listmonk.APIError); ok && apiErr.StatusCode == http.StatusConflict {
+		var apiErr *listmonk.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
 			c.JSON(http.StatusOK, gin.H{"success": true})
 			return
 		}

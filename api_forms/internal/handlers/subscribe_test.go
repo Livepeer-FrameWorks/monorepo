@@ -163,6 +163,40 @@ func TestSubscribeReturnsSuccessWhenAlreadySubscribed(t *testing.T) {
 	}
 }
 
+func TestSubscribeRetriesWhenUnconfirmed(t *testing.T) {
+	harness := setupSubscribeHandler()
+	harness.stub.subscriberOK = true
+	harness.stub.subscriberInfo = &listmonk.SubscriberInfo{
+		Status: "enabled",
+		Lists: []listmonk.ListSubscription{
+			{ListID: 99, Status: "unconfirmed"},
+		},
+	}
+	payload := map[string]interface{}{
+		"email":       "user@example.com",
+		"human_check": "human",
+		"behavior": map[string]interface{}{
+			"formShownAt": float64(time.Now().Add(-10 * time.Second).UnixMilli()),
+			"submittedAt": float64(time.Now().UnixMilli()),
+			"mouse":       true,
+			"typed":       true,
+		},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/subscribe", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	harness.router.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.Code)
+	}
+	if len(harness.stub.subscribeCalls) != 1 {
+		t.Fatalf("expected subscribe to be called once")
+	}
+}
+
 func TestSubscribeRejectsBlocklistedSubscriber(t *testing.T) {
 	harness := setupSubscribeHandler()
 	harness.stub.subscriberOK = true
