@@ -67,7 +67,7 @@ func (f *fakeControlStream) RecvMsg(_ any) error {
 }
 
 func TestSendMistTriggerOnceStreamDisconnected(t *testing.T) {
-	currentStream = nil
+	clearConn()
 
 	triggerType := "test_disconnect"
 	before := testutil.ToFloat64(TriggersSent.WithLabelValues(triggerType, "stream_disconnected"))
@@ -84,7 +84,7 @@ func TestSendMistTriggerOnceStreamDisconnected(t *testing.T) {
 }
 
 func TestSendMistTriggerOnceSendError(t *testing.T) {
-	currentStream = &fakeControlStream{sendErr: fmt.Errorf("send failed")}
+	storeConn(&fakeControlStream{sendErr: fmt.Errorf("send failed")}, "")
 
 	triggerType := "test_send_error"
 	before := testutil.ToFloat64(TriggersSent.WithLabelValues(triggerType, "send_error"))
@@ -118,7 +118,11 @@ func TestWaitForMistTriggerResponseTimeout(t *testing.T) {
 }
 
 func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
+	resetControlState(t)
+
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		time.Sleep(10 * time.Millisecond)
 		notifyDisconnect()
 	}()
@@ -130,6 +134,7 @@ func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
 	if result == nil || !result.Abort || result.ErrorCode != pb.IngestErrorCode_INGEST_ERROR_INTERNAL {
 		t.Fatalf("unexpected result: %#v", result)
 	}
+	<-done
 }
 
 func TestDownloadToFileDiskFull(t *testing.T) {
@@ -162,8 +167,7 @@ func TestDownloadToFileDiskFull(t *testing.T) {
 }
 
 type controlState struct {
-	stream              pb.HelmsmanControl_ConnectClient
-	nodeID              string
+	conn                *streamConn
 	blockingGraceMs     int
 	streamReconnected   chan struct{}
 	disconnectNotify    chan struct{}
@@ -174,8 +178,7 @@ type controlState struct {
 func resetControlState(t *testing.T) {
 	t.Helper()
 	prev := controlState{
-		stream:              currentStream,
-		nodeID:              currentNodeID,
+		conn:                activeConn.Load(),
 		blockingGraceMs:     blockingGraceMs,
 		streamReconnected:   streamReconnected,
 		disconnectNotify:    disconnectNotify,
@@ -184,20 +187,26 @@ func resetControlState(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		currentStream = prev.stream
-		currentNodeID = prev.nodeID
+		activeConn.Store(prev.conn)
 		blockingGraceMs = prev.blockingGraceMs
+		streamReconnectedM.Lock()
 		streamReconnected = prev.streamReconnected
+		streamReconnectedM.Unlock()
+		disconnectNotifyMu.Lock()
 		disconnectNotify = prev.disconnectNotify
+		disconnectNotifyMu.Unlock()
 		pendingMistTriggers = prev.pendingMistTriggers
 		pendingMutex = prev.pendingMutex
 	})
 
-	currentStream = nil
-	currentNodeID = ""
+	clearConn()
 	blockingGraceMs = 0
+	streamReconnectedM.Lock()
 	streamReconnected = make(chan struct{})
+	streamReconnectedM.Unlock()
+	disconnectNotifyMu.Lock()
 	disconnectNotify = make(chan struct{})
+	disconnectNotifyMu.Unlock()
 	pendingMistTriggers = make(map[string]chan *pb.MistTriggerResponse)
 	pendingMutex = make(chan struct{}, 1)
 }
@@ -233,7 +242,7 @@ func TestWaitForReconnectionReturnsStream(t *testing.T) {
 	resetControlState(t)
 
 	stream := &fakeControlStream{}
-	currentStream = stream
+	storeConn(stream, "")
 
 	got := waitForReconnection(20 * time.Millisecond)
 	if got != stream {
@@ -264,19 +273,27 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		currentStream = stream
+		storeConn(stream, "")
 		signalReconnect()
 	}()
 
+	resultCh := make(chan *MistTriggerResult, 1)
+	errCh := make(chan error, 1)
 	go func() {
-		<-stream.sendCh
-		handleMistTriggerResponse(&pb.MistTriggerResponse{
-			RequestId: "req-reconnect",
-			Response:  "ok",
-		})
+		r, e := SendMistTrigger(trigger, logger)
+		resultCh <- r
+		errCh <- e
 	}()
 
-	result, err := SendMistTrigger(trigger, logger)
+	<-stream.sendCh
+	waitForPendingTrigger(t, trigger.RequestId)
+	handleMistTriggerResponse(&pb.MistTriggerResponse{
+		RequestId: "req-reconnect",
+		Response:  "ok",
+	})
+
+	result := <-resultCh
+	err := <-errCh
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -293,7 +310,7 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 
 	stream1 := &fakeControlStream{sendCh: make(chan *pb.ControlMessage, 1)}
 	stream2 := &fakeControlStream{sendCh: make(chan *pb.ControlMessage, 1)}
-	currentStream = stream1
+	storeConn(stream1, "")
 	logger := logging.NewLogger()
 
 	trigger := &pb.MistTrigger{
@@ -326,7 +343,7 @@ func TestSendMistTriggerRetriesAfterDisconnect(t *testing.T) {
 
 	notifyDisconnect()
 
-	currentStream = stream2
+	storeConn(stream2, "")
 	signalReconnect()
 
 	<-stream2.sendCh
