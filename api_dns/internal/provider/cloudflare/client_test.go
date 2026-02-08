@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"frameworks/pkg/clients"
 )
 
 func TestClient_RetriesOnRateLimit(t *testing.T) {
@@ -112,15 +110,14 @@ func TestClient_TimeoutReturnsError(t *testing.T) {
 	client := NewClient("token", "zone", "acct")
 	client.baseURL = server.URL
 	client.httpClient.Timeout = 10 * time.Millisecond
-	cfg := clients.DefaultHTTPExecutorConfig()
-	cfg.MaxRetries = 0
-	client.executor = clients.NewHTTPExecutor(cfg)
+	// Avoid overriding the executor in tests.
+	// The client implementation is responsible for closing response bodies.
 
 	_, err := client.ListPools()
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if err != nil && err.Error() == "" {
+	if err.Error() == "" {
 		t.Fatal("expected error message to be populated")
 	}
 }
