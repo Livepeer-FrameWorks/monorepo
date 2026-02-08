@@ -499,12 +499,20 @@ func (o *Orchestrator) searchKnowledge(ctx context.Context, arguments string) (T
 	// Over-fetch 3x to allow source-level deduplication and reranking.
 	fetchLimit := limit * 3
 	var chunks []knowledge.Chunk
+	var searchErr error
 	for _, tenantID := range tenantIDs {
 		results, err := o.knowledge.HybridSearch(ctx, tenantID, embedding, searchQuery, fetchLimit)
 		if err != nil {
-			return ToolOutcome{}, err
+			searchErr = err
+			if o.logger != nil {
+				o.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Knowledge search failed for tenant")
+			}
+			continue
 		}
 		chunks = append(chunks, results...)
+	}
+	if len(chunks) == 0 && searchErr != nil {
+		return ToolOutcome{}, searchErr
 	}
 	if o.reranker != nil {
 		chunks = o.reranker.Rerank(ctx, searchQuery, chunks)

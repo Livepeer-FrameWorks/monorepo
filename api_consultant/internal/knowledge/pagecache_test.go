@@ -174,3 +174,28 @@ func TestPageCacheStoreDeleteBySource(t *testing.T) {
 		t.Fatalf("expectations: %v", err)
 	}
 }
+
+func TestPageCacheStoreCleanupStale(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	store := NewPageCacheStore(db)
+
+	mock.ExpectExec("DELETE FROM skipper\\.skipper_page_cache").
+		WithArgs("tenant", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+
+	count, err := store.CleanupStale(context.Background(), "tenant", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 rows deleted, got %d", count)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
