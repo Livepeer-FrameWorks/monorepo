@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -111,7 +112,7 @@ func TestWaitForMistTriggerResponseDisconnect(t *testing.T) {
 	}()
 
 	result, err := waitForMistTriggerResponseWithDisconnect("disconnect-test", 100*time.Millisecond)
-	if err == nil || err != errStreamDisconnected {
+	if err == nil || !errors.Is(err, errStreamDisconnected) {
 		t.Fatalf("expected disconnect error, got %v", err)
 	}
 	if result == nil || !result.Abort || result.ErrorCode != pb.IngestErrorCode_INGEST_ERROR_INTERNAL {
