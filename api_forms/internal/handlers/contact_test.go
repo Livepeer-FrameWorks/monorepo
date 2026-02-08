@@ -199,7 +199,7 @@ func TestContactHandlerRedactsLogsAndMetrics(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	httpReq, err := http.NewRequest(http.MethodPost, "/api/contact", buildContactRequest(t, req))
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/api/contact", buildContactRequest(t, req))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestContactHandlerTurnstileErrorMapsToBadGateway(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	httpReq, err := http.NewRequest(http.MethodPost, "/api/contact", buildContactRequest(t, req))
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/api/contact", buildContactRequest(t, req))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestContactHandlerEmailErrorMapsToBadGateway(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	httpReq, err := http.NewRequest(http.MethodPost, "/api/contact", buildContactRequest(t, req))
+	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "/api/contact", buildContactRequest(t, req))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

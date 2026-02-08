@@ -44,12 +44,12 @@ func main() {
 
 	formMetrics := &handlers.FormMetrics{
 		ContactRequests: metricsCollector.NewCounter(
-			"forms_contact_requests_total",
+			"contact_requests_total",
 			"Contact form requests handled",
 			[]string{"status"},
 		),
 		SubscribeRequests: metricsCollector.NewCounter(
-			"forms_subscribe_requests_total",
+			"subscribe_requests_total",
 			"Subscribe form requests handled",
 			[]string{"status"},
 		),
