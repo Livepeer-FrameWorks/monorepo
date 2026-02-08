@@ -81,14 +81,12 @@ func (c *Client) doRequest(method, path string, body interface{}) (*APIResponse,
 	}
 
 	executor := c.executor
-	if executor == nil {
+	if method != http.MethodGet && method != http.MethodHead && method != http.MethodDelete {
 		cfg := clients.DefaultHTTPExecutorConfig()
-		// Avoid retrying non-idempotent writes (POST/PUT/PATCH) to prevent duplicate resources.
-		// Retries are only enabled for idempotent methods.
-		if method != http.MethodGet && method != http.MethodHead && method != http.MethodDelete {
-			cfg.MaxRetries = 0
-		}
+		cfg.MaxRetries = 0
 		executor = clients.NewHTTPExecutor(cfg) //nolint:bodyclose
+	} else if executor == nil {
+		executor = clients.NewHTTPExecutor(clients.DefaultHTTPExecutorConfig()) //nolint:bodyclose
 	}
 
 	resp, err := clients.ExecuteHTTP(ctx, executor, execute)
