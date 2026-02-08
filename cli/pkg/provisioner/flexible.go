@@ -39,18 +39,28 @@ func (f *FlexibleProvisioner) Detect(ctx context.Context, host inventory.Host) (
 
 // Provision installs the service in Docker or native mode
 func (f *FlexibleProvisioner) Provision(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	// Check if already provisioned
 	state, err := f.Detect(ctx, host)
-	if err == nil && state.Exists && state.Running {
-		fmt.Printf("Service %s already running, skipping...\n", f.serviceName)
-		return nil
+	if err != nil {
+		state = nil
 	}
 
 	// Allow explicit image/binary overrides from manifest
 	if config.Mode == "docker" && config.Image != "" {
+		if skip, reason := shouldSkipProvision(state, config, "", config.Image); skip {
+			fmt.Printf("Service %s already running (%s), skipping...\n", f.serviceName, reason)
+			return nil
+		}
 		return f.provisionDocker(ctx, host, config, &gitops.ServiceInfo{FullImage: config.Image})
 	}
 	if config.Mode == "native" && config.BinaryURL != "" {
+		desiredVersion := ""
+		if config.Version != "" && config.Version != "stable" {
+			desiredVersion = config.Version
+		}
+		if skip, reason := shouldSkipProvision(state, config, desiredVersion, ""); skip {
+			fmt.Printf("Service %s already running (%s), skipping...\n", f.serviceName, reason)
+			return nil
+		}
 		return f.provisionNative(ctx, host, config, &gitops.ServiceInfo{Binaries: map[string]string{"*": config.BinaryURL}})
 	}
 
@@ -71,6 +81,11 @@ func (f *FlexibleProvisioner) Provision(ctx context.Context, host inventory.Host
 		return fmt.Errorf("service not found in manifest: %w", err)
 	}
 
+	if skip, reason := shouldSkipProvision(state, config, svcInfo.Version, svcInfo.FullImage); skip {
+		fmt.Printf("Service %s already running (%s), skipping...\n", f.serviceName, reason)
+		return nil
+	}
+
 	// Provision based on mode
 	switch config.Mode {
 	case "docker":
@@ -80,6 +95,28 @@ func (f *FlexibleProvisioner) Provision(ctx context.Context, host inventory.Host
 	default:
 		return fmt.Errorf("unsupported mode: %s (must be docker or native)", config.Mode)
 	}
+}
+
+func shouldSkipProvision(state *detect.ServiceState, config ServiceConfig, desiredVersion, desiredImage string) (bool, string) {
+	if config.Force || state == nil || !state.Exists || !state.Running {
+		return false, ""
+	}
+
+	if desiredImage != "" {
+		if state.Metadata["image"] == desiredImage {
+			return true, fmt.Sprintf("image matches %s", desiredImage)
+		}
+		return false, ""
+	}
+
+	if desiredVersion != "" {
+		if state.Version != "" && state.Version == desiredVersion {
+			return true, fmt.Sprintf("version matches %s", desiredVersion)
+		}
+		return false, ""
+	}
+
+	return true, "already running"
 }
 
 // provisionDocker provisions the service using Docker

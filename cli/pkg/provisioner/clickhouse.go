@@ -39,19 +39,63 @@ func (c *ClickHouseProvisioner) Provision(ctx context.Context, host inventory.Ho
 	}
 
 	// Install ClickHouse via shell script
-	// For MVP, we'll use the official installation script
-	installScript := `#!/bin/bash
+	version := config.Version
+	installScript := fmt.Sprintf(`#!/bin/bash
 set -e
 
-# Install ClickHouse
-curl https://clickhouse.com/ | sh
+VERSION="%s"
+if [ "$VERSION" = "stable" ]; then
+  VERSION=""
+fi
 
-# Start ClickHouse server
-sudo /usr/bin/clickhouse-server start
+install_clickhouse_apt() {
+  apt-get update
+  apt-get install -y apt-transport-https ca-certificates curl gnupg
+  mkdir -p /etc/apt/keyrings
+  curl -fsSL https://packages.clickhouse.com/CLICKHOUSE-KEY.GPG | gpg --dearmor -o /etc/apt/keyrings/clickhouse.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/clickhouse.gpg] https://packages.clickhouse.com/deb stable main" > /etc/apt/sources.list.d/clickhouse.list
+  apt-get update
+  if [ -n "$VERSION" ]; then
+    apt-get install -y clickhouse-server="$VERSION" clickhouse-client="$VERSION"
+  else
+    apt-get install -y clickhouse-server clickhouse-client
+  fi
+}
+
+install_clickhouse_yum() {
+  cat >/etc/yum.repos.d/clickhouse.repo <<'REPO'
+[clickhouse]
+name=ClickHouse
+baseurl=https://packages.clickhouse.com/rpm/stable/
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.clickhouse.com/rpm/stable/repodata/repomd.xml.key
+REPO
+  if [ -n "$VERSION" ]; then
+    yum install -y "clickhouse-server-$VERSION" "clickhouse-client-$VERSION"
+  else
+    yum install -y clickhouse-server clickhouse-client
+  fi
+}
+
+if command -v apt-get >/dev/null; then
+  install_clickhouse_apt
+elif command -v yum >/dev/null; then
+  install_clickhouse_yum
+else
+  echo "Unsupported package manager"
+  exit 1
+fi
+
+if command -v systemctl >/dev/null; then
+  systemctl enable --now clickhouse-server
+else
+  /usr/bin/clickhouse-server start
+fi
 
 # Wait for server to be ready
 sleep 5
-`
+`, version)
 
 	result, err := c.ExecuteScript(ctx, host, installScript)
 	if err != nil {

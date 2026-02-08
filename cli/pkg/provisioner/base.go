@@ -3,6 +3,7 @@ package provisioner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/cli/pkg/detect"
@@ -118,25 +119,41 @@ func (b *BaseProvisioner) UploadFile(ctx context.Context, host inventory.Host, o
 func (b *BaseProvisioner) Cleanup(ctx context.Context, host inventory.Host, config ServiceConfig) error {
 	serviceName := b.name
 
-	// Try to stop service based on mode
-	var stopCmd string
+	var attempts []string
 	switch config.Mode {
 	case "docker":
-		// Try docker compose stop, fall back to docker stop
-		stopCmd = fmt.Sprintf("docker compose stop %s 2>/dev/null || docker stop frameworks-%s 2>/dev/null || true", serviceName, serviceName)
+		attempts = []string{
+			fmt.Sprintf("docker compose stop %s", serviceName),
+			fmt.Sprintf("docker stop frameworks-%s", serviceName),
+			fmt.Sprintf("docker rm -f frameworks-%s", serviceName),
+		}
 	case "native":
-		// Try systemd stop
-		stopCmd = fmt.Sprintf("systemctl stop frameworks-%s 2>/dev/null || true", serviceName)
+		attempts = []string{
+			fmt.Sprintf("systemctl stop frameworks-%s", serviceName),
+			fmt.Sprintf("systemctl kill frameworks-%s", serviceName),
+		}
 	default:
-		// Try both
-		stopCmd = fmt.Sprintf("docker compose stop %s 2>/dev/null || docker stop frameworks-%s 2>/dev/null || systemctl stop frameworks-%s 2>/dev/null || true", serviceName, serviceName, serviceName)
+		attempts = []string{
+			fmt.Sprintf("docker compose stop %s", serviceName),
+			fmt.Sprintf("docker stop frameworks-%s", serviceName),
+			fmt.Sprintf("docker rm -f frameworks-%s", serviceName),
+			fmt.Sprintf("systemctl stop frameworks-%s", serviceName),
+			fmt.Sprintf("systemctl kill frameworks-%s", serviceName),
+		}
 	}
 
-	_, err := b.RunCommand(ctx, host, stopCmd)
-	if err != nil {
-		// Don't fail cleanup - best effort
-		fmt.Printf("    Warning: cleanup for %s may have failed: %v\n", serviceName, err)
+	var errMessages []string
+	for _, cmd := range attempts {
+		result, err := b.RunCommand(ctx, host, cmd)
+		if err == nil && result.ExitCode == 0 {
+			return nil
+		}
+		if err != nil {
+			errMessages = append(errMessages, fmt.Sprintf("%s: %v", cmd, err))
+		} else if result != nil && result.ExitCode != 0 {
+			errMessages = append(errMessages, fmt.Sprintf("%s: %s", cmd, result.Stderr))
+		}
 	}
 
-	return nil // Always return nil - cleanup is best-effort
+	return fmt.Errorf("cleanup failed for %s: %s", serviceName, strings.Join(errMessages, "; "))
 }
