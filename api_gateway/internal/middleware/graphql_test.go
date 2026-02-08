@@ -119,3 +119,31 @@ func TestCtxkeysStringCastConsistency(t *testing.T) {
 		}
 	}
 }
+
+func TestGraphQLContextMiddlewareMissingTenantSkipsUserContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var userContextPresent bool
+
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(string(ctxkeys.KeyUserID), "user-123")
+		c.Next()
+	})
+	r.Use(GraphQLContextMiddleware())
+	r.GET("/test", func(c *gin.Context) {
+		ctx := c.Request.Context()
+		if ctx.Value(ctxkeys.KeyUser) != nil {
+			userContextPresent = true
+		}
+		c.String(200, "ok")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), "GET", "/test", nil)
+	r.ServeHTTP(w, req)
+
+	if userContextPresent {
+		t.Fatal("expected user context to be absent when tenant ID is missing")
+	}
+}
