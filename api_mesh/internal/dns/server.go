@@ -74,7 +74,9 @@ func (s *Server) UpdateRecords(records map[string][]string) error {
 			return fmt.Errorf("dns record name is empty")
 		}
 		if len(ips) == 0 {
-			return fmt.Errorf("dns record %q has no ips", trimmedName)
+			// Allow empty service endpoint lists (e.g., during scaling/down or outages).
+			// Treat as an instruction to skip/omit this record.
+			continue
 		}
 
 		validated := make([]string, 0, len(ips))
