@@ -1211,8 +1211,8 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pb
 			GROUP BY country_code
 		)
 	`, whereClause)
-	if err := s.clickhouse.QueryRowContext(ctx, totalQuery, args...).Scan(&totalViewersForPercent); err != nil {
-		return nil, wrapClickhouseError(err, "database error (countries)")
+	if queryErr := s.clickhouse.QueryRowContext(ctx, totalQuery, args...).Scan(&totalViewersForPercent); queryErr != nil {
+		return nil, wrapClickhouseError(queryErr, "database error (countries)")
 	}
 
 	// Calculate percentages for countries

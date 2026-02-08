@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"strings"
 	"testing"
@@ -257,7 +258,13 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 			mock.ExpectQuery(pattern).WillReturnError(err)
 			return
 		}
-		mock.ExpectQuery(pattern).WillReturnRows(sqlmock.NewRows(columns).AddRow(values...))
+
+		// sqlmock expects []driver.Value, not []any.
+		rowValues := make([]driver.Value, 0, len(values))
+		for _, v := range values {
+			rowValues = append(rowValues, v)
+		}
+		mock.ExpectQuery(pattern).WillReturnRows(sqlmock.NewRows(columns).AddRow(rowValues...))
 	}
 
 	expectQuery("FROM stream_event_log", []string{"max_viewers", "total_streams", "stream_hours"}, []any{int64(0), int64(0), float64(0)})
