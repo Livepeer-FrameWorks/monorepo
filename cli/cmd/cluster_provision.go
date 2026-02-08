@@ -418,11 +418,8 @@ func findKafkaBrokerID(task *orchestrator.Task, manifest *inventory.Manifest) (i
 	if manifest == nil || manifest.Infrastructure.Kafka == nil {
 		return 0, false
 	}
-	for _, broker := range manifest.Infrastructure.Kafka.Brokers {
-		if broker.Host == task.Host {
-			return broker.ID, true
-		}
-	}
+
+	// Prefer the task name (kafka-broker-N) since multiple brokers may share a host.
 	const prefix = "kafka-broker-"
 	if strings.HasPrefix(task.Name, prefix) {
 		id, err := strconv.Atoi(strings.TrimPrefix(task.Name, prefix))
@@ -430,6 +427,25 @@ func findKafkaBrokerID(task *orchestrator.Task, manifest *inventory.Manifest) (i
 			return id, true
 		}
 	}
+
+	var (
+		matchedID   int
+		matchCount  int
+		haveMatched bool
+	)
+	for _, broker := range manifest.Infrastructure.Kafka.Brokers {
+		if broker.Host != task.Host {
+			continue
+		}
+		matchedID = broker.ID
+		haveMatched = true
+		matchCount++
+	}
+	if haveMatched && matchCount == 1 {
+		return matchedID, true
+	}
+
+	// Ambiguous (multiple brokers on same host) or no match.
 	return 0, false
 }
 
