@@ -3,9 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/servicedefs"
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -162,40 +164,7 @@ func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	fmt.Fprintln(cmd.OutOrStdout(), "Port Conflict Diagnostics")
 
 	// Check standard ports on each host
-	standardPorts := map[int]string{
-		5432:  "Postgres",
-		9092:  "Kafka",
-		2181:  "Zookeeper",
-		9000:  "ClickHouse",
-		9001:  "Listmonk",
-		5353:  "Privateer DNS",
-		18000: "Bridge",
-		18001: "Commodore",
-		18002: "Quartermaster",
-		18003: "Purser",
-		18004: "Periscope Query",
-		18005: "Periscope Ingest",
-		18006: "Decklog",
-		18007: "Helmsman",
-		18008: "Foghorn",
-		18009: "Signalman",
-		18010: "Navigator",
-		18011: "Navigator gRPC",
-		18012: "Privateer",
-		18018: "Skipper",
-		18019: "Foghorn Control",
-		18030: "Chartroom",
-		18031: "Foredeck",
-		18032: "Steward",
-		18033: "Logbook",
-		18090: "Nginx/Caddy",
-		19001: "Commodore gRPC",
-		19002: "Quartermaster gRPC",
-		19003: "Purser gRPC",
-		19004: "Periscope gRPC",
-		19005: "Signalman gRPC",
-		19007: "Skipper gRPC",
-	}
+	standardPorts := buildStandardPorts()
 
 	for hostname, host := range manifest.Hosts {
 		fmt.Fprintf(cmd.OutOrStdout(), "Host: %s (%s)\n", hostname, host.Address)
@@ -222,6 +191,35 @@ func diagnosePorts(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	}
 
 	return nil
+}
+
+func buildStandardPorts() map[int]string {
+	standardPorts := map[int]string{
+		5353:  "privateer-dns",
+		18019: "foghorn-control",
+	}
+
+	ids := make([]string, 0, len(servicedefs.Services))
+	for id := range servicedefs.Services {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		svc := servicedefs.Services[id]
+		if svc.DefaultPort != 0 {
+			if _, exists := standardPorts[svc.DefaultPort]; !exists {
+				standardPorts[svc.DefaultPort] = id
+			}
+		}
+		if grpcPort, ok := servicedefs.DefaultGRPCPort(id); ok {
+			if _, exists := standardPorts[grpcPort]; !exists {
+				standardPorts[grpcPort] = fmt.Sprintf("%s-grpc", id)
+			}
+		}
+	}
+
+	return standardPorts
 }
 
 // diagnoseKafka checks Kafka cluster health

@@ -24,6 +24,9 @@ var ServicePorts = map[string]int{
 	"foghorn":          18008,
 	"signalman":        18009,
 	"navigator":        18010,
+	"prometheus":       9090,
+	"grafana":          3000,
+	"metabase":         3001,
 	"chartroom":        18030,
 	"foredeck":         18031,
 	"steward":          18032,
@@ -54,6 +57,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewPostgresProvisioner(pool)
 	case "kafka":
 		return NewKafkaProvisioner(pool)
+	case "zookeeper":
+		return NewZookeeperProvisioner(pool)
 	case "clickhouse":
 		return NewClickHouseProvisioner(pool)
 	case "privateer":
@@ -69,6 +74,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewFlexibleProvisioner("foghorn", port, pool), nil
 	case "decklog":
 		return NewFlexibleProvisioner("decklog", port, pool), nil
+	case "helmsman":
+		return NewFlexibleProvisioner("helmsman", port, pool), nil
 	case "periscope-ingest":
 		return NewFlexibleProvisioner("periscope-ingest", port, pool), nil
 	case "periscope-query":
@@ -83,6 +90,12 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewFlexibleProvisioner("navigator", port, pool), nil
 	case "listmonk":
 		return NewFlexibleProvisioner("listmonk", port, pool), nil
+	case "prometheus":
+		return NewFlexibleProvisioner("prometheus", port, pool), nil
+	case "grafana":
+		return NewFlexibleProvisioner("grafana", port, pool), nil
+	case "metabase":
+		return NewFlexibleProvisioner("metabase", port, pool), nil
 
 	case "caddy":
 		return NewCaddyProvisioner(pool), nil
