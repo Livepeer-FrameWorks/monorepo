@@ -36,6 +36,8 @@ var (
 	nodeName string
 )
 
+var sendMistTrigger = control.SendMistTrigger
+
 // VideoExtensions lists file extensions recognized as video container formats.
 var VideoExtensions = []string{".mp4", ".webm", ".mkv", ".avi", ".ts", ".mov", ".m4v", ".flv"}
 
@@ -53,6 +55,15 @@ func incMistWebhook(triggerType, status string) {
 		return
 	}
 	metrics.MistWebhookRequests.WithLabelValues(triggerType, status).Inc()
+}
+
+func applyTenantContext(trigger *pb.MistTrigger) {
+	if trigger == nil {
+		return
+	}
+	if tenantID := config.GetTenantID(); tenantID != "" {
+		trigger.TenantId = &tenantID
+	}
 }
 
 // Init initializes the handlers with logger, metrics, and node identity.
@@ -395,7 +406,8 @@ func HandlePushRewrite(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	result, err := control.SendMistTrigger(mistTrigger, logger)
+	applyTenantContext(mistTrigger)
+	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -494,7 +506,8 @@ func HandlePlayRewrite(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	result, err := control.SendMistTrigger(mistTrigger, logger)
+	applyTenantContext(mistTrigger)
+	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -591,7 +604,7 @@ func HandleStreamSource(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	result, err := control.SendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_SOURCE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -692,7 +705,7 @@ func HandlePushEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_END", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -736,7 +749,7 @@ func HandlePushOutStart(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	result, err := control.SendMistTrigger(mistTrigger, logger)
+	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_OUT_START", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -802,7 +815,7 @@ func HandleStreamBuffer(c *gin.Context) {
 	}
 
 	// Forward enriched trigger to Foghorn via gRPC (non-blocking)
-	_, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_BUFFER", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -851,7 +864,7 @@ func HandleStreamEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, err = control.SendMistTrigger(mistTrigger, logger)
+	_, err = sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_END", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -900,7 +913,8 @@ func HandleUserNew(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
-	result, err := control.SendMistTrigger(mistTrigger, logger)
+	applyTenantContext(mistTrigger)
+	result, err := sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("USER_NEW", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -968,7 +982,8 @@ func HandleUserEnd(c *gin.Context) {
 	}
 
 	// Forward trigger to Foghorn via gRPC (non-blocking)
-	_, err = control.SendMistTrigger(mistTrigger, logger)
+	applyTenantContext(mistTrigger)
+	_, err = sendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("USER_END", "forward_error")
 		logger.WithFields(logging.Fields{
