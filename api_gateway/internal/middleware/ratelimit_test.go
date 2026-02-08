@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -85,5 +86,45 @@ func TestEvaluateAccessPublicTenantSkipsGetLimits(t *testing.T) {
 
 	if !decision.Allowed {
 		t.Fatalf("expected public allowlisted request to be allowed, got status %d", decision.Status)
+	}
+}
+
+func TestEvaluateAccessRateLimitHeaders(t *testing.T) {
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+
+	getLimits := func(tenantID string) (int, int) {
+		if tenantID != "tenant-1" {
+			t.Fatalf("unexpected tenant id: %q", tenantID)
+		}
+		return 1, 1
+	}
+
+	req := AccessRequest{
+		TenantID:      "tenant-1",
+		ClientIP:      "172.18.0.1",
+		Path:          "/graphql",
+		OperationName: "streamsConnection",
+	}
+
+	for i := 0; i < 2; i++ {
+		decision := EvaluateAccess(context.Background(), req, rl, getLimits, nil, nil, nil, nil, nil)
+		if !decision.Allowed {
+			t.Fatalf("expected request %d to be allowed, got status %d", i+1, decision.Status)
+		}
+		if decision.Headers["X-RateLimit-Limit"] == "" {
+			t.Fatalf("expected rate limit headers on request %d", i+1)
+		}
+	}
+
+	decision := EvaluateAccess(context.Background(), req, rl, getLimits, nil, nil, nil, nil, nil)
+	if decision.Allowed {
+		t.Fatal("expected request to be rate limited")
+	}
+	if decision.Status != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429, got %d", decision.Status)
+	}
+	if decision.Headers["Retry-After"] == "" {
+		t.Fatal("expected Retry-After header on rate limited response")
 	}
 }
