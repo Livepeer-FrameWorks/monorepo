@@ -156,8 +156,8 @@ func TestAgentSyncBootstrapJoinFlow(t *testing.T) {
 	if len(mesh.bootstrapRequests) != 1 {
 		t.Fatalf("expected bootstrap request, got %d", len(mesh.bootstrapRequests))
 	}
-	if mesh.bootstrapRequests[0].GetNodeId() == nil || mesh.bootstrapRequests[0].GetNodeId().GetValue() != "node-old" {
-		t.Fatalf("expected bootstrap node_id node-old, got %v", mesh.bootstrapRequests[0].GetNodeId())
+	if got := mesh.bootstrapRequests[0].GetNodeId(); got != "node-old" {
+		t.Fatalf("expected bootstrap node_id node-old, got %q", got)
 	}
 	if got := agent.nodeID; got != "node-new" {
 		t.Fatalf("expected node id updated to node-new, got %s", got)
