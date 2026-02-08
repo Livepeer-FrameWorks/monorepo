@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -134,6 +135,108 @@ func PortChecks() []Check {
 	out = append(out, try(80))
 	out = append(out, try(443))
 	return out
+}
+
+// DiskSpace checks if the path has enough free space.
+func DiskSpace(path string, minFreeBytes uint64, minFreePercent float64) Check {
+	name := diskCheckName(path)
+	if runtime.GOOS == "windows" {
+		return Check{Name: name, OK: true, Detail: "windows: skipping"}
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return Check{Name: name, OK: false, Detail: "statfs failed", Error: err.Error()}
+	}
+
+	freeBytes, totalBytes := diskStats(stat)
+	return evaluateDiskSpace(name, path, freeBytes, totalBytes, minFreeBytes, minFreePercent)
+}
+
+// DiskSpaceFromDF evaluates disk space using `df -Pk` output for remote checks.
+func DiskSpaceFromDF(output, path string, minFreeBytes uint64, minFreePercent float64) Check {
+	name := diskCheckName(path)
+	freeBytes, totalBytes, err := parseDFKilobytes(output)
+	if err != nil {
+		return Check{Name: name, OK: false, Detail: "df parse failed", Error: err.Error()}
+	}
+	return evaluateDiskSpace(name, path, freeBytes, totalBytes, minFreeBytes, minFreePercent)
+}
+
+func parseDFKilobytes(output string) (uint64, uint64, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) < 2 {
+		return 0, 0, fmt.Errorf("expected df output with header and data")
+	}
+	fields := strings.Fields(lines[len(lines)-1])
+	if len(fields) < 5 {
+		return 0, 0, fmt.Errorf("unexpected df output format")
+	}
+	totalKB, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid total size: %w", err)
+	}
+	availKB, err := strconv.ParseUint(fields[3], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid available size: %w", err)
+	}
+	return availKB * 1024, totalKB * 1024, nil
+}
+
+func evaluateDiskSpace(name, path string, freeBytes, totalBytes, minFreeBytes uint64, minFreePercent float64) Check {
+	if totalBytes == 0 {
+		return Check{Name: name, OK: false, Detail: "disk total reported as 0"}
+	}
+
+	freePercent := (float64(freeBytes) / float64(totalBytes)) * 100
+	meetsBytes := minFreeBytes == 0 || freeBytes >= minFreeBytes
+	meetsPercent := minFreePercent == 0 || freePercent >= minFreePercent
+	ok := meetsBytes && meetsPercent
+
+	detail := fmt.Sprintf("%s free (%s of %s)", formatBytes(freeBytes), formatPercent(freePercent), formatBytes(totalBytes))
+	if minFreeBytes > 0 || minFreePercent > 0 {
+		detail = fmt.Sprintf("%s (min %s, %s)", detail, formatBytes(minFreeBytes), formatPercent(minFreePercent))
+	}
+	if !ok {
+		return Check{Name: name, OK: false, Detail: detail}
+	}
+	return Check{Name: name, OK: true, Detail: detail}
+}
+
+func diskStats(stat syscall.Statfs_t) (uint64, uint64) {
+	total := stat.Blocks * uint64(stat.Bsize)
+	free := stat.Bavail * uint64(stat.Bsize)
+	return free, total
+}
+
+func diskCheckName(path string) string {
+	if path == "/" {
+		return "disk-root"
+	}
+	clean := strings.TrimPrefix(path, "/")
+	if clean == "" {
+		return "disk"
+	}
+	return "disk-" + strings.ReplaceAll(clean, "/", "-")
+}
+
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	div, exp := uint64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	value := float64(bytes) / float64(div)
+	suffix := []string{"KB", "MB", "GB", "TB", "PB"}[exp]
+	return fmt.Sprintf("%.1f%s", value, suffix)
+}
+
+func formatPercent(value float64) string {
+	return fmt.Sprintf("%.1f%%", value)
 }
 
 func errString(err error) string {

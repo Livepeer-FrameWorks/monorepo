@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
@@ -362,8 +363,8 @@ func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, co
 	// We can try to hit its /health endpoint or metrics.
 	// For web health, we can check 80/443.
 
-	// Let's check the admin API for a reliable internal health check
-	checker := &health.HTTPChecker{ // This is where health is used
+	// Let's check the admin API for a reliable internal health check.
+	checker := &health.HTTPChecker{
 		Path:    "/health",
 		Timeout: 5,
 	}
@@ -375,6 +376,24 @@ func (c *CaddyProvisioner) Validate(ctx context.Context, host inventory.Host, co
 	result := checker.Check(host.Address, 2019) // Caddy admin API port
 	if !result.OK {
 		return fmt.Errorf("caddy admin API health check failed: %s", result.Error)
+	}
+
+	// For the public listener, a TCP connect is safer than hard-coding an HTTP path.
+	// Edge Caddy commonly redirects :80 -> :443 and templates may not define /health.
+	publicHTTP := &health.TCPChecker{
+		Timeout: 5 * time.Second,
+	}
+	httpResult := publicHTTP.Check(host.Address, 80)
+	if !httpResult.OK {
+		return fmt.Errorf("caddy public HTTP port check failed: %s", httpResult.Error)
+	}
+
+	publicTLS := &health.TCPChecker{
+		Timeout: 5 * time.Second,
+	}
+	tlsResult := publicTLS.Check(host.Address, 443)
+	if !tlsResult.OK {
+		return fmt.Errorf("caddy public HTTPS port check failed: %s", tlsResult.Error)
 	}
 
 	return nil
