@@ -55,6 +55,10 @@ func main() {
 	// Initialize gRPC server
 	signalmanServer := signalmangrpc.NewSignalmanServer(logger, serviceMetrics)
 	grpcHub := signalmanServer.GetHub()
+	maxConnectionsPerTenant := config.GetEnvInt("SIGNALMAN_MAX_CONNECTIONS_PER_TENANT", 0)
+	if maxConnectionsPerTenant > 0 {
+		grpcHub.SetMaxConnectionsPerTenant(maxConnectionsPerTenant)
+	}
 
 	// Setup Kafka consumer
 	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
@@ -336,7 +340,7 @@ func main() {
 		}
 		advertiseHost := config.GetEnv("SIGNALMAN_HOST", "signalman")
 		clusterID := config.GetEnv("CLUSTER_ID", "")
-		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		req := &pb.BootstrapServiceRequest{
 			Type:          "signalman",
 			Version:       version.Version,
 			Protocol:      "grpc",
@@ -348,7 +352,8 @@ func main() {
 				}
 				return nil
 			}(),
-		}); err != nil {
+		}
+		if err := bootstrapSignalmanService(ctx, qc, req); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (signalman) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (signalman) ok")
@@ -448,6 +453,7 @@ func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.Ev
 	// Marshal to JSON then unmarshal to MistTrigger protobuf
 	b, err := json.Marshal(data)
 	if err != nil {
+		logger.WithError(err).Debug("Failed to marshal event data")
 		return eventData
 	}
 

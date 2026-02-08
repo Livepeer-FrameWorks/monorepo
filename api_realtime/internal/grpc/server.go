@@ -34,6 +34,8 @@ type Hub struct {
 	logger     logging.Logger
 	metrics    *metrics.Metrics
 	mutex      sync.RWMutex
+
+	maxConnectionsPerTenant int
 }
 
 // Client represents a connected gRPC streaming client
@@ -74,6 +76,14 @@ func NewSignalmanServer(logger logging.Logger, m *metrics.Metrics) *SignalmanSer
 // GetHub returns the hub for external event broadcasting (e.g., from Kafka consumer)
 func (s *SignalmanServer) GetHub() *Hub {
 	return s.hub
+}
+
+// SetMaxConnectionsPerTenant configures the maximum number of active connections per tenant.
+// A value <= 0 disables the limit.
+func (h *Hub) SetMaxConnectionsPerTenant(limit int) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+	h.maxConnectionsPerTenant = limit
 }
 
 // run is the main event loop for the hub
@@ -156,6 +166,13 @@ func redactSensitiveData(event *pb.SignalmanEvent) {
 
 // broadcastEvent sends an event to all relevant clients
 func (h *Hub) broadcastEvent(event *pb.SignalmanEvent) {
+	if event == nil {
+		h.logger.Warn("Skipping broadcast of nil event")
+		return
+	}
+	if event.Timestamp == nil {
+		event.Timestamp = timestamppb.Now()
+	}
 	// Redact sensitive fields before broadcasting
 	redactSensitiveData(event)
 
@@ -264,26 +281,66 @@ func (c *Client) shouldReceive(event *pb.SignalmanEvent) bool {
 // Subscribe implements bidirectional streaming for realtime events
 func (s *SignalmanServer) Subscribe(stream pb.SignalmanService_SubscribeServer) error {
 	ctx := stream.Context()
+	userID := ctxkeys.GetUserID(ctx)
+	tenantID := ctxkeys.GetTenantID(ctx)
+
 	client := &Client{
 		stream:   stream,
 		channels: []pb.Channel{},
-		userID:   ctxkeys.GetUserID(ctx),
-		tenantID: ctxkeys.GetTenantID(ctx),
+		userID:   userID,
+		tenantID: tenantID,
 		send:     make(chan *pb.ServerMessage, 256),
 		done:     make(chan struct{}),
 		logger:   s.logger,
 	}
 
+	// Enforce tenant limit atomically with registration.
+	s.hub.mutex.Lock()
+	if limit := s.hub.maxConnectionsPerTenant; limit > 0 && tenantID != "" {
+		count := 0
+		for c := range s.hub.clients {
+			if c.tenantID == tenantID {
+				count++
+			}
+		}
+		if count >= limit {
+			s.hub.mutex.Unlock()
+			s.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID,
+				"limit":     limit,
+			}).Warn("Tenant connection limit reached")
+			time.Sleep(50 * time.Millisecond)
+			return status.Error(codes.ResourceExhausted, "tenant connection limit reached")
+		}
+	}
+	s.hub.clients[client] = true
+	clientCount := len(s.hub.clients)
+	s.hub.mutex.Unlock()
+
+	s.logger.WithFields(logging.Fields{
+		"client_count": clientCount,
+		"channels":     client.channels,
+		"user_id":      client.userID,
+		"tenant_id":    client.tenantID,
+	}).Info("gRPC client connected")
+
 	// Start sender goroutine
 	go client.sendLoop()
-
-	// Register client with hub
-	s.hub.register <- client
 
 	// Ensure cleanup on exit
 	defer func() {
 		close(client.done)
-		s.hub.unregister <- client
+		s.hub.mutex.Lock()
+		if _, ok := s.hub.clients[client]; ok {
+			delete(s.hub.clients, client)
+			close(client.send)
+		}
+		clientCount := len(s.hub.clients)
+		s.hub.mutex.Unlock()
+
+		s.logger.WithFields(logging.Fields{
+			"client_count": clientCount,
+		}).Info("gRPC client disconnected")
 	}()
 
 	// Read client messages
