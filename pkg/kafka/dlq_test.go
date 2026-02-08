@@ -28,8 +28,8 @@ func TestEncodeDLQMessageExtractsTenantIDFromPayload(t *testing.T) {
 	}
 
 	var payload DLQPayload
-	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-		t.Fatalf("failed to unmarshal payload: %v", err)
+	if unmarshalErr := json.Unmarshal(payloadBytes, &payload); unmarshalErr != nil {
+		t.Fatalf("failed to unmarshal payload: %v", unmarshalErr)
 	}
 
 	if payload.TenantID != "tenant-123" {
