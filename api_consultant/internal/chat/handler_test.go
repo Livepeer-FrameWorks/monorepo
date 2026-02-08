@@ -198,6 +198,101 @@ func TestHandleChat_NilHandler(t *testing.T) {
 	}
 }
 
+type captureUsageLogger struct {
+	events []skipper.ChatUsageEvent
+}
+
+func (c *captureUsageLogger) LogChatUsage(_ context.Context, event skipper.ChatUsageEvent) {
+	c.events = append(c.events, event)
+}
+
+func TestHandleChat_UsageLoggerCapturesTokens(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("INSERT INTO skipper\\.skipper_conversations").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("conv-1"))
+
+	mock.ExpectQuery("SELECT \\* FROM \\(SELECT").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id",
+			"conversation_id",
+			"role",
+			"content",
+			"confidence",
+			"sources",
+			"tools_used",
+			"token_count_input",
+			"token_count_output",
+			"created_at",
+		}))
+
+	mock.ExpectQuery("INSERT INTO skipper\\.skipper_messages").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("msg-user"))
+	mock.ExpectExec("UPDATE skipper\\.skipper_conversations").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mock.ExpectQuery("INSERT INTO skipper\\.skipper_messages").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("msg-assistant"))
+	mock.ExpectExec("UPDATE skipper\\.skipper_conversations").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mock.ExpectExec("UPDATE skipper\\.skipper_conversations").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	w := httptest.NewRecorder()
+	c, _ := newTestContext(w)
+
+	body, _ := json.Marshal(ChatRequest{Message: "hello world"})
+	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	ctx = skipper.WithUserID(ctx, "user-a")
+	c.Request = req.WithContext(ctx)
+
+	store := NewConversationStore(db)
+	usageLogger := &captureUsageLogger{}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: &fakeRewriterLLM{response: "ok response"},
+	})
+	handler := &ChatHandler{
+		Conversations: store,
+		Orchestrator:  orchestrator,
+		UsageLogger:   usageLogger,
+	}
+
+	handler.HandleChat(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if len(usageLogger.events) != 1 {
+		t.Fatalf("expected 1 usage event, got %d", len(usageLogger.events))
+	}
+	event := usageLogger.events[0]
+	if event.TenantID != "tenant-a" {
+		t.Fatalf("expected tenant-a, got %q", event.TenantID)
+	}
+	if event.UserID != "user-a" {
+		t.Fatalf("expected user-a, got %q", event.UserID)
+	}
+	if event.ConversationID != "conv-1" {
+		t.Fatalf("expected conv-1, got %q", event.ConversationID)
+	}
+	if event.TokensIn == 0 || event.TokensOut == 0 {
+		t.Fatalf("expected non-zero token counts, got in=%d out=%d", event.TokensIn, event.TokensOut)
+	}
+	if event.HadError {
+		t.Fatal("expected HadError false")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("db expectations: %v", err)
+	}
+}
+
 func TestHandleChat_NilOrchestrator(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := newTestContext(w)

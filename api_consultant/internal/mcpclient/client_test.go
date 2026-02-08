@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"frameworks/pkg/ctxkeys"
@@ -266,5 +267,74 @@ func TestGatewayClient_Allowlist(t *testing.T) {
 	}
 	if gc.HasTool("delete_stream") {
 		t.Fatal("expected delete_stream to be filtered out")
+	}
+}
+
+func TestGatewayClient_ReconnectRefreshesTools(t *testing.T) {
+	var version atomic.Int32
+	version.Store(1)
+
+	handler := mcp.NewStreamableHTTPHandler(
+		func(_ *http.Request) *mcp.Server {
+			server := mcp.NewServer(&mcp.Implementation{
+				Name:    "dynamic-gateway",
+				Version: "1.0.0",
+			}, nil)
+
+			if version.Load() == 1 {
+				server.AddTool(&mcp.Tool{
+					Name:        "tool_a",
+					Description: "Tool A",
+					InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+				}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+					version.Store(2)
+					return nil, context.Canceled
+				})
+				return server
+			}
+
+			server.AddTool(&mcp.Tool{
+				Name:        "tool_a",
+				Description: "Tool A",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+			}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{
+					Content: []mcp.Content{&mcp.TextContent{Text: "ok"}},
+				}, nil
+			})
+			server.AddTool(&mcp.Tool{
+				Name:        "tool_b",
+				Description: "Tool B",
+				InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+			}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return &mcp.CallToolResult{
+					Content: []mcp.Content{&mcp.TextContent{Text: "ok"}},
+				}, nil
+			})
+			return server
+		},
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+
+	gc, err := New(context.Background(), Config{
+		GatewayURL:   ts.URL,
+		ServiceToken: "test-token",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gc.Close() }()
+
+	result, err := gc.CallTool(context.Background(), "tool_a", nil)
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result != "ok" {
+		t.Fatalf("expected ok response after reconnect, got %q", result)
+	}
+	if !gc.HasTool("tool_b") {
+		t.Fatal("expected tool_b to be registered after reconnect")
 	}
 }
