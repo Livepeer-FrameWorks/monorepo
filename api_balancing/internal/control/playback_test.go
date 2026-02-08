@@ -70,6 +70,69 @@ func TestBuildOutputsMap(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        interface{}
+		baseURL    string
+		streamName string
+		expected   string
+	}{
+		{
+			name:       "non_string_raw",
+			raw:        map[string]interface{}{"url": "http://example.com"},
+			baseURL:    "https://edge.example.com/live",
+			streamName: "stream",
+			expected:   "",
+		},
+		{
+			name:       "array_non_string",
+			raw:        []interface{}{123},
+			baseURL:    "https://edge.example.com/live",
+			streamName: "stream",
+			expected:   "",
+		},
+		{
+			name:       "host_placeholder_missing_base",
+			raw:        "rtmp://HOST:1935/live/$",
+			baseURL:    "",
+			streamName: "stream",
+			expected:   "",
+		},
+		{
+			name:       "host_placeholder_valid_base",
+			raw:        "rtmp://HOST:1935/live/$",
+			baseURL:    "https://edge.example.com/live",
+			streamName: "stream",
+			expected:   "rtmp://edge.example.com/live:1935/live/stream",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := ResolveTemplateURL(test.raw, test.baseURL, test.streamName)
+			if actual != test.expected {
+				t.Fatalf("expected %q, got %q", test.expected, actual)
+			}
+		})
+	}
+}
+
+func TestSelectPrimaryArtifactOutputFallback(t *testing.T) {
+	outputs := map[string]interface{}{
+		"HLS":  []interface{}{123},
+		"DASH": "https://cdn.example.com/dash/$/index.mpd",
+	}
+
+	protocol, url := selectPrimaryArtifactOutput(outputs, "https://edge.example.com/live", "stream", "m3u8")
+	if protocol != "dash" {
+		t.Fatalf("expected protocol %q, got %q", "dash", protocol)
+	}
+	if url != "https://cdn.example.com/dash/stream/index.mpd" {
+		t.Fatalf("expected url %q, got %q", "https://cdn.example.com/dash/stream/index.mpd", url)
+	}
+}
+
 func TestBuildOutputCapabilities(t *testing.T) {
 	tests := []struct {
 		name             string

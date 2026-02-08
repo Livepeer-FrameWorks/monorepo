@@ -552,6 +552,9 @@ func ResolveTemplateURL(raw interface{}, baseURL, streamName string) string {
 		host = strings.TrimPrefix(host, "https://")
 		host = strings.TrimPrefix(host, "http://")
 		host = strings.TrimSuffix(host, "/")
+		if host == "" {
+			return ""
+		}
 		s = strings.ReplaceAll(s, "HOST", host)
 	}
 	s = strings.Trim(s, "[]\"")
