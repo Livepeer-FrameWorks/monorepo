@@ -148,11 +148,11 @@ func TestGetBestNodeWithScore_PrefersCloserGeo(t *testing.T) {
 	sm := setupTestManager(t)
 	sm.SetWeights(0, 0, 0, 1000, 0)
 
-	addTestNode(t, sm, "node-close", "node-close", 0, 0, true)
-	addTestNode(t, sm, "node-far", "node-far", 0, 180, true)
+	addTestNode(t, sm, "node-close", "node-close", 1, 1, true)
+	addTestNode(t, sm, "node-far", "node-far", 1, 180, true)
 
 	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
-	best, _, _, _, _, err := lb.GetBestNodeWithScore(context.Background(), "", 0, 0, nil, "", false)
+	best, _, _, _, _, err := lb.GetBestNodeWithScore(context.Background(), "", 1, 1, nil, "", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
