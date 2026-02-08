@@ -34,15 +34,42 @@ type PeriscopeMetrics struct {
 
 // AnalyticsHandler handles analytics events
 type AnalyticsHandler struct {
-	clickhouse database.ClickHouseNativeConn
+	clickhouse clickhouseConn
 	logger     logging.Logger
 	metrics    *PeriscopeMetrics
+}
+
+type clickhouseBatch interface {
+	Append(v ...interface{}) error
+	Send() error
+}
+
+type clickhouseRows interface {
+	Next() bool
+	Close() error
+}
+
+type clickhouseConn interface {
+	PrepareBatch(ctx context.Context, query string) (clickhouseBatch, error)
+	Query(ctx context.Context, query string, args ...interface{}) (clickhouseRows, error)
+}
+
+type clickhouseNativeConn struct {
+	conn database.ClickHouseNativeConn
+}
+
+func (c clickhouseNativeConn) PrepareBatch(ctx context.Context, query string) (clickhouseBatch, error) {
+	return c.conn.PrepareBatch(ctx, query)
+}
+
+func (c clickhouseNativeConn) Query(ctx context.Context, query string, args ...interface{}) (clickhouseRows, error) {
+	return c.conn.Query(ctx, query, args...)
 }
 
 // NewAnalyticsHandler creates a new analytics handler
 func NewAnalyticsHandler(clickhouse database.ClickHouseNativeConn, logger logging.Logger, metrics *PeriscopeMetrics) *AnalyticsHandler {
 	return &AnalyticsHandler{
-		clickhouse: clickhouse,
+		clickhouse: clickhouseNativeConn{conn: clickhouse},
 		logger:     logger,
 		metrics:    metrics,
 	}
@@ -2770,6 +2797,8 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 
 	batchTimestamp := time.Unix(batch.GetTimestamp(), 0)
 	sourceNode := batch.GetSourceNode()
+	appendErrors := 0
+	rowCount := 0
 
 	for _, agg := range batch.GetAggregates() {
 		timestamp := batchTimestamp
@@ -2815,8 +2844,36 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 				"tenant_id": agg.GetTenantId(),
 				"error":     err,
 			}).Warn("Failed to append aggregate to api_request_batch")
+			appendErrors++
 			continue
 		}
+		rowCount++
+	}
+
+	if rowCount == 0 {
+		// If everything was filtered out (empty/invalid payload), treat as a no-op.
+		// Returning an error would cause the Kafka consumer to retry forever and stall the partition.
+		if appendErrors > 0 {
+			if h.metrics != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			}
+			return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
+		}
+
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "skip").Inc()
+		}
+		h.logger.WithFields(logging.Fields{
+			"source_node": sourceNode,
+		}).Debug("api_request_batch had no valid aggregates; skipping")
+		return nil
+	}
+
+	if appendErrors > 0 {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+		}
+		return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 	}
 
 	if err := chBatch.Send(); err != nil {
@@ -2833,7 +2890,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 
 	h.logger.WithFields(logging.Fields{
 		"source_node":     sourceNode,
-		"aggregate_count": len(batch.GetAggregates()),
+		"aggregate_count": rowCount,
 	}).Debug("Successfully processed API request batch")
 
 	return nil
@@ -2878,6 +2935,8 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 		return err
 	}
 
+	appendErrors := 0
+	rowCount := 0
 	for _, rawAgg := range aggregatesSlice {
 		aggMap, ok := rawAgg.(map[string]interface{})
 		if !ok {
@@ -2926,8 +2985,36 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 				"tenant_id": getStringFromMap(aggMap, "tenant_id"),
 				"error":     err,
 			}).Warn("Failed to append aggregate to api_request_batch")
+			appendErrors++
 			continue
 		}
+		rowCount++
+	}
+
+	if rowCount == 0 {
+		// If everything was filtered out (empty/invalid payload), treat as a no-op.
+		// Returning an error would cause the Kafka consumer to retry forever and stall the partition.
+		if appendErrors > 0 {
+			if h.metrics != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+			}
+			return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
+		}
+
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "skip").Inc()
+		}
+		h.logger.WithFields(logging.Fields{
+			"source_node": sourceNode,
+		}).Debug("api_request_batch had no valid aggregates; skipping")
+		return nil
+	}
+
+	if appendErrors > 0 {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "error").Inc()
+		}
+		return fmt.Errorf("api_request_batch append failures: %d", appendErrors)
 	}
 
 	if err := chBatch.Send(); err != nil {
@@ -2944,7 +3031,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 
 	h.logger.WithFields(logging.Fields{
 		"source_node":     sourceNode,
-		"aggregate_count": len(aggregatesSlice),
+		"aggregate_count": rowCount,
 	}).Debug("Successfully processed service API request batch")
 
 	_ = h.processServiceAPIRequestBatchAudit(ctx, event, aggregatesSlice, sourceNode, timestamp)
