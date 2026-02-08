@@ -19,19 +19,41 @@ import (
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 )
 
 // CertManager handles certificate issuance logic
+type certStore interface {
+	GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
+	SaveCertificate(ctx context.Context, tenantID string, cert *store.Certificate) error
+	GetACMEAccount(ctx context.Context, tenantID, email string) (*store.ACMEAccount, error)
+	SaveACMEAccount(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
+}
+
+type acmeClient interface {
+	SetDNS01Provider(provider challenge.Provider) error
+	Register() (*registration.Resource, error)
+	Obtain(request certificate.ObtainRequest) (*certificate.Resource, error)
+}
+
 type CertManager struct {
-	store *store.Store
+	store              certStore
+	acmeClientFactory  func(config *lego.Config) (acmeClient, error)
+	dnsProviderFactory func() (challenge.Provider, error)
 }
 
 // NewCertManager creates a new CertManager
-func NewCertManager(s *store.Store) *CertManager {
-	return &CertManager{store: s}
+func NewCertManager(s certStore) *CertManager {
+	return &CertManager{
+		store:             s,
+		acmeClientFactory: newLegoClient,
+		dnsProviderFactory: func() (challenge.Provider, error) {
+			return cloudflare.NewDNSProvider()
+		},
+	}
 }
 
 // ACMEUser implements lego.User
@@ -85,7 +107,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	config.Certificate.KeyType = certcrypto.EC256
 
 	// 4. Create Lego client
-	client, err := lego.NewClient(config)
+	client, err := m.acmeClientFactory(config)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to create lego client: %w", err)
 	}
@@ -95,18 +117,18 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 		os.Setenv("CLOUDFLARE_DNS_API_TOKEN", os.Getenv("CLOUDFLARE_API_TOKEN"))
 	}
 
-	provider, err := cloudflare.NewDNSProvider()
+	provider, err := m.dnsProviderFactory()
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to create cloudflare provider: %w", err)
 	}
 
-	if challengeErr := client.Challenge.SetDNS01Provider(provider); challengeErr != nil {
+	if challengeErr := client.SetDNS01Provider(provider); challengeErr != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to set DNS provider: %w", challengeErr)
 	}
 
 	// 6. Register User (if new)
 	if user.Registration == nil {
-		reg, regErr := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		reg, regErr := client.Register()
 		if regErr != nil {
 			return "", "", time.Time{}, fmt.Errorf("registration failed: %w", regErr)
 		}
@@ -122,7 +144,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 		Domains: []string{domain},
 		Bundle:  true,
 	}
-	certificates, err := client.Certificate.Obtain(request)
+	certificates, err := client.Obtain(request)
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to obtain certificate: %w", err)
 	}
@@ -149,6 +171,30 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	}
 
 	return newCert.CertPEM, newCert.KeyPEM, expiry, nil
+}
+
+type legoClient struct {
+	client *lego.Client
+}
+
+func newLegoClient(config *lego.Config) (acmeClient, error) {
+	client, err := lego.NewClient(config)
+	if err != nil {
+		return nil, err
+	}
+	return &legoClient{client: client}, nil
+}
+
+func (l *legoClient) SetDNS01Provider(provider challenge.Provider) error {
+	return l.client.Challenge.SetDNS01Provider(provider)
+}
+
+func (l *legoClient) Register() (*registration.Resource, error) {
+	return l.client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+}
+
+func (l *legoClient) Obtain(request certificate.ObtainRequest) (*certificate.Resource, error) {
+	return l.client.Certificate.Obtain(request)
 }
 
 func isDomainAllowed(domain string) bool {
