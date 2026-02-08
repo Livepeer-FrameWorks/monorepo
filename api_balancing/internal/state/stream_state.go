@@ -512,6 +512,14 @@ func DefaultManager() *StreamStateManager {
 	return defaultManager
 }
 
+func ResetDefaultManagerForTests() *StreamStateManager {
+	if defaultManager != nil {
+		defaultManager.Shutdown()
+	}
+	defaultManager = NewStreamStateManager()
+	return defaultManager
+}
+
 func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -1889,6 +1897,9 @@ func (sm *StreamStateManager) getStalenessCheckInterval() time.Duration {
 
 // Shutdown gracefully shuts down the state manager
 func (sm *StreamStateManager) Shutdown() {
+	// Shutdown may be called multiple times in tests.
+	// stalenessChecker is a stop channel; closing twice panics.
+	defer func() { _ = recover() }()
 	close(sm.stalenessChecker)
 	if sm.reconcileTicker != nil {
 		sm.reconcileTicker.Stop()
