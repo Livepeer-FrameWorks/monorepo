@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge build-bin-deckhand build-bin-forms build-bin-skipper \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge build-image-deckhand build-image-skipper \
-	proto graphql graphql-frontend graphql-all clean version install-tools verify test coverage env tidy fmt \
+	proto graphql graphql-frontend graphql-all clean version install-tools verify test test-api-sidecar coverage env tidy fmt \
 	lint lint-all lint-fix lint-report lint-analyze \
 	dead-code-install dead-code-go dead-code-ts dead-code-report dead-code
 
@@ -255,6 +255,13 @@ test: proto graphql
 		echo "✗ Unit tests failed"; \
 		exit 1; \
 	fi
+
+# Run api_sidecar unit tests without GraphQL codegen
+test-api-sidecar: proto
+	@echo "Running api_sidecar unit tests..."
+	@(cd api_sidecar && \
+		go mod tidy && \
+		go test ./... -race -count=1)
 
 # Run unit tests with JUnit XML output for Codecov Test Analytics
 test-junit: proto graphql

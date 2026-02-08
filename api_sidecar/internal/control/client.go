@@ -670,6 +670,8 @@ func buildClipParams(req *pb.ClipPullRequest) string {
 	return strings.Join(parts, "&")
 }
 
+var hasSpaceFor = storage.HasSpaceFor
+
 func downloadToFile(url, dst string) error {
 	ctx := context.Background()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -694,7 +696,7 @@ func downloadToFile(url, dst string) error {
 	if resp.ContentLength > 0 {
 		requiredBytes = uint64(resp.ContentLength)
 	}
-	if err = storage.HasSpaceFor(parentDir, requiredBytes); err != nil {
+	if err = hasSpaceFor(parentDir, requiredBytes); err != nil {
 		return err
 	}
 
