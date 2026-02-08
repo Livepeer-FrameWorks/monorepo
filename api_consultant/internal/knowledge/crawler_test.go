@@ -145,6 +145,91 @@ func TestCrawlerCrawlAndEmbed(t *testing.T) {
 	}
 }
 
+func TestCrawlerCrawlAndEmbed_IdempotentWithCache(t *testing.T) {
+	pageHTML := `<!doctype html><html><head><title>Page One</title></head><body><p>Body copy.</p></body></html>`
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>` + server.URL + `/page1.html</loc></url>
+</urlset>`))
+		case "/page1.html":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(pageHTML))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	title, content := extractContent([]byte(pageHTML), server.URL+"/page1.html")
+	if title == "" || content == "" {
+		t.Fatalf("expected extracted content for hash")
+	}
+	hash := contentHash(content)
+
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	cache := NewPageCacheStore(db)
+	crawler, err := NewCrawler(server.Client(), embedder, store, WithPageCache(cache), withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	pageURL := server.URL + "/page1.html"
+	sitemapURL := server.URL + "/sitemap.xml"
+
+	// First run: cache miss, embed once.
+	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
+		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}),
+	)
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
+		"tenant", sitemapURL, pageURL,
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", sitemapURL, false); err != nil {
+		t.Fatalf("crawl and embed: %v", err)
+	}
+
+	// Second run: cached hash match, no embedding.
+	now := time.Now().UTC()
+	mock.ExpectQuery("SELECT tenant_id").WithArgs("tenant", pageURL).WillReturnRows(
+		sqlmock.NewRows([]string{"tenant_id", "source_root", "page_url", "content_hash", "etag", "last_modified", "raw_size", "last_fetched_at"}).
+			AddRow("tenant", sitemapURL, pageURL, hash, nil, nil, nil, now),
+	)
+	mock.ExpectExec("INSERT INTO skipper\\.skipper_page_cache").WithArgs(
+		"tenant", sitemapURL, pageURL,
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	if _, err := crawler.CrawlAndEmbed(context.Background(), "tenant", sitemapURL, false); err != nil {
+		t.Fatalf("crawl and embed (second run): %v", err)
+	}
+
+	if embedder.calls != 1 {
+		t.Fatalf("expected 1 embed call after idempotent re-crawl, got %d", embedder.calls)
+	}
+	if len(store.upserted) != 1 {
+		t.Fatalf("expected 1 upsert batch, got %d", len(store.upserted))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
 func TestFetchRenderedIncludesHeadMetadata(t *testing.T) {
 	lastModified := time.Now().UTC().Format(http.TimeFormat)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

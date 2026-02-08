@@ -2,74 +2,75 @@ package chat
 
 import (
 	"context"
-	"encoding/json"
+	"strings"
 	"testing"
 
+	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/skipper"
-	"frameworks/pkg/llm"
 )
 
-type capturingLLM struct {
-	tools []llm.Tool
+type fakeKnowledgeStore struct {
+	results   map[string][]knowledge.Chunk
+	errTenant string
+	calls     []string
 }
 
-func (c *capturingLLM) Complete(_ context.Context, _ []llm.Message, tools []llm.Tool) (llm.Stream, error) {
-	c.tools = tools
-	return &singleChunkStream{content: ""}, nil
+func (f *fakeKnowledgeStore) Search(ctx context.Context, tenantID string, _ []float32, _ int) ([]knowledge.Chunk, error) {
+	return f.HybridSearch(ctx, tenantID, nil, "", 0)
 }
 
-type fakeGatewayUnit struct {
-	tools []llm.Tool
-}
-
-func (g *fakeGatewayUnit) AvailableTools() []llm.Tool { return g.tools }
-func (g *fakeGatewayUnit) HasTool(name string) bool {
-	for _, tool := range g.tools {
-		if tool.Name == name {
-			return true
-		}
+func (f *fakeKnowledgeStore) HybridSearch(_ context.Context, tenantID string, _ []float32, _ string, _ int) ([]knowledge.Chunk, error) {
+	f.calls = append(f.calls, tenantID)
+	if tenantID == f.errTenant {
+		return nil, context.DeadlineExceeded
 	}
-	return false
-}
-func (g *fakeGatewayUnit) CallTool(_ context.Context, _ string, _ json.RawMessage) (string, error) {
-	return "", nil
+	return f.results[tenantID], nil
 }
 
-func TestDocsModeFiltersToolsBeforeLLM(t *testing.T) {
-	gateway := &fakeGatewayUnit{
-		tools: []llm.Tool{
-			{Name: "create_stream"},
-			{Name: "get_stream"},
+type fakeQueryEmbedder struct {
+	calls int
+}
+
+func (f *fakeQueryEmbedder) EmbedQuery(_ context.Context, _ string) ([]float32, error) {
+	f.calls++
+	return []float32{0.1, 0.2}, nil
+}
+
+func TestSearchKnowledgeFallsBackOnTenantFailure(t *testing.T) {
+	store := &fakeKnowledgeStore{
+		errTenant: "tenant-a",
+		results: map[string][]knowledge.Chunk{
+			"global": {
+				{
+					SourceURL:   "https://docs.example.com",
+					SourceTitle: "Global Docs",
+					Text:        "Latency tuning guide",
+					Similarity:  0.98,
+				},
+			},
 		},
 	}
-	provider := &capturingLLM{}
-	orchestrator := NewOrchestrator(OrchestratorConfig{
-		LLMProvider: provider,
-		Gateway:     gateway,
-	})
+	embedder := &fakeQueryEmbedder{}
 
-	ctx := skipper.WithMode(context.Background(), "docs")
-	_, err := orchestrator.Run(ctx, []llm.Message{
-		{Role: "system", Content: "system"},
-		{Role: "user", Content: "hello"},
-	}, nil)
+	orchestrator := &Orchestrator{
+		knowledge:      store,
+		embedder:       embedder,
+		searchLimit:    2,
+		globalTenantID: "global",
+	}
+
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	outcome, err := orchestrator.searchKnowledge(ctx, `{"query":"latency","tenant_scope":"all"}`)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("expected fallback success, got error: %v", err)
 	}
-
-	if hasTool(provider.tools, "create_stream") {
-		t.Fatalf("expected create_stream to be filtered in docs mode")
+	if embedder.calls != 1 {
+		t.Fatalf("expected embedder called once, got %d", embedder.calls)
 	}
-	if !hasTool(provider.tools, "get_stream") {
-		t.Fatalf("expected get_stream to remain available in docs mode")
+	if len(outcome.Sources) != 1 || outcome.Sources[0].URL != "https://docs.example.com" {
+		t.Fatalf("expected global source, got %+v", outcome.Sources)
 	}
-}
-
-func hasTool(tools []llm.Tool, name string) bool {
-	for _, tool := range tools {
-		if tool.Name == name {
-			return true
-		}
+	if !strings.Contains(outcome.Content, "Knowledge base results") {
+		t.Fatalf("expected knowledge context, got %q", outcome.Content)
 	}
-	return false
 }
