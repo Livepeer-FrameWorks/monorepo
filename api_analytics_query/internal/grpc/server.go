@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"frameworks/api_analytics_query/internal/metrics"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/database"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
@@ -91,8 +92,16 @@ func validateRelatedTenantIDs(ctx context.Context, relatedIDs []string) error {
 	if len(relatedIDs) == 0 {
 		return nil
 	}
-	if middleware.GetTenantID(ctx) != "" {
-		return status.Error(codes.PermissionDenied, "related_tenant_ids require service credentials")
+
+	// related_tenant_ids are used by Gateway calls (user JWT) to fetch routing/live-node
+	// data across subscribed clusters. Don’t block purely because a tenant_id exists.
+	// If we want to restrict this further, we need to check for actual service creds/role,
+	// not just the presence of tenant context.
+	if middleware.IsServiceCall(ctx) {
+		return nil
+	}
+	if middleware.GetUserID(ctx) == "" && ctxkeys.GetServiceToken(ctx) == "" {
+		return status.Error(codes.PermissionDenied, "related_tenant_ids require authentication")
 	}
 	return nil
 }
@@ -1869,8 +1878,8 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *pb.GetLiveNodes
 	if err != nil {
 		return nil, err
 	}
-	if err := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); err != nil {
-		return nil, err
+	if validateErr := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); validateErr != nil {
+		return nil, validateErr
 	}
 
 	// Support querying across multiple tenants (e.g. self + subscribed clusters)
@@ -1958,8 +1967,8 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *pb.GetRouti
 	if err != nil {
 		return nil, err
 	}
-	if err := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); err != nil {
-		return nil, err
+	if validateErr := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); validateErr != nil {
+		return nil, validateErr
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
