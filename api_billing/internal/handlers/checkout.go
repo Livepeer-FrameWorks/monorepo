@@ -581,7 +581,7 @@ func handlePrepaidCheckoutCompleted(sessionID, tenantID, topupID string, amountC
 			"tenant_id":        tenantID,
 			"stored_tenant_id": storedTenantID,
 		}).Warn("Pending top-up tenant mismatch")
-		return nil
+		return fmt.Errorf("pending top-up tenant mismatch")
 	}
 
 	if currentStatus != "pending" {

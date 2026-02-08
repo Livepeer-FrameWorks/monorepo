@@ -135,15 +135,15 @@ func TestValidateXpub(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
+			mockDB, mock, err := sqlmock.New()
 			if err != nil {
 				t.Fatalf("failed to create sqlmock: %v", err)
 			}
-			defer db.Close()
+			defer mockDB.Close()
 
 			test.setupRow(&mock)
 
-			wallet := &HDWallet{db: db, logger: logrus.New()}
+			wallet := &HDWallet{db: mockDB, logger: logrus.New()}
 			err = wallet.ValidateXpub()
 			if test.wantErrMsg == "" {
 				if err != nil {

@@ -26,8 +26,8 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
 	mock.ExpectRollback()
 
-	if err := handlePrepaidCheckoutCompleted("sess-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe); err != nil {
-		t.Fatalf("expected nil error, got %v", err)
+	if err := handlePrepaidCheckoutCompleted("sess-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe); err == nil {
+		t.Fatal("expected error")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
