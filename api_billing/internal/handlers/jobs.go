@@ -1529,13 +1529,13 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	periodStart, periodEnd := loadSubscriptionPeriod(jm.db, tenantID, now)
 
 	var finalizedCount int
-	if err := jm.db.QueryRow(`
+	if countErr := jm.db.QueryRow(`
 		SELECT COUNT(*) FROM purser.billing_invoices
 		WHERE tenant_id = $1
 		  AND period_start = $2
 		  AND status != 'draft'
-	`, tenantID, periodStart).Scan(&finalizedCount); err != nil {
-		return fmt.Errorf("failed to check finalized invoices: %w", err)
+	`, tenantID, periodStart).Scan(&finalizedCount); countErr != nil {
+		return fmt.Errorf("failed to check finalized invoices: %w", countErr)
 	}
 	if finalizedCount > 0 {
 		jm.logger.WithFields(logging.Fields{
