@@ -2,6 +2,8 @@ package dns
 
 import (
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 
 	"frameworks/pkg/logging"
@@ -62,20 +64,43 @@ func (s *Server) Stop() {
 	}
 }
 
-// UpdateRecords updates the DNS records from the list of peers/services
+// UpdateRecords updates the DNS records from the list of peers/services.
 // records map: hostname -> [IPs]
-func (s *Server) UpdateRecords(records map[string][]string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Clear and rebuild
-	s.records = make(map[string][]string)
+func (s *Server) UpdateRecords(records map[string][]string) error {
+	nextRecords := make(map[string][]string, len(records))
 	for name, ips := range records {
-		fqdn := fmt.Sprintf("%s.internal.", name)
-		s.records[fqdn] = ips
+		trimmedName := strings.TrimSpace(name)
+		if trimmedName == "" {
+			return fmt.Errorf("dns record name is empty")
+		}
+		if len(ips) == 0 {
+			// Allow empty service endpoint lists (e.g., during scaling/down or outages).
+			// Treat as an instruction to skip/omit this record.
+			continue
+		}
+
+		validated := make([]string, 0, len(ips))
+		for _, ip := range ips {
+			trimmedIP := strings.TrimSpace(ip)
+			if trimmedIP == "" {
+				return fmt.Errorf("dns record %q has empty ip", trimmedName)
+			}
+			if net.ParseIP(trimmedIP) == nil {
+				return fmt.Errorf("dns record %q has invalid ip %q", trimmedName, trimmedIP)
+			}
+			validated = append(validated, trimmedIP)
+		}
+
+		fqdn := fmt.Sprintf("%s.internal.", trimmedName)
+		nextRecords[fqdn] = validated
 	}
 
+	s.mu.Lock()
+	s.records = nextRecords
+	s.mu.Unlock()
+
 	s.logger.WithField("count", len(s.records)).Info("Updated DNS records")
+	return nil
 }
 
 func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
