@@ -128,3 +128,41 @@ func hasTool(tools []llm.Tool, name string) bool {
 	}
 	return false
 }
+
+func TestMergeToolCalls_DeduplicatesByID(t *testing.T) {
+	existing := []llm.ToolCall{
+		{ID: "call-1", Name: "search_knowledge", Arguments: `{"query":"stream `},
+	}
+	incoming := []llm.ToolCall{
+		{ID: "call-1", Name: "search_knowledge", Arguments: `latency"}`},
+	}
+
+	result := mergeToolCalls(existing, incoming)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(result))
+	}
+	if result[0].Arguments != `{"query":"stream latency"}` {
+		t.Fatalf("expected merged arguments, got %q", result[0].Arguments)
+	}
+}
+
+func TestMergeToolCalls_PreservesOrderWithOutOfOrderChunks(t *testing.T) {
+	existing := []llm.ToolCall{
+		{ID: "call-2", Name: "get_stream", Arguments: `{"stream_id":"a"`},
+	}
+	incoming := []llm.ToolCall{
+		{ID: "call-1", Name: "search_knowledge", Arguments: `{"query":"srt"}`},
+		{ID: "call-2", Name: "get_stream", Arguments: `,"tenant_id":"t"}`},
+	}
+
+	result := mergeToolCalls(existing, incoming)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(result))
+	}
+	if result[0].ID != "call-2" || result[1].ID != "call-1" {
+		t.Fatalf("expected order preserved by first-seen ID, got %q then %q", result[0].ID, result[1].ID)
+	}
+	if result[0].Arguments != `{"stream_id":"a","tenant_id":"t"}` {
+		t.Fatalf("expected merged arguments for call-2, got %q", result[0].Arguments)
+	}
+}

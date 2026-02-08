@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"frameworks/api_consultant/internal/skipper"
+	"frameworks/pkg/logging"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/gin-gonic/gin"
@@ -668,5 +669,65 @@ func TestTruncateTitle(t *testing.T) {
 		if got != tc.expected {
 			t.Errorf("truncateTitle(%q, %d) = %q, want %q", tc.input, tc.maxLen, got, tc.expected)
 		}
+	}
+}
+
+func TestHandleChat_OrchestratorErrorSendsErrorBeforeDone(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("INSERT INTO skipper\\.skipper_conversations").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("conv-1"))
+	mock.ExpectQuery("SELECT \\* FROM \\(SELECT").
+		WithArgs("conv-1", "tenant-a", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "conversation_id", "role", "content", "confidence", "sources", "tools_used", "token_count_input", "token_count_output", "created_at",
+		}))
+	mock.ExpectQuery("INSERT INTO skipper\\.skipper_messages").
+		WithArgs("conv-1", "user", "hello", "", sqlmock.AnyArg(), sqlmock.AnyArg(), 1, 0, "tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("message-id"))
+	mock.ExpectExec("UPDATE skipper\\.skipper_conversations").
+		WithArgs("conv-1", "tenant-a").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	w := httptest.NewRecorder()
+	c, _ := newTestContext(w)
+
+	body, _ := json.Marshal(ChatRequest{Message: "hello"})
+	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	ctx = skipper.WithUserID(ctx, "user-a")
+	c.Request = req.WithContext(ctx)
+
+	store := NewConversationStore(db)
+	handler := &ChatHandler{
+		Conversations: store,
+		Orchestrator:  &Orchestrator{},
+		Logger:        logging.NewLogger(),
+	}
+
+	handler.HandleChat(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	bodyText := w.Body.String()
+	errIdx := strings.Index(bodyText, `"type":"error"`)
+	doneIdx := strings.Index(bodyText, `"type":"done"`)
+	finalIdx := strings.Index(bodyText, "data: [DONE]")
+	if errIdx == -1 || doneIdx == -1 || finalIdx == -1 {
+		t.Fatalf("missing SSE markers; body: %s", bodyText)
+	}
+	if errIdx > doneIdx || doneIdx > finalIdx {
+		t.Fatalf("expected error -> done -> [DONE] ordering; body: %s", bodyText)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
 	}
 }
