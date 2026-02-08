@@ -161,6 +161,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 
 		// Execute tasks in batch (could be parallelized)
 		for _, task := range batch {
+			if err := ctx.Err(); err != nil {
+				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
+				return fmt.Errorf("provisioning halted before %s: %w", task.Name, err)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
 
 			// Get host config
@@ -174,12 +178,15 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, manifest *invento
 			config := buildTaskConfig(task, manifest, runtimeData, force)
 
 			// Provision based on task type
+			stopProgress := startTaskProgressLogger(cmd, task, 30*time.Second)
 			if err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, runtimeData); err != nil {
+				stopProgress()
 				fmt.Fprintf(cmd.OutOrStdout(), "\n  ✗ Provisioning failed for %s: %v\n", task.Name, err)
 				fmt.Fprintln(cmd.OutOrStdout(), "\n  Rolling back previously provisioned services...")
 				rollbackProvisionedTasks(ctx, cmd, sshPool, completed)
 				return fmt.Errorf("failed to provision %s: %w", task.Name, err)
 			}
+			stopProgress()
 
 			// Track completed task for potential rollback
 			completed = append(completed, provisionedTask{task: task, host: host, config: config})
@@ -318,6 +325,17 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 				if manifest.Infrastructure.Kafka.Version != "" {
 					config.Version = manifest.Infrastructure.Kafka.Version
 				}
+				if brokerID, ok := findKafkaBrokerID(task, manifest); ok {
+					config.Metadata["broker_id"] = brokerID
+				}
+				if manifest.Infrastructure.Kafka.ZookeeperConnect != "" {
+					config.Metadata["zookeeper_connect"] = manifest.Infrastructure.Kafka.ZookeeperConnect
+				} else if zkConnect, ok := buildZookeeperConnect(manifest); ok {
+					config.Metadata["zookeeper_connect"] = zkConnect
+				}
+				if len(manifest.Infrastructure.Kafka.Topics) > 0 {
+					config.Metadata["topics"] = kafkaTopicsToMetadata(manifest.Infrastructure.Kafka.Topics)
+				}
 			}
 		case "zookeeper":
 			if manifest.Infrastructure.Zookeeper != nil {
@@ -406,6 +424,99 @@ func resolveZookeeperNodeConfig(taskName string, manifest *inventory.Manifest) *
 	}
 }
 
+func findKafkaBrokerID(task *orchestrator.Task, manifest *inventory.Manifest) (int, bool) {
+	if manifest == nil || manifest.Infrastructure.Kafka == nil {
+		return 0, false
+	}
+
+	// Prefer the task name (kafka-broker-N) since multiple brokers may share a host.
+	const prefix = "kafka-broker-"
+	if strings.HasPrefix(task.Name, prefix) {
+		id, err := strconv.Atoi(strings.TrimPrefix(task.Name, prefix))
+		if err == nil {
+			return id, true
+		}
+	}
+
+	var (
+		matchedID   int
+		matchCount  int
+		haveMatched bool
+	)
+	for _, broker := range manifest.Infrastructure.Kafka.Brokers {
+		if broker.Host != task.Host {
+			continue
+		}
+		matchedID = broker.ID
+		haveMatched = true
+		matchCount++
+	}
+	if haveMatched && matchCount == 1 {
+		return matchedID, true
+	}
+
+	// Ambiguous (multiple brokers on same host) or no match.
+	return 0, false
+}
+
+func buildZookeeperConnect(manifest *inventory.Manifest) (string, bool) {
+	if manifest == nil || manifest.Infrastructure.Zookeeper == nil || !manifest.Infrastructure.Zookeeper.Enabled {
+		return "", false
+	}
+	if len(manifest.Infrastructure.Zookeeper.Ensemble) == 0 {
+		return "", false
+	}
+	parts := make([]string, 0, len(manifest.Infrastructure.Zookeeper.Ensemble))
+	for _, node := range manifest.Infrastructure.Zookeeper.Ensemble {
+		host := node.Host
+		if hostInfo, ok := manifest.Hosts[node.Host]; ok && hostInfo.Address != "" {
+			host = hostInfo.Address
+		}
+		port := node.Port
+		if port == 0 {
+			port = 2181
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d", host, port))
+	}
+	return strings.Join(parts, ","), true
+}
+
+func kafkaTopicsToMetadata(topics []inventory.KafkaTopic) []map[string]interface{} {
+	metadata := make([]map[string]interface{}, 0, len(topics))
+	for _, topic := range topics {
+		metadata = append(metadata, map[string]interface{}{
+			"name":               topic.Name,
+			"partitions":         topic.Partitions,
+			"replication_factor": topic.ReplicationFactor,
+			"config":             topic.Config,
+		})
+	}
+	return metadata
+}
+
+func startTaskProgressLogger(cmd *cobra.Command, task *orchestrator.Task, interval time.Duration) func() {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	start := time.Now()
+	ticker := time.NewTicker(interval)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Fprintf(cmd.OutOrStdout(), "    ... still provisioning %s (elapsed %s)\n", task.Name, time.Since(start).Round(time.Second))
+			case <-done:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+	}
+}
+
 // rollbackProvisionedTasks stops previously provisioned services in reverse order
 func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh.Pool, tasks []provisionedTask) {
 	if len(tasks) == 0 {
@@ -438,6 +549,9 @@ func rollbackProvisionedTasks(ctx context.Context, cmd *cobra.Command, pool *ssh
 
 // provisionTask provisions a single task
 func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.Host, pool *ssh.Pool, manifest *inventory.Manifest, force, ignoreValidation bool, runtimeData map[string]interface{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Get provisioner from registry
 	prov, err := provisioner.GetProvisioner(task.Type, pool)
 	if err != nil {
@@ -448,6 +562,10 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 
 	// Provision
 	if err := prov.Provision(ctx, host, config); err != nil {
+		return err
+	}
+
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 

@@ -74,6 +74,13 @@ func (m *Manifest) Validate() error {
 				return fmt.Errorf("kafka.broker host '%s' not found in hosts", broker.Host)
 			}
 		}
+		if m.Infrastructure.Zookeeper == nil || !m.Infrastructure.Zookeeper.Enabled {
+			if m.Infrastructure.Kafka.ZookeeperConnect == "" {
+				return fmt.Errorf("kafka is enabled but zookeeper is disabled and zookeeper_connect is empty")
+			}
+		} else if m.Infrastructure.Kafka.ZookeeperConnect == "" && len(m.Infrastructure.Zookeeper.Ensemble) == 0 {
+			return fmt.Errorf("kafka is enabled with zookeeper but zookeeper ensemble is empty")
+		}
 	}
 
 	// Validate service host references
