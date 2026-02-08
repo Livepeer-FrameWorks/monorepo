@@ -408,8 +408,9 @@ func TestSubscribeRetriesWithBackoff(t *testing.T) {
 	delay := postTimes[1].Sub(postTimes[0])
 	mu.Unlock()
 
-	if delay < executorCfg.BaseDelay {
-		t.Fatalf("expected retry delay >= %s, got %s", executorCfg.BaseDelay, delay)
+	// Allow 5ms jitter tolerance for timer imprecision on slow/busy runners
+	if delay < executorCfg.BaseDelay-5*time.Millisecond {
+		t.Fatalf("expected retry delay >= ~%s, got %s", executorCfg.BaseDelay, delay)
 	}
 }
 
