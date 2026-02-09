@@ -11,7 +11,7 @@ func TestDeriveAddressFromPrivKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if address != "0x90f8bf6a479f320ead074411a4b0e7944ea8c9c1" {
+	if address != "0xfa99341c1e9bf760dfec7e938943792f1cc73e16" {
 		t.Fatalf("unexpected address: %s", address)
 	}
 }

@@ -69,6 +69,8 @@ func TestProcessStripeWebhookGRPCIdempotent(t *testing.T) {
 }
 
 func TestProcessStripeWebhookGRPCMissingSecret(t *testing.T) {
+	t.Setenv("STRIPE_WEBHOOK_SECRET", "")
+
 	body := []byte(`{"id":"evt_missing_secret"}`)
 	headers := map[string]string{
 		"Stripe-Signature": "t=123,v1=deadbeef",
