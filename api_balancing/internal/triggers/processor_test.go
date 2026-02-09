@@ -1,10 +1,21 @@
 package triggers
 
 import (
+	"context"
+	"errors"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
+	"frameworks/api_balancing/internal/ingesterrors"
+	"frameworks/pkg/cache"
+	"frameworks/pkg/clients/commodore"
+	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
+
+	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc"
 )
 
 // TestPayloadTypeAssertions verifies that handlers return errors for wrong payload types
@@ -477,5 +488,321 @@ func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 				t.Fatalf("GetTriggerPayload returned nil for %s", tc.name)
 			}
 		})
+	}
+}
+
+type stubCommodoreInternalService struct {
+	pb.UnimplementedInternalServiceServer
+	response *pb.ValidateStreamKeyResponse
+	err      error
+}
+
+func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *pb.ValidateStreamKeyRequest) (*pb.ValidateStreamKeyResponse, error) {
+	return s.response, s.err
+}
+
+func newTestProcessor(t *testing.T) *Processor {
+	t.Helper()
+	return &Processor{
+		logger: logging.Logger(logrus.New()),
+		streamCache: cache.New(cache.Options{
+			TTL:                  10 * time.Minute,
+			StaleWhileRevalidate: 0,
+			NegativeTTL:          0,
+			MaxEntries:           100,
+		}, cache.MetricsHooks{}),
+	}
+}
+
+func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func()) {
+	t.Helper()
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+
+	server := grpc.NewServer()
+	pb.RegisterInternalServiceServer(server, &stubCommodoreInternalService{
+		response: response,
+		err:      responseErr,
+	})
+
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	client, err := commodore.NewGRPCClient(commodore.GRPCConfig{
+		GRPCAddr: listener.Addr().String(),
+		Logger:   logging.Logger(logrus.New()),
+	})
+	if err != nil {
+		server.Stop()
+		_ = listener.Close()
+		t.Fatalf("failed to create commodore client: %v", err)
+	}
+
+	cleanup := func() {
+		_ = client.Close()
+		server.Stop()
+		_ = listener.Close()
+	}
+
+	return client, cleanup
+}
+
+func TestHandleProcessBilling_EnrichesFromCache(t *testing.T) {
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	internalName := "stream-abc"
+	cacheKey := tenantID + ":" + internalName
+	processor.streamCache.Set(cacheKey, streamContext{
+		TenantID: tenantID,
+		UserID:   "user-1",
+		StreamID: "stream-id",
+		Source:   "test",
+	}, time.Minute)
+
+	streamID := "stream-id"
+	trigger := &pb.MistTrigger{
+		StreamId: &streamID,
+		TenantId: &tenantID,
+		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+			ProcessBilling: &pb.ProcessBillingEvent{
+				StreamName: "live+" + internalName,
+			},
+		},
+	}
+
+	_, blocking, err := processor.handleProcessBilling(trigger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blocking {
+		t.Fatalf("expected non-blocking response")
+	}
+
+	payload := trigger.GetProcessBilling()
+	if payload.GetTenantId() != tenantID {
+		t.Fatalf("expected tenant ID %q, got %q", tenantID, payload.GetTenantId())
+	}
+	if payload.GetStreamId() != streamID {
+		t.Fatalf("expected stream ID %q, got %q", streamID, payload.GetStreamId())
+	}
+}
+
+func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
+	processor := newTestProcessor(t)
+	tenantID := "tenant-2"
+	internalName := "storage-stream"
+	cacheKey := tenantID + ":" + internalName
+	processor.streamCache.Set(cacheKey, streamContext{
+		TenantID: tenantID,
+		UserID:   "user-2",
+		StreamID: "stream-2",
+		Source:   "test",
+	}, time.Minute)
+
+	streamID := "stream-2"
+	trigger := &pb.MistTrigger{
+		StreamId: &streamID,
+		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
+			StorageLifecycleData: &pb.StorageLifecycleData{
+				TenantId:     &tenantID,
+				InternalName: &internalName,
+			},
+		},
+	}
+
+	_, blocking, err := processor.handleStorageLifecycleData(trigger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blocking {
+		t.Fatalf("expected non-blocking response")
+	}
+
+	if trigger.GetUserId() != "user-2" {
+		t.Fatalf("expected user ID to be enriched, got %q", trigger.GetUserId())
+	}
+	payload := trigger.GetStorageLifecycleData()
+	if payload.GetStreamId() != streamID {
+		t.Fatalf("expected stream ID %q, got %q", streamID, payload.GetStreamId())
+	}
+}
+
+func TestHandleDVRLifecycleData_NormalizesInternalName(t *testing.T) {
+	processor := newTestProcessor(t)
+	tenantID := "tenant-3"
+	internalName := "dvr-stream"
+	cacheKey := tenantID + ":" + internalName
+	processor.streamCache.Set(cacheKey, streamContext{
+		TenantID: tenantID,
+		UserID:   "user-3",
+		StreamID: "stream-3",
+		Source:   "test",
+	}, time.Minute)
+
+	streamID := "stream-3"
+	wildcardName := "live+" + internalName
+	trigger := &pb.MistTrigger{
+		StreamId: &streamID,
+		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
+			DvrLifecycleData: &pb.DVRLifecycleData{
+				TenantId:     &tenantID,
+				InternalName: &wildcardName,
+			},
+		},
+	}
+
+	_, blocking, err := processor.handleDVRLifecycleData(trigger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blocking {
+		t.Fatalf("expected non-blocking response")
+	}
+
+	if trigger.GetUserId() != "user-3" {
+		t.Fatalf("expected user ID to be enriched, got %q", trigger.GetUserId())
+	}
+	payload := trigger.GetDvrLifecycleData()
+	if payload.GetStreamId() != streamID {
+		t.Fatalf("expected stream ID %q, got %q", streamID, payload.GetStreamId())
+	}
+}
+
+func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
+	response := &pb.ValidateStreamKeyResponse{
+		Valid:             true,
+		UserId:            "user-4",
+		TenantId:          "tenant-4",
+		InternalName:      "push-stream",
+		StreamId:          "stream-4",
+		BillingModel:      "prepaid",
+		IsSuspended:       false,
+		IsBalanceNegative: false,
+	}
+	commodoreClient, cleanup := setupCommodoreClient(t, response, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+
+	trigger := &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{
+				StreamName: "push-stream",
+				PushUrl:    "rtmp://example.com/live",
+			},
+		},
+	}
+
+	streamName, blocking, err := processor.handlePushRewrite(trigger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if blocking {
+		t.Fatalf("expected non-blocking response")
+	}
+	if streamName != "live+push-stream" {
+		t.Fatalf("expected live+push-stream response, got %q", streamName)
+	}
+
+	if trigger.GetTenantId() != "tenant-4" {
+		t.Fatalf("expected tenant ID to be set, got %q", trigger.GetTenantId())
+	}
+	if trigger.GetUserId() != "user-4" {
+		t.Fatalf("expected user ID to be set, got %q", trigger.GetUserId())
+	}
+	if trigger.GetStreamId() != "stream-4" {
+		t.Fatalf("expected stream ID to be set, got %q", trigger.GetStreamId())
+	}
+
+	cacheKey := "tenant-4:push-stream"
+	cached, ok := processor.streamCache.Peek(cacheKey)
+	if !ok {
+		t.Fatalf("expected stream cache entry for %q", cacheKey)
+	}
+	info, ok := cached.(streamContext)
+	if !ok {
+		t.Fatalf("expected stream cache entry type, got %T", cached)
+	}
+	if info.BillingModel != "prepaid" || info.IsBalanceNegative || info.IsSuspended {
+		t.Fatalf("unexpected billing context: %+v", info)
+	}
+}
+
+func TestHandlePushRewrite_RejectsSuspendedTenant(t *testing.T) {
+	response := &pb.ValidateStreamKeyResponse{
+		Valid:        true,
+		TenantId:     "tenant-5",
+		InternalName: "suspended-stream",
+		IsSuspended:  true,
+	}
+	commodoreClient, cleanup := setupCommodoreClient(t, response, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+
+	trigger := &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{
+				StreamName: "suspended-stream",
+			},
+		},
+	}
+
+	_, blocking, err := processor.handlePushRewrite(trigger)
+	if err == nil {
+		t.Fatalf("expected error for suspended tenant")
+	}
+	if !blocking {
+		t.Fatalf("expected blocking response")
+	}
+	var ingestErr *ingesterrors.IngestError
+	if !errors.As(err, &ingestErr) {
+		t.Fatalf("expected ingest error type, got %T", err)
+	}
+	if ingestErr.Code != pb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED {
+		t.Fatalf("expected suspended error code, got %v", ingestErr.Code)
+	}
+}
+
+func TestHandlePushRewrite_RejectsNegativeBalanceTenant(t *testing.T) {
+	response := &pb.ValidateStreamKeyResponse{
+		Valid:             true,
+		TenantId:          "tenant-6",
+		InternalName:      "negative-balance-stream",
+		IsBalanceNegative: true,
+	}
+	commodoreClient, cleanup := setupCommodoreClient(t, response, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+
+	trigger := &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{
+				StreamName: "negative-balance-stream",
+			},
+		},
+	}
+
+	_, blocking, err := processor.handlePushRewrite(trigger)
+	if err == nil {
+		t.Fatalf("expected error for negative balance tenant")
+	}
+	if !blocking {
+		t.Fatalf("expected blocking response")
+	}
+	var ingestErr *ingesterrors.IngestError
+	if !errors.As(err, &ingestErr) {
+		t.Fatalf("expected ingest error type, got %T", err)
+	}
+	if ingestErr.Code != pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED {
+		t.Fatalf("expected payment required error code, got %v", ingestErr.Code)
 	}
 }
