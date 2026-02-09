@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/pkg/auth"
 	"frameworks/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
@@ -114,5 +115,77 @@ func TestPublicOrJWTAuthRejectsUnauthenticatedMutation(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthAllowlistIgnoresInvalidToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	body := []byte("query { resolveViewerEndpoint }")
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthUsesJWTForProtectedQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	secret := []byte("secret")
+	token, err := auth.GenerateJWT("user-1", "tenant-1", "user@example.com", "admin", secret)
+	if err != nil {
+		t.Fatalf("failed to generate JWT: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(PublicOrJWTAuth(secret, &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) {
+		if c.GetString(string(ctxkeys.KeyUserID)) != "user-1" {
+			t.Fatalf("expected user context to be set")
+		}
+		if c.Request.Context().Value(ctxkeys.KeyTenantID) != "tenant-1" {
+			t.Fatalf("expected tenant context to be set")
+		}
+		c.String(http.StatusOK, "ok")
+	})
+
+	body := []byte("query { streamsConnection { edges { node { id } } } }")
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthWebSocketUpgradePassesThrough(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.GET("/graphql", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/graphql", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
