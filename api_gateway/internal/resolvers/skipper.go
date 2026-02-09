@@ -104,11 +104,29 @@ func convertSkipperEvent(evt *pb.SkipperChatEvent) model.SkipperChatEvent {
 			}
 			details = append(details, &model.SkipperToolDet{Title: d.GetTitle(), Payload: payload})
 		}
+		var blocks []*model.SkipperConfidenceBlock
+		if len(meta.GetBlocks()) > 1 {
+			blocks = make([]*model.SkipperConfidenceBlock, 0, len(meta.GetBlocks()))
+			for _, b := range meta.GetBlocks() {
+				blockSources := make([]*model.SkipperCitation, 0, len(b.GetSources()))
+				for _, s := range b.GetSources() {
+					blockSources = append(blockSources, &model.SkipperCitation{
+						Label: s.GetLabel(), URL: s.GetUrl(),
+					})
+				}
+				blocks = append(blocks, &model.SkipperConfidenceBlock{
+					Content:    b.GetContent(),
+					Confidence: b.GetConfidence(),
+					Sources:    blockSources,
+				})
+			}
+		}
 		return model.SkipperMeta{
 			Confidence:    meta.GetConfidence(),
 			Citations:     citations,
 			ExternalLinks: external,
 			Details:       details,
+			Blocks:        blocks,
 		}
 	case *pb.SkipperChatEvent_Done:
 		return model.SkipperDone{
@@ -195,6 +213,14 @@ func (r *Resolver) DoSkipperConversation(ctx context.Context, id string) (*model
 			if json.Unmarshal([]byte(tools), &parsed) == nil {
 				if sanitized := sanitizeSkipperJSON(parsed); sanitized != nil {
 					msg.ToolsUsed = sanitized
+				}
+			}
+		}
+		if blocks := m.GetConfidenceBlocksJson(); blocks != "" {
+			var parsed any
+			if json.Unmarshal([]byte(blocks), &parsed) == nil {
+				if sanitized := sanitizeSkipperJSON(parsed); sanitized != nil {
+					msg.ConfidenceBlocks = sanitized
 				}
 			}
 		}

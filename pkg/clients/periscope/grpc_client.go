@@ -104,9 +104,9 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                10 * time.Second, // Send keepalive ping every 10s
-			Timeout:             3 * time.Second,  // Wait 3s for ping ack before closing
-			PermitWithoutStream: true,             // Keep connection alive even when idle
+			Time:                5 * time.Minute,  // Ping interval (must be >= server MinTime, default 5m)
+			Timeout:             10 * time.Second, // Wait for ping ack before closing
+			PermitWithoutStream: false,            // Only keepalive when active RPCs exist
 		}),
 	)
 	if err != nil {

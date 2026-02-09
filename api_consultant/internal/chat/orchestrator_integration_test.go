@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 
 	"frameworks/api_consultant/internal/knowledge"
@@ -151,6 +152,101 @@ func TestOrchestratorGroundingConfidenceAndSources(t *testing.T) {
 	}
 	if result.Sources[0].URL != "https://example.com/docs" {
 		t.Fatalf("unexpected source URL: %s", result.Sources[0].URL)
+	}
+	if len(result.Blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(result.Blocks))
+	}
+	if result.Blocks[0].Confidence != ConfidenceVerified {
+		t.Fatalf("expected block confidence verified, got %s", result.Blocks[0].Confidence)
+	}
+}
+
+func TestOrchestratorMultiBlockResponse(t *testing.T) {
+	provider := &fakeProvider{
+		sequences: [][]llm.Chunk{
+			{
+				{
+					Content: "[confidence:verified]\nStream setup is documented.\n[sources]\n- Setup Guide \u2014 https://example.com/setup\n[/sources]\n\n[confidence:best_guess]\nRecommended bitrate is 4500 kbps.\n[sources]\n[/sources]\n",
+				},
+			},
+		},
+	}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: provider,
+	})
+
+	result, err := orchestrator.Run(context.Background(), []llm.Message{{Role: "user", Content: "help"}}, nil)
+	if err != nil {
+		t.Fatalf("run orchestrator: %v", err)
+	}
+	if len(result.Blocks) != 2 {
+		t.Fatalf("expected 2 blocks, got %d", len(result.Blocks))
+	}
+	if result.Blocks[0].Confidence != ConfidenceVerified {
+		t.Fatalf("expected first block verified, got %s", result.Blocks[0].Confidence)
+	}
+	if result.Blocks[1].Confidence != ConfidenceBestGuess {
+		t.Fatalf("expected second block best_guess, got %s", result.Blocks[1].Confidence)
+	}
+	if len(result.Blocks[0].Sources) != 1 {
+		t.Fatalf("expected 1 source in first block, got %d", len(result.Blocks[0].Sources))
+	}
+	if result.Blocks[0].Sources[0].URL != "https://example.com/setup" {
+		t.Fatalf("unexpected first block source URL: %s", result.Blocks[0].Sources[0].URL)
+	}
+	// Summarized confidence should be highest rank (verified > best_guess).
+	if result.Confidence != ConfidenceVerified {
+		t.Fatalf("expected summarized confidence verified, got %s", result.Confidence)
+	}
+}
+
+func TestBuildMetaMultiBlock(t *testing.T) {
+	result := OrchestratorResult{
+		Content:    "Block 1\n\nBlock 2",
+		Confidence: ConfidenceVerified,
+		Sources: []Source{
+			{Title: "KB Doc", URL: "https://example.com/kb", Type: SourceTypeKnowledgeBase},
+		},
+		Blocks: []ConfidenceBlock{
+			{
+				Content:    "Block 1",
+				Confidence: ConfidenceVerified,
+				Sources:    []Source{{Title: "KB Doc", URL: "https://example.com/kb", Type: SourceTypeKnowledgeBase}},
+			},
+			{
+				Content:    "Block 2",
+				Confidence: ConfidenceBestGuess,
+			},
+		},
+	}
+
+	meta := buildMeta(result)
+	if len(meta.Blocks) != 2 {
+		t.Fatalf("expected 2 meta blocks, got %d", len(meta.Blocks))
+	}
+	if meta.Blocks[0].Confidence != "verified" {
+		t.Fatalf("expected first meta block confidence verified, got %s", meta.Blocks[0].Confidence)
+	}
+	if meta.Blocks[1].Confidence != "best_guess" {
+		t.Fatalf("expected second meta block confidence best_guess, got %s", meta.Blocks[1].Confidence)
+	}
+	if len(meta.Blocks[0].Sources) != 1 {
+		t.Fatalf("expected 1 source in first meta block, got %d", len(meta.Blocks[0].Sources))
+	}
+}
+
+func TestBuildMetaSingleBlockOmitsBlocks(t *testing.T) {
+	result := OrchestratorResult{
+		Content:    "Single answer",
+		Confidence: ConfidenceVerified,
+		Blocks: []ConfidenceBlock{
+			{Content: "Single answer", Confidence: ConfidenceVerified},
+		},
+	}
+
+	meta := buildMeta(result)
+	if len(meta.Blocks) != 0 {
+		t.Fatalf("expected no meta blocks for single-block response, got %d", len(meta.Blocks))
 	}
 }
 
@@ -664,6 +760,263 @@ func TestOrchestratorSearchKnowledgeWithAllEnhancements(t *testing.T) {
 		t.Fatal("expected sources in result")
 	}
 }
+
+// recordingProvider wraps fakeProvider and records the messages passed to each
+// Complete call so tests can inspect what the orchestrator sent.
+type recordingProvider struct {
+	sequences [][]llm.Chunk
+	calls     [][]llm.Message
+	call      int
+}
+
+func (p *recordingProvider) Complete(_ context.Context, messages []llm.Message, _ []llm.Tool) (llm.Stream, error) {
+	cp := make([]llm.Message, len(messages))
+	copy(cp, messages)
+	p.calls = append(p.calls, cp)
+	if p.call >= len(p.sequences) {
+		return &fakeStream{}, nil
+	}
+	stream := &fakeStream{chunks: p.sequences[p.call]}
+	p.call++
+	return stream, nil
+}
+
+func TestOrchestratorPreservesTextAcrossToolRounds(t *testing.T) {
+	store := &inMemoryKnowledgeStore{
+		chunks: []knowledge.Chunk{
+			{TenantID: "tenant-a", SourceURL: "https://example.com", SourceTitle: "Doc", Text: "SRT setup guide", Similarity: 0.9},
+		},
+	}
+	embedder := &fakeQueryEmbedder{}
+	provider := &fakeProvider{
+		sequences: [][]llm.Chunk{
+			// Round 0: confidence-tagged text + tool call
+			{
+				{Content: "[confidence:best_guess]\nSRT ingest uses listener mode on port 9000.\n[sources]\n[/sources]\n"},
+				{ToolCalls: []llm.ToolCall{{
+					ID:        "call-1",
+					Name:      "search_knowledge",
+					Arguments: `{"query":"SRT ingest"}`,
+				}}},
+			},
+			// Round 1: more confidence-tagged text, no tool call
+			{
+				{Content: "[confidence:verified]\nHere is the SRT setup guide.\n[sources]\n- Doc \u2014 https://example.com\n[/sources]\n"},
+			},
+		},
+	}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: provider,
+		Knowledge:   store,
+		Embedder:    embedder,
+	})
+
+	ctx := skipper.WithTenantID(context.Background(), "tenant-a")
+	result, err := orchestrator.Run(ctx, []llm.Message{
+		{Role: "system", Content: "You are a helpful assistant."},
+		{Role: "user", Content: "How do I set up SRT ingest?"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(result.Content, "listener mode on port 9000") {
+		t.Fatalf("expected round-0 text preserved, got %q", result.Content)
+	}
+	if !strings.Contains(result.Content, "Here is the SRT setup guide") {
+		t.Fatalf("expected round-1 text preserved, got %q", result.Content)
+	}
+	if result.Confidence != ConfidenceVerified {
+		t.Fatalf("expected verified confidence (highest across blocks), got %s", result.Confidence)
+	}
+}
+
+func TestOrchestratorMaxRoundsPreservesContent(t *testing.T) {
+	provider := &fakeProvider{
+		sequences: [][]llm.Chunk{
+			// Round 0: text + tool call
+			{
+				{Content: "Based on my search, here is the answer.\n"},
+				{ToolCalls: []llm.ToolCall{{
+					ID: "call-1", Name: "search_web",
+					Arguments: `{"query":"test"}`,
+				}}},
+			},
+			// Round 1 (last with MaxRounds=2): only tool call, no text → hits max
+			{
+				{ToolCalls: []llm.ToolCall{{
+					ID: "call-2", Name: "search_web",
+					Arguments: `{"query":"test again"}`,
+				}}},
+			},
+		},
+	}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: provider,
+		SearchWeb:   NewSearchWebTool(&recordingSearchProvider{}),
+		MaxRounds:   2,
+	})
+
+	result, err := orchestrator.Run(context.Background(), []llm.Message{
+		{Role: "user", Content: "test"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(result.Content, "Based on my search, here is the answer") {
+		t.Fatalf("expected round-0 text preserved after max rounds, got %q", result.Content)
+	}
+}
+
+func TestOrchestratorMaxRoundsEmptyContentGetsFallback(t *testing.T) {
+	provider := &fakeProvider{
+		sequences: [][]llm.Chunk{
+			// Round 0: only tool call, no text
+			{
+				{ToolCalls: []llm.ToolCall{{
+					ID: "call-1", Name: "search_web",
+					Arguments: `{"query":"test"}`,
+				}}},
+			},
+			// Round 1 (last): only tool call again
+			{
+				{ToolCalls: []llm.ToolCall{{
+					ID: "call-2", Name: "search_web",
+					Arguments: `{"query":"test again"}`,
+				}}},
+			},
+		},
+	}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: provider,
+		SearchWeb:   NewSearchWebTool(&recordingSearchProvider{}),
+		MaxRounds:   2,
+	})
+
+	result, err := orchestrator.Run(context.Background(), []llm.Message{
+		{Role: "user", Content: "test"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(result.Content, "Reached maximum tool iterations") {
+		t.Fatalf("expected fallback message, got %q", result.Content)
+	}
+	if result.Confidence != ConfidenceUnknown {
+		t.Fatalf("expected unknown confidence, got %s", result.Confidence)
+	}
+}
+
+func TestOrchestratorConvergenceNudge(t *testing.T) {
+	provider := &recordingProvider{
+		sequences: [][]llm.Chunk{
+			// Round 0: tool call
+			{
+				{ToolCalls: []llm.ToolCall{{
+					ID: "call-1", Name: "search_web",
+					Arguments: `{"query":"test"}`,
+				}}},
+			},
+			// Round 1 (maxRounds-2 = 1): tool call → nudge injected after this
+			{
+				{ToolCalls: []llm.ToolCall{{
+					ID: "call-2", Name: "search_web",
+					Arguments: `{"query":"test2"}`,
+				}}},
+			},
+			// Round 2 (last): should see nudge in messages, produce final answer
+			{
+				{Content: "[confidence:sourced]\nFinal answer.\n[sources]\n[/sources]\n"},
+			},
+		},
+	}
+	orchestrator := NewOrchestrator(OrchestratorConfig{
+		LLMProvider: provider,
+		SearchWeb:   NewSearchWebTool(&recordingSearchProvider{}),
+		MaxRounds:   3,
+	})
+
+	result, err := orchestrator.Run(context.Background(), []llm.Message{
+		{Role: "user", Content: "test"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Content != "Final answer." {
+		t.Fatalf("expected final answer, got %q", result.Content)
+	}
+
+	// The third Complete call (index 2) should have the nudge message.
+	if len(provider.calls) < 3 {
+		t.Fatalf("expected 3 LLM calls, got %d", len(provider.calls))
+	}
+	lastCallMessages := provider.calls[2]
+	foundNudge := false
+	for _, msg := range lastCallMessages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "one remaining tool round") {
+			foundNudge = true
+			break
+		}
+	}
+	if !foundNudge {
+		t.Fatal("expected convergence nudge in last LLM call messages")
+	}
+}
+
+func TestStripConfidenceTags(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		out  string
+	}{
+		{"start of line", "[confidence:verified]Some text", "Some text"},
+		{"end of line", "Some text[confidence:best_guess]", "Some text"},
+		{"middle of line", "Before [confidence:sourced] after", "Before  after"},
+		{"standalone", "[confidence:unknown]", ""},
+		{"multiple", "[confidence:verified]A[confidence:sourced]B", "AB"},
+		{"no tag", "Just regular text", "Just regular text"},
+		{"unclosed tag", "[confidence:verified text", "[confidence:verified text"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripConfidenceTags(tc.in)
+			if got != tc.out {
+				t.Fatalf("stripConfidenceTags(%q) = %q, want %q", tc.in, got, tc.out)
+			}
+		})
+	}
+}
+
+func TestConfidenceStreamFilterInlineTag(t *testing.T) {
+	var tokens []string
+	streamer := tokenFunc(func(tok string) error {
+		tokens = append(tokens, tok)
+		return nil
+	})
+	filter := newConfidenceStreamFilter(streamer)
+	// LLM produces a confidence tag inline with content.
+	input := "Here is the answer [confidence:verified] with details.\n"
+	if err := filter.Write(input); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := filter.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	joined := strings.Join(tokens, "")
+	if strings.Contains(joined, "[confidence:") {
+		t.Fatalf("confidence tag leaked into streamed output: %q", joined)
+	}
+	if !strings.Contains(joined, "Here is the answer") {
+		t.Fatalf("expected content preserved, got %q", joined)
+	}
+	if !strings.Contains(joined, "with details.") {
+		t.Fatalf("expected content after tag preserved, got %q", joined)
+	}
+}
+
+// tokenFunc adapts a function into a TokenStreamer for testing.
+type tokenFunc func(string) error
+
+func (f tokenFunc) SendToken(tok string) error { return f(tok) }
 
 func TestLLMProviderSwitching(t *testing.T) {
 	cases := []struct {

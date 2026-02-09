@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { auth } from "$lib/stores/auth";
   import { getIconComponent } from "$lib/iconUtils";
   import SkipperMessage, {
     type SkipperChatMessage,
     type SkipperConfidence,
+    type SkipperConfidenceBlock,
   } from "$lib/components/skipper/SkipperMessage.svelte";
   import SkipperInput from "$lib/components/skipper/SkipperInput.svelte";
   import SkipperToolStatus from "$lib/components/skipper/SkipperToolStatus.svelte";
@@ -14,6 +15,7 @@
   } from "$lib/components/skipper/SkipperConversationList.svelte";
 
   let isAuthenticated = false;
+  let destroyed = false;
 
   // Conversation state
   let conversations = $state<SkipperConversationSummary[]>([]);
@@ -25,18 +27,36 @@
   let activeToolError = $state("");
   let loadingConversations = $state(true);
   let loadingMessages = $state(false);
+  let loadError = $state("");
   let abortController = $state<AbortController | null>(null);
 
   // Refs
   let scrollRef = $state<HTMLDivElement | null>(null);
 
   const BotIcon = getIconComponent("Bot");
-  const PanelLeftIcon = getIconComponent("PanelLeft");
+  const ArrowLeftIcon = getIconComponent("ArrowLeft");
 
-  let sidebarOpen = $state(false);
+  let isMobile = $state(false);
+  let mobileView = $state<"list" | "chat">("list");
+  let showChat = $derived(!isMobile || mobileView === "chat");
 
-  auth.subscribe((authState) => {
+  const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+  });
+
+  $effect(() => {
+    const handleResize = () => {
+      isMobile = window.innerWidth < 1024;
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  });
+
+  $effect(() => {
+    if (!loadingConversations && conversations.length === 0 && isMobile) {
+      mobileView = "chat";
+    }
   });
 
   onMount(async () => {
@@ -44,6 +64,15 @@
       await auth.checkAuth();
     }
     await loadConversations();
+  });
+
+  onDestroy(() => {
+    destroyed = true;
+    unsubscribeAuth();
+    if (abortController) {
+      abortController.abort();
+      abortController = null;
+    }
   });
 
   function createId() {
@@ -57,11 +86,22 @@
     messages = messages.map((m) => (m.id === id ? { ...m, ...update } : m));
   }
 
+  let scrollRafPending = false;
+
   async function scrollToBottom() {
     await tick();
     if (scrollRef) {
       scrollRef.scrollTop = scrollRef.scrollHeight;
     }
+  }
+
+  function scheduleScroll() {
+    if (scrollRafPending) return;
+    scrollRafPending = true;
+    requestAnimationFrame(async () => {
+      scrollRafPending = false;
+      if (!destroyed) await scrollToBottom();
+    });
   }
 
   // --- API calls ---
@@ -72,25 +112,32 @@
       const response = await fetch("/api/skipper/conversations", {
         credentials: "include",
       });
+      if (destroyed) return;
       if (response.ok) {
-        conversations = await response.json();
+        conversations = (await response.json()) ?? [];
       }
     } catch (err) {
-      console.error("Failed to load conversations:", err);
+      if (!destroyed) console.error("Failed to load conversations:", err);
     } finally {
-      loadingConversations = false;
+      if (!destroyed) loadingConversations = false;
     }
   }
 
   async function loadConversation(id: string) {
     try {
       loadingMessages = true;
+      loadError = "";
       activeConversationId = id;
       const response = await fetch(`/api/skipper/conversations/${id}`, {
         credentials: "include",
       });
-      if (!response.ok) return;
+      if (destroyed) return;
+      if (!response.ok) {
+        loadError = `Failed to load conversation (${response.status})`;
+        return;
+      }
       const convo = await response.json();
+      if (destroyed) return;
       messages = (convo.Messages ?? []).map((msg: Record<string, unknown>) => {
         const sources = parseSources(msg.Sources as string | null);
         return {
@@ -101,14 +148,18 @@
           citations: sources.citations,
           externalLinks: sources.externalLinks,
           details: parseDetails(msg.ToolsUsed as string | null),
+          blocks: parseConfidenceBlocks(msg.ConfidenceBlocks as string | null),
           createdAt: msg.CreatedAt as string,
         };
       });
       await scrollToBottom();
     } catch (err) {
-      console.error("Failed to load conversation:", err);
+      if (!destroyed) {
+        console.error("Failed to load conversation:", err);
+        loadError = "Failed to load conversation. Check connection.";
+      }
     } finally {
-      loadingMessages = false;
+      if (!destroyed) loadingMessages = false;
     }
   }
 
@@ -165,6 +216,17 @@
     }
   }
 
+  function parseConfidenceBlocks(raw: string | null): SkipperConfidenceBlock[] | undefined {
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+      return parsed as SkipperConfidenceBlock[];
+    } catch {
+      return undefined;
+    }
+  }
+
   // --- New conversation ---
 
   function startNewConversation() {
@@ -172,6 +234,11 @@
     messages = [];
     draft = "";
     activeToolName = "";
+    loadError = "";
+  }
+
+  function handleMobileBack() {
+    mobileView = "list";
   }
 
   function stopStreaming() {
@@ -207,6 +274,7 @@
 
     const controller = new AbortController();
     abortController = controller;
+    let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
     try {
       const response = await fetch("/api/skipper/chat", {
@@ -259,8 +327,20 @@
       let buffer = "";
       let isDone = false;
 
+      // Abort if no SSE data arrives for 90 seconds (e.g. silent connection drop).
+      const INACTIVITY_MS = 90_000;
+      function resetInactivityTimer() {
+        if (inactivityTimer) clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(() => {
+          console.warn("SSE inactivity timeout — aborting");
+          controller.abort();
+        }, INACTIVITY_MS);
+      }
+      resetInactivityTimer();
+
       while (!isDone) {
         const { done, value } = await reader.read();
+        resetInactivityTimer();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         let separatorIndex = buffer.indexOf("\n\n");
@@ -305,6 +385,7 @@
                   citations: parsed.citations,
                   externalLinks: parsed.externalLinks,
                   details: parsed.details,
+                  blocks: parsed.blocks,
                 });
               } else if (parsed.type === "done") {
                 isDone = true;
@@ -314,7 +395,7 @@
           }
           separatorIndex = buffer.indexOf("\n\n");
         }
-        await scrollToBottom();
+        scheduleScroll();
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
@@ -333,10 +414,12 @@
         });
       }
     } finally {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
       isStreaming = false;
       activeToolName = "";
       activeToolError = "";
       abortController = null;
+      if (destroyed) return;
       // Detect empty response from orchestrator crash
       const final = messages.find((m) => m.id === assistantId);
       if (final && !final.content?.trim()) {
@@ -401,13 +484,15 @@
     class="flex shrink-0 items-center justify-between border-b border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background px-4 py-3 sm:px-6"
   >
     <div class="flex items-center gap-3">
-      <button
-        class="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:hidden"
-        onclick={() => (sidebarOpen = !sidebarOpen)}
-        aria-label="Toggle sidebar"
-      >
-        <PanelLeftIcon class="h-4 w-4" />
-      </button>
+      {#if isMobile && mobileView === "chat"}
+        <button
+          class="rounded-md p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          onclick={handleMobileBack}
+          aria-label="Back to conversations"
+        >
+          <ArrowLeftIcon class="h-4 w-4" />
+        </button>
+      {/if}
       <BotIcon class="h-5 w-5 text-primary" />
       <div>
         <h1 class="text-lg font-bold text-foreground">Skipper</h1>
@@ -418,11 +503,122 @@
 
   <!-- Main Content -->
   <div class="flex flex-1 overflow-hidden">
-    <!-- Sidebar -->
+    <!-- Mobile: full-width conversation list -->
+    {#if isMobile && mobileView === "list"}
+      <div class="flex flex-1 flex-col overflow-hidden lg:hidden">
+        {#if loadingConversations}
+          <div class="space-y-3 p-4">
+            {#each Array.from({ length: 4 }) as _, i (i)}
+              <div class="h-12 animate-pulse rounded-lg bg-muted"></div>
+            {/each}
+          </div>
+        {:else}
+          <SkipperConversationList
+            {conversations}
+            activeId={activeConversationId}
+            onSelect={(id) => {
+              loadConversation(id);
+              mobileView = "chat";
+            }}
+            onNew={() => {
+              startNewConversation();
+              mobileView = "chat";
+            }}
+            onDelete={deleteConversation}
+            onRename={renameConversation}
+          />
+        {/if}
+      </div>
+    {/if}
+
+    <!-- Chat Area -->
+    {#if showChat}
+      <div class="flex flex-1 flex-col overflow-hidden">
+        <!-- Messages -->
+        <div bind:this={scrollRef} class="flex-1 overflow-y-auto bg-background/50 p-4 sm:p-6">
+          {#if messages.length === 0 && !loadingMessages}
+            {#if loadError}
+              <div
+                class="mx-auto mb-6 max-w-2xl rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400"
+              >
+                {loadError}
+              </div>
+            {/if}
+            <SkipperSuggestedPrompts onSend={handleSend} />
+          {:else if loadingMessages}
+            <div class="mx-auto max-w-3xl space-y-4">
+              {#each Array.from({ length: 4 }) as _, i (i)}
+                <div class="flex gap-3 {i % 2 === 0 ? 'justify-end' : ''}">
+                  <div class="max-w-[70%]">
+                    <div class="h-16 animate-pulse rounded-lg bg-muted"></div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="mx-auto max-w-3xl space-y-6">
+              {#each messages as message (message.id)}
+                <div class={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
+                  <div class="max-w-[85%]">
+                    <SkipperMessage {message} />
+                  </div>
+                </div>
+              {/each}
+
+              <!-- Tool status indicator -->
+              {#if activeToolName}
+                <div class="flex justify-start">
+                  <div class="max-w-[85%]">
+                    <SkipperToolStatus toolName={activeToolName} error={activeToolError} />
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Streaming indicator (waiting for first token) -->
+              {#if isStreaming && !activeToolName}
+                {@const lastMsg = messages[messages.length - 1]}
+                {#if lastMsg?.role === "assistant" && !lastMsg.content}
+                  <div class="flex justify-start">
+                    <div
+                      class="flex items-center gap-1.5 rounded-xl border border-border bg-card px-4 py-3"
+                    >
+                      <span class="h-2 w-2 animate-pulse rounded-full bg-primary/60"></span>
+                      <span
+                        class="h-2 w-2 animate-pulse rounded-full bg-primary/60"
+                        style="animation-delay: 150ms"
+                      ></span>
+                      <span
+                        class="h-2 w-2 animate-pulse rounded-full bg-primary/60"
+                        style="animation-delay: 300ms"
+                      ></span>
+                    </div>
+                  </div>
+                {/if}
+              {/if}
+            </div>
+          {/if}
+        </div>
+
+        <!-- Input Footer -->
+        <div
+          class="shrink-0 border-t border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-4 sm:px-6"
+        >
+          <div class="mx-auto max-w-3xl">
+            <SkipperInput
+              bind:value={draft}
+              disabled={isStreaming}
+              streaming={isStreaming}
+              onSend={handleSend}
+              onStop={stopStreaming}
+            />
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Right rail: conversation history (desktop only) -->
     <div
-      class="shrink-0 border-r border-[hsl(var(--tn-fg-gutter)/0.3)] bg-sidebar transition-all duration-300 {sidebarOpen
-        ? 'w-72'
-        : 'w-0 overflow-hidden'} hidden lg:block"
+      class="hidden w-72 shrink-0 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] bg-sidebar lg:block"
     >
       {#if loadingConversations}
         <div class="space-y-3 p-4">
@@ -440,106 +636,6 @@
           onRename={renameConversation}
         />
       {/if}
-    </div>
-
-    <!-- Mobile sidebar overlay -->
-    {#if sidebarOpen}
-      <div class="lg:hidden">
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-        <div class="fixed inset-0 z-30 bg-black/50" onclick={() => (sidebarOpen = false)}></div>
-        <div class="fixed inset-y-0 left-0 z-40 w-72 border-r border-border bg-sidebar shadow-xl">
-          <SkipperConversationList
-            {conversations}
-            activeId={activeConversationId}
-            onSelect={(id) => {
-              loadConversation(id);
-              sidebarOpen = false;
-            }}
-            onNew={() => {
-              startNewConversation();
-              sidebarOpen = false;
-            }}
-            onDelete={deleteConversation}
-            onRename={renameConversation}
-          />
-        </div>
-      </div>
-    {/if}
-
-    <!-- Chat Area -->
-    <div class="flex flex-1 flex-col overflow-hidden">
-      <!-- Messages -->
-      <div bind:this={scrollRef} class="flex-1 overflow-y-auto bg-background/50 p-4 sm:p-6">
-        {#if messages.length === 0 && !loadingMessages}
-          <SkipperSuggestedPrompts onSend={handleSend} />
-        {:else if loadingMessages}
-          <div class="mx-auto max-w-3xl space-y-4">
-            {#each Array.from({ length: 4 }) as _, i (i)}
-              <div class="flex gap-3 {i % 2 === 0 ? 'justify-end' : ''}">
-                <div class="max-w-[70%]">
-                  <div class="h-16 animate-pulse rounded-lg bg-muted"></div>
-                </div>
-              </div>
-            {/each}
-          </div>
-        {:else}
-          <div class="mx-auto max-w-3xl space-y-6">
-            {#each messages as message (message.id)}
-              <div class={message.role === "user" ? "flex justify-end" : "flex justify-start"}>
-                <div class="max-w-[85%]">
-                  <SkipperMessage {message} />
-                </div>
-              </div>
-            {/each}
-
-            <!-- Tool status indicator -->
-            {#if activeToolName}
-              <div class="flex justify-start">
-                <div class="max-w-[85%]">
-                  <SkipperToolStatus toolName={activeToolName} error={activeToolError} />
-                </div>
-              </div>
-            {/if}
-
-            <!-- Streaming indicator (waiting for first token) -->
-            {#if isStreaming && !activeToolName}
-              {@const lastMsg = messages[messages.length - 1]}
-              {#if lastMsg?.role === "assistant" && !lastMsg.content}
-                <div class="flex justify-start">
-                  <div
-                    class="flex items-center gap-1.5 rounded-xl border border-border bg-card px-4 py-3"
-                  >
-                    <span class="h-2 w-2 animate-pulse rounded-full bg-primary/60"></span>
-                    <span
-                      class="h-2 w-2 animate-pulse rounded-full bg-primary/60"
-                      style="animation-delay: 150ms"
-                    ></span>
-                    <span
-                      class="h-2 w-2 animate-pulse rounded-full bg-primary/60"
-                      style="animation-delay: 300ms"
-                    ></span>
-                  </div>
-                </div>
-              {/if}
-            {/if}
-          </div>
-        {/if}
-      </div>
-
-      <!-- Input Footer -->
-      <div
-        class="shrink-0 border-t border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-4 sm:px-6"
-      >
-        <div class="mx-auto max-w-3xl">
-          <SkipperInput
-            bind:value={draft}
-            disabled={isStreaming}
-            streaming={isStreaming}
-            onSend={handleSend}
-            onStop={stopStreaming}
-          />
-        </div>
-      </div>
     </div>
   </div>
 </div>

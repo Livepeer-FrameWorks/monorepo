@@ -40,7 +40,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 	}
 	reqBody := openAIRequest{
 		Model:     p.model,
-		Messages:  messages,
+		Messages:  openAIMessagesFrom(messages),
 		Stream:    true,
 		MaxTokens: p.maxTokens,
 	}
@@ -83,11 +83,19 @@ func (p *OpenAIProvider) Complete(ctx context.Context, messages []Message, tools
 }
 
 type openAIRequest struct {
-	Model     string       `json:"model"`
-	Messages  []Message    `json:"messages"`
-	Stream    bool         `json:"stream"`
-	MaxTokens int          `json:"max_tokens,omitempty"`
-	Tools     []openAITool `json:"tools,omitempty"`
+	Model     string          `json:"model"`
+	Messages  []openAIMessage `json:"messages"`
+	Stream    bool            `json:"stream"`
+	MaxTokens int             `json:"max_tokens,omitempty"`
+	Tools     []openAITool    `json:"tools,omitempty"`
+}
+
+type openAIMessage struct {
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	Name       string           `json:"name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type openAITool struct {
@@ -125,6 +133,33 @@ type openAIToolCall struct {
 type openAIFunctionCall struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+func openAIMessagesFrom(messages []Message) []openAIMessage {
+	out := make([]openAIMessage, 0, len(messages))
+	for _, msg := range messages {
+		m := openAIMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			Name:       msg.Name,
+			ToolCallID: msg.ToolCallID,
+		}
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			m.ToolCalls = make([]openAIToolCall, 0, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				m.ToolCalls = append(m.ToolCalls, openAIToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: openAIFunctionCall{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 func newOpenAIChunkDecoder() func([]byte) (Chunk, error) {

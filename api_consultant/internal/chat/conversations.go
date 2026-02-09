@@ -44,6 +44,7 @@ type Message struct {
 	Confidence       string
 	Sources          json.RawMessage
 	ToolsUsed        json.RawMessage
+	ConfidenceBlocks json.RawMessage
 	TokenCountInput  int
 	TokenCountOutput int
 	CreatedAt        time.Time
@@ -97,7 +98,8 @@ func (s *ConversationStore) AddMessage(
 	content,
 	confidence string,
 	sources,
-	toolsUsed json.RawMessage,
+	toolsUsed,
+	confidenceBlocks json.RawMessage,
 	tokens TokenCounts,
 ) error {
 	tenantID := skipper.GetTenantID(ctx)
@@ -107,6 +109,7 @@ func (s *ConversationStore) AddMessage(
 
 	sourcesValue := normalizeJSONInput(sources)
 	toolsValue := normalizeJSONInput(toolsUsed)
+	blocksValue := normalizeJSONInput(confidenceBlocks)
 
 	var messageID string
 	err := s.db.QueryRowContext(
@@ -118,12 +121,13 @@ func (s *ConversationStore) AddMessage(
 			confidence,
 			sources,
 			tools_used,
+			confidence_blocks,
 			token_count_input,
 			token_count_output
 		)
-		SELECT c.id, $2, $3, $4, $5, $6, $7, $8
+		SELECT c.id, $2, $3, $4, $5, $6, $7, $8, $9
 		FROM skipper.skipper_conversations c
-		WHERE c.id = $1 AND c.tenant_id = $9
+		WHERE c.id = $1 AND c.tenant_id = $10
 		RETURNING id`,
 		conversationID,
 		role,
@@ -131,6 +135,7 @@ func (s *ConversationStore) AddMessage(
 		confidence,
 		sourcesValue,
 		toolsValue,
+		blocksValue,
 		tokens.Input,
 		tokens.Output,
 		tenantID,
@@ -372,8 +377,9 @@ func (s *ConversationStore) fetchMessages(ctx context.Context, tenantID, convers
 		m.role,
 		m.content,
 		m.confidence,
-		m.sources,
-		m.tools_used,
+		COALESCE(m.sources, 'null'),
+		COALESCE(m.tools_used, 'null'),
+		COALESCE(m.confidence_blocks, 'null'),
 		m.token_count_input,
 		m.token_count_output,
 		m.created_at
@@ -415,6 +421,7 @@ func (s *ConversationStore) fetchMessages(ctx context.Context, tenantID, convers
 			&message.Confidence,
 			&message.Sources,
 			&message.ToolsUsed,
+			&message.ConfidenceBlocks,
 			&message.TokenCountInput,
 			&message.TokenCountOutput,
 			&message.CreatedAt,
@@ -479,9 +486,9 @@ func (s *ConversationStore) MessageCount(ctx context.Context, conversationID str
 	return count, nil
 }
 
-func normalizeJSONInput(value json.RawMessage) any {
+func normalizeJSONInput(value json.RawMessage) json.RawMessage {
 	if len(value) == 0 {
-		return nil
+		return json.RawMessage("null")
 	}
 	return value
 }

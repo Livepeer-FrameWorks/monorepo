@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_messages (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+DO $$ BEGIN
+    ALTER TABLE skipper.skipper_messages ADD COLUMN confidence_blocks JSONB;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
 -- ============================================================================
 -- USAGE METERING
 -- ============================================================================
@@ -134,6 +139,24 @@ CREATE TABLE IF NOT EXISTS skipper.skipper_page_cache (
 
 CREATE INDEX IF NOT EXISTS skipper_page_cache_source_idx
     ON skipper.skipper_page_cache (tenant_id, source_root);
+
+-- ============================================================================
+-- INVESTIGATION REPORTS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS skipper.skipper_reports (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    trigger TEXT,
+    summary TEXT,
+    metrics_reviewed JSONB,
+    root_cause TEXT,
+    recommendations JSONB,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS skipper_reports_tenant_created_idx
+    ON skipper.skipper_reports (tenant_id, created_at DESC);
 
 -- ============================================================================
 -- SCHEMA UPGRADES (idempotent ALTER for existing databases)

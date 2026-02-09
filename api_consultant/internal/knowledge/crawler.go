@@ -70,6 +70,8 @@ const (
 	PageFailed
 	PageEmbedded
 	PageDisallowed
+	PageNoChunks // content too thin for embedding
+	PageExcluded // URL matched exclude pattern
 )
 
 type CrawlResult struct {
@@ -80,6 +82,8 @@ type CrawlResult struct {
 	Failed      int
 	Embedded    int
 	Disallowed  int
+	NoChunks    int
+	Excluded    int
 }
 
 func (r *CrawlResult) add(s PageStatus) {
@@ -98,6 +102,10 @@ func (r *CrawlResult) add(s PageStatus) {
 		r.Embedded++
 	case PageDisallowed:
 		r.Disallowed++
+	case PageNoChunks:
+		r.NoChunks++
+	case PageExcluded:
+		r.Excluded++
 	}
 }
 
@@ -128,6 +136,7 @@ type Crawler struct {
 	mu                sync.Mutex
 	skipURLValidation bool // for tests that use httptest (localhost)
 	linkDiscovery     bool
+	excludePatterns   []string
 }
 
 type CrawlerOption func(*Crawler)
@@ -154,6 +163,10 @@ func WithRenderer(r PageRenderer) CrawlerOption {
 
 func WithLinkDiscovery(enabled bool) CrawlerOption {
 	return func(c *Crawler) { c.linkDiscovery = enabled }
+}
+
+func WithExcludePatterns(patterns []string) CrawlerOption {
+	return func(c *Crawler) { c.excludePatterns = patterns }
 }
 
 func (c *Crawler) Close() {
@@ -418,6 +431,8 @@ func (c *Crawler) CrawlAndEmbed(ctx context.Context, tenantID, sitemapURL string
 			WithField("skipped_hash", result.SkippedHash).
 			WithField("skipped_ttl", result.SkippedTTL).
 			WithField("failed", result.Failed).
+			WithField("no_chunks", result.NoChunks).
+			WithField("excluded", result.Excluded).
 			WithField("disallowed", result.Disallowed).
 			Info("Crawl cycle summary")
 	}
@@ -427,6 +442,8 @@ func (c *Crawler) CrawlAndEmbed(ctx context.Context, tenantID, sitemapURL string
 	crawlPagesTotal.WithLabelValues("skipped_hash").Add(float64(result.SkippedHash))
 	crawlPagesTotal.WithLabelValues("skipped_ttl").Add(float64(result.SkippedTTL))
 	crawlPagesTotal.WithLabelValues("failed").Add(float64(result.Failed))
+	crawlPagesTotal.WithLabelValues("no_chunks").Add(float64(result.NoChunks))
+	crawlPagesTotal.WithLabelValues("excluded").Add(float64(result.Excluded))
 	crawlPagesTotal.WithLabelValues("disallowed").Add(float64(result.Disallowed))
 
 	return &result, nil
@@ -493,6 +510,13 @@ func (c *Crawler) CrawlPages(ctx context.Context, tenantID string, pageURLs []st
 // When render is true and a PageRenderer is available, pages are fetched via headless browser.
 // Returns non-nil error only on context cancellation; page-level errors are logged and skipped.
 func (c *Crawler) processPage(ctx context.Context, tenantID, sourceRoot, pageURL, lastMod, sourceType string, render bool, discovered *linkSet) (PageStatus, error) {
+	if c.isExcluded(pageURL) {
+		if c.logger != nil {
+			c.logger.WithField("url", pageURL).Debug("Skipping excluded URL pattern")
+		}
+		return PageExcluded, nil
+	}
+
 	if !c.skipURLValidation {
 		if _, err := validateCrawlURLWithContext(ctx, pageURL); err != nil {
 			if c.logger != nil {
@@ -618,6 +642,12 @@ func (c *Crawler) finishPage(ctx context.Context, tenantID, sourceRoot, pageURL,
 	if embedErr != nil {
 		if ctx.Err() != nil {
 			return PageFailed, ctx.Err()
+		}
+		if errors.Is(embedErr, ErrNoChunks) {
+			if c.logger != nil {
+				c.logger.WithField("url", pageURL).Debug("Content produced no embeddable chunks")
+			}
+			return PageNoChunks, nil
 		}
 		if c.logger != nil {
 			c.logger.WithField("url", pageURL).WithField("error", embedErr.Error()).Warn("Embed failed, skipping")
@@ -948,6 +978,22 @@ func (c *Crawler) getRobotsRules(ctx context.Context, siteURL *url.URL) *robotsR
 	return rules
 }
 
+func (c *Crawler) isExcluded(pageURL string) bool {
+	if len(c.excludePatterns) == 0 {
+		return false
+	}
+	parsed, err := url.Parse(pageURL)
+	if err != nil {
+		return false
+	}
+	for _, pattern := range c.excludePatterns {
+		if strings.HasPrefix(parsed.Path, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Crawler) isAllowedByRobots(rules *robotsRules, pageURL string) bool {
 	if rules == nil || len(rules.disallow) == 0 {
 		return true
@@ -1228,7 +1274,17 @@ func (ls *linkSet) list() []string {
 	return out
 }
 
-// extractLinks parses HTML and returns unique same-domain links.
+// nonDocExtensions lists file extensions that are never useful for knowledge embedding.
+var nonDocExtensions = map[string]bool{
+	".json": true, ".xml": true, ".csv": true, ".yaml": true, ".yml": true,
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".webp": true, ".ico": true,
+	".pdf": true, ".zip": true, ".tar": true, ".gz": true, ".woff": true, ".woff2": true, ".ttf": true, ".eot": true,
+	".css": true, ".js": true, ".mjs": true, ".map": true, ".wasm": true,
+	".mp4": true, ".webm": true, ".mp3": true, ".ogg": true, ".wav": true,
+}
+
+// extractLinks parses HTML and returns unique same-domain links, skipping
+// non-document file extensions (images, data files, scripts, etc.).
 func extractLinks(data []byte, baseURL string) []string {
 	base, err := url.Parse(baseURL)
 	if err != nil {
@@ -1267,6 +1323,9 @@ func extractLinks(data []byte, baseURL string) []string {
 				resolved.Fragment = ""
 				resolved.RawQuery = ""
 				canonical := resolved.String()
+				if nonDocExtensions[strings.ToLower(pathExtension(resolved.Path))] {
+					continue
+				}
 				if !seen[canonical] {
 					seen[canonical] = true
 					links = append(links, canonical)
@@ -1282,4 +1341,17 @@ func extractLinks(data []byte, baseURL string) []string {
 	}
 	walk(doc)
 	return links
+}
+
+// pathExtension returns the file extension from a URL path (e.g. ".json").
+func pathExtension(p string) string {
+	i := strings.LastIndex(p, "/")
+	if i >= 0 {
+		p = p[i:]
+	}
+	j := strings.LastIndex(p, ".")
+	if j < 0 {
+		return ""
+	}
+	return p[j:]
 }

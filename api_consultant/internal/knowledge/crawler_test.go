@@ -28,10 +28,14 @@ func (f *fakeStore) DeleteBySource(_ context.Context, _, _ string) error {
 
 type fakeEmbedder struct {
 	calls int
+	err   error // if set, EmbedDocument returns this error
 }
 
 func (f *fakeEmbedder) EmbedDocument(_ context.Context, url, title, content string) ([]Chunk, error) {
 	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
 	return []Chunk{{SourceURL: url, SourceTitle: title, Text: content, Index: 0, Embedding: []float32{1}}}, nil
 }
 
@@ -740,5 +744,168 @@ func TestCrawlPagesEmptyList(t *testing.T) {
 	}
 	if embedder.calls != 0 {
 		t.Fatalf("expected 0 embed calls, got %d", embedder.calls)
+	}
+}
+
+func TestCrawlAndEmbed_EmbedFailureContinues(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>` + server.URL + `/page1.html</loc></url>
+  <url><loc>` + server.URL + `/page2.html</loc></url>
+</urlset>`))
+		case "/page1.html":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Page</title></head><body><p>Content one.</p></body></html>`))
+		case "/page2.html":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Page</title></head><body><p>Content two.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{err: errors.New("API error")}
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	result, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false)
+	if err != nil {
+		t.Fatalf("expected no fatal error, got: %v", err)
+	}
+	if result.Failed != 2 {
+		t.Fatalf("expected 2 failed pages, got %d", result.Failed)
+	}
+	if result.Embedded != 0 {
+		t.Fatalf("expected 0 embedded pages, got %d", result.Embedded)
+	}
+}
+
+func TestCrawlAndEmbed_NoChunksTracked(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>` + server.URL + `/tags</loc></url>
+</urlset>`))
+		case "/tags":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Tags</title></head><body><p>Thin content.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{err: ErrNoChunks}
+	crawler, err := NewCrawler(server.Client(), embedder, store, withSkipURLValidation())
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	result, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false)
+	if err != nil {
+		t.Fatalf("expected no fatal error, got: %v", err)
+	}
+	if result.NoChunks != 1 {
+		t.Fatalf("expected 1 no_chunks page, got %d", result.NoChunks)
+	}
+	if result.Failed != 0 {
+		t.Fatalf("expected 0 failed pages (no_chunks is not a failure), got %d", result.Failed)
+	}
+}
+
+func TestCrawlAndEmbed_ExcludePatterns(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/sitemap.xml":
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset>
+  <url><loc>` + server.URL + `/tags</loc></url>
+  <url><loc>` + server.URL + `/tags/foo</loc></url>
+  <url><loc>` + server.URL + `/docs/guide</loc></url>
+</urlset>`))
+		case "/tags":
+			t.Fatal("should not fetch excluded /tags")
+		case "/tags/foo":
+			t.Fatal("should not fetch excluded /tags/foo")
+		case "/docs/guide":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Guide</title></head><body><p>Guide content.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(server.Client(), embedder, store,
+		withSkipURLValidation(),
+		WithExcludePatterns([]string{"/tags"}),
+	)
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	result, err := crawler.CrawlAndEmbed(context.Background(), "tenant", server.URL+"/sitemap.xml", false)
+	if err != nil {
+		t.Fatalf("crawl and embed: %v", err)
+	}
+	if result.Excluded != 2 {
+		t.Fatalf("expected 2 excluded pages, got %d", result.Excluded)
+	}
+	if result.Embedded != 1 {
+		t.Fatalf("expected 1 embedded page, got %d", result.Embedded)
+	}
+	if embedder.calls != 1 {
+		t.Fatalf("expected 1 embed call, got %d", embedder.calls)
+	}
+}
+
+func TestCrawlPages_ExcludePatterns(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			_, _ = w.Write([]byte("User-agent: *\nCrawl-delay: 0"))
+		case "/tag/example":
+			t.Fatal("should not fetch excluded /tag/example")
+		case "/docs/guide":
+			_, _ = w.Write([]byte(`<!doctype html><html><head><title>Guide</title></head><body><p>Guide content.</p></body></html>`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	store := &fakeStore{}
+	embedder := &fakeEmbedder{}
+	crawler, err := NewCrawler(server.Client(), embedder, store,
+		withSkipURLValidation(),
+		WithExcludePatterns([]string{"/tag/"}),
+	)
+	if err != nil {
+		t.Fatalf("new crawler: %v", err)
+	}
+
+	pages := []string{server.URL + "/tag/example", server.URL + "/docs/guide"}
+	if err := crawler.CrawlPages(context.Background(), "tenant", pages, false); err != nil {
+		t.Fatalf("crawl pages: %v", err)
+	}
+	if embedder.calls != 1 {
+		t.Fatalf("expected 1 embed call (excluded page skipped), got %d", embedder.calls)
 	}
 }

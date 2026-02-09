@@ -65,6 +65,13 @@ message SkipperChatMeta {
   repeated SkipperCitation citations = 2;
   repeated SkipperCitation external_links = 3;
   repeated SkipperToolDetail details = 4;
+  repeated SkipperConfidenceBlock blocks = 5;
+}
+
+message SkipperConfidenceBlock {
+  string content = 1;
+  string confidence = 2;
+  repeated SkipperCitation sources = 3;
 }
 
 message SkipperCitation {
@@ -125,6 +132,7 @@ message SkipperChatMessage {
   int32 token_count_input = 7;
   int32 token_count_output = 8;
   google.protobuf.Timestamp created_at = 9;
+  string confidence_blocks_json = 10;
 }
 
 message DeleteSkipperConversationRequest {

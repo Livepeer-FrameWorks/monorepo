@@ -17,7 +17,7 @@ import (
 	"frameworks/pkg/logging"
 )
 
-const defaultMaxToolRounds = 5
+const defaultMaxToolRounds = 6
 
 // GatewayToolCaller invokes tools on the Gateway MCP server.
 type GatewayToolCaller interface {
@@ -74,6 +74,7 @@ type OrchestratorResult struct {
 	Content     string
 	Confidence  Confidence
 	Sources     []Source
+	Blocks      []ConfidenceBlock
 	ToolCalls   []ToolCallRecord
 	Details     []ToolDetail
 	TokenCounts TokenCounts
@@ -155,6 +156,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 	}
 
 	var response strings.Builder
+	var fullResponse strings.Builder
 	var sources []Source
 	var toolCalls []ToolCallRecord
 	var details []ToolDetail
@@ -210,6 +212,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			}
 			if chunk.Content != "" {
 				response.WriteString(chunk.Content)
+				fullResponse.WriteString(chunk.Content)
 				if filterErr := filter.Write(chunk.Content); filterErr != nil {
 					_ = stream.Close()
 					return OrchestratorResult{}, filterErr
@@ -229,6 +232,15 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		if len(pendingToolCalls) == 0 {
 			break
 		}
+
+		// Append the assistant message (with tool_use blocks) so the next
+		// LLM round sees the tool_use → tool_result pairing it expects.
+		messages = append(messages, llm.Message{
+			Role:      "assistant",
+			Content:   response.String(),
+			ToolCalls: pendingToolCalls,
+		})
+		response.Reset()
 
 		tes, _ := streamer.(ToolEventStreamer)
 		for _, call := range pendingToolCalls {
@@ -275,12 +287,19 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			}
 		}
 
-		if round == o.maxRounds-1 {
-			response.WriteString("\n\n[confidence:unknown]\nReached maximum tool iterations before producing a final answer.\n[sources]\n[/sources]\n")
+		if round == o.maxRounds-2 {
+			messages = append(messages, llm.Message{
+				Role:    "user",
+				Content: "[System note: You have one remaining tool round. Synthesize your answer now using the context already gathered. Do not make additional tool calls unless absolutely critical.]",
+			})
+		}
+
+		if round == o.maxRounds-1 && fullResponse.Len() == 0 {
+			fullResponse.WriteString("[confidence:unknown]\nReached maximum tool iterations before producing a final answer.\n[sources]\n[/sources]\n")
 		}
 	}
 
-	blocks := parseConfidenceBlocks(response.String())
+	blocks := parseConfidenceBlocks(fullResponse.String())
 	content := joinConfidenceContent(blocks)
 	confidence := summarizeConfidence(blocks)
 	blockSources := sourcesFromBlocks(blocks)
@@ -297,6 +316,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		Content:    content,
 		Confidence: confidence,
 		Sources:    sources,
+		Blocks:     blocks,
 		ToolCalls:  toolCalls,
 		Details:    details,
 		TokenCounts: TokenCounts{
@@ -327,27 +347,55 @@ var docsAllowedTools = map[string]bool{
 	"get_anomaly_report":        true,
 }
 
-func (o *Orchestrator) toolsForContext(ctx context.Context) []llm.Tool {
-	if skipper.GetMode(ctx) != "docs" {
-		return o.tools
-	}
-	return filterDocsTools(o.tools)
+// heartbeatAllowedTools lists tools permitted when mode=heartbeat.
+// The heartbeat agent already has metrics from direct Periscope gRPC calls;
+// it only needs the local knowledge base for context.
+var heartbeatAllowedTools = map[string]bool{
+	"search_knowledge": true,
 }
 
-func filterDocsTools(tools []llm.Tool) []llm.Tool {
+func (o *Orchestrator) toolsForContext(ctx context.Context) []llm.Tool {
+	switch skipper.GetMode(ctx) {
+	case "docs":
+		return filterTools(o.tools, docsAllowedTools)
+	case "heartbeat":
+		return filterTools(o.tools, heartbeatAllowedTools)
+	default:
+		return o.tools
+	}
+}
+
+func filterTools(tools []llm.Tool, allowed map[string]bool) []llm.Tool {
 	filtered := make([]llm.Tool, 0, len(tools))
 	for _, tool := range tools {
-		if docsAllowedTools[tool.Name] {
+		if allowed[tool.Name] {
 			filtered = append(filtered, tool)
 		}
 	}
 	return filtered
 }
 
+func (o *Orchestrator) modeAllowsTool(ctx context.Context, name string) bool {
+	switch skipper.GetMode(ctx) {
+	case "docs":
+		return docsAllowedTools[name]
+	case "heartbeat":
+		return heartbeatAllowedTools[name]
+	default:
+		return true
+	}
+}
+
+var modeLabels = map[string]string{
+	"docs":      "documentation",
+	"heartbeat": "heartbeat",
+}
+
 func (o *Orchestrator) executeTool(ctx context.Context, call llm.ToolCall) (ToolOutcome, error) {
-	if skipper.GetMode(ctx) == "docs" && !docsAllowedTools[call.Name] {
+	if !o.modeAllowsTool(ctx, call.Name) {
+		label := modeLabels[skipper.GetMode(ctx)]
 		return ToolOutcome{
-			Content: fmt.Sprintf("Tool %q is not available in documentation mode.", call.Name),
+			Content: fmt.Sprintf("Tool %q is not available in %s mode.", call.Name, label),
 		}, nil
 	}
 	switch call.Name {
@@ -709,19 +757,19 @@ func (f *confidenceStreamFilter) Flush() error {
 
 func (f *confidenceStreamFilter) processLine(line string, addNewline bool) error {
 	trimmed := strings.TrimSpace(line)
-	switch {
-	case strings.HasPrefix(trimmed, "[confidence:"):
-		return nil
-	case trimmed == "[sources]":
+	switch trimmed {
+	case "[sources]":
 		f.inSources = true
 		return nil
-	case trimmed == "[/sources]":
+	case "[/sources]":
 		f.inSources = false
 		return nil
 	}
 	if f.inSources {
 		return nil
 	}
+	// Strip [confidence:...] tags wherever they appear in the line.
+	line = stripConfidenceTags(line)
 	output := line
 	if addNewline {
 		output += "\n"
@@ -733,6 +781,20 @@ func (f *confidenceStreamFilter) processLine(line string, addNewline bool) error
 		return nil
 	}
 	return f.streamer.SendToken(output)
+}
+
+func stripConfidenceTags(s string) string {
+	for {
+		start := strings.Index(s, "[confidence:")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "]")
+		if end == -1 {
+			return s
+		}
+		s = s[:start] + s[start+end+1:]
+	}
 }
 
 func parseConfidenceBlocks(input string) []ConfidenceBlock {
@@ -899,7 +961,7 @@ func mergeToolCalls(existing, incoming []llm.ToolCall) []llm.ToolCall {
 		found := false
 		for i, ex := range existing {
 			if ex.ID != "" && ex.ID == inc.ID {
-				existing[i].Arguments += inc.Arguments
+				existing[i].Arguments = inc.Arguments
 				found = true
 				break
 			}

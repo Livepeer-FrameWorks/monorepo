@@ -11,6 +11,10 @@ import (
 	"frameworks/pkg/llm"
 )
 
+// ErrNoChunks is returned when content extraction produces text that is
+// entirely filtered out (too short, navigation-only, or all duplicates).
+var ErrNoChunks = errors.New("content produced no chunks")
+
 const (
 	// Token limits are expressed in approximate BPE tokens.
 	// estimateBPETokens applies a 1.3x multiplier to word count.
@@ -19,6 +23,13 @@ const (
 	maxEmbedBatchSize   = 2048
 	minChunkTokens      = 20
 	bpeMultiplier       = 1.3
+
+	// maxChunkChars is a hard character-count safety cap that catches cases
+	// where the BPE word-based estimator underestimates (base64 blobs,
+	// minified JS, SVG paths). OpenAI averages ~4 chars/BPE token; with an
+	// 8192-token limit this gives ~32K chars max. We use 24000 (~6000 tokens)
+	// to leave room for contextual prefixes.
+	maxChunkChars = 24000
 )
 
 type EmbedderOption func(*Embedder)
@@ -86,20 +97,23 @@ func (e *Embedder) EmbedDocument(ctx context.Context, url, title, content string
 	seen := make(map[string]bool)
 	for _, chunk := range allChunks {
 		if estimateBPETokens(chunk) < minTokens {
+			chunksFilteredTotal.WithLabelValues("below_min_tokens").Inc()
 			continue
 		}
 		if isNavigationChunk(chunk) {
+			chunksFilteredTotal.WithLabelValues("navigation").Inc()
 			continue
 		}
 		normalized := normalizeForDedup(chunk)
 		if seen[normalized] {
+			chunksFilteredTotal.WithLabelValues("duplicate").Inc()
 			continue
 		}
 		seen[normalized] = true
 		chunks = append(chunks, chunk)
 	}
 	if len(chunks) == 0 {
-		return nil, errors.New("content produced no chunks")
+		return nil, ErrNoChunks
 	}
 
 	// Contextual retrieval: prepend LLM-generated context to each chunk
@@ -206,7 +220,7 @@ func (e *Embedder) chunkContent(content string) []string {
 		if blockTokens == 0 {
 			continue
 		}
-		if blockTokens > e.tokenLimit {
+		if blockTokens > e.tokenLimit || len(block) > maxChunkChars {
 			flushCurrent()
 			// splitLargeBlock works on word arrays; convert BPE limits to word counts
 			wordLimit := int(float64(e.tokenLimit) / bpeMultiplier)
@@ -235,7 +249,7 @@ func (e *Embedder) chunkContent(content string) []string {
 	}
 
 	flushCurrent()
-	return chunks
+	return enforceCharLimit(chunks, maxChunkChars)
 }
 
 func splitBlocks(content string) []string {
@@ -243,6 +257,7 @@ func splitBlocks(content string) []string {
 	var blocks []string
 	var current []string
 	var currentHeading string
+	inCodeFence := false
 
 	flush := func() {
 		if len(current) == 0 {
@@ -260,6 +275,18 @@ func splitBlocks(content string) []string {
 
 	for _, line := range raw {
 		trimmed := strings.TrimSpace(line)
+
+		// Code fence toggle (``` or ~~~)
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			flush()
+			inCodeFence = !inCodeFence
+			continue
+		}
+		if inCodeFence {
+			current = append(current, trimmed)
+			continue
+		}
+
 		if trimmed == "" {
 			flush()
 			continue
@@ -269,11 +296,53 @@ func splitBlocks(content string) []string {
 			currentHeading = trimmed
 			continue
 		}
+		if isHorizontalRule(trimmed) {
+			flush()
+			continue
+		}
+		// HTML block-level elements act as section boundaries
+		if isHTMLBlockTag(trimmed) {
+			flush()
+			continue
+		}
 		current = append(current, trimmed)
 	}
 	flush()
 
 	return blocks
+}
+
+func isHorizontalRule(line string) bool {
+	clean := strings.ReplaceAll(line, " ", "")
+	if len(clean) < 3 {
+		return false
+	}
+	switch clean[0] {
+	case '-', '*', '_':
+		for i := 1; i < len(clean); i++ {
+			if clean[i] != clean[0] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+var htmlBlockPrefixes = []string{
+	"<hr", "<div", "</div", "<section", "</section",
+	"<article", "</article", "<nav", "</nav",
+	"<header", "</header", "<footer", "</footer",
+}
+
+func isHTMLBlockTag(line string) bool {
+	lower := strings.ToLower(line)
+	for _, prefix := range htmlBlockPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func tokenize(text string) []string {
@@ -318,6 +387,35 @@ func overlapTokens(text string, overlap int) string {
 		return text
 	}
 	return strings.Join(tokens[len(tokens)-overlap:], " ")
+}
+
+// enforceCharLimit splits any chunk whose character count exceeds maxChars
+// at word boundaries. This catches cases where word-based token estimation
+// dramatically underestimates (e.g. base64 blobs count as 1 word).
+func enforceCharLimit(chunks []string, maxChars int) []string {
+	var result []string
+	for _, chunk := range chunks {
+		if len(chunk) <= maxChars {
+			result = append(result, chunk)
+			continue
+		}
+		words := strings.Fields(chunk)
+		var buf strings.Builder
+		for _, w := range words {
+			if buf.Len() > 0 && buf.Len()+1+len(w) > maxChars {
+				result = append(result, buf.String())
+				buf.Reset()
+			}
+			if buf.Len() > 0 {
+				buf.WriteByte(' ')
+			}
+			buf.WriteString(w)
+		}
+		if buf.Len() > 0 {
+			result = append(result, buf.String())
+		}
+	}
+	return result
 }
 
 // isNavigationChunk detects chunks that are mostly navigation text (short

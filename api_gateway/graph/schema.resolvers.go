@@ -3864,6 +3864,15 @@ func (r *serviceInstanceHealthResolver) LastHealthCheck(ctx context.Context, obj
 }
 
 // Sources is the resolver for the sources field.
+func (r *skipperConfidenceBlockResolver) Sources(ctx context.Context, obj *proto.SkipperConfidenceBlock) ([]*model.SkipperCitation, error) {
+	sources := make([]*model.SkipperCitation, 0, len(obj.GetSources()))
+	for _, s := range obj.GetSources() {
+		sources = append(sources, &model.SkipperCitation{Label: s.GetLabel(), URL: s.GetUrl()})
+	}
+	return sources, nil
+}
+
+// Sources is the resolver for the sources field.
 func (r *skipperMessageResolver) Sources(ctx context.Context, obj *model.SkipperMessage) (*string, error) {
 	if obj.Sources == nil {
 		return nil, nil
@@ -3887,6 +3896,41 @@ func (r *skipperMessageResolver) ToolsUsed(ctx context.Context, obj *model.Skipp
 	}
 	s := string(b)
 	return &s, nil
+}
+
+// ConfidenceBlocks is the resolver for the confidenceBlocks field.
+func (r *skipperMessageResolver) ConfidenceBlocks(ctx context.Context, obj *model.SkipperMessage) (*string, error) {
+	if obj.ConfidenceBlocks == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.ConfidenceBlocks)
+	if err != nil {
+		return nil, err
+	}
+	s := string(b)
+	return &s, nil
+}
+
+// Blocks is the resolver for the blocks field.
+func (r *skipperMetaResolver) Blocks(ctx context.Context, obj *model.SkipperMeta) ([]*proto.SkipperConfidenceBlock, error) {
+	if len(obj.Blocks) == 0 {
+		return nil, nil
+	}
+	result := make([]*proto.SkipperConfidenceBlock, 0, len(obj.Blocks))
+	for _, b := range obj.Blocks {
+		pb := &proto.SkipperConfidenceBlock{
+			Content:    b.Content,
+			Confidence: b.Confidence,
+		}
+		for _, s := range b.Sources {
+			pb.Sources = append(pb.Sources, &proto.SkipperCitation{
+				Label: s.Label,
+				Url:   s.URL,
+			})
+		}
+		result = append(result, pb)
+	}
+	return result, nil
 }
 
 // Payload is the resolver for the payload field.
@@ -5853,10 +5897,18 @@ func (r *Resolver) ServiceInstanceHealth() generated.ServiceInstanceHealthResolv
 	return &serviceInstanceHealthResolver{r}
 }
 
+// SkipperConfidenceBlock returns generated.SkipperConfidenceBlockResolver implementation.
+func (r *Resolver) SkipperConfidenceBlock() generated.SkipperConfidenceBlockResolver {
+	return &skipperConfidenceBlockResolver{r}
+}
+
 // SkipperMessage returns generated.SkipperMessageResolver implementation.
 func (r *Resolver) SkipperMessage() generated.SkipperMessageResolver {
 	return &skipperMessageResolver{r}
 }
+
+// SkipperMeta returns generated.SkipperMetaResolver implementation.
+func (r *Resolver) SkipperMeta() generated.SkipperMetaResolver { return &skipperMetaResolver{r} }
 
 // SkipperToolDetail returns generated.SkipperToolDetailResolver implementation.
 func (r *Resolver) SkipperToolDetail() generated.SkipperToolDetailResolver {
@@ -6062,7 +6114,9 @@ type rebufferingEventResolver struct{ *Resolver }
 type routingEventResolver struct{ *Resolver }
 type serviceInstanceResolver struct{ *Resolver }
 type serviceInstanceHealthResolver struct{ *Resolver }
+type skipperConfidenceBlockResolver struct{ *Resolver }
 type skipperMessageResolver struct{ *Resolver }
+type skipperMetaResolver struct{ *Resolver }
 type skipperToolDetailResolver struct{ *Resolver }
 type storageEventResolver struct{ *Resolver }
 type storageUsageResolver struct{ *Resolver }

@@ -47,12 +47,19 @@ type citation struct {
 	URL   string `json:"url"`
 }
 
+type sseMetaBlock struct {
+	Content    string     `json:"content"`
+	Confidence string     `json:"confidence"`
+	Sources    []citation `json:"sources,omitempty"`
+}
+
 type sseMeta struct {
-	Type          string       `json:"type"`
-	Confidence    string       `json:"confidence"`
-	Citations     []citation   `json:"citations,omitempty"`
-	ExternalLinks []citation   `json:"externalLinks,omitempty"`
-	Details       []ToolDetail `json:"details,omitempty"`
+	Type          string         `json:"type"`
+	Confidence    string         `json:"confidence"`
+	Citations     []citation     `json:"citations,omitempty"`
+	ExternalLinks []citation     `json:"externalLinks,omitempty"`
+	Details       []ToolDetail   `json:"details,omitempty"`
+	Blocks        []sseMetaBlock `json:"blocks,omitempty"`
 }
 
 type sseToken struct {
@@ -179,7 +186,7 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		return
 	}
 
-	if addErr := h.Conversations.AddMessage(ctx, conversationID, "user", req.Message, "", nil, nil, TokenCounts{
+	if addErr := h.Conversations.AddMessage(ctx, conversationID, "user", req.Message, "", nil, nil, nil, TokenCounts{
 		Input:  estimateTokens(req.Message),
 		Output: 0,
 	}); addErr != nil {
@@ -227,7 +234,11 @@ func (h *ChatHandler) HandleChat(c *gin.Context) {
 		Details []ToolDetail     `json:"details,omitempty"`
 	}{result.ToolCalls, result.Details}
 	toolsJSON, _ := json.Marshal(toolData)
-	if err := h.Conversations.AddMessage(ctx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, result.TokenCounts); err != nil {
+	var blocksJSON json.RawMessage
+	if len(result.Blocks) > 1 {
+		blocksJSON, _ = json.Marshal(result.Blocks)
+	}
+	if err := h.Conversations.AddMessage(ctx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, blocksJSON, result.TokenCounts); err != nil {
 		h.Logger.WithError(err).Warn("Failed to store assistant response")
 	}
 
@@ -332,8 +343,13 @@ func (h *ChatHandler) HandleGetConversation(c *gin.Context) {
 		ctx = skipper.WithUserID(ctx, userID)
 	}
 	convo, err := h.Conversations.GetConversation(ctx, conversationID)
-	if err != nil {
+	if errors.Is(err, ErrConversationNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "conversation not found"})
+		return
+	}
+	if err != nil {
+		h.Logger.WithError(err).WithField("conversation_id", conversationID).Error("Failed to get conversation")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load conversation"})
 		return
 	}
 	c.JSON(http.StatusOK, convo)
@@ -529,13 +545,29 @@ func buildMeta(result OrchestratorResult) sseMeta {
 			citations = append(citations, citation{Label: source.Title, URL: source.URL})
 		}
 	}
-	return sseMeta{
+	meta := sseMeta{
 		Type:          "meta",
 		Confidence:    string(result.Confidence),
 		Citations:     citations,
 		ExternalLinks: external,
 		Details:       result.Details,
 	}
+	if len(result.Blocks) > 1 {
+		meta.Blocks = make([]sseMetaBlock, 0, len(result.Blocks))
+		for _, b := range result.Blocks {
+			block := sseMetaBlock{
+				Content:    b.Content,
+				Confidence: string(b.Confidence),
+			}
+			for _, s := range b.Sources {
+				if s.URL != "" {
+					block.Sources = append(block.Sources, citation{Label: s.Title, URL: s.URL})
+				}
+			}
+			meta.Blocks = append(meta.Blocks, block)
+		}
+	}
+	return meta
 }
 
 type sseStreamer struct {

@@ -88,23 +88,22 @@
     <span class="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
       Conversations
     </span>
-    <button
-      class="rounded-md border border-border bg-background p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-      onclick={() => onNew?.()}
-      aria-label="New conversation"
-    >
-      <PlusIcon class="h-3.5 w-3.5" />
-    </button>
+    {#if activeId}
+      <button
+        class="rounded-md border border-border bg-background p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        onclick={() => onNew?.()}
+        aria-label="New conversation"
+      >
+        <PlusIcon class="h-3.5 w-3.5" />
+      </button>
+    {/if}
   </div>
 
   <div class="flex-1 overflow-y-auto">
-    {#if conversations.length === 0}
+    {#if !conversations || conversations.length === 0}
       <div class="px-4 py-8 text-center">
         <BotIcon class="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
         <p class="text-sm text-muted-foreground">No conversations yet</p>
-        <button class="mt-2 text-xs text-primary hover:underline" onclick={() => onNew?.()}>
-          Start your first conversation
-        </button>
       </div>
     {:else}
       <div class="space-y-0.5 p-2">
@@ -159,9 +158,13 @@
                   {/if}
                   <div class="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span>
-                      {formatDistanceToNow(new Date(convo.LastMessageAt || convo.UpdatedAt), {
-                        addSuffix: true,
-                      })}
+                      {#if (convo.LastMessageAt || convo.UpdatedAt) && !isNaN(new Date(convo.LastMessageAt || convo.UpdatedAt).getTime())}
+                        {formatDistanceToNow(new Date(convo.LastMessageAt || convo.UpdatedAt), {
+                          addSuffix: true,
+                        })}
+                      {:else}
+                        just now
+                      {/if}
                     </span>
                     {#if convo.MessageCount > 0}
                       <span class="text-muted-foreground/40">&middot;</span>

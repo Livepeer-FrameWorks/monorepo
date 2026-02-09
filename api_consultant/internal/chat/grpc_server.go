@@ -94,7 +94,7 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 		return status.Errorf(codes.Internal, "failed to load conversation history: %v", err)
 	}
 
-	if addErr := s.conversations.AddMessage(ctx, conversationID, "user", message, "", nil, nil, TokenCounts{
+	if addErr := s.conversations.AddMessage(ctx, conversationID, "user", message, "", nil, nil, nil, TokenCounts{
 		Input:  estimateTokens(message),
 		Output: 0,
 	}); addErr != nil {
@@ -143,7 +143,11 @@ func (s *GRPCServer) Chat(req *pb.SkipperChatRequest, stream grpc.ServerStreamin
 		Details []ToolDetail     `json:"details,omitempty"`
 	}{result.ToolCalls, result.Details}
 	toolsJSON, _ := json.Marshal(toolData)
-	if storeErr := s.conversations.AddMessage(ctx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, result.TokenCounts); storeErr != nil {
+	var blocksJSON json.RawMessage
+	if len(result.Blocks) > 1 {
+		blocksJSON, _ = json.Marshal(result.Blocks)
+	}
+	if storeErr := s.conversations.AddMessage(ctx, conversationID, "assistant", result.Content, string(result.Confidence), sourcesJSON, toolsJSON, blocksJSON, result.TokenCounts); storeErr != nil {
 		s.logger.WithError(storeErr).Warn("Failed to store assistant response (gRPC)")
 	}
 
@@ -219,7 +223,7 @@ func (s *GRPCServer) GetConversation(ctx context.Context, req *pb.GetSkipperConv
 
 	msgs := make([]*pb.SkipperChatMessage, 0, len(convo.Messages))
 	for _, m := range convo.Messages {
-		msgs = append(msgs, &pb.SkipperChatMessage{
+		msg := &pb.SkipperChatMessage{
 			Id:               m.ID,
 			Role:             m.Role,
 			Content:          m.Content,
@@ -229,7 +233,11 @@ func (s *GRPCServer) GetConversation(ctx context.Context, req *pb.GetSkipperConv
 			TokenCountInput:  int32(m.TokenCountInput),
 			TokenCountOutput: int32(m.TokenCountOutput),
 			CreatedAt:        timestamppb.New(m.CreatedAt),
-		})
+		}
+		if len(m.ConfidenceBlocks) > 0 && string(m.ConfidenceBlocks) != "null" {
+			msg.ConfidenceBlocksJson = string(m.ConfidenceBlocks)
+		}
+		msgs = append(msgs, msg)
 	}
 
 	return &pb.SkipperConversationDetail{
@@ -405,12 +413,29 @@ func buildGRPCMeta(result OrchestratorResult) *pb.SkipperChatMeta {
 		})
 	}
 
-	return &pb.SkipperChatMeta{
+	meta := &pb.SkipperChatMeta{
 		Confidence:    string(result.Confidence),
 		Citations:     citations,
 		ExternalLinks: external,
 		Details:       details,
 	}
+	if len(result.Blocks) > 1 {
+		for _, b := range result.Blocks {
+			pbBlock := &pb.SkipperConfidenceBlock{
+				Content:    b.Content,
+				Confidence: string(b.Confidence),
+			}
+			for _, s := range b.Sources {
+				if s.URL != "" {
+					pbBlock.Sources = append(pbBlock.Sources, &pb.SkipperCitation{
+						Label: s.Title, Url: s.URL,
+					})
+				}
+			}
+			meta.Blocks = append(meta.Blocks, pbBlock)
+		}
+	}
+	return meta
 }
 
 func toStruct(v any) (*structpb.Struct, error) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/chat"
+	"frameworks/api_consultant/internal/skipper"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/llm"
@@ -48,7 +49,6 @@ Use tools when it helps confirm findings.`
 type AgentConfig struct {
 	Interval          time.Duration
 	Orchestrator      Orchestrator
-	Commodore         CommodoreClient
 	Periscope         PeriscopeClient
 	Purser            BillingClient
 	Quartermaster     QuartermasterClient
@@ -61,7 +61,6 @@ type AgentConfig struct {
 type Agent struct {
 	interval          time.Duration
 	orchestrator      Orchestrator
-	commodore         CommodoreClient
 	periscope         PeriscopeClient
 	purser            BillingClient
 	quartermaster     QuartermasterClient
@@ -90,13 +89,10 @@ type Orchestrator interface {
 	Run(ctx context.Context, messages []llm.Message, streamer chat.TokenStreamer) (chat.OrchestratorResult, error)
 }
 
-type CommodoreClient interface {
-	ListStreams(ctx context.Context, pagination *pb.CursorPaginationRequest) (*pb.ListStreamsResponse, error)
-}
-
 type PeriscopeClient interface {
 	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error)
 	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetClientQoeSummaryResponse, error)
+	GetPlatformOverview(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*pb.GetPlatformOverviewResponse, error)
 }
 
 type BillingClient interface {
@@ -121,7 +117,6 @@ func NewAgent(cfg AgentConfig) *Agent {
 	agent := &Agent{
 		interval:          interval,
 		orchestrator:      cfg.Orchestrator,
-		commodore:         cfg.Commodore,
 		periscope:         cfg.Periscope,
 		purser:            cfg.Purser,
 		quartermaster:     cfg.Quartermaster,
@@ -225,42 +220,23 @@ func (a *Agent) isSkipperEnabled(ctx context.Context, tenantID string) bool {
 }
 
 func (a *Agent) countActiveStreams(ctx context.Context, tenantID string) (int, error) {
-	if a.commodore == nil {
-		return 0, errors.New("commodore client unavailable")
+	if a.periscope == nil {
+		return 0, errors.New("periscope client unavailable")
 	}
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
-	var cursor *string
-	count := 0
-	for {
-		resp, err := a.commodore.ListStreams(ctx, &pb.CursorPaginationRequest{
-			First: 100,
-			After: cursor,
-		})
-		if err != nil {
-			return count, err
-		}
-		for _, stream := range resp.GetStreams() {
-			if stream.GetIsLive() {
-				count++
-			}
-		}
-		pagination := resp.GetPagination()
-		if pagination == nil || !pagination.GetHasNextPage() {
-			break
-		}
-		endCursor := pagination.GetEndCursor()
-		if endCursor == "" {
-			break
-		}
-		cursor = &endCursor
+	resp, err := a.periscope.GetPlatformOverview(ctx, tenantID, nil)
+	if err != nil {
+		return 0, err
 	}
-	return count, nil
+	return int(resp.GetActiveStreams()), nil
 }
 
 func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
 	if a.orchestrator == nil || a.periscope == nil {
 		return errors.New("heartbeat dependencies unavailable")
 	}
+	ctx = skipper.WithTenantID(ctx, tenantID)
+	ctx = skipper.WithMode(ctx, "heartbeat")
 	snapshot, err := a.loadSnapshot(ctx, tenantID)
 	if err != nil {
 		return err

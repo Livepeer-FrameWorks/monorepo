@@ -27,13 +27,20 @@ type SkipperToolEndEvent struct {
 func (SkipperToolEndEvent) IsSkipperChatEvent() {}
 
 type SkipperMeta struct {
-	Confidence    string             `json:"confidence"`
-	Citations     []*SkipperCitation `json:"citations"`
-	ExternalLinks []*SkipperCitation `json:"externalLinks"`
-	Details       []*SkipperToolDet  `json:"details"`
+	Confidence    string                    `json:"confidence"`
+	Citations     []*SkipperCitation        `json:"citations"`
+	ExternalLinks []*SkipperCitation        `json:"externalLinks"`
+	Details       []*SkipperToolDet         `json:"details"`
+	Blocks        []*SkipperConfidenceBlock `json:"blocks,omitempty"`
 }
 
 func (SkipperMeta) IsSkipperChatEvent() {}
+
+type SkipperConfidenceBlock struct {
+	Content    string             `json:"content"`
+	Confidence string             `json:"confidence"`
+	Sources    []*SkipperCitation `json:"sources"`
+}
 
 type SkipperCitation struct {
 	Label string `json:"label"`
@@ -69,15 +76,16 @@ type SkipperConversationSummary struct {
 }
 
 type SkipperMessage struct {
-	ID           string    `json:"id"`
-	Role         string    `json:"role"`
-	Content      string    `json:"content"`
-	Confidence   *string   `json:"confidence"`
-	Sources      any       `json:"sources"`
-	ToolsUsed    any       `json:"toolsUsed"`
-	TokensInput  int       `json:"tokensInput"`
-	TokensOutput int       `json:"tokensOutput"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ID               string    `json:"id"`
+	Role             string    `json:"role"`
+	Content          string    `json:"content"`
+	Confidence       *string   `json:"confidence"`
+	Sources          any       `json:"sources"`
+	ToolsUsed        any       `json:"toolsUsed"`
+	ConfidenceBlocks any       `json:"confidenceBlocks,omitempty"`
+	TokensInput      int       `json:"tokensInput"`
+	TokensOutput     int       `json:"tokensOutput"`
+	CreatedAt        time.Time `json:"createdAt"`
 }
 
 // SkipperChatInput is the input for the skipperChat subscription.

@@ -107,10 +107,13 @@ type anthropicMessage struct {
 }
 
 type anthropicContent struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	Content   string `json:"content,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
 }
 
 type anthropicTool struct {
@@ -188,8 +191,11 @@ func (s *anthropicStream) decodeEvent(data []byte) (Chunk, error) {
 			callID := event.ContentBlock.ID
 			s.indexToID[event.Index] = callID
 			s.toolNames[callID] = event.ContentBlock.Name
-			if len(event.ContentBlock.Input) > 0 {
+			// Streaming sends input:{} as placeholder; only keep non-empty input
+			if len(event.ContentBlock.Input) > 2 {
 				s.toolInputs[callID] = string(event.ContentBlock.Input)
+			} else {
+				s.toolInputs[callID] = ""
 			}
 			return Chunk{
 				ToolCalls: []ToolCall{
@@ -233,11 +239,33 @@ func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 			systemParts = append(systemParts, message.Content)
 			continue
 		}
+		if message.Role == "assistant" && len(message.ToolCalls) > 0 {
+			contents := make([]anthropicContent, 0, 1+len(message.ToolCalls))
+			if message.Content != "" {
+				contents = append(contents, anthropicContent{Type: "text", Text: message.Content})
+			}
+			for _, tc := range message.ToolCalls {
+				input := json.RawMessage(tc.Arguments)
+				if len(input) == 0 {
+					input = json.RawMessage("{}")
+				}
+				contents = append(contents, anthropicContent{
+					Type:  "tool_use",
+					ID:    tc.ID,
+					Name:  tc.Name,
+					Input: input,
+				})
+			}
+			out = append(out, anthropicMessage{Role: "assistant", Content: contents})
+			continue
+		}
 		content := anthropicContent{
 			Type: "text",
 			Text: message.Content,
 		}
-		if message.Role == "tool" {
+		role := message.Role
+		if role == "tool" {
+			role = "user"
 			content = anthropicContent{
 				Type:      "tool_result",
 				ToolUseID: message.ToolCallID,
@@ -245,7 +273,7 @@ func anthropicMessagesFrom(messages []Message) ([]anthropicMessage, string) {
 			}
 		}
 		out = append(out, anthropicMessage{
-			Role:    message.Role,
+			Role:    role,
 			Content: []anthropicContent{content},
 		})
 	}

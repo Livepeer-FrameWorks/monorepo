@@ -27,6 +27,7 @@ func TestConversationAddMessageScopesTenant(t *testing.T) {
 		"verified",
 		sqlmock.AnyArg(),
 		sqlmock.AnyArg(),
+		sqlmock.AnyArg(),
 		2,
 		3,
 		"tenant-a",
@@ -36,7 +37,7 @@ func TestConversationAddMessageScopesTenant(t *testing.T) {
 		"tenant-a",
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	err = store.AddMessage(ctx, "conversation-id", "assistant", "hello", "verified", nil, nil, TokenCounts{Input: 2, Output: 3})
+	err = store.AddMessage(ctx, "conversation-id", "assistant", "hello", "verified", nil, nil, nil, TokenCounts{Input: 2, Output: 3})
 	if err != nil {
 		t.Fatalf("add message: %v", err)
 	}
@@ -62,10 +63,10 @@ func TestConversationGetConversationScopesUser(t *testing.T) {
 			"id", "tenant_id", "user_id", "title", "summary", "created_at", "updated_at",
 		}).AddRow("conversation-id", "tenant-a", "user-a", "Title", "Summary", time.Now(), time.Now()))
 
-	mock.ExpectQuery("SELECT m\\.id, m\\.conversation_id, m\\.role, m\\.content, m\\.confidence, m\\.sources, m\\.tools_used, m\\.token_count_input, m\\.token_count_output, m\\.created_at").
+	mock.ExpectQuery("SELECT m\\.id, m\\.conversation_id, m\\.role, m\\.content, m\\.confidence, COALESCE\\(m\\.sources, 'null'\\), COALESCE\\(m\\.tools_used, 'null'\\), COALESCE\\(m\\.confidence_blocks, 'null'\\), m\\.token_count_input, m\\.token_count_output, m\\.created_at").
 		WithArgs("conversation-id", "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "conversation_id", "role", "content", "confidence", "sources", "tools_used", "token_count_input", "token_count_output", "created_at",
+			"id", "conversation_id", "role", "content", "confidence", "sources", "tools_used", "confidence_blocks", "token_count_input", "token_count_output", "created_at",
 		}))
 
 	convo, err := store.GetConversation(ctx, "conversation-id")

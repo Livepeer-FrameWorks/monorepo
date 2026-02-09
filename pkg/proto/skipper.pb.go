@@ -362,11 +362,12 @@ func (x *SkipperToolEnd) GetError() string {
 }
 
 type SkipperChatMeta struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Confidence    string                 `protobuf:"bytes,1,opt,name=confidence,proto3" json:"confidence,omitempty"`
-	Citations     []*SkipperCitation     `protobuf:"bytes,2,rep,name=citations,proto3" json:"citations,omitempty"`
-	ExternalLinks []*SkipperCitation     `protobuf:"bytes,3,rep,name=external_links,json=externalLinks,proto3" json:"external_links,omitempty"`
-	Details       []*SkipperToolDetail   `protobuf:"bytes,4,rep,name=details,proto3" json:"details,omitempty"`
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Confidence    string                    `protobuf:"bytes,1,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	Citations     []*SkipperCitation        `protobuf:"bytes,2,rep,name=citations,proto3" json:"citations,omitempty"`
+	ExternalLinks []*SkipperCitation        `protobuf:"bytes,3,rep,name=external_links,json=externalLinks,proto3" json:"external_links,omitempty"`
+	Details       []*SkipperToolDetail      `protobuf:"bytes,4,rep,name=details,proto3" json:"details,omitempty"`
+	Blocks        []*SkipperConfidenceBlock `protobuf:"bytes,5,rep,name=blocks,proto3" json:"blocks,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -429,6 +430,73 @@ func (x *SkipperChatMeta) GetDetails() []*SkipperToolDetail {
 	return nil
 }
 
+func (x *SkipperChatMeta) GetBlocks() []*SkipperConfidenceBlock {
+	if x != nil {
+		return x.Blocks
+	}
+	return nil
+}
+
+type SkipperConfidenceBlock struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
+	Confidence    string                 `protobuf:"bytes,2,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	Sources       []*SkipperCitation     `protobuf:"bytes,3,rep,name=sources,proto3" json:"sources,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SkipperConfidenceBlock) Reset() {
+	*x = SkipperConfidenceBlock{}
+	mi := &file_skipper_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SkipperConfidenceBlock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SkipperConfidenceBlock) ProtoMessage() {}
+
+func (x *SkipperConfidenceBlock) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SkipperConfidenceBlock.ProtoReflect.Descriptor instead.
+func (*SkipperConfidenceBlock) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *SkipperConfidenceBlock) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *SkipperConfidenceBlock) GetConfidence() string {
+	if x != nil {
+		return x.Confidence
+	}
+	return ""
+}
+
+func (x *SkipperConfidenceBlock) GetSources() []*SkipperCitation {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
 type SkipperCitation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Label         string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
@@ -439,7 +507,7 @@ type SkipperCitation struct {
 
 func (x *SkipperCitation) Reset() {
 	*x = SkipperCitation{}
-	mi := &file_skipper_proto_msgTypes[6]
+	mi := &file_skipper_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -451,7 +519,7 @@ func (x *SkipperCitation) String() string {
 func (*SkipperCitation) ProtoMessage() {}
 
 func (x *SkipperCitation) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[6]
+	mi := &file_skipper_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -464,7 +532,7 @@ func (x *SkipperCitation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkipperCitation.ProtoReflect.Descriptor instead.
 func (*SkipperCitation) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{6}
+	return file_skipper_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SkipperCitation) GetLabel() string {
@@ -491,7 +559,7 @@ type SkipperToolDetail struct {
 
 func (x *SkipperToolDetail) Reset() {
 	*x = SkipperToolDetail{}
-	mi := &file_skipper_proto_msgTypes[7]
+	mi := &file_skipper_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -503,7 +571,7 @@ func (x *SkipperToolDetail) String() string {
 func (*SkipperToolDetail) ProtoMessage() {}
 
 func (x *SkipperToolDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[7]
+	mi := &file_skipper_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -516,7 +584,7 @@ func (x *SkipperToolDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkipperToolDetail.ProtoReflect.Descriptor instead.
 func (*SkipperToolDetail) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{7}
+	return file_skipper_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SkipperToolDetail) GetTitle() string {
@@ -544,7 +612,7 @@ type SkipperChatDone struct {
 
 func (x *SkipperChatDone) Reset() {
 	*x = SkipperChatDone{}
-	mi := &file_skipper_proto_msgTypes[8]
+	mi := &file_skipper_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -556,7 +624,7 @@ func (x *SkipperChatDone) String() string {
 func (*SkipperChatDone) ProtoMessage() {}
 
 func (x *SkipperChatDone) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[8]
+	mi := &file_skipper_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -569,7 +637,7 @@ func (x *SkipperChatDone) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkipperChatDone.ProtoReflect.Descriptor instead.
 func (*SkipperChatDone) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{8}
+	return file_skipper_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *SkipperChatDone) GetConversationId() string {
@@ -603,7 +671,7 @@ type ListSkipperConversationsRequest struct {
 
 func (x *ListSkipperConversationsRequest) Reset() {
 	*x = ListSkipperConversationsRequest{}
-	mi := &file_skipper_proto_msgTypes[9]
+	mi := &file_skipper_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -615,7 +683,7 @@ func (x *ListSkipperConversationsRequest) String() string {
 func (*ListSkipperConversationsRequest) ProtoMessage() {}
 
 func (x *ListSkipperConversationsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[9]
+	mi := &file_skipper_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -628,7 +696,7 @@ func (x *ListSkipperConversationsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkipperConversationsRequest.ProtoReflect.Descriptor instead.
 func (*ListSkipperConversationsRequest) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{9}
+	return file_skipper_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListSkipperConversationsRequest) GetLimit() int32 {
@@ -654,7 +722,7 @@ type ListSkipperConversationsResponse struct {
 
 func (x *ListSkipperConversationsResponse) Reset() {
 	*x = ListSkipperConversationsResponse{}
-	mi := &file_skipper_proto_msgTypes[10]
+	mi := &file_skipper_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -666,7 +734,7 @@ func (x *ListSkipperConversationsResponse) String() string {
 func (*ListSkipperConversationsResponse) ProtoMessage() {}
 
 func (x *ListSkipperConversationsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[10]
+	mi := &file_skipper_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -679,7 +747,7 @@ func (x *ListSkipperConversationsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkipperConversationsResponse.ProtoReflect.Descriptor instead.
 func (*ListSkipperConversationsResponse) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{10}
+	return file_skipper_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListSkipperConversationsResponse) GetConversations() []*SkipperConversationSummary {
@@ -701,7 +769,7 @@ type SkipperConversationSummary struct {
 
 func (x *SkipperConversationSummary) Reset() {
 	*x = SkipperConversationSummary{}
-	mi := &file_skipper_proto_msgTypes[11]
+	mi := &file_skipper_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -713,7 +781,7 @@ func (x *SkipperConversationSummary) String() string {
 func (*SkipperConversationSummary) ProtoMessage() {}
 
 func (x *SkipperConversationSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[11]
+	mi := &file_skipper_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +794,7 @@ func (x *SkipperConversationSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkipperConversationSummary.ProtoReflect.Descriptor instead.
 func (*SkipperConversationSummary) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{11}
+	return file_skipper_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SkipperConversationSummary) GetId() string {
@@ -766,7 +834,7 @@ type GetSkipperConversationRequest struct {
 
 func (x *GetSkipperConversationRequest) Reset() {
 	*x = GetSkipperConversationRequest{}
-	mi := &file_skipper_proto_msgTypes[12]
+	mi := &file_skipper_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -778,7 +846,7 @@ func (x *GetSkipperConversationRequest) String() string {
 func (*GetSkipperConversationRequest) ProtoMessage() {}
 
 func (x *GetSkipperConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[12]
+	mi := &file_skipper_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -791,7 +859,7 @@ func (x *GetSkipperConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSkipperConversationRequest.ProtoReflect.Descriptor instead.
 func (*GetSkipperConversationRequest) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{12}
+	return file_skipper_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetSkipperConversationRequest) GetId() string {
@@ -814,7 +882,7 @@ type SkipperConversationDetail struct {
 
 func (x *SkipperConversationDetail) Reset() {
 	*x = SkipperConversationDetail{}
-	mi := &file_skipper_proto_msgTypes[13]
+	mi := &file_skipper_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -826,7 +894,7 @@ func (x *SkipperConversationDetail) String() string {
 func (*SkipperConversationDetail) ProtoMessage() {}
 
 func (x *SkipperConversationDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[13]
+	mi := &file_skipper_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -839,7 +907,7 @@ func (x *SkipperConversationDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkipperConversationDetail.ProtoReflect.Descriptor instead.
 func (*SkipperConversationDetail) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{13}
+	return file_skipper_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SkipperConversationDetail) GetId() string {
@@ -878,23 +946,24 @@ func (x *SkipperConversationDetail) GetUpdatedAt() *timestamppb.Timestamp {
 }
 
 type SkipperChatMessage struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Role             string                 `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
-	Content          string                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
-	Confidence       string                 `protobuf:"bytes,4,opt,name=confidence,proto3" json:"confidence,omitempty"`
-	SourcesJson      string                 `protobuf:"bytes,5,opt,name=sources_json,json=sourcesJson,proto3" json:"sources_json,omitempty"`
-	ToolsUsedJson    string                 `protobuf:"bytes,6,opt,name=tools_used_json,json=toolsUsedJson,proto3" json:"tools_used_json,omitempty"`
-	TokenCountInput  int32                  `protobuf:"varint,7,opt,name=token_count_input,json=tokenCountInput,proto3" json:"token_count_input,omitempty"`
-	TokenCountOutput int32                  `protobuf:"varint,8,opt,name=token_count_output,json=tokenCountOutput,proto3" json:"token_count_output,omitempty"`
-	CreatedAt        *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Id                   string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Role                 string                 `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`
+	Content              string                 `protobuf:"bytes,3,opt,name=content,proto3" json:"content,omitempty"`
+	Confidence           string                 `protobuf:"bytes,4,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	SourcesJson          string                 `protobuf:"bytes,5,opt,name=sources_json,json=sourcesJson,proto3" json:"sources_json,omitempty"`
+	ToolsUsedJson        string                 `protobuf:"bytes,6,opt,name=tools_used_json,json=toolsUsedJson,proto3" json:"tools_used_json,omitempty"`
+	TokenCountInput      int32                  `protobuf:"varint,7,opt,name=token_count_input,json=tokenCountInput,proto3" json:"token_count_input,omitempty"`
+	TokenCountOutput     int32                  `protobuf:"varint,8,opt,name=token_count_output,json=tokenCountOutput,proto3" json:"token_count_output,omitempty"`
+	CreatedAt            *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ConfidenceBlocksJson string                 `protobuf:"bytes,10,opt,name=confidence_blocks_json,json=confidenceBlocksJson,proto3" json:"confidence_blocks_json,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SkipperChatMessage) Reset() {
 	*x = SkipperChatMessage{}
-	mi := &file_skipper_proto_msgTypes[14]
+	mi := &file_skipper_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -906,7 +975,7 @@ func (x *SkipperChatMessage) String() string {
 func (*SkipperChatMessage) ProtoMessage() {}
 
 func (x *SkipperChatMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[14]
+	mi := &file_skipper_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -919,7 +988,7 @@ func (x *SkipperChatMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SkipperChatMessage.ProtoReflect.Descriptor instead.
 func (*SkipperChatMessage) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{14}
+	return file_skipper_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *SkipperChatMessage) GetId() string {
@@ -985,6 +1054,13 @@ func (x *SkipperChatMessage) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *SkipperChatMessage) GetConfidenceBlocksJson() string {
+	if x != nil {
+		return x.ConfidenceBlocksJson
+	}
+	return ""
+}
+
 type DeleteSkipperConversationRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -994,7 +1070,7 @@ type DeleteSkipperConversationRequest struct {
 
 func (x *DeleteSkipperConversationRequest) Reset() {
 	*x = DeleteSkipperConversationRequest{}
-	mi := &file_skipper_proto_msgTypes[15]
+	mi := &file_skipper_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1006,7 +1082,7 @@ func (x *DeleteSkipperConversationRequest) String() string {
 func (*DeleteSkipperConversationRequest) ProtoMessage() {}
 
 func (x *DeleteSkipperConversationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[15]
+	mi := &file_skipper_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1019,7 +1095,7 @@ func (x *DeleteSkipperConversationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSkipperConversationRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSkipperConversationRequest) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{15}
+	return file_skipper_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *DeleteSkipperConversationRequest) GetId() string {
@@ -1037,7 +1113,7 @@ type DeleteSkipperConversationResponse struct {
 
 func (x *DeleteSkipperConversationResponse) Reset() {
 	*x = DeleteSkipperConversationResponse{}
-	mi := &file_skipper_proto_msgTypes[16]
+	mi := &file_skipper_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1049,7 +1125,7 @@ func (x *DeleteSkipperConversationResponse) String() string {
 func (*DeleteSkipperConversationResponse) ProtoMessage() {}
 
 func (x *DeleteSkipperConversationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[16]
+	mi := &file_skipper_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1062,7 +1138,7 @@ func (x *DeleteSkipperConversationResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use DeleteSkipperConversationResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSkipperConversationResponse) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{16}
+	return file_skipper_proto_rawDescGZIP(), []int{17}
 }
 
 type UpdateSkipperConversationTitleRequest struct {
@@ -1075,7 +1151,7 @@ type UpdateSkipperConversationTitleRequest struct {
 
 func (x *UpdateSkipperConversationTitleRequest) Reset() {
 	*x = UpdateSkipperConversationTitleRequest{}
-	mi := &file_skipper_proto_msgTypes[17]
+	mi := &file_skipper_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1087,7 +1163,7 @@ func (x *UpdateSkipperConversationTitleRequest) String() string {
 func (*UpdateSkipperConversationTitleRequest) ProtoMessage() {}
 
 func (x *UpdateSkipperConversationTitleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_skipper_proto_msgTypes[17]
+	mi := &file_skipper_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1100,7 +1176,7 @@ func (x *UpdateSkipperConversationTitleRequest) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use UpdateSkipperConversationTitleRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSkipperConversationTitleRequest) Descriptor() ([]byte, []int) {
-	return file_skipper_proto_rawDescGZIP(), []int{17}
+	return file_skipper_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *UpdateSkipperConversationTitleRequest) GetId() string {
@@ -1141,14 +1217,21 @@ const file_skipper_proto_rawDesc = "" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\"C\n" +
 	"\x0eSkipperToolEnd\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\xe0\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\x99\x02\n" +
 	"\x0fSkipperChatMeta\x12\x1e\n" +
 	"\n" +
 	"confidence\x18\x01 \x01(\tR\n" +
 	"confidence\x126\n" +
 	"\tcitations\x18\x02 \x03(\v2\x18.skipper.SkipperCitationR\tcitations\x12?\n" +
 	"\x0eexternal_links\x18\x03 \x03(\v2\x18.skipper.SkipperCitationR\rexternalLinks\x124\n" +
-	"\adetails\x18\x04 \x03(\v2\x1a.skipper.SkipperToolDetailR\adetails\"9\n" +
+	"\adetails\x18\x04 \x03(\v2\x1a.skipper.SkipperToolDetailR\adetails\x127\n" +
+	"\x06blocks\x18\x05 \x03(\v2\x1f.skipper.SkipperConfidenceBlockR\x06blocks\"\x86\x01\n" +
+	"\x16SkipperConfidenceBlock\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12\x1e\n" +
+	"\n" +
+	"confidence\x18\x02 \x01(\tR\n" +
+	"confidence\x122\n" +
+	"\asources\x18\x03 \x03(\v2\x18.skipper.SkipperCitationR\asources\"9\n" +
 	"\x0fSkipperCitation\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\"\\\n" +
@@ -1180,7 +1263,7 @@ const file_skipper_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xd2\x02\n" +
+	"updated_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x88\x03\n" +
 	"\x12SkipperChatMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\x12\x18\n" +
@@ -1193,7 +1276,9 @@ const file_skipper_proto_rawDesc = "" +
 	"\x11token_count_input\x18\a \x01(\x05R\x0ftokenCountInput\x12,\n" +
 	"\x12token_count_output\x18\b \x01(\x05R\x10tokenCountOutput\x129\n" +
 	"\n" +
-	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"2\n" +
+	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x124\n" +
+	"\x16confidence_blocks_json\x18\n" +
+	" \x01(\tR\x14confidenceBlocksJson\"2\n" +
 	" DeleteSkipperConversationRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"#\n" +
 	"!DeleteSkipperConversationResponse\"M\n" +
@@ -1219,7 +1304,7 @@ func file_skipper_proto_rawDescGZIP() []byte {
 	return file_skipper_proto_rawDescData
 }
 
-var file_skipper_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_skipper_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_skipper_proto_goTypes = []any{
 	(*SkipperChatRequest)(nil),                    // 0: skipper.SkipperChatRequest
 	(*SkipperChatEvent)(nil),                      // 1: skipper.SkipperChatEvent
@@ -1227,53 +1312,56 @@ var file_skipper_proto_goTypes = []any{
 	(*SkipperToolStart)(nil),                      // 3: skipper.SkipperToolStart
 	(*SkipperToolEnd)(nil),                        // 4: skipper.SkipperToolEnd
 	(*SkipperChatMeta)(nil),                       // 5: skipper.SkipperChatMeta
-	(*SkipperCitation)(nil),                       // 6: skipper.SkipperCitation
-	(*SkipperToolDetail)(nil),                     // 7: skipper.SkipperToolDetail
-	(*SkipperChatDone)(nil),                       // 8: skipper.SkipperChatDone
-	(*ListSkipperConversationsRequest)(nil),       // 9: skipper.ListSkipperConversationsRequest
-	(*ListSkipperConversationsResponse)(nil),      // 10: skipper.ListSkipperConversationsResponse
-	(*SkipperConversationSummary)(nil),            // 11: skipper.SkipperConversationSummary
-	(*GetSkipperConversationRequest)(nil),         // 12: skipper.GetSkipperConversationRequest
-	(*SkipperConversationDetail)(nil),             // 13: skipper.SkipperConversationDetail
-	(*SkipperChatMessage)(nil),                    // 14: skipper.SkipperChatMessage
-	(*DeleteSkipperConversationRequest)(nil),      // 15: skipper.DeleteSkipperConversationRequest
-	(*DeleteSkipperConversationResponse)(nil),     // 16: skipper.DeleteSkipperConversationResponse
-	(*UpdateSkipperConversationTitleRequest)(nil), // 17: skipper.UpdateSkipperConversationTitleRequest
-	(*structpb.Struct)(nil),                       // 18: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),                 // 19: google.protobuf.Timestamp
+	(*SkipperConfidenceBlock)(nil),                // 6: skipper.SkipperConfidenceBlock
+	(*SkipperCitation)(nil),                       // 7: skipper.SkipperCitation
+	(*SkipperToolDetail)(nil),                     // 8: skipper.SkipperToolDetail
+	(*SkipperChatDone)(nil),                       // 9: skipper.SkipperChatDone
+	(*ListSkipperConversationsRequest)(nil),       // 10: skipper.ListSkipperConversationsRequest
+	(*ListSkipperConversationsResponse)(nil),      // 11: skipper.ListSkipperConversationsResponse
+	(*SkipperConversationSummary)(nil),            // 12: skipper.SkipperConversationSummary
+	(*GetSkipperConversationRequest)(nil),         // 13: skipper.GetSkipperConversationRequest
+	(*SkipperConversationDetail)(nil),             // 14: skipper.SkipperConversationDetail
+	(*SkipperChatMessage)(nil),                    // 15: skipper.SkipperChatMessage
+	(*DeleteSkipperConversationRequest)(nil),      // 16: skipper.DeleteSkipperConversationRequest
+	(*DeleteSkipperConversationResponse)(nil),     // 17: skipper.DeleteSkipperConversationResponse
+	(*UpdateSkipperConversationTitleRequest)(nil), // 18: skipper.UpdateSkipperConversationTitleRequest
+	(*structpb.Struct)(nil),                       // 19: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),                 // 20: google.protobuf.Timestamp
 }
 var file_skipper_proto_depIdxs = []int32{
 	2,  // 0: skipper.SkipperChatEvent.token:type_name -> skipper.SkipperTokenChunk
 	3,  // 1: skipper.SkipperChatEvent.tool_start:type_name -> skipper.SkipperToolStart
 	4,  // 2: skipper.SkipperChatEvent.tool_end:type_name -> skipper.SkipperToolEnd
 	5,  // 3: skipper.SkipperChatEvent.meta:type_name -> skipper.SkipperChatMeta
-	8,  // 4: skipper.SkipperChatEvent.done:type_name -> skipper.SkipperChatDone
-	6,  // 5: skipper.SkipperChatMeta.citations:type_name -> skipper.SkipperCitation
-	6,  // 6: skipper.SkipperChatMeta.external_links:type_name -> skipper.SkipperCitation
-	7,  // 7: skipper.SkipperChatMeta.details:type_name -> skipper.SkipperToolDetail
-	18, // 8: skipper.SkipperToolDetail.payload:type_name -> google.protobuf.Struct
-	11, // 9: skipper.ListSkipperConversationsResponse.conversations:type_name -> skipper.SkipperConversationSummary
-	19, // 10: skipper.SkipperConversationSummary.created_at:type_name -> google.protobuf.Timestamp
-	19, // 11: skipper.SkipperConversationSummary.updated_at:type_name -> google.protobuf.Timestamp
-	14, // 12: skipper.SkipperConversationDetail.messages:type_name -> skipper.SkipperChatMessage
-	19, // 13: skipper.SkipperConversationDetail.created_at:type_name -> google.protobuf.Timestamp
-	19, // 14: skipper.SkipperConversationDetail.updated_at:type_name -> google.protobuf.Timestamp
-	19, // 15: skipper.SkipperChatMessage.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 16: skipper.SkipperChatService.Chat:input_type -> skipper.SkipperChatRequest
-	9,  // 17: skipper.SkipperChatService.ListConversations:input_type -> skipper.ListSkipperConversationsRequest
-	12, // 18: skipper.SkipperChatService.GetConversation:input_type -> skipper.GetSkipperConversationRequest
-	15, // 19: skipper.SkipperChatService.DeleteConversation:input_type -> skipper.DeleteSkipperConversationRequest
-	17, // 20: skipper.SkipperChatService.UpdateConversationTitle:input_type -> skipper.UpdateSkipperConversationTitleRequest
-	1,  // 21: skipper.SkipperChatService.Chat:output_type -> skipper.SkipperChatEvent
-	10, // 22: skipper.SkipperChatService.ListConversations:output_type -> skipper.ListSkipperConversationsResponse
-	13, // 23: skipper.SkipperChatService.GetConversation:output_type -> skipper.SkipperConversationDetail
-	16, // 24: skipper.SkipperChatService.DeleteConversation:output_type -> skipper.DeleteSkipperConversationResponse
-	11, // 25: skipper.SkipperChatService.UpdateConversationTitle:output_type -> skipper.SkipperConversationSummary
-	21, // [21:26] is the sub-list for method output_type
-	16, // [16:21] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	9,  // 4: skipper.SkipperChatEvent.done:type_name -> skipper.SkipperChatDone
+	7,  // 5: skipper.SkipperChatMeta.citations:type_name -> skipper.SkipperCitation
+	7,  // 6: skipper.SkipperChatMeta.external_links:type_name -> skipper.SkipperCitation
+	8,  // 7: skipper.SkipperChatMeta.details:type_name -> skipper.SkipperToolDetail
+	6,  // 8: skipper.SkipperChatMeta.blocks:type_name -> skipper.SkipperConfidenceBlock
+	7,  // 9: skipper.SkipperConfidenceBlock.sources:type_name -> skipper.SkipperCitation
+	19, // 10: skipper.SkipperToolDetail.payload:type_name -> google.protobuf.Struct
+	12, // 11: skipper.ListSkipperConversationsResponse.conversations:type_name -> skipper.SkipperConversationSummary
+	20, // 12: skipper.SkipperConversationSummary.created_at:type_name -> google.protobuf.Timestamp
+	20, // 13: skipper.SkipperConversationSummary.updated_at:type_name -> google.protobuf.Timestamp
+	15, // 14: skipper.SkipperConversationDetail.messages:type_name -> skipper.SkipperChatMessage
+	20, // 15: skipper.SkipperConversationDetail.created_at:type_name -> google.protobuf.Timestamp
+	20, // 16: skipper.SkipperConversationDetail.updated_at:type_name -> google.protobuf.Timestamp
+	20, // 17: skipper.SkipperChatMessage.created_at:type_name -> google.protobuf.Timestamp
+	0,  // 18: skipper.SkipperChatService.Chat:input_type -> skipper.SkipperChatRequest
+	10, // 19: skipper.SkipperChatService.ListConversations:input_type -> skipper.ListSkipperConversationsRequest
+	13, // 20: skipper.SkipperChatService.GetConversation:input_type -> skipper.GetSkipperConversationRequest
+	16, // 21: skipper.SkipperChatService.DeleteConversation:input_type -> skipper.DeleteSkipperConversationRequest
+	18, // 22: skipper.SkipperChatService.UpdateConversationTitle:input_type -> skipper.UpdateSkipperConversationTitleRequest
+	1,  // 23: skipper.SkipperChatService.Chat:output_type -> skipper.SkipperChatEvent
+	11, // 24: skipper.SkipperChatService.ListConversations:output_type -> skipper.ListSkipperConversationsResponse
+	14, // 25: skipper.SkipperChatService.GetConversation:output_type -> skipper.SkipperConversationDetail
+	17, // 26: skipper.SkipperChatService.DeleteConversation:output_type -> skipper.DeleteSkipperConversationResponse
+	12, // 27: skipper.SkipperChatService.UpdateConversationTitle:output_type -> skipper.SkipperConversationSummary
+	23, // [23:28] is the sub-list for method output_type
+	18, // [18:23] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_skipper_proto_init() }
@@ -1294,7 +1382,7 @@ func file_skipper_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_skipper_proto_rawDesc), len(file_skipper_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

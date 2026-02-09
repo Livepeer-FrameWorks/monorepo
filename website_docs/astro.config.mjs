@@ -144,6 +144,19 @@ export default defineConfig({
         uploadToken: process.env.CODECOV_TOKEN,
       }),
     ],
+    server: {
+      proxy: {
+        "/auth": {
+          target: env.GATEWAY_PUBLIC_URL || "http://localhost:18090",
+          changeOrigin: true,
+        },
+        "/graphql": {
+          target: env.GATEWAY_PUBLIC_URL || "http://localhost:18090",
+          changeOrigin: true,
+          ws: true,
+        },
+      },
+    },
   },
   integrations: [
     sitemap(),

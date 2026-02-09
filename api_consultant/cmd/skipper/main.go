@@ -24,7 +24,6 @@ import (
 	"frameworks/api_consultant/internal/skipper"
 	"frameworks/api_consultant/internal/webui"
 	"frameworks/pkg/auth"
-	commodoreclient "frameworks/pkg/clients/commodore"
 	decklogclient "frameworks/pkg/clients/decklog"
 	periscopeclient "frameworks/pkg/clients/periscope"
 	purserclient "frameworks/pkg/clients/purser"
@@ -126,22 +125,6 @@ func main() {
 	} else {
 		defer func() { _ = periscopeClient.Close() }()
 		logger.WithField("addr", periscopeGRPCAddr).Info("Connected to Periscope gRPC")
-	}
-
-	// Commodore gRPC client — used by the heartbeat agent for tenant/stream context.
-	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
-	commodoreClient, err := commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
-		GRPCAddr:     commodoreGRPCAddr,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-		ServiceToken: serviceToken,
-	})
-	if err != nil {
-		logger.WithError(err).Warn("Failed to create Commodore gRPC client - tenant context disabled")
-		commodoreClient = nil
-	} else {
-		defer func() { _ = commodoreClient.Close() }()
-		logger.WithField("addr", commodoreGRPCAddr).Info("Connected to Commodore gRPC")
 	}
 
 	// Create Purser gRPC client for tier checks
@@ -355,7 +338,6 @@ func main() {
 	heartbeatAgent := heartbeat.NewAgent(heartbeat.AgentConfig{
 		Interval:          heartbeatDuration,
 		Orchestrator:      orchestrator,
-		Commodore:         commodoreClient,
 		Periscope:         periscopeClient,
 		Purser:            purserClient,
 		Quartermaster:     qmClient,
@@ -558,6 +540,7 @@ func main() {
 
 	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("skipper", cfg.Port)
+	serverConfig.WriteTimeout = 5 * time.Minute // SSE streams need time for multi-round tool calling
 
 	// Best-effort service registration in Quartermaster (using gRPC)
 	go func() {

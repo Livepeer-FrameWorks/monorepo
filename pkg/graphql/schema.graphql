@@ -5602,6 +5602,13 @@ type SkipperMeta {
   citations: [SkipperCitation!]!
   externalLinks: [SkipperCitation!]!
   details: [SkipperToolDetail!]!
+  blocks: [SkipperConfidenceBlock!]
+}
+
+type SkipperConfidenceBlock {
+  content: String!
+  confidence: String!
+  sources: [SkipperCitation!]!
 }
 
 type SkipperCitation {
@@ -5642,6 +5649,7 @@ type SkipperMessage {
   confidence: String
   sources: JSON
   toolsUsed: JSON
+  confidenceBlocks: JSON
   tokensInput: Int!
   tokensOutput: Int!
   createdAt: Time!

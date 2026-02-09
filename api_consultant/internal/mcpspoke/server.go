@@ -305,11 +305,18 @@ type askConsultantSource struct {
 	Type  string `json:"type"`
 }
 
+type askConsultantBlock struct {
+	Content    string                `json:"content"`
+	Confidence string                `json:"confidence"`
+	Sources    []askConsultantSource `json:"sources"`
+}
+
 type askConsultantResponse struct {
 	Answer     string                `json:"answer"`
 	Confidence string                `json:"confidence"`
 	Sources    []askConsultantSource `json:"sources"`
 	ToolsUsed  []string              `json:"tools_used"`
+	Blocks     []askConsultantBlock  `json:"blocks,omitempty"`
 }
 
 // discardStreamer is a TokenStreamer that discards all tokens.
@@ -386,6 +393,21 @@ func handleAskConsultant(ctx context.Context, args askConsultantInput, cfg Confi
 		Confidence: string(result.Confidence),
 		Sources:    sources,
 		ToolsUsed:  toolsUsed,
+	}
+	if len(result.Blocks) > 1 {
+		resp.Blocks = make([]askConsultantBlock, 0, len(result.Blocks))
+		for _, b := range result.Blocks {
+			block := askConsultantBlock{
+				Content:    b.Content,
+				Confidence: string(b.Confidence),
+			}
+			for _, s := range b.Sources {
+				block.Sources = append(block.Sources, askConsultantSource{
+					Title: s.Title, URL: s.URL, Type: string(s.Type),
+				})
+			}
+			resp.Blocks = append(resp.Blocks, block)
+		}
 	}
 	spokeSearchQueriesTotal.WithLabelValues("ask_consultant").Inc()
 	return spokeSuccess(resp)

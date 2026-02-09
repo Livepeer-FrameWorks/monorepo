@@ -134,7 +134,7 @@ func TestMergeToolCalls_DeduplicatesByID(t *testing.T) {
 		{ID: "call-1", Name: "search_knowledge", Arguments: `{"query":"stream `},
 	}
 	incoming := []llm.ToolCall{
-		{ID: "call-1", Name: "search_knowledge", Arguments: `latency"}`},
+		{ID: "call-1", Name: "search_knowledge", Arguments: `{"query":"stream latency"}`},
 	}
 
 	result := mergeToolCalls(existing, incoming)
@@ -152,7 +152,7 @@ func TestMergeToolCalls_PreservesOrderWithOutOfOrderChunks(t *testing.T) {
 	}
 	incoming := []llm.ToolCall{
 		{ID: "call-1", Name: "search_knowledge", Arguments: `{"query":"srt"}`},
-		{ID: "call-2", Name: "get_stream", Arguments: `,"tenant_id":"t"}`},
+		{ID: "call-2", Name: "get_stream", Arguments: `{"stream_id":"a","tenant_id":"t"}`},
 	}
 
 	result := mergeToolCalls(existing, incoming)

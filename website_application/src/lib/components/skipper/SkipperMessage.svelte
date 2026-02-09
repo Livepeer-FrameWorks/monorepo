@@ -14,6 +14,12 @@
     payload: string | Record<string, unknown>;
   }
 
+  export interface SkipperConfidenceBlock {
+    content: string;
+    confidence: SkipperConfidence;
+    sources?: SkipperCitation[];
+  }
+
   export interface SkipperChatMessage {
     id: string;
     role: "user" | "assistant";
@@ -22,6 +28,7 @@
     citations?: SkipperCitation[];
     externalLinks?: SkipperCitation[];
     details?: SkipperDetail[];
+    blocks?: SkipperConfidenceBlock[];
     createdAt?: string;
   }
 
@@ -35,7 +42,14 @@
     verified: "Verified",
     sourced: "Sourced",
     best_guess: "Best guess",
-    unknown: "Unknown",
+    unknown: "Unverified",
+  };
+
+  const confidenceTooltips: Record<SkipperConfidence, string> = {
+    verified: "Answer grounded in indexed knowledge base content",
+    sourced: "Answer includes external web sources",
+    best_guess: "Inferred from general knowledge — verify before acting",
+    unknown: "Could not validate against available data",
   };
 
   function escapeHtml(value: string) {
@@ -61,6 +75,28 @@
     });
 
     working = escapeHtml(working);
+
+    // Horizontal rules
+    working = working.replace(/(?:^|\n) *--- *(?:\n|$)/g, '\n<hr class="my-3 border-border">\n');
+
+    // Headings (#### before ### before ## before # to avoid greedy match)
+    working = working.replace(
+      /(?:^|\n)#### (.+)/g,
+      '\n<h6 class="mt-3 mb-1 text-xs font-semibold text-foreground">$1</h6>'
+    );
+    working = working.replace(
+      /(?:^|\n)### (.+)/g,
+      '\n<h5 class="mt-3 mb-1 text-sm font-semibold text-foreground">$1</h5>'
+    );
+    working = working.replace(
+      /(?:^|\n)## (.+)/g,
+      '\n<h4 class="mt-3 mb-1 font-semibold text-foreground">$1</h4>'
+    );
+    working = working.replace(
+      /(?:^|\n)# (.+)/g,
+      '\n<h3 class="mt-4 mb-1 text-base font-semibold text-foreground">$1</h3>'
+    );
+
     working = working.replace(
       /`([^`]+)`/g,
       '<code class="rounded bg-muted/60 px-1 py-0.5 text-xs">$1</code>'
@@ -119,9 +155,14 @@
     <span class="font-semibold">{message.role === "assistant" ? "Skipper" : "You"}</span>
     {#if message.role === "assistant" && message.confidence}
       <span
-        class="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] tracking-[0.16em]"
+        class="group/tip relative cursor-default rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] tracking-[0.16em]"
       >
         {confidenceLabels[message.confidence]}
+        <span
+          class="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] normal-case tracking-normal text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/tip:opacity-100"
+        >
+          {confidenceTooltips[message.confidence]}
+        </span>
       </span>
     {/if}
     {#if message.role === "assistant" && message.confidence === "sourced"}
@@ -148,7 +189,7 @@
     <div
       class="rounded-md border border-muted-foreground/30 bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
     >
-      I could not validate a confident answer based on available data.
+      Unverified — could not validate against available data.
     </div>
   {/if}
 
@@ -157,20 +198,73 @@
       ? "rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground"
       : "rounded-xl bg-primary px-4 py-3 text-sm text-primary-foreground"}
   >
-    <div class={message.confidence === "best_guess" ? "opacity-80" : "opacity-100"}>
-      <div class="prose prose-sm max-w-none text-inherit prose-a:text-primary">
-        <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes input -->
-        {@html renderMarkdown(message.content)}
+    {#if message.blocks && message.blocks.length > 1}
+      {#each message.blocks as block, i (i)}
+        {#if i > 0}
+          <hr class="my-3 border-border/40" />
+        {/if}
+        <div>
+          <div class="mb-1.5 flex items-center gap-2">
+            <span
+              class="group/tip relative cursor-default rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] tracking-[0.16em] uppercase text-muted-foreground"
+            >
+              {confidenceLabels[block.confidence]}
+              <span
+                class="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2.5 py-1.5 text-[11px] normal-case tracking-normal text-popover-foreground shadow-md opacity-0 transition-opacity group-hover/tip:opacity-100"
+              >
+                {confidenceTooltips[block.confidence]}
+              </span>
+            </span>
+          </div>
+          {#if block.confidence === "best_guess"}
+            <div
+              class="rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-warning mb-1.5"
+            >
+              Best guess — verify before acting.
+            </div>
+          {/if}
+          <div class={block.confidence === "best_guess" ? "opacity-80" : "opacity-100"}>
+            <div class="prose prose-sm max-w-none text-inherit prose-a:text-primary">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes input -->
+              {@html renderMarkdown(block.content)}
+            </div>
+          </div>
+        </div>
+      {/each}
+    {:else}
+      <div class={message.confidence === "best_guess" ? "opacity-80" : "opacity-100"}>
+        <div class="prose prose-sm max-w-none text-inherit prose-a:text-primary">
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes input -->
+          {@html renderMarkdown(message.content)}
+        </div>
       </div>
-    </div>
+    {/if}
   </div>
 
   {#if message.role === "assistant" && message.citations?.length}
-    <div
-      class="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+    <details
+      class="rounded-md border border-border bg-muted/30 text-xs text-muted-foreground [&[open]>summary>.skipper-chevron]:rotate-90"
     >
-      <div class="font-semibold uppercase tracking-[0.16em] text-[10px]">Citations</div>
-      <ul class="mt-2 space-y-1">
+      <summary
+        class="flex cursor-pointer select-none items-center gap-2 px-3 py-2 font-semibold uppercase tracking-[0.16em] text-[10px]"
+      >
+        <svg
+          class="skipper-chevron h-3 w-3 shrink-0 transition-transform"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
+        >
+        Citations
+        <span
+          class="rounded-full border border-border bg-muted/60 px-1.5 py-0.5 text-[9px] font-normal normal-case tracking-normal"
+        >
+          {message.citations.length}
+        </span>
+      </summary>
+      <ul class="space-y-1 px-3 pb-2">
         {#each message.citations as citation (citation.url)}
           <li>
             <a
@@ -184,15 +278,33 @@
           </li>
         {/each}
       </ul>
-    </div>
+    </details>
   {/if}
 
   {#if message.role === "assistant" && message.externalLinks?.length}
-    <div
-      class="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+    <details
+      class="rounded-md border border-border bg-muted/30 text-xs text-muted-foreground [&[open]>summary>.skipper-chevron]:rotate-90"
     >
-      <div class="font-semibold uppercase tracking-[0.16em] text-[10px]">External sources</div>
-      <ul class="mt-2 space-y-1">
+      <summary
+        class="flex cursor-pointer select-none items-center gap-2 px-3 py-2 font-semibold uppercase tracking-[0.16em] text-[10px]"
+      >
+        <svg
+          class="skipper-chevron h-3 w-3 shrink-0 transition-transform"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
+        >
+        External sources
+        <span
+          class="rounded-full border border-border bg-muted/60 px-1.5 py-0.5 text-[9px] font-normal normal-case tracking-normal"
+        >
+          {message.externalLinks.length}
+        </span>
+      </summary>
+      <ul class="space-y-1 px-3 pb-2">
         {#each message.externalLinks as link (link.url)}
           <li>
             <a
@@ -206,14 +318,37 @@
           </li>
         {/each}
       </ul>
-    </div>
+    </details>
   {/if}
 
   {#if message.role === "assistant" && message.details?.length}
-    <div class="space-y-2">
-      {#each message.details as detail, i (i)}
-        <SkipperToolResult {detail} />
-      {/each}
-    </div>
+    <details
+      class="rounded-md border border-border bg-muted/30 text-xs text-muted-foreground [&[open]>summary>.skipper-chevron]:rotate-90"
+    >
+      <summary
+        class="flex cursor-pointer select-none items-center gap-2 px-3 py-2 font-semibold uppercase tracking-[0.16em] text-[10px]"
+      >
+        <svg
+          class="skipper-chevron h-3 w-3 shrink-0 transition-transform"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
+        >
+        Tool details
+        <span
+          class="rounded-full border border-border bg-muted/60 px-1.5 py-0.5 text-[9px] font-normal normal-case tracking-normal"
+        >
+          {message.details.length}
+        </span>
+      </summary>
+      <div class="space-y-2 px-3 pb-2">
+        {#each message.details as detail, i (i)}
+          <SkipperToolResult {detail} />
+        {/each}
+      </div>
+    </details>
   {/if}
 </div>

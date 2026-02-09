@@ -1389,7 +1389,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *pb.Get
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO commodore.users (
 			id, tenant_id, email, password_hash,
-			role, is_active, is_verified,
+			role, is_active, verified,
 			first_name, last_name,
 			created_at, updated_at
 		)
@@ -2235,10 +2235,8 @@ func (s *CommodoreServer) UpdateMe(ctx context.Context, req *pb.UpdateMeRequest)
 		args = append(args, *req.LastName)
 		argCount++
 	}
-	if req.PhoneNumber != nil {
-		updates = append(updates, fmt.Sprintf("phone_number = $%d", argCount))
-		args = append(args, *req.PhoneNumber)
-		argCount++
+	if req.PhoneNumber != nil && *req.PhoneNumber != "" {
+		return nil, status.Error(codes.InvalidArgument, "invalid request")
 	}
 
 	if len(updates) == 0 {
@@ -2424,7 +2422,7 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *pb.WalletLoginRe
 	var createdAt, updatedAt time.Time
 
 	err = s.db.QueryRowContext(ctx, `
-		SELECT email, first_name, last_name, role, is_active, is_verified,
+		SELECT email, first_name, last_name, role, is_active, verified,
 		       last_login_at, created_at, updated_at
 		FROM commodore.users WHERE id = $1
 	`, userID).Scan(&email, &firstName, &lastName, &role,
@@ -2543,7 +2541,7 @@ func (s *CommodoreServer) WalletLoginWithX402(ctx context.Context, req *pb.Walle
 	var createdAt, updatedAt time.Time
 
 	err = s.db.QueryRowContext(ctx, `
-		SELECT email, first_name, last_name, role, is_active, is_verified,
+		SELECT email, first_name, last_name, role, is_active, verified,
 		       last_login_at, created_at, updated_at
 		FROM commodore.users WHERE id = $1
 	`, userID).Scan(&email, &firstName, &lastName, &role,
@@ -4166,7 +4164,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 			id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
 			retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
 	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
 		retentionUntil)

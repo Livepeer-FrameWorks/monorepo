@@ -23,6 +23,7 @@
           citations { label url }
           externalLinks { label url }
           details { title payload }
+          blocks { content confidence sources { label url } }
         }
         ... on SkipperDone { conversationId tokensInput tokensOutput }
       }
@@ -252,6 +253,7 @@
             citations: event.citations as SkipperChatMessage["citations"],
             externalLinks: event.externalLinks as SkipperChatMessage["externalLinks"],
             details: event.details as SkipperChatMessage["details"],
+            blocks: event.blocks as SkipperChatMessage["blocks"],
           });
         } else if ("conversationId" in event) {
           // SkipperDone

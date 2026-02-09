@@ -226,6 +226,7 @@ func TestHandleChat_UsageLoggerCapturesTokens(t *testing.T) {
 			"confidence",
 			"sources",
 			"tools_used",
+			"confidence_blocks",
 			"token_count_input",
 			"token_count_output",
 			"created_at",
@@ -684,10 +685,10 @@ func TestHandleChat_OrchestratorErrorSendsErrorBeforeDone(t *testing.T) {
 	mock.ExpectQuery("SELECT \\* FROM \\(SELECT").
 		WithArgs("conv-1", "tenant-a", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "conversation_id", "role", "content", "confidence", "sources", "tools_used", "token_count_input", "token_count_output", "created_at",
+			"id", "conversation_id", "role", "content", "confidence", "sources", "tools_used", "confidence_blocks", "token_count_input", "token_count_output", "created_at",
 		}))
 	mock.ExpectQuery("INSERT INTO skipper\\.skipper_messages").
-		WithArgs("conv-1", "user", "hello", "", sqlmock.AnyArg(), sqlmock.AnyArg(), 1, 0, "tenant-a").
+		WithArgs("conv-1", "user", "hello", "", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1, 0, "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("message-id"))
 	mock.ExpectExec("UPDATE skipper\\.skipper_conversations").
 		WithArgs("conv-1", "tenant-a").

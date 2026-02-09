@@ -94,4 +94,13 @@ var (
 			Help:      "Total render skips from HEAD size-match optimization",
 		},
 	)
+
+	chunksFilteredTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "skipper",
+			Name:      "chunks_filtered_total",
+			Help:      "Total chunks filtered during embedding",
+		},
+		[]string{"reason"},
+	)
 )

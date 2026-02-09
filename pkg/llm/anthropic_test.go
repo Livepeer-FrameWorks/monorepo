@@ -159,6 +159,9 @@ func TestAnthropicProviderToolResultMessage(t *testing.T) {
 			for _, c := range msg.Content {
 				if c.Type == "tool_result" {
 					foundToolResult = true
+					if msg.Role != "user" {
+						t.Fatalf("expected tool_result role 'user', got %q", msg.Role)
+					}
 					if c.ToolUseID != "toolu_1" {
 						t.Fatalf("expected tool_use_id toolu_1, got %s", c.ToolUseID)
 					}

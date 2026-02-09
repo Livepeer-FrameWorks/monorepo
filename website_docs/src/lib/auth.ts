@@ -34,7 +34,7 @@ export async function checkAuth(): Promise<AuthUser | null> {
       if (!refresh.ok) return null;
       return (await refresh.json()).user ?? null;
     }
-    return (await res.json()).user ?? null;
+    return (await res.json()) ?? null;
   } catch {
     return null;
   }
