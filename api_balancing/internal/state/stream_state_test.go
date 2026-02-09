@@ -473,3 +473,142 @@ func TestStreamStateTransitionsAndTenantIsolation(t *testing.T) {
 		t.Fatalf("expected no live streams for tenant A after offline, got %d", len(streamsForA))
 	}
 }
+
+func TestUpdateStreamFromBuffer_ParsesDetailsAndIssues(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	internalName := "internal-1"
+	streamName := "stream-1"
+	nodeID := "node-1"
+	tenantID := "tenant-1"
+	detailsJSON := `{
+		"video1": {"codec": "H264", "kbits": 1500, "fpks": 30000, "width": 1920, "height": 1080},
+		"audio1": {"codec": "AAC", "channels": 2, "rate": 48000},
+		"issues": "signal_warning"
+	}`
+
+	if err := sm.UpdateStreamFromBuffer(streamName, internalName, nodeID, tenantID, "FULL", detailsJSON); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	state := sm.GetStreamState(internalName)
+	if state == nil {
+		t.Fatal("expected stream state")
+	}
+	if state.Status != "live" {
+		t.Fatalf("expected live status, got %s", state.Status)
+	}
+	if state.BufferState != "FULL" {
+		t.Fatalf("expected buffer state FULL, got %s", state.BufferState)
+	}
+	if state.HasIssues != true || state.Issues != "signal_warning" {
+		t.Fatalf("expected issues to be set, got hasIssues=%v issues=%q", state.HasIssues, state.Issues)
+	}
+	if state.StartedAt == nil {
+		t.Fatal("expected StartedAt to be set")
+	}
+	if len(state.Tracks) != 2 {
+		t.Fatalf("expected 2 tracks, got %d", len(state.Tracks))
+	}
+
+	var videoTrack, audioTrack *StreamTrack
+	for i := range state.Tracks {
+		track := &state.Tracks[i]
+		if track.Type == "video" {
+			videoTrack = track
+		}
+		if track.Type == "audio" {
+			audioTrack = track
+		}
+	}
+	if videoTrack == nil || audioTrack == nil {
+		t.Fatalf("expected both video and audio tracks, got video=%v audio=%v", videoTrack, audioTrack)
+	}
+	if videoTrack.FPS != 30 {
+		t.Fatalf("expected 30 fps, got %v", videoTrack.FPS)
+	}
+	if videoTrack.Bitrate != 1500 {
+		t.Fatalf("expected video bitrate 1500, got %d", videoTrack.Bitrate)
+	}
+	if audioTrack.Channels != 2 {
+		t.Fatalf("expected audio channels 2, got %d", audioTrack.Channels)
+	}
+	if audioTrack.SampleRate != 48000 {
+		t.Fatalf("expected audio sample rate 48000, got %d", audioTrack.SampleRate)
+	}
+
+	instances := sm.GetStreamInstances(internalName)
+	inst, ok := instances[nodeID]
+	if !ok {
+		t.Fatal("expected stream instance state")
+	}
+	if inst.Status != "live" {
+		t.Fatalf("expected instance status live, got %s", inst.Status)
+	}
+	if inst.BufferState != "FULL" {
+		t.Fatalf("expected instance buffer state FULL, got %s", inst.BufferState)
+	}
+}
+
+func TestUpdateStreamFromBuffer_IgnoresNonStringIssues(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	detailsJSON := `{"issues": {"code": 42}}`
+	if err := sm.UpdateStreamFromBuffer("stream", "internal", "node", "tenant", "READY", detailsJSON); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	state := sm.GetStreamState("internal")
+	if state == nil {
+		t.Fatal("expected stream state")
+	}
+	if state.HasIssues {
+		t.Fatal("expected HasIssues to be false when issues is not a string")
+	}
+}
+
+func TestUpdateStreamFromBuffer_InvalidJSONReturnsError(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	err := sm.UpdateStreamFromBuffer("stream", "internal", "node", "tenant", "READY", "{invalid")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+}
+
+func TestUpdateTrackListAndOfflineState(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	internalName := "internal-2"
+	nodeID := "node-2"
+	tenantID := "tenant-2"
+
+	sm.UpdateTrackList(internalName, nodeID, tenantID, "tracklist-json")
+	sm.SetOffline(internalName, nodeID)
+
+	state := sm.GetStreamState(internalName)
+	if state == nil {
+		t.Fatal("expected stream state")
+	}
+	if state.Status != "offline" {
+		t.Fatalf("expected status offline, got %s", state.Status)
+	}
+	if state.BufferState != "EMPTY" {
+		t.Fatalf("expected buffer state EMPTY, got %s", state.BufferState)
+	}
+	if state.LastTrackList != "tracklist-json" {
+		t.Fatalf("expected tracklist to remain, got %s", state.LastTrackList)
+	}
+
+	instances := sm.GetStreamInstances(internalName)
+	inst, ok := instances[nodeID]
+	if !ok {
+		t.Fatal("expected stream instance state")
+	}
+	if inst.Status != "offline" {
+		t.Fatalf("expected instance status offline, got %s", inst.Status)
+	}
+	if inst.BufferState != "EMPTY" {
+		t.Fatalf("expected instance buffer state EMPTY, got %s", inst.BufferState)
+	}
+}
