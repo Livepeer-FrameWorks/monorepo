@@ -20,7 +20,7 @@ func TestConfirmPrepaidTopupCreatesBalanceAndTransaction(t *testing.T) {
 	defer mockDB.Close()
 
 	mock.ExpectBegin()
-	tx, err := mockDB.Begin()
+	tx, err := mockDB.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
