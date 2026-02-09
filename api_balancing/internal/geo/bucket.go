@@ -19,13 +19,15 @@ func Bucket(lat, lon float64) (*pb.GeoBucket, float64, float64, bool) {
 	}
 
 	latLng := h3.NewLatLng(lat, lon)
-	cell := h3.LatLngToCell(latLng, defaultResolution)
-
-	if cell == 0 {
+	cell, err := h3.LatLngToCell(latLng, defaultResolution)
+	if err != nil || cell == 0 {
 		return nil, 0, 0, false
 	}
 
-	centroid := h3.CellToLatLng(cell)
+	centroid, err := h3.CellToLatLng(cell)
+	if err != nil {
+		return nil, 0, 0, false
+	}
 	return &pb.GeoBucket{
 			H3Index:    uint64(cell),
 			Resolution: defaultResolution,

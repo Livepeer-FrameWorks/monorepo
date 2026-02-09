@@ -783,7 +783,10 @@ describe("Canvas2DRenderer", () => {
 
       renderer.applyFilter("layer-1", { type: "blur", strength: 5 } as FilterConfig);
 
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("Filters not supported"));
+      expect(console.warn).toHaveBeenCalledTimes(1);
+      expect(console.warn).toHaveBeenCalledWith(
+        "[Canvas2DRenderer] Filters not supported. Use WebGL or WebGPU renderer for filter effects."
+      );
     });
   });
 

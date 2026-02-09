@@ -1103,6 +1103,15 @@ describe("WebGLRenderer", () => {
       expect(strengthCalls.some((c: any[]) => c[1] === 0.75)).toBe(true);
     });
 
+    it("sepia defaults strength to 1 when not specified", () => {
+      renderWithFilter({ type: "sepia" });
+
+      const strengthCalls = gl.uniform1f.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_filterStrength"
+      );
+      expect(strengthCalls.some((c: any[]) => c[1] === 1)).toBe(true);
+    });
+
     it("blur warns and sets filterType to 0", () => {
       renderWithFilter({ type: "blur", strength: 5 });
 
@@ -1115,6 +1124,23 @@ describe("WebGLRenderer", () => {
       );
       const lastCall = filterTypeCalls[filterTypeCalls.length - 1];
       expect(lastCall[1]).toBe(0);
+    });
+
+    it("unsupported filters default filterType to 0", () => {
+      renderWithFilter({ type: "invert" });
+
+      const filterTypeCalls = gl.uniform1i.mock.calls.filter(
+        (c: any[]) => c[0]._name === "u_filterType"
+      );
+      const lastCall = filterTypeCalls[filterTypeCalls.length - 1];
+      expect(lastCall[1]).toBe(0);
+
+      gl.uniform1i.mockClear();
+      renderWithFilter({ type: "glow", strength: 0.5 });
+
+      const glowCalls = gl.uniform1i.mock.calls.filter((c: any[]) => c[0]._name === "u_filterType");
+      const lastGlowCall = glowCalls[glowCalls.length - 1];
+      expect(lastGlowCall[1]).toBe(0);
     });
 
     it("colorMatrix uses default values when brightness/contrast/saturation not set", () => {
