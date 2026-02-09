@@ -520,6 +520,165 @@ Web search is optional — Skipper works without it, relying on the knowledge ba
 
 ---
 
+## Self-Hosting Dependencies
+
+Skipper can run entirely on your own infrastructure with no external API calls. This section covers deploying the self-hostable components.
+
+### Ollama (LLM + Embeddings)
+
+[Ollama](https://ollama.com) runs open-weight models locally. It provides both chat completion and embedding endpoints that Skipper uses directly.
+
+**Docker (recommended for production):**
+
+```yaml
+ollama:
+  image: ollama/ollama:latest
+  ports:
+    - "11434:11434"
+  volumes:
+    - ollama_data:/root/.ollama # persist downloaded models
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia # GPU passthrough (NVIDIA)
+            count: all
+            capabilities: [gpu]
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 30s
+```
+
+For AMD GPUs, use `image: ollama/ollama:rocm`. For CPU-only, omit the `deploy.resources` block — expect ~2-5 tok/s on a 32B model.
+
+**Pull models after starting Ollama:**
+
+```bash
+# Chat model (pick one per tier — see Model Selection above)
+docker exec ollama ollama pull qwen2.5:32b
+
+# Embedding model
+docker exec ollama ollama pull nomic-embed-text
+
+# Utility model (optional, for contextual retrieval / query rewriting)
+docker exec ollama ollama pull qwen2.5:7b
+```
+
+<Aside type="caution" title="Models must be pulled before Skipper starts">
+  Ollama ships with no models. If Skipper can't reach the configured model, it starts with LLM
+  disabled and chat won't work. Pull models first, or use the health check + `depends_on` pattern
+  below.
+</Aside>
+
+**Skipper env vars for Ollama:**
+
+```bash
+LLM_PROVIDER=ollama
+LLM_MODEL=qwen2.5:32b
+LLM_API_URL=http://ollama:11434/v1       # use container name in Docker networks
+
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_API_URL=http://ollama:11434     # embeddings use /api/embeddings, not /v1
+```
+
+### SearXNG (Web Search)
+
+[SearXNG](https://docs.searxng.org/) is a self-hosted metasearch engine. No API key needed.
+
+```bash
+docker run -d --name searxng -p 8080:8080 searxng/searxng:latest
+```
+
+**Skipper env vars:**
+
+```bash
+SEARCH_PROVIDER=searxng
+SEARCH_API_URL=http://searxng:8080
+```
+
+### Self-Hosted Reranker
+
+For fully local retrieval quality, run a cross-encoder model via [Text Embeddings Inference (TEI)](https://github.com/huggingface/text-embeddings-inference) or a similar `/v1/rerank`-compatible server:
+
+```bash
+docker run -d --name reranker -p 8787:80 \
+  ghcr.io/huggingface/text-embeddings-inference:latest \
+  --model-id BAAI/bge-reranker-v2-m3
+```
+
+**Skipper env vars:**
+
+```bash
+RERANKER_PROVIDER=generic
+RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+RERANKER_API_URL=http://reranker:8787
+```
+
+### Putting It Together
+
+A fully self-hosted stack with proper health checks and startup ordering:
+
+```yaml
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  searxng:
+    image: searxng/searxng:latest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  skipper:
+    # ... your existing Skipper config ...
+    environment:
+      LLM_PROVIDER: ollama
+      LLM_MODEL: qwen2.5:32b
+      LLM_API_URL: http://ollama:11434/v1
+      EMBEDDING_PROVIDER: ollama
+      EMBEDDING_MODEL: nomic-embed-text
+      EMBEDDING_API_URL: http://ollama:11434
+      SEARCH_PROVIDER: searxng
+      SEARCH_API_URL: http://searxng:8080
+    depends_on:
+      ollama:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+
+volumes:
+  ollama_data:
+```
+
+<Aside type="tip">
+  After first deployment, pull models into the running Ollama container. The volume ensures they
+  persist across restarts: `docker exec ollama ollama pull qwen2.5:32b && docker exec ollama ollama
+  pull nomic-embed-text`
+</Aside>
+
+---
+
 ## Architecture
 
 ```mermaid

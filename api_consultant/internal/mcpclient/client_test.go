@@ -91,10 +91,7 @@ func TestAuthTransport_UsesJWTFromContext(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	transport := &authTransport{
-		base:         http.DefaultTransport,
-		serviceToken: "svc-token",
-	}
+	transport := &authTransport{base: http.DefaultTransport}
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, "user-jwt-123")
 	req, _ := http.NewRequestWithContext(ctx, "POST", backend.URL, nil)
@@ -108,31 +105,7 @@ func TestAuthTransport_UsesJWTFromContext(t *testing.T) {
 	}
 }
 
-func TestAuthTransport_FallsBackToServiceToken(t *testing.T) {
-	var capturedAuth string
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedAuth = r.Header.Get("Authorization")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer backend.Close()
-
-	transport := &authTransport{
-		base:         http.DefaultTransport,
-		serviceToken: "svc-token",
-	}
-
-	req, _ := http.NewRequestWithContext(context.Background(), "POST", backend.URL, nil)
-	resp, err := transport.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	resp.Body.Close()
-	if capturedAuth != "Bearer svc-token" {
-		t.Fatalf("expected Bearer svc-token, got %q", capturedAuth)
-	}
-}
-
-func TestAuthTransport_NoAuthWhenBothEmpty(t *testing.T) {
+func TestAuthTransport_NoAuthWithoutJWT(t *testing.T) {
 	var capturedAuth string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedAuth = r.Header.Get("Authorization")
@@ -209,8 +182,7 @@ func TestGatewayClient_EndToEnd(t *testing.T) {
 	ts := testMCPServer(t)
 
 	gc, err := New(context.Background(), Config{
-		GatewayURL:   ts.URL,
-		ServiceToken: "test-token",
+		GatewayURL: ts.URL,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -250,7 +222,6 @@ func TestGatewayClient_Allowlist(t *testing.T) {
 
 	gc, err := New(context.Background(), Config{
 		GatewayURL:    ts.URL,
-		ServiceToken:  "test-token",
 		ToolAllowlist: []string{"diagnose_rebuffering"},
 	})
 	if err != nil {
@@ -319,8 +290,7 @@ func TestGatewayClient_ReconnectRefreshesTools(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	gc, err := New(context.Background(), Config{
-		GatewayURL:   ts.URL,
-		ServiceToken: "test-token",
+		GatewayURL: ts.URL,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

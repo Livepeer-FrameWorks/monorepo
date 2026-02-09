@@ -526,7 +526,6 @@ func main() {
 		Resolver:       resolver.Resolver,
 		Logger:         logger,
 		JWTSecret:      []byte(jwtSecret),
-		ServiceToken:   serviceToken,
 		RateLimiter:    rateLimiter,
 		TenantCache:    tenantCache,
 		UsageTracker:   usageTracker,

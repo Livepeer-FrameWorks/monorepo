@@ -52,7 +52,6 @@ type Config struct {
 	Resolver       *resolvers.Resolver
 	Logger         logging.Logger
 	JWTSecret      []byte
-	ServiceToken   string
 	RateLimiter    *middleware.RateLimiter
 	TenantCache    *middleware.TenantCache
 	UsageTracker   *middleware.UsageTracker
@@ -313,6 +312,13 @@ func (s *Server) registerAccessMiddleware() {
 			}
 
 			publicAllowlisted := isPublicMCPOperation(opName)
+
+			// Unauthenticated metadata operations (initialize, list tools/resources/prompts)
+			// bypass access control — they don't need rate limiting or billing checks.
+			if tenantID == "" && publicAllowlisted {
+				return next(ctx, method, req)
+			}
+
 			decision := middleware.EvaluateAccess(ctx, middleware.AccessRequest{
 				TenantID:          tenantID,
 				ClientIP:          clientIP,

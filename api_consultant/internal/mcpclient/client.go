@@ -35,8 +35,6 @@ type GatewayClient struct {
 type Config struct {
 	// GatewayURL is the base URL for the Gateway MCP endpoint.
 	GatewayURL string
-	// ServiceToken authenticates the long-lived session.
-	ServiceToken string
 	// ToolAllowlist restricts which Gateway tools are exposed to the LLM.
 	// An empty list means all discovered tools are exposed.
 	ToolAllowlist []string
@@ -48,9 +46,9 @@ type Config struct {
 }
 
 // New creates a GatewayClient and connects to the Gateway MCP server.
-// The connection uses a service token for session establishment, but each
-// CallTool request injects the calling user's JWT via context so the
-// Gateway scopes operations to the correct tenant.
+// Session establishment is unauthenticated (initialize and tools/list are
+// publicly allowed). Each CallTool request injects the calling user's JWT
+// via context so the Gateway scopes operations to the correct tenant.
 func New(ctx context.Context, cfg Config) (*GatewayClient, error) {
 	if cfg.GatewayURL == "" {
 		return nil, fmt.Errorf("mcpclient: GatewayURL is required")
@@ -68,10 +66,7 @@ func New(ctx context.Context, cfg Config) (*GatewayClient, error) {
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: cfg.GatewayURL,
 		HTTPClient: &http.Client{
-			Transport: &authTransport{
-				base:         http.DefaultTransport,
-				serviceToken: cfg.ServiceToken,
-			},
+			Transport: &authTransport{base: http.DefaultTransport},
 		},
 	}
 
@@ -172,10 +167,7 @@ func (gc *GatewayClient) tryReconnect(ctx context.Context) error {
 	transport := &mcp.StreamableClientTransport{
 		Endpoint: gc.cfg.GatewayURL,
 		HTTPClient: &http.Client{
-			Transport: &authTransport{
-				base:         http.DefaultTransport,
-				serviceToken: gc.cfg.ServiceToken,
-			},
+			Transport: &authTransport{base: http.DefaultTransport},
 		},
 	}
 	session, err := gc.client.Connect(ctx, transport, nil)
@@ -288,12 +280,11 @@ func extractTextContent(result *mcp.CallToolResult) string {
 	return strings.Join(parts, "\n")
 }
 
-// authTransport injects authentication headers into each HTTP request.
-// It reads the user's JWT from the request context (set by the chat
-// handler) and falls back to the service token when no JWT is available.
+// authTransport injects the calling user's JWT into each HTTP request.
+// Session establishment requests (initialize, tools/list) go unauthenticated;
+// tool calls carry the user's JWT from the chat handler context.
 type authTransport struct {
-	base         http.RoundTripper
-	serviceToken string
+	base http.RoundTripper
 }
 
 func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -301,8 +292,6 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	if token := ctxkeys.GetJWTToken(req.Context()); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
-	} else if t.serviceToken != "" {
-		req.Header.Set("Authorization", "Bearer "+t.serviceToken)
 	}
 
 	return t.base.RoundTrip(req)

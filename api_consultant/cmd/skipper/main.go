@@ -276,7 +276,6 @@ func main() {
 		var connectErr error
 		gatewayClient, connectErr = mcpclient.New(context.Background(), mcpclient.Config{
 			GatewayURL:   mcpURL,
-			ServiceToken: serviceToken,
 			ToolDenylist: []string{"ask_consultant"},
 			Logger:       logger,
 		})
@@ -532,7 +531,8 @@ func main() {
 		},
 		&mcp.StreamableHTTPOptions{Stateless: false},
 	)
-	router.Any("/mcp/*path", gin.WrapH(http.Handler(mcpHandler)))
+	router.Any("/mcp/notify", gin.WrapH(http.Handler(mcpHandler)))
+	router.Any("/mcp/notify/*path", gin.WrapH(http.Handler(mcpHandler)))
 
 	// Embedded web UI — enabled by default, set SKIPPER_WEB_UI=false to disable.
 	if config.GetEnv("SKIPPER_WEB_UI", "true") != "false" {
