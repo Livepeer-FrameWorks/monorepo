@@ -563,7 +563,7 @@ func (cm *CryptoMonitor) confirmPrepaidTopup(ctx context.Context, dbTx *sql.Tx, 
 		wallet.TenantID,
 		amountCents,
 		newBalance,
-		fmt.Sprintf("Crypto top-up via %s (%s)", wallet.Asset, tx.Hash[:16]+"..."),
+		fmt.Sprintf("Crypto top-up via %s (%s)", wallet.Asset, tx.Hash),
 		wallet.ID, // reference to crypto_wallet
 		now,
 	)
