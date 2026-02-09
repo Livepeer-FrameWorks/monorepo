@@ -151,6 +151,27 @@ func TestParseUUID(t *testing.T) {
 	}
 }
 
+func TestParseUUIDOrNil(t *testing.T) {
+	valid := uuid.New()
+	cases := []struct {
+		name     string
+		input    string
+		expected *uuid.UUID
+	}{
+		{name: "empty", input: "", expected: nil},
+		{name: "invalid", input: "nope", expected: nil},
+		{name: "nil uuid", input: uuid.Nil.String(), expected: nil},
+		{name: "valid", input: valid.String(), expected: uuidPtr(valid)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseUUIDOrNil(tc.input)
+			assertInterfaceValue(t, got, tc.expected)
+		})
+	}
+}
+
 func TestIsValidUUIDString(t *testing.T) {
 	valid := uuid.New().String()
 	cases := []struct {
@@ -188,6 +209,48 @@ func TestBoolToUint8(t *testing.T) {
 			if got := boolToUint8(tc.input); got != tc.expected {
 				t.Fatalf("boolToUint8(%t) = %d, want %d", tc.input, got, tc.expected)
 			}
+		})
+	}
+}
+
+func TestValueOrNilUint64Ptr(t *testing.T) {
+	zero := uint64(0)
+	value := uint64(21)
+	cases := []struct {
+		name     string
+		input    *uint64
+		expected *uint64
+	}{
+		{name: "nil", input: nil, expected: nil},
+		{name: "zero", input: &zero, expected: uint64Ptr(0)},
+		{name: "non-zero", input: &value, expected: uint64Ptr(21)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := valueOrNilUint64Ptr(tc.input)
+			assertInterfaceValue(t, got, tc.expected)
+		})
+	}
+}
+
+func TestNilIfZeroFloat64Ptr(t *testing.T) {
+	zero := float64(0)
+	value := float64(1.75)
+	cases := []struct {
+		name     string
+		input    *float64
+		expected *float64
+	}{
+		{name: "nil", input: nil, expected: nil},
+		{name: "zero", input: &zero, expected: nil},
+		{name: "non-zero", input: &value, expected: float64Ptr(1.75)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := nilIfZeroFloat64Ptr(tc.input)
+			assertInterfaceValue(t, got, tc.expected)
 		})
 	}
 }
@@ -903,6 +966,94 @@ func TestViewerConnectionDuplicateEventSkipped(t *testing.T) {
 	}
 }
 
+func TestHandleAnalyticsEventUnknownTypeSkipped(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "totally_unknown",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      map[string]interface{}{"ignored": true},
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(conn.batches) != 0 {
+		t.Fatalf("expected no batches, got %#v", conn.batches)
+	}
+}
+
+func TestHandleAnalyticsEventMissingStreamIDDropped(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_ViewerConnect{
+			ViewerConnect: &pb.ViewerConnectTrigger{
+				StreamName: "live+demo",
+				SessionId:  "sess-4",
+				Connector:  "hls",
+				Host:       "1.2.3.4",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_connect",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("expected drop without error, got %v", err)
+	}
+
+	batch := conn.batches["ingest_errors"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected ingest_errors row, got %#v", batch)
+	}
+	if reason, ok := batch.rows[0][6].(string); !ok || !strings.Contains(reason, "missing_or_invalid_stream_id") {
+		t.Fatalf("expected missing stream id reason, got %#v", batch.rows[0][6])
+	}
+}
+
+func TestWriteIngestErrorPayloadMarshalFailure(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := &AnalyticsHandler{clickhouse: clickhouseNativeConn{conn: conn}, logger: logging.NewLogger()}
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "viewer_connect",
+		Timestamp: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		Source:    "decklog",
+		TenantID:  uuid.NewString(),
+		Data: map[string]interface{}{
+			"bad": func() {},
+		},
+	}
+
+	handler.writeIngestError(context.Background(), event, "stream-1", "handler_error", errors.New("boom"))
+
+	batch := conn.batches["ingest_errors"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected ingest_errors row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[5] != "stream-1" {
+		t.Fatalf("expected stream_id stream-1, got %#v", row[5])
+	}
+	if reason, ok := row[6].(string); !ok || !strings.Contains(reason, "payload_marshal_error") || !strings.Contains(reason, "boom") {
+		t.Fatalf("expected marshal error and cause in reason, got %#v", row[6])
+	}
+	if row[7] != "{}" {
+		t.Fatalf("expected payload_json {}, got %#v", row[7])
+	}
+}
+
 func mustMistTriggerData(t *testing.T, mt *pb.MistTrigger) map[string]interface{} {
 	t.Helper()
 	bytes, err := protojson.Marshal(mt)
@@ -1053,6 +1204,10 @@ func float32Ptr(v float32) *float32 {
 	return &v
 }
 
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
 func boolPtr(v bool) *bool {
 	return &v
 }
@@ -1082,5 +1237,9 @@ func uint8Ptr(v uint8) *uint8 {
 }
 
 func uint16Ptr(v uint16) *uint16 {
+	return &v
+}
+
+func uuidPtr(v uuid.UUID) *uuid.UUID {
 	return &v
 }
