@@ -185,7 +185,7 @@ func TestBuild402ResponseIncludesRequirements(t *testing.T) {
 		"maxAmountRequired": "100",
 		"payTo":             "0xabc",
 		"asset":             "USDC",
-		"maxTimeoutSeconds": int64(120),
+		"maxTimeoutSeconds": int32(120),
 		"resource":          "viewer://content",
 		"description":       "viewer endpoint",
 	}
