@@ -7,8 +7,8 @@ toolchain go1.24.12
 require (
 	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/VictorAvelar/mollie-api-go/v4 v4.13.0
-	github.com/btcsuite/btcd v0.24.2
+	github.com/VictorAvelar/mollie-api-go/v4 v4.14.0
+	github.com/btcsuite/btcd v0.25.0
 	github.com/btcsuite/btcd/btcutil v1.1.6
 	github.com/ethereum/go-ethereum v1.16.8
 	github.com/google/uuid v1.6.0
@@ -53,7 +53,7 @@ require (
 	github.com/goccy/go-json v0.10.4 // indirect
 	github.com/goccy/go-yaml v1.18.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
-	github.com/google/go-querystring v1.1.0 // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -88,7 +88,7 @@ require (
 	golang.org/x/arch v0.20.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda // indirect
 )
