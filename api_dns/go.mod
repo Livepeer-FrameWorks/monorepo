@@ -7,7 +7,7 @@ toolchain go1.24.12
 require (
 	frameworks/pkg v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/failsafe-go/failsafe-go v0.9.5
+	github.com/failsafe-go/failsafe-go v0.9.6
 	github.com/gin-gonic/gin v1.11.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/grpc v1.78.0
