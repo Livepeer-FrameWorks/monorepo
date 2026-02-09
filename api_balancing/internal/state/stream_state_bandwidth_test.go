@@ -88,3 +88,94 @@ func TestReconcileVirtualViewers_TimesOutStalePending(t *testing.T) {
 		}
 	}
 }
+
+func TestCalculateEstBandwidthPerUser_UsesNodeMetricsAndClusterAverage(t *testing.T) {
+	sm := setupStateManager(t)
+	nodeID := "node-3"
+	configureTestNode(sm, nodeID)
+
+	sm.mu.Lock()
+	node := sm.nodes[nodeID]
+	node.UpSpeed = 512 * 1024
+	sm.streamInstances["stream-1"] = map[string]*StreamInstanceState{
+		nodeID: {
+			NodeID:           nodeID,
+			TotalConnections: 4,
+		},
+	}
+	est := sm.calculateEstBandwidthPerUserLocked(node)
+	if est != 128*1024 {
+		sm.mu.Unlock()
+		t.Fatalf("expected 128KB/s estimate, got %d", est)
+	}
+
+	otherID := "node-4"
+	sm.nodes[otherID] = &NodeState{
+		NodeID:    otherID,
+		IsHealthy: true,
+		UpSpeed:   256 * 1024,
+	}
+	sm.streamInstances["stream-2"] = map[string]*StreamInstanceState{
+		otherID: {
+			NodeID:           otherID,
+			TotalConnections: 2,
+		},
+	}
+	sm.streamInstances["stream-1"][nodeID].TotalConnections = 0
+	node.UpSpeed = 0
+	node.EstBandwidthPerUser = 0
+	est = sm.calculateEstBandwidthPerUserLocked(node)
+	sm.mu.Unlock()
+	if est != 128*1024 {
+		t.Fatalf("expected cluster average 128KB/s, got %d", est)
+	}
+}
+
+func TestClampBandwidthEnforcesMinAndMax(t *testing.T) {
+	sm := setupStateManager(t)
+
+	min := sm.clampBandwidth(1)
+	if min != 64*1024 {
+		t.Fatalf("expected min clamp 64KB/s, got %d", min)
+	}
+
+	max := sm.clampBandwidth(10 * 1024 * 1024)
+	if max != 1024*1024 {
+		t.Fatalf("expected max clamp 1MB/s, got %d", max)
+	}
+}
+
+func TestUpdateUserConnection_ClampsBandwidthPenalty(t *testing.T) {
+	sm := setupStateManager(t)
+	nodeID := "node-5"
+	configureTestNode(sm, nodeID)
+
+	sm.UpdateNodeMetrics(nodeID, struct {
+		CPU                  float64
+		RAMMax               float64
+		RAMCurrent           float64
+		UpSpeed              float64
+		DownSpeed            float64
+		BWLimit              float64
+		CapIngest            bool
+		CapEdge              bool
+		CapStorage           bool
+		CapProcessing        bool
+		Roles                []string
+		StorageCapacityBytes uint64
+		StorageUsedBytes     uint64
+		MaxTranscodes        int
+		CurrentTranscodes    int
+	}{
+		UpSpeed: 10 * 1024 * 1024,
+	})
+
+	sm.UpdateUserConnection("stream-3", nodeID, "tenant-3", 1)
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	node := sm.nodes[nodeID]
+	if node.AddBandwidth != 1024*1024 {
+		t.Fatalf("expected AddBandwidth to be clamped to 1MB/s, got %d", node.AddBandwidth)
+	}
+}
