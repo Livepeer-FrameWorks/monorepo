@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -260,7 +261,7 @@ func (a *Agent) sync() {
 	req := &pb.InfrastructureSyncRequest{
 		NodeId:     a.nodeID,
 		PublicKey:  pubKey,
-		ListenPort: int32(a.listenPort),
+		ListenPort: safeInt32(a.listenPort),
 	}
 
 	syncCtx, cancel := context.WithTimeout(context.Background(), a.syncTimeout)
@@ -482,4 +483,14 @@ func loadOrGenerateNodeID(path string, logger logging.Logger) string {
 	}
 
 	return newID
+}
+
+func safeInt32(v int) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v)
 }

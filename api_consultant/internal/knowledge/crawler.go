@@ -1257,6 +1257,9 @@ func extractLinks(data []byte, baseURL string) []string {
 				if resolveErr != nil {
 					continue
 				}
+				if resolved.Scheme != "http" && resolved.Scheme != "https" {
+					continue
+				}
 				// Same host only
 				if resolved.Host != base.Host {
 					continue

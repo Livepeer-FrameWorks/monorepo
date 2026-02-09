@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1475,14 +1476,14 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 		Timestamp:         time.Now().Unix(),
 		TenantId:          stringPtr(config.GetTenantID()),
 		LivepeerSessionId: stringPtr(livepeerSessionId),
-		SegmentNumber:     int32Ptr(int32(segmentNumInt)),
+		SegmentNumber:     int32Ptr(safeInt32(segmentNumInt)),
 		SegmentStartMs:    int64Ptr(segmentStartMsInt),
-		Width:             int32Ptr(int32(widthInt)),
-		Height:            int32Ptr(int32(heightInt)),
+		Width:             int32Ptr(safeInt32(widthInt)),
+		Height:            int32Ptr(safeInt32(heightInt)),
 		InputBytes:        int64Ptr(inputBytesInt),
 		OutputBytesTotal:  int64Ptr(outputBytesTotalInt),
-		RenditionCount:    int32Ptr(int32(renditionCountInt)),
-		AttemptCount:      int32Ptr(int32(attemptCountInt)),
+		RenditionCount:    int32Ptr(safeInt32(renditionCountInt)),
+		AttemptCount:      int32Ptr(safeInt32(attemptCountInt)),
 		BroadcasterUrl:    stringPtr(broadcasterURL),
 		TurnaroundMs:      int64Ptr(turnaroundMsInt),
 		SpeedFactor:       float64Ptr(speedFactorFloat),
@@ -1635,14 +1636,14 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 		EncodeUsPerFrame:    int64Ptr(encodeUsInt),
 		InputCodec:          stringPtr(inputCodec),
 		OutputCodec:         stringPtr(outputCodec),
-		InputWidth:          int32Ptr(int32(inputWidthInt)),
-		InputHeight:         int32Ptr(int32(inputHeightInt)),
-		OutputWidth:         int32Ptr(int32(outputWidthInt)),
-		OutputHeight:        int32Ptr(int32(outputHeightInt)),
-		InputFpks:           int32Ptr(int32(inputFpksInt)),
+		InputWidth:          int32Ptr(safeInt32(inputWidthInt)),
+		InputHeight:         int32Ptr(safeInt32(inputHeightInt)),
+		OutputWidth:         int32Ptr(safeInt32(outputWidthInt)),
+		OutputHeight:        int32Ptr(safeInt32(outputHeightInt)),
+		InputFpks:           int32Ptr(safeInt32(inputFpksInt)),
 		OutputFpsMeasured:   float64Ptr(outputFpsFloat),
-		SampleRate:          int32Ptr(int32(sampleRateInt)),
-		Channels:            int32Ptr(int32(channelsInt)),
+		SampleRate:          int32Ptr(safeInt32(sampleRateInt)),
+		Channels:            int32Ptr(safeInt32(channelsInt)),
 		SourceTimestampMs:   int64Ptr(sourceTimestampMsInt),
 		SinkTimestampMs:     int64Ptr(sinkTimestampMsInt),
 		SourceAdvancedMs:    int64Ptr(sourceAdvancedMsInt),
@@ -1670,6 +1671,16 @@ func stringPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+func safeInt32(v int) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v)
 }
 
 func int32Ptr(i int32) *int32 {

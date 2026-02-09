@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -652,7 +653,11 @@ func adminSessionMAC(apiKey string) string {
 }
 
 func setAdminSessionCookie(c *gin.Context, apiKey string) {
-	c.SetCookie("skipper_session", adminSessionMAC(apiKey), 86400, "/", "", false, true)
+	isDev := os.Getenv("ENV") == "development" ||
+		os.Getenv("BUILD_ENV") == "development" ||
+		os.Getenv("GO_ENV") == "development"
+	secure := !isDev
+	c.SetCookie("skipper_session", adminSessionMAC(apiKey), 86400, "/", "", secure, true)
 }
 
 func validAdminSession(cookie, apiKey string) bool {

@@ -3821,6 +3821,9 @@ func GenerateTenantDailyStats(days *int) []*pb.TenantDailyStat {
 	if days != nil && *days > 0 {
 		daysCount = *days
 	}
+	if daysCount > 365 {
+		daysCount = 365
+	}
 
 	stats := make([]*pb.TenantDailyStat, daysCount)
 	for i := 0; i < daysCount; i++ {

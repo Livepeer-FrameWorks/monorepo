@@ -1832,7 +1832,7 @@ func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge,
 		limits := &pb.NodeLimits{}
 		hasLimits := false
 		if maxT, err := strconv.Atoi(os.Getenv("HELMSMAN_MAX_TRANSCODES")); err == nil && maxT > 0 {
-			limits.MaxTranscodes = int32(maxT)
+			limits.MaxTranscodes = safeInt32(maxT)
 			hasLimits = true
 		}
 		if capBytes, err := strconv.ParseUint(os.Getenv("HELMSMAN_STORAGE_CAPACITY_BYTES"), 10, 64); err == nil && capBytes > 0 {

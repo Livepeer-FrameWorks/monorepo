@@ -345,10 +345,14 @@ func (h *AuthHandlers) Logout() gin.HandlerFunc {
 			return
 		}
 
-		// Clear all auth cookies (must match domain to actually clear)
-		c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, false, true)
-		c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, false, true)
-		c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, false, true)
+		// Clear all auth cookies (must match domain and Secure flag to actually clear)
+		isDev := os.Getenv("ENV") == "development" ||
+			os.Getenv("BUILD_ENV") == "development" ||
+			os.Getenv("GO_ENV") == "development"
+		secure := !isDev
+		c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
+		c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
+		c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, secure, true)
 
 		c.JSON(http.StatusOK, gin.H{
 			"success": resp.Success,
@@ -370,10 +374,14 @@ func (h *AuthHandlers) RefreshToken() gin.HandlerFunc {
 		resp, err := h.commodore.RefreshToken(c.Request.Context(), refreshToken)
 		if err != nil {
 			h.logger.WithError(err).Debug("Token refresh failed")
-			// Clear invalid cookie
-			c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, false, true)
-			c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, false, true)
-			c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, false, true)
+			// Clear invalid cookies (must match Secure flag to actually clear)
+			isDev := os.Getenv("ENV") == "development" ||
+				os.Getenv("BUILD_ENV") == "development" ||
+				os.Getenv("GO_ENV") == "development"
+			secure := !isDev
+			c.SetCookie(refreshTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
+			c.SetCookie(accessTokenCookie, "", -1, "/", h.cookieDomain, secure, true)
+			c.SetCookie(tenantIDCookie, "", -1, "/", h.cookieDomain, secure, true)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
 			return
 		}
