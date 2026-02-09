@@ -564,6 +564,70 @@ func TestSettleX402Payment(t *testing.T) {
 		}
 	})
 
+	t.Run("non-viewer resource without auth", func(t *testing.T) {
+		_, err := SettleX402Payment(ctx, SettlementOptions{
+			Purser:   &mockPurser{},
+			Payload:  paymentPayload("10"),
+			Resource: "stream://stream-id",
+			Resolution: &ResourceResolution{
+				Resource: "stream://stream-id",
+				Kind:     ResourceKindStream,
+				TenantID: "tenant-1",
+				Resolved: true,
+			},
+		})
+		if err == nil || err.Code != ErrAuthRequired {
+			t.Fatalf("expected auth required")
+		}
+	})
+
+	t.Run("resource resolution not found without allow", func(t *testing.T) {
+		commodore := &mockCommodore{
+			resolveIdentifierFn: func(_ context.Context, _ string) (*pb.ResolveIdentifierResponse, error) {
+				return &pb.ResolveIdentifierResponse{Found: false}, nil
+			},
+		}
+		_, err := SettleX402Payment(ctx, SettlementOptions{
+			Purser:       &mockPurser{},
+			Commodore:    commodore,
+			Payload:      paymentPayload("10"),
+			Resource:     "stream://missing",
+			AuthTenantID: "tenant-1",
+		})
+		if err == nil || err.Code != ErrResourceNotFound {
+			t.Fatalf("expected resource not found")
+		}
+	})
+
+	t.Run("unresolved creator allowed with provided resolution", func(t *testing.T) {
+		purser := &mockPurser{
+			verifyFn: func(_ context.Context, tenantID string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+				if tenantID != "tenant-1" {
+					t.Errorf("expected tenant tenant-1, got %s", tenantID)
+				}
+				return &pb.VerifyX402PaymentResponse{Valid: true}, nil
+			},
+			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+				return &pb.SettleX402PaymentResponse{Success: true}, nil
+			},
+		}
+		_, err := SettleX402Payment(ctx, SettlementOptions{
+			Purser:                 purser,
+			Payload:                paymentPayload("10"),
+			Resource:               "stream://new-stream",
+			AuthTenantID:           "tenant-1",
+			AllowUnresolvedCreator: true,
+			Resolution: &ResourceResolution{
+				Resource: "stream://new-stream",
+				Kind:     ResourceKindStream,
+				Resolved: false,
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
 	t.Run("verification error", func(t *testing.T) {
 		purser := &mockPurser{
 			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
@@ -797,6 +861,28 @@ func TestSettleX402Payment(t *testing.T) {
 		}
 		if result.PayerAddress != "0xfrom" {
 			t.Fatalf("expected payer from payload, got %q", result.PayerAddress)
+		}
+	})
+
+	t.Run("payer address empty when payload missing auth", func(t *testing.T) {
+		purser := &mockPurser{
+			verifyFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.VerifyX402PaymentResponse, error) {
+				return &pb.VerifyX402PaymentResponse{Valid: true, PayerAddress: ""}, nil
+			},
+			settleFn: func(_ context.Context, _ string, _ *pb.X402PaymentPayload, _ string) (*pb.SettleX402PaymentResponse, error) {
+				return &pb.SettleX402PaymentResponse{Success: true, PayerAddress: ""}, nil
+			},
+		}
+		result, err := SettleX402Payment(ctx, SettlementOptions{
+			Purser:       purser,
+			Payload:      &pb.X402PaymentPayload{X402Version: 1, Scheme: "exact", Network: "base"},
+			AuthTenantID: "tenant-1",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.PayerAddress != "" {
+			t.Fatalf("expected empty payer address, got %q", result.PayerAddress)
 		}
 	})
 
