@@ -1,22 +1,49 @@
 # Codecov configuration
 # Docs: https://docs.codecov.com/docs/codecovyml-reference
 
+codecov:
+  notify:
+    # Wait for explicit send-notifications from CI rather than firing after
+    # the first upload. Prevents premature status checks when both Go and
+    # frontend jobs run, and avoids waiting forever when one is skipped.
+    manual_trigger: true
+
 coverage:
   status:
+    default_rules:
+      # When a flag's CI job is skipped (no relevant file changes), auto-pass
+      # its status check instead of leaving it pending or using stale data.
+      flag_coverage_not_uploaded_behavior: pass
     project:
-      default:
-        target: auto # don't drop overall coverage
-        threshold: 5% # allow 5% wiggle room
-        informational: true # don't block PRs yet (remove once coverage is established)
+      go:
+        target: auto
+        threshold: 5%
+        flags:
+          - go
+        informational: true
+      frontend:
+        target: auto
+        threshold: 5%
+        flags:
+          - frontend
+        informational: true
     patch:
-      default:
-        target: 50% # new code should have some coverage
-        informational: true # don't block PRs yet
+      go:
+        target: 50%
+        flags:
+          - go
+        informational: true
+      frontend:
+        target: 50%
+        flags:
+          - frontend
+        informational: true
 
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
   behavior: default
-  require_changes: true # only comment if coverage changed
+  require_changes: true
+  show_carryforward_flags: true
 
 flags:
   go:

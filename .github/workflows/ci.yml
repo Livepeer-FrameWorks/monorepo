@@ -242,6 +242,19 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  codecov-notify:
+    name: Codecov notify
+    needs: [go-test, frontend-test, frontend-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Send Codecov notifications
+        uses: codecov/codecov-action@v5
+        with:
+          run_command: send-notifications
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   ci-passed:
     name: CI passed
     needs: [changes, go-build, go-test, go-lint, frontend-lint, frontend-test, frontend-build]
