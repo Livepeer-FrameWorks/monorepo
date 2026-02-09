@@ -517,7 +517,7 @@ func newTestProcessor(t *testing.T) *Processor {
 func setupCommodoreClient(t *testing.T, response *pb.ValidateStreamKeyResponse, responseErr error) (*commodore.GRPCClient, func()) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}

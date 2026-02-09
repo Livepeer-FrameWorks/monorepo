@@ -34,7 +34,7 @@ func (s *stubX402Service) SettleX402Payment(ctx context.Context, req *pb.SettleX
 func setupPurserClient(t *testing.T, service *stubX402Service) (*purserclient.GRPCClient, func()) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
