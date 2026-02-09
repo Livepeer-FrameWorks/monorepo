@@ -170,6 +170,22 @@ describe("Layouts", () => {
       expect(layers).toHaveLength(1);
       expect(layers[0].transform.width).toBe(1);
     });
+
+    it("split-h respects splitRatio from config", () => {
+      const layers = applyLayout({ mode: "split-h", splitRatio: 0.65 }, ["a", "b"]);
+      expect(layers).toHaveLength(2);
+      expect(layers[0].transform.width).toBeCloseTo(0.65 - HALF_GAP, 5);
+      expect(layers[1].transform.width).toBeCloseTo(1 - 0.65 - HALF_GAP, 5);
+      expect(layers[1].transform.x).toBeCloseTo(0.65 + HALF_GAP, 5);
+    });
+
+    it("split-v respects splitRatio from config", () => {
+      const layers = applyLayout({ mode: "split-v", splitRatio: 0.35 }, ["a", "b"]);
+      expect(layers).toHaveLength(2);
+      expect(layers[0].transform.height).toBeCloseTo(0.35 - HALF_GAP, 5);
+      expect(layers[1].transform.height).toBeCloseTo(1 - 0.35 - HALF_GAP, 5);
+      expect(layers[1].transform.y).toBeCloseTo(0.35 + HALF_GAP, 5);
+    });
   });
 
   // =========================================================================

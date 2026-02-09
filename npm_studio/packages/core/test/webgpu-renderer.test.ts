@@ -890,8 +890,9 @@ describe("WebGPURenderer", () => {
 
       renderer.applyFilter("layer-1", { type: "blur", strength: 5 });
 
+      expect(warnSpy).toHaveBeenCalledTimes(1);
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Filter effects not yet implemented")
+        "[WebGPURenderer] Filter effects not yet implemented. Use WebGL renderer for filters."
       );
     });
   });
