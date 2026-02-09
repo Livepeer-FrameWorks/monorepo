@@ -426,6 +426,7 @@ export function applyLayout(layout: LayoutConfig, sourceIds: string[]): Layer[] 
   currentScalingMode = layout.scalingMode ?? "letterbox";
   const pipScale = layout.pipScale ?? PIP_SCALE;
   const splitRatio = layout.splitRatio ?? 0.5;
+  const clampedSplitRatio = Math.min(Math.max(splitRatio, SPLIT_GAP / 2), 1 - SPLIT_GAP / 2);
 
   switch (layout.mode) {
     // Solo / Fullscreen
@@ -447,9 +448,9 @@ export function applyLayout(layout: LayoutConfig, sourceIds: string[]): Layer[] 
     // Split variants
     case "split-h":
     case "side-by-side":
-      return applySplitLayout(sourceIds, "h", splitRatio);
+      return applySplitLayout(sourceIds, "h", clampedSplitRatio);
     case "split-v":
-      return applySplitLayout(sourceIds, "v", splitRatio);
+      return applySplitLayout(sourceIds, "v", clampedSplitRatio);
 
     // Focus variants (70/30 split)
     case "focus-l":
