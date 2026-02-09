@@ -59,15 +59,8 @@ COPY website_docs/ website_docs/
 COPY docs/skills/ docs/skills/
 
 # build the docs site
-RUN cp docs/skills/SKILL.md website_docs/public/SKILL.md \
-  && cp docs/skills/skill.json website_docs/public/skill.json \
-  && cp docs/skills/heartbeat.md website_docs/public/heartbeat.md \
-  && cp docs/skills/llms.txt website_docs/public/llms.txt \
-  && cp docs/skills/robots.txt website_docs/public/robots.txt \
-  && mkdir -p website_docs/public/.well-known \
-  && cp docs/skills/mcp.json website_docs/public/.well-known/mcp.json \
-  && cp docs/skills/security.txt website_docs/public/.well-known/security.txt \
-  && cp docs/skills/did.json website_docs/public/.well-known/did.json
+COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh
+RUN cd website_docs && ../scripts/copy-agent-files.sh public
 RUN pnpm --filter website_docs... run build
 
 FROM node:24-alpine AS runner

@@ -86,15 +86,8 @@ COPY pkg/graphql/schema.graphql pkg/graphql/schema.graphql
 COPY pkg/graphql/operations/ pkg/graphql/operations/
 
 # ensure skill files are present in static assets
-RUN cp docs/skills/SKILL.md website_application/static/SKILL.md \
-  && cp docs/skills/skill.json website_application/static/skill.json \
-  && cp docs/skills/heartbeat.md website_application/static/heartbeat.md \
-  && cp docs/skills/llms.txt website_application/static/llms.txt \
-  && cp docs/skills/robots.txt website_application/static/robots.txt \
-  && mkdir -p website_application/static/.well-known \
-  && cp docs/skills/mcp.json website_application/static/.well-known/mcp.json \
-  && cp docs/skills/security.txt website_application/static/.well-known/security.txt \
-  && cp docs/skills/did.json website_application/static/.well-known/did.json
+COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh
+RUN cd website_application && ../scripts/copy-agent-files.sh static
 
 # build the app (increase memory for Houdini codegen + Vite SSR + adapter-node)
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter frameworks-frontend... run build

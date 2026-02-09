@@ -115,3 +115,23 @@ infrastructure/nginx/logs/
 
 # Dead code analysis reports
 reports/
+
+# Agent discovery files (copied from docs/skills/ by prebuild)
+website_application/static/SKILL.md
+website_application/static/skill.json
+website_application/static/heartbeat.md
+website_application/static/llms.txt
+website_application/static/robots.txt
+website_application/static/.well-known/
+website_marketing/public/SKILL.md
+website_marketing/public/skill.json
+website_marketing/public/heartbeat.md
+website_marketing/public/llms.txt
+website_marketing/public/robots.txt
+website_marketing/public/.well-known/
+website_docs/public/SKILL.md
+website_docs/public/skill.json
+website_docs/public/heartbeat.md
+website_docs/public/llms.txt
+website_docs/public/robots.txt
+website_docs/public/.well-known/

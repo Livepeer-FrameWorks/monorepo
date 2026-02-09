@@ -68,15 +68,8 @@ COPY website_marketing/ website_marketing/
 COPY docs/skills/ docs/skills/
 
 # build the marketing site
-RUN cp docs/skills/SKILL.md website_marketing/public/SKILL.md \
-  && cp docs/skills/skill.json website_marketing/public/skill.json \
-  && cp docs/skills/heartbeat.md website_marketing/public/heartbeat.md \
-  && cp docs/skills/llms.txt website_marketing/public/llms.txt \
-  && cp docs/skills/robots.txt website_marketing/public/robots.txt \
-  && mkdir -p website_marketing/public/.well-known \
-  && cp docs/skills/mcp.json website_marketing/public/.well-known/mcp.json \
-  && cp docs/skills/security.txt website_marketing/public/.well-known/security.txt \
-  && cp docs/skills/did.json website_marketing/public/.well-known/did.json
+COPY scripts/copy-agent-files.sh scripts/copy-agent-files.sh
+RUN cd website_marketing && ../scripts/copy-agent-files.sh public
 RUN pnpm --filter frameworks-website... run build
 
 FROM node:24-alpine AS runner

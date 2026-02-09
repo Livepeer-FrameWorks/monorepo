@@ -4,6 +4,7 @@
   "private": true,
   "packageManager": "pnpm@9.12.0",
   "scripts": {
+    "prebuild": "../scripts/copy-agent-files.sh static",
     "build": "houdini generate && vite build",
     "dev": "vite dev",
     "preview": "vite preview",
