@@ -100,6 +100,10 @@ func GenerateWalletAuthMessage(nonce string) string {
 
 // ValidateWalletMessageTimestamp checks if the message timestamp is within 5 minutes
 func ValidateWalletMessageTimestamp(message string) error {
+	return validateWalletMessageTimestampAt(message, time.Now().UTC())
+}
+
+func validateWalletMessageTimestampAt(message string, now time.Time) error {
 	lines := strings.Split(message, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "Timestamp: ") {
@@ -109,7 +113,7 @@ func ValidateWalletMessageTimestamp(message string) error {
 				return fmt.Errorf("invalid timestamp format: %w", err)
 			}
 
-			age := time.Since(timestamp)
+			age := now.Sub(timestamp)
 			if age < -1*time.Minute {
 				return fmt.Errorf("message timestamp is in the future")
 			}

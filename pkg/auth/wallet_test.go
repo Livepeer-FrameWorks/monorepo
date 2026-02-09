@@ -307,6 +307,54 @@ func TestValidateWalletMessageTimestampBoundaries(t *testing.T) {
 	})
 }
 
+func TestValidateWalletMessageTimestampExactBoundaries(t *testing.T) {
+	now := time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		timestamp time.Time
+		wantErr   bool
+	}{
+		{
+			name:      "exactly 1 minute in future is allowed",
+			timestamp: now.Add(1 * time.Minute),
+			wantErr:   false,
+		},
+		{
+			name:      "1 minute and 1 second in future is rejected",
+			timestamp: now.Add(1*time.Minute + 1*time.Second),
+			wantErr:   true,
+		},
+		{
+			name:      "exactly 5 minutes old is allowed",
+			timestamp: now.Add(-5 * time.Minute),
+			wantErr:   false,
+		},
+		{
+			name:      "5 minutes and 1 second old is rejected",
+			timestamp: now.Add(-5*time.Minute - 1*time.Second),
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := fmt.Sprintf(
+				"FrameWorks Login\nTimestamp: %s\nNonce: abc123",
+				tt.timestamp.Format(time.RFC3339),
+			)
+
+			err := validateWalletMessageTimestampAt(msg, now)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestGenerateWalletAuthMessage(t *testing.T) {
 	nonce := "test-nonce-123"
 	msg := GenerateWalletAuthMessage(nonce)
