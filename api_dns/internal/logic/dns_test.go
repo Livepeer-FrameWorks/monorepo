@@ -296,6 +296,99 @@ func TestApplyLoadBalancerConfig_ReturnsPartialErrors(t *testing.T) {
 	}
 }
 
+func TestApplyLoadBalancerConfig_ListLoadBalancersError(t *testing.T) {
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			monitor.ID = "monitor"
+			return &monitor, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return nil, nil
+		},
+		createPool: func(pool cloudflare.Pool) (*cloudflare.Pool, error) {
+			pool.ID = "pool"
+			return &pool, nil
+		},
+		getPool: func(poolID string) (*cloudflare.Pool, error) {
+			return &cloudflare.Pool{
+				ID: poolID,
+				Origins: []cloudflare.Origin{
+					{Name: "one", Address: "1.1.1.1"},
+					{Name: "two", Address: "2.2.2.2"},
+				},
+			}, nil
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return nil, errors.New("list lb failed")
+		},
+	}
+
+	manager := newTestManager(cf)
+	_, err := manager.applyLoadBalancerConfig(context.Background(), "edge.example.com", "edge", []string{"2.2.2.2"}, false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "failed to list LBs") {
+		t.Fatalf("expected wrapped error, got: %v", err)
+	}
+}
+
+func TestApplyLoadBalancerConfig_UpdateLoadBalancerError(t *testing.T) {
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			monitor.ID = "monitor"
+			return &monitor, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return []cloudflare.Pool{{ID: "pool", Name: "edge"}}, nil
+		},
+		getPool: func(poolID string) (*cloudflare.Pool, error) {
+			return &cloudflare.Pool{
+				ID: poolID,
+				Origins: []cloudflare.Origin{
+					{Name: "one", Address: "1.1.1.1"},
+					{Name: "two", Address: "2.2.2.2"},
+				},
+			}, nil
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return []cloudflare.LoadBalancer{{ID: "lb1", Name: "edge.example.com"}}, nil
+		},
+		getLoadBalancer: func(lbID string) (*cloudflare.LoadBalancer, error) {
+			return &cloudflare.LoadBalancer{
+				ID:           lbID,
+				Name:         "edge.example.com",
+				FallbackPool: "wrong-pool",
+				DefaultPools: []string{"wrong-pool"},
+				TTL:          30,
+				Proxied:      false,
+				Enabled:      true,
+			}, nil
+		},
+		updateLoadBalancer: func(lbID string, lb cloudflare.LoadBalancer) (*cloudflare.LoadBalancer, error) {
+			return nil, errors.New("update failed")
+		},
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			return nil, nil
+		},
+	}
+
+	manager := newTestManager(cf)
+	_, err := manager.applyLoadBalancerConfig(context.Background(), "edge.example.com", "edge", []string{"2.2.2.2"}, false)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "failed to update LB") {
+		t.Fatalf("expected wrapped error, got: %v", err)
+	}
+}
+
 func newTestManager(cf *fakeCloudflareClient) *DNSManager {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)

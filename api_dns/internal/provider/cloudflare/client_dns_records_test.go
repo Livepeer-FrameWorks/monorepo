@@ -138,6 +138,59 @@ func TestDNSRecordRetryBehavior(t *testing.T) {
 	}
 }
 
+func TestListDNSRecords_IncludesQueryParamsAndPagination(t *testing.T) {
+	var page1Seen bool
+	var page2Seen bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("type") != "A" {
+			t.Fatalf("expected type=A, got %q", query.Get("type"))
+		}
+		if query.Get("name") != "edge.example.com" {
+			t.Fatalf("expected name=edge.example.com, got %q", query.Get("name"))
+		}
+		if query.Get("per_page") != "100" {
+			t.Fatalf("expected per_page=100, got %q", query.Get("per_page"))
+		}
+
+		switch query.Get("page") {
+		case "1":
+			page1Seen = true
+			writeAPIResponse(w, http.StatusOK, []DNSRecord{{
+				ID:      "record-1",
+				Type:    "A",
+				Name:    "edge.example.com",
+				Content: "1.1.1.1",
+			}}, &ResultInfo{TotalPages: 2})
+		case "2":
+			page2Seen = true
+			writeAPIResponse(w, http.StatusOK, []DNSRecord{{
+				ID:      "record-2",
+				Type:    "A",
+				Name:    "edge.example.com",
+				Content: "2.2.2.2",
+			}}, &ResultInfo{TotalPages: 2})
+		default:
+			t.Fatalf("unexpected page: %q", query.Get("page"))
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient("token", "zone-1", "account-1")
+	client.baseURL = server.URL
+
+	records, err := client.ListDNSRecords("A", "edge.example.com")
+	if err != nil {
+		t.Fatalf("list records: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(records))
+	}
+	if !page1Seen || !page2Seen {
+		t.Fatalf("expected both pages to be fetched, page1=%v page2=%v", page1Seen, page2Seen)
+	}
+}
+
 func writeAPIResponse(w http.ResponseWriter, status int, result interface{}, info ...*ResultInfo) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

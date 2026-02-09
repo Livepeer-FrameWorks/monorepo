@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,5 +120,45 @@ func TestClient_TimeoutReturnsError(t *testing.T) {
 	}
 	if err.Error() == "" {
 		t.Fatal("expected error message to be populated")
+	}
+}
+
+func TestClient_ReturnsErrorOnInvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not-json"))
+	}))
+	defer server.Close()
+
+	client := NewClient("token", "zone", "acct")
+	client.baseURL = server.URL
+
+	_, err := client.ListPools()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "failed to parse API response") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClient_ReturnsErrorWhenAPIFailureHasNoErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(APIResponse{
+			Success: false,
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient("token", "zone", "acct")
+	client.baseURL = server.URL
+
+	_, err := client.ListPools()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if err.Error() != "CloudFlare API request failed" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
