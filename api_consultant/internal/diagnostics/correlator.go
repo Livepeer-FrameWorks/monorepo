@@ -73,7 +73,7 @@ var patterns = []patternDef{
 		pattern: PatternCDNPressure,
 		signals: []signal{
 			{"avg_bandwidth_out", "above"},
-			{"total_active_sessions", "above"},
+			{"active_sessions", "above"},
 		},
 	},
 }

@@ -490,6 +490,9 @@ func (s *GRPCServer) ListReports(ctx context.Context, req *pb.ListSkipperReports
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
 	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
 	if s.reports == nil {
 		return nil, status.Error(codes.Unavailable, "report store unavailable")
 	}
@@ -527,6 +530,9 @@ func (s *GRPCServer) GetReport(ctx context.Context, req *pb.GetSkipperReportRequ
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
 	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
 	if s.reports == nil {
 		return nil, status.Error(codes.Unavailable, "report store unavailable")
 	}
@@ -549,6 +555,9 @@ func (s *GRPCServer) MarkReportsRead(ctx context.Context, req *pb.MarkSkipperRep
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
 	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
 	if s.reports == nil {
 		return nil, status.Error(codes.Unavailable, "report store unavailable")
 	}
@@ -565,6 +574,9 @@ func (s *GRPCServer) GetUnreadReportCount(ctx context.Context, _ *pb.GetUnreadRe
 	tenantID := skipper.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
+	}
+	if err := requireUserOrService(ctx); err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
 	if s.reports == nil {
 		return nil, status.Error(codes.Unavailable, "report store unavailable")

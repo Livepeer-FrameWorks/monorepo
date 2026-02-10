@@ -123,7 +123,7 @@ func TestCorrelateIngestInstability(t *testing.T) {
 func TestCorrelateCDNPressure(t *testing.T) {
 	devs := []Deviation{
 		{Metric: "avg_bandwidth_out", Current: 100e6, Baseline: 50e6, StdDev: 10e6, Sigma: 5, Direction: "above"},
-		{Metric: "total_active_sessions", Current: 500, Baseline: 100, StdDev: 20, Sigma: 20, Direction: "above"},
+		{Metric: "active_sessions", Current: 500, Baseline: 100, StdDev: 20, Sigma: 20, Direction: "above"},
 		{Metric: "total_rebuffer_count", Current: 30, Baseline: 5, StdDev: 3, Sigma: 8.3, Direction: "above"},
 	}
 	results := Correlate(devs)

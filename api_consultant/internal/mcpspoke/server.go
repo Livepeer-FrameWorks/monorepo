@@ -44,6 +44,7 @@ type ConsultantOrchestrator interface {
 const (
 	defaultGlobalTenantID = "00000000-0000-0000-0000-000000000001"
 	defaultSearchLimit    = 5
+	maxSpokeSearchLimit   = 20
 )
 
 // Config configures the Skipper spoke MCP server.
@@ -131,6 +132,9 @@ func handleSearchKnowledge(ctx context.Context, args searchKnowledgeInput, cfg C
 	if limit <= 0 {
 		limit = cfg.SearchLimit
 	}
+	if limit > maxSpokeSearchLimit {
+		limit = maxSpokeSearchLimit
+	}
 
 	tenantIDs := resolveKnowledgeTenants(args.TenantID, args.TenantScope, cfg.GlobalTenantID)
 	embedding, err := cfg.Embedder.EmbedQuery(ctx, query)
@@ -200,8 +204,10 @@ func resolveKnowledgeTenants(tenantID, scope, globalTenantID string) []string {
 		return []string{globalTenantID}
 	case "all":
 		return []string{tenantID, globalTenantID}
-	default:
+	case "tenant":
 		return []string{tenantID}
+	default: // "all" or empty — match documented default
+		return []string{tenantID, globalTenantID}
 	}
 }
 
@@ -249,6 +255,9 @@ func handleSearchWeb(ctx context.Context, args searchWebInput, cfg Config) (*mcp
 	limit := args.Limit
 	if limit <= 0 {
 		limit = cfg.SearchLimit
+	}
+	if limit > maxSpokeSearchLimit {
+		limit = maxSpokeSearchLimit
 	}
 	depth := strings.TrimSpace(args.SearchDepth)
 	if depth == "" {
@@ -353,9 +362,15 @@ func handleAskConsultant(ctx context.Context, args askConsultantInput, cfg Confi
 	// and Gateway tool calls to the correct tenant.
 	ctx = skipper.WithTenantID(ctx, args.TenantID)
 
+	// Enforce tool gating via context mode. The spoke path is for external
+	// agents — restrict to read + diagnostic tools (no mutations). Docs mode
+	// restricts further to read-only.
 	systemContent := chat.SystemPrompt
 	if strings.EqualFold(strings.TrimSpace(args.Mode), "docs") {
+		ctx = skipper.WithMode(ctx, "docs")
 		systemContent += chat.DocsSystemPromptSuffix
+	} else {
+		ctx = skipper.WithMode(ctx, "spoke")
 	}
 
 	messages := []llm.Message{

@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"frameworks/api_consultant/internal/metering"
 	"frameworks/pkg/llm"
 )
 
@@ -55,5 +56,9 @@ func generateSummary(ctx context.Context, provider llm.Provider, messages []Mess
 	}
 	_ = stream.Close()
 
+	metering.RecordLLMUsage(ctx,
+		estimateTokens(summarizePrompt)+estimateTokens(b.String()),
+		estimateTokens(result.String()),
+	)
 	return strings.TrimSpace(result.String()), nil
 }

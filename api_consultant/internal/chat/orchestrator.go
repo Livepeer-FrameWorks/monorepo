@@ -195,6 +195,10 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 			return OrchestratorResult{}, err
 		}
 
+		if countTokensInMessages(messages) > maxPromptTokenBudget {
+			messages = compactMessages(ctx, messages, maxPromptTokenBudget, o.llmProvider)
+		}
+
 		inputTokens += countTokensInMessages(messages)
 		llmStart := time.Now()
 		stream, err := o.llmProvider.Complete(ctx, messages, o.toolsForContext(ctx))
@@ -366,6 +370,7 @@ var docsAllowedTools = map[string]bool{
 	"search_web":                true,
 	"introspect_schema":         true,
 	"generate_query":            true,
+	"execute_query":             true,
 	"get_stream":                true,
 	"list_streams":              true,
 	"get_stream_health":         true,
@@ -377,6 +382,28 @@ var docsAllowedTools = map[string]bool{
 	"diagnose_routing":          true,
 	"get_stream_health_summary": true,
 	"get_anomaly_report":        true,
+	"search_support_history":    true,
+}
+
+// spokeMutationBlocklist lists mutation tools blocked in spoke mode.
+// Spoke callers (external agents via MCP) should not trigger mutations
+// through ask_consultant — those should go directly via Gateway MCP tools.
+var spokeMutationBlocklist = map[string]bool{
+	"create_stream":          true,
+	"update_stream":          true,
+	"delete_stream":          true,
+	"refresh_stream_key":     true,
+	"create_clip":            true,
+	"delete_clip":            true,
+	"start_dvr":              true,
+	"stop_dvr":               true,
+	"create_vod_upload":      true,
+	"complete_vod_upload":    true,
+	"abort_vod_upload":       true,
+	"delete_vod_asset":       true,
+	"topup_balance":          true,
+	"submit_payment":         true,
+	"update_billing_details": true,
 }
 
 // heartbeatAllowedTools lists tools permitted when mode=heartbeat.
@@ -390,6 +417,8 @@ func (o *Orchestrator) toolsForContext(ctx context.Context) []llm.Tool {
 	switch skipper.GetMode(ctx) {
 	case "docs":
 		return filterTools(o.tools, docsAllowedTools)
+	case "spoke":
+		return excludeTools(o.tools, spokeMutationBlocklist)
 	case "heartbeat":
 		return filterTools(o.tools, heartbeatAllowedTools)
 	default:
@@ -407,10 +436,22 @@ func filterTools(tools []llm.Tool, allowed map[string]bool) []llm.Tool {
 	return filtered
 }
 
+func excludeTools(tools []llm.Tool, blocked map[string]bool) []llm.Tool {
+	filtered := make([]llm.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if !blocked[tool.Name] {
+			filtered = append(filtered, tool)
+		}
+	}
+	return filtered
+}
+
 func (o *Orchestrator) modeAllowsTool(ctx context.Context, name string) bool {
 	switch skipper.GetMode(ctx) {
 	case "docs":
 		return docsAllowedTools[name]
+	case "spoke":
+		return !spokeMutationBlocklist[name]
 	case "heartbeat":
 		return heartbeatAllowedTools[name]
 	default:
@@ -420,6 +461,7 @@ func (o *Orchestrator) modeAllowsTool(ctx context.Context, name string) bool {
 
 var modeLabels = map[string]string{
 	"docs":      "documentation",
+	"spoke":     "consultant",
 	"heartbeat": "heartbeat",
 }
 
@@ -448,6 +490,15 @@ func (o *Orchestrator) callGatewayTool(ctx context.Context, call llm.ToolCall) (
 		return ToolOutcome{}, fmt.Errorf("unknown tool %q", call.Name)
 	}
 
+	// Block GraphQL mutations via execute_query in restricted modes.
+	if call.Name == "execute_query" && isMutationRestricted(ctx) {
+		if isMutationQuery(call.Arguments) {
+			return ToolOutcome{
+				Content: "Mutations are not allowed in this mode. Use execute_query for read-only queries only.",
+			}, nil
+		}
+	}
+
 	content, err := o.gateway.CallTool(ctx, call.Name, json.RawMessage(call.Arguments))
 	if err != nil {
 		return ToolOutcome{}, err
@@ -472,6 +523,29 @@ func (o *Orchestrator) callGatewayTool(ctx context.Context, call llm.ToolCall) (
 			Payload: payload,
 		},
 	}, nil
+}
+
+func isMutationRestricted(ctx context.Context) bool {
+	mode := skipper.GetMode(ctx)
+	return mode == "docs" || mode == "spoke"
+}
+
+func isMutationQuery(arguments string) bool {
+	var args struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return false
+	}
+	// Strip GraphQL line comments and blank lines to find the first operation token.
+	for _, line := range strings.Split(args.Query, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		return strings.HasPrefix(strings.ToLower(line), "mutation")
+	}
+	return false
 }
 
 var diagnosticTools = map[string]bool{
@@ -546,17 +620,28 @@ func parseDiagnosticMetrics(content string) map[string]float64 {
 		return metrics
 	}
 	knownMetrics := map[string]string{
-		"avg_buffer_health":    "avg_buffer_health",
-		"buffer_health":        "avg_buffer_health",
-		"avg_fps":              "avg_fps",
-		"fps":                  "avg_fps",
-		"avg_bitrate":          "avg_bitrate",
-		"bitrate":              "avg_bitrate",
-		"avg_packet_loss":      "avg_packet_loss",
-		"packet_loss":          "avg_packet_loss",
-		"avg_packet_loss_rate": "avg_packet_loss",
-		"rebuffer_count":       "total_rebuffer_count",
-		"total_rebuffer_count": "total_rebuffer_count",
+		"avg_buffer_health":     "avg_buffer_health",
+		"buffer_health":         "avg_buffer_health",
+		"avg_fps":               "avg_fps",
+		"fps":                   "avg_fps",
+		"avg_bitrate":           "avg_bitrate",
+		"avg_bitrate_kbps":      "avg_bitrate",
+		"bitrate":               "avg_bitrate",
+		"avg_packet_loss":       "avg_packet_loss",
+		"packet_loss":           "avg_packet_loss",
+		"avg_packet_loss_rate":  "avg_packet_loss",
+		"rebuffer_count":        "total_rebuffer_count",
+		"total_rebuffer_count":  "total_rebuffer_count",
+		"total_issue_count":     "total_issue_count",
+		"issue_count":           "total_issue_count",
+		"total_issues":          "total_issue_count",
+		"avg_bandwidth_in":      "avg_bandwidth_in",
+		"bandwidth_in":          "avg_bandwidth_in",
+		"avg_bandwidth_out":     "avg_bandwidth_out",
+		"avg_bandwidth_out_bps": "avg_bandwidth_out",
+		"bandwidth_out":         "avg_bandwidth_out",
+		"active_sessions":       "active_sessions",
+		"sessions":              "active_sessions",
 	}
 	// Gateway DiagnosticResult nests values under "metrics".
 	sources := []map[string]any{raw}
@@ -658,6 +743,9 @@ func (o *Orchestrator) searchKnowledge(ctx context.Context, arguments string) (T
 	if limit <= 0 {
 		limit = o.searchLimit
 	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit
+	}
 
 	tenantIDs := o.resolveKnowledgeTenants(ctx, input.TenantScope)
 	if len(tenantIDs) == 0 {
@@ -724,7 +812,7 @@ func (o *Orchestrator) searchKnowledge(ctx context.Context, arguments string) (T
 
 	response := mapKnowledgeResponse(query, chunks)
 	return ToolOutcome{
-		Content: response.Context,
+		Content: guardUntrustedContext("Knowledge search results", response.Context, maxToolContextTokens),
 		Sources: response.Sources,
 		Detail: ToolDetail{
 			Title:   "Tool call: search_knowledge",
@@ -747,11 +835,16 @@ func (o *Orchestrator) resolveKnowledgeTenants(ctx context.Context, scope string
 			tenantID,
 			o.globalTenantID,
 		}
-	default:
+	case "tenant":
 		if tenantID == "" {
 			return nil
 		}
 		return []string{tenantID}
+	default: // "all" or empty — match documented default
+		if tenantID == "" {
+			return []string{o.globalTenantID}
+		}
+		return []string{tenantID, o.globalTenantID}
 	}
 }
 
@@ -858,7 +951,7 @@ func (o *Orchestrator) searchWebTool(ctx context.Context, arguments string) (Too
 		return ToolOutcome{}, err
 	}
 	return ToolOutcome{
-		Content: response.Context,
+		Content: guardUntrustedContext("Web search results", response.Context, maxToolContextTokens),
 		Sources: response.Sources,
 		Detail: ToolDetail{
 			Title:   "Tool call: search_web",
@@ -1082,21 +1175,6 @@ func countTokensInMessages(messages []llm.Message) int {
 		total += estimateTokens(msg.Content)
 	}
 	return total
-}
-
-func trimMessagesToBudget(messages []llm.Message, budget int) []llm.Message {
-	if budget <= 0 || len(messages) <= 2 {
-		return messages
-	}
-	total := countTokensInMessages(messages)
-	if total <= budget {
-		return messages
-	}
-	for total > budget && len(messages) > 2 {
-		total -= estimateTokens(messages[1].Content)
-		messages = append(messages[:1], messages[2:]...)
-	}
-	return messages
 }
 
 // mergeToolCalls accumulates tool calls across streaming chunks. If a chunk

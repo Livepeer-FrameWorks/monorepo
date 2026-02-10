@@ -1300,6 +1300,9 @@ func extractLinks(data []byte, baseURL string) []string {
 
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
+		if len(links) >= maxLinksPerPage {
+			return
+		}
 		if n.Type == html.ElementNode && n.Data == "a" {
 			for _, attr := range n.Attr {
 				if attr.Key != "href" {

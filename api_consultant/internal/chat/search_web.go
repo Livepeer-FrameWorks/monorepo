@@ -13,6 +13,7 @@ import (
 
 const (
 	defaultSearchLimit  = 8
+	maxSearchLimit      = 20
 	defaultSearchDepth  = "basic"
 	maxSnippetRuneCount = 320
 )
@@ -75,6 +76,9 @@ func (t *SearchWebTool) Search(ctx context.Context, input SearchWebInput) (Searc
 	limit := input.Limit
 	if limit <= 0 {
 		limit = t.searchLimit
+	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit
 	}
 
 	depth := strings.TrimSpace(input.SearchDepth)

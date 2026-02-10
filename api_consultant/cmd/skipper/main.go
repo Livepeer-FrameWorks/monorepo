@@ -532,17 +532,27 @@ func main() {
 			logger.Warn("SKIPPER_ADMIN_TENANT_ID not set — WebUI will use tenant 'local' (Gateway tools unavailable)")
 		}
 		adminAPIKey := cfg.AdminAPIKey
+		enableUI := true
 		if adminAPIKey == "" {
-			logger.Warn("SKIPPER_API_KEY not set — admin WebUI has no authentication (network-trust only)")
+			if config.GetEnv("SKIPPER_WEB_UI_INSECURE", "") != "true" {
+				logger.Error("WebUI disabled: set SKIPPER_API_KEY or SKIPPER_WEB_UI_INSECURE=true")
+				enableUI = false
+			} else {
+				logger.Warn("WebUI running WITHOUT authentication (SKIPPER_WEB_UI_INSECURE=true)")
+			}
 		}
-		adminGroup := router.Group("/admin/api")
-		adminGroup.Use(adminAuthMiddleware(adminTenantID, []byte(jwtSecret), adminAPIKey))
-		adminGroup.Use(skipperContextBridge())
-		chat.RegisterRoutes(adminGroup, chatHandler)
+		if !enableUI {
+			logger.Info("Web UI skipped (no auth configured)")
+		} else {
+			adminGroup := router.Group("/admin/api")
+			adminGroup.Use(adminAuthMiddleware(adminTenantID, []byte(jwtSecret), adminAPIKey))
+			adminGroup.Use(skipperContextBridge())
+			chat.RegisterRoutes(adminGroup, chatHandler)
 
-		uiHandler := webui.Handler(webui.Config{APIURL: "/admin/api"})
-		router.NoRoute(gin.WrapH(uiHandler))
-		logger.Info("Web UI enabled at /")
+			uiHandler := webui.Handler(webui.Config{APIURL: "/admin/api"})
+			router.NoRoute(gin.WrapH(uiHandler))
+			logger.Info("Web UI enabled at /")
+		}
 	}
 
 	// Start HTTP server with graceful shutdown

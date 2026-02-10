@@ -132,13 +132,20 @@ func (gc *GatewayClient) CallTool(ctx context.Context, name string, arguments js
 		}
 	}
 
-	result, err := gc.session.CallTool(ctx, &mcp.CallToolParams{
+	gc.mu.RLock()
+	session := gc.session
+	gc.mu.RUnlock()
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      name,
 		Arguments: args,
 	})
 	if err != nil {
 		if reconnErr := gc.tryReconnect(ctx); reconnErr == nil {
-			result, err = gc.session.CallTool(ctx, &mcp.CallToolParams{
+			gc.mu.RLock()
+			session = gc.session
+			gc.mu.RUnlock()
+			result, err = session.CallTool(ctx, &mcp.CallToolParams{
 				Name:      name,
 				Arguments: args,
 			})
