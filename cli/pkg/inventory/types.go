@@ -136,13 +136,14 @@ type ServiceConfig struct {
 
 // EdgeManifest represents edge node deployment configuration (edges.yaml)
 type EdgeManifest struct {
-	Version    string     `yaml:"version"`
-	RootDomain string     `yaml:"root_domain"`
-	PoolDomain string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
-	Email      string     `yaml:"email"`       // ACME email
-	ClusterID  string     `yaml:"cluster_id,omitempty"`
-	FetchCert  bool       `yaml:"fetch_cert,omitempty"` // Fetch certs from Navigator
-	Nodes      []EdgeNode `yaml:"nodes"`
+	Version         string     `yaml:"version"`
+	RootDomain      string     `yaml:"root_domain"`
+	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
+	Email           string     `yaml:"email"`       // ACME email
+	ClusterID       string     `yaml:"cluster_id,omitempty"`
+	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
+	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
+	Nodes           []EdgeNode `yaml:"nodes"`
 }
 
 // EdgeNode represents a single edge node in the manifest

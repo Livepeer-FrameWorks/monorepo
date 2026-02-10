@@ -16,6 +16,7 @@ type EdgeVars struct {
 	AcmeEmail       string
 	FoghornHTTPBase string
 	FoghornGRPCAddr string
+	EnrollmentToken string
 	// Optional: file-based TLS certificate paths (if using Navigator-issued certs)
 	CertPath string // e.g., /etc/frameworks/certs/cert.pem
 	KeyPath  string // e.g., /etc/frameworks/certs/key.pem
@@ -43,6 +44,7 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{ACME_EMAIL}}", vars.AcmeEmail)
 		content = strings.ReplaceAll(content, "{{FOGHORN_HTTP_BASE}}", vars.FoghornHTTPBase)
 		content = strings.ReplaceAll(content, "{{FOGHORN_GRPC_ADDR}}", vars.FoghornGRPCAddr)
+		content = strings.ReplaceAll(content, "{{ENROLLMENT_TOKEN}}", vars.EnrollmentToken)
 		content = strings.ReplaceAll(content, "{{CERT_PATH}}", vars.CertPath)
 		content = strings.ReplaceAll(content, "{{KEY_PATH}}", vars.KeyPath)
 		// Handle TLS directive: if cert paths provided, use file-based; otherwise auto-ACME

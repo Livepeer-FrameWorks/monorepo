@@ -131,6 +131,7 @@ func newEdgeInitCmd() *cobra.Command {
 	var target string
 	var domain string
 	var email string
+	var enrollmentToken string
 	var overwrite bool
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, _, err := fwcfg.Load()
@@ -146,6 +147,7 @@ func newEdgeInitCmd() *cobra.Command {
 			AcmeEmail:       email,
 			FoghornHTTPBase: ctx.Endpoints.FoghornHTTPURL,
 			FoghornGRPCAddr: ctx.Endpoints.FoghornGRPCAddr,
+			EnrollmentToken: enrollmentToken,
 		}
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
 			return err
@@ -156,6 +158,7 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&target, "dir", ".", "target directory for templates")
 	cmd.Flags().StringVar(&domain, "domain", "", "EDGE_DOMAIN to configure (manual DNS)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
+	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	return cmd
 }
@@ -256,6 +259,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var clusterID string
 	var region string
 	var email string
+	var enrollmentToken string
 	var timeout time.Duration
 	var skipPreflight bool
 	var applyTuning bool
@@ -296,7 +300,7 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
-				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, parallel, timeout)
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, enrollmentToken, parallel, timeout)
 			}
 
 			// Single node mode - require ssh target
@@ -394,6 +398,7 @@ Multi-node manifest example:
 				AcmeEmail:       email,
 				FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 				FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+				EnrollmentToken: enrollmentToken,
 			}
 			// If we fetched certs, configure file-based TLS
 			if fetchCert && certPEM != "" && keyPEM != "" {
@@ -434,6 +439,7 @@ Multi-node manifest example:
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "Cluster ID for node registration")
 	cmd.Flags().StringVar(&region, "region", "", "Region for node registration (e.g., us-east-1)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
+	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "Timeout for HTTPS readiness")
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
 	cmd.Flags().BoolVar(&applyTuning, "tune", false, "Apply sysctl/limits tuning")
@@ -454,7 +460,7 @@ type EdgeProvisionResult struct {
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
-func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, defaultSSHKey string, parallel int, timeout time.Duration) error {
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration) error {
 	// Load manifest
 	manifest, err := inventory.LoadEdgeManifest(manifestPath)
 	if err != nil {
@@ -515,7 +521,11 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if sshKey == "" {
 				sshKey = defaultSSHKey
 			}
-			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout)
+			token := enrollmentToken
+			if token == "" {
+				token = manifest.EnrollmentToken
+			}
+			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout)
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -560,7 +570,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 }
 
 // provisionSingleEdgeNode provisions a single edge node (used by both single and manifest modes)
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email string, fetchCert, applyTuning, registerNode bool, timeout time.Duration) error {
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration) error {
 	primaryDomain := poolDomain
 	if primaryDomain == "" {
 		primaryDomain = nodeDomain
@@ -601,6 +611,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		AcmeEmail:       email,
 		FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 		FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+		EnrollmentToken: enrollmentToken,
 	}
 	if fetchCert && certPEM != "" && keyPEM != "" {
 		vars.CertPath = "/etc/frameworks/certs/cert.pem"
