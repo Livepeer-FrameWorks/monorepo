@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -101,14 +102,16 @@ func (s *CrawlScheduler) Stop() {
 }
 
 type crawlSource struct {
-	url    string
-	direct bool
-	render bool
+	url       string
+	direct    bool
+	render    bool
+	localPath string // non-empty for local: file entries
 }
 
 const (
 	directPagePrefix = "page:"
 	renderPrefix     = "render:"
+	localPrefix      = "local:"
 )
 
 func (s *CrawlScheduler) loadSources() []crawlSource {
@@ -116,6 +119,27 @@ func (s *CrawlScheduler) loadSources() []crawlSource {
 	var result []crawlSource
 	add := func(raw string) {
 		raw = strings.TrimSpace(raw)
+
+		// Local file — mutually exclusive with page:/render: prefixes.
+		if strings.HasPrefix(raw, localPrefix) {
+			raw = strings.TrimPrefix(raw, localPrefix)
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				return
+			}
+			lp := raw
+			if !filepath.IsAbs(lp) && s.sitemapsDir != "" {
+				lp = filepath.Join(s.sitemapsDir, lp)
+			}
+			lp = filepath.Clean(lp)
+			key := "local://" + lp
+			if !seen[key] {
+				seen[key] = true
+				result = append(result, crawlSource{url: key, localPath: lp})
+			}
+			return
+		}
+
 		direct := strings.HasPrefix(raw, directPagePrefix)
 		if direct {
 			raw = strings.TrimPrefix(raw, directPagePrefix)
@@ -180,9 +204,12 @@ func (s *CrawlScheduler) runCycle(ctx context.Context, checkTTL bool) {
 	}
 
 	var directPages, directPagesRendered []string
+	var localFiles []string
 	var sitemapSources []crawlSource
 	for _, src := range sources {
-		if src.direct {
+		if src.localPath != "" {
+			localFiles = append(localFiles, src.localPath)
+		} else if src.direct {
 			if src.render {
 				directPagesRendered = append(directPagesRendered, src.url)
 			} else {
@@ -233,40 +260,65 @@ func (s *CrawlScheduler) runCycle(ctx context.Context, checkTTL bool) {
 	_ = g.Wait()
 
 	allDirect := append(directPages, directPagesRendered...)
-	if len(allDirect) == 0 {
-		return
-	}
-
-	if checkTTL && s.pageCache != nil {
-		lastFetched, err := s.pageCache.LastFetchedForSource(ctx, s.tenantID, directPageSourceRoot)
-		if err == nil && lastFetched != nil && time.Since(*lastFetched) < s.interval {
-			s.logger.WithField("source", directPageSourceRoot).
-				WithField("last_crawl", lastFetched.Format(time.RFC3339)).
-				WithField("ttl", s.interval.String()).
-				Info("Skipping direct pages — crawled recently")
-			return
+	if len(allDirect) > 0 {
+		skipDirect := false
+		if checkTTL && s.pageCache != nil {
+			lastFetched, err := s.pageCache.LastFetchedForSource(ctx, s.tenantID, directPageSourceRoot)
+			if err == nil && lastFetched != nil && time.Since(*lastFetched) < s.interval {
+				s.logger.WithField("source", directPageSourceRoot).
+					WithField("last_crawl", lastFetched.Format(time.RFC3339)).
+					WithField("ttl", s.interval.String()).
+					Info("Skipping direct pages — crawled recently")
+				skipDirect = true
+			}
+		}
+		if !skipDirect {
+			total := len(allDirect)
+			s.logger.WithField("pages", total).Info("Starting scheduled direct page crawl")
+			var crawlErr error
+			if len(directPages) > 0 {
+				if err := s.crawler.CrawlPages(ctx, s.tenantID, directPages, false); err != nil {
+					crawlErr = err
+				}
+			}
+			if len(directPagesRendered) > 0 {
+				if err := s.crawler.CrawlPages(ctx, s.tenantID, directPagesRendered, true); err != nil {
+					crawlErr = err
+				}
+			}
+			if crawlErr != nil {
+				s.logger.WithError(crawlErr).Warn("Scheduled direct page crawl failed")
+				s.health.RecordFailure(directPageSourceRoot)
+			} else {
+				s.logger.WithField("pages", total).Info("Scheduled direct page crawl completed")
+				s.health.RecordSuccess(directPageSourceRoot, total)
+			}
 		}
 	}
 
-	total := len(allDirect)
-	s.logger.WithField("pages", total).Info("Starting scheduled direct page crawl")
-	var crawlErr error
-	if len(directPages) > 0 {
-		if err := s.crawler.CrawlPages(ctx, s.tenantID, directPages, false); err != nil {
-			crawlErr = err
+	if len(localFiles) > 0 {
+		skipLocal := false
+		if checkTTL && s.pageCache != nil {
+			lastFetched, err := s.pageCache.LastFetchedForSource(ctx, s.tenantID, localFileSourceRoot)
+			if err == nil && lastFetched != nil && time.Since(*lastFetched) < s.interval {
+				s.logger.WithField("source", localFileSourceRoot).
+					WithField("last_crawl", lastFetched.Format(time.RFC3339)).
+					WithField("ttl", s.interval.String()).
+					Info("Skipping local files — ingested recently")
+				skipLocal = true
+			}
 		}
-	}
-	if len(directPagesRendered) > 0 {
-		if err := s.crawler.CrawlPages(ctx, s.tenantID, directPagesRendered, true); err != nil {
-			crawlErr = err
+		if !skipLocal {
+			total := len(localFiles)
+			s.logger.WithField("files", total).Info("Starting local file ingestion")
+			if err := s.crawler.CrawlLocalFiles(ctx, s.tenantID, localFiles); err != nil {
+				s.logger.WithError(err).Warn("Local file ingestion failed")
+				s.health.RecordFailure(localFileSourceRoot)
+			} else {
+				s.logger.WithField("files", total).Info("Local file ingestion completed")
+				s.health.RecordSuccess(localFileSourceRoot, total)
+			}
 		}
-	}
-	if crawlErr != nil {
-		s.logger.WithError(crawlErr).Warn("Scheduled direct page crawl failed")
-		s.health.RecordFailure(directPageSourceRoot)
-	} else {
-		s.logger.WithField("pages", total).Info("Scheduled direct page crawl completed")
-		s.health.RecordSuccess(directPageSourceRoot, total)
 	}
 }
 

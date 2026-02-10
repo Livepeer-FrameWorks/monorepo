@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,5 +362,60 @@ func TestSchedulerLoadSourcesPagePrefixNoEnvExpansion(t *testing.T) {
 	// Env vars are NOT expanded (security hardening) — literal string preserved.
 	if result[0].url != "${TEST_PAGE_HOST}/guide" || !result[0].direct {
 		t.Fatalf("expected literal direct page (no env expansion), got %+v", result[0])
+	}
+}
+
+func TestSchedulerLoadSourcesLocalPrefix(t *testing.T) {
+	dir := t.TempDir()
+	content := "https://example.com/sitemap.xml\nlocal:../faq/bitrate.md\nlocal:../faq/codec.md\n"
+	if err := os.WriteFile(filepath.Join(dir, "mixed.txt"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &CrawlScheduler{
+		sitemapsDir: dir,
+		logger:      logging.NewLoggerWithService("test"),
+	}
+	result := s.loadSources()
+	if len(result) != 3 {
+		t.Fatalf("expected 3 sources, got %d", len(result))
+	}
+	// First should be a sitemap source.
+	if result[0].url != "https://example.com/sitemap.xml" || result[0].localPath != "" {
+		t.Fatalf("expected sitemap source, got %+v", result[0])
+	}
+	// Second and third should be local file sources.
+	if result[1].localPath == "" {
+		t.Fatalf("expected local source with localPath set, got %+v", result[1])
+	}
+	// Path should be resolved relative to sitemapsDir.
+	expectedPath := filepath.Clean(filepath.Join(dir, "../faq/bitrate.md"))
+	if result[1].localPath != expectedPath {
+		t.Fatalf("expected localPath %q, got %q", expectedPath, result[1].localPath)
+	}
+	// URL should use local:// scheme.
+	if !strings.HasPrefix(result[1].url, "local://") {
+		t.Fatalf("expected local:// URL scheme, got %q", result[1].url)
+	}
+	// Should not be marked as direct or render.
+	if result[1].direct || result[1].render {
+		t.Fatalf("local source should not be direct or render: %+v", result[1])
+	}
+}
+
+func TestSchedulerLoadSourcesLocalDedup(t *testing.T) {
+	dir := t.TempDir()
+	content := "local:../faq/file.md\nlocal:../faq/file.md\n"
+	if err := os.WriteFile(filepath.Join(dir, "dup.txt"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &CrawlScheduler{
+		sitemapsDir: dir,
+		logger:      logging.NewLoggerWithService("test"),
+	}
+	result := s.loadSources()
+	if len(result) != 1 {
+		t.Fatalf("expected 1 source (dedup), got %d", len(result))
 	}
 }

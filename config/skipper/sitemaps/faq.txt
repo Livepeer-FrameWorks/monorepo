@@ -1,0 +1,6 @@
+# Curated FAQ / Troubleshooting Knowledge
+# These local markdown files are ingested through the same pipeline as
+# web-crawled pages — content hashing skips unchanged files.
+local:../faq/bitrate-recommendations.md
+local:../faq/codec-compatibility.md
+local:../faq/protocol-selection.md

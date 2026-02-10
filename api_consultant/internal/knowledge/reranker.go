@@ -2,19 +2,17 @@ package knowledge
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"frameworks/pkg/llm"
 )
 
-const (
-	vectorWeight  = 0.7
-	keywordWeight = 0.3
-)
+const rrfK = 60 // standard Reciprocal Rank Fusion constant
 
 // Reranker rescores retrieved chunks. When a cross-encoder client is
 // configured it delegates to the model; otherwise it falls back to the
-// keyword-overlap heuristic.
+// RRF (Reciprocal Rank Fusion) heuristic.
 type Reranker struct {
 	client llm.RerankClient // nil = keyword fallback
 }
@@ -37,7 +35,7 @@ func (r *Reranker) Rerank(ctx context.Context, query string, chunks []Chunk) []C
 		}
 		// Cross-encoder failed; fall through to keyword fallback.
 	}
-	return keywordRerank(query, chunks)
+	return rrfRerank(query, chunks)
 }
 
 func (r *Reranker) crossEncoderRerank(ctx context.Context, query string, chunks []Chunk) []Chunk {
@@ -75,8 +73,11 @@ func (r *Reranker) crossEncoderRerank(ctx context.Context, query string, chunks 
 	return out
 }
 
-// keywordRerank is the original heuristic: 0.7*vector + 0.3*keyword overlap.
-func keywordRerank(query string, chunks []Chunk) []Chunk {
+// rrfRerank uses Reciprocal Rank Fusion to combine vector similarity and
+// keyword overlap rankings. RRF is rank-based (immune to score scale
+// differences) and is the standard fusion method in information retrieval.
+// score(d) = 1/(k + vectorRank) + 1/(k + keywordRank), k=60.
+func rrfRerank(query string, chunks []Chunk) []Chunk {
 	if len(chunks) == 0 {
 		return chunks
 	}
@@ -86,25 +87,56 @@ func keywordRerank(query string, chunks []Chunk) []Chunk {
 		return chunks
 	}
 
+	n := len(chunks)
+
+	// Compute keyword overlap scores.
+	kwScores := make([]float64, n)
+	for i, c := range chunks {
+		kwScores[i] = keywordOverlap(queryTerms, c.Text)
+	}
+
+	// Rank by vector similarity (Similarity field from DB), descending.
+	vectorOrder := make([]int, n)
+	for i := range vectorOrder {
+		vectorOrder[i] = i
+	}
+	sort.SliceStable(vectorOrder, func(a, b int) bool {
+		return chunks[vectorOrder[a]].Similarity > chunks[vectorOrder[b]].Similarity
+	})
+	vectorRank := make([]int, n)
+	for rank, idx := range vectorOrder {
+		vectorRank[idx] = rank + 1
+	}
+
+	// Rank by keyword overlap, descending.
+	kwOrder := make([]int, n)
+	for i := range kwOrder {
+		kwOrder[i] = i
+	}
+	sort.SliceStable(kwOrder, func(a, b int) bool {
+		return kwScores[kwOrder[a]] > kwScores[kwOrder[b]]
+	})
+	kwRank := make([]int, n)
+	for rank, idx := range kwOrder {
+		kwRank[idx] = rank + 1
+	}
+
+	// RRF fusion.
 	type scored struct {
 		chunk Chunk
 		score float64
 	}
-
-	items := make([]scored, len(chunks))
-	for i, chunk := range chunks {
-		kwScore := keywordOverlap(queryTerms, chunk.Text)
-		combined := vectorWeight*chunk.Similarity + keywordWeight*kwScore
-		items[i] = scored{chunk: chunk, score: combined}
+	items := make([]scored, n)
+	for i, c := range chunks {
+		score := 1.0/float64(rrfK+vectorRank[i]) + 1.0/float64(rrfK+kwRank[i])
+		items[i] = scored{chunk: c, score: score}
 	}
 
-	for i := 1; i < len(items); i++ {
-		for j := i; j > 0 && items[j].score > items[j-1].score; j-- {
-			items[j], items[j-1] = items[j-1], items[j]
-		}
-	}
+	sort.SliceStable(items, func(a, b int) bool {
+		return items[a].score > items[b].score
+	})
 
-	result := make([]Chunk, len(items))
+	result := make([]Chunk, n)
 	for i, item := range items {
 		item.chunk.Similarity = item.score
 		result[i] = item.chunk
@@ -113,9 +145,9 @@ func keywordRerank(query string, chunks []Chunk) []Chunk {
 }
 
 // Rerank is the package-level function preserved for backward compatibility.
-// It uses the keyword-overlap fallback only.
+// It uses the RRF fallback.
 func Rerank(query string, chunks []Chunk) []Chunk {
-	return keywordRerank(query, chunks)
+	return rrfRerank(query, chunks)
 }
 
 // keywordOverlap returns the fraction of query terms found in the text.
