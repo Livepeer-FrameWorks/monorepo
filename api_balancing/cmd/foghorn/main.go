@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"frameworks/api_balancing/internal/balancer"
+	foghornconfig "frameworks/api_balancing/internal/config"
 	"frameworks/api_balancing/internal/control"
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
 	"frameworks/api_balancing/internal/handlers"
@@ -20,6 +22,7 @@ import (
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pkgredis "frameworks/pkg/redis"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
@@ -70,6 +73,7 @@ func main() {
 
 	// Load environment variables
 	config.LoadEnv(logger)
+	foghornCfg := foghornconfig.Load()
 
 	// Storage base path for defrost operations when node has no StorageLocal.
 	// Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH for path reconstruction.
@@ -95,6 +99,19 @@ func main() {
 
 	// Create load balancer instance
 	lb := balancer.NewLoadBalancer(logger)
+
+	if foghornCfg.RedisURL != "" {
+		redisClient, err := pkgredis.NewClientFromURL(context.Background(), foghornCfg.RedisURL)
+		if err != nil {
+			logger.WithError(err).Warn("Failed to initialize redis state store")
+		} else {
+			instanceID := config.GetEnv("FOGHORN_INSTANCE_ID", fmt.Sprintf("foghorn-%d", time.Now().UnixNano()))
+			store := state.NewRedisStateStore(redisClient, foghornCfg.ClusterID)
+			if err := state.DefaultManager().EnableRedisSync(context.Background(), store, instanceID, logger); err != nil {
+				logger.WithError(err).Warn("Failed to enable redis state synchronization")
+			}
+		}
+	}
 
 	// Set weights from environment variables
 	cpu := uint64(config.GetEnvInt("CPU_WEIGHT", 500))
