@@ -262,3 +262,6 @@ export function getIconComponent(iconName?: string | null): ComponentType {
   if (!iconName) return HelpCircle;
   return iconMap[iconName as IconName] || HelpCircle;
 }
+
+// Re-export commonly used icons for direct imports
+export { Bell };
