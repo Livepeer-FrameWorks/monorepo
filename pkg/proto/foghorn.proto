@@ -54,6 +54,26 @@ service VodControlService {
   rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
 }
 
+// EdgeProvisioningService handles pre-registration of edge nodes during CLI provisioning.
+// Uses enrollment tokens for auth (no service token required).
+service EdgeProvisioningService {
+  // PreRegisterEdge validates an enrollment token and returns an assigned domain for the edge.
+  rpc PreRegisterEdge(PreRegisterEdgeRequest) returns (PreRegisterEdgeResponse);
+}
+
+message PreRegisterEdgeRequest {
+  string enrollment_token = 1;  // Bootstrap token for edge enrollment
+  string external_ip = 2;       // Edge's public IP (detected by CLI)
+}
+
+message PreRegisterEdgeResponse {
+  string node_id = 1;           // Assigned node ID
+  string edge_domain = 2;       // e.g., edge-{node_id}.{cluster_slug}.{root_domain}
+  string pool_domain = 3;       // e.g., edge.{cluster_slug}.{root_domain}
+  string cluster_slug = 4;
+  string foghorn_grpc_addr = 5; // Address for Helmsman's FOGHORN_CONTROL_ADDR
+}
+
 // TenantControlService handles tenant-level operations called by Purser
 service TenantControlService {
   // TerminateTenantStreams stops all active streams for a tenant (called when suspended)

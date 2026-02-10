@@ -2,8 +2,10 @@ package control
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -20,6 +22,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	navclient "frameworks/pkg/clients/navigator"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/grpcutil"
 	"frameworks/pkg/logging"
@@ -67,9 +70,10 @@ type Registry struct {
 }
 
 type conn struct {
-	stream   pb.HelmsmanControl_ConnectServer
-	last     time.Time
-	peerAddr string
+	stream      pb.HelmsmanControl_ConnectServer
+	last        time.Time
+	peerAddr    string
+	canonicalID string // node ID after fingerprint/enrollment resolution (may differ from registry key)
 }
 
 var registry *Registry
@@ -379,6 +383,15 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}
 				tenantID = resp.TenantId
 				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Edge node enrolled via Quartermaster")
+			}
+
+			// Store canonical node ID back into conn for cert refresh and other lookups
+			if canonicalNodeID != nodeID {
+				registry.mu.Lock()
+				if c, ok := registry.conns[nodeID]; ok {
+					c.canonicalID = canonicalNodeID
+				}
+				registry.mu.Unlock()
 			}
 
 			// Determine operational mode: DB-persisted wins over Helmsman's request
@@ -713,6 +726,8 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 				"/grpc.health.v1.Health/Watch",
 				// HelmsmanControl uses bootstrap token validated in-method
 				"/proto.HelmsmanControl/Connect",
+				// EdgeProvisioning uses enrollment token validated in-method
+				"/foghorn.EdgeProvisioningService/PreRegisterEdge",
 			},
 		})
 		unaryInterceptors = append([]grpc.UnaryServerInterceptor{authInterceptor}, unaryInterceptors...)
@@ -721,6 +736,7 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptors...))
 	srv := grpc.NewServer(opts...)
 	pb.RegisterHelmsmanControlServer(srv, &Server{})
+	RegisterEdgeProvisioningService(srv)
 
 	// gRPC health service for control plane
 	hs := health.NewServer()
@@ -1596,7 +1612,7 @@ func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
 	if rootDomain == "" {
 		rootDomain = "frameworks.network"
 	}
-	domain := fmt.Sprintf("*.%s.%s", strings.ToLower(strings.TrimSpace(node.GetClusterId())), rootDomain)
+	domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(node.GetClusterId()), rootDomain)
 
 	certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
 	if certErr != nil || certResp == nil || !certResp.GetFound() {
@@ -2760,4 +2776,129 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 			"error":      errorMsg,
 		}).Warn("Asset sync to S3 failed")
 	}
+}
+
+// ==================== Cert Refresh Loop ====================
+
+var lastPushedCertExpiry sync.Map // nodeID → int64 (expiresAt unix timestamp)
+
+// StartCertRefreshLoop periodically re-checks TLS certificates for all connected
+// Helmsman nodes and re-pushes ConfigSeed when a cert has been renewed.
+func StartCertRefreshLoop(ctx context.Context, interval time.Duration, log logging.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refreshTLSBundles(log)
+		}
+	}
+}
+
+func refreshTLSBundles(log logging.Logger) {
+	registry.mu.RLock()
+	nodes := make([]struct {
+		connID      string // registry key (used for SendConfigSeed)
+		canonicalID string // QM-resolved node ID (used for resolveClusterTLSBundle)
+		peerAddr    string
+	}, 0, len(registry.conns))
+	for id, c := range registry.conns {
+		cid := c.canonicalID
+		if cid == "" {
+			cid = id
+		}
+		nodes = append(nodes, struct {
+			connID      string
+			canonicalID string
+			peerAddr    string
+		}{id, cid, c.peerAddr})
+	}
+	registry.mu.RUnlock()
+
+	if len(nodes) == 0 {
+		return
+	}
+
+	for _, n := range nodes {
+		bundle := resolveClusterTLSBundle(n.canonicalID)
+		if bundle == nil {
+			continue
+		}
+
+		expiry := bundle.GetExpiresAt()
+		prev, ok := lastPushedCertExpiry.Load(n.connID)
+		if ok && prev.(int64) == expiry {
+			continue
+		}
+
+		mode := resolveOperationalMode(n.canonicalID, pb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
+		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode)
+		// Override TLS with the bundle we already resolved above.
+		// composeConfigSeed calls resolveClusterTLSBundle internally, which
+		// can fail transiently on the second call; using the pre-resolved
+		// bundle avoids pushing a seed that silently drops TLS.
+		seed.Tls = bundle
+		if err := SendConfigSeed(n.connID, seed); err != nil {
+			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to push renewed TLS certificate")
+			continue
+		}
+
+		lastPushedCertExpiry.Store(n.connID, expiry)
+		log.WithFields(logging.Fields{
+			"node_id":    n.canonicalID,
+			"conn_id":    n.connID,
+			"domain":     bundle.GetDomain(),
+			"expires_at": expiry,
+		}).Info("Pushed renewed TLS certificate to edge")
+	}
+}
+
+// ==================== Edge Provisioning (PreRegisterEdge) ====================
+
+type EdgeProvisioningServer struct {
+	pb.UnimplementedEdgeProvisioningServiceServer
+}
+
+func RegisterEdgeProvisioningService(srv *grpc.Server) {
+	pb.RegisterEdgeProvisioningServiceServer(srv, &EdgeProvisioningServer{})
+}
+
+func (s *EdgeProvisioningServer) PreRegisterEdge(_ context.Context, req *pb.PreRegisterEdgeRequest) (*pb.PreRegisterEdgeResponse, error) {
+	token := strings.TrimSpace(req.GetEnrollmentToken())
+	if token == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "enrollment_token is required")
+	}
+
+	// Use Foghorn's own cluster identity for domain generation.
+	// Token validation is deferred to Helmsman Register time (BootstrapEdgeNode)
+	// so the token is NOT consumed here.
+	clusterID := strings.TrimSpace(os.Getenv("CLUSTER_ID"))
+	if clusterID == "" {
+		clusterID = "default"
+	}
+	clusterSlug := pkgdns.SanitizeLabel(clusterID)
+
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	nodeID := hex.EncodeToString(b)
+
+	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
+	if rootDomain == "" {
+		rootDomain = "frameworks.network"
+	}
+
+	edgeDomain := fmt.Sprintf("edge-%s.%s.%s", nodeID, clusterSlug, rootDomain)
+	poolDomain := fmt.Sprintf("edge.%s.%s", clusterSlug, rootDomain)
+
+	foghornAddr := strings.TrimSpace(os.Getenv("FOGHORN_EXTERNAL_ADDR"))
+
+	return &pb.PreRegisterEdgeResponse{
+		NodeId:          nodeID,
+		EdgeDomain:      edgeDomain,
+		PoolDomain:      poolDomain,
+		ClusterSlug:     clusterSlug,
+		FoghornGrpcAddr: foghornAddr,
+	}, nil
 }

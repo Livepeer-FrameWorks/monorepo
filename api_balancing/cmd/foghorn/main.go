@@ -511,6 +511,11 @@ func main() {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
 	}
 
+	// Start cert refresh loop (re-pushes ConfigSeed when Navigator renews wildcard certs)
+	certRefreshCtx, certRefreshCancel := context.WithCancel(context.Background())
+	defer certRefreshCancel()
+	go control.StartCertRefreshLoop(certRefreshCtx, 1*time.Hour, logger)
+
 	// Start the hourly storage snapshot scheduler
 	go startStorageSnapshotScheduler(triggerProcessor, logger)
 

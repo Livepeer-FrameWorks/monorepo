@@ -23,6 +23,7 @@ type GRPCClient struct {
 	viewer  pb.ViewerControlServiceClient
 	vod     pb.VodControlServiceClient
 	tenant  pb.TenantControlServiceClient
+	edge    pb.EdgeProvisioningServiceClient
 	logger  logging.Logger
 	timeout time.Duration
 }
@@ -99,6 +100,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		viewer:  pb.NewViewerControlServiceClient(conn),
 		vod:     pb.NewVodControlServiceClient(conn),
 		tenant:  pb.NewTenantControlServiceClient(conn),
+		edge:    pb.NewEdgeProvisioningServiceClient(conn),
 		logger:  config.Logger,
 		timeout: config.Timeout,
 	}, nil
@@ -338,4 +340,15 @@ func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason
 		Reason:   reason,
 	}, grpc.Trailer(&trailers))
 	return resp, trailers, err
+}
+
+// =============================================================================
+// EDGE PROVISIONING
+// =============================================================================
+
+// PreRegisterEdge validates an enrollment token and returns an assigned domain for the edge.
+func (c *GRPCClient) PreRegisterEdge(ctx context.Context, req *pb.PreRegisterEdgeRequest) (*pb.PreRegisterEdgeResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.edge.PreRegisterEdge(ctx, req)
 }

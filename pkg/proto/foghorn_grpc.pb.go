@@ -811,6 +811,117 @@ var VodControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	EdgeProvisioningService_PreRegisterEdge_FullMethodName = "/foghorn.EdgeProvisioningService/PreRegisterEdge"
+)
+
+// EdgeProvisioningServiceClient is the client API for EdgeProvisioningService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// EdgeProvisioningService handles pre-registration of edge nodes during CLI provisioning.
+// Uses enrollment tokens for auth (no service token required).
+type EdgeProvisioningServiceClient interface {
+	// PreRegisterEdge validates an enrollment token and returns an assigned domain for the edge.
+	PreRegisterEdge(ctx context.Context, in *PreRegisterEdgeRequest, opts ...grpc.CallOption) (*PreRegisterEdgeResponse, error)
+}
+
+type edgeProvisioningServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewEdgeProvisioningServiceClient(cc grpc.ClientConnInterface) EdgeProvisioningServiceClient {
+	return &edgeProvisioningServiceClient{cc}
+}
+
+func (c *edgeProvisioningServiceClient) PreRegisterEdge(ctx context.Context, in *PreRegisterEdgeRequest, opts ...grpc.CallOption) (*PreRegisterEdgeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PreRegisterEdgeResponse)
+	err := c.cc.Invoke(ctx, EdgeProvisioningService_PreRegisterEdge_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// EdgeProvisioningServiceServer is the server API for EdgeProvisioningService service.
+// All implementations must embed UnimplementedEdgeProvisioningServiceServer
+// for forward compatibility.
+//
+// EdgeProvisioningService handles pre-registration of edge nodes during CLI provisioning.
+// Uses enrollment tokens for auth (no service token required).
+type EdgeProvisioningServiceServer interface {
+	// PreRegisterEdge validates an enrollment token and returns an assigned domain for the edge.
+	PreRegisterEdge(context.Context, *PreRegisterEdgeRequest) (*PreRegisterEdgeResponse, error)
+	mustEmbedUnimplementedEdgeProvisioningServiceServer()
+}
+
+// UnimplementedEdgeProvisioningServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedEdgeProvisioningServiceServer struct{}
+
+func (UnimplementedEdgeProvisioningServiceServer) PreRegisterEdge(context.Context, *PreRegisterEdgeRequest) (*PreRegisterEdgeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreRegisterEdge not implemented")
+}
+func (UnimplementedEdgeProvisioningServiceServer) mustEmbedUnimplementedEdgeProvisioningServiceServer() {
+}
+func (UnimplementedEdgeProvisioningServiceServer) testEmbeddedByValue() {}
+
+// UnsafeEdgeProvisioningServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EdgeProvisioningServiceServer will
+// result in compilation errors.
+type UnsafeEdgeProvisioningServiceServer interface {
+	mustEmbedUnimplementedEdgeProvisioningServiceServer()
+}
+
+func RegisterEdgeProvisioningServiceServer(s grpc.ServiceRegistrar, srv EdgeProvisioningServiceServer) {
+	// If the following call panics, it indicates UnimplementedEdgeProvisioningServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&EdgeProvisioningService_ServiceDesc, srv)
+}
+
+func _EdgeProvisioningService_PreRegisterEdge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PreRegisterEdgeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EdgeProvisioningServiceServer).PreRegisterEdge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EdgeProvisioningService_PreRegisterEdge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EdgeProvisioningServiceServer).PreRegisterEdge(ctx, req.(*PreRegisterEdgeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// EdgeProvisioningService_ServiceDesc is the grpc.ServiceDesc for EdgeProvisioningService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var EdgeProvisioningService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "foghorn.EdgeProvisioningService",
+	HandlerType: (*EdgeProvisioningServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PreRegisterEdge",
+			Handler:    _EdgeProvisioningService_PreRegisterEdge_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "foghorn.proto",
+}
+
+const (
 	TenantControlService_TerminateTenantStreams_FullMethodName = "/foghorn.TenantControlService/TerminateTenantStreams"
 	TenantControlService_InvalidateTenantCache_FullMethodName  = "/foghorn.TenantControlService/InvalidateTenantCache"
 )

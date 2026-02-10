@@ -15,10 +15,12 @@ import (
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/navigator"
 	"frameworks/pkg/clients/quartermaster"
 	pb "frameworks/pkg/proto"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -132,21 +134,53 @@ func newEdgeInitCmd() *cobra.Command {
 	var domain string
 	var email string
 	var enrollmentToken string
+	var foghornAddr string
 	var overwrite bool
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, _, err := fwcfg.Load()
 		if err != nil {
 			return err
 		}
-		ctx := fwcfg.GetCurrent(cfg)
+		cliCtx := fwcfg.GetCurrent(cfg)
 		if target == "" {
 			target = "."
 		}
+
+		// PreRegisterEdge: if enrollment token is provided but domain is not,
+		// call Foghorn to get an assigned domain.
+		var preRegNodeID string
+		var preRegFoghornAddr string
+		if enrollmentToken != "" && domain == "" {
+			addr := foghornAddr
+			if addr == "" {
+				addr = cliCtx.Endpoints.FoghornGRPCAddr
+			}
+			if addr == "" {
+				return fmt.Errorf("--foghorn-addr is required when using --enrollment-token without --domain")
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
+			resp, preRegErr := preRegisterEdgeLocal(cmd.Context(), addr, enrollmentToken)
+			if preRegErr != nil {
+				return fmt.Errorf("pre-registration failed: %w", preRegErr)
+			}
+			domain = resp.GetEdgeDomain()
+			preRegNodeID = resp.GetNodeId()
+			preRegFoghornAddr = resp.GetFoghornGrpcAddr()
+			fmt.Fprintf(cmd.OutOrStdout(), "  Assigned domain: %s\n", domain)
+			fmt.Fprintf(cmd.OutOrStdout(), "  Node ID: %s\n", preRegNodeID)
+		}
+
+		foghornGRPC := cliCtx.Endpoints.FoghornGRPCAddr
+		if preRegFoghornAddr != "" {
+			foghornGRPC = preRegFoghornAddr
+		}
+
 		vars := templates.EdgeVars{
+			NodeID:          preRegNodeID,
 			EdgeDomain:      domain,
 			AcmeEmail:       email,
-			FoghornHTTPBase: ctx.Endpoints.FoghornHTTPURL,
-			FoghornGRPCAddr: ctx.Endpoints.FoghornGRPCAddr,
+			FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
+			FoghornGRPCAddr: foghornGRPC,
 			EnrollmentToken: enrollmentToken,
 		}
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
@@ -159,6 +193,7 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&domain, "domain", "", "EDGE_DOMAIN to configure (manual DNS)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
+	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	return cmd
 }
@@ -260,6 +295,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var region string
 	var email string
 	var enrollmentToken string
+	var foghornAddr string
 	var timeout time.Duration
 	var skipPreflight bool
 	var applyTuning bool
@@ -307,8 +343,43 @@ Multi-node manifest example:
 			if sshTarget == "" {
 				return fmt.Errorf("--ssh is required (user@host) or use --manifest for multi-node")
 			}
+
+			// PreRegisterEdge: if enrollment token is provided but domain is not,
+			// call Foghorn to validate the token and get an assigned domain.
+			var preRegNodeID string
+			var preRegFoghornAddr string
+			if enrollmentToken != "" && nodeDomain == "" && poolDomain == "" {
+				addr := foghornAddr
+				if addr == "" {
+					addr = cliCtx.Endpoints.FoghornGRPCAddr
+				}
+				if addr == "" {
+					return fmt.Errorf("--foghorn-addr is required when using --enrollment-token without --node-domain")
+				}
+
+				fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
+				preRegResp, preRegErr := preRegisterEdge(cmd.Context(), addr, enrollmentToken, sshTarget, sshKey)
+				if preRegErr != nil {
+					return fmt.Errorf("pre-registration failed: %w", preRegErr)
+				}
+				nodeDomain = preRegResp.GetEdgeDomain()
+				poolDomain = preRegResp.GetPoolDomain()
+				preRegNodeID = preRegResp.GetNodeId()
+				preRegFoghornAddr = preRegResp.GetFoghornGrpcAddr()
+				if nodeName == "" {
+					nodeName = "edge-" + preRegNodeID
+				}
+				if clusterID == "" {
+					clusterID = preRegResp.GetClusterSlug()
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "  Assigned domain: %s\n", nodeDomain)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Pool domain: %s\n", poolDomain)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Node ID: %s\n", preRegNodeID)
+				fmt.Fprintf(cmd.OutOrStdout(), "  Cluster: %s\n", preRegResp.GetClusterSlug())
+			}
+
 			if poolDomain == "" && nodeDomain == "" {
-				return fmt.Errorf("at least one of --pool-domain or --node-domain is required")
+				return fmt.Errorf("at least one of --pool-domain or --node-domain is required (or use --enrollment-token for auto-assignment)")
 			}
 
 			// Use poolDomain for the main domain if set, otherwise nodeDomain
@@ -393,11 +464,16 @@ Multi-node manifest example:
 			}
 
 			fmt.Fprintln(cmd.OutOrStdout(), "\n[5/7] Generating and uploading edge templates...")
+			foghornGRPC := cliCtx.Endpoints.FoghornGRPCAddr
+			if preRegFoghornAddr != "" {
+				foghornGRPC = preRegFoghornAddr
+			}
 			vars := templates.EdgeVars{
+				NodeID:          preRegNodeID,
 				EdgeDomain:      primaryDomain,
 				AcmeEmail:       email,
 				FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
-				FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+				FoghornGRPCAddr: foghornGRPC,
 				EnrollmentToken: enrollmentToken,
 			}
 			// If we fetched certs, configure file-based TLS
@@ -440,6 +516,7 @@ Multi-node manifest example:
 	cmd.Flags().StringVar(&region, "region", "", "Region for node registration (e.g., us-east-1)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
+	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "Timeout for HTTPS readiness")
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
 	cmd.Flags().BoolVar(&applyTuning, "tune", false, "Apply sysctl/limits tuning")
@@ -845,6 +922,31 @@ func waitForHTTPS(cmd *cobra.Command, domain string, timeout time.Duration) erro
 }
 
 // getRemoteExternalIP detects the external IP of the remote host
+func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken string) (*pb.PreRegisterEdgeResponse, error) {
+	return preRegisterEdge(ctx, foghornAddr, enrollmentToken, "", "")
+}
+
+func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey string) (*pb.PreRegisterEdgeResponse, error) {
+	externalIP, _ := getRemoteExternalIP(sshTarget, sshKey)
+
+	logger := logrus.New()
+	logger.SetLevel(logrus.WarnLevel)
+	client, err := foghorn.NewGRPCClient(foghorn.GRPCConfig{
+		GRPCAddr: foghornAddr,
+		Timeout:  15 * time.Second,
+		Logger:   logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Foghorn at %s: %w", foghornAddr, err)
+	}
+	defer client.Close()
+
+	return client.PreRegisterEdge(ctx, &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: enrollmentToken,
+		ExternalIp:      externalIP,
+	})
+}
+
 func getRemoteExternalIP(sshTarget, sshKey string) (string, error) {
 	// Try multiple methods to detect external IP
 	methods := []struct {

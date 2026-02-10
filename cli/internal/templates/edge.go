@@ -12,6 +12,7 @@ import (
 var edgeFS embed.FS
 
 type EdgeVars struct {
+	NodeID          string
 	EdgeDomain      string
 	AcmeEmail       string
 	FoghornHTTPBase string
@@ -40,6 +41,7 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 			return err
 		}
 		content := string(b)
+		content = strings.ReplaceAll(content, "{{NODE_ID}}", vars.NodeID)
 		content = strings.ReplaceAll(content, "{{EDGE_DOMAIN}}", vars.EdgeDomain)
 		content = strings.ReplaceAll(content, "{{ACME_EMAIL}}", vars.AcmeEmail)
 		content = strings.ReplaceAll(content, "{{FOGHORN_HTTP_BASE}}", vars.FoghornHTTPBase)

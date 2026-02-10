@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"frameworks/api_dns/internal/provider/cloudflare"
+	pkgdns "frameworks/pkg/dns"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/proto"
 )
@@ -59,8 +59,6 @@ type quartermasterClient interface {
 	ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int) (*proto.ListHealthyNodesForDNSResponse, error)
 	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
 }
-
-var slugSanitizer = regexp.MustCompile(`[^a-z0-9-]`)
 
 // NewDNSManager creates a new DNSManager
 func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration, monitorConfig MonitorConfig) *DNSManager {
@@ -120,14 +118,7 @@ func (m *DNSManager) shouldProxy(serviceType string) bool {
 
 // SanitizeLabel normalizes a string for use as a DNS label (lowercase, hyphens only).
 func SanitizeLabel(raw string) string {
-	label := strings.ToLower(strings.TrimSpace(raw))
-	label = strings.ReplaceAll(label, "_", "-")
-	label = slugSanitizer.ReplaceAllString(label, "-")
-	label = strings.Trim(label, "-")
-	if label == "" {
-		return "default"
-	}
-	return label
+	return pkgdns.SanitizeLabel(raw)
 }
 
 // ClusterSlug returns a DNS-safe slug for a cluster, preferring cluster_id over cluster_name.
