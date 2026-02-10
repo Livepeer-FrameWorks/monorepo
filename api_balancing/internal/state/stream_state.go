@@ -245,6 +245,11 @@ type StreamStateManager struct {
 	rehydrateMu      sync.Mutex
 	lastRehydrateAt  time.Time
 	lastRehydrateErr string
+
+	redisStore  *RedisStateStore
+	instanceID  string
+	redisCancel context.CancelFunc
+	redisWg     sync.WaitGroup
 }
 
 // NewStreamStateManager creates a new stream state manager
@@ -307,7 +312,6 @@ func normalizeNodeOperationalMode(mode NodeOperationalMode) (NodeOperationalMode
 // UpdateStreamFromBuffer updates stream state from STREAM_BUFFER event
 func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, nodeID, tenantID, bufferState string, streamDetailsJSON string) error {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	// Get or create stream state
 	state := sm.streams[internalName]
@@ -346,6 +350,7 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 	if streamDetailsJSON != "" {
 		var details map[string]interface{}
 		if err := json.Unmarshal([]byte(streamDetailsJSON), &details); err != nil {
+			sm.mu.Unlock()
 			return err
 		}
 
@@ -362,6 +367,12 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 			state.HasIssues = false
 		}
 	}
+	streamPayload, _ := json.Marshal(state)
+	instPayload, _ := json.Marshal(inst)
+	sm.mu.Unlock()
+
+	sm.persistStreamWriteThrough(internalName, streamPayload)
+	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 
 	return nil
 }
@@ -417,19 +428,47 @@ func (sm *StreamStateManager) GetStreamsByTenant(tenantID string) []*StreamState
 // RemoveStream removes a stream from state tracking
 func (sm *StreamStateManager) RemoveStream(internalName string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
+	instanceNodeIDs := make([]string, 0, len(sm.streamInstances[internalName]))
+	for nodeID := range sm.streamInstances[internalName] {
+		instanceNodeIDs = append(instanceNodeIDs, nodeID)
+	}
 	delete(sm.streams, internalName)
+	delete(sm.streamInstances, internalName)
+	sm.mu.Unlock()
+
+	sm.persistStreamDeleteWriteThrough(internalName)
+	for _, nodeID := range instanceNodeIDs {
+		sm.persistStreamInstanceDeleteWriteThrough(internalName, nodeID)
+	}
 }
 
 // CleanupStaleStreams removes streams that haven't been updated recently
 func (sm *StreamStateManager) CleanupStaleStreams(maxAge time.Duration) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	cutoff := time.Now().Add(-maxAge)
+	type staleEntry struct {
+		name    string
+		nodeIDs []string
+	}
+	var stale []staleEntry
 	for internalName, state := range sm.streams {
 		if state.LastUpdate.Before(cutoff) {
+			nodeIDs := make([]string, 0, len(sm.streamInstances[internalName]))
+			for nodeID := range sm.streamInstances[internalName] {
+				nodeIDs = append(nodeIDs, nodeID)
+			}
+			stale = append(stale, staleEntry{name: internalName, nodeIDs: nodeIDs})
 			delete(sm.streams, internalName)
+			delete(sm.streamInstances, internalName)
+		}
+	}
+	sm.mu.Unlock()
+
+	for _, entry := range stale {
+		sm.persistStreamDeleteWriteThrough(entry.name)
+		for _, nodeID := range entry.nodeIDs {
+			sm.persistStreamInstanceDeleteWriteThrough(entry.name, nodeID)
 		}
 	}
 }
@@ -522,9 +561,67 @@ func ResetDefaultManagerForTests() *StreamStateManager {
 	return defaultManager
 }
 
+func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload json.RawMessage) {
+	if sm.redisStore == nil {
+		return
+	}
+	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyNode(nodeID), payload); err != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to write node state to redis")
+		}
+		return
+	}
+	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
+}
+
+func (sm *StreamStateManager) persistStreamWriteThrough(internalName string, payload json.RawMessage) {
+	if sm.redisStore == nil {
+		return
+	}
+	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyStream(internalName), payload); err != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithField("stream", internalName).Warn("Failed to write stream state to redis")
+		}
+		return
+	}
+	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpUpsert, StreamName: internalName, Payload: payload})
+}
+
+func (sm *StreamStateManager) persistStreamDeleteWriteThrough(internalName string) {
+	if sm.redisStore == nil {
+		return
+	}
+	if err := sm.redisStore.DeleteStream(internalName); err != nil && stateLogger != nil {
+		stateLogger.WithError(err).WithField("stream", internalName).Warn("Failed to delete stream state from redis")
+	}
+	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStream, Operation: StateOpDelete, StreamName: internalName})
+}
+
+func (sm *StreamStateManager) persistStreamInstanceDeleteWriteThrough(internalName, nodeID string) {
+	if sm.redisStore == nil {
+		return
+	}
+	if err := sm.redisStore.DeleteStreamInstance(internalName, nodeID); err != nil && stateLogger != nil {
+		stateLogger.WithError(err).WithField("stream", internalName).WithField("node_id", nodeID).Warn("Failed to delete stream instance from redis")
+	}
+	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpDelete, StreamName: internalName, NodeID: nodeID})
+}
+
+func (sm *StreamStateManager) persistStreamInstanceWriteThrough(internalName, nodeID string, payload json.RawMessage) {
+	if sm.redisStore == nil {
+		return
+	}
+	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyStreamInstance(internalName, nodeID), payload); err != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(err).WithFields(map[string]interface{}{"stream": internalName, "node_id": nodeID}).Warn("Failed to write stream instance to redis")
+		}
+		return
+	}
+	_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityStreamInstance, Operation: StateOpUpsert, StreamName: internalName, NodeID: nodeID, Payload: payload})
+}
+
 func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantID string, delta int) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	union := sm.streams[internalName]
 	if union == nil {
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
@@ -553,6 +650,22 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 	// Apply bandwidth penalty when a viewer connects (delta > 0)
 	if delta > 0 {
 		sm.addViewerBandwidthPenalty(nodeID, internalName, inst)
+	}
+
+	streamPayload, _ := json.Marshal(union)
+	instPayload, _ := json.Marshal(inst)
+	var nodePayload json.RawMessage
+	if delta > 0 {
+		if n := sm.nodes[nodeID]; n != nil {
+			nodePayload, _ = json.Marshal(n)
+		}
+	}
+	sm.mu.Unlock()
+
+	sm.persistStreamWriteThrough(internalName, streamPayload)
+	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
+	if nodePayload != nil {
+		sm.persistNodeWriteThrough(nodeID, nodePayload)
 	}
 }
 
@@ -615,7 +728,6 @@ func saturatingAddBandwidth(current, delta uint64) uint64 {
 
 func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, trackListJSON string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	union := sm.streams[internalName]
 	if union == nil {
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
@@ -634,11 +746,17 @@ func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, tr
 	}
 	inst.LastTrackList = trackListJSON
 	inst.LastUpdate = time.Now()
+
+	streamPayload, _ := json.Marshal(union)
+	instPayload, _ := json.Marshal(inst)
+	sm.mu.Unlock()
+
+	sm.persistStreamWriteThrough(internalName, streamPayload)
+	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
 func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	union := sm.streams[internalName]
 	if union == nil {
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
@@ -658,11 +776,16 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	inst.Status = "offline"
 	inst.BufferState = "EMPTY"
 	inst.LastUpdate = time.Now()
+	streamPayload, _ := json.Marshal(union)
+	instPayload, _ := json.Marshal(inst)
+	sm.mu.Unlock()
+
+	sm.persistStreamWriteThrough(internalName, streamPayload)
+	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
 func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated bool) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	union := sm.streams[internalName]
 	if union == nil {
 		union = &StreamState{InternalName: internalName, StreamName: internalName}
@@ -687,12 +810,17 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 	inst.BytesDown = down
 	inst.Replicated = replicated
 	inst.LastUpdate = time.Now()
+	streamPayload, _ := json.Marshal(union)
+	instPayload, _ := json.Marshal(inst)
+	sm.mu.Unlock()
+
+	sm.persistStreamWriteThrough(internalName, streamPayload)
+	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
 // UpdateStreamInstanceInfo merges arbitrary info into the per-node instance RawDetails
 func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID string, info map[string]interface{}) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	if sm.streamInstances[internalName] == nil {
 		sm.streamInstances[internalName] = make(map[string]*StreamInstanceState)
 	}
@@ -708,12 +836,15 @@ func (sm *StreamStateManager) UpdateStreamInstanceInfo(internalName, nodeID stri
 		inst.RawDetails[k] = v
 	}
 	inst.LastUpdate = time.Now()
+	instPayload, _ := json.Marshal(inst)
+	sm.mu.Unlock()
+
+	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
 // TouchNode updates only health + last update time without overwriting identity fields.
 func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -725,12 +856,15 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	now := time.Now()
 	n.LastUpdate = now
 	n.LastHeartbeat = now
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // SetNodeInfo updates per-node info
 func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool, lat, lon *float64, location string, outputsRaw string, outputs map[string]interface{}) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	n := sm.nodes[nodeID]
 	isNew := false
 	if n == nil {
@@ -765,6 +899,10 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 		n.OutputsRaw = outputsRaw
 	}
 	n.LastUpdate = time.Now()
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // UpdateNodeMetrics updates node metrics, capabilities, roles, and storage info
@@ -786,7 +924,6 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	CurrentTranscodes    int
 }) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 	n := sm.nodes[nodeID]
 	if n == nil {
 		n = newNodeState(nodeID)
@@ -811,12 +948,15 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 
 	// Recompute cached scores
 	sm.recomputeNodeScoresLocked(n)
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // UpdateNodeDiskUsage updates the disk usage statistics for a node
 func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, diskUsed uint64) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -827,15 +967,20 @@ func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, disk
 	n.DiskTotalBytes = diskTotal
 	n.DiskUsedBytes = diskUsed
 	n.LastUpdate = time.Now()
+
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // MarkNodeDisconnected immediately flags a node as unhealthy/stale after disconnect.
 func (sm *StreamStateManager) MarkNodeDisconnected(nodeID string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
+		sm.mu.Unlock()
 		return
 	}
 	n.IsHealthy = false
@@ -843,6 +988,10 @@ func (sm *StreamStateManager) MarkNodeDisconnected(nodeID string) {
 	// Keep the disconnected state sticky until a new heartbeat arrives.
 	n.LastHeartbeat = time.Time{}
 	n.LastUpdate = time.Now()
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error {
@@ -866,8 +1015,10 @@ func (sm *StreamStateManager) SetNodeOperationalMode(ctx context.Context, nodeID
 	}
 	n.OperationalMode = normalized
 	n.LastUpdate = time.Now()
+	nodePayload, _ := json.Marshal(n)
 	sm.mu.Unlock()
 
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 	return nil
 }
 
@@ -895,7 +1046,6 @@ func (sm *StreamStateManager) GetNodeActiveViewers(nodeID string) int {
 // SetNodeGPUInfo updates GPU information for a node
 func (sm *StreamStateManager) SetNodeGPUInfo(nodeID string, gpuVendor string, gpuCount int, gpuMemMB int, gpuCC string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -908,12 +1058,16 @@ func (sm *StreamStateManager) SetNodeGPUInfo(nodeID string, gpuVendor string, gp
 	n.GPUMemMB = gpuMemMB
 	n.GPUCC = gpuCC
 	n.LastUpdate = time.Now()
+
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // SetNodeStoragePaths updates storage path information for a node
 func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, storageBucket, storagePrefix string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -925,6 +1079,11 @@ func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, s
 	n.StorageBucket = storageBucket
 	n.StoragePrefix = storagePrefix
 	n.LastUpdate = time.Now()
+
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // BalancerStreamSummary provides per-stream metrics for balancer decisions
@@ -1132,7 +1291,6 @@ func (sm *StreamStateManager) GetClusterSnapshot() (streams []*StreamState, node
 // Node tags are updated only if explicitly provided, allowing for flexible tag management.
 func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, tenantID string, tags []string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -1158,6 +1316,11 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 
 	// Recompute cached scores as node connection info (like BinHost) affects eligibility.
 	sm.recomputeNodeScoresLocked(n)
+
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // ArtifactNodeInfo contains node information for artifact routing
@@ -1226,10 +1389,10 @@ func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.S
 // UpdateAddBandwidth updates the bandwidth penalty for a node
 func (sm *StreamStateManager) UpdateAddBandwidth(nodeID string, addBandwidth uint64) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
+		sm.mu.Unlock()
 		return
 	}
 
@@ -1238,6 +1401,11 @@ func (sm *StreamStateManager) UpdateAddBandwidth(nodeID string, addBandwidth uin
 
 	// Recompute cached scores since bandwidth affects them
 	sm.recomputeNodeScoresLocked(n)
+
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // SetNodeArtifacts updates the artifacts stored on a node (in-memory and persistent)
@@ -1257,7 +1425,28 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 
 	// Get artifact repo reference while holding lock
 	artifactRepo := sm.repos.Artifacts
+	redisStore := sm.redisStore
+	instanceID := sm.instanceID
 	sm.mu.Unlock()
+
+	if redisStore != nil {
+		artifactStates := make([]*NodeArtifactState, 0, len(artifacts))
+		for _, artifact := range artifacts {
+			artifactStates = append(artifactStates, &NodeArtifactState{
+				NodeID:    nodeID,
+				ClipHash:  artifact.GetClipHash(),
+				FilePath:  artifact.GetFilePath(),
+				SizeBytes: artifact.GetSizeBytes(),
+			})
+		}
+		if err := redisStore.SetNodeArtifacts(nodeID, artifactStates); err != nil {
+			if stateLogger != nil {
+				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to write node artifacts to redis")
+			}
+		} else if payload, err := json.Marshal(artifactStates); err == nil {
+			_ = redisStore.PublishStateChange(StateChange{InstanceID: instanceID, Entity: StateEntityArtifact, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
+		}
+	}
 
 	// Persist to database (outside lock to avoid blocking)
 	if artifactRepo != nil && len(artifacts) > 0 {
@@ -1297,7 +1486,6 @@ func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *pb.Stored
 	}
 
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -1309,12 +1497,18 @@ func (sm *StreamStateManager) AddNodeArtifact(nodeID string, artifact *pb.Stored
 		if existing.GetClipHash() == artifact.GetClipHash() {
 			n.Artifacts[i] = artifact
 			n.LastUpdate = time.Now()
+			artifactsCopy := append([]*pb.StoredArtifact(nil), n.Artifacts...)
+			sm.mu.Unlock()
+			sm.SetNodeArtifacts(nodeID, artifactsCopy)
 			return
 		}
 	}
 
 	n.Artifacts = append(n.Artifacts, artifact)
 	n.LastUpdate = time.Now()
+	artifactsCopy := append([]*pb.StoredArtifact(nil), n.Artifacts...)
+	sm.mu.Unlock()
+	sm.SetNodeArtifacts(nodeID, artifactsCopy)
 }
 
 // setNodeArtifactsMemoryOnly updates artifacts in memory without persisting to DB.
@@ -1411,10 +1605,10 @@ func triggerIncrementalDtshSync(nodeID, artifactHash, artifactType, filePath str
 // RemoveNodeArtifact removes a specific artifact from a node's list
 func (sm *StreamStateManager) RemoveNodeArtifact(nodeID string, clipHash string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil || len(n.Artifacts) == 0 {
+		sm.mu.Unlock()
 		return
 	}
 
@@ -1428,6 +1622,9 @@ func (sm *StreamStateManager) RemoveNodeArtifact(nodeID string, clipHash string)
 
 	n.Artifacts = newArtifacts
 	n.LastUpdate = time.Now()
+	artifactsCopy := append([]*pb.StoredArtifact(nil), n.Artifacts...)
+	sm.mu.Unlock()
+	sm.SetNodeArtifacts(nodeID, artifactsCopy)
 }
 
 // ApplyArtifactDeleted updates state and persists artifact deletion
@@ -1446,10 +1643,10 @@ func (sm *StreamStateManager) ApplyArtifactDeleted(ctx context.Context, clipHash
 // DecayAddBandwidth applies bandwidth penalty decay to a node (like C++ LoadBalancer)
 func (sm *StreamStateManager) DecayAddBandwidth(nodeID string) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
+		sm.mu.Unlock()
 		return
 	}
 
@@ -1459,6 +1656,11 @@ func (sm *StreamStateManager) DecayAddBandwidth(nodeID string) {
 
 	// Recompute cached scores since bandwidth affects them
 	sm.recomputeNodeScoresLocked(n)
+
+	nodePayload, _ := json.Marshal(n)
+	sm.mu.Unlock()
+
+	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // recomputeNodeScoresLocked recalculates cached score components for a node (must hold write lock)
@@ -1918,6 +2120,10 @@ func (sm *StreamStateManager) Shutdown() {
 		// already closed
 	default:
 		close(sm.reconcileStop)
+	}
+	if sm.redisCancel != nil {
+		sm.redisCancel()
+		sm.redisWg.Wait()
 	}
 }
 

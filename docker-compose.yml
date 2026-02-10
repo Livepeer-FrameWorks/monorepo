@@ -7,6 +7,7 @@ networks:
 
 volumes:
   postgres_data:
+  foghorn_redis_data:
   mistserver_data:
   zookeeper_data:
   zookeeper_logs:
@@ -216,6 +217,8 @@ services:
       STREAM_BONUS: ${STREAM_BONUS}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
+      REDIS_URL: redis://foghorn-redis:6379
+      FOGHORN_INSTANCE_ID: foghorn-1
     ports:
       - "18008:18008"
       - "18019:18019"
@@ -223,6 +226,8 @@ services:
       postgres:
         condition: service_healthy
       quartermaster:
+        condition: service_healthy
+      foghorn-redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -242,6 +247,90 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  foghorn-2:
+    <<: *default-env
+    container_name: frameworks-foghorn-2
+    build:
+      context: .
+      dockerfile: api_balancing/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: 18018
+      FOGHORN_CONTROL_BIND_ADDR: 0.0.0.0:18029
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      COMMODORE_CACHE_TTL: ${COMMODORE_CACHE_TTL}
+      COMMODORE_CACHE_SWR: ${COMMODORE_CACHE_SWR}
+      COMMODORE_CACHE_NEG_TTL: ${COMMODORE_CACHE_NEG_TTL}
+      COMMODORE_CACHE_MAX: ${COMMODORE_CACHE_MAX}
+      GEOIP_MMDB_PATH: ${GEOIP_MMDB_PATH}
+      GEOIP_CACHE_TTL: ${GEOIP_CACHE_TTL}
+      GEOIP_CACHE_SWR: ${GEOIP_CACHE_SWR}
+      GEOIP_CACHE_NEG_TTL: ${GEOIP_CACHE_NEG_TTL}
+      GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
+      DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}
+      GRPC_USE_TLS: ${FOGHORN_GRPC_USE_TLS}
+      GRPC_TLS_CERT_PATH: ${FOGHORN_GRPC_TLS_CERT_PATH}
+      GRPC_TLS_KEY_PATH: ${FOGHORN_GRPC_TLS_KEY_PATH}
+      CPU_WEIGHT: ${CPU_WEIGHT}
+      RAM_WEIGHT: ${RAM_WEIGHT}
+      BANDWIDTH_WEIGHT: ${BANDWIDTH_WEIGHT}
+      GEO_WEIGHT: ${GEO_WEIGHT}
+      STREAM_BONUS: ${STREAM_BONUS}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
+      REDIS_URL: redis://foghorn-redis:6379
+      FOGHORN_INSTANCE_ID: foghorn-2
+    ports:
+      - "18028:18018"
+      - "18029:18029"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_healthy
+      foghorn-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18018/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  foghorn-redis:
+    image: redis:7-alpine
+    container_name: frameworks-foghorn-redis
+    hostname: foghorn-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - foghorn_redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - frameworks
 
   # Add Kafka infrastructure for event-driven analytics
   zookeeper:
@@ -1108,6 +1197,8 @@ services:
       mistserver:
         condition: service_started
       foghorn:
+        condition: service_started
+      foghorn-2:
         condition: service_started
       commodore:
         condition: service_started
