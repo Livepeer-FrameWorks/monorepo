@@ -47,17 +47,15 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{ENROLLMENT_TOKEN}}", vars.EnrollmentToken)
 		content = strings.ReplaceAll(content, "{{CERT_PATH}}", vars.CertPath)
 		content = strings.ReplaceAll(content, "{{KEY_PATH}}", vars.KeyPath)
-		// Default to file-based TLS for Navigator-distributed wildcard certs.
-		certPath := vars.CertPath
-		keyPath := vars.KeyPath
-		if certPath == "" {
-			certPath = "/etc/frameworks/certs/cert.pem"
+		// TLS: use explicit cert paths if provided, otherwise auto-ACME (Caddy default).
+		// ConfigSeed will push wildcard certs to /etc/frameworks/certs/ at runtime;
+		// Caddy watches the files and hot-reloads when they appear.
+		if vars.CertPath != "" && vars.KeyPath != "" {
+			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)
+			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)
+		} else {
+			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", "")
 		}
-		if keyPath == "" {
-			keyPath = "/etc/frameworks/certs/key.pem"
-		}
-		tlsDirective := fmt.Sprintf("tls %s %s", certPath, keyPath)
-		content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)
 		outPath := filepath.Join(targetDir, f.out)
 		if _, err := os.Stat(outPath); err == nil && !overwrite {
 			return fmt.Errorf("file exists: %s (use overwrite)", outPath)

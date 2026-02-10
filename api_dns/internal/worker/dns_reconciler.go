@@ -95,8 +95,8 @@ func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
 		if !cluster.GetIsActive() {
 			continue
 		}
-		clusterSlug := strings.ToLower(strings.TrimSpace(cluster.GetClusterId()))
-		if clusterSlug == "" {
+		clusterSlug := logic.ClusterSlug(cluster)
+		if clusterSlug == "" || clusterSlug == "default" {
 			continue
 		}
 		cert, certErr := r.certManager.EnsureClusterWildcardCertificate(ctx, clusterSlug, r.rootDomain, r.acmeEmail)

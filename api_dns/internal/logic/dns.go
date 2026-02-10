@@ -118,7 +118,8 @@ func (m *DNSManager) shouldProxy(serviceType string) bool {
 	return m.proxy[serviceType]
 }
 
-func sanitizeLabel(raw string) string {
+// SanitizeLabel normalizes a string for use as a DNS label (lowercase, hyphens only).
+func SanitizeLabel(raw string) string {
 	label := strings.ToLower(strings.TrimSpace(raw))
 	label = strings.ReplaceAll(label, "_", "-")
 	label = slugSanitizer.ReplaceAllString(label, "-")
@@ -129,14 +130,19 @@ func sanitizeLabel(raw string) string {
 	return label
 }
 
-func (m *DNSManager) clusterSlug(cluster *proto.InfrastructureCluster) string {
+// ClusterSlug returns a DNS-safe slug for a cluster, preferring cluster_id over cluster_name.
+func ClusterSlug(cluster *proto.InfrastructureCluster) string {
 	if cluster == nil {
 		return "default"
 	}
-	if v := sanitizeLabel(cluster.GetClusterId()); v != "default" {
+	if v := SanitizeLabel(cluster.GetClusterId()); v != "default" {
 		return v
 	}
-	return sanitizeLabel(cluster.GetClusterName())
+	return SanitizeLabel(cluster.GetClusterName())
+}
+
+func (m *DNSManager) clusterSlug(cluster *proto.InfrastructureCluster) string {
+	return ClusterSlug(cluster)
 }
 
 func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType string) (map[string]string, error) {
@@ -180,14 +186,15 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 			}
 		}
 
+		svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
 		if len(ips) == 0 {
-			if _, err := m.clearDNSConfig(ctx, fmt.Sprintf("%s.%s", serviceType, rootDomain)); err != nil {
-				partialErrors[fmt.Sprintf("%s.%s", serviceType, rootDomain)] = err.Error()
+			if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
+				partialErrors[svcFQDN] = err.Error()
 			}
 		} else {
-			svcPartial, syncErr := m.SyncService(ctx, serviceType, rootDomain)
+			svcPartial, syncErr := m.syncClusterService(ctx, svcFQDN, serviceType, ips)
 			if syncErr != nil {
-				partialErrors[fmt.Sprintf("%s.%s", serviceType, rootDomain)] = syncErr.Error()
+				partialErrors[svcFQDN] = syncErr.Error()
 			} else {
 				for k, v := range svcPartial {
 					partialErrors[k] = v
@@ -204,7 +211,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 			if node.ExternalIp == nil || *node.ExternalIp == "" {
 				continue
 			}
-			nodeLabel := sanitizeLabel(node.GetNodeId())
+			nodeLabel := SanitizeLabel(node.GetNodeId())
 			fqdn := fmt.Sprintf("edge-%s.%s", nodeLabel, rootDomain)
 			desiredNodeRecords[fqdn] = *node.ExternalIp
 			if err := m.applySingleNodeConfig(ctx, fqdn, *node.ExternalIp, false); err != nil {
@@ -236,6 +243,25 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
+	subdomain := serviceType
+	switch serviceType {
+	case "gateway", "api":
+		subdomain = "api"
+	case "website":
+		return rootDomain
+	}
+	return fmt.Sprintf("%s.%s", subdomain, rootDomain)
+}
+
+// syncClusterService applies DNS for a cluster-scoped service using pre-fetched IPs.
+func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType string, ips []string) (map[string]string, error) {
+	if len(ips) == 1 {
+		return nil, m.applySingleNodeConfig(ctx, fqdn, ips[0], m.shouldProxy(serviceType))
+	}
+	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, ips, m.shouldProxy(serviceType))
 }
 
 // SyncService synchronizes DNS records for a specific service type (e.g. "edge", "gateway")

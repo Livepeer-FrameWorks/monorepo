@@ -1486,6 +1486,11 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 			) OR c.owner_tenant_id = $1)
 		`
 		baseCountArgs = append(baseCountArgs, tenantID)
+	} else if middleware.IsServiceCall(ctx) {
+		// Service-to-service calls (e.g. Navigator) see all active clusters.
+		baseWhere = `
+			WHERE c.is_active = true
+		`
 	} else {
 		baseWhere = `
 			WHERE c.is_default_cluster = true
