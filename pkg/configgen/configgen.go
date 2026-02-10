@@ -332,6 +332,11 @@ func computeDerived(env map[string]string) error {
 	env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%s", foghornControlPort)
 	env["FOGHORN_CONTROL_ADDR"] = fmt.Sprintf("%s:%s", foghornHost, foghornControlPort)
 
+	// Foghorn HA via Redis (optional — empty means standalone mode)
+	if redisURL := env["FOGHORN_REDIS_URL"]; redisURL != "" {
+		env["REDIS_URL"] = redisURL
+	}
+
 	// WEBAPP_PUBLIC_URL is already defined in base.env, no derivation needed
 
 	return nil

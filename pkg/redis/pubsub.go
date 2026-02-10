@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -49,6 +50,7 @@ func (p *TypedPubSub[T]) Subscribe(ctx context.Context, channel string, handler 
 
 			var payload T
 			if err := json.Unmarshal([]byte(msg.Payload), &payload); err != nil {
+				log.Printf("[redis-pubsub] unmarshal error on channel %s: %v", channel, err)
 				continue
 			}
 			handler(payload)

@@ -218,6 +218,7 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
       REDIS_URL: redis://foghorn-redis:6379
+      FOGHORN_INSTANCE_ID: foghorn-1
     ports:
       - "18008:18008"
       - "18019:18019"
@@ -284,6 +285,9 @@ services:
       CLUSTER_ID: ${CLUSTER_ID}
       REDIS_URL: redis://foghorn-redis:6379
       FOGHORN_INSTANCE_ID: foghorn-2
+    ports:
+      - "18028:18018"
+      - "18029:18029"
     depends_on:
       postgres:
         condition: service_healthy
@@ -294,21 +298,21 @@ services:
     restart: unless-stopped
     networks:
       - frameworks
-
-  foghorn-lb:
-    image: nginx:alpine
-    container_name: frameworks-foghorn-lb
-    volumes:
-      - ./infrastructure/nginx/foghorn-lb.conf:/etc/nginx/conf.d/default.conf:ro
-    ports:
-      - "18080:80"
-    depends_on:
-      foghorn:
-        condition: service_started
-      foghorn-2:
-        condition: service_started
-    networks:
-      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18018/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   foghorn-redis:
     image: redis:7-alpine
@@ -1193,6 +1197,8 @@ services:
       mistserver:
         condition: service_started
       foghorn:
+        condition: service_started
+      foghorn-2:
         condition: service_started
       commodore:
         condition: service_started

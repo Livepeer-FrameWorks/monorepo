@@ -5,14 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	pkgredis "frameworks/pkg/redis"
 
 	goredis "github.com/redis/go-redis/v9"
 )
-
-const defaultRedisStateTTL = 30 * time.Second
 
 type StateEntity string
 
@@ -55,7 +52,6 @@ type RedisStateStore struct {
 	client    *goredis.Client
 	pubsub    *pkgredis.TypedPubSub[StateChange]
 	clusterID string
-	ttl       time.Duration
 	channel   string
 }
 
@@ -64,7 +60,6 @@ func NewRedisStateStore(client *goredis.Client, clusterID string) *RedisStateSto
 		client:    client,
 		pubsub:    pkgredis.NewTypedPubSub[StateChange](client),
 		clusterID: clusterID,
-		ttl:       defaultRedisStateTTL,
 		channel:   fmt.Sprintf("foghorn:%s:state_updates", clusterID),
 	}
 }
@@ -87,7 +82,11 @@ func (r *RedisStateStore) setJSON(ctx context.Context, key string, value any) er
 	if err != nil {
 		return err
 	}
-	return r.client.Set(ctx, key, bytes, r.ttl).Err()
+	return r.client.Set(ctx, key, bytes, 0).Err()
+}
+
+func (r *RedisStateStore) setJSONRaw(ctx context.Context, key string, payload []byte) error {
+	return r.client.Set(ctx, key, payload, 0).Err()
 }
 
 func (r *RedisStateStore) SetNode(nodeID string, state *NodeState) error {
@@ -201,10 +200,19 @@ func scanRedisMap[T any](r *RedisStateStore, pattern string, parser redisScanner
 		for _, key := range keys {
 			value, err := r.client.Get(ctx, key).Result()
 			if err != nil {
+				if stateLogger != nil {
+					stateLogger.WithError(err).WithField("key", key).Warn("Failed to GET redis key during scan")
+				}
 				continue
 			}
 			parsed, resultKey, err := parser(value)
-			if err != nil || resultKey == "" {
+			if err != nil {
+				if stateLogger != nil {
+					stateLogger.WithError(err).WithField("key", key).Warn("Failed to parse redis value during scan")
+				}
+				continue
+			}
+			if resultKey == "" {
 				continue
 			}
 			result[resultKey] = parsed
