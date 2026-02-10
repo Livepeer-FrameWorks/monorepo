@@ -134,13 +134,11 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "pnpm"
           cache-dependency-path: "pnpm-lock.yaml"
 
@@ -316,7 +314,7 @@ jobs:
           echo "value=${ver}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.22"
+          go-version: "1.24"
           cache-dependency-path: cli/go.sum
       - name: Build CLI ${{ matrix.goos }}/${{ matrix.goarch }}
         env:
@@ -369,7 +367,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.22"
+          go-version: "1.24"
           cache-dependency-path: ${{ matrix.service.context }}/go.sum
 
       - name: Read service version
