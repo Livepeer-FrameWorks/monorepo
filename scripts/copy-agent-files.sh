@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # Copies agent discovery files from docs/skills/ into a web app's static directory.
 # Used by prebuild hooks so bare-metal builds get the same files as Docker builds.
@@ -7,7 +7,7 @@
 #   e.g. ./scripts/copy-agent-files.sh static    (website_application)
 #        ./scripts/copy-agent-files.sh public    (website_marketing, website_docs)
 
-set -euo pipefail
+set -eu
 
 TARGET="${1:?Usage: $0 <static_dir>}"
 
@@ -17,9 +17,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILLS_DIR="$REPO_ROOT/docs/skills"
 
 # if called from a subdirectory (package.json prebuild), TARGET is relative to cwd
-if [[ ! "$TARGET" = /* ]]; then
-  TARGET="$(pwd)/$TARGET"
-fi
+case "$TARGET" in
+  /*) ;;
+  *) TARGET="$(pwd)/$TARGET" ;;
+esac
 
 if [ ! -d "$SKILLS_DIR" ]; then
   echo "warn: $SKILLS_DIR not found, skipping agent file copy" >&2
