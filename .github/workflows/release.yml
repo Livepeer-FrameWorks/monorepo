@@ -190,21 +190,6 @@ jobs:
           VITE_COMPANY_NAME: ${{ secrets.VITE_COMPANY_NAME }}
           VITE_DOMAIN: ${{ secrets.VITE_DOMAIN }}
           VITE_TURNSTILE_FORMS_SITE_KEY: ${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
-          # logbook (website_docs) variables
-          PUBLIC_DOCS_URL: ${{ secrets.PUBLIC_DOCS_URL }}
-          WEBAPP_PUBLIC_URL: ${{ secrets.WEBAPP_PUBLIC_URL }}
-          MARKETING_PUBLIC_URL: ${{ secrets.MARKETING_PUBLIC_URL }}
-          GATEWAY_PUBLIC_URL: ${{ secrets.GATEWAY_PUBLIC_URL }}
-          STREAMING_INGEST_URL: ${{ secrets.STREAMING_INGEST_URL }}
-          STREAMING_EDGE_URL: ${{ secrets.STREAMING_EDGE_URL }}
-          STREAMING_PLAY_URL: ${{ secrets.STREAMING_PLAY_URL }}
-          STREAMING_RTMP_PORT: ${{ secrets.STREAMING_RTMP_PORT }}
-          STREAMING_SRT_PORT: ${{ secrets.STREAMING_SRT_PORT }}
-          STREAMING_RTMP_PATH: ${{ secrets.STREAMING_RTMP_PATH }}
-          STREAMING_HLS_PATH: ${{ secrets.STREAMING_HLS_PATH }}
-          STREAMING_WEBRTC_PATH: ${{ secrets.STREAMING_WEBRTC_PATH }}
-          DISCORD_URL: ${{ secrets.DISCORD_URL }}
-          GITHUB_URL: ${{ secrets.GITHUB_URL }}
         run: |
           cd ${{ matrix.webapp.context }}
           pnpm run build
@@ -274,20 +259,6 @@ jobs:
             VITE_COMPANY_NAME=${{ secrets.VITE_COMPANY_NAME }}
             VITE_DOMAIN=${{ secrets.VITE_DOMAIN }}
             VITE_TURNSTILE_FORMS_SITE_KEY=${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
-            PUBLIC_DOCS_URL=${{ secrets.PUBLIC_DOCS_URL }}
-            WEBAPP_PUBLIC_URL=${{ secrets.WEBAPP_PUBLIC_URL }}
-            MARKETING_PUBLIC_URL=${{ secrets.MARKETING_PUBLIC_URL }}
-            GATEWAY_PUBLIC_URL=${{ secrets.GATEWAY_PUBLIC_URL }}
-            STREAMING_INGEST_URL=${{ secrets.STREAMING_INGEST_URL }}
-            STREAMING_EDGE_URL=${{ secrets.STREAMING_EDGE_URL }}
-            STREAMING_PLAY_URL=${{ secrets.STREAMING_PLAY_URL }}
-            STREAMING_RTMP_PORT=${{ secrets.STREAMING_RTMP_PORT }}
-            STREAMING_SRT_PORT=${{ secrets.STREAMING_SRT_PORT }}
-            STREAMING_RTMP_PATH=${{ secrets.STREAMING_RTMP_PATH }}
-            STREAMING_HLS_PATH=${{ secrets.STREAMING_HLS_PATH }}
-            STREAMING_WEBRTC_PATH=${{ secrets.STREAMING_WEBRTC_PATH }}
-            DISCORD_URL=${{ secrets.DISCORD_URL }}
-            GITHUB_URL=${{ secrets.GITHUB_URL }}
           tags: |
             ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
             livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}

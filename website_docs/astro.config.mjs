@@ -27,18 +27,18 @@ function parseStreamingUrl(url) {
   }
 }
 
-const ingestUrl = env.STREAMING_INGEST_URL || "http://localhost:8080";
-const edgeUrl = env.STREAMING_EDGE_URL || "http://localhost:8080";
-const playUrl = env.STREAMING_PLAY_URL || "http://localhost:18008";
+const ingestUrl = env.VITE_STREAMING_INGEST_URL || "http://localhost:8080";
+const edgeUrl = env.VITE_STREAMING_EDGE_URL || "http://localhost:8080";
+const playUrl = env.VITE_STREAMING_PLAY_URL || "http://localhost:18008";
 const ingest = parseStreamingUrl(ingestUrl);
 const edge = parseStreamingUrl(edgeUrl);
 
 // Build protocol-specific URLs
-const rtmpPort = env.STREAMING_RTMP_PORT || "1935";
-const srtPort = env.STREAMING_SRT_PORT || "8889";
-const rtmpPath = env.STREAMING_RTMP_PATH || "/live";
-const hlsPath = env.STREAMING_HLS_PATH || "/hls";
-const webrtcPath = env.STREAMING_WEBRTC_PATH || "/webrtc";
+const rtmpPort = env.VITE_STREAMING_RTMP_PORT || "1935";
+const srtPort = env.VITE_STREAMING_SRT_PORT || "8889";
+const rtmpPath = env.VITE_STREAMING_RTMP_PATH || "/live";
+const hlsPath = env.VITE_STREAMING_HLS_PATH || "/hls";
+const webrtcPath = env.VITE_STREAMING_WEBRTC_PATH || "/webrtc";
 
 // Build full URLs for docs examples
 const rtmpProto = ingest.useTls ? "rtmps" : "rtmp";
@@ -49,10 +49,10 @@ const ingestPortPart = ingest.port ? `:${ingest.port}` : "";
 
 // Env var mapping for MDX placeholder replacement
 const envVarMap = {
-  APP_URL: env.WEBAPP_PUBLIC_URL,
-  MARKETING_URL: env.MARKETING_PUBLIC_URL,
-  GATEWAY_URL: env.GATEWAY_PUBLIC_URL,
-  API_URL: env.GATEWAY_PUBLIC_URL,
+  APP_URL: env.VITE_APP_URL,
+  MARKETING_URL: env.VITE_MARKETING_SITE_URL,
+  GATEWAY_URL: env.VITE_GATEWAY_URL,
+  API_URL: env.VITE_GATEWAY_URL,
   // Streaming - constructed URLs for protocol-specific examples
   RTMP_URL: `${rtmpProto}://${ingest.hostname}:${rtmpPort}${rtmpPath}`,
   SRT_HOST: `${ingest.hostname}:${srtPort}`,
@@ -66,8 +66,8 @@ const envVarMap = {
   INGEST_HOSTNAME: ingest.hostname,
   SRT_PORT: srtPort,
   // Community links
-  DISCORD_URL: env.DISCORD_URL,
-  GITHUB_URL: env.GITHUB_URL,
+  DISCORD_URL: env.VITE_DISCORD_URL,
+  GITHUB_URL: env.VITE_GITHUB_URL,
 };
 
 // Helper to replace %PLACEHOLDER% patterns
@@ -101,7 +101,7 @@ function remarkEnvReplace() {
   };
 }
 
-const docsUrl = env.PUBLIC_DOCS_URL;
+const docsUrl = env.VITE_DOCS_SITE_URL;
 const parsedUrl = docsUrl ? new URL(docsUrl) : null;
 const siteOrigin = parsedUrl ? parsedUrl.origin : undefined;
 const basePath = parsedUrl ? parsedUrl.pathname : "";
@@ -147,11 +147,11 @@ export default defineConfig({
     server: {
       proxy: {
         "/auth": {
-          target: env.GATEWAY_PUBLIC_URL || "http://localhost:18090",
+          target: env.VITE_GATEWAY_URL || "http://localhost:18090",
           changeOrigin: true,
         },
         "/graphql": {
-          target: env.GATEWAY_PUBLIC_URL || "http://localhost:18090",
+          target: env.VITE_GATEWAY_URL || "http://localhost:18090",
           changeOrigin: true,
           ws: true,
         },
