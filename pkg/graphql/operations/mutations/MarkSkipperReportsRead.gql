@@ -1,0 +1,3 @@
+mutation MarkSkipperReportsRead($ids: [ID!]) {
+  markSkipperReportsRead(ids: $ids)
+}

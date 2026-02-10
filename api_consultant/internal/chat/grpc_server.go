@@ -20,6 +20,33 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// ReportData is a local mirror of the heartbeat report record, avoiding an
+// import cycle (heartbeat test files import chat).
+type ReportData struct {
+	ID              string
+	Trigger         string
+	Summary         string
+	MetricsReviewed []string
+	RootCause       string
+	Recommendations []ReportRecommendation
+	CreatedAt       time.Time
+	ReadAt          *time.Time
+}
+
+type ReportRecommendation struct {
+	Text       string
+	Confidence string
+}
+
+// ReportQuerier is the read/write interface the gRPC server needs for
+// investigation reports.  Satisfied by the adapter wired in main.go.
+type ReportQuerier interface {
+	ListPaginated(ctx context.Context, tenantID string, limit, offset int) ([]ReportData, int, error)
+	GetByID(ctx context.Context, tenantID, reportID string) (ReportData, error)
+	MarkRead(ctx context.Context, tenantID string, ids []string) (int, error)
+	UnreadCount(ctx context.Context, tenantID string) (int, error)
+}
+
 // GRPCServerConfig holds dependencies for the gRPC chat server.
 type GRPCServerConfig struct {
 	Conversations      *ConversationStore
@@ -27,6 +54,7 @@ type GRPCServerConfig struct {
 	UsageLogger        skipper.UsageLogger
 	Logger             logging.Logger
 	MaxHistoryMessages int
+	Reports            ReportQuerier
 }
 
 // GRPCServer implements pb.SkipperChatServiceServer.
@@ -37,6 +65,7 @@ type GRPCServer struct {
 	usageLogger        skipper.UsageLogger
 	logger             logging.Logger
 	maxHistoryMessages int
+	reports            ReportQuerier
 }
 
 // NewGRPCServer creates a new gRPC server for the Skipper chat service.
@@ -51,6 +80,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *GRPCServer {
 		usageLogger:        cfg.UsageLogger,
 		logger:             cfg.Logger,
 		maxHistoryMessages: maxHistory,
+		reports:            cfg.Reports,
 	}
 }
 
@@ -448,4 +478,124 @@ func toStruct(v any) (*structpb.Struct, error) {
 		return nil, err
 	}
 	return structpb.NewStruct(m)
+}
+
+// ---------------------------------------------------------------------------
+// Investigation reports
+// ---------------------------------------------------------------------------
+
+func (s *GRPCServer) ListReports(ctx context.Context, req *pb.ListSkipperReportsRequest) (*pb.ListSkipperReportsResponse, error) {
+	ctx = bridgeAuthContext(ctx)
+	tenantID := skipper.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
+	}
+	if s.reports == nil {
+		return nil, status.Error(codes.Unavailable, "report store unavailable")
+	}
+
+	limit := int(req.GetLimit())
+	if limit <= 0 {
+		limit = 20
+	}
+	offset := int(req.GetOffset())
+
+	reports, total, err := s.reports.ListPaginated(ctx, tenantID, limit, offset)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list reports: %v", err)
+	}
+
+	unread, err := s.reports.UnreadCount(ctx, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "count unread: %v", err)
+	}
+
+	out := make([]*pb.SkipperReport, 0, len(reports))
+	for _, r := range reports {
+		out = append(out, reportDataToProto(r))
+	}
+	return &pb.ListSkipperReportsResponse{
+		Reports:     out,
+		TotalCount:  int32(total),
+		UnreadCount: int32(unread),
+	}, nil
+}
+
+func (s *GRPCServer) GetReport(ctx context.Context, req *pb.GetSkipperReportRequest) (*pb.SkipperReport, error) {
+	ctx = bridgeAuthContext(ctx)
+	tenantID := skipper.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
+	}
+	if s.reports == nil {
+		return nil, status.Error(codes.Unavailable, "report store unavailable")
+	}
+
+	id := req.GetId()
+	if id == "" {
+		return nil, status.Error(codes.InvalidArgument, "report id is required")
+	}
+
+	r, err := s.reports.GetByID(ctx, tenantID, id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get report: %v", err)
+	}
+	return reportDataToProto(r), nil
+}
+
+func (s *GRPCServer) MarkReportsRead(ctx context.Context, req *pb.MarkSkipperReportsReadRequest) (*pb.MarkSkipperReportsReadResponse, error) {
+	ctx = bridgeAuthContext(ctx)
+	tenantID := skipper.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
+	}
+	if s.reports == nil {
+		return nil, status.Error(codes.Unavailable, "report store unavailable")
+	}
+
+	n, err := s.reports.MarkRead(ctx, tenantID, req.GetIds())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "mark read: %v", err)
+	}
+	return &pb.MarkSkipperReportsReadResponse{MarkedCount: int32(n)}, nil
+}
+
+func (s *GRPCServer) GetUnreadReportCount(ctx context.Context, _ *pb.GetUnreadReportCountRequest) (*pb.GetUnreadReportCountResponse, error) {
+	ctx = bridgeAuthContext(ctx)
+	tenantID := skipper.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, status.Error(codes.Unauthenticated, "tenant_id missing")
+	}
+	if s.reports == nil {
+		return nil, status.Error(codes.Unavailable, "report store unavailable")
+	}
+
+	count, err := s.reports.UnreadCount(ctx, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "count unread: %v", err)
+	}
+	return &pb.GetUnreadReportCountResponse{Count: int32(count)}, nil
+}
+
+func reportDataToProto(r ReportData) *pb.SkipperReport {
+	recs := make([]*pb.SkipperReportRecommendation, 0, len(r.Recommendations))
+	for _, rec := range r.Recommendations {
+		recs = append(recs, &pb.SkipperReportRecommendation{
+			Text:       rec.Text,
+			Confidence: rec.Confidence,
+		})
+	}
+	out := &pb.SkipperReport{
+		Id:              r.ID,
+		Trigger:         r.Trigger,
+		Summary:         r.Summary,
+		MetricsReviewed: r.MetricsReviewed,
+		RootCause:       r.RootCause,
+		Recommendations: recs,
+		CreatedAt:       timestamppb.New(r.CreatedAt),
+	}
+	if r.ReadAt != nil {
+		out.ReadAt = timestamppb.New(*r.ReadAt)
+	}
+	return out
 }

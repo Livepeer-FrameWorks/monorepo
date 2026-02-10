@@ -2134,6 +2134,11 @@ func (r *mutationResolver) UpdateSkipperConversation(ctx context.Context, id str
 	return r.Resolver.DoUpdateSkipperConversation(ctx, id, title)
 }
 
+// MarkSkipperReportsRead is the resolver for the markSkipperReportsRead field.
+func (r *mutationResolver) MarkSkipperReportsRead(ctx context.Context, ids []string) (int, error) {
+	return r.Resolver.DoMarkSkipperReportsRead(ctx, ids)
+}
+
 // CreateConversation is the resolver for the createConversation field.
 func (r *mutationResolver) CreateConversation(ctx context.Context, input model.CreateConversationInput) (model.CreateConversationResult, error) {
 	resolver := r.Resolver
@@ -3656,6 +3661,16 @@ func (r *queryResolver) SkipperConversation(ctx context.Context, id string) (*mo
 	return r.Resolver.DoSkipperConversation(ctx, id)
 }
 
+// SkipperReports is the resolver for the skipperReports field.
+func (r *queryResolver) SkipperReports(ctx context.Context, limit *int, offset *int) (*model.SkipperReportsConnection, error) {
+	return r.Resolver.DoSkipperReports(ctx, limit, offset)
+}
+
+// SkipperUnreadReportCount is the resolver for the skipperUnreadReportCount field.
+func (r *queryResolver) SkipperUnreadReportCount(ctx context.Context) (int, error) {
+	return r.Resolver.DoSkipperUnreadReportCount(ctx)
+}
+
 // ConversationsConnection is the resolver for the conversationsConnection field.
 func (r *queryResolver) ConversationsConnection(ctx context.Context, page *model.ConnectionInput) (*model.ConversationsConnection, error) {
 	resolver := r.Resolver
@@ -3931,6 +3946,16 @@ func (r *skipperMetaResolver) Blocks(ctx context.Context, obj *model.SkipperMeta
 		result = append(result, pb)
 	}
 	return result, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *skipperReportResolver) CreatedAt(ctx context.Context, obj *proto.SkipperReport) (*time.Time, error) {
+	return r.Resolver.DoSkipperReportCreatedAt(obj)
+}
+
+// ReadAt is the resolver for the readAt field.
+func (r *skipperReportResolver) ReadAt(ctx context.Context, obj *proto.SkipperReport) (*time.Time, error) {
+	return r.Resolver.DoSkipperReportReadAt(obj)
 }
 
 // Payload is the resolver for the payload field.
@@ -5910,6 +5935,9 @@ func (r *Resolver) SkipperMessage() generated.SkipperMessageResolver {
 // SkipperMeta returns generated.SkipperMetaResolver implementation.
 func (r *Resolver) SkipperMeta() generated.SkipperMetaResolver { return &skipperMetaResolver{r} }
 
+// SkipperReport returns generated.SkipperReportResolver implementation.
+func (r *Resolver) SkipperReport() generated.SkipperReportResolver { return &skipperReportResolver{r} }
+
 // SkipperToolDetail returns generated.SkipperToolDetailResolver implementation.
 func (r *Resolver) SkipperToolDetail() generated.SkipperToolDetailResolver {
 	return &skipperToolDetailResolver{r}
@@ -6117,6 +6145,7 @@ type serviceInstanceHealthResolver struct{ *Resolver }
 type skipperConfidenceBlockResolver struct{ *Resolver }
 type skipperMessageResolver struct{ *Resolver }
 type skipperMetaResolver struct{ *Resolver }
+type skipperReportResolver struct{ *Resolver }
 type skipperToolDetailResolver struct{ *Resolver }
 type storageEventResolver struct{ *Resolver }
 type storageUsageResolver struct{ *Resolver }

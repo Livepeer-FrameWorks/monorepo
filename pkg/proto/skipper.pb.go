@@ -1193,6 +1193,482 @@ func (x *UpdateSkipperConversationTitleRequest) GetTitle() string {
 	return ""
 }
 
+type ListSkipperReportsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Limit         int32                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
+	Offset        int32                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSkipperReportsRequest) Reset() {
+	*x = ListSkipperReportsRequest{}
+	mi := &file_skipper_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSkipperReportsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSkipperReportsRequest) ProtoMessage() {}
+
+func (x *ListSkipperReportsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSkipperReportsRequest.ProtoReflect.Descriptor instead.
+func (*ListSkipperReportsRequest) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ListSkipperReportsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ListSkipperReportsRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+type ListSkipperReportsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reports       []*SkipperReport       `protobuf:"bytes,1,rep,name=reports,proto3" json:"reports,omitempty"`
+	TotalCount    int32                  `protobuf:"varint,2,opt,name=total_count,json=totalCount,proto3" json:"total_count,omitempty"`
+	UnreadCount   int32                  `protobuf:"varint,3,opt,name=unread_count,json=unreadCount,proto3" json:"unread_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSkipperReportsResponse) Reset() {
+	*x = ListSkipperReportsResponse{}
+	mi := &file_skipper_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSkipperReportsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSkipperReportsResponse) ProtoMessage() {}
+
+func (x *ListSkipperReportsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSkipperReportsResponse.ProtoReflect.Descriptor instead.
+func (*ListSkipperReportsResponse) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ListSkipperReportsResponse) GetReports() []*SkipperReport {
+	if x != nil {
+		return x.Reports
+	}
+	return nil
+}
+
+func (x *ListSkipperReportsResponse) GetTotalCount() int32 {
+	if x != nil {
+		return x.TotalCount
+	}
+	return 0
+}
+
+func (x *ListSkipperReportsResponse) GetUnreadCount() int32 {
+	if x != nil {
+		return x.UnreadCount
+	}
+	return 0
+}
+
+type GetSkipperReportRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSkipperReportRequest) Reset() {
+	*x = GetSkipperReportRequest{}
+	mi := &file_skipper_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSkipperReportRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSkipperReportRequest) ProtoMessage() {}
+
+func (x *GetSkipperReportRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSkipperReportRequest.ProtoReflect.Descriptor instead.
+func (*GetSkipperReportRequest) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *GetSkipperReportRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type SkipperReport struct {
+	state           protoimpl.MessageState         `protogen:"open.v1"`
+	Id              string                         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Trigger         string                         `protobuf:"bytes,2,opt,name=trigger,proto3" json:"trigger,omitempty"`
+	Summary         string                         `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	MetricsReviewed []string                       `protobuf:"bytes,4,rep,name=metrics_reviewed,json=metricsReviewed,proto3" json:"metrics_reviewed,omitempty"`
+	RootCause       string                         `protobuf:"bytes,5,opt,name=root_cause,json=rootCause,proto3" json:"root_cause,omitempty"`
+	Recommendations []*SkipperReportRecommendation `protobuf:"bytes,6,rep,name=recommendations,proto3" json:"recommendations,omitempty"`
+	CreatedAt       *timestamppb.Timestamp         `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ReadAt          *timestamppb.Timestamp         `protobuf:"bytes,8,opt,name=read_at,json=readAt,proto3" json:"read_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *SkipperReport) Reset() {
+	*x = SkipperReport{}
+	mi := &file_skipper_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SkipperReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SkipperReport) ProtoMessage() {}
+
+func (x *SkipperReport) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SkipperReport.ProtoReflect.Descriptor instead.
+func (*SkipperReport) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *SkipperReport) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SkipperReport) GetTrigger() string {
+	if x != nil {
+		return x.Trigger
+	}
+	return ""
+}
+
+func (x *SkipperReport) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *SkipperReport) GetMetricsReviewed() []string {
+	if x != nil {
+		return x.MetricsReviewed
+	}
+	return nil
+}
+
+func (x *SkipperReport) GetRootCause() string {
+	if x != nil {
+		return x.RootCause
+	}
+	return ""
+}
+
+func (x *SkipperReport) GetRecommendations() []*SkipperReportRecommendation {
+	if x != nil {
+		return x.Recommendations
+	}
+	return nil
+}
+
+func (x *SkipperReport) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *SkipperReport) GetReadAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ReadAt
+	}
+	return nil
+}
+
+type SkipperReportRecommendation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	Confidence    string                 `protobuf:"bytes,2,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SkipperReportRecommendation) Reset() {
+	*x = SkipperReportRecommendation{}
+	mi := &file_skipper_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SkipperReportRecommendation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SkipperReportRecommendation) ProtoMessage() {}
+
+func (x *SkipperReportRecommendation) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SkipperReportRecommendation.ProtoReflect.Descriptor instead.
+func (*SkipperReportRecommendation) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *SkipperReportRecommendation) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *SkipperReportRecommendation) GetConfidence() string {
+	if x != nil {
+		return x.Confidence
+	}
+	return ""
+}
+
+type MarkSkipperReportsReadRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ids           []string               `protobuf:"bytes,1,rep,name=ids,proto3" json:"ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarkSkipperReportsReadRequest) Reset() {
+	*x = MarkSkipperReportsReadRequest{}
+	mi := &file_skipper_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkSkipperReportsReadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkSkipperReportsReadRequest) ProtoMessage() {}
+
+func (x *MarkSkipperReportsReadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkSkipperReportsReadRequest.ProtoReflect.Descriptor instead.
+func (*MarkSkipperReportsReadRequest) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *MarkSkipperReportsReadRequest) GetIds() []string {
+	if x != nil {
+		return x.Ids
+	}
+	return nil
+}
+
+type MarkSkipperReportsReadResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MarkedCount   int32                  `protobuf:"varint,1,opt,name=marked_count,json=markedCount,proto3" json:"marked_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MarkSkipperReportsReadResponse) Reset() {
+	*x = MarkSkipperReportsReadResponse{}
+	mi := &file_skipper_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MarkSkipperReportsReadResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MarkSkipperReportsReadResponse) ProtoMessage() {}
+
+func (x *MarkSkipperReportsReadResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MarkSkipperReportsReadResponse.ProtoReflect.Descriptor instead.
+func (*MarkSkipperReportsReadResponse) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *MarkSkipperReportsReadResponse) GetMarkedCount() int32 {
+	if x != nil {
+		return x.MarkedCount
+	}
+	return 0
+}
+
+type GetUnreadReportCountRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUnreadReportCountRequest) Reset() {
+	*x = GetUnreadReportCountRequest{}
+	mi := &file_skipper_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUnreadReportCountRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUnreadReportCountRequest) ProtoMessage() {}
+
+func (x *GetUnreadReportCountRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUnreadReportCountRequest.ProtoReflect.Descriptor instead.
+func (*GetUnreadReportCountRequest) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{26}
+}
+
+type GetUnreadReportCountResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Count         int32                  `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetUnreadReportCountResponse) Reset() {
+	*x = GetUnreadReportCountResponse{}
+	mi := &file_skipper_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetUnreadReportCountResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetUnreadReportCountResponse) ProtoMessage() {}
+
+func (x *GetUnreadReportCountResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_skipper_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetUnreadReportCountResponse.ProtoReflect.Descriptor instead.
+func (*GetUnreadReportCountResponse) Descriptor() ([]byte, []int) {
+	return file_skipper_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *GetUnreadReportCountResponse) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
 var File_skipper_proto protoreflect.FileDescriptor
 
 const file_skipper_proto_rawDesc = "" +
@@ -1284,13 +1760,50 @@ const file_skipper_proto_rawDesc = "" +
 	"!DeleteSkipperConversationResponse\"M\n" +
 	"%UpdateSkipperConversationTitleRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05title\x18\x02 \x01(\tR\x05title2\xfc\x03\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\"I\n" +
+	"\x19ListSkipperReportsRequest\x12\x14\n" +
+	"\x05limit\x18\x01 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x05R\x06offset\"\x92\x01\n" +
+	"\x1aListSkipperReportsResponse\x120\n" +
+	"\areports\x18\x01 \x03(\v2\x16.skipper.SkipperReportR\areports\x12\x1f\n" +
+	"\vtotal_count\x18\x02 \x01(\x05R\n" +
+	"totalCount\x12!\n" +
+	"\funread_count\x18\x03 \x01(\x05R\vunreadCount\")\n" +
+	"\x17GetSkipperReportRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xdd\x02\n" +
+	"\rSkipperReport\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
+	"\atrigger\x18\x02 \x01(\tR\atrigger\x12\x18\n" +
+	"\asummary\x18\x03 \x01(\tR\asummary\x12)\n" +
+	"\x10metrics_reviewed\x18\x04 \x03(\tR\x0fmetricsReviewed\x12\x1d\n" +
+	"\n" +
+	"root_cause\x18\x05 \x01(\tR\trootCause\x12N\n" +
+	"\x0frecommendations\x18\x06 \x03(\v2$.skipper.SkipperReportRecommendationR\x0frecommendations\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x123\n" +
+	"\aread_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\x06readAt\"Q\n" +
+	"\x1bSkipperReportRecommendation\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1e\n" +
+	"\n" +
+	"confidence\x18\x02 \x01(\tR\n" +
+	"confidence\"1\n" +
+	"\x1dMarkSkipperReportsReadRequest\x12\x10\n" +
+	"\x03ids\x18\x01 \x03(\tR\x03ids\"C\n" +
+	"\x1eMarkSkipperReportsReadResponse\x12!\n" +
+	"\fmarked_count\x18\x01 \x01(\x05R\vmarkedCount\"\x1d\n" +
+	"\x1bGetUnreadReportCountRequest\"4\n" +
+	"\x1cGetUnreadReportCountResponse\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x05R\x05count2\xe4\x06\n" +
 	"\x12SkipperChatService\x12@\n" +
 	"\x04Chat\x12\x1b.skipper.SkipperChatRequest\x1a\x19.skipper.SkipperChatEvent0\x01\x12h\n" +
 	"\x11ListConversations\x12(.skipper.ListSkipperConversationsRequest\x1a).skipper.ListSkipperConversationsResponse\x12]\n" +
 	"\x0fGetConversation\x12&.skipper.GetSkipperConversationRequest\x1a\".skipper.SkipperConversationDetail\x12k\n" +
 	"\x12DeleteConversation\x12).skipper.DeleteSkipperConversationRequest\x1a*.skipper.DeleteSkipperConversationResponse\x12n\n" +
-	"\x17UpdateConversationTitle\x12..skipper.UpdateSkipperConversationTitleRequest\x1a#.skipper.SkipperConversationSummaryB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x17UpdateConversationTitle\x12..skipper.UpdateSkipperConversationTitleRequest\x1a#.skipper.SkipperConversationSummary\x12V\n" +
+	"\vListReports\x12\".skipper.ListSkipperReportsRequest\x1a#.skipper.ListSkipperReportsResponse\x12E\n" +
+	"\tGetReport\x12 .skipper.GetSkipperReportRequest\x1a\x16.skipper.SkipperReport\x12b\n" +
+	"\x0fMarkReportsRead\x12&.skipper.MarkSkipperReportsReadRequest\x1a'.skipper.MarkSkipperReportsReadResponse\x12c\n" +
+	"\x14GetUnreadReportCount\x12$.skipper.GetUnreadReportCountRequest\x1a%.skipper.GetUnreadReportCountResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_skipper_proto_rawDescOnce sync.Once
@@ -1304,7 +1817,7 @@ func file_skipper_proto_rawDescGZIP() []byte {
 	return file_skipper_proto_rawDescData
 }
 
-var file_skipper_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_skipper_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_skipper_proto_goTypes = []any{
 	(*SkipperChatRequest)(nil),                    // 0: skipper.SkipperChatRequest
 	(*SkipperChatEvent)(nil),                      // 1: skipper.SkipperChatEvent
@@ -1325,8 +1838,17 @@ var file_skipper_proto_goTypes = []any{
 	(*DeleteSkipperConversationRequest)(nil),      // 16: skipper.DeleteSkipperConversationRequest
 	(*DeleteSkipperConversationResponse)(nil),     // 17: skipper.DeleteSkipperConversationResponse
 	(*UpdateSkipperConversationTitleRequest)(nil), // 18: skipper.UpdateSkipperConversationTitleRequest
-	(*structpb.Struct)(nil),                       // 19: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),                 // 20: google.protobuf.Timestamp
+	(*ListSkipperReportsRequest)(nil),             // 19: skipper.ListSkipperReportsRequest
+	(*ListSkipperReportsResponse)(nil),            // 20: skipper.ListSkipperReportsResponse
+	(*GetSkipperReportRequest)(nil),               // 21: skipper.GetSkipperReportRequest
+	(*SkipperReport)(nil),                         // 22: skipper.SkipperReport
+	(*SkipperReportRecommendation)(nil),           // 23: skipper.SkipperReportRecommendation
+	(*MarkSkipperReportsReadRequest)(nil),         // 24: skipper.MarkSkipperReportsReadRequest
+	(*MarkSkipperReportsReadResponse)(nil),        // 25: skipper.MarkSkipperReportsReadResponse
+	(*GetUnreadReportCountRequest)(nil),           // 26: skipper.GetUnreadReportCountRequest
+	(*GetUnreadReportCountResponse)(nil),          // 27: skipper.GetUnreadReportCountResponse
+	(*structpb.Struct)(nil),                       // 28: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),                 // 29: google.protobuf.Timestamp
 }
 var file_skipper_proto_depIdxs = []int32{
 	2,  // 0: skipper.SkipperChatEvent.token:type_name -> skipper.SkipperTokenChunk
@@ -1339,29 +1861,41 @@ var file_skipper_proto_depIdxs = []int32{
 	8,  // 7: skipper.SkipperChatMeta.details:type_name -> skipper.SkipperToolDetail
 	6,  // 8: skipper.SkipperChatMeta.blocks:type_name -> skipper.SkipperConfidenceBlock
 	7,  // 9: skipper.SkipperConfidenceBlock.sources:type_name -> skipper.SkipperCitation
-	19, // 10: skipper.SkipperToolDetail.payload:type_name -> google.protobuf.Struct
+	28, // 10: skipper.SkipperToolDetail.payload:type_name -> google.protobuf.Struct
 	12, // 11: skipper.ListSkipperConversationsResponse.conversations:type_name -> skipper.SkipperConversationSummary
-	20, // 12: skipper.SkipperConversationSummary.created_at:type_name -> google.protobuf.Timestamp
-	20, // 13: skipper.SkipperConversationSummary.updated_at:type_name -> google.protobuf.Timestamp
+	29, // 12: skipper.SkipperConversationSummary.created_at:type_name -> google.protobuf.Timestamp
+	29, // 13: skipper.SkipperConversationSummary.updated_at:type_name -> google.protobuf.Timestamp
 	15, // 14: skipper.SkipperConversationDetail.messages:type_name -> skipper.SkipperChatMessage
-	20, // 15: skipper.SkipperConversationDetail.created_at:type_name -> google.protobuf.Timestamp
-	20, // 16: skipper.SkipperConversationDetail.updated_at:type_name -> google.protobuf.Timestamp
-	20, // 17: skipper.SkipperChatMessage.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 18: skipper.SkipperChatService.Chat:input_type -> skipper.SkipperChatRequest
-	10, // 19: skipper.SkipperChatService.ListConversations:input_type -> skipper.ListSkipperConversationsRequest
-	13, // 20: skipper.SkipperChatService.GetConversation:input_type -> skipper.GetSkipperConversationRequest
-	16, // 21: skipper.SkipperChatService.DeleteConversation:input_type -> skipper.DeleteSkipperConversationRequest
-	18, // 22: skipper.SkipperChatService.UpdateConversationTitle:input_type -> skipper.UpdateSkipperConversationTitleRequest
-	1,  // 23: skipper.SkipperChatService.Chat:output_type -> skipper.SkipperChatEvent
-	11, // 24: skipper.SkipperChatService.ListConversations:output_type -> skipper.ListSkipperConversationsResponse
-	14, // 25: skipper.SkipperChatService.GetConversation:output_type -> skipper.SkipperConversationDetail
-	17, // 26: skipper.SkipperChatService.DeleteConversation:output_type -> skipper.DeleteSkipperConversationResponse
-	12, // 27: skipper.SkipperChatService.UpdateConversationTitle:output_type -> skipper.SkipperConversationSummary
-	23, // [23:28] is the sub-list for method output_type
-	18, // [18:23] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	29, // 15: skipper.SkipperConversationDetail.created_at:type_name -> google.protobuf.Timestamp
+	29, // 16: skipper.SkipperConversationDetail.updated_at:type_name -> google.protobuf.Timestamp
+	29, // 17: skipper.SkipperChatMessage.created_at:type_name -> google.protobuf.Timestamp
+	22, // 18: skipper.ListSkipperReportsResponse.reports:type_name -> skipper.SkipperReport
+	23, // 19: skipper.SkipperReport.recommendations:type_name -> skipper.SkipperReportRecommendation
+	29, // 20: skipper.SkipperReport.created_at:type_name -> google.protobuf.Timestamp
+	29, // 21: skipper.SkipperReport.read_at:type_name -> google.protobuf.Timestamp
+	0,  // 22: skipper.SkipperChatService.Chat:input_type -> skipper.SkipperChatRequest
+	10, // 23: skipper.SkipperChatService.ListConversations:input_type -> skipper.ListSkipperConversationsRequest
+	13, // 24: skipper.SkipperChatService.GetConversation:input_type -> skipper.GetSkipperConversationRequest
+	16, // 25: skipper.SkipperChatService.DeleteConversation:input_type -> skipper.DeleteSkipperConversationRequest
+	18, // 26: skipper.SkipperChatService.UpdateConversationTitle:input_type -> skipper.UpdateSkipperConversationTitleRequest
+	19, // 27: skipper.SkipperChatService.ListReports:input_type -> skipper.ListSkipperReportsRequest
+	21, // 28: skipper.SkipperChatService.GetReport:input_type -> skipper.GetSkipperReportRequest
+	24, // 29: skipper.SkipperChatService.MarkReportsRead:input_type -> skipper.MarkSkipperReportsReadRequest
+	26, // 30: skipper.SkipperChatService.GetUnreadReportCount:input_type -> skipper.GetUnreadReportCountRequest
+	1,  // 31: skipper.SkipperChatService.Chat:output_type -> skipper.SkipperChatEvent
+	11, // 32: skipper.SkipperChatService.ListConversations:output_type -> skipper.ListSkipperConversationsResponse
+	14, // 33: skipper.SkipperChatService.GetConversation:output_type -> skipper.SkipperConversationDetail
+	17, // 34: skipper.SkipperChatService.DeleteConversation:output_type -> skipper.DeleteSkipperConversationResponse
+	12, // 35: skipper.SkipperChatService.UpdateConversationTitle:output_type -> skipper.SkipperConversationSummary
+	20, // 36: skipper.SkipperChatService.ListReports:output_type -> skipper.ListSkipperReportsResponse
+	22, // 37: skipper.SkipperChatService.GetReport:output_type -> skipper.SkipperReport
+	25, // 38: skipper.SkipperChatService.MarkReportsRead:output_type -> skipper.MarkSkipperReportsReadResponse
+	27, // 39: skipper.SkipperChatService.GetUnreadReportCount:output_type -> skipper.GetUnreadReportCountResponse
+	31, // [31:40] is the sub-list for method output_type
+	22, // [22:31] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_skipper_proto_init() }
@@ -1382,7 +1916,7 @@ func file_skipper_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_skipper_proto_rawDesc), len(file_skipper_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

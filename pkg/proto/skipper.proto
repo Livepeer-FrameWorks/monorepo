@@ -24,6 +24,12 @@ service SkipperChatService {
   rpc GetConversation(GetSkipperConversationRequest) returns (SkipperConversationDetail);
   rpc DeleteConversation(DeleteSkipperConversationRequest) returns (DeleteSkipperConversationResponse);
   rpc UpdateConversationTitle(UpdateSkipperConversationTitleRequest) returns (SkipperConversationSummary);
+
+  // Investigation reports
+  rpc ListReports(ListSkipperReportsRequest) returns (ListSkipperReportsResponse);
+  rpc GetReport(GetSkipperReportRequest) returns (SkipperReport);
+  rpc MarkReportsRead(MarkSkipperReportsReadRequest) returns (MarkSkipperReportsReadResponse);
+  rpc GetUnreadReportCount(GetUnreadReportCountRequest) returns (GetUnreadReportCountResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -144,4 +150,53 @@ message DeleteSkipperConversationResponse {}
 message UpdateSkipperConversationTitleRequest {
   string id = 1;
   string title = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Investigation reports
+// ---------------------------------------------------------------------------
+
+message ListSkipperReportsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+}
+
+message ListSkipperReportsResponse {
+  repeated SkipperReport reports = 1;
+  int32 total_count = 2;
+  int32 unread_count = 3;
+}
+
+message GetSkipperReportRequest {
+  string id = 1;
+}
+
+message SkipperReport {
+  string id = 1;
+  string trigger = 2;
+  string summary = 3;
+  repeated string metrics_reviewed = 4;
+  string root_cause = 5;
+  repeated SkipperReportRecommendation recommendations = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp read_at = 8;
+}
+
+message SkipperReportRecommendation {
+  string text = 1;
+  string confidence = 2;
+}
+
+message MarkSkipperReportsReadRequest {
+  repeated string ids = 1;
+}
+
+message MarkSkipperReportsReadResponse {
+  int32 marked_count = 1;
+}
+
+message GetUnreadReportCountRequest {}
+
+message GetUnreadReportCountResponse {
+  int32 count = 1;
 }

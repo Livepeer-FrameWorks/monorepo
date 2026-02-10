@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
@@ -371,4 +372,83 @@ func (r *Resolver) DoUpdateSkipperConversation(ctx context.Context, id, title st
 		CreatedAt: resp.GetCreatedAt().AsTime(),
 		UpdatedAt: resp.GetUpdatedAt().AsTime(),
 	}, nil
+}
+
+// DoSkipperReports lists investigation reports for the current tenant.
+func (r *Resolver) DoSkipperReports(ctx context.Context, limit, offset *int) (*model.SkipperReportsConnection, error) {
+	if r.Clients.Skipper == nil {
+		return nil, fmt.Errorf("skipper service unavailable")
+	}
+	if _, err := middleware.RequireAuth(ctx); err != nil {
+		return nil, fmt.Errorf("authentication required: %w", err)
+	}
+
+	l := int32(20)
+	if limit != nil && *limit > 0 {
+		l = int32(*limit)
+	}
+	o := int32(0)
+	if offset != nil && *offset > 0 {
+		o = int32(*offset)
+	}
+	resp, err := r.Clients.Skipper.ListReports(ctx, l, o)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list reports: %w", err)
+	}
+
+	return &model.SkipperReportsConnection{
+		Nodes:       resp.GetReports(),
+		TotalCount:  int(resp.GetTotalCount()),
+		UnreadCount: int(resp.GetUnreadCount()),
+	}, nil
+}
+
+// DoSkipperUnreadReportCount returns the unread investigation report count.
+func (r *Resolver) DoSkipperUnreadReportCount(ctx context.Context) (int, error) {
+	if r.Clients.Skipper == nil {
+		return 0, fmt.Errorf("skipper service unavailable")
+	}
+	if _, err := middleware.RequireAuth(ctx); err != nil {
+		return 0, fmt.Errorf("authentication required: %w", err)
+	}
+
+	resp, err := r.Clients.Skipper.GetUnreadReportCount(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get unread count: %w", err)
+	}
+	return int(resp.GetCount()), nil
+}
+
+// DoMarkSkipperReportsRead marks investigation reports as read.
+func (r *Resolver) DoMarkSkipperReportsRead(ctx context.Context, ids []string) (int, error) {
+	if r.Clients.Skipper == nil {
+		return 0, fmt.Errorf("skipper service unavailable")
+	}
+	if _, err := middleware.RequireAuth(ctx); err != nil {
+		return 0, fmt.Errorf("authentication required: %w", err)
+	}
+
+	resp, err := r.Clients.Skipper.MarkReportsRead(ctx, ids)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark reports read: %w", err)
+	}
+	return int(resp.GetMarkedCount()), nil
+}
+
+// DoSkipperReportCreatedAt resolves the createdAt timestamp from proto.
+func (r *Resolver) DoSkipperReportCreatedAt(obj *pb.SkipperReport) (*time.Time, error) {
+	if ts := obj.GetCreatedAt(); ts != nil && ts.IsValid() {
+		t := ts.AsTime()
+		return &t, nil
+	}
+	return nil, nil
+}
+
+// DoSkipperReportReadAt resolves the readAt timestamp from proto.
+func (r *Resolver) DoSkipperReportReadAt(obj *pb.SkipperReport) (*time.Time, error) {
+	if ts := obj.GetReadAt(); ts != nil && ts.IsValid() {
+		t := ts.AsTime()
+		return &t, nil
+	}
+	return nil, nil
 }

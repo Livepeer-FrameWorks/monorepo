@@ -24,6 +24,10 @@ const (
 	SkipperChatService_GetConversation_FullMethodName         = "/skipper.SkipperChatService/GetConversation"
 	SkipperChatService_DeleteConversation_FullMethodName      = "/skipper.SkipperChatService/DeleteConversation"
 	SkipperChatService_UpdateConversationTitle_FullMethodName = "/skipper.SkipperChatService/UpdateConversationTitle"
+	SkipperChatService_ListReports_FullMethodName             = "/skipper.SkipperChatService/ListReports"
+	SkipperChatService_GetReport_FullMethodName               = "/skipper.SkipperChatService/GetReport"
+	SkipperChatService_MarkReportsRead_FullMethodName         = "/skipper.SkipperChatService/MarkReportsRead"
+	SkipperChatService_GetUnreadReportCount_FullMethodName    = "/skipper.SkipperChatService/GetUnreadReportCount"
 )
 
 // SkipperChatServiceClient is the client API for SkipperChatService service.
@@ -37,6 +41,11 @@ type SkipperChatServiceClient interface {
 	GetConversation(ctx context.Context, in *GetSkipperConversationRequest, opts ...grpc.CallOption) (*SkipperConversationDetail, error)
 	DeleteConversation(ctx context.Context, in *DeleteSkipperConversationRequest, opts ...grpc.CallOption) (*DeleteSkipperConversationResponse, error)
 	UpdateConversationTitle(ctx context.Context, in *UpdateSkipperConversationTitleRequest, opts ...grpc.CallOption) (*SkipperConversationSummary, error)
+	// Investigation reports
+	ListReports(ctx context.Context, in *ListSkipperReportsRequest, opts ...grpc.CallOption) (*ListSkipperReportsResponse, error)
+	GetReport(ctx context.Context, in *GetSkipperReportRequest, opts ...grpc.CallOption) (*SkipperReport, error)
+	MarkReportsRead(ctx context.Context, in *MarkSkipperReportsReadRequest, opts ...grpc.CallOption) (*MarkSkipperReportsReadResponse, error)
+	GetUnreadReportCount(ctx context.Context, in *GetUnreadReportCountRequest, opts ...grpc.CallOption) (*GetUnreadReportCountResponse, error)
 }
 
 type skipperChatServiceClient struct {
@@ -106,6 +115,46 @@ func (c *skipperChatServiceClient) UpdateConversationTitle(ctx context.Context, 
 	return out, nil
 }
 
+func (c *skipperChatServiceClient) ListReports(ctx context.Context, in *ListSkipperReportsRequest, opts ...grpc.CallOption) (*ListSkipperReportsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSkipperReportsResponse)
+	err := c.cc.Invoke(ctx, SkipperChatService_ListReports_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skipperChatServiceClient) GetReport(ctx context.Context, in *GetSkipperReportRequest, opts ...grpc.CallOption) (*SkipperReport, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SkipperReport)
+	err := c.cc.Invoke(ctx, SkipperChatService_GetReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skipperChatServiceClient) MarkReportsRead(ctx context.Context, in *MarkSkipperReportsReadRequest, opts ...grpc.CallOption) (*MarkSkipperReportsReadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MarkSkipperReportsReadResponse)
+	err := c.cc.Invoke(ctx, SkipperChatService_MarkReportsRead_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skipperChatServiceClient) GetUnreadReportCount(ctx context.Context, in *GetUnreadReportCountRequest, opts ...grpc.CallOption) (*GetUnreadReportCountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetUnreadReportCountResponse)
+	err := c.cc.Invoke(ctx, SkipperChatService_GetUnreadReportCount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SkipperChatServiceServer is the server API for SkipperChatService service.
 // All implementations must embed UnimplementedSkipperChatServiceServer
 // for forward compatibility.
@@ -117,6 +166,11 @@ type SkipperChatServiceServer interface {
 	GetConversation(context.Context, *GetSkipperConversationRequest) (*SkipperConversationDetail, error)
 	DeleteConversation(context.Context, *DeleteSkipperConversationRequest) (*DeleteSkipperConversationResponse, error)
 	UpdateConversationTitle(context.Context, *UpdateSkipperConversationTitleRequest) (*SkipperConversationSummary, error)
+	// Investigation reports
+	ListReports(context.Context, *ListSkipperReportsRequest) (*ListSkipperReportsResponse, error)
+	GetReport(context.Context, *GetSkipperReportRequest) (*SkipperReport, error)
+	MarkReportsRead(context.Context, *MarkSkipperReportsReadRequest) (*MarkSkipperReportsReadResponse, error)
+	GetUnreadReportCount(context.Context, *GetUnreadReportCountRequest) (*GetUnreadReportCountResponse, error)
 	mustEmbedUnimplementedSkipperChatServiceServer()
 }
 
@@ -141,6 +195,18 @@ func (UnimplementedSkipperChatServiceServer) DeleteConversation(context.Context,
 }
 func (UnimplementedSkipperChatServiceServer) UpdateConversationTitle(context.Context, *UpdateSkipperConversationTitleRequest) (*SkipperConversationSummary, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateConversationTitle not implemented")
+}
+func (UnimplementedSkipperChatServiceServer) ListReports(context.Context, *ListSkipperReportsRequest) (*ListSkipperReportsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListReports not implemented")
+}
+func (UnimplementedSkipperChatServiceServer) GetReport(context.Context, *GetSkipperReportRequest) (*SkipperReport, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetReport not implemented")
+}
+func (UnimplementedSkipperChatServiceServer) MarkReportsRead(context.Context, *MarkSkipperReportsReadRequest) (*MarkSkipperReportsReadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MarkReportsRead not implemented")
+}
+func (UnimplementedSkipperChatServiceServer) GetUnreadReportCount(context.Context, *GetUnreadReportCountRequest) (*GetUnreadReportCountResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetUnreadReportCount not implemented")
 }
 func (UnimplementedSkipperChatServiceServer) mustEmbedUnimplementedSkipperChatServiceServer() {}
 func (UnimplementedSkipperChatServiceServer) testEmbeddedByValue()                            {}
@@ -246,6 +312,78 @@ func _SkipperChatService_UpdateConversationTitle_Handler(srv interface{}, ctx co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SkipperChatService_ListReports_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSkipperReportsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkipperChatServiceServer).ListReports(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkipperChatService_ListReports_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkipperChatServiceServer).ListReports(ctx, req.(*ListSkipperReportsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkipperChatService_GetReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSkipperReportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkipperChatServiceServer).GetReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkipperChatService_GetReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkipperChatServiceServer).GetReport(ctx, req.(*GetSkipperReportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkipperChatService_MarkReportsRead_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MarkSkipperReportsReadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkipperChatServiceServer).MarkReportsRead(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkipperChatService_MarkReportsRead_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkipperChatServiceServer).MarkReportsRead(ctx, req.(*MarkSkipperReportsReadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkipperChatService_GetUnreadReportCount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetUnreadReportCountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkipperChatServiceServer).GetUnreadReportCount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkipperChatService_GetUnreadReportCount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkipperChatServiceServer).GetUnreadReportCount(ctx, req.(*GetUnreadReportCountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SkipperChatService_ServiceDesc is the grpc.ServiceDesc for SkipperChatService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -268,6 +406,22 @@ var SkipperChatService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateConversationTitle",
 			Handler:    _SkipperChatService_UpdateConversationTitle_Handler,
+		},
+		{
+			MethodName: "ListReports",
+			Handler:    _SkipperChatService_ListReports_Handler,
+		},
+		{
+			MethodName: "GetReport",
+			Handler:    _SkipperChatService_GetReport_Handler,
+		},
+		{
+			MethodName: "MarkReportsRead",
+			Handler:    _SkipperChatService_MarkReportsRead_Handler,
+		},
+		{
+			MethodName: "GetUnreadReportCount",
+			Handler:    _SkipperChatService_GetUnreadReportCount_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -541,6 +541,17 @@ type Query {
   """
   skipperConversation(id: ID!): SkipperConversation!
 
+  """
+  List Skipper investigation reports for the current tenant.
+  Returns newest first with read/unread status and counts.
+  """
+  skipperReports(limit: Int, offset: Int): SkipperReportsConnection!
+
+  """
+  Get count of unread Skipper investigation reports.
+  """
+  skipperUnreadReportCount: Int!
+
   # ==================== Support Messaging ====================
 
   """
@@ -1465,6 +1476,13 @@ type Mutation {
   Update the title of a Skipper conversation.
   """
   updateSkipperConversation(id: ID!, title: String!): SkipperConversationSummary!
+
+  """
+  Mark Skipper investigation reports as read.
+  Pass specific IDs, or omit to mark all as read.
+  Returns the number of reports marked.
+  """
+  markSkipperReportsRead(ids: [ID!]): Int!
 
   # ==================== Support Messaging ====================
 
@@ -5653,4 +5671,26 @@ type SkipperMessage {
   tokensInput: Int!
   tokensOutput: Int!
   createdAt: Time!
+}
+
+type SkipperReport {
+  id: ID!
+  trigger: String!
+  summary: String!
+  metricsReviewed: [String!]!
+  rootCause: String!
+  recommendations: [SkipperReportRecommendation!]!
+  createdAt: Time!
+  readAt: Time
+}
+
+type SkipperReportRecommendation {
+  text: String!
+  confidence: String!
+}
+
+type SkipperReportsConnection {
+  nodes: [SkipperReport!]!
+  totalCount: Int!
+  unreadCount: Int!
 }

@@ -355,6 +355,7 @@ func main() {
 		UsageLogger:        usageLogger,
 		Logger:             logger,
 		MaxHistoryMessages: cfg.MaxHistoryMessages,
+		Reports:            &reportStoreAdapter{store: reportStore},
 	})
 	grpcAuthCfg := middleware.GRPCAuthConfig{
 		ServiceToken: serviceToken,
@@ -664,5 +665,56 @@ func skipperContextBridge() gin.HandlerFunc {
 		}
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
+	}
+}
+
+// reportStoreAdapter bridges heartbeat.SQLReportStore → chat.ReportQuerier,
+// avoiding the import cycle (heartbeat test files import chat).
+type reportStoreAdapter struct {
+	store *heartbeat.SQLReportStore
+}
+
+func (a *reportStoreAdapter) ListPaginated(ctx context.Context, tenantID string, limit, offset int) ([]chat.ReportData, int, error) {
+	records, total, err := a.store.ListByTenantPaginated(ctx, tenantID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]chat.ReportData, len(records))
+	for i, r := range records {
+		out[i] = convertReport(r)
+	}
+	return out, total, nil
+}
+
+func (a *reportStoreAdapter) GetByID(ctx context.Context, tenantID, reportID string) (chat.ReportData, error) {
+	r, err := a.store.GetByID(ctx, tenantID, reportID)
+	if err != nil {
+		return chat.ReportData{}, err
+	}
+	return convertReport(r), nil
+}
+
+func (a *reportStoreAdapter) MarkRead(ctx context.Context, tenantID string, ids []string) (int, error) {
+	return a.store.MarkRead(ctx, tenantID, ids)
+}
+
+func (a *reportStoreAdapter) UnreadCount(ctx context.Context, tenantID string) (int, error) {
+	return a.store.UnreadCount(ctx, tenantID)
+}
+
+func convertReport(r heartbeat.ReportRecord) chat.ReportData {
+	recs := make([]chat.ReportRecommendation, len(r.Recommendations))
+	for i, rec := range r.Recommendations {
+		recs[i] = chat.ReportRecommendation{Text: rec.Text, Confidence: rec.Confidence}
+	}
+	return chat.ReportData{
+		ID:              r.ID,
+		Trigger:         r.Trigger,
+		Summary:         r.Summary,
+		MetricsReviewed: r.MetricsReviewed,
+		RootCause:       r.RootCause,
+		Recommendations: recs,
+		CreatedAt:       r.CreatedAt,
+		ReadAt:          r.ReadAt,
 	}
 }

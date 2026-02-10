@@ -39,6 +39,22 @@ func (s *recordingStore) ListByTenant(ctx context.Context, tenantID string, limi
 	return nil, nil
 }
 
+func (s *recordingStore) ListByTenantPaginated(_ context.Context, _ string, _, _ int) ([]ReportRecord, int, error) {
+	return nil, 0, nil
+}
+
+func (s *recordingStore) GetByID(_ context.Context, _, _ string) (ReportRecord, error) {
+	return ReportRecord{}, nil
+}
+
+func (s *recordingStore) MarkRead(_ context.Context, _ string, _ []string) (int, error) {
+	return 0, nil
+}
+
+func (s *recordingStore) UnreadCount(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
 func TestThresholdTriggerInvestigatesDegradedMetrics(t *testing.T) {
 	orchestrator := &fakeOrchestrator{
 		result: chat.OrchestratorResult{

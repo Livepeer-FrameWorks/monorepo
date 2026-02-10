@@ -1183,6 +1183,12 @@ type ServiceInstancesConnection struct {
 	TotalCount int                      `json:"totalCount"`
 }
 
+type SkipperReportsConnection struct {
+	Nodes       []*proto.SkipperReport `json:"nodes"`
+	TotalCount  int                    `json:"totalCount"`
+	UnreadCount int                    `json:"unreadCount"`
+}
+
 type StorageEventEdge struct {
 	Cursor string              `json:"cursor"`
 	Node   *proto.StorageEvent `json:"node"`

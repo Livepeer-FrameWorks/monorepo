@@ -191,3 +191,8 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS skipper_knowledge_tsv_idx
     ON skipper.skipper_knowledge USING GIN (tsv);
+
+DO $$ BEGIN
+    ALTER TABLE skipper.skipper_reports ADD COLUMN read_at TIMESTAMP WITH TIME ZONE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;

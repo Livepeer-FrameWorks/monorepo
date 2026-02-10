@@ -131,7 +131,8 @@ const About = () => {
     },
     {
       title: "Agent-Native Platform",
-      description: "MCP server, wallet auth, x402 payments. AI agents operate autonomously.",
+      description:
+        "MCP server, wallet auth, x402 payments. AI agents operate autonomously, or call on Skipper to ensure we can solve any video roadblock",
       icon: null,
       tone: "cyan",
     },

@@ -15,6 +15,7 @@
   import Toast from "$lib/components/Toast.svelte";
   import ErrorBoundary from "$lib/components/ErrorBoundary.svelte";
   import BetaBadge from "$lib/components/BetaBadge.svelte";
+  import NotificationBell from "$lib/components/NotificationBell.svelte";
   import { Button } from "$lib/components/ui/button";
   import { TooltipProvider } from "$lib/components/ui/tooltip";
   interface User {
@@ -212,6 +213,9 @@
 
             <!-- Right Actions (Flush & Seamed) -->
             <div class="flex items-stretch">
+              <!-- Notifications -->
+              <NotificationBell />
+
               <!-- User Info (Seamed, Padded) -->
               <div
                 class="hidden md:flex items-center px-6 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] bg-[hsl(var(--tn-bg-dark)/0.3)]"

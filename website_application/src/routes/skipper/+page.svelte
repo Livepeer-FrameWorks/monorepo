@@ -2,6 +2,7 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { auth } from "$lib/stores/auth";
   import { getIconComponent } from "$lib/iconUtils";
+  import { notificationStore } from "$lib/stores/notifications.svelte";
   import SkipperMessage, {
     type SkipperChatMessage,
     type SkipperConfidence,
@@ -35,6 +36,19 @@
 
   const BotIcon = getIconComponent("Bot");
   const ArrowLeftIcon = getIconComponent("ArrowLeft");
+  const AlertTriangleIcon = getIconComponent("AlertTriangle");
+
+  let showInvestigations = $state(true);
+
+  function formatRelativeTime(dateStr: string): string {
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.floor(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    return `${Math.floor(diffHr / 24)}d ago`;
+  }
 
   let isMobile = $state(false);
   let mobileView = $state<"list" | "chat">("list");
@@ -616,26 +630,97 @@
       </div>
     {/if}
 
-    <!-- Right rail: conversation history (desktop only) -->
+    <!-- Right rail: investigations + conversation history (desktop only) -->
     <div
-      class="hidden w-72 shrink-0 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] bg-sidebar lg:block"
+      class="hidden w-72 shrink-0 flex-col border-l border-[hsl(var(--tn-fg-gutter)/0.3)] bg-sidebar lg:flex"
     >
-      {#if loadingConversations}
-        <div class="space-y-3 p-4">
-          {#each Array.from({ length: 4 }) as _, i (i)}
-            <div class="h-12 animate-pulse rounded-lg bg-muted"></div>
-          {/each}
-        </div>
-      {:else}
-        <SkipperConversationList
-          {conversations}
-          activeId={activeConversationId}
-          onSelect={loadConversation}
-          onNew={startNewConversation}
-          onDelete={deleteConversation}
-          onRename={renameConversation}
-        />
-      {/if}
+      <!-- Investigations section -->
+      <div class="border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+        <button
+          class="flex w-full items-center justify-between px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          onclick={() => (showInvestigations = !showInvestigations)}
+        >
+          <span class="flex items-center gap-1.5">
+            <AlertTriangleIcon class="h-3.5 w-3.5" />
+            Investigations
+            {#if notificationStore.unreadCount > 0}
+              <span
+                class="inline-flex items-center justify-center min-w-[16px] h-4 px-1 text-[10px] font-bold leading-none text-white bg-[hsl(var(--tn-red))] rounded-full"
+              >
+                {notificationStore.unreadCount}
+              </span>
+            {/if}
+          </span>
+          <svg
+            class="h-3 w-3 transition-transform {showInvestigations ? 'rotate-180' : ''}"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </button>
+        {#if showInvestigations}
+          <div class="max-h-48 overflow-y-auto">
+            {#if notificationStore.reports.length === 0}
+              <p class="px-4 py-3 text-xs text-muted-foreground">No investigations yet</p>
+            {:else}
+              {#each notificationStore.reports.slice(0, 5) as report (report.id)}
+                <div
+                  class="px-4 py-2 border-b border-[hsl(var(--tn-fg-gutter)/0.05)] {!report.readAt
+                    ? 'border-l-2 border-l-[hsl(var(--tn-blue))]'
+                    : 'border-l-2 border-l-transparent'}"
+                >
+                  <p
+                    class="text-xs leading-snug line-clamp-2 {!report.readAt
+                      ? 'text-foreground font-medium'
+                      : 'text-muted-foreground'}"
+                  >
+                    {report.summary}
+                  </p>
+                  <div class="mt-0.5 flex items-center gap-1.5">
+                    {#if report.trigger}
+                      <span
+                        class="text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-[hsl(var(--tn-bg-visual))] text-muted-foreground"
+                      >
+                        {report.trigger}
+                      </span>
+                    {/if}
+                    <span class="text-[9px] text-muted-foreground">
+                      {formatRelativeTime(report.createdAt)}
+                    </span>
+                  </div>
+                </div>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
+
+      <!-- Conversation list -->
+      <div class="flex-1 overflow-hidden">
+        {#if loadingConversations}
+          <div class="space-y-3 p-4">
+            {#each Array.from({ length: 4 }) as _, i (i)}
+              <div class="h-12 animate-pulse rounded-lg bg-muted"></div>
+            {/each}
+          </div>
+        {:else}
+          <SkipperConversationList
+            {conversations}
+            activeId={activeConversationId}
+            onSelect={loadConversation}
+            onNew={startNewConversation}
+            onDelete={deleteConversation}
+            onRename={renameConversation}
+          />
+        {/if}
+      </div>
     </div>
   </div>
 </div>

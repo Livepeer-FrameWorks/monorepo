@@ -1,0 +1,19 @@
+query GetSkipperReports($limit: Int = 20, $offset: Int = 0) {
+  skipperReports(limit: $limit, offset: $offset) {
+    nodes {
+      id
+      trigger
+      summary
+      metricsReviewed
+      rootCause
+      recommendations {
+        text
+        confidence
+      }
+      createdAt
+      readAt
+    }
+    totalCount
+    unreadCount
+  }
+}

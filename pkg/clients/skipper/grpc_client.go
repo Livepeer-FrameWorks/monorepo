@@ -133,3 +133,26 @@ func (c *GRPCClient) UpdateConversationTitle(ctx context.Context, id, title stri
 		Title: title,
 	})
 }
+
+// ListReports lists investigation reports for the authenticated tenant.
+func (c *GRPCClient) ListReports(ctx context.Context, limit, offset int32) (*pb.ListSkipperReportsResponse, error) {
+	return c.client.ListReports(ctx, &pb.ListSkipperReportsRequest{
+		Limit:  limit,
+		Offset: offset,
+	})
+}
+
+// GetReport returns a single investigation report.
+func (c *GRPCClient) GetReport(ctx context.Context, id string) (*pb.SkipperReport, error) {
+	return c.client.GetReport(ctx, &pb.GetSkipperReportRequest{Id: id})
+}
+
+// MarkReportsRead marks investigation reports as read.
+func (c *GRPCClient) MarkReportsRead(ctx context.Context, ids []string) (*pb.MarkSkipperReportsReadResponse, error) {
+	return c.client.MarkReportsRead(ctx, &pb.MarkSkipperReportsReadRequest{Ids: ids})
+}
+
+// GetUnreadReportCount returns the count of unread investigation reports.
+func (c *GRPCClient) GetUnreadReportCount(ctx context.Context) (*pb.GetUnreadReportCountResponse, error) {
+	return c.client.GetUnreadReportCount(ctx, &pb.GetUnreadReportCountRequest{})
+}
