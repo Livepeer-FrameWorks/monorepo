@@ -375,3 +375,8 @@ func (c *GRPCClient) SubscribeToAll() error {
 func (c *GRPCClient) SubscribeToMessaging() error {
 	return c.Subscribe(pb.Channel_CHANNEL_MESSAGING)
 }
+
+// SubscribeToAI subscribes to the AI channel (Skipper investigation events)
+func (c *GRPCClient) SubscribeToAI() error {
+	return c.Subscribe(pb.Channel_CHANNEL_AI)
+}

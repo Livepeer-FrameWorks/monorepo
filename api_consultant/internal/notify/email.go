@@ -58,7 +58,7 @@ func (n *EmailNotifier) Notify(ctx context.Context, report Report) error {
 
 	reportURL := report.ReportURL
 	if reportURL == "" && n.webAppURL != "" && report.InvestigationID != "" {
-		reportURL = fmt.Sprintf("%s/skipper/investigations/%s", strings.TrimRight(n.webAppURL, "/"), report.InvestigationID)
+		reportURL = fmt.Sprintf("%s/skipper?report=%s", strings.TrimRight(n.webAppURL, "/"), report.InvestigationID)
 	}
 
 	subject := "Skipper Investigation Report"

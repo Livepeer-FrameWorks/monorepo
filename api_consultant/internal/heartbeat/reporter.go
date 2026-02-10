@@ -157,7 +157,7 @@ func (r *Reporter) buildNotification(ctx context.Context, record ReportRecord, r
 	}
 
 	if strings.TrimSpace(r.WebAppURL) != "" && record.ID != "" {
-		notification.ReportURL = fmt.Sprintf("%s/skipper/investigations/%s", strings.TrimRight(r.WebAppURL, "/"), record.ID)
+		notification.ReportURL = fmt.Sprintf("%s/skipper?report=%s", strings.TrimRight(r.WebAppURL, "/"), record.ID)
 	}
 
 	return notification

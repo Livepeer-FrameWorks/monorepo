@@ -57,6 +57,9 @@ models:
   TenantEvent:
     model:
       - frameworks/api_gateway/graph/model.TenantEvent
+  SkipperInvestigationEvent:
+    model:
+      - frameworks/api_gateway/graph/model.SkipperInvestigationEvent
   # Rollup analytics types - use generated model types (NOT proto)
   # Proto has same-named types (StreamHealthSummary, ClientQoeSummary, RoutingCountryStat)
   # but resolvers return model.* types, so we must override autobind.

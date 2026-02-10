@@ -37,6 +37,13 @@
   function handleMarkAllRead() {
     notificationStore.markAllRead();
   }
+
+  function handleItemClick(report: SkipperReport) {
+    if (isUnread(report)) {
+      notificationStore.markRead([report.id]);
+    }
+    notificationStore.closePanel();
+  }
 </script>
 
 <div
@@ -66,8 +73,8 @@
     {:else}
       {#each notificationStore.reports as report (report.id)}
         <a
-          href={skipperPath}
-          onclick={() => notificationStore.closePanel()}
+          href="{skipperPath}?report={report.id}"
+          onclick={() => handleItemClick(report)}
           class="block px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.1)] hover:bg-[hsl(var(--tn-bg-visual))] transition-colors {isUnread(
             report
           )

@@ -671,8 +671,11 @@
               <p class="px-4 py-3 text-xs text-muted-foreground">No investigations yet</p>
             {:else}
               {#each notificationStore.reports.slice(0, 5) as report (report.id)}
-                <div
-                  class="px-4 py-2 border-b border-[hsl(var(--tn-fg-gutter)/0.05)] {!report.readAt
+                <button
+                  onclick={() => {
+                    if (!report.readAt) notificationStore.markRead([report.id]);
+                  }}
+                  class="w-full text-left px-4 py-2 border-b border-[hsl(var(--tn-fg-gutter)/0.05)] hover:bg-[hsl(var(--tn-bg-visual))] transition-colors cursor-pointer {!report.readAt
                     ? 'border-l-2 border-l-[hsl(var(--tn-blue))]'
                     : 'border-l-2 border-l-transparent'}"
                 >
@@ -695,7 +698,7 @@
                       {formatRelativeTime(report.createdAt)}
                     </span>
                   </div>
-                </div>
+                </button>
               {/each}
             {/if}
           </div>

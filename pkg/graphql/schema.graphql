@@ -1730,6 +1730,13 @@ type TenantEvent {
   processingEvent: ProcessingUsageRecord
   routingEvent: RoutingEvent
   systemHealthEvent: SystemHealthEvent
+  skipperInvestigation: SkipperInvestigationEvent
+}
+
+# Skipper investigation notification event
+type SkipperInvestigationEvent {
+  reportId: String!
+  resourceType: String!
 }
 
 # DVR lifecycle event - bound to proto.DVRLifecycleData

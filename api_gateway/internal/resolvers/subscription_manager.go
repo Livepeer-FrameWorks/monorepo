@@ -387,6 +387,9 @@ func (sm *SubscriptionManager) SubscribeToFirehose(ctx context.Context, config C
 		sm.logger.Warn("Failed to subscribe to system for firehose", "error", err)
 		// Continue - system subscription is optional
 	}
+	if err := client.SubscribeToAI(); err != nil {
+		sm.logger.Warn("Failed to subscribe to AI for firehose", "error", err)
+	}
 
 	updates := make(chan *model.TenantEvent, 50) // Larger buffer for firehose
 	go sm.processFirehoseMessages(ctx, client, updates, config.TenantID)
@@ -502,6 +505,12 @@ func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEven
 		tenantEvent.ProcessingEvent = mapSignalmanProcessingEvent(event)
 	case pb.EventType_EVENT_TYPE_STORAGE_SNAPSHOT:
 		tenantEvent.StorageSnapshot = event.Data.GetStorageSnapshot()
+
+	case pb.EventType_EVENT_TYPE_SKIPPER_INVESTIGATION:
+		tenantEvent.SkipperInvestigation = &model.SkipperInvestigationEvent{
+			ReportID:     "",
+			ResourceType: "skipper_investigation",
+		}
 	}
 
 	return tenantEvent

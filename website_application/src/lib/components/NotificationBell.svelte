@@ -1,11 +1,14 @@
 <script lang="ts">
   import { Bell } from "$lib/iconUtils";
   import { notificationStore } from "$lib/stores/notifications.svelte";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { auth } from "$lib/stores/auth";
   import NotificationPanel from "./NotificationPanel.svelte";
 
+  const POLL_INTERVAL_MS = 60_000;
+
   let isAuthenticated = $state(false);
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   auth.subscribe((s) => {
     isAuthenticated = s.isAuthenticated;
@@ -14,7 +17,12 @@
   onMount(() => {
     if (isAuthenticated) {
       notificationStore.loadReports();
+      pollTimer = setInterval(() => notificationStore.refreshUnreadCount(), POLL_INTERVAL_MS);
     }
+  });
+
+  onDestroy(() => {
+    if (pollTimer) clearInterval(pollTimer);
   });
 
   function handleClick(e: MouseEvent) {
