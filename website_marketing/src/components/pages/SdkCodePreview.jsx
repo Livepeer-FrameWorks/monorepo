@@ -12,9 +12,9 @@ import config from "../../config";
 
 const snippetPlayer = `import { Player } from '@livepeer-frameworks/player-react'
 
-export const MyStream = () => (
+export const MyStream = ({ playbackId }) => (
   <Player
-    contentId="pk_29f8..."
+    contentId={playbackId}
     contentType="live"
     options={{
       autoplay: true,
@@ -24,33 +24,33 @@ export const MyStream = () => (
   />
 )`;
 
-const snippetIngest = `import { useStreamCrafter } from '@livepeer-frameworks/streamcrafter-react'
+const snippetIngest = `<script>
+  import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-svelte'
 
-export const Broadcaster = () => {
-  const { startStreaming, isStreaming } = useStreamCrafter({
-    streamKey: "sk_92d1...",
-    gatewayUrl: "${config.gatewayUrl}"
-  })
+  let { whipUrl, streamName } = $props()
+</script>
 
-  return (
-    <button onClick={startStreaming}>
-      {isStreaming ? 'Stop' : 'Go Live'}
-    </button>
-  )
-}`;
+<div class="studio">
+  <h2>Broadcasting: {streamName}</h2>
+  <StreamCrafter
+    {whipUrl}
+    initialProfile="broadcast"
+    onStateChange={(state) => console.log('State:', state)}
+    onError={(err) => console.error(err)}
+  />
+</div>`;
 
-const snippetGraphql = `# Paste this into the API playground at ${config.appUrl}/developer/api
-query StreamsDashboard {
+const snippetGraphql = `query LiveStreams {
   streamsConnection(page: { first: 10 }) {
     edges {
       node {
-        id
         name
         playbackId
-        record
+        streamKey
         metrics {
-          viewerCount
-          qualityScore
+          status
+          isLive
+          currentViewers
         }
       }
     }
@@ -70,7 +70,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
 
   const langLabels = {
     player: "React / TSX",
-    ingest: "React / TSX",
+    ingest: "Svelte 5",
     graphql: "GraphQL",
   };
 
