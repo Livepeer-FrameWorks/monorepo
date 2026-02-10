@@ -1,4 +1,0 @@
-packages:
-  - "packages/*"
-  - "playground"
-  - "../npm_studio/packages/*"

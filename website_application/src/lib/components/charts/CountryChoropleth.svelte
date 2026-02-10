@@ -3,6 +3,7 @@
   import { SvelteMap } from "svelte/reactivity";
   import type { Map as LeafletMap, GeoJSON, Layer } from "leaflet";
   import { getIconComponent } from "$lib/iconUtils";
+  import "leaflet/dist/leaflet.css";
   import { iso2ToIso3, iso3ToIso2, getCountryName } from "$lib/utils/country-names";
 
   // Icons for controls

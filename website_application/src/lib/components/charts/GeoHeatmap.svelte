@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import type { Map as LeafletMap } from "leaflet";
   import { getIconComponent } from "$lib/iconUtils";
+  import "leaflet/dist/leaflet.css";
 
   // Leaflet is client-side only
   let L: typeof import("leaflet") | null = null;
@@ -47,14 +48,6 @@
     const leafletModule = await import("leaflet");
     L = leafletModule.default;
     await import("leaflet.heat");
-
-    // Fix for default marker icons if we were using markers (we aren't, but good practice)
-    // delete (L.Icon.Default.prototype as any)._getIconUrl;
-    // L.Icon.Default.mergeOptions({
-    //   iconRetinaUrl: '/marker-icon-2x.png',
-    //   iconUrl: '/marker-icon.png',
-    //   shadowUrl: '/marker-shadow.png',
-    // });
 
     if (mapContainer) {
       initMap();

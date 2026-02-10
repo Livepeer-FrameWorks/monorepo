@@ -1,6 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "leaflet/dist/leaflet.css";
 
 /* StreamCrafter CSS (wrapped in @layer fw-streamcrafter for isolation) */
 @import "../../npm_studio/packages/core/src/styles/streamcrafter.css";
