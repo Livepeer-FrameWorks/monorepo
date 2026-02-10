@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/pkg/clients"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
@@ -90,7 +91,10 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		config.GRPCAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
-		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
+		grpc.WithChainUnaryInterceptor(
+			authInterceptor(config.ServiceToken),
+			clients.FailsafeUnaryInterceptor("purser", config.Logger),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Purser gRPC: %w", err)

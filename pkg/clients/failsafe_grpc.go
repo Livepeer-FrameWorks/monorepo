@@ -2,11 +2,10 @@ package clients
 
 import (
 	"context"
-	"errors"
 	"time"
 
-	"github.com/failsafe-go/failsafe-go"
 	"github.com/failsafe-go/failsafe-go/circuitbreaker"
+	"github.com/failsafe-go/failsafe-go/failsafegrpc"
 	"github.com/failsafe-go/failsafe-go/retrypolicy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -15,74 +14,41 @@ import (
 	"frameworks/pkg/logging"
 )
 
-// GRPCExecutorConfig configures the gRPC executor
-type GRPCExecutorConfig struct {
-	// Retry settings
-	MaxRetries int
-	BaseDelay  time.Duration
-	MaxDelay   time.Duration
+// gRPC retry defaults
+const (
+	defaultMaxRetries   = 3
+	defaultBaseDelay    = 100 * time.Millisecond
+	defaultMaxDelay     = 5 * time.Second
+	defaultJitterFactor = 0.25 // 25% jitter per AWS/gRPC best practices
+)
 
-	// Circuit breaker settings
-	CircuitBreakerConfig *CircuitBreakerConfig
-
-	// Logger for debugging
-	Logger logging.Logger
-}
-
-// DefaultGRPCExecutorConfig returns sensible defaults for gRPC
-func DefaultGRPCExecutorConfig() GRPCExecutorConfig {
-	return GRPCExecutorConfig{
-		MaxRetries: 3,
-		BaseDelay:  100 * time.Millisecond,
-		MaxDelay:   5 * time.Second,
-	}
-}
-
-// isRetryableGRPCError determines if a gRPC error should be retried
+// isRetryableGRPCError determines if a gRPC error should be retried.
+// Retries transient/infrastructure errors only; never retries client or logic errors.
 func isRetryableGRPCError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	code := status.Code(err)
-	switch code {
-	// Retryable errors
+	switch status.Code(err) {
 	case codes.Unavailable,
 		codes.DeadlineExceeded,
 		codes.ResourceExhausted,
 		codes.Aborted:
 		return true
-
-	// Non-retryable errors
-	case codes.InvalidArgument,
-		codes.NotFound,
-		codes.AlreadyExists,
-		codes.PermissionDenied,
-		codes.Unauthenticated,
-		codes.FailedPrecondition,
-		codes.OutOfRange,
-		codes.Unimplemented,
-		codes.Internal,
-		codes.Canceled,
-		codes.OK:
-		return false
-
 	default:
-		// Unknown codes - don't retry to be safe
 		return false
 	}
 }
 
 // isCircuitBreakerFailure determines if a gRPC error should count
-// as a failure for circuit breaker purposes
+// as a failure for circuit breaker purposes. Broader than retry:
+// includes Internal and Unknown since they indicate server health issues.
 func isCircuitBreakerFailure(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	code := status.Code(err)
-	switch code {
-	// Server errors - count as failures
+	switch status.Code(err) {
 	case codes.Internal,
 		codes.Unavailable,
 		codes.DeadlineExceeded,
@@ -90,28 +56,34 @@ func isCircuitBreakerFailure(err error) bool {
 		codes.Aborted,
 		codes.Unknown:
 		return true
-
-	// Client errors - don't count as failures (our fault, not server's)
 	default:
 		return false
 	}
 }
 
-// NewGRPCRetryPolicy creates a retry policy for gRPC calls
-func NewGRPCRetryPolicy[T any](cfg GRPCExecutorConfig) retrypolicy.RetryPolicy[T] {
-	return retrypolicy.NewBuilder[T]().
-		WithBackoff(cfg.BaseDelay, cfg.MaxDelay).
-		WithMaxRetries(cfg.MaxRetries).
-		WithJitterFactor(0.1).
-		HandleIf(func(_ T, err error) bool {
+// newGRPCRetryPolicy creates a retry policy for gRPC calls with sensible defaults.
+func newGRPCRetryPolicy() retrypolicy.RetryPolicy[any] {
+	return retrypolicy.NewBuilder[any]().
+		WithBackoff(defaultBaseDelay, defaultMaxDelay).
+		WithMaxRetries(defaultMaxRetries).
+		WithJitterFactor(defaultJitterFactor).
+		HandleIf(func(_ any, err error) bool {
 			return isRetryableGRPCError(err)
 		}).
 		Build()
 }
 
-// NewGRPCCircuitBreaker creates a circuit breaker for gRPC calls
+// newGRPCCircuitBreaker creates a named circuit breaker with Prometheus metrics.
+func newGRPCCircuitBreaker(name string, logger logging.Logger) circuitbreaker.CircuitBreaker[any] {
+	cfg := DefaultCircuitBreakerConfig()
+	cfg.Name = name
+	cfg.Logger = logger
+	cfg.OnStateChange = CircuitBreakerMetricsCallback(name)
+	return NewGRPCCircuitBreaker[any](cfg)
+}
+
+// NewGRPCCircuitBreaker creates a circuit breaker for gRPC calls from config.
 func NewGRPCCircuitBreaker[T any](cfg CircuitBreakerConfig) circuitbreaker.CircuitBreaker[T] {
-	// Apply defaults
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 15 * time.Second
 	}
@@ -138,7 +110,6 @@ func NewGRPCCircuitBreaker[T any](cfg CircuitBreakerConfig) circuitbreaker.Circu
 			return isCircuitBreakerFailure(err)
 		})
 
-	// Add state change logging
 	if cfg.OnStateChange != nil || cfg.Logger != nil {
 		builder = builder.OnStateChanged(func(event circuitbreaker.StateChangedEvent) {
 			fromState := convertState(event.OldState)
@@ -161,66 +132,18 @@ func NewGRPCCircuitBreaker[T any](cfg CircuitBreakerConfig) circuitbreaker.Circu
 	return builder.Build()
 }
 
-// NewGRPCExecutor creates a failsafe executor for gRPC calls
-func NewGRPCExecutor[T any](cfg GRPCExecutorConfig) failsafe.Executor[T] {
-	retry := NewGRPCRetryPolicy[T](cfg)
-
-	if cfg.CircuitBreakerConfig != nil {
-		cb := NewGRPCCircuitBreaker[T](*cfg.CircuitBreakerConfig)
-		return failsafe.With(retry, cb)
-	}
-
-	return failsafe.With(retry)
+// FailsafeUnaryInterceptor returns a gRPC unary client interceptor with retry + circuit breaker.
+// Uses failsafegrpc's built-in interceptor for correct per-attempt context propagation.
+func FailsafeUnaryInterceptor(serviceName string, logger logging.Logger) grpc.UnaryClientInterceptor {
+	retry := newGRPCRetryPolicy()
+	cb := newGRPCCircuitBreaker(serviceName, logger)
+	return failsafegrpc.NewUnaryClientInterceptor[any](retry, cb)
 }
 
-// GRPCUnaryClientInterceptor returns a gRPC unary client interceptor
-// that applies retry and circuit breaker policies.
-func GRPCUnaryClientInterceptor(cfg GRPCExecutorConfig) grpc.UnaryClientInterceptor {
-	// Create policies
-	retry := retrypolicy.NewBuilder[any]().
-		WithBackoff(cfg.BaseDelay, cfg.MaxDelay).
-		WithMaxRetries(cfg.MaxRetries).
-		WithJitterFactor(0.1).
-		HandleIf(func(_ any, err error) bool {
-			return isRetryableGRPCError(err)
-		}).
-		Build()
-
-	var policies []failsafe.Policy[any]
-	policies = append(policies, retry)
-
-	if cfg.CircuitBreakerConfig != nil {
-		cb := NewGRPCCircuitBreaker[any](*cfg.CircuitBreakerConfig)
-		policies = append(policies, cb)
-	}
-
-	executor := failsafe.With(policies...)
-
-	return func(
-		ctx context.Context,
-		method string,
-		req, reply interface{},
-		cc *grpc.ClientConn,
-		invoker grpc.UnaryInvoker,
-		opts ...grpc.CallOption,
-	) error {
-		_, err := executor.WithContext(ctx).Get(func() (any, error) {
-			err := invoker(ctx, method, req, reply, cc, opts...)
-			return nil, err
-		})
-
-		// Convert circuit breaker open error to gRPC Unavailable
-		if err != nil && errors.Is(err, circuitbreaker.ErrOpen) {
-			return status.Errorf(codes.Unavailable, "circuit breaker open")
-		}
-
-		return err
-	}
-}
-
-// GRPCStreamClientInterceptor returns a gRPC stream client interceptor
-// that checks circuit breaker state before creating streams.
-func GRPCStreamClientInterceptor(cb *CircuitBreaker) grpc.StreamClientInterceptor {
+// FailsafeStreamInterceptor returns a gRPC stream client interceptor with circuit breaker.
+// Checks CB state before stream creation and records failures from stream establishment.
+func FailsafeStreamInterceptor(serviceName string, logger logging.Logger) grpc.StreamClientInterceptor {
+	cb := newGRPCCircuitBreaker(serviceName+"-stream", logger)
 	return func(
 		ctx context.Context,
 		desc *grpc.StreamDesc,
@@ -229,21 +152,16 @@ func GRPCStreamClientInterceptor(cb *CircuitBreaker) grpc.StreamClientIntercepto
 		streamer grpc.Streamer,
 		opts ...grpc.CallOption,
 	) (grpc.ClientStream, error) {
-		// Check circuit state before attempting stream
-		if cb != nil && cb.IsOpen() {
-			return nil, status.Errorf(codes.Unavailable, "circuit breaker open: %s", cb.Name())
+		if cb.IsOpen() {
+			return nil, status.Errorf(codes.Unavailable, "circuit breaker open: %s", serviceName)
 		}
 
 		stream, err := streamer(ctx, desc, cc, method, opts...)
-		if err != nil && cb != nil && isCircuitBreakerFailure(err) {
-			// Record failure through circuit breaker
-			_ = cb.Call(func() error { return err }) //nolint:errcheck // recording pre-existing failure
+		if err != nil && isCircuitBreakerFailure(err) {
+			cb.RecordFailure()
+		} else if err == nil {
+			cb.RecordSuccess()
 		}
 		return stream, err
 	}
-}
-
-// WithGRPCFailsafe returns gRPC dial options with retry and circuit breaker
-func WithGRPCFailsafe(cfg GRPCExecutorConfig) grpc.DialOption {
-	return grpc.WithUnaryInterceptor(GRPCUnaryClientInterceptor(cfg))
 }

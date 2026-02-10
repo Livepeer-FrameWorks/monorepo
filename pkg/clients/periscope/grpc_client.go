@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/pkg/clients"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/pagination"
@@ -102,7 +103,10 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		config.GRPCAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
-		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
+		grpc.WithChainUnaryInterceptor(
+			authInterceptor(config.ServiceToken),
+			clients.FailsafeUnaryInterceptor("periscope", config.Logger),
+		),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                5 * time.Minute,  // Ping interval (must be >= server MinTime, default 5m)
 			Timeout:             10 * time.Second, // Wait for ping ack before closing
