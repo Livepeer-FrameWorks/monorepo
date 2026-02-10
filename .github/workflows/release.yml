@@ -342,24 +342,34 @@ jobs:
       fail-fast: false
       matrix:
         service:
-          - { name: bridge, context: api_gateway, cmd_path: ./cmd/bridge }
-          - { name: quartermaster, context: api_tenants, cmd_path: ./cmd/quartermaster }
-          - { name: commodore, context: api_control, cmd_path: ./cmd/commodore }
-          - { name: purser, context: api_billing, cmd_path: ./cmd/purser }
-          - { name: foghorn, context: api_balancing, cmd_path: ./cmd/foghorn }
-          - { name: decklog, context: api_firehose, cmd_path: cmd/decklog/main.go }
-          - { name: periscope-ingest, context: api_analytics_ingest, cmd_path: ./cmd/periscope }
-          - { name: periscope-query, context: api_analytics_query, cmd_path: ./cmd/periscope }
-          - { name: signalman, context: api_realtime, cmd_path: ./cmd/signalman }
-          - { name: helmsman, context: api_sidecar, cmd_path: ./cmd/helmsman }
-          - { name: steward, context: api_forms, cmd_path: ./cmd/forms }
-          - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator }
-          - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand }
-          - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer }
-          - { name: skipper, context: api_consultant, cmd_path: ./cmd/skipper }
+          - { name: bridge, context: api_gateway, cmd_path: ./cmd/bridge, cgo: false }
+          - { name: quartermaster, context: api_tenants, cmd_path: ./cmd/quartermaster, cgo: false }
+          - { name: commodore, context: api_control, cmd_path: ./cmd/commodore, cgo: false }
+          - { name: purser, context: api_billing, cmd_path: ./cmd/purser, cgo: false }
+          - { name: foghorn, context: api_balancing, cmd_path: ./cmd/foghorn, cgo: true }
+          - { name: decklog, context: api_firehose, cmd_path: cmd/decklog/main.go, cgo: false }
+          - {
+              name: periscope-ingest,
+              context: api_analytics_ingest,
+              cmd_path: ./cmd/periscope,
+              cgo: false,
+            }
+          - {
+              name: periscope-query,
+              context: api_analytics_query,
+              cmd_path: ./cmd/periscope,
+              cgo: false,
+            }
+          - { name: signalman, context: api_realtime, cmd_path: ./cmd/signalman, cgo: false }
+          - { name: helmsman, context: api_sidecar, cmd_path: ./cmd/helmsman, cgo: false }
+          - { name: steward, context: api_forms, cmd_path: ./cmd/forms, cgo: false }
+          - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator, cgo: false }
+          - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand, cgo: false }
+          - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer, cgo: false }
+          - { name: skipper, context: api_consultant, cmd_path: ./cmd/skipper, cgo: false }
         arch:
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: amd64, zig_target: x86_64-linux-musl }
+          - { goos: linux, goarch: arm64, zig_target: aarch64-linux-musl }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -369,6 +379,10 @@ jobs:
         with:
           go-version: "1.24"
           cache-dependency-path: ${{ matrix.service.context }}/go.sum
+
+      - name: Install zig (for CGO cross-compilation)
+        if: matrix.service.cgo
+        uses: mlugg/setup-zig@v2
 
       - name: Read service version
         id: svcver
@@ -384,7 +398,9 @@ jobs:
         env:
           GOOS: ${{ matrix.arch.goos }}
           GOARCH: ${{ matrix.arch.goarch }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: ${{ matrix.service.cgo && '1' || '0' }}
+          CC: ${{ matrix.service.cgo && format('zig cc -target {0}', matrix.arch.zig_target) || '' }}
+          CXX: ${{ matrix.service.cgo && format('zig c++ -target {0}', matrix.arch.zig_target) || '' }}
         run: |
           set -euo pipefail
           cd ${{ matrix.service.context }}
