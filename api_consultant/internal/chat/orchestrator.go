@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
+	"sync"
 	"time"
 
+	"frameworks/api_consultant/internal/diagnostics"
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/metering"
 	"frameworks/api_consultant/internal/skipper"
@@ -36,6 +37,7 @@ type OrchestratorConfig struct {
 	QueryRewriter  *QueryRewriter
 	HyDE           *HyDEGenerator
 	Gateway        GatewayToolCaller
+	Diagnostics    *diagnostics.BaselineEvaluator
 	MaxRounds      int
 	SearchLimit    int
 	GlobalTenantID string
@@ -53,6 +55,7 @@ type Orchestrator struct {
 	queryRewriter  *QueryRewriter
 	hyde           *HyDEGenerator
 	gateway        GatewayToolCaller
+	diag           *diagnostics.BaselineEvaluator
 	tools          []llm.Tool
 	maxRounds      int
 	searchLimit    int
@@ -143,6 +146,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 		queryRewriter:  cfg.QueryRewriter,
 		hyde:           cfg.HyDE,
 		gateway:        cfg.Gateway,
+		diag:           cfg.Diagnostics,
 		tools:          tools,
 		maxRounds:      maxRounds,
 		searchLimit:    searchLimit,
@@ -180,7 +184,7 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 						}
 					}
 					sources = appendSources(sources, preResult.Sources)
-					messages = trimMessagesToBudget(messages, maxPromptTokenBudget)
+					messages = compactMessages(ctx, messages, maxPromptTokenBudget, o.llmProvider)
 				}
 			}
 		}
@@ -243,47 +247,75 @@ func (o *Orchestrator) Run(ctx context.Context, messages []llm.Message, streamer
 		response.Reset()
 
 		tes, _ := streamer.(ToolEventStreamer)
-		for _, call := range pendingToolCalls {
-			if tes != nil {
-				_ = tes.SendToolStart(call.Name)
-			}
-			outcome, err := o.executeTool(ctx, call)
-			record := ToolCallRecord{Name: call.Name}
-			if call.Arguments != "" {
-				record.Arguments = json.RawMessage(call.Arguments)
-			}
-			errMsg := ""
-			if err != nil {
-				if o.logger != nil {
-					o.logger.WithError(err).WithField("tool", call.Name).Warn("Skipper tool execution failed")
+
+		type toolResult struct {
+			index   int
+			record  ToolCallRecord
+			outcome ToolOutcome
+		}
+		results := make([]toolResult, len(pendingToolCalls))
+		var sseMu sync.Mutex
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 3)
+
+		for i, call := range pendingToolCalls {
+			wg.Add(1)
+			go func(idx int, c llm.ToolCall) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				if tes != nil {
+					sseMu.Lock()
+					_ = tes.SendToolStart(c.Name)
+					sseMu.Unlock()
 				}
-				record.Error = err.Error()
-				errMsg = err.Error()
-				outcome = ToolOutcome{
-					Content: fmt.Sprintf("Tool %s failed: %v", call.Name, err),
-					Detail: ToolDetail{
-						Title:   fmt.Sprintf("Tool call: %s", call.Name),
-						Payload: map[string]any{"error": err.Error()},
-					},
+				outcome, err := o.executeTool(ctx, c)
+				record := ToolCallRecord{Name: c.Name}
+				if c.Arguments != "" {
+					record.Arguments = json.RawMessage(c.Arguments)
 				}
-			}
-			if tes != nil {
-				_ = tes.SendToolEnd(call.Name, errMsg)
-			}
-			toolCalls = append(toolCalls, record)
-			if outcome.Content != "" {
+				errMsg := ""
+				if err != nil {
+					if o.logger != nil {
+						o.logger.WithError(err).WithField("tool", c.Name).Warn("Skipper tool execution failed")
+					}
+					record.Error = err.Error()
+					errMsg = err.Error()
+					outcome = ToolOutcome{
+						Content: fmt.Sprintf("Tool %s failed: %v", c.Name, err),
+						Detail: ToolDetail{
+							Title:   fmt.Sprintf("Tool call: %s", c.Name),
+							Payload: map[string]any{"error": err.Error()},
+						},
+					}
+				}
+				if tes != nil {
+					sseMu.Lock()
+					_ = tes.SendToolEnd(c.Name, errMsg)
+					sseMu.Unlock()
+				}
+				results[idx] = toolResult{index: idx, record: record, outcome: outcome}
+			}(i, call)
+		}
+		wg.Wait()
+
+		// Append in original LLM order.
+		for _, r := range results {
+			toolCalls = append(toolCalls, r.record)
+			if r.outcome.Content != "" {
 				messages = append(messages, llm.Message{
 					Role:       "tool",
-					Content:    outcome.Content,
-					Name:       call.Name,
-					ToolCallID: call.ID,
+					Content:    r.outcome.Content,
+					Name:       r.record.Name,
+					ToolCallID: pendingToolCalls[r.index].ID,
 				})
 			}
-			if len(outcome.Sources) > 0 {
-				sources = appendSources(sources, outcome.Sources)
+			if len(r.outcome.Sources) > 0 {
+				sources = appendSources(sources, r.outcome.Sources)
 			}
-			if outcome.Detail.Title != "" {
-				details = append(details, outcome.Detail)
+			if r.outcome.Detail.Title != "" {
+				details = append(details, r.outcome.Detail)
 			}
 		}
 
@@ -421,6 +453,11 @@ func (o *Orchestrator) callGatewayTool(ctx context.Context, call llm.ToolCall) (
 		return ToolOutcome{}, err
 	}
 
+	// Enrich diagnostic tool output with baseline context (read-only).
+	if o.diag != nil && isDiagnosticTool(call.Name) {
+		content = o.enrichDiagnosticOutput(ctx, call, content)
+	}
+
 	var payload any
 	if json.Valid([]byte(content)) {
 		payload = json.RawMessage(content)
@@ -435,6 +472,115 @@ func (o *Orchestrator) callGatewayTool(ctx context.Context, call llm.ToolCall) (
 			Payload: payload,
 		},
 	}, nil
+}
+
+var diagnosticTools = map[string]bool{
+	"diagnose_rebuffering":   true,
+	"diagnose_buffer_health": true,
+	"diagnose_packet_loss":   true,
+	"diagnose_routing":       true,
+	"check_stream_health":    true,
+	"get_anomaly_report":     true,
+}
+
+func isDiagnosticTool(name string) bool {
+	return diagnosticTools[name]
+}
+
+// enrichDiagnosticOutput appends baseline deviations and correlation hypotheses
+// to a diagnostic tool's response, giving the LLM targeted context.
+func (o *Orchestrator) enrichDiagnosticOutput(ctx context.Context, call llm.ToolCall, content string) string {
+	tenantID := skipper.GetTenantID(ctx)
+	if tenantID == "" {
+		return content
+	}
+
+	// Extract stream_id from tool arguments if present.
+	streamID := ""
+	var args struct {
+		StreamID string `json:"stream_id"`
+	}
+	if err := json.Unmarshal([]byte(call.Arguments), &args); err == nil {
+		streamID = args.StreamID
+	}
+
+	metrics := parseDiagnosticMetrics(content)
+	if len(metrics) == 0 {
+		return content
+	}
+
+	// Try stream-specific baseline; fall back to tenant-wide (stream_id="")
+	// since heartbeat writes baselines under stream_id="".
+	deviations, err := o.diag.Deviations(ctx, tenantID, streamID, metrics)
+	if (err != nil || len(deviations) == 0) && streamID != "" {
+		deviations, err = o.diag.Deviations(ctx, tenantID, "", metrics)
+	}
+	if err != nil || len(deviations) == 0 {
+		return content
+	}
+
+	correlations := diagnostics.Correlate(deviations)
+
+	var b strings.Builder
+	b.WriteString(content)
+	b.WriteString("\n\n--- Baseline Context ---\n")
+	for _, d := range deviations {
+		fmt.Fprintf(&b, "- %s\n", d.String())
+	}
+	if len(correlations) > 0 {
+		b.WriteString("\nCorrelation Hypotheses:\n")
+		for _, c := range correlations {
+			fmt.Fprintf(&b, "- %s (confidence %.2f)\n", c.Hypothesis, c.Confidence)
+		}
+	}
+	return b.String()
+}
+
+// parseDiagnosticMetrics attempts to extract numeric metric values from a
+// diagnostic tool response. Gateway tools return DiagnosticResult with a
+// nested "metrics" object — we check both the top level and that nested level.
+func parseDiagnosticMetrics(content string) map[string]float64 {
+	metrics := make(map[string]float64)
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
+		return metrics
+	}
+	knownMetrics := map[string]string{
+		"avg_buffer_health":    "avg_buffer_health",
+		"buffer_health":        "avg_buffer_health",
+		"avg_fps":              "avg_fps",
+		"fps":                  "avg_fps",
+		"avg_bitrate":          "avg_bitrate",
+		"bitrate":              "avg_bitrate",
+		"avg_packet_loss":      "avg_packet_loss",
+		"packet_loss":          "avg_packet_loss",
+		"avg_packet_loss_rate": "avg_packet_loss",
+		"rebuffer_count":       "total_rebuffer_count",
+		"total_rebuffer_count": "total_rebuffer_count",
+	}
+	// Gateway DiagnosticResult nests values under "metrics".
+	sources := []map[string]any{raw}
+	if nested, ok := raw["metrics"].(map[string]any); ok {
+		sources = append(sources, nested)
+	}
+	for _, src := range sources {
+		for key, canonical := range knownMetrics {
+			if _, already := metrics[canonical]; already {
+				continue
+			}
+			if v, ok := src[key]; ok {
+				switch val := v.(type) {
+				case float64:
+					metrics[canonical] = val
+				case json.Number:
+					if f, err := val.Float64(); err == nil {
+						metrics[canonical] = f
+					}
+				}
+			}
+		}
+	}
+	return metrics
 }
 
 type SearchKnowledgeInput struct {

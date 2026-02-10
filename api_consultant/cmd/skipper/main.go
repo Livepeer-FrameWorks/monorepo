@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_consultant/internal/chat"
 	skipperconfig "frameworks/api_consultant/internal/config"
+	"frameworks/api_consultant/internal/diagnostics"
 	"frameworks/api_consultant/internal/heartbeat"
 	"frameworks/api_consultant/internal/knowledge"
 	"frameworks/api_consultant/internal/mcpclient"
@@ -286,6 +287,9 @@ func main() {
 		logger.Info("HyDE (Hypothetical Document Embeddings) enabled")
 	}
 
+	baselineStore := diagnostics.NewSQLBaselineStore(db)
+	baselineEvaluator := diagnostics.NewBaselineEvaluator(baselineStore, 2.0, 5)
+
 	conversationStore := chat.NewConversationStore(db)
 	knowledgeStore := knowledge.NewStore(db)
 	searchTool := chat.NewSearchWebTool(searchProvider)
@@ -301,6 +305,7 @@ func main() {
 		QueryRewriter:  queryRewriter,
 		HyDE:           hyde,
 		Gateway:        gatewayClient,
+		Diagnostics:    baselineEvaluator,
 		SearchLimit:    cfg.SearchLimit,
 		GlobalTenantID: globalTenantID,
 	})
@@ -343,6 +348,7 @@ func main() {
 		Quartermaster:     qmClient,
 		Decklog:           decklogClient,
 		Reporter:          heartbeatReporter,
+		Diagnostics:       baselineEvaluator,
 		Logger:            logger,
 		RequiredTierLevel: cfg.RequiredTierLevel,
 	})

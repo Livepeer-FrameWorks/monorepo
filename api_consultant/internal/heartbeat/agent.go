@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_consultant/internal/chat"
+	"frameworks/api_consultant/internal/diagnostics"
 	"frameworks/api_consultant/internal/skipper"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/ctxkeys"
@@ -23,16 +24,6 @@ const (
 	defaultHeartbeatInterval = 30 * time.Minute
 	defaultSummaryWindow     = 15 * time.Minute
 )
-
-const decisionSystemPrompt = `You are Skipper's heartbeat agent, monitoring live streams for early warning signs.
-You will receive a snapshot of health and QoE metrics. Decide whether to investigate now.
-
-Return ONLY valid JSON with:
-{
-  "action": "investigate" | "flag" | "skip",
-  "reason": "short rationale",
-  "metrics_reviewed": ["metric1", "metric2"]
-}`
 
 const investigationSystemPrompt = `You are Skipper's diagnostic agent.
 Use available tools to investigate issues, then produce a report in JSON with:
@@ -54,6 +45,7 @@ type AgentConfig struct {
 	Quartermaster     QuartermasterClient
 	Decklog           DecklogClient
 	Reporter          *Reporter
+	Diagnostics       *diagnostics.BaselineEvaluator
 	Logger            logging.Logger
 	RequiredTierLevel int
 }
@@ -66,15 +58,12 @@ type Agent struct {
 	quartermaster     QuartermasterClient
 	decklog           DecklogClient
 	reporter          *Reporter
+	diagnostics       *diagnostics.BaselineEvaluator
+	cooldown          *diagnostics.TriageCooldown
+	perStreamAnalyzer *diagnostics.PerStreamAnalyzer
 	logger            logging.Logger
 	requiredTierLevel int
 	thresholdTrigger  *ThresholdTrigger
-}
-
-type decisionPayload struct {
-	Action          string   `json:"action"`
-	Reason          string   `json:"reason"`
-	MetricsReviewed []string `json:"metrics_reviewed"`
 }
 
 type healthSnapshot struct {
@@ -93,6 +82,7 @@ type PeriscopeClient interface {
 	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetStreamHealthSummaryResponse, error)
 	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*pb.GetClientQoeSummaryResponse, error)
 	GetPlatformOverview(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*pb.GetPlatformOverviewResponse, error)
+	GetStreamHealthMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, pagination *periscope.CursorPaginationOpts) (*pb.GetStreamHealthMetricsResponse, error)
 }
 
 type BillingClient interface {
@@ -114,6 +104,10 @@ func NewAgent(cfg AgentConfig) *Agent {
 	if interval <= 0 {
 		interval = defaultHeartbeatInterval
 	}
+	var perStream *diagnostics.PerStreamAnalyzer
+	if cfg.Diagnostics != nil {
+		perStream = diagnostics.NewPerStreamAnalyzer(cfg.Diagnostics)
+	}
 	agent := &Agent{
 		interval:          interval,
 		orchestrator:      cfg.Orchestrator,
@@ -122,6 +116,9 @@ func NewAgent(cfg AgentConfig) *Agent {
 		quartermaster:     cfg.Quartermaster,
 		decklog:           cfg.Decklog,
 		reporter:          cfg.Reporter,
+		diagnostics:       cfg.Diagnostics,
+		cooldown:          diagnostics.NewTriageCooldown(diagnostics.DefaultFlagCooldown),
+		perStreamAnalyzer: perStream,
 		logger:            cfg.Logger,
 		requiredTierLevel: cfg.RequiredTierLevel,
 	}
@@ -245,53 +242,133 @@ func (a *Agent) processTenant(ctx context.Context, tenantID string) error {
 		return errors.New("missing health snapshot")
 	}
 
-	if a.thresholdTrigger != nil {
-		if triggered := a.thresholdTrigger.Evaluate(ctx, snapshot); triggered {
-			return nil
-		}
+	metrics := snapshotToMetricMap(snapshot)
+
+	// Compare against previous baseline before updating with current sample,
+	// so the current observation doesn't dilute the anomaly signal.
+	var deviations []diagnostics.Deviation
+	if a.diagnostics != nil {
+		deviations, _ = a.diagnostics.Deviations(ctx, tenantID, "", metrics)
 	}
 
-	decision, result, err := a.evaluateDecision(ctx, snapshot)
-	if err != nil {
-		if logErr := a.logUsage(ctx, tenantID, result.TokenCounts, true); logErr != nil {
-			// Best-effort usage logging: do not block incident handling on metering outages.
-			a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
+	// Feed baselines (heartbeat is the sole writer).
+	if a.diagnostics != nil {
+		if err := a.diagnostics.Update(ctx, tenantID, "", metrics); err != nil && a.logger != nil {
+			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Baseline update failed")
 		}
-		return err
 	}
-	if logErr := a.logUsage(ctx, tenantID, result.TokenCounts, false); logErr != nil {
-		// Best-effort usage logging: do not block incident handling on metering outages.
-		a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
+	violations := a.thresholdTrigger.Check(snapshot)
+	correlations := diagnostics.Correlate(deviations)
+	result := diagnostics.Triage(violations, deviations, correlations)
+
+	// Stale baseline cleanup (best-effort).
+	if a.diagnostics != nil {
+		_ = a.diagnostics.Cleanup(ctx, tenantID, 7*24*time.Hour)
 	}
 
-	action := strings.ToLower(strings.TrimSpace(decision.Action))
-	switch action {
-	case "investigate":
-		report, tokens, err := a.Investigate(ctx, tenantID, "heartbeat", decision.Reason, snapshot)
+	// Per-stream analysis when triage signals trouble.
+	var streamAnomalies []diagnostics.StreamAnomaly
+	if result.Action != diagnostics.TriageOK && a.perStreamAnalyzer != nil && a.periscope != nil {
+		streamAnomalies = a.collectPerStreamAnomalies(ctx, tenantID, snapshot)
+	}
+
+	switch result.Action {
+	case diagnostics.TriageInvestigate:
+		report, tokens, err := a.Investigate(ctx, tenantID, result.Trigger, result.Reason, snapshot, &result, streamAnomalies)
 		if logErr := a.logUsage(ctx, tenantID, tokens, err != nil); logErr != nil {
-			// Best-effort usage logging: do not block incident handling on metering outages.
 			a.logger.WithError(logErr).WithField("tenant_id", tenantID).Warn("Heartbeat usage logging failed")
 		}
 		if err != nil {
 			return err
 		}
 		a.logger.WithField("tenant_id", tenantID).WithField("report", report.FormatMarkdown()).Info("HEARTBEAT_INVESTIGATION")
-	case "flag":
-		if a.reporter != nil {
-			report := Report{
-				Trigger:         "flag",
-				Summary:         decision.Reason,
-				MetricsReviewed: decision.MetricsReviewed,
-				RootCause:       "pending review",
-				Recommendations: []Recommendation{},
+	case diagnostics.TriageFlag:
+		if a.cooldown.ShouldFlag(tenantID) {
+			if a.reporter != nil {
+				flagReport := Report{
+					Trigger:         result.Trigger,
+					Summary:         result.Reason,
+					MetricsReviewed: metricsFromDeviations(result.Deviations),
+					RootCause:       "pending review",
+					Recommendations: []Recommendation{},
+				}
+				_ = a.reporter.Send(ctx, tenantID, flagReport)
 			}
-			_ = a.reporter.Send(ctx, tenantID, report)
+			a.logger.WithField("tenant_id", tenantID).WithField("reason", result.Reason).Info("HEARTBEAT_FLAG")
 		}
-		a.logger.WithField("tenant_id", tenantID).WithField("reason", decision.Reason).Info("HEARTBEAT_FLAG")
 	default:
 		a.logger.WithField("tenant_id", tenantID).Info("HEARTBEAT_OK")
 	}
 	return nil
+}
+
+func snapshotToMetricMap(snapshot *healthSnapshot) map[string]float64 {
+	m := make(map[string]float64)
+	if snapshot == nil {
+		return m
+	}
+	if h := snapshot.Health; h != nil {
+		m["avg_bitrate"] = h.GetAvgBitrate()
+		m["avg_fps"] = h.GetAvgFps()
+		m["avg_buffer_health"] = h.GetAvgBufferHealth()
+		m["total_rebuffer_count"] = float64(h.GetTotalRebufferCount())
+		m["total_issue_count"] = float64(h.GetTotalIssueCount())
+	}
+	if q := snapshot.ClientQoE; q != nil {
+		m["avg_packet_loss"] = q.GetAvgPacketLossRate()
+		m["avg_bandwidth_in"] = q.GetAvgBandwidthIn()
+		m["avg_bandwidth_out"] = q.GetAvgBandwidthOut()
+		m["total_active_sessions"] = float64(q.GetTotalActiveSessions())
+	}
+	return m
+}
+
+func metricsFromDeviations(devs []diagnostics.Deviation) []string {
+	names := make([]string, len(devs))
+	for i, d := range devs {
+		names[i] = d.Metric
+	}
+	return names
+}
+
+func (a *Agent) collectPerStreamAnomalies(ctx context.Context, tenantID string, snapshot *healthSnapshot) []diagnostics.StreamAnomaly {
+	now := time.Now()
+	timeRange := &periscope.TimeRangeOpts{
+		StartTime: now.Add(-defaultSummaryWindow),
+		EndTime:   now,
+	}
+	pagination := &periscope.CursorPaginationOpts{First: 100}
+	var allMetrics []*pb.StreamHealthMetric
+	for {
+		resp, err := a.periscope.GetStreamHealthMetrics(ctx, tenantID, nil, timeRange, pagination)
+		if err != nil {
+			if a.logger != nil {
+				a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Per-stream metrics fetch failed")
+			}
+			break
+		}
+		allMetrics = append(allMetrics, resp.GetMetrics()...)
+		pg := resp.GetPagination()
+		if pg == nil || !pg.GetHasNextPage() {
+			break
+		}
+		cursor := pg.GetEndCursor()
+		if cursor == "" {
+			break
+		}
+		pagination = &periscope.CursorPaginationOpts{First: 100, After: &cursor}
+	}
+	if len(allMetrics) == 0 {
+		return nil
+	}
+	anomalies, err := a.perStreamAnalyzer.Analyze(ctx, tenantID, allMetrics)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Per-stream analysis failed")
+		}
+		return nil
+	}
+	return anomalies
 }
 
 func (a *Agent) loadSnapshot(ctx context.Context, tenantID string) (*healthSnapshot, error) {
@@ -329,28 +406,11 @@ func (a *Agent) loadSnapshot(ctx context.Context, tenantID string) (*healthSnaps
 	}, nil
 }
 
-func (a *Agent) evaluateDecision(ctx context.Context, snapshot *healthSnapshot) (decisionPayload, chat.OrchestratorResult, error) {
-	prompt := buildDecisionPrompt(snapshot)
-	messages := []llm.Message{
-		{Role: "system", Content: decisionSystemPrompt},
-		{Role: "user", Content: prompt},
-	}
-	result, err := a.orchestrator.Run(ctx, messages, nil)
-	if err != nil {
-		return decisionPayload{}, result, err
-	}
-	payload, err := parseDecisionPayload(result.Content)
-	if err != nil {
-		return decisionPayload{}, result, err
-	}
-	return payload, result, nil
-}
-
-func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason string, snapshot *healthSnapshot) (Report, chat.TokenCounts, error) {
+func (a *Agent) Investigate(ctx context.Context, tenantID, trigger, reason string, snapshot *healthSnapshot, triage *diagnostics.TriageResult, streamAnomalies []diagnostics.StreamAnomaly) (Report, chat.TokenCounts, error) {
 	if a.orchestrator == nil {
 		return Report{}, chat.TokenCounts{}, errors.New("orchestrator unavailable")
 	}
-	prompt := buildInvestigationPrompt(snapshot, trigger, reason)
+	prompt := buildInvestigationPrompt(snapshot, trigger, reason, triage, streamAnomalies)
 	messages := []llm.Message{
 		{Role: "system", Content: investigationSystemPrompt},
 		{Role: "user", Content: prompt},
@@ -417,85 +477,59 @@ func (a *Agent) logUsage(ctx context.Context, tenantID string, tokens chat.Token
 	return nil
 }
 
-func buildDecisionPrompt(snapshot *healthSnapshot) string {
-	if snapshot == nil {
-		return "No snapshot available."
-	}
-	health := snapshot.Health
-	qoe := snapshot.ClientQoE
-	metrics := []string{
-		fmt.Sprintf("Active streams: %d", snapshot.ActiveStreams),
-		fmt.Sprintf("Avg bitrate: %.2f", health.GetAvgBitrate()),
-		fmt.Sprintf("Avg FPS: %.2f", health.GetAvgFps()),
-		fmt.Sprintf("Avg buffer health: %.2f", health.GetAvgBufferHealth()),
-		fmt.Sprintf("Total rebuffer count: %d", health.GetTotalRebufferCount()),
-		fmt.Sprintf("Total issue count: %d", health.GetTotalIssueCount()),
-		fmt.Sprintf("Has active issues: %t", health.GetHasActiveIssues()),
-		fmt.Sprintf("Current quality tier: %s", health.GetCurrentQualityTier()),
-	}
-	if qoe != nil {
-		metrics = append(metrics,
-			fmt.Sprintf("Avg packet loss: %.2f", qoe.GetAvgPacketLossRate()),
-			fmt.Sprintf("Peak packet loss: %.2f", qoe.GetPeakPacketLossRate()),
-			fmt.Sprintf("Avg bandwidth in: %.2f", qoe.GetAvgBandwidthIn()),
-			fmt.Sprintf("Avg bandwidth out: %.2f", qoe.GetAvgBandwidthOut()),
-			fmt.Sprintf("Total active sessions: %d", qoe.GetTotalActiveSessions()),
-		)
-	}
-	return fmt.Sprintf("Tenant: %s\nWindow: last %s\nMetrics:\n- %s\nDecide whether to investigate.",
-		snapshot.TenantID,
-		snapshot.Window.String(),
-		strings.Join(metrics, "\n- "),
-	)
-}
-
-func buildInvestigationPrompt(snapshot *healthSnapshot, trigger, reason string) string {
+func buildInvestigationPrompt(snapshot *healthSnapshot, trigger, reason string, triage *diagnostics.TriageResult, streamAnomalies []diagnostics.StreamAnomaly) string {
 	if snapshot == nil {
 		return fmt.Sprintf("Trigger: %s\nReason: %s\nNo metrics available.", trigger, reason)
 	}
 	health := snapshot.Health
 	qoe := snapshot.ClientQoE
-	metrics := []string{
-		fmt.Sprintf("Active streams: %d", snapshot.ActiveStreams),
-		fmt.Sprintf("Avg bitrate: %.2f", health.GetAvgBitrate()),
-		fmt.Sprintf("Avg FPS: %.2f", health.GetAvgFps()),
-		fmt.Sprintf("Avg buffer health: %.2f", health.GetAvgBufferHealth()),
-		fmt.Sprintf("Total rebuffer count: %d", health.GetTotalRebufferCount()),
-		fmt.Sprintf("Total issue count: %d", health.GetTotalIssueCount()),
-		fmt.Sprintf("Has active issues: %t", health.GetHasActiveIssues()),
-		fmt.Sprintf("Current quality tier: %s", health.GetCurrentQualityTier()),
-	}
-	if qoe != nil {
-		metrics = append(metrics,
-			fmt.Sprintf("Avg packet loss: %.2f", qoe.GetAvgPacketLossRate()),
-			fmt.Sprintf("Peak packet loss: %.2f", qoe.GetPeakPacketLossRate()),
-			fmt.Sprintf("Avg bandwidth in: %.2f", qoe.GetAvgBandwidthIn()),
-			fmt.Sprintf("Avg bandwidth out: %.2f", qoe.GetAvgBandwidthOut()),
-			fmt.Sprintf("Total active sessions: %d", qoe.GetTotalActiveSessions()),
-		)
-	}
-	return fmt.Sprintf("Tenant: %s\nTrigger: %s\nReason: %s\nWindow: last %s\nMetrics:\n- %s\nUse tools if needed to diagnose.",
-		snapshot.TenantID,
-		trigger,
-		reason,
-		snapshot.Window.String(),
-		strings.Join(metrics, "\n- "),
-	)
-}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Tenant: %s\nTrigger: %s\nReason: %s\nWindow: last %s\n", snapshot.TenantID, trigger, reason, snapshot.Window)
 
-func parseDecisionPayload(content string) (decisionPayload, error) {
-	var payload decisionPayload
-	if content == "" {
-		return payload, errors.New("empty decision response")
+	if triage != nil && len(triage.Deviations) > 0 {
+		b.WriteString("\nBaseline Deviations:\n")
+		for _, d := range triage.Deviations {
+			fmt.Fprintf(&b, "- %s\n", d.String())
+		}
 	}
-	raw := extractJSON(content)
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return payload, err
+	if triage != nil && len(triage.Correlations) > 0 {
+		b.WriteString("\nCorrelations:\n")
+		for _, c := range triage.Correlations {
+			fmt.Fprintf(&b, "- %s (confidence %.2f)\n", c.Hypothesis, c.Confidence)
+		}
 	}
-	if payload.Action == "" {
-		return payload, errors.New("decision missing action")
+
+	if len(streamAnomalies) > 0 {
+		b.WriteString("\nPer-Stream Anomalies:\n")
+		for _, sa := range streamAnomalies {
+			fmt.Fprintf(&b, "- stream %s (max σ=%.1f):\n", sa.StreamID, sa.MaxSigma)
+			for _, d := range sa.Deviations {
+				fmt.Fprintf(&b, "    %s\n", d.String())
+			}
+			for _, c := range sa.Correlations {
+				fmt.Fprintf(&b, "    correlation: %s (confidence %.2f)\n", c.Hypothesis, c.Confidence)
+			}
+		}
 	}
-	return payload, nil
+
+	b.WriteString("\nRaw Metrics:\n")
+	fmt.Fprintf(&b, "- Active streams: %d\n", snapshot.ActiveStreams)
+	fmt.Fprintf(&b, "- Avg bitrate: %.2f\n", health.GetAvgBitrate())
+	fmt.Fprintf(&b, "- Avg FPS: %.2f\n", health.GetAvgFps())
+	fmt.Fprintf(&b, "- Avg buffer health: %.2f\n", health.GetAvgBufferHealth())
+	fmt.Fprintf(&b, "- Total rebuffer count: %d\n", health.GetTotalRebufferCount())
+	fmt.Fprintf(&b, "- Total issue count: %d\n", health.GetTotalIssueCount())
+	fmt.Fprintf(&b, "- Has active issues: %t\n", health.GetHasActiveIssues())
+	fmt.Fprintf(&b, "- Current quality tier: %s\n", health.GetCurrentQualityTier())
+	if qoe != nil {
+		fmt.Fprintf(&b, "- Avg packet loss: %.4f\n", qoe.GetAvgPacketLossRate())
+		fmt.Fprintf(&b, "- Peak packet loss: %.4f\n", qoe.GetPeakPacketLossRate())
+		fmt.Fprintf(&b, "- Avg bandwidth in: %.2f\n", qoe.GetAvgBandwidthIn())
+		fmt.Fprintf(&b, "- Avg bandwidth out: %.2f\n", qoe.GetAvgBandwidthOut())
+		fmt.Fprintf(&b, "- Total active sessions: %d\n", qoe.GetTotalActiveSessions())
+	}
+	b.WriteString("\nUse tools if needed to diagnose.")
+	return b.String()
 }
 
 func parseReport(content string) (Report, error) {

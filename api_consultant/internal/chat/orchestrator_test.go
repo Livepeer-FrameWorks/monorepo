@@ -166,3 +166,63 @@ func TestMergeToolCalls_PreservesOrderWithOutOfOrderChunks(t *testing.T) {
 		t.Fatalf("expected merged arguments for call-2, got %q", result[0].Arguments)
 	}
 }
+
+func TestParseDiagnosticMetrics(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    map[string]float64
+	}{
+		{
+			name:    "top-level keys",
+			content: `{"avg_buffer_health":2.5,"avg_fps":28}`,
+			want:    map[string]float64{"avg_buffer_health": 2.5, "avg_fps": 28},
+		},
+		{
+			name:    "nested metrics object (gateway DiagnosticResult)",
+			content: `{"status":"warning","metrics":{"avg_buffer_health":0.6,"avg_packet_loss_rate":0.03,"avg_bandwidth_out_bps":5000000},"analysis":"Buffer health degraded."}`,
+			want: map[string]float64{
+				"avg_buffer_health": 0.6,
+				"avg_packet_loss":   0.03,
+			},
+		},
+		{
+			name:    "mixed: top-level and nested",
+			content: `{"bitrate":5000000,"metrics":{"avg_buffer_health":2.0}}`,
+			want: map[string]float64{
+				"avg_bitrate":       5000000,
+				"avg_buffer_health": 2.0,
+			},
+		},
+		{
+			name:    "invalid JSON",
+			content: `not json at all`,
+			want:    map[string]float64{},
+		},
+		{
+			name:    "no known metrics",
+			content: `{"status":"ok","analysis":"all good"}`,
+			want:    map[string]float64{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseDiagnosticMetrics(tt.content)
+			for k, wantV := range tt.want {
+				gotV, ok := got[k]
+				if !ok {
+					t.Errorf("missing key %q", k)
+					continue
+				}
+				if gotV != wantV {
+					t.Errorf("%s = %v, want %v", k, gotV, wantV)
+				}
+			}
+			for k := range got {
+				if _, ok := tt.want[k]; !ok {
+					t.Errorf("unexpected key %q = %v", k, got[k])
+				}
+			}
+		})
+	}
+}

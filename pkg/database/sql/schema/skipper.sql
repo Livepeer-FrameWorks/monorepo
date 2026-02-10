@@ -196,3 +196,18 @@ DO $$ BEGIN
     ALTER TABLE skipper.skipper_reports ADD COLUMN read_at TIMESTAMP WITH TIME ZONE;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+
+-- ============================================================================
+-- DIAGNOSTIC BASELINES (Welford running averages)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS skipper.skipper_baselines (
+    tenant_id TEXT NOT NULL,
+    stream_id TEXT NOT NULL DEFAULT '',
+    metric_name TEXT NOT NULL,
+    avg_value DOUBLE PRECISION NOT NULL DEFAULT 0,
+    m2 DOUBLE PRECISION NOT NULL DEFAULT 0,
+    sample_count BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, stream_id, metric_name)
+);

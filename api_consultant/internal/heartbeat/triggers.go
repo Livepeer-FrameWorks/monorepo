@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_consultant/internal/diagnostics"
+
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 )
@@ -50,52 +52,59 @@ func NewThresholdTrigger(agent *Agent) *ThresholdTrigger {
 	}
 }
 
-func (t *ThresholdTrigger) Evaluate(ctx context.Context, snapshot *healthSnapshot) bool {
-	if t == nil || snapshot == nil || snapshot.Health == nil || t.agent == nil {
-		return false
+// Check returns threshold violations without side effects.
+// The caller (processTenant) decides what action to take.
+func (t *ThresholdTrigger) Check(snapshot *healthSnapshot) []diagnostics.ThresholdViolation {
+	if t == nil || snapshot == nil || snapshot.Health == nil {
+		return nil
 	}
 	if t.considerActiveOnly && snapshot.ActiveStreams == 0 {
-		return false
+		return nil
 	}
 	health := snapshot.Health
 	qoe := snapshot.ClientQoE
-	yellowReasons := make([]string, 0)
+	var violations []diagnostics.ThresholdViolation
 	if health.GetAvgBufferHealth() > 0 && health.GetAvgBufferHealth() < t.warningBuffer {
-		yellowReasons = append(yellowReasons, fmt.Sprintf("buffer health %.2f", health.GetAvgBufferHealth()))
+		violations = append(violations, diagnostics.ThresholdViolation{
+			Metric:  "avg_buffer_health",
+			Value:   health.GetAvgBufferHealth(),
+			Limit:   t.warningBuffer,
+			Message: fmt.Sprintf("buffer health %.2f < %.2f", health.GetAvgBufferHealth(), t.warningBuffer),
+		})
 	}
 	if health.GetAvgFps() > 0 && health.GetAvgFps() < t.warningFPS {
-		yellowReasons = append(yellowReasons, fmt.Sprintf("avg FPS %.2f", health.GetAvgFps()))
+		violations = append(violations, diagnostics.ThresholdViolation{
+			Metric:  "avg_fps",
+			Value:   health.GetAvgFps(),
+			Limit:   t.warningFPS,
+			Message: fmt.Sprintf("avg FPS %.2f < %.2f", health.GetAvgFps(), t.warningFPS),
+		})
 	}
 	if health.GetAvgBitrate() > 0 && health.GetAvgBitrate() < t.warningBitrate {
-		yellowReasons = append(yellowReasons, fmt.Sprintf("avg bitrate %.2f", health.GetAvgBitrate()))
+		violations = append(violations, diagnostics.ThresholdViolation{
+			Metric:  "avg_bitrate",
+			Value:   health.GetAvgBitrate(),
+			Limit:   t.warningBitrate,
+			Message: fmt.Sprintf("avg bitrate %.2f < %.2f", health.GetAvgBitrate(), t.warningBitrate),
+		})
 	}
 	if health.GetTotalIssueCount() >= t.warningIssueCount {
-		yellowReasons = append(yellowReasons, fmt.Sprintf("issue count %d", health.GetTotalIssueCount()))
+		violations = append(violations, diagnostics.ThresholdViolation{
+			Metric:  "total_issue_count",
+			Value:   float64(health.GetTotalIssueCount()),
+			Limit:   float64(t.warningIssueCount),
+			Message: fmt.Sprintf("issue count %d >= %d", health.GetTotalIssueCount(), t.warningIssueCount),
+		})
 	}
 	if qoe != nil && qoe.GetAvgPacketLossRate() >= t.warningPacketLoss {
-		yellowReasons = append(yellowReasons, fmt.Sprintf("packet loss %.2f", qoe.GetAvgPacketLossRate()))
+		violations = append(violations, diagnostics.ThresholdViolation{
+			Metric:  "avg_packet_loss",
+			Value:   qoe.GetAvgPacketLossRate(),
+			Limit:   t.warningPacketLoss,
+			Message: fmt.Sprintf("packet loss %.4f >= %.4f", qoe.GetAvgPacketLossRate(), t.warningPacketLoss),
+		})
 	}
-	if len(yellowReasons) == 0 {
-		return false
-	}
-	reason := fmt.Sprintf("threshold warning: %s", strings.Join(yellowReasons, ", "))
-	report, tokens, err := t.agent.Investigate(ctx, snapshot.TenantID, "threshold", reason, snapshot)
-	if logErr := t.agent.logUsage(ctx, snapshot.TenantID, tokens, err != nil); logErr != nil {
-		// Best-effort usage logging: do not block incident handling on metering outages.
-		if t.logger != nil {
-			t.logger.WithError(logErr).WithField("tenant_id", snapshot.TenantID).Warn("Threshold usage logging failed")
-		}
-	}
-	if err != nil {
-		if t.logger != nil {
-			t.logger.WithError(err).WithField("tenant_id", snapshot.TenantID).Warn("Threshold investigation failed")
-		}
-		return false
-	}
-	if t.logger != nil {
-		t.logger.WithField("tenant_id", snapshot.TenantID).WithField("report", report.FormatMarkdown()).Info("HEARTBEAT_THRESHOLD")
-	}
-	return true
+	return violations
 }
 
 func (t *LookoutTrigger) Start(ctx context.Context) error {
@@ -146,7 +155,7 @@ func (t *LookoutTrigger) handleIncident(ctx context.Context, msg kafka.Message) 
 	if reason == "" {
 		reason = fmt.Sprintf("Lookout incident severity=%s", incident.Severity)
 	}
-	report, tokens, err := t.Agent.Investigate(ctx, incident.TenantID, "lookout", reason, snapshot)
+	report, tokens, err := t.Agent.Investigate(ctx, incident.TenantID, "lookout", reason, snapshot, nil, nil)
 	if logErr := t.Agent.logUsage(ctx, incident.TenantID, tokens, err != nil); logErr != nil {
 		if t.Logger != nil {
 			t.Logger.WithError(logErr).WithField("tenant_id", incident.TenantID).Warn("Lookout usage logging failed")
