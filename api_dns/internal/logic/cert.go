@@ -25,6 +25,8 @@ import (
 	"github.com/go-acme/lego/v4/registration"
 )
 
+const platformCertTenantID = ""
+
 // CertManager handles certificate issuance logic
 type certStore interface {
 	GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error)
@@ -234,6 +236,21 @@ func isDomainAllowed(domain string) bool {
 // tenantID is optional - empty string means platform-wide certificate.
 func (m *CertManager) GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
 	return m.store.GetCertificate(ctx, tenantID, domain)
+}
+
+func (m *CertManager) EnsureClusterWildcardCertificate(ctx context.Context, clusterSlug, rootDomain, email string) (*store.Certificate, error) {
+	clusterSlug = strings.TrimSpace(clusterSlug)
+	rootDomain = strings.TrimSpace(rootDomain)
+	if clusterSlug == "" || rootDomain == "" {
+		return nil, fmt.Errorf("cluster slug and root domain are required")
+	}
+	domain := fmt.Sprintf("*.%s.%s", clusterSlug, rootDomain)
+
+	if _, _, _, err := m.IssueCertificate(ctx, platformCertTenantID, domain, email); err != nil {
+		return nil, err
+	}
+
+	return m.GetCertificate(ctx, platformCertTenantID, domain)
 }
 
 func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email string) (*ACMEUser, error) {

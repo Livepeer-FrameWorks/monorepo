@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,7 +57,10 @@ type cloudflareClient interface {
 
 type quartermasterClient interface {
 	ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int) (*proto.ListHealthyNodesForDNSResponse, error)
+	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
 }
+
+var slugSanitizer = regexp.MustCompile(`[^a-z0-9-]`)
 
 // NewDNSManager creates a new DNSManager
 func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.Logger, rootDomain string, recordTTL int, lbTTL int, staleAge time.Duration, monitorConfig MonitorConfig) *DNSManager {
@@ -111,6 +116,152 @@ func loadProxyServices() map[string]bool {
 
 func (m *DNSManager) shouldProxy(serviceType string) bool {
 	return m.proxy[serviceType]
+}
+
+// SanitizeLabel normalizes a string for use as a DNS label (lowercase, hyphens only).
+func SanitizeLabel(raw string) string {
+	label := strings.ToLower(strings.TrimSpace(raw))
+	label = strings.ReplaceAll(label, "_", "-")
+	label = slugSanitizer.ReplaceAllString(label, "-")
+	label = strings.Trim(label, "-")
+	if label == "" {
+		return "default"
+	}
+	return label
+}
+
+// ClusterSlug returns a DNS-safe slug for a cluster, preferring cluster_id over cluster_name.
+func ClusterSlug(cluster *proto.InfrastructureCluster) string {
+	if cluster == nil {
+		return "default"
+	}
+	if v := SanitizeLabel(cluster.GetClusterId()); v != "default" {
+		return v
+	}
+	return SanitizeLabel(cluster.GetClusterName())
+}
+
+func (m *DNSManager) clusterSlug(cluster *proto.InfrastructureCluster) string {
+	return ClusterSlug(cluster)
+}
+
+func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType string) (map[string]string, error) {
+	partialErrors := map[string]string{}
+
+	clustersResp, err := m.qmClient.ListClusters(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	nodesResp, err := m.qmClient.ListHealthyNodesForDNS(ctx, serviceType, int(m.staleAge.Seconds()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch nodes from Quartermaster: %w", err)
+	}
+
+	nodesByCluster := make(map[string][]*proto.InfrastructureNode)
+	for _, node := range nodesResp.GetNodes() {
+		clusterID := node.GetClusterId()
+		if clusterID == "" {
+			continue
+		}
+		nodesByCluster[clusterID] = append(nodesByCluster[clusterID], node)
+	}
+
+	sort.Slice(clustersResp.Clusters, func(i, j int) bool {
+		return clustersResp.Clusters[i].GetClusterId() < clustersResp.Clusters[j].GetClusterId()
+	})
+
+	for _, cluster := range clustersResp.Clusters {
+		if !cluster.GetIsActive() {
+			continue
+		}
+		clusterSlug := m.clusterSlug(cluster)
+		rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
+
+		nodes := nodesByCluster[cluster.GetClusterId()]
+		ips := make([]string, 0, len(nodes))
+		for _, node := range nodes {
+			if node.ExternalIp != nil && *node.ExternalIp != "" {
+				ips = append(ips, *node.ExternalIp)
+			}
+		}
+
+		svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
+		if len(ips) == 0 {
+			if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
+				partialErrors[svcFQDN] = err.Error()
+			}
+		} else {
+			svcPartial, syncErr := m.syncClusterService(ctx, svcFQDN, serviceType, ips)
+			if syncErr != nil {
+				partialErrors[svcFQDN] = syncErr.Error()
+			} else {
+				for k, v := range svcPartial {
+					partialErrors[k] = v
+				}
+			}
+		}
+
+		if serviceType != "edge" {
+			continue
+		}
+
+		desiredNodeRecords := map[string]string{}
+		for _, node := range nodes {
+			if node.ExternalIp == nil || *node.ExternalIp == "" {
+				continue
+			}
+			nodeLabel := SanitizeLabel(node.GetNodeId())
+			fqdn := fmt.Sprintf("edge-%s.%s", nodeLabel, rootDomain)
+			desiredNodeRecords[fqdn] = *node.ExternalIp
+			if err := m.applySingleNodeConfig(ctx, fqdn, *node.ExternalIp, false); err != nil {
+				partialErrors[fqdn] = err.Error()
+			}
+		}
+
+		aRecords, listErr := m.cfClient.ListDNSRecords("A", "")
+		if listErr != nil {
+			partialErrors[fmt.Sprintf("edge-nodes.%s", rootDomain)] = listErr.Error()
+			continue
+		}
+		prefix := "edge-"
+		suffix := "." + rootDomain
+		for _, rec := range aRecords {
+			if !strings.HasPrefix(rec.Name, prefix) || !strings.HasSuffix(rec.Name, suffix) {
+				continue
+			}
+			if _, keep := desiredNodeRecords[rec.Name]; keep {
+				continue
+			}
+			if err := m.cfClient.DeleteDNSRecord(rec.ID); err != nil {
+				partialErrors[rec.Name] = err.Error()
+			}
+		}
+	}
+
+	if len(partialErrors) == 0 {
+		return nil, nil
+	}
+	return partialErrors, nil
+}
+
+func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
+	subdomain := serviceType
+	switch serviceType {
+	case "gateway", "api":
+		subdomain = "api"
+	case "website":
+		return rootDomain
+	}
+	return fmt.Sprintf("%s.%s", subdomain, rootDomain)
+}
+
+// syncClusterService applies DNS for a cluster-scoped service using pre-fetched IPs.
+func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType string, ips []string) (map[string]string, error) {
+	if len(ips) == 1 {
+		return nil, m.applySingleNodeConfig(ctx, fqdn, ips[0], m.shouldProxy(serviceType))
+	}
+	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, ips, m.shouldProxy(serviceType))
 }
 
 // SyncService synchronizes DNS records for a specific service type (e.g. "edge", "gateway")

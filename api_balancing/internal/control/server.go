@@ -18,6 +18,7 @@ import (
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
+	navclient "frameworks/pkg/clients/navigator"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/grpcutil"
@@ -75,6 +76,7 @@ var registry *Registry
 var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var quartermasterClient *qmclient.GRPCClient
+var navigatorClient *navclient.Client
 var livepeerGatewayURL string // Set from main.go if LIVEPEER_GATEWAY_URL is configured
 var geoipCache *cache.Cache
 var decklogClient *decklog.BatchedClient
@@ -178,6 +180,9 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 
 // SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
 func SetQuartermasterClient(c *qmclient.GRPCClient) { quartermasterClient = c }
+
+// SetNavigatorClient sets the Navigator client used for cluster wildcard certificate retrieval.
+func SetNavigatorClient(c *navclient.Client) { navigatorClient = c }
 
 // SetGeoIPCache sets the GeoIP cache for cached lookup usage.
 func SetGeoIPCache(c *cache.Cache) { geoipCache = c }
@@ -1560,6 +1565,8 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		LocalInputCodecs:         []string{"H264", "H265", "AV1", "VP9"}, // MistServer supports these locally
 	}
 
+	tlsBundle := resolveClusterTLSBundle(nodeID)
+
 	return &pb.ConfigSeed{
 		NodeId:          nodeID,
 		Latitude:        lat,
@@ -1568,6 +1575,39 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		Templates:       templates,
 		Processing:      processingConfig,
 		OperationalMode: operationalMode,
+		Tls:             tlsBundle,
+	}
+}
+
+func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
+	if quartermasterClient == nil || navigatorClient == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	node, err := quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
+	if err != nil || node == nil || strings.TrimSpace(node.GetClusterId()) == "" {
+		return nil
+	}
+
+	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
+	if rootDomain == "" {
+		rootDomain = "frameworks.network"
+	}
+	domain := fmt.Sprintf("*.%s.%s", strings.ToLower(strings.TrimSpace(node.GetClusterId())), rootDomain)
+
+	certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
+	if certErr != nil || certResp == nil || !certResp.GetFound() {
+		return nil
+	}
+
+	return &pb.TLSCertBundle{
+		CertPem:   certResp.GetCertPem(),
+		KeyPem:    certResp.GetKeyPem(),
+		Domain:    certResp.GetDomain(),
+		ExpiresAt: certResp.GetExpiresAt(),
 	}
 }
 

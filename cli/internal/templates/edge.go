@@ -47,12 +47,13 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{ENROLLMENT_TOKEN}}", vars.EnrollmentToken)
 		content = strings.ReplaceAll(content, "{{CERT_PATH}}", vars.CertPath)
 		content = strings.ReplaceAll(content, "{{KEY_PATH}}", vars.KeyPath)
-		// Handle TLS directive: if cert paths provided, use file-based; otherwise auto-ACME
+		// TLS: use explicit cert paths if provided, otherwise auto-ACME (Caddy default).
+		// ConfigSeed will push wildcard certs to /etc/frameworks/certs/ at runtime;
+		// Caddy watches the files and hot-reloads when they appear.
 		if vars.CertPath != "" && vars.KeyPath != "" {
 			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)
 			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)
 		} else {
-			// Auto-ACME (Caddy default)
 			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", "")
 		}
 		outPath := filepath.Join(targetDir, f.out)

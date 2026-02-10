@@ -1349,6 +1349,13 @@ message StreamTemplate {
   repeated string caps = 4;
 }
 
+message TLSCertBundle {
+  string cert_pem = 1;
+  string key_pem = 2;
+  string domain = 3;
+  int64 expires_at = 4;
+}
+
 message ConfigSeed {
   string node_id = 1;
   double latitude = 2;
@@ -1361,6 +1368,7 @@ message ConfigSeed {
   ProcessingConfig processing = 11;
   // Authoritative operational mode set by Foghorn. Helmsman must apply this.
   NodeOperationalMode operational_mode = 12;
+  TLSCertBundle tls = 20;
 }
 
 // ==================== Transcode Job Messages ====================

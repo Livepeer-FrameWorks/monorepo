@@ -109,7 +109,8 @@ func main() {
 	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger)
 	go renewalWorker.Start(context.Background())
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
-	reconciler := worker.NewDNSReconciler(dnsManager, logger, time.Duration(reconcileIntervalSeconds)*time.Second, []string{
+	acmeEmail := config.GetEnv("BRAND_CONTACT_EMAIL", "info@frameworks.network")
+	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, []string{
 		"edge",
 		"ingest",
 		"play",
