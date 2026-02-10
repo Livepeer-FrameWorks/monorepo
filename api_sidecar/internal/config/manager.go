@@ -1,11 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -116,6 +118,9 @@ func (m *Manager) reconcile() {
 		return
 	}
 
+	if tls := seed.GetTls(); tls != nil {
+		m.applyTLSBundle(tls)
+	}
 	// Log processing config if present
 	if proc := seed.GetProcessing(); proc != nil {
 		if proc.GetLivepeerGatewayAvailable() {
@@ -184,6 +189,43 @@ func (m *Manager) reconcile() {
 		m.lastAppliedSum = sum
 		m.mu.Unlock()
 	}
+}
+
+func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) {
+	certPath := "/etc/frameworks/certs/cert.pem"
+	keyPath := "/etc/frameworks/certs/key.pem"
+
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
+		m.logger.WithError(err).Warn("Failed to create TLS certificate directory")
+		return
+	}
+
+	certBytes := []byte(bundle.GetCertPem())
+	keyBytes := []byte(bundle.GetKeyPem())
+	if len(certBytes) == 0 || len(keyBytes) == 0 {
+		m.logger.Warn("Received empty TLS bundle in ConfigSeed")
+		return
+	}
+
+	if existing, err := os.ReadFile(certPath); err == nil && bytes.Equal(existing, certBytes) {
+		if existingKey, keyErr := os.ReadFile(keyPath); keyErr == nil && bytes.Equal(existingKey, keyBytes) {
+			return
+		}
+	}
+
+	if err := os.WriteFile(certPath, certBytes, 0o600); err != nil {
+		m.logger.WithError(err).Warn("Failed to write TLS certificate file")
+		return
+	}
+	if err := os.WriteFile(keyPath, keyBytes, 0o600); err != nil {
+		m.logger.WithError(err).Warn("Failed to write TLS key file")
+		return
+	}
+
+	m.logger.WithFields(logging.Fields{
+		"domain":     bundle.GetDomain(),
+		"expires_at": bundle.GetExpiresAt(),
+	}).Info("Applied TLS certificate bundle from ConfigSeed")
 }
 
 func (m *Manager) ensureProtocols(current map[string]interface{}) error {

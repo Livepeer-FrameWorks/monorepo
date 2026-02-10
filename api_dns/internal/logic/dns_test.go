@@ -157,11 +157,13 @@ func (f *fakeCloudflareClient) CreatePool(pool cloudflare.Pool) (*cloudflare.Poo
 }
 
 type fakeQuartermasterClient struct {
-	nodeType  string
-	staleAge  int
-	response  *proto.ListHealthyNodesForDNSResponse
-	err       error
-	callCount int
+	nodeType         string
+	staleAge         int
+	response         *proto.ListHealthyNodesForDNSResponse
+	err              error
+	callCount        int
+	clustersResponse *proto.ListClustersResponse
+	clustersErr      error
 }
 
 func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, nodeType string, staleThresholdSeconds int) (*proto.ListHealthyNodesForDNSResponse, error) {
@@ -169,6 +171,13 @@ func (f *fakeQuartermasterClient) ListHealthyNodesForDNS(ctx context.Context, no
 	f.nodeType = nodeType
 	f.staleAge = staleThresholdSeconds
 	return f.response, f.err
+}
+
+func (f *fakeQuartermasterClient) ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error) {
+	if f.clustersResponse == nil {
+		return &proto.ListClustersResponse{}, f.clustersErr
+	}
+	return f.clustersResponse, f.clustersErr
 }
 
 func TestSyncService_UsesStaleAgeSeconds(t *testing.T) {

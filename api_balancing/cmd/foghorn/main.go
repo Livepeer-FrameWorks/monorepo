@@ -15,6 +15,7 @@ import (
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
+	navclient "frameworks/pkg/clients/navigator"
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
@@ -329,6 +330,21 @@ func main() {
 		defer func() { _ = commodoreClient.Close() }()
 	}
 
+	// Navigator (gRPC) - wildcard certificate retrieval for edge ConfigSeed
+	navigatorAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "navigator:19004")
+	navigatorClient, err := navclient.NewClient(navclient.Config{
+		Addr:         navigatorAddr,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Navigator gRPC client - TLS bundles will not be seeded")
+		navigatorClient = nil
+	} else {
+		defer navigatorClient.Close()
+		control.SetNavigatorClient(navigatorClient)
+	}
 	// Purser (gRPC) - x402 settlement + billing checks
 	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{

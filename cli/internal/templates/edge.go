@@ -47,14 +47,17 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{ENROLLMENT_TOKEN}}", vars.EnrollmentToken)
 		content = strings.ReplaceAll(content, "{{CERT_PATH}}", vars.CertPath)
 		content = strings.ReplaceAll(content, "{{KEY_PATH}}", vars.KeyPath)
-		// Handle TLS directive: if cert paths provided, use file-based; otherwise auto-ACME
-		if vars.CertPath != "" && vars.KeyPath != "" {
-			tlsDirective := fmt.Sprintf("tls %s %s", vars.CertPath, vars.KeyPath)
-			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)
-		} else {
-			// Auto-ACME (Caddy default)
-			content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", "")
+		// Default to file-based TLS for Navigator-distributed wildcard certs.
+		certPath := vars.CertPath
+		keyPath := vars.KeyPath
+		if certPath == "" {
+			certPath = "/etc/frameworks/certs/cert.pem"
 		}
+		if keyPath == "" {
+			keyPath = "/etc/frameworks/certs/key.pem"
+		}
+		tlsDirective := fmt.Sprintf("tls %s %s", certPath, keyPath)
+		content = strings.ReplaceAll(content, "{{TLS_DIRECTIVE}}", tlsDirective)
 		outPath := filepath.Join(targetDir, f.out)
 		if _, err := os.Stat(outPath); err == nil && !overwrite {
 			return fmt.Errorf("file exists: %s (use overwrite)", outPath)

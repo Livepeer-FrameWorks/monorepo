@@ -2,24 +2,38 @@ package worker
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"frameworks/api_dns/internal/logic"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/proto"
 )
 
 type DNSReconciler struct {
 	dnsManager   *logic.DNSManager
+	certManager  *logic.CertManager
+	qmClient     quartermasterClient
 	logger       logging.Logger
 	interval     time.Duration
+	rootDomain   string
+	acmeEmail    string
 	serviceTypes []string
 }
 
-func NewDNSReconciler(dnsManager *logic.DNSManager, logger logging.Logger, interval time.Duration, serviceTypes []string) *DNSReconciler {
+type quartermasterClient interface {
+	ListClusters(ctx context.Context, pagination *proto.CursorPaginationRequest) (*proto.ListClustersResponse, error)
+}
+
+func NewDNSReconciler(dnsManager *logic.DNSManager, certManager *logic.CertManager, qmClient quartermasterClient, logger logging.Logger, interval time.Duration, rootDomain, acmeEmail string, serviceTypes []string) *DNSReconciler {
 	return &DNSReconciler{
 		dnsManager:   dnsManager,
+		certManager:  certManager,
+		qmClient:     qmClient,
 		logger:       logger,
 		interval:     interval,
+		rootDomain:   rootDomain,
+		acmeEmail:    acmeEmail,
 		serviceTypes: serviceTypes,
 	}
 }
@@ -51,5 +65,49 @@ func (r *DNSReconciler) reconcile(ctx context.Context) {
 		if len(partialErrors) > 0 {
 			r.logger.WithField("service_type", serviceType).WithField("partial_errors", partialErrors).Warn("DNS reconciliation completed with partial errors")
 		}
+
+		if serviceType == "edge" || serviceType == "ingest" || serviceType == "play" {
+			clusterPartialErrors, clusterErr := r.dnsManager.SyncServiceByCluster(ctx, serviceType)
+			if clusterErr != nil {
+				r.logger.WithError(clusterErr).WithField("service_type", serviceType).Error("Cluster DNS reconciliation failed")
+			}
+			if len(clusterPartialErrors) > 0 {
+				r.logger.WithField("service_type", serviceType).WithField("partial_errors", clusterPartialErrors).Warn("Cluster DNS reconciliation completed with partial errors")
+			}
+		}
+	}
+
+	r.ensureClusterWildcardCerts(ctx)
+}
+
+func (r *DNSReconciler) ensureClusterWildcardCerts(ctx context.Context) {
+	if r.certManager == nil || r.qmClient == nil || strings.TrimSpace(r.acmeEmail) == "" {
+		return
+	}
+
+	clustersResp, err := r.qmClient.ListClusters(ctx, nil)
+	if err != nil {
+		r.logger.WithError(err).Warn("Failed to list clusters for wildcard certificate issuance")
+		return
+	}
+
+	for _, cluster := range clustersResp.GetClusters() {
+		if !cluster.GetIsActive() {
+			continue
+		}
+		clusterSlug := strings.ToLower(strings.TrimSpace(cluster.GetClusterId()))
+		if clusterSlug == "" {
+			continue
+		}
+		cert, certErr := r.certManager.EnsureClusterWildcardCertificate(ctx, clusterSlug, r.rootDomain, r.acmeEmail)
+		if certErr != nil {
+			r.logger.WithError(certErr).WithField("cluster", cluster.GetClusterId()).Warn("Failed to ensure cluster wildcard certificate")
+			continue
+		}
+		r.logger.WithFields(logging.Fields{
+			"cluster":    cluster.GetClusterId(),
+			"domain":     cert.Domain,
+			"expires_at": cert.ExpiresAt,
+		}).Debug("Ensured cluster wildcard certificate")
 	}
 }

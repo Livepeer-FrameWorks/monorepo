@@ -124,3 +124,12 @@ func (c *Client) GetHealth(ctx context.Context) error {
 	return nil
 
 }
+
+// GetCertificate retrieves an existing certificate from Navigator.
+func (c *Client) GetCertificate(ctx context.Context, req *pb.GetCertificateRequest) (*pb.GetCertificateResponse, error) {
+	resp, err := c.service.GetCertificate(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get certificate: %w", err)
+	}
+	return resp, nil
+}
