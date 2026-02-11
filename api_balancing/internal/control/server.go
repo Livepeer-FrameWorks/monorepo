@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/hex"
@@ -1689,35 +1690,11 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 }
 
 func resolveClusterTLSBundle(nodeID string) *pb.TLSCertBundle {
-	if quartermasterClient == nil || navigatorClient == nil {
+	bundle, found, err := fetchClusterTLSBundle(nodeID)
+	if err != nil || !found {
 		return nil
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	node, err := quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
-	if err != nil || node == nil || strings.TrimSpace(node.GetClusterId()) == "" {
-		return nil
-	}
-
-	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
-	if rootDomain == "" {
-		rootDomain = "frameworks.network"
-	}
-	domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(node.GetClusterId()), rootDomain)
-
-	certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
-	if certErr != nil || certResp == nil || !certResp.GetFound() {
-		return nil
-	}
-
-	return &pb.TLSCertBundle{
-		CertPem:   certResp.GetCertPem(),
-		KeyPem:    certResp.GetKeyPem(),
-		Domain:    certResp.GetDomain(),
-		ExpiresAt: certResp.GetExpiresAt(),
-	}
+	return bundle
 }
 
 func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
@@ -2946,7 +2923,9 @@ func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger loggin
 
 // ==================== Cert Refresh Loop ====================
 
-var lastPushedCertExpiry sync.Map // nodeID → int64 (expiresAt unix timestamp)
+const tlsStateNoCert = "<no-cert>"
+
+var lastPushedTLSState sync.Map // connID -> tls state fingerprint (cert hash or tlsStateNoCert)
 
 // StartCertRefreshLoop periodically re-checks TLS certificates for all connected
 // Helmsman nodes and re-pushes ConfigSeed when a cert has been renewed.
@@ -3008,14 +2987,19 @@ func refreshTLSBundles(log logging.Logger) {
 	}
 
 	for _, n := range nodes {
-		bundle := resolveClusterTLSBundle(n.canonicalID)
-		if bundle == nil {
+		bundle, found, err := fetchClusterTLSBundle(n.canonicalID)
+		if err != nil {
+			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to resolve TLS bundle for node")
 			continue
 		}
 
-		expiry := bundle.GetExpiresAt()
-		prev, ok := lastPushedCertExpiry.Load(n.connID)
-		if prevExpiry, isInt := prev.(int64); ok && isInt && prevExpiry == expiry {
+		nextState := tlsStateNoCert
+		if found {
+			nextState = tlsBundleState(bundle)
+		}
+
+		prev, ok := lastPushedTLSState.Load(n.connID)
+		if prevState, isString := prev.(string); ok && isString && prevState == nextState {
 			continue
 		}
 
@@ -3031,14 +3015,71 @@ func refreshTLSBundles(log logging.Logger) {
 			continue
 		}
 
-		lastPushedCertExpiry.Store(n.connID, expiry)
+		lastPushedTLSState.Store(n.connID, nextState)
+		if bundle == nil {
+			log.WithFields(logging.Fields{
+				"node_id": n.canonicalID,
+				"conn_id": n.connID,
+			}).Info("Removed TLS certificate from edge after navigator reported no certificate")
+			continue
+		}
+
 		log.WithFields(logging.Fields{
 			"node_id":    n.canonicalID,
 			"conn_id":    n.connID,
 			"domain":     bundle.GetDomain(),
-			"expires_at": expiry,
+			"expires_at": bundle.GetExpiresAt(),
 		}).Info("Pushed renewed TLS certificate to edge")
 	}
+}
+
+func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
+	if quartermasterClient == nil || navigatorClient == nil {
+		return nil, false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	node, err := quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
+	if err != nil {
+		return nil, false, err
+	}
+	if node == nil || strings.TrimSpace(node.GetClusterId()) == "" {
+		return nil, false, nil
+	}
+
+	rootDomain := strings.TrimSpace(os.Getenv("NAVIGATOR_ROOT_DOMAIN"))
+	if rootDomain == "" {
+		rootDomain = "frameworks.network"
+	}
+	domain := fmt.Sprintf("*.%s.%s", pkgdns.SanitizeLabel(node.GetClusterId()), rootDomain)
+
+	certResp, certErr := navigatorClient.GetCertificate(ctx, &pb.GetCertificateRequest{Domain: domain})
+	if certErr != nil {
+		return nil, false, certErr
+	}
+	if certResp == nil || !certResp.GetFound() {
+		if certResp != nil && certResp.GetError() != "" {
+			return nil, false, fmt.Errorf("navigator: %s", certResp.GetError())
+		}
+		return nil, false, nil
+	}
+
+	return &pb.TLSCertBundle{
+		CertPem:   certResp.GetCertPem(),
+		KeyPem:    certResp.GetKeyPem(),
+		Domain:    certResp.GetDomain(),
+		ExpiresAt: certResp.GetExpiresAt(),
+	}, true, nil
+}
+
+func tlsBundleState(bundle *pb.TLSCertBundle) string {
+	if bundle == nil {
+		return tlsStateNoCert
+	}
+	sum := sha256.Sum256([]byte(bundle.GetCertPem() + "\x00" + bundle.GetKeyPem() + "\x00" + bundle.GetDomain() + fmt.Sprintf("\x00%d", bundle.GetExpiresAt())))
+	return hex.EncodeToString(sum[:])
 }
 
 // ==================== Edge Provisioning (PreRegisterEdge) ====================
