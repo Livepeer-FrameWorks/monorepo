@@ -290,7 +290,7 @@ func TestApplyLoadBalancerConfig_ReturnsPartialErrors(t *testing.T) {
 	logger := logrus.New()
 	manager := NewDNSManager(cf, &fakeQuartermasterClient{}, logger, "example.com", 60, 60, 5*time.Minute, MonitorConfig{})
 
-	partialErrors, err := manager.applyLoadBalancerConfig(context.Background(), "edge-egress.example.com", "edge-egress", []string{"2.2.2.2", "3.3.3.3"}, false)
+	partialErrors, err := manager.applyLoadBalancerConfig(context.Background(), "edge-egress.example.com", "edge-egress", "edge-egress", []string{"2.2.2.2", "3.3.3.3"}, false)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -336,7 +336,7 @@ func TestApplyLoadBalancerConfig_ListLoadBalancersError(t *testing.T) {
 	}
 
 	manager := newTestManager(cf)
-	_, err := manager.applyLoadBalancerConfig(context.Background(), "edge-egress.example.com", "edge-egress", []string{"2.2.2.2"}, false)
+	_, err := manager.applyLoadBalancerConfig(context.Background(), "edge-egress.example.com", "edge-egress", "edge-egress", []string{"2.2.2.2"}, false)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -389,7 +389,7 @@ func TestApplyLoadBalancerConfig_UpdateLoadBalancerError(t *testing.T) {
 	}
 
 	manager := newTestManager(cf)
-	_, err := manager.applyLoadBalancerConfig(context.Background(), "edge-egress.example.com", "edge-egress", []string{"2.2.2.2"}, false)
+	_, err := manager.applyLoadBalancerConfig(context.Background(), "edge-egress.example.com", "edge-egress", "edge-egress", []string{"2.2.2.2"}, false)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -415,7 +415,7 @@ func newTestManager(cf *fakeCloudflareClient) *DNSManager {
 			Timeout:  5,
 			Retries:  2,
 		},
-		servicePorts: map[string]int{"edge-egress": 18008, "gateway": 18001},
+		servicePorts: defaultServicePorts(),
 	}
 }
 
@@ -863,7 +863,7 @@ func TestEnsurePool_ReusesExisting(t *testing.T) {
 	}
 	m := newTestManager(cf)
 
-	id, err := m.ensurePool("edge-egress", []string{"1.1.1.1"})
+	id, err := m.ensurePool("edge-egress", "edge-egress", []string{"1.1.1.1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -893,7 +893,7 @@ func TestEnsurePool_AttachesMonitorToExisting(t *testing.T) {
 	}
 	m := newTestManager(cf)
 
-	id, err := m.ensurePool("edge-egress", []string{"1.1.1.1"})
+	id, err := m.ensurePool("edge-egress", "edge-egress", []string{"1.1.1.1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -926,7 +926,7 @@ func TestEnsurePool_CreatesNew(t *testing.T) {
 	}
 	m := newTestManager(cf)
 
-	id, err := m.ensurePool("edge-egress", []string{"1.1.1.1", "2.2.2.2"})
+	id, err := m.ensurePool("edge-egress", "edge-egress", []string{"1.1.1.1", "2.2.2.2"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -959,7 +959,7 @@ func TestEnsurePool_ListPoolsError(t *testing.T) {
 	}
 	m := newTestManager(cf)
 
-	_, err := m.ensurePool("edge-egress", []string{"1.1.1.1"})
+	_, err := m.ensurePool("edge-egress", "edge-egress", []string{"1.1.1.1"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -986,7 +986,7 @@ func TestEnsurePool_CreatePoolError(t *testing.T) {
 	}
 	m := newTestManager(cf)
 
-	_, err := m.ensurePool("edge-egress", []string{"1.1.1.1"})
+	_, err := m.ensurePool("edge-egress", "edge-egress", []string{"1.1.1.1"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1013,7 +1013,7 @@ func TestEnsurePool_ContinuesWithoutMonitor(t *testing.T) {
 	}
 	m := newTestManager(cf)
 
-	id, err := m.ensurePool("edge-egress", []string{"1.1.1.1"})
+	id, err := m.ensurePool("edge-egress", "edge-egress", []string{"1.1.1.1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1134,6 +1134,7 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 		serviceType     string
 		expectedSubpart string
 	}{
+		{"edge", "edge.example.com"},
 		{"edge-egress", "edge-egress.example.com"},
 		{"edge-ingest", "edge-ingest.example.com"},
 		{"foghorn", "foghorn.example.com"},
@@ -1252,6 +1253,7 @@ func TestClusterServiceFQDN(t *testing.T) {
 		rootDomain  string
 		expected    string
 	}{
+		{"edge", "c1.example.com", "edge.c1.example.com"},
 		{"edge-egress", "c1.example.com", "edge-egress.c1.example.com"},
 		{"edge-ingest", "c1.example.com", "edge-ingest.c1.example.com"},
 		{"foghorn", "c1.example.com", "foghorn.c1.example.com"},
@@ -1375,6 +1377,91 @@ func TestSyncServiceByCluster_NonEdgeSkipsNodeRecords(t *testing.T) {
 	for _, r := range createdRecords {
 		if strings.HasPrefix(r, "edge-") {
 			t.Fatalf("foghorn should not create edge node records, but created: %s", r)
+		}
+	}
+}
+
+func TestSyncServiceByCluster_UsesClusterScopedPoolNames(t *testing.T) {
+	ip1 := "10.0.0.1"
+	ip2 := "10.0.0.2"
+	ip3 := "10.0.1.1"
+	ip4 := "10.0.1.2"
+
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{
+			Clusters: []*proto.InfrastructureCluster{
+				{ClusterId: "cluster-1", ClusterName: "one", IsActive: true},
+				{ClusterId: "cluster-2", ClusterName: "two", IsActive: true},
+			},
+		},
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{
+				{NodeId: "n1", ClusterId: "cluster-1", ExternalIp: strPtr(ip1)},
+				{NodeId: "n2", ClusterId: "cluster-1", ExternalIp: strPtr(ip2)},
+				{NodeId: "n3", ClusterId: "cluster-2", ExternalIp: strPtr(ip3)},
+				{NodeId: "n4", ClusterId: "cluster-2", ExternalIp: strPtr(ip4)},
+			},
+		},
+	}
+
+	createdPools := []string{}
+	var monitorPorts []int
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			monitorPorts = append(monitorPorts, monitor.Port)
+			monitor.ID = "monitor"
+			return &monitor, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return nil, nil
+		},
+		createPool: func(pool cloudflare.Pool) (*cloudflare.Pool, error) {
+			pool.ID = pool.Name
+			createdPools = append(createdPools, pool.Name)
+			return &pool, nil
+		},
+		getPool: func(poolID string) (*cloudflare.Pool, error) {
+			return &cloudflare.Pool{ID: poolID}, nil
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return nil, nil
+		},
+	}
+
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	partialErrors, err := m.SyncServiceByCluster(context.Background(), "foghorn")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+
+	if len(createdPools) != 2 {
+		t.Fatalf("expected 2 pools, got %d (%v)", len(createdPools), createdPools)
+	}
+
+	for _, name := range createdPools {
+		if strings.Contains(name, ".") {
+			t.Fatalf("expected sanitized cluster-scoped pool name without dots, got %q", name)
+		}
+		if !strings.Contains(name, "example-com") {
+			t.Fatalf("expected pool name to include cluster fqdn scope, got %q", name)
+		}
+	}
+
+	if createdPools[0] == createdPools[1] {
+		t.Fatalf("expected unique pool names per cluster, got %v", createdPools)
+	}
+
+	for _, port := range monitorPorts {
+		if port != 18008 {
+			t.Fatalf("expected health check monitor on port 18008 (foghorn), got %d", port)
 		}
 	}
 }

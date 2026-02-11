@@ -79,6 +79,7 @@ func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.L
 // defaultServicePorts returns the default HTTP health check port for each service type
 func defaultServicePorts() map[string]int {
 	return map[string]int{
+		"edge":        18008, // Any edge node (nearest-node routing)
 		"edge-egress": 18008, // Direct to edge nodes (viewer delivery)
 		"edge-ingest": 18008, // Direct to edge nodes (stream receive)
 		"foghorn":     18008, // Foghorn viewer routing
@@ -252,7 +253,8 @@ func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType s
 	if len(ips) == 1 {
 		return nil, m.applySingleNodeConfig(ctx, fqdn, ips[0], m.shouldProxy(serviceType))
 	}
-	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, ips, m.shouldProxy(serviceType))
+	poolName := strings.ReplaceAll(fqdn, ".", "-")
+	return m.applyLoadBalancerConfig(ctx, fqdn, poolName, serviceType, ips, m.shouldProxy(serviceType))
 }
 
 // SyncService synchronizes DNS records for a specific service type (e.g. "edge", "gateway")
@@ -285,6 +287,8 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	// Map internal service types to public subdomains
 	var subdomain string
 	switch serviceType {
+	case "edge":
+		subdomain = "edge"
 	case "edge-egress":
 		subdomain = "edge-egress"
 	case "edge-ingest":
@@ -329,7 +333,7 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 
 	// === Multi Node: Load Balancer Pool ===
 	log.Info("Multiple nodes detected, using Load Balancer")
-	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, activeIPs, m.shouldProxy(serviceType))
+	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, serviceType, activeIPs, m.shouldProxy(serviceType))
 }
 
 // applySingleNodeConfig ensures an A record exists and cleans up any LB config
@@ -389,12 +393,11 @@ func (m *DNSManager) applySingleNodeConfig(ctx context.Context, fqdn, ip string,
 }
 
 // applyLoadBalancerConfig ensures an LB Pool exists and updates origins
-func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName string, ips []string, proxied bool) (map[string]string, error) {
+func (m *DNSManager) applyLoadBalancerConfig(ctx context.Context, fqdn, poolName, serviceType string, ips []string, proxied bool) (map[string]string, error) {
 	partialErrors := make(map[string]string)
 
 	// 1. Find or Create Pool
-	// We use the serviceType (e.g. "edge") as the pool name
-	poolID, err := m.ensurePool(poolName, ips)
+	poolID, err := m.ensurePool(poolName, serviceType, ips)
 	if err != nil {
 		return nil, err
 	}
@@ -605,9 +608,9 @@ func (m *DNSManager) ensureMonitor(serviceType string) (string, error) {
 }
 
 // ensurePool finds a pool by name or creates it, attaching a health monitor
-func (m *DNSManager) ensurePool(name string, ips []string) (string, error) {
+func (m *DNSManager) ensurePool(name, serviceType string, ips []string) (string, error) {
 	// First, ensure we have a monitor for this service type
-	monitorID, err := m.ensureMonitor(name)
+	monitorID, err := m.ensureMonitor(serviceType)
 	if err != nil {
 		m.logger.WithError(err).Warn("Failed to ensure monitor, pool will have no health checks")
 		monitorID = "" // Continue without monitor
