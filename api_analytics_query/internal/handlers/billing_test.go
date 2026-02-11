@@ -34,3 +34,26 @@ func TestSanitizeFloat(t *testing.T) {
 		})
 	}
 }
+
+func TestAttributedViewerClusterID(t *testing.T) {
+	tests := []struct {
+		name             string
+		clusterID        string
+		originClusterID  string
+		primaryClusterID string
+		expected         string
+	}{
+		{name: "uses serving cluster when present", clusterID: "cluster-serving", originClusterID: "cluster-origin", primaryClusterID: "cluster-primary", expected: "cluster-serving"},
+		{name: "falls back to origin cluster when serving missing", clusterID: "", originClusterID: "cluster-origin", primaryClusterID: "cluster-primary", expected: "cluster-origin"},
+		{name: "falls back to primary when both missing", clusterID: "", originClusterID: "", primaryClusterID: "cluster-primary", expected: "cluster-primary"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual := attributedViewerClusterID(test.clusterID, test.originClusterID, test.primaryClusterID)
+			if actual != test.expected {
+				t.Fatalf("expected %q, got %q", test.expected, actual)
+			}
+		})
+	}
+}

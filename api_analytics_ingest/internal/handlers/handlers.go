@@ -2141,7 +2141,8 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, filename, request_id, stage, content_type,
+			timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
+			filename, request_id, stage, content_type,
 			start_unix, stop_unix, ingest_node_id,
 			percent, message, file_path, s3_url, size_bytes, expires_at
 		)`)
@@ -2157,6 +2158,8 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		internalName,
+		mt.GetClusterId(),
+		mt.GetOriginClusterId(),
 		nil,
 		requestID,
 		stageStr,
@@ -2293,7 +2296,8 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	// 2. Write to clip_events (historical log - MergeTree)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, filename, request_id, stage, content_type,
+			timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
+			filename, request_id, stage, content_type,
 			start_unix, stop_unix, ingest_node_id, file_path, size_bytes, message, expires_at
 		)`)
 	if err != nil {
@@ -2313,6 +2317,8 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		internalName,
+		mt.GetClusterId(),
+		mt.GetOriginClusterId(),
 		nil,
 		dvrData.GetDvrHash(),                   // request_id
 		stageStr,                               // stage
@@ -2446,7 +2452,8 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 	// Reuse clip_events table for VOD lifecycle events (content_type differentiates)
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO artifact_events (
-			timestamp, tenant_id, stream_id, internal_name, filename, request_id, stage, content_type,
+			timestamp, tenant_id, stream_id, internal_name, cluster_id, origin_cluster_id,
+			filename, request_id, stage, content_type,
 			ingest_node_id, file_path, s3_url, size_bytes, message, expires_at
 		)`)
 	if err != nil {
@@ -2466,6 +2473,8 @@ func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.
 		tenantID,
 		parseUUID(mt.GetStreamId()),
 		internalName, // internal_name = vod_hash
+		mt.GetClusterId(),
+		mt.GetOriginClusterId(),
 		filename,
 		vodData.GetVodHash(),                  // request_id = vod_hash
 		stageStr,                              // stage

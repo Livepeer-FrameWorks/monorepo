@@ -207,13 +207,14 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	viewerRows, err := bs.clickhouse.QueryContext(ctx, `
 		SELECT
 			cluster_id,
+			origin_cluster_id,
 			COALESCE(sum(egress_gb), 0) as egress_gb,
 			COALESCE(sum(viewer_hours), 0) as viewer_hours,
 			COALESCE(sum(unique_viewers), 0) as unique_viewers
 		FROM periscope.tenant_viewer_daily
 		WHERE tenant_id = ?
 		AND day BETWEEN toDate(?) AND toDate(?)
-		GROUP BY cluster_id
+		GROUP BY cluster_id, origin_cluster_id
 	`, tenantID, startTime, endTime)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query egress/viewer metrics from ClickHouse: %w", err)
@@ -221,15 +222,12 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	if err == nil {
 		defer func() { _ = viewerRows.Close() }()
 		for viewerRows.Next() {
-			var cid string
+			var clusterID, originClusterID string
 			var m clusterViewerMetrics
-			if scanErr := viewerRows.Scan(&cid, &m.EgressGB, &m.ViewerHours, &m.UniqueViewers); scanErr != nil {
+			if scanErr := viewerRows.Scan(&clusterID, &originClusterID, &m.EgressGB, &m.ViewerHours, &m.UniqueViewers); scanErr != nil {
 				continue
 			}
-			// Legacy rows with empty cluster_id are attributed to primary cluster
-			if cid == "" {
-				cid = primaryClusterID
-			}
+			cid := attributedViewerClusterID(clusterID, originClusterID, primaryClusterID)
 			if existing, ok := clusterMetrics[cid]; ok {
 				existing.EgressGB += m.EgressGB
 				existing.ViewerHours += m.ViewerHours
@@ -458,6 +456,16 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	}).Info("Generated usage summaries for tenant")
 
 	return summaries, nil
+}
+
+func attributedViewerClusterID(clusterID, originClusterID, primaryClusterID string) string {
+	if strings.TrimSpace(clusterID) != "" {
+		return clusterID
+	}
+	if strings.TrimSpace(originClusterID) != "" {
+		return originClusterID
+	}
+	return primaryClusterID
 }
 
 // getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster gRPC API
