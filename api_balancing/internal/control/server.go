@@ -320,9 +320,9 @@ func init() {
 	}
 }
 
-func reconcileNodeOwnership(ctx context.Context, canonicalNodeID, tenantID, clusterID string, logger logging.Logger) (string, string) {
+func reconcileNodeCluster(ctx context.Context, canonicalNodeID, clusterID string, logger logging.Logger) string {
 	if canonicalNodeID == "" || getNodeOwnerFn == nil {
-		return tenantID, clusterID
+		return clusterID
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -330,30 +330,20 @@ func reconcileNodeOwnership(ctx context.Context, canonicalNodeID, tenantID, clus
 
 	ownerResp, err := getNodeOwnerFn(lookupCtx, canonicalNodeID)
 	if err != nil {
-		logger.WithError(err).WithField("node_id", canonicalNodeID).Debug("Node ownership reconciliation lookup failed")
-		return tenantID, clusterID
+		logger.WithError(err).WithField("node_id", canonicalNodeID).Debug("Node cluster reconciliation lookup failed")
+		return clusterID
 	}
 
-	reconciledTenant := tenantID
-	reconciledCluster := clusterID
-	if ownerResp.GetOwnerTenantId() != "" {
-		reconciledTenant = ownerResp.GetOwnerTenantId()
-	}
-	if ownerResp.GetClusterId() != "" {
-		reconciledCluster = ownerResp.GetClusterId()
-	}
-
-	if reconciledTenant != tenantID || reconciledCluster != clusterID {
+	if ownerResp.GetClusterId() != "" && ownerResp.GetClusterId() != clusterID {
 		logger.WithFields(logging.Fields{
 			"node_id":           canonicalNodeID,
-			"tenant_id_before":  tenantID,
-			"tenant_id_after":   reconciledTenant,
 			"cluster_id_before": clusterID,
-			"cluster_id_after":  reconciledCluster,
-		}).Info("Reconciled node ownership from Quartermaster")
+			"cluster_id_after":  ownerResp.GetClusterId(),
+		}).Info("Reconciled node cluster from Quartermaster")
+		return ownerResp.GetClusterId()
 	}
 
-	return reconciledTenant, reconciledCluster
+	return clusterID
 }
 
 // SetNavigatorClient sets the Navigator client used for cluster wildcard certificate retrieval.
@@ -557,7 +547,7 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID, "cluster_id": clusterID}).Info("Edge node enrolled via Quartermaster")
 			}
 
-			tenantID, clusterID = reconcileNodeOwnership(stream.Context(), canonicalNodeID, tenantID, clusterID, registry.log)
+			clusterID = reconcileNodeCluster(stream.Context(), canonicalNodeID, clusterID, registry.log)
 
 			// Persist resolved tenant/cluster ownership on the node state
 			if clusterID != "" {

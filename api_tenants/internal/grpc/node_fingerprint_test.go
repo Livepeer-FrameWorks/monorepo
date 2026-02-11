@@ -31,7 +31,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 
 		resp, err := server.ResolveNodeFingerprint(context.Background(), &pb.ResolveNodeFingerprintRequest{
 			PeerIp:          "203.0.113.10",
-			MachineIdSha256: ptrStrNF("machine-hash"),
+			MachineIdSha256: strPtr("machine-hash"),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -62,7 +62,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 
 		_, err = server.ResolveNodeFingerprint(context.Background(), &pb.ResolveNodeFingerprintRequest{
 			PeerIp:          "198.51.100.4",
-			MachineIdSha256: ptrStrNF("machine-stale"),
+			MachineIdSha256: strPtr("machine-stale"),
 		})
 		if err == nil {
 			t.Fatal("expected not found error")
@@ -77,5 +77,3 @@ func TestResolveNodeFingerprint(t *testing.T) {
 		}
 	})
 }
-
-func ptrStrNF(v string) *string { return &v }

@@ -217,7 +217,7 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 
 // resolveFoghornForTenant returns a Foghorn gRPC client for the tenant's cluster.
 // Delegates to resolveClusterRouteForTenant for routing, then dials via pool.
-// Foghorn dial failure does NOT evict the route cache entry.
+// On any failure, evicts the cached route and retries once with a fresh lookup.
 func (s *CommodoreServer) resolveFoghornForTenant(ctx context.Context, tenantID string) (*foghornclient.GRPCClient, *clusterRoute, error) {
 	resolveAndDial := func() (*foghornclient.GRPCClient, *clusterRoute, error) {
 		route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
