@@ -217,8 +217,51 @@ func AddServedCluster(id string) {
 }
 
 func isServedCluster(id string) bool {
+	if id == "" {
+		return false
+	}
 	_, ok := servedClusters.Load(id)
-	return ok
+	if ok {
+		return true
+	}
+
+	if discoverServedCluster(id) {
+		servedClusters.Store(id, true)
+		return true
+	}
+
+	return false
+}
+
+func discoverServedCluster(clusterID string) bool {
+	if db == nil {
+		return false
+	}
+
+	instanceID := strings.TrimSpace(os.Getenv("FOGHORN_INSTANCE_ID"))
+	if instanceID == "" {
+		return false
+	}
+
+	var exists bool
+	err := db.QueryRowContext(context.Background(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM quartermaster.foghorn_cluster_assignments fca
+			JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			WHERE si.instance_id = $1
+			  AND svc.type = 'foghorn'
+			  AND si.status = 'running'
+			  AND fca.cluster_id = $2
+			  AND fca.is_active = true
+		)
+	`, instanceID, clusterID).Scan(&exists)
+	if err != nil {
+		return false
+	}
+
+	return exists
 }
 
 // SetClipHashResolver sets the resolver for clip hash lookups
