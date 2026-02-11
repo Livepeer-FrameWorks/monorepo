@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -3450,6 +3451,22 @@ func validateExpectedIP(expectedIP sql.NullString, clientIP string) bool {
 	return expectedAddr != nil && expectedAddr.Equal(clientAddr)
 }
 
+var edgeNodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
+
+func deriveEdgeNodeID(hostname string) string {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	if hostname == "" {
+		return ""
+	}
+	if idx := strings.Index(hostname, "."); idx > 0 {
+		hostname = hostname[:idx]
+	}
+	if !edgeNodeIDPattern.MatchString(hostname) {
+		return ""
+	}
+	return hostname
+}
+
 // ============================================================================
 // BOOTSTRAP SERVICE - Additional Methods
 // ============================================================================
@@ -3534,9 +3551,11 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		}
 	}
 
-	// Generate node ID with UUID suffix for uniqueness
-	nodeID := "edge-" + uuid.New().String()[:12]
-	hostname := req.GetHostname()
+	hostname := strings.TrimSpace(req.GetHostname())
+	nodeID := deriveEdgeNodeID(hostname)
+	if nodeID == "" {
+		nodeID = "edge-" + uuid.New().String()[:12]
+	}
 	if hostname == "" {
 		hostname = nodeID
 	}
