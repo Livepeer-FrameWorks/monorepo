@@ -1502,6 +1502,12 @@ type MistTriggerProcessor interface {
 
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman
 func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	if trigger != nil && (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") {
+		if cid := strings.TrimSpace(localClusterID); cid != "" {
+			trigger.ClusterId = &cid
+		}
+	}
+
 	triggerType := trigger.GetTriggerType()
 	requestID := trigger.GetRequestId()
 	blocking := trigger.GetBlocking()

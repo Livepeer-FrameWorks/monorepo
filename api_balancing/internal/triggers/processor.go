@@ -747,6 +747,13 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		streamID := streamValidation.StreamId
 		pushRewrite.StreamId = &streamID
 	}
+	if originClusterID := streamValidation.GetOriginClusterId(); originClusterID != "" {
+		trigger.OriginClusterId = &originClusterID
+	}
+	if (trigger.ClusterId == nil || *trigger.ClusterId == "") && p.clusterID != "" {
+		clusterID := p.clusterID
+		trigger.ClusterId = &clusterID
+	}
 
 	// Detect protocol from push URL
 	protocol := p.detectProtocol(pushRewrite.GetPushUrl())
@@ -2235,8 +2242,12 @@ func (p *Processor) applyStreamContext(trigger *pb.MistTrigger, streamName strin
 	if info.StreamID != "" && (trigger.StreamId == nil || *trigger.StreamId == "") {
 		trigger.StreamId = &info.StreamID
 	}
-	if info.OriginClusterID != "" && (trigger.ClusterId == nil || *trigger.ClusterId == "") {
-		trigger.ClusterId = &info.OriginClusterID
+	if info.OriginClusterID != "" && (trigger.OriginClusterId == nil || *trigger.OriginClusterId == "") {
+		trigger.OriginClusterId = &info.OriginClusterID
+	}
+	if (trigger.ClusterId == nil || *trigger.ClusterId == "") && p.clusterID != "" {
+		clusterID := p.clusterID
+		trigger.ClusterId = &clusterID
 	}
 	return info
 }
