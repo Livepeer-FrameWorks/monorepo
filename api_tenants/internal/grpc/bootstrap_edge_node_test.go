@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -47,8 +48,11 @@ func TestBootstrapEdgeNode_UsesDerivedNodeIDFromHostname(t *testing.T) {
 		WithArgs("tok-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
 			AddRow("token-id", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil))
+	mock.ExpectQuery(`SELECT cluster_id FROM quartermaster\.infrastructure_nodes WHERE node_id = \$1`).
+		WithArgs("edge-abcd1234").
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(`INSERT INTO quartermaster\.infrastructure_nodes \(id, node_id, cluster_id, node_name, node_type, tags, metadata, created_at, updated_at\)`).
-		WithArgs(sqlmock.AnyArg(), "edge-abcd1234", "cluster-1", "edge-abcd1234.example.com", "edge").
+		WithArgs(sqlmock.AnyArg(), "edge-abcd1234", "cluster-1", "edge-abcd1234.example.com").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`UPDATE quartermaster\.bootstrap_tokens\s+SET usage_count = usage_count \+ 1, used_at = NOW\(\)\s+WHERE id = \$1`).
 		WithArgs("token-id").

@@ -3560,6 +3560,29 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		hostname = nodeID
 	}
 
+	// Idempotent: if node already exists with same cluster, return it
+	var existingClusterID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1
+	`, nodeID).Scan(&existingClusterID)
+	if err == nil {
+		if existingClusterID != resolvedClusterID {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"node %s already exists in cluster %s", nodeID, existingClusterID)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+		}
+		return &pb.BootstrapEdgeNodeResponse{
+			NodeId:    nodeID,
+			TenantId:  tenantID.String,
+			ClusterId: resolvedClusterID,
+		}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
 	// Create node
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, tags, metadata, created_at, updated_at)
