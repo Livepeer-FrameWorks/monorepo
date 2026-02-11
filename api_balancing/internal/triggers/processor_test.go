@@ -835,3 +835,89 @@ func TestGetStreamOrigin_PrefixedStreamName(t *testing.T) {
 		}
 	})
 }
+
+func TestApplyStreamContext_SeparatesClusterAndOrigin(t *testing.T) {
+	processor := newTestProcessor(t)
+	processor.clusterID = "cluster-local"
+
+	processor.streamCache.Set("tenant-1:stream-a", streamContext{
+		TenantID:        "tenant-1",
+		UserID:          "user-1",
+		StreamID:        "stream-id-1",
+		OriginClusterID: "cluster-origin",
+	}, time.Minute)
+
+	trigger := &pb.MistTrigger{TenantId: func() *string { s := "tenant-1"; return &s }()}
+	info := processor.applyStreamContext(trigger, "stream-a")
+
+	if info.OriginClusterID != "cluster-origin" {
+		t.Fatalf("expected origin cluster in context, got %q", info.OriginClusterID)
+	}
+	if trigger.GetOriginClusterId() != "cluster-origin" {
+		t.Fatalf("expected origin_cluster_id from cache, got %q", trigger.GetOriginClusterId())
+	}
+	if trigger.GetClusterId() != "cluster-local" {
+		t.Fatalf("expected emitting cluster_id from processor, got %q", trigger.GetClusterId())
+	}
+}
+
+func TestApplyStreamContext_UsesTenantHintToAvoidCrossTenantMixups(t *testing.T) {
+	processor := newTestProcessor(t)
+	processor.clusterID = "cluster-local"
+
+	processor.streamCache.Set("tenant-a:shared-stream", streamContext{
+		TenantID:        "tenant-a",
+		OriginClusterID: "cluster-a",
+	}, time.Minute)
+	processor.streamCache.Set("tenant-b:shared-stream", streamContext{
+		TenantID:        "tenant-b",
+		OriginClusterID: "cluster-b",
+	}, time.Minute)
+
+	trigger := &pb.MistTrigger{TenantId: func() *string { s := "tenant-b"; return &s }()}
+	processor.applyStreamContext(trigger, "shared-stream")
+
+	if trigger.GetOriginClusterId() != "cluster-b" {
+		t.Fatalf("expected tenant-b origin cluster, got %q", trigger.GetOriginClusterId())
+	}
+	if trigger.GetClusterId() != "cluster-local" {
+		t.Fatalf("expected local emitting cluster, got %q", trigger.GetClusterId())
+	}
+}
+
+func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
+	response := &pb.ValidateStreamKeyResponse{
+		Valid:           true,
+		TenantId:        "tenant-1",
+		UserId:          "user-1",
+		StreamId:        "stream-id-1",
+		InternalName:    "stream-a",
+		OriginClusterId: func() *string { s := "cluster-origin"; return &s }(),
+	}
+	commodoreClient, cleanup := setupCommodoreClient(t, response, nil)
+	t.Cleanup(cleanup)
+
+	processor := newTestProcessor(t)
+	processor.commodoreClient = commodoreClient
+	processor.clusterID = "cluster-local"
+
+	trigger := &pb.MistTrigger{
+		TriggerPayload: &pb.MistTrigger_PushRewrite{
+			PushRewrite: &pb.PushRewriteTrigger{StreamName: "stream-a", Hostname: "127.0.0.1"},
+		},
+	}
+
+	_, blocking, err := processor.handlePushRewrite(trigger)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if blocking {
+		t.Fatal("expected PUSH_REWRITE to allow ingest (non-abort response)")
+	}
+	if trigger.GetOriginClusterId() != "cluster-origin" {
+		t.Fatalf("expected origin_cluster_id to be populated, got %q", trigger.GetOriginClusterId())
+	}
+	if trigger.GetClusterId() != "cluster-local" {
+		t.Fatalf("expected cluster_id to use local cluster, got %q", trigger.GetClusterId())
+	}
+}

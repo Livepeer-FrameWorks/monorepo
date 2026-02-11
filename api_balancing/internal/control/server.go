@@ -1502,6 +1502,17 @@ type MistTriggerProcessor interface {
 
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman
 func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	if trigger != nil && (trigger.ClusterId == nil || strings.TrimSpace(trigger.GetClusterId()) == "") {
+		// Prefer the node's actual cluster from the state manager (accurate for
+		// remote nodes in multi-cluster deployments) over the local Foghorn cluster.
+		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil && strings.TrimSpace(ns.ClusterID) != "" {
+			cid := strings.TrimSpace(ns.ClusterID)
+			trigger.ClusterId = &cid
+		} else if cid := strings.TrimSpace(localClusterID); cid != "" {
+			trigger.ClusterId = &cid
+		}
+	}
+
 	triggerType := trigger.GetTriggerType()
 	requestID := trigger.GetRequestId()
 	blocking := trigger.GetBlocking()
