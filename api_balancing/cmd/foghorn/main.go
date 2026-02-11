@@ -446,7 +446,6 @@ func main() {
 			s3ForJobs = client
 			s3ForFederation = client
 			control.SetS3Client(client)
-			control.SetDB(db)
 			logger.WithFields(logging.Fields{
 				"bucket": s3Bucket,
 				"prefix": s3Config.Prefix,
@@ -609,6 +608,12 @@ func main() {
 	defer certRefreshCancel()
 	go control.StartCertRefreshLoop(certRefreshCtx, 1*time.Hour, logger)
 
+	// Bulk-load served cluster assignments from DB and refresh every 5 minutes
+	control.LoadServedClusters()
+	clusterRefreshCtx, clusterRefreshCancel := context.WithCancel(context.Background())
+	defer clusterRefreshCancel()
+	go control.StartServedClustersRefresh(clusterRefreshCtx, 5*time.Minute, logger)
+
 	// Start the hourly storage snapshot scheduler
 	go startStorageSnapshotScheduler(triggerProcessor, logger)
 
@@ -665,6 +670,7 @@ func main() {
 	// Root page debug interface
 	router.GET("/dashboard", handlers.HandleRootPage)
 	router.GET("/debug/cache/stream-context", handlers.HandleStreamContextCache)
+	router.GET("/debug/served-clusters", handlers.HandleServedClusters)
 
 	// Viewer playback routes - generic player redirects via foghorn.* domain
 	router.GET("/play/*path", handlers.HandleGenericViewerPlayback)

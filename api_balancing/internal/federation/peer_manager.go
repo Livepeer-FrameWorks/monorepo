@@ -224,6 +224,7 @@ func (pm *PeerManager) TrackStream(streamName string, clusterIDs []string) {
 			pm.streamPeers[cid] = make(map[string]bool)
 		}
 		pm.streamPeers[cid][streamName] = true
+		pm.flushStreamPeersToRedis(cid)
 	}
 }
 
@@ -236,6 +237,7 @@ func (pm *PeerManager) UntrackStream(streamName string) {
 		delete(streams, streamName)
 		if len(streams) == 0 {
 			delete(pm.streamPeers, cid)
+			pm.flushStreamPeersToRedis(cid)
 			ps, ok := pm.peers[cid]
 			if ok && ps.lifecycle == peerStreamScoped {
 				if ps.cancel != nil {
@@ -247,7 +249,57 @@ func (pm *PeerManager) UntrackStream(streamName string) {
 					"stream":       streamName,
 				}).Info("Closed stream-scoped peer (no remaining streams)")
 			}
+		} else {
+			pm.flushStreamPeersToRedis(cid)
 		}
+	}
+}
+
+// flushStreamPeersToRedis persists the current stream set for a peer cluster.
+// Must be called with pm.mu held.
+func (pm *PeerManager) flushStreamPeersToRedis(peerClusterID string) {
+	if pm.cache == nil {
+		return
+	}
+	streams := pm.streamPeers[peerClusterID]
+	var list []string
+	for s := range streams {
+		list = append(list, s)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := pm.cache.SetStreamPeers(ctx, peerClusterID, list); err != nil {
+		pm.logger.WithError(err).WithField("peer_cluster", peerClusterID).Warn("Failed to flush stream peers to Redis")
+	}
+}
+
+// loadStreamPeersFromRedis loads persisted stream-peer mappings on leader takeover.
+func (pm *PeerManager) loadStreamPeersFromRedis() {
+	if pm.cache == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	all, err := pm.cache.LoadAllStreamPeers(ctx)
+	if err != nil {
+		pm.logger.WithError(err).Warn("Failed to load stream peers from Redis on leader takeover")
+		return
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	for cid, streams := range all {
+		if cid == pm.clusterID || cid == "" {
+			continue
+		}
+		if pm.streamPeers[cid] == nil {
+			pm.streamPeers[cid] = make(map[string]bool)
+		}
+		for _, s := range streams {
+			pm.streamPeers[cid][s] = true
+		}
+	}
+	if len(all) > 0 {
+		pm.logger.WithField("peer_count", len(all)).Info("Restored stream-peer mappings from Redis")
 	}
 }
 
@@ -331,6 +383,7 @@ func (pm *PeerManager) runAsLeader() {
 		pm.logger.Info("Released PeerManager leadership")
 	}()
 
+	pm.loadStreamPeersFromRedis()
 	pm.refreshPeers()
 	if pm.cache != nil {
 		pm.syncPeerAddressesToRedis()
