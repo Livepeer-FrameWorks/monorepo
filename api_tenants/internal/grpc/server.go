@@ -3346,9 +3346,12 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 	machineIDSHA := req.GetMachineIdSha256()
 	if machineIDSHA != "" {
 		err := s.db.QueryRowContext(ctx, `
-			SELECT tenant_id::text, node_id
-			FROM quartermaster.node_fingerprints
-			WHERE fingerprint_machine_sha256 = $1
+			SELECT nf.tenant_id::text, nf.node_id
+			FROM quartermaster.node_fingerprints nf
+			JOIN quartermaster.infrastructure_nodes n ON n.node_id = nf.node_id
+			JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = n.cluster_id
+			WHERE nf.fingerprint_machine_sha256 = $1
+			  AND c.is_active = TRUE
 		`, machineIDSHA).Scan(&tenantID, &nodeID)
 		if err == nil {
 			_ = s.upsertSeenIP(ctx, nodeID, peerIP)
@@ -3363,9 +3366,12 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 	macsSHA := req.GetMacsSha256()
 	if macsSHA != "" {
 		err := s.db.QueryRowContext(ctx, `
-			SELECT tenant_id::text, node_id
-			FROM quartermaster.node_fingerprints
-			WHERE fingerprint_macs_sha256 = $1
+			SELECT nf.tenant_id::text, nf.node_id
+			FROM quartermaster.node_fingerprints nf
+			JOIN quartermaster.infrastructure_nodes n ON n.node_id = nf.node_id
+			JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = n.cluster_id
+			WHERE nf.fingerprint_macs_sha256 = $1
+			  AND c.is_active = TRUE
 		`, macsSHA).Scan(&tenantID, &nodeID)
 		if err == nil {
 			_ = s.upsertSeenIP(ctx, nodeID, peerIP)
@@ -3378,10 +3384,13 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *p
 
 	// 3) Match by peer_ip in seen_ips array
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id::text, node_id
-		FROM quartermaster.node_fingerprints
-		WHERE $1::inet = ANY(seen_ips)
-		ORDER BY last_seen DESC
+		SELECT nf.tenant_id::text, nf.node_id
+		FROM quartermaster.node_fingerprints nf
+		JOIN quartermaster.infrastructure_nodes n ON n.node_id = nf.node_id
+		JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = n.cluster_id
+		WHERE $1::inet = ANY(nf.seen_ips)
+		  AND c.is_active = TRUE
+		ORDER BY nf.last_seen DESC
 		LIMIT 1
 	`, peerIP).Scan(&tenantID, &nodeID)
 	if err == nil {

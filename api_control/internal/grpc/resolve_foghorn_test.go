@@ -151,7 +151,7 @@ func TestResolveClusterRouteForTenant_IndependentOfFoghorn(t *testing.T) {
 	}
 }
 
-func TestResolveFoghornForTenant_EmptyAddr_NoEviction(t *testing.T) {
+func TestResolveFoghornForTenant_EmptyAddr_EvictsAndRetries(t *testing.T) {
 	server := &CommodoreServer{
 		logger: logrus.New(),
 		routeCache: map[string]*clusterRoute{
@@ -175,12 +175,14 @@ func TestResolveFoghornForTenant_EmptyAddr_NoEviction(t *testing.T) {
 	if st.Code() != codes.Unavailable {
 		t.Fatalf("expected Unavailable, got %v", st.Code())
 	}
+	if st.Message() != "quartermaster not available for cluster routing" {
+		t.Fatalf("expected quartermaster fallback message, got %q", st.Message())
+	}
 
-	// Route cache must NOT be evicted — Quartermaster data is still valid
 	server.routeCacheMu.RLock()
 	_, exists := server.routeCache["tenant-1"]
 	server.routeCacheMu.RUnlock()
-	if !exists {
-		t.Fatal("route cache entry was evicted on empty foghorn addr (regression)")
+	if exists {
+		t.Fatal("route cache entry should be evicted after failed resolution")
 	}
 }
