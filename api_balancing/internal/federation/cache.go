@@ -517,7 +517,13 @@ func (c *RemoteEdgeCache) SetStreamAd(ctx context.Context, peerClusterID string,
 	}
 	key := c.keyStreamAd(peerClusterID, record.InternalName)
 	if !record.IsLive {
-		return c.client.Del(ctx, key).Err()
+		pipe := c.client.TxPipeline()
+		pipe.Del(ctx, key)
+		if record.PlaybackID != "" {
+			pipe.Del(ctx, c.keyPlaybackIndex(record.PlaybackID))
+		}
+		_, err = pipe.Exec(ctx)
+		return err
 	}
 	return c.client.Set(ctx, key, data, streamAdTTL).Err()
 }
