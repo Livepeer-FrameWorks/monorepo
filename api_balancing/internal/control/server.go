@@ -110,6 +110,7 @@ func (h *serverCertHolder) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificat
 // validateBootstrapTokenFn allows tests to override token validation.
 // In production this calls quartermasterClient.ValidateBootstrapToken.
 var validateBootstrapTokenFn func(ctx context.Context, token string) (*pb.ValidateBootstrapTokenResponse, error)
+var getNodeOwnerFn func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error)
 var livepeerGatewayURL string // Set from main.go if LIVEPEER_GATEWAY_URL is configured
 var geoipCache *cache.Cache
 var decklogClient *decklog.BatchedClient
@@ -309,6 +310,41 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 
 // SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
 func SetQuartermasterClient(c *qmclient.GRPCClient) { quartermasterClient = c }
+
+func init() {
+	getNodeOwnerFn = func(ctx context.Context, nodeID string) (*pb.NodeOwnerResponse, error) {
+		if quartermasterClient == nil {
+			return nil, status.Error(codes.Unavailable, "quartermaster unavailable")
+		}
+		return quartermasterClient.GetNodeOwner(ctx, nodeID)
+	}
+}
+
+func reconcileNodeCluster(ctx context.Context, canonicalNodeID, clusterID string, logger logging.Logger) string {
+	if canonicalNodeID == "" || getNodeOwnerFn == nil {
+		return clusterID
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	ownerResp, err := getNodeOwnerFn(lookupCtx, canonicalNodeID)
+	if err != nil {
+		logger.WithError(err).WithField("node_id", canonicalNodeID).Debug("Node cluster reconciliation lookup failed")
+		return clusterID
+	}
+
+	if ownerResp.GetClusterId() != "" && ownerResp.GetClusterId() != clusterID {
+		logger.WithFields(logging.Fields{
+			"node_id":           canonicalNodeID,
+			"cluster_id_before": clusterID,
+			"cluster_id_after":  ownerResp.GetClusterId(),
+		}).Info("Reconciled node cluster from Quartermaster")
+		return ownerResp.GetClusterId()
+	}
+
+	return clusterID
+}
 
 // SetNavigatorClient sets the Navigator client used for cluster wildcard certificate retrieval.
 func SetNavigatorClient(c *navclient.Client) { navigatorClient = c }
@@ -510,6 +546,8 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				clusterID = resp.ClusterId
 				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID, "cluster_id": clusterID}).Info("Edge node enrolled via Quartermaster")
 			}
+
+			clusterID = reconcileNodeCluster(stream.Context(), canonicalNodeID, clusterID, registry.log)
 
 			// Persist resolved tenant/cluster ownership on the node state
 			if clusterID != "" {

@@ -217,22 +217,42 @@ func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tena
 
 // resolveFoghornForTenant returns a Foghorn gRPC client for the tenant's cluster.
 // Delegates to resolveClusterRouteForTenant for routing, then dials via pool.
-// Foghorn dial failure does NOT evict the route cache entry.
+// On any failure, evicts the cached route and retries once with a fresh lookup.
 func (s *CommodoreServer) resolveFoghornForTenant(ctx context.Context, tenantID string) (*foghornclient.GRPCClient, *clusterRoute, error) {
-	route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
-	if err != nil {
+	resolveAndDial := func() (*foghornclient.GRPCClient, *clusterRoute, error) {
+		route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if route.foghornAddr == "" {
+			return nil, route, status.Errorf(codes.Unavailable, "no foghorn registered for cluster %s", route.clusterID)
+		}
+
+		client, err := s.foghornPool.GetOrCreate(route.clusterID, route.foghornAddr)
+		if err != nil {
+			return nil, route, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", route.clusterID, err)
+		}
+		return client, route, nil
+	}
+
+	client, route, err := resolveAndDial()
+	if err == nil {
+		return client, route, nil
+	}
+	if len(tenantID) == 0 {
 		return nil, nil, err
 	}
 
-	if route.foghornAddr == "" {
-		return nil, nil, status.Errorf(codes.Unavailable, "no foghorn registered for cluster %s", route.clusterID)
-	}
+	s.routeCacheMu.Lock()
+	delete(s.routeCache, tenantID)
+	s.routeCacheMu.Unlock()
 
-	client, err := s.foghornPool.GetOrCreate(route.clusterID, route.foghornAddr)
-	if err != nil {
-		return nil, nil, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", route.clusterID, err)
+	client, route, retryErr := resolveAndDial()
+	if retryErr == nil {
+		return client, route, nil
 	}
-	return client, route, nil
+	return nil, nil, retryErr
 }
 
 // ============================================================================
