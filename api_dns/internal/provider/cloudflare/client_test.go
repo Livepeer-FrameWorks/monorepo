@@ -76,6 +76,45 @@ func TestClient_DoesNotRetryNonIdempotentRequests(t *testing.T) {
 	}
 }
 
+func TestClient_RetriesIdempotentPutRequests(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		if r.Method != http.MethodPut {
+			t.Fatalf("expected PUT request, got %s", r.Method)
+		}
+
+		if atomic.LoadInt32(&calls) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_ = json.NewEncoder(w).Encode(APIResponse{
+				Success: false,
+				Errors:  []APIError{{Code: 1014, Message: "rate limited"}},
+			})
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(APIResponse{
+			Success: true,
+			Result: LoadBalancer{
+				ID:   "lb1",
+				Name: "edge.example.com",
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient("token", "zone", "acct")
+	client.baseURL = server.URL
+
+	_, err := client.UpdateLoadBalancer("lb1", LoadBalancer{Name: "edge.example.com"})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("expected 2 calls for retry, got %d", calls)
+	}
+}
+
 func TestClient_APIErrorsIncludeCode(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
