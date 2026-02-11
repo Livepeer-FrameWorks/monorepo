@@ -565,6 +565,27 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		s.logger.WithField("cluster_id", clusterID).Debug("Auto-selected single active cluster for bootstrap")
 	}
 
+	if token != "" {
+		result, updateErr := s.db.ExecContext(ctx, `
+			UPDATE quartermaster.bootstrap_tokens
+			SET used_at = NOW(), usage_count = usage_count + 1
+			WHERE token = $1
+			  AND kind = 'service'
+			  AND used_at IS NULL
+			  AND expires_at > NOW()
+		`, token)
+		if updateErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", updateErr)
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify bootstrap token consumption: %v", rowsErr)
+		}
+		if rowsAffected == 0 {
+			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
+		}
+	}
+
 	// 2. Get or create service record (service_id/type default to request type)
 	var serviceID string
 	err := exec.QueryRowContext(ctx, `
@@ -4042,11 +4063,26 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 
 	// Consume: increment usage_count if requested (PreRegisterEdge uses this)
 	if req.GetConsume() {
-		_, _ = s.db.ExecContext(ctx, `
+		result, updateErr := s.db.ExecContext(ctx, `
 			UPDATE quartermaster.bootstrap_tokens
 			SET usage_count = usage_count + 1, used_at = NOW()
 			WHERE token = $1
+			  AND expires_at > NOW()
+			  AND (
+				(usage_limit IS NULL AND used_at IS NULL) OR
+				(usage_limit IS NOT NULL AND usage_count < usage_limit)
+			  )
 		`, token)
+		if updateErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", updateErr)
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify bootstrap token consumption: %v", rowsErr)
+		}
+		if rowsAffected == 0 {
+			return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "already_used"}, nil
+		}
 	}
 
 	resp := &pb.ValidateBootstrapTokenResponse{
