@@ -1,8 +1,6 @@
 module frameworks/api_consultant
 
-go 1.24.1
-
-toolchain go1.24.12
+go 1.25
 
 require (
 	codeberg.org/readeck/go-readability/v2 v2.1.1

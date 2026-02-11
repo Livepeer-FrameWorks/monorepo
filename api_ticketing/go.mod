@@ -1,8 +1,6 @@
 module frameworks/api_ticketing
 
-go 1.24.1
-
-toolchain go1.24.12
+go 1.25
 
 replace frameworks/pkg => ../pkg
 

@@ -25,7 +25,7 @@ on:
         type: string
 
 env:
-  GO_VERSION: "1.24"
+  GO_VERSION: "1.25"
   CRITICAL_PACKAGES: "pkg/auth pkg/x402 api_gateway/internal/errors"
 
 jobs:

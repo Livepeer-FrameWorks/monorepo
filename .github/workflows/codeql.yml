@@ -27,15 +27,15 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@v6
         with:
-          go-version: "1.24"
+          go-version: "1.25"
 
       - name: Install build dependencies
         if: matrix.language == 'go'
         run: |
           sudo apt-get update && sudo apt-get install -y protobuf-compiler
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0
-          go install github.com/99designs/gqlgen@v0.17.78
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
+          go install github.com/99designs/gqlgen@v0.17.86
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

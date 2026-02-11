@@ -1,6 +1,6 @@
 module frameworks/pkg
 
-go 1.24.1
+go 1.25
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.43.0
