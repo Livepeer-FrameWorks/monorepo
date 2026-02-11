@@ -919,6 +919,10 @@ PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, request_id)
 TTL timestamp + INTERVAL 90 DAY;
 
+-- Migration: add cluster columns to existing artifact_events tables
+ALTER TABLE artifact_events ADD COLUMN IF NOT EXISTS cluster_id LowCardinality(String) DEFAULT '' AFTER internal_name;
+ALTER TABLE artifact_events ADD COLUMN IF NOT EXISTS origin_cluster_id LowCardinality(String) DEFAULT '' AFTER cluster_id;
+
 
 CREATE TABLE IF NOT EXISTS artifact_state_current (
     tenant_id UUID,
