@@ -613,6 +613,10 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 			return
 		}
 
+		if pm.cache == nil {
+			continue
+		}
+
 		ctx := context.Background()
 
 		switch payload := msg.Payload.(type) {
@@ -677,25 +681,23 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 
 		case *pb.PeerMessage_StreamLifecycle:
 			ev := payload.StreamLifecycle
-			if pm.cache != nil {
-				if ev.GetIsLive() {
-					if err := pm.cache.SetRemoteLiveStream(ctx, ev.GetInternalName(), &RemoteLiveStreamEntry{
-						ClusterID: ev.GetClusterId(),
-						TenantID:  ev.GetTenantId(),
-						UpdatedAt: time.Now().Unix(),
-					}); err != nil {
-						pm.logger.WithError(err).Debug("Failed to cache remote live stream from PeerChannel")
-					}
-				} else {
-					if err := pm.cache.DeleteRemoteLiveStream(ctx, ev.GetInternalName()); err != nil {
-						pm.logger.WithError(err).Debug("Failed to delete remote live stream from PeerChannel")
-					}
+			if ev.GetIsLive() {
+				if err := pm.cache.SetRemoteLiveStream(ctx, ev.GetInternalName(), &RemoteLiveStreamEntry{
+					ClusterID: ev.GetClusterId(),
+					TenantID:  ev.GetTenantId(),
+					UpdatedAt: time.Now().Unix(),
+				}); err != nil {
+					pm.logger.WithError(err).Debug("Failed to cache remote live stream from PeerChannel")
+				}
+			} else {
+				if err := pm.cache.DeleteRemoteLiveStream(ctx, ev.GetInternalName()); err != nil {
+					pm.logger.WithError(err).Debug("Failed to delete remote live stream from PeerChannel")
 				}
 			}
 
 		case *pb.PeerMessage_StreamAd:
 			ad := payload.StreamAd
-			if ad != nil && pm.cache != nil {
+			if ad != nil {
 				edges := make([]*StreamAdEdge, 0, len(ad.Edges))
 				for _, e := range ad.Edges {
 					edges = append(edges, &StreamAdEdge{
@@ -732,7 +734,7 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 
 		case *pb.PeerMessage_ArtifactAd:
 			ad := payload.ArtifactAd
-			if ad != nil && pm.cache != nil {
+			if ad != nil {
 				for _, loc := range ad.Artifacts {
 					entry := &RemoteArtifactEntry{
 						ArtifactHash: loc.ArtifactHash,
@@ -754,7 +756,7 @@ func (pm *PeerManager) recvLoop(peerClusterID string, stream pb.FoghornFederatio
 
 		case *pb.PeerMessage_PeerHeartbeat:
 			hb := payload.PeerHeartbeat
-			if hb != nil && pm.cache != nil {
+			if hb != nil {
 				record := &PeerHeartbeatRecord{
 					ProtocolVersion:  hb.ProtocolVersion,
 					StreamCount:      hb.StreamCount,

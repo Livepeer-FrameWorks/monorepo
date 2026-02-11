@@ -181,7 +181,10 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 		return nil, fmt.Errorf("failed to query artifact: %w", err)
 	}
 
-	artifactNodes := state.DefaultManager().FindNodesByArtifactHash(artifactResp.ArtifactHash)
+	var artifactNodes []state.ArtifactNodeInfo
+	if manager := state.DefaultManager(); manager != nil {
+		artifactNodes = manager.FindNodesByArtifactHash(artifactResp.ArtifactHash)
+	}
 	if len(artifactNodes) == 0 {
 		// Check peer clusters for hot copies before falling through to S3/defrost
 		if deps.RemoteArtifacts != nil {

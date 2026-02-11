@@ -153,17 +153,19 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 		return
 	}
 
-	nodes := state.DefaultManager().FindNodesByArtifactHash(artifactHash)
-	if len(nodes) > 0 {
-		best := nodes[0]
-		for _, n := range nodes[1:] {
-			if n.Score < best.Score {
-				best = n
+	if manager := state.DefaultManager(); manager != nil {
+		nodes := manager.FindNodesByArtifactHash(artifactHash)
+		if len(nodes) > 0 {
+			best := nodes[0]
+			for _, n := range nodes[1:] {
+				if n.Score < best.Score {
+					best = n
+				}
 			}
+			target.FixedNode = best.Host
+			target.FixedNodeID = best.NodeID
+			return
 		}
-		target.FixedNode = best.Host
-		target.FixedNodeID = best.NodeID
-		return
 	}
 
 	// Cache Miss: No local nodes have the artifact - check if synced to S3

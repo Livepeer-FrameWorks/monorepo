@@ -243,10 +243,30 @@ func DefaultHTTPExecutorConfig() HTTPExecutorConfig {
 	}
 }
 
+func normalizeHTTPExecutorConfig(cfg HTTPExecutorConfig) HTTPExecutorConfig {
+	if cfg.MaxRetries < 0 {
+		cfg.MaxRetries = 0
+	}
+	if cfg.BaseDelay <= 0 {
+		cfg.BaseDelay = 100 * time.Millisecond
+	}
+	if cfg.MaxDelay <= 0 {
+		cfg.MaxDelay = 5 * time.Second
+	}
+	if cfg.MaxDelay < cfg.BaseDelay {
+		cfg.MaxDelay = cfg.BaseDelay
+	}
+	if cfg.ShouldRetry == nil {
+		cfg.ShouldRetry = DefaultShouldRetry
+	}
+	return cfg
+}
+
 // NewHTTPRetryPolicy creates a retry policy for HTTP requests
 //
 //nolint:bodyclose // false positive: [*http.Response] is a generic type parameter, not an actual response
 func NewHTTPRetryPolicy(cfg HTTPExecutorConfig) retrypolicy.RetryPolicy[*http.Response] {
+	cfg = normalizeHTTPExecutorConfig(cfg)
 	builder := retrypolicy.NewBuilder[*http.Response]().
 		WithBackoff(cfg.BaseDelay, cfg.MaxDelay).
 		WithMaxRetries(cfg.MaxRetries).
