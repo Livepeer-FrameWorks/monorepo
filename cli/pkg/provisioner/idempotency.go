@@ -7,8 +7,16 @@ import (
 	"strings"
 
 	"github.com/IBM/sarama"
-	_ "github.com/lib/pq" // Postgres driver
+	"github.com/lib/pq" // Postgres driver
 )
+
+func buildCreateDatabaseQuery(dbName, owner string) string {
+	query := fmt.Sprintf("CREATE DATABASE %s", pq.QuoteIdentifier(dbName))
+	if owner != "" {
+		query = fmt.Sprintf("CREATE DATABASE %s OWNER %s", pq.QuoteIdentifier(dbName), pq.QuoteIdentifier(owner))
+	}
+	return query
+}
 
 // DatabaseExists checks if a Postgres database exists
 func DatabaseExists(ctx context.Context, connStr, dbName string) (bool, error) {
@@ -47,10 +55,7 @@ func CreateDatabaseIfNotExists(ctx context.Context, connStr, dbName, owner strin
 	}
 
 	// Create database
-	query := fmt.Sprintf("CREATE DATABASE %s", dbName)
-	if owner != "" {
-		query = fmt.Sprintf("CREATE DATABASE %s OWNER %s", dbName, owner)
-	}
+	query := buildCreateDatabaseQuery(dbName, owner)
 
 	if _, err := db.ExecContext(ctx, query); err != nil {
 		return false, fmt.Errorf("failed to create database: %w", err)

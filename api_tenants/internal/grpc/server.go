@@ -465,33 +465,50 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 
 // BootstrapService handles service registration with idempotent instance management
 func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.BootstrapServiceRequest) (*pb.BootstrapServiceResponse, error) {
+	type queryExecutor interface {
+		ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+		QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+		QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+	}
+
 	serviceType := req.GetType()
 	if serviceType == "" {
 		return nil, status.Error(codes.InvalidArgument, "type required")
+	}
+
+	exec := queryExecutor(s.db)
+	var tx *sql.Tx
+	token := req.GetToken()
+	if token != "" {
+		var err error
+		tx, err = s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
+		}
+		exec = tx
+		defer func() {
+			if tx != nil {
+				_ = tx.Rollback()
+			}
+		}()
 	}
 
 	// 1. Resolve cluster from token, request, or fallback (single cluster only)
 	var clusterID string
 	var tokenBoundClusterID string
 
-	token := req.GetToken()
 	if token != "" {
 		var kind string
 		var expiresAt time.Time
-		err := s.db.QueryRowContext(ctx, `
+		err := exec.QueryRowContext(ctx, `
 			SELECT kind, COALESCE(cluster_id, ''), expires_at
 			FROM quartermaster.bootstrap_tokens
 			WHERE token = $1 AND used_at IS NULL
+			FOR UPDATE
 		`, token).Scan(&kind, &tokenBoundClusterID, &expiresAt)
 		if errors.Is(err, sql.ErrNoRows) || kind != "service" || time.Now().After(expiresAt) {
 			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
 		}
-		// Mark token used
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE quartermaster.bootstrap_tokens
-			SET used_at = NOW(), usage_count = usage_count + 1
-			WHERE token = $1
-		`, token)
 	}
 
 	// Priority: token-bound cluster > request cluster_id > single active cluster fallback
@@ -506,7 +523,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 	} else if requestClusterID != "" {
 		// No token-bound cluster, but request provides cluster_id - validate it exists and is active
 		var isActive bool
-		err := s.db.QueryRowContext(ctx, `
+		err := exec.QueryRowContext(ctx, `
 			SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
 		`, requestClusterID).Scan(&isActive)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -523,7 +540,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		// No token-bound cluster and no request cluster_id
 		// Fallback: only allow if exactly 1 active cluster exists (dev convenience)
 		var activeClusters []string
-		rows, err := s.db.QueryContext(ctx, `
+		rows, err := exec.QueryContext(ctx, `
 			SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true
 		`)
 		if err != nil {
@@ -550,7 +567,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	// 2. Get or create service record (service_id/type default to request type)
 	var serviceID string
-	err := s.db.QueryRowContext(ctx, `
+	err := exec.QueryRowContext(ctx, `
 		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1
 	`, serviceType).Scan(&serviceID)
 
@@ -560,7 +577,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		if defaultProtocol == "" {
 			defaultProtocol = "http"
 		}
-		_, err = s.db.ExecContext(ctx, `
+		_, err = exec.ExecContext(ctx, `
 			INSERT INTO quartermaster.services (service_id, name, plane, type, protocol, is_active, created_at, updated_at)
 			VALUES ($1, $2, 'control', $3, $4, true, NOW(), NOW())
 		`, serviceID, serviceType, serviceType, defaultProtocol)
@@ -597,7 +614,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	// 5. Idempotent registration: check for existing instance on same (service_id, cluster_id, protocol, port)
 	var existingID, existingInstanceID string
-	_ = s.db.QueryRowContext(ctx, `
+	_ = exec.QueryRowContext(ctx, `
 		SELECT id::text, instance_id FROM quartermaster.service_instances
 		WHERE service_id = $1 AND cluster_id = $2 AND protocol = $3 AND port = $4
 		ORDER BY updated_at DESC NULLS LAST, started_at DESC NULLS LAST LIMIT 1
@@ -605,7 +622,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 
 	if existingID != "" {
 		// Update existing row
-		_, err = s.db.ExecContext(ctx, `
+		_, err = exec.ExecContext(ctx, `
 			UPDATE quartermaster.service_instances
 			SET advertise_host = $1,
 			    health_endpoint_override = $2,
@@ -624,7 +641,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		instanceID = existingInstanceID
 	} else {
 		// Insert new row
-		_, err = s.db.ExecContext(ctx, `
+		_, err = exec.ExecContext(ctx, `
 			INSERT INTO quartermaster.service_instances
 				(instance_id, cluster_id, service_id, protocol, advertise_host, health_endpoint_override, version, port, status, health_status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'running', 'unknown', NOW(), NOW())
@@ -635,7 +652,36 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		}
 	}
 
-	// 6. Cleanup stale/duplicate instances
+	// 6. Look up cluster owner tenant for dual-tenant attribution
+	var ownerTenantID sql.NullString
+	_ = exec.QueryRowContext(ctx, `
+		SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
+	`, clusterID).Scan(&ownerTenantID)
+
+	if token != "" {
+		result, err := exec.ExecContext(ctx, `
+			UPDATE quartermaster.bootstrap_tokens
+			SET used_at = NOW(), usage_count = usage_count + 1
+			WHERE token = $1 AND used_at IS NULL
+		`, token)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", err)
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil || rowsAffected != 1 {
+			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
+		}
+	}
+
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit bootstrap transaction: %v", err)
+		}
+		tx = nil
+	}
+
+	// Best-effort cleanup — runs outside the transaction so failures
+	// don't abort the already-committed bootstrap.
 	_, _ = s.db.ExecContext(ctx, `
 		UPDATE quartermaster.service_instances
 		SET status = 'stopped', updated_at = NOW()
@@ -647,7 +693,6 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		  )
 	`, serviceID, clusterID, instanceID, advHost, proto, port)
 
-	// 7. For Foghorn services, auto-create junction table entry (home cluster assignment)
 	if serviceType == "foghorn" {
 		_, _ = s.db.ExecContext(ctx, `
 			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
@@ -657,12 +702,6 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
 		`, clusterID, instanceID)
 	}
-
-	// 8. Look up cluster owner tenant for dual-tenant attribution
-	var ownerTenantID sql.NullString
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
-	`, clusterID).Scan(&ownerTenantID)
 
 	resp := &pb.BootstrapServiceResponse{
 		ServiceId:  serviceID,
