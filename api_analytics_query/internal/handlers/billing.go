@@ -204,41 +204,23 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	var totalEgressGB, totalViewerHours float64
 	var totalUniqueViewers int
 
-	viewerRows, err := bs.clickhouse.QueryContext(ctx, `
-		SELECT
-			cluster_id,
-			origin_cluster_id,
-			COALESCE(sum(egress_gb), 0) as egress_gb,
-			COALESCE(sum(viewer_hours), 0) as viewer_hours,
-			COALESCE(sum(unique_viewers), 0) as unique_viewers
-		FROM periscope.tenant_viewer_daily
-		WHERE tenant_id = ?
-		AND day BETWEEN toDate(?) AND toDate(?)
-		GROUP BY cluster_id, origin_cluster_id
-	`, tenantID, startTime, endTime)
+	viewerMetrics, err := bs.queryTenantViewerMetrics(ctx, tenantID, startTime, endTime)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query egress/viewer metrics from ClickHouse: %w", err)
 	}
-	if err == nil {
-		defer func() { _ = viewerRows.Close() }()
-		for viewerRows.Next() {
-			var clusterID, originClusterID string
-			var m clusterViewerMetrics
-			if scanErr := viewerRows.Scan(&clusterID, &originClusterID, &m.EgressGB, &m.ViewerHours, &m.UniqueViewers); scanErr != nil {
-				continue
-			}
-			cid := attributedViewerClusterID(clusterID, originClusterID, primaryClusterID)
-			if existing, ok := clusterMetrics[cid]; ok {
-				existing.EgressGB += m.EgressGB
-				existing.ViewerHours += m.ViewerHours
-				existing.UniqueViewers += m.UniqueViewers
-			} else {
-				clusterMetrics[cid] = &m
-			}
-			totalEgressGB += m.EgressGB
-			totalViewerHours += m.ViewerHours
-			totalUniqueViewers += m.UniqueViewers
+	for _, metric := range viewerMetrics {
+		m := clusterViewerMetrics{EgressGB: metric.EgressGB, ViewerHours: metric.ViewerHours, UniqueViewers: metric.UniqueViewers}
+		cid := attributedViewerClusterID(metric.ClusterID, metric.OriginClusterID, primaryClusterID)
+		if existing, ok := clusterMetrics[cid]; ok {
+			existing.EgressGB += m.EgressGB
+			existing.ViewerHours += m.ViewerHours
+			existing.UniqueViewers += m.UniqueViewers
+		} else {
+			clusterMetrics[cid] = &m
 		}
+		totalEgressGB += m.EgressGB
+		totalViewerHours += m.ViewerHours
+		totalUniqueViewers += m.UniqueViewers
 	}
 
 	// Derive peak bandwidth from client_qoe_5m (avg_bw_out is in bytes/sec)
@@ -466,6 +448,114 @@ func attributedViewerClusterID(clusterID, originClusterID, primaryClusterID stri
 		return originClusterID
 	}
 	return primaryClusterID
+}
+
+type tenantViewerMetricRow struct {
+	ClusterID       string
+	OriginClusterID string
+	EgressGB        float64
+	ViewerHours     float64
+	UniqueViewers   int
+}
+
+func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenantID string, startTime, endTime time.Time) ([]tenantViewerMetricRow, error) {
+	queries := []struct {
+		name  string
+		query string
+		scan  func(*sql.Rows) (tenantViewerMetricRow, error)
+	}{
+		{
+			name: "cluster_and_origin",
+			query: `
+				SELECT
+					cluster_id,
+					origin_cluster_id,
+					COALESCE(sum(egress_gb), 0) as egress_gb,
+					COALESCE(sum(viewer_hours), 0) as viewer_hours,
+					COALESCE(sum(unique_viewers), 0) as unique_viewers
+				FROM periscope.tenant_viewer_daily
+				WHERE tenant_id = ?
+				AND day BETWEEN toDate(?) AND toDate(?)
+				GROUP BY cluster_id, origin_cluster_id
+			`,
+			scan: func(rows *sql.Rows) (tenantViewerMetricRow, error) {
+				var row tenantViewerMetricRow
+				err := rows.Scan(&row.ClusterID, &row.OriginClusterID, &row.EgressGB, &row.ViewerHours, &row.UniqueViewers)
+				return row, err
+			},
+		},
+		{
+			name: "cluster_only",
+			query: `
+				SELECT
+					cluster_id,
+					COALESCE(sum(egress_gb), 0) as egress_gb,
+					COALESCE(sum(viewer_hours), 0) as viewer_hours,
+					COALESCE(sum(unique_viewers), 0) as unique_viewers
+				FROM periscope.tenant_viewer_daily
+				WHERE tenant_id = ?
+				AND day BETWEEN toDate(?) AND toDate(?)
+				GROUP BY cluster_id
+			`,
+			scan: func(rows *sql.Rows) (tenantViewerMetricRow, error) {
+				var row tenantViewerMetricRow
+				err := rows.Scan(&row.ClusterID, &row.EgressGB, &row.ViewerHours, &row.UniqueViewers)
+				return row, err
+			},
+		},
+		{
+			name: "tenant_only",
+			query: `
+				SELECT
+					COALESCE(sum(egress_gb), 0) as egress_gb,
+					COALESCE(sum(viewer_hours), 0) as viewer_hours,
+					COALESCE(sum(unique_viewers), 0) as unique_viewers
+				FROM periscope.tenant_viewer_daily
+				WHERE tenant_id = ?
+				AND day BETWEEN toDate(?) AND toDate(?)
+			`,
+			scan: func(rows *sql.Rows) (tenantViewerMetricRow, error) {
+				var row tenantViewerMetricRow
+				err := rows.Scan(&row.EgressGB, &row.ViewerHours, &row.UniqueViewers)
+				return row, err
+			},
+		},
+	}
+
+	for i, q := range queries {
+		rows, err := bs.clickhouse.QueryContext(ctx, q.query, tenantID, startTime, endTime)
+		if err != nil {
+			if i < len(queries)-1 && isMissingColumnCompatibilityError(err) {
+				bs.logger.WithError(err).WithField("query_variant", q.name).Warn("tenant_viewer_daily schema not yet upgraded on this node, retrying with compatibility query")
+				continue
+			}
+			return nil, err
+		}
+
+		var out []tenantViewerMetricRow
+		for rows.Next() {
+			row, scanErr := q.scan(rows)
+			if scanErr != nil {
+				continue
+			}
+			out = append(out, row)
+		}
+		_ = rows.Close()
+		return out, nil
+	}
+
+	return nil, nil
+}
+
+func isMissingColumnCompatibilityError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unknown expression") ||
+		strings.Contains(msg, "unknown identifier") ||
+		strings.Contains(msg, "missing columns") ||
+		strings.Contains(msg, "there is no column")
 }
 
 // getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster gRPC API

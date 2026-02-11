@@ -723,12 +723,29 @@ func TestParseProtobufData(t *testing.T) {
 	t.Run("invalid json payload", func(t *testing.T) {
 		event := kafka.AnalyticsEvent{
 			Data: map[string]interface{}{
-				"streamName": 123,
+				"streamName": map[string]interface{}{"nested": true},
 			},
 		}
 		var payload pb.ViewerConnectTrigger
 		if err := handler.parseProtobufData(event, &payload); err == nil {
 			t.Fatal("expected error for invalid payload")
+		}
+	})
+
+	t.Run("unknown fields are ignored for forward compatibility", func(t *testing.T) {
+		event := kafka.AnalyticsEvent{
+			Data: map[string]interface{}{
+				"streamName":      "stream-1",
+				"host":            "1.2.3.4",
+				"futureOnlyField": "newer-producer",
+			},
+		}
+		var payload pb.ViewerConnectTrigger
+		if err := handler.parseProtobufData(event, &payload); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if payload.GetStreamName() != "stream-1" {
+			t.Fatalf("expected stream name stream-1, got %q", payload.GetStreamName())
 		}
 	})
 
@@ -818,7 +835,7 @@ func TestHandleAnalyticsEventMalformedPayloadWritesIngestError(t *testing.T) {
 		Source:    "decklog",
 		TenantID:  uuid.NewString(),
 		Data: map[string]interface{}{
-			"streamName": 123,
+			"streamName": map[string]interface{}{"nested": true},
 		},
 	}
 

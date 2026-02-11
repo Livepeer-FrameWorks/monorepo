@@ -85,7 +85,9 @@ func (h *AnalyticsHandler) parseProtobufData(event kafka.AnalyticsEvent, target 
 
 	// Parse JSON using protojson to maintain proper protobuf semantics
 	unmarshaler := protojson.UnmarshalOptions{
-		DiscardUnknown: false,
+		// Mixed-version clusters may emit fields newer than this ingest binary.
+		// Discarding unknown fields keeps ingestion forward-compatible.
+		DiscardUnknown: true,
 	}
 
 	return unmarshaler.Unmarshal(jsonData, target)
