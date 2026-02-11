@@ -286,11 +286,15 @@ func (a *Agent) sync() {
 			cancel()
 			if err != nil {
 				a.logger.WithError(err).Error("Failed to sync after bootstrap")
+				a.clearMeshDNSState("post-bootstrap sync failed")
 				a.syncFailed()
 				return
 			}
 		} else {
 			a.logger.WithError(err).Error("Failed to sync infrastructure")
+			if status.Code(err) == codes.NotFound {
+				a.clearMeshDNSState("node not found")
+			}
 			a.syncFailed()
 			return
 		}
@@ -361,6 +365,17 @@ func (a *Agent) sync() {
 
 	a.syncSucceeded()
 	a.logger.Info("Successfully applied wireguard config")
+}
+
+func (a *Agent) clearMeshDNSState(reason string) {
+	a.logger.WithField("reason", reason).Warn("Clearing local mesh DNS records")
+	if err := a.dnsServer.UpdateRecords(map[string][]string{}); err != nil {
+		a.logger.WithError(err).Warn("Failed to clear local mesh DNS records")
+		return
+	}
+	a.lastConfigMu.Lock()
+	a.lastAppliedCfg = nil
+	a.lastConfigMu.Unlock()
 }
 
 func (a *Agent) rollbackWireGuardConfig() {

@@ -61,21 +61,7 @@ func (p *PrivateerProvisioner) Provision(ctx context.Context, host inventory.Hos
 		return fmt.Errorf("privateer did not become ready: %w", err)
 	}
 
-	dnsPort := 5353
-	if value, ok := config.Metadata["dns_port"]; ok {
-		switch v := value.(type) {
-		case string:
-			if parsed, err := strconv.Atoi(v); err == nil {
-				dnsPort = parsed
-			}
-		case int:
-			dnsPort = v
-		case int32:
-			dnsPort = int(v)
-		case int64:
-			dnsPort = int(v)
-		}
-	}
+	dnsPort := parseDNSPort(config.Metadata["dns_port"])
 
 	// 5. Configure Host DNS after Privateer is ready.
 	if err := p.configureDNS(ctx, host, dnsPort); err != nil {
@@ -149,21 +135,7 @@ func (p *PrivateerProvisioner) configureSystemd(ctx context.Context, host invent
 	token, _ := config.Metadata["enrollment_token"].(string)
 	serviceToken, _ := config.Metadata["service_token"].(string)
 
-	dnsPort := "5353"
-	if value, ok := config.Metadata["dns_port"]; ok {
-		switch v := value.(type) {
-		case string:
-			if v != "" {
-				dnsPort = v
-			}
-		case int:
-			dnsPort = strconv.Itoa(v)
-		case int32:
-			dnsPort = strconv.Itoa(int(v))
-		case int64:
-			dnsPort = strconv.Itoa(int(v))
-		}
-	}
+	dnsPort := strconv.Itoa(parseDNSPort(config.Metadata["dns_port"]))
 
 	envContent := fmt.Sprintf(`QUARTERMASTER_GRPC_ADDR=%s
 SERVICE_TOKEN=%s
@@ -206,6 +178,30 @@ MESH_INTERFACE=wg0
 	return p.UploadFile(ctx, host, ssh.UploadOptions{
 		LocalPath: tmpUnit, RemotePath: "/etc/systemd/system/frameworks-privateer.service", Mode: 0644,
 	})
+}
+
+func parseDNSPort(raw any) int {
+	const defaultPort = 5353
+	var port int
+
+	switch v := raw.(type) {
+	case string:
+		if parsed, err := strconv.Atoi(v); err == nil {
+			port = parsed
+		}
+	case int:
+		port = v
+	case int32:
+		port = int(v)
+	case int64:
+		port = int(v)
+	}
+
+	if port < 1 || port > 65535 {
+		return defaultPort
+	}
+
+	return port
 }
 
 func (p *PrivateerProvisioner) configureDNS(ctx context.Context, host inventory.Host, port int) error {
