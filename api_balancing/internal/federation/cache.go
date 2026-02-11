@@ -606,6 +606,73 @@ func (c *RemoteEdgeCache) GetPeerHeartbeat(ctx context.Context, peerClusterID st
 	return &record, nil
 }
 
+// --- Stream Peers (leader writes, loaded on leader takeover, TTL 60s) ---
+
+const streamPeersTTL = 60 * time.Second
+
+func (c *RemoteEdgeCache) keyStreamPeers(peerClusterID string) string {
+	return fmt.Sprintf("{%s}:stream_peers:%s", c.clusterID, peerClusterID)
+}
+
+// SetStreamPeers persists the set of active stream names for a given peer cluster.
+func (c *RemoteEdgeCache) SetStreamPeers(ctx context.Context, peerClusterID string, streams []string) error {
+	if len(streams) == 0 {
+		return c.client.Del(ctx, c.keyStreamPeers(peerClusterID)).Err()
+	}
+	data, err := json.Marshal(streams)
+	if err != nil {
+		return fmt.Errorf("marshal stream peers: %w", err)
+	}
+	return c.client.Set(ctx, c.keyStreamPeers(peerClusterID), data, streamPeersTTL).Err()
+}
+
+// GetStreamPeers returns the set of active streams for a peer cluster, or nil.
+func (c *RemoteEdgeCache) GetStreamPeers(ctx context.Context, peerClusterID string) ([]string, error) {
+	data, err := c.client.Get(ctx, c.keyStreamPeers(peerClusterID)).Bytes()
+	if errors.Is(err, goredis.Nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get stream peers: %w", err)
+	}
+	var streams []string
+	if err := json.Unmarshal(data, &streams); err != nil {
+		return nil, fmt.Errorf("unmarshal stream peers: %w", err)
+	}
+	return streams, nil
+}
+
+// LoadAllStreamPeers loads all stream-peer mappings from Redis (used on leader takeover).
+func (c *RemoteEdgeCache) LoadAllStreamPeers(ctx context.Context) (map[string][]string, error) {
+	pattern := fmt.Sprintf("{%s}:stream_peers:*", c.clusterID)
+	result := make(map[string][]string)
+	prefix := fmt.Sprintf("{%s}:stream_peers:", c.clusterID)
+
+	var cursor uint64
+	for {
+		keys, nextCursor, err := c.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return nil, fmt.Errorf("scan stream peers: %w", err)
+		}
+		for _, key := range keys {
+			data, err := c.client.Get(ctx, key).Bytes()
+			if err != nil {
+				continue
+			}
+			var streams []string
+			if json.Unmarshal(data, &streams) == nil {
+				peerClusterID := strings.TrimPrefix(key, prefix)
+				result[peerClusterID] = streams
+			}
+		}
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+	return result, nil
+}
+
 // PeerClusterIDFromKey extracts the peer cluster ID from a remote_edges or
 // remote_replications key. Returns empty string if the key doesn't match.
 func PeerClusterIDFromKey(key string) string {

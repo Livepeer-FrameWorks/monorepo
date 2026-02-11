@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -648,8 +649,16 @@ func parseDiagnosticMetrics(content string) map[string]float64 {
 	if nested, ok := raw["metrics"].(map[string]any); ok {
 		sources = append(sources, nested)
 	}
+	// Sort keys so that when multiple aliases map to the same canonical name,
+	// the first alphabetically wins (deterministic across Go map iterations).
+	sortedKeys := make([]string, 0, len(knownMetrics))
+	for k := range knownMetrics {
+		sortedKeys = append(sortedKeys, k)
+	}
+	sort.Strings(sortedKeys)
 	for _, src := range sources {
-		for key, canonical := range knownMetrics {
+		for _, key := range sortedKeys {
+			canonical := knownMetrics[key]
 			if _, already := metrics[canonical]; already {
 				continue
 			}

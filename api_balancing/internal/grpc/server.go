@@ -125,12 +125,18 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 // enrichClusterID returns the cluster for an operation. Prefers explicit
 // cluster_id from the caller. Falls back to stream's node state for
 // media-plane-initiated flows (e.g. DVR triggered by MistServer).
-func (s *FoghornGRPCServer) enrichClusterID(explicit, streamName string) string {
+//
+// Tenant-aware fallback prevents cross-tenant stream name collisions from
+// enriching artifacts with another tenant's cluster context.
+func (s *FoghornGRPCServer) enrichClusterID(explicit, streamName, tenantID string) string {
 	if explicit != "" {
 		return explicit
 	}
 	if streamName != "" {
 		if ss := state.DefaultManager().GetStreamState(streamName); ss != nil && ss.NodeID != "" {
+			if tenantID != "" && ss.TenantID != "" && ss.TenantID != tenantID {
+				return ""
+			}
 			if ns := state.DefaultManager().GetNodeState(ss.NodeID); ns != nil && ns.ClusterID != "" {
 				return ns.ClusterID
 			}
@@ -548,7 +554,7 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
-	clipCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName)
+	clipCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId())
 	if s.decklogClient != nil {
 		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
 		if clipCluster != "" {
@@ -792,7 +798,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	dvrCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName)
+	dvrCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId())
 
 	// Resolve retention policy (default 30 days) for cleanup jobs.
 	retentionUntil := time.Now().Add(30 * 24 * time.Hour)
@@ -857,7 +863,7 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 			UserId:          req.GetUserId(),
 			StreamId:        req.GetStreamId(),
 			InternalName:    req.InternalName,
-			OriginClusterId: s.enrichClusterID(req.GetClusterId(), req.InternalName),
+			OriginClusterId: s.enrichClusterID(req.GetClusterId(), req.InternalName, req.GetTenantId()),
 		}
 		// Pass retention from request if provided
 		if req.GetExpiresAt() > 0 {

@@ -369,7 +369,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		WHERE fca.cluster_id = $1
 		  AND fca.is_active = true
 		  AND si.status = 'running'
-		ORDER BY si.updated_at DESC
+		ORDER BY si.updated_at DESC, si.id ASC
 		LIMIT 1
 	`, primaryClusterID).Scan(&foghornAddr)
 	if foghornAddr.Valid {
@@ -406,7 +406,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				WHERE fca.cluster_id = $1
 				  AND fca.is_active = true
 				  AND si.status = 'running'
-				ORDER BY si.updated_at DESC
+				ORDER BY si.updated_at DESC, si.id ASC
 				LIMIT 1
 			`, officialClusterID.String).Scan(&offFoghornAddr)
 			if offFoghornAddr.Valid {
@@ -1068,7 +1068,7 @@ func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *p
 			  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
 			WHERE svc.type = 'foghorn' AND si.status = 'running'
 			GROUP BY si.id
-			ORDER BY COUNT(fca.id) ASC
+			ORDER BY COUNT(fca.id) ASC, si.started_at ASC, si.id ASC
 			LIMIT $2
 			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
 		`, clusterID, count)
@@ -1195,7 +1195,7 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.Ena
 		  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
 		WHERE svc.type = 'foghorn' AND si.status = 'running'
 		GROUP BY si.id, si.advertise_host, si.port
-		ORDER BY COUNT(fca.id) ASC
+		ORDER BY COUNT(fca.id) ASC, si.started_at ASC, si.id ASC
 		LIMIT 1
 	`).Scan(&foghornInstanceID, &foghornAddr)
 	if errors.Is(err, sql.ErrNoRows) {

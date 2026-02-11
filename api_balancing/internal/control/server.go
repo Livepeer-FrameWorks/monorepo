@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -82,7 +83,12 @@ var registry *Registry
 var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var localClusterID string
-var servedClusters sync.Map
+var servedClusters atomic.Pointer[sync.Map]
+
+func init() {
+	servedClusters.Store(&sync.Map{})
+}
+
 var quartermasterClient *qmclient.GRPCClient
 var navigatorClient *navclient.Client
 var serverCert serverCertHolder
@@ -208,17 +214,92 @@ func GetDB() *sql.DB {
 // SetLocalClusterID sets the primary cluster ID and marks it as served.
 func SetLocalClusterID(id string) {
 	localClusterID = id
-	servedClusters.Store(id, true)
+	servedClusters.Load().Store(id, true)
+}
+
+// GetLocalClusterID returns the primary cluster ID for this Foghorn instance.
+func GetLocalClusterID() string {
+	return localClusterID
 }
 
 // AddServedCluster registers an additional cluster served by this Foghorn.
 func AddServedCluster(id string) {
-	servedClusters.Store(id, true)
+	servedClusters.Load().Store(id, true)
 }
 
 func isServedCluster(id string) bool {
-	_, ok := servedClusters.Load(id)
+	if id == "" {
+		return false
+	}
+	_, ok := servedClusters.Load().Load(id)
 	return ok
+}
+
+// LoadServedClusters bulk-loads all active cluster assignments from the DB
+// and atomically swaps the served set. localClusterID is always preserved.
+func LoadServedClusters() {
+	if db == nil {
+		return
+	}
+	instanceID := strings.TrimSpace(os.Getenv("FOGHORN_INSTANCE_ID"))
+	if instanceID == "" {
+		return
+	}
+
+	rows, err := db.QueryContext(context.Background(), `
+		SELECT fca.cluster_id
+		FROM quartermaster.foghorn_cluster_assignments fca
+		JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.instance_id = $1
+		  AND svc.type = 'foghorn'
+		  AND si.status = 'running'
+		  AND fca.is_active = true
+	`, instanceID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	fresh := &sync.Map{}
+	if localClusterID != "" {
+		fresh.Store(localClusterID, true)
+	}
+	for rows.Next() {
+		var clusterID string
+		if rows.Scan(&clusterID) == nil && clusterID != "" {
+			fresh.Store(clusterID, true)
+		}
+	}
+	servedClusters.Store(fresh)
+}
+
+// ServedClustersSnapshot returns the current set of served cluster IDs (sorted).
+func ServedClustersSnapshot() []string {
+	var ids []string
+	servedClusters.Load().Range(func(key, _ any) bool {
+		if s, ok := key.(string); ok {
+			ids = append(ids, s)
+		}
+		return true
+	})
+	sort.Strings(ids)
+	return ids
+}
+
+// StartServedClustersRefresh periodically reloads cluster assignments from the DB.
+func StartServedClustersRefresh(ctx context.Context, interval time.Duration, log logging.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			LoadServedClusters()
+			log.WithField("clusters", ServedClustersSnapshot()).Debug("Refreshed served clusters from DB")
+		}
+	}
 }
 
 // SetClipHashResolver sets the resolver for clip hash lookups
