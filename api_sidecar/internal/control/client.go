@@ -33,6 +33,17 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func addrIsFQDN(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	return strings.Contains(host, ".")
+}
+
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
 
@@ -426,11 +437,12 @@ func runClient(addr string, logger logging.Logger) error {
 		return fmt.Errorf("config not initialized")
 	}
 
-	// Configure TLS based on config
+	// Auto-detect TLS: FQDN address (contains dots, not a bare IP) → TLS.
+	// Docker service names (no dots) → insecure.
+	useTLS := cfg.GRPCUseTLS || addrIsFQDN(addr)
 	var creds credentials.TransportCredentials
-	if cfg.GRPCUseTLS {
+	if useTLS {
 		if cfg.GRPCTLSCertPath != "" && cfg.GRPCTLSKeyPath != "" {
-			// Use client certificate for mutual TLS
 			cert, err := tls.LoadX509KeyPair(cfg.GRPCTLSCertPath, cfg.GRPCTLSKeyPath)
 			if err != nil {
 				return fmt.Errorf("failed to load TLS certificates: %w", err)
@@ -439,14 +451,12 @@ func runClient(addr string, logger logging.Logger) error {
 				Certificates: []tls.Certificate{cert},
 			})
 		} else {
-			// Use TLS without client certificate
 			creds = credentials.NewTLS(&tls.Config{})
 		}
-
 		logger.Info("Connecting to gRPC server with TLS")
 	} else {
 		creds = insecure.NewCredentials()
-		logger.Info("Connecting to gRPC server with insecure connection")
+		logger.Info("Connecting to gRPC server without TLS")
 	}
 
 	conn, err := grpc.NewClient(

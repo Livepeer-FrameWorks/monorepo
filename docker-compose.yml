@@ -13,7 +13,7 @@ volumes:
   zookeeper_logs:
   kafka_data:
   clickhouse_data:
-  chatwoot_redis_data:
+  platform_redis_data:
 
 x-default-env: &default-env
   env_file:
@@ -205,8 +205,7 @@ services:
       GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
       DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
       DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}
-      # gRPC TLS configuration
-      GRPC_USE_TLS: ${FOGHORN_GRPC_USE_TLS}
+      # gRPC TLS cert override (auto-provisions from Navigator when empty)
       GRPC_TLS_CERT_PATH: ${FOGHORN_GRPC_TLS_CERT_PATH}
       GRPC_TLS_KEY_PATH: ${FOGHORN_GRPC_TLS_KEY_PATH}
       # Load balancing weights
@@ -217,8 +216,8 @@ services:
       STREAM_BONUS: ${STREAM_BONUS}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
-      REDIS_URL: redis://foghorn-redis:6379
-      FOGHORN_INSTANCE_ID: foghorn-1
+      REDIS_URL: ${FOGHORN_REDIS_URL}
+      FOGHORN_INSTANCE_ID: ${FOGHORN_INSTANCE_ID}
     ports:
       - "18008:18008"
       - "18019:18019"
@@ -248,6 +247,7 @@ services:
       retries: 3
       start_period: 10s
 
+  # Foghorn HA peer (overrides instance ID and ports)
   foghorn-2:
     <<: *default-env
     container_name: frameworks-foghorn-2
@@ -273,7 +273,6 @@ services:
       GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
       DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
       DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}
-      GRPC_USE_TLS: ${FOGHORN_GRPC_USE_TLS}
       GRPC_TLS_CERT_PATH: ${FOGHORN_GRPC_TLS_CERT_PATH}
       GRPC_TLS_KEY_PATH: ${FOGHORN_GRPC_TLS_KEY_PATH}
       CPU_WEIGHT: ${CPU_WEIGHT}
@@ -283,7 +282,7 @@ services:
       STREAM_BONUS: ${STREAM_BONUS}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ID: ${CLUSTER_ID}
-      REDIS_URL: redis://foghorn-redis:6379
+      REDIS_URL: ${FOGHORN_REDIS_URL}
       FOGHORN_INSTANCE_ID: foghorn-2
     ports:
       - "18028:18018"
@@ -314,6 +313,7 @@ services:
       retries: 3
       start_period: 10s
 
+  # Foghorn HA state store
   foghorn-redis:
     image: redis:7-alpine
     container_name: frameworks-foghorn-redis
@@ -664,7 +664,6 @@ services:
       PORT: ${HELMSMAN_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
-      GRPC_USE_TLS: ${HELMSMAN_GRPC_USE_TLS}
       GRPC_TLS_CERT_PATH: ${HELMSMAN_GRPC_TLS_CERT_PATH}
       GRPC_TLS_KEY_PATH: ${HELMSMAN_GRPC_TLS_KEY_PATH}
       HELMSMAN_STORAGE_LOCAL_PATH: /var/lib/mistserver/recordings
@@ -1332,8 +1331,8 @@ services:
       POSTGRES_DATABASE: chatwoot
       POSTGRES_USERNAME: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # Redis (dedicated)
-      REDIS_URL: redis://chatwoot-redis:6379
+      # Redis (platform-wide: Chatwoot + Deckhand)
+      REDIS_URL: redis://platform-redis:6379
       # SMTP for notifications
       SMTP_ADDRESS: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
@@ -1352,7 +1351,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      chatwoot-redis:
+      platform-redis:
         condition: service_healthy
     networks:
       - frameworks
@@ -1386,7 +1385,7 @@ services:
       POSTGRES_DATABASE: chatwoot
       POSTGRES_USERNAME: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      REDIS_URL: redis://chatwoot-redis:6379
+      REDIS_URL: redis://platform-redis:6379
       SMTP_ADDRESS: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
       SMTP_USERNAME: ${SMTP_USER}
@@ -1401,7 +1400,7 @@ services:
     depends_on:
       chatwoot:
         condition: service_healthy
-      chatwoot-redis:
+      platform-redis:
         condition: service_healthy
     networks:
       - frameworks
@@ -1414,13 +1413,13 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  chatwoot-redis:
+  platform-redis:
     image: redis:7-alpine
-    container_name: frameworks-chatwoot-redis
-    hostname: chatwoot-redis
+    container_name: frameworks-platform-redis
+    hostname: platform-redis
     command: redis-server --appendonly yes
     volumes:
-      - chatwoot_redis_data:/data
+      - platform_redis_data:/data
     networks:
       - frameworks
     mem_limit: 256m

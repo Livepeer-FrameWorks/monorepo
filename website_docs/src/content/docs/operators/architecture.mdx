@@ -61,8 +61,8 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Decklog (metrics)        | 18026                      | Regional | Prometheus metrics                                                  |
 | Signalman                | 18009 (WS), 19005 (gRPC)   | Regional | Real-time updates & WebSocket hub                                   |
 | **Media Plane**          |                            |          |                                                                     |
-| Foghorn                  | 18008                      | Regional | Load balancer                                                       |
-| Foghorn (control)        | 18019 (gRPC)               | Regional | gRPC control API                                                    |
+| Foghorn                  | 18008                      | Regional | Load balancer, stream replication orchestrator (HA via Redis)       |
+| Foghorn (control)        | 18019 (gRPC)               | Regional | gRPC control API + FoghornFederation (cross-cluster peering)        |
 | Helmsman                 | 18007 (HTTP)               | Edge     | MistServer sidecar                                                  |
 | **Support & Interfaces** |                            |          |                                                                     |
 | Deckhand                 | 18015 (HTTP), 19006 (gRPC) | Central  | Support messaging API (Chatwoot adapter)                            |
@@ -85,6 +85,8 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | VictoriaMetrics (or Prometheus)              | Metrics collection                  | Support        | Operator-defined                                   | Central                                    |
 | Grafana                                      | Metrics visualization               | Support        | Operator-defined                                   | Central                                    |
 | Listmonk                                     | Newsletter/mailing list manager     | Support        | 9000 (service), 9001 (docker-compose host)         | Central                                    |
+
+| Foghorn Redis | 6379 | Foghorn state sync (HA) | Infrastructure | Regional |
 
 _Navigator and Privateer are in testing. Production rollout is controlled and may not be enabled in every environment._
 
@@ -125,6 +127,30 @@ _Note: The Android App is currently a stub and represents a planned future inter
 - **Regional**: Bridge, Foghorn, Decklog, Periscope Ingest, Signalman, Kafka, Web Console, Marketing Site.
 - **Central/Regional**: Privateer (WireGuard mesh agent runs on all backend infrastructure nodes).
 - **Edge**: MistServer, Helmsman, Livepeer Gateway.
+
+---
+
+## Multi-Cluster Topology
+
+FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central control plane (Commodore, Quartermaster, Purser) and data plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
+
+Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances:
+
+- **Peer discovery**: Quartermaster maintains a registry of all clusters. Foghorn queries `ListPeers` to find peers and opens `PeerChannel` bidirectional streams for real-time edge telemetry exchange.
+- **Cross-cluster viewer routing**: When a viewer's cluster doesn't have a stream, Foghorn uses `QueryStream` to find it on a peer, then either redirects the viewer or arranges a DTSC origin-pull to serve locally.
+- **Cross-cluster artifacts**: VOD clips and DVR recordings on remote clusters are accessed via `PrepareArtifact` (presigned S3 URLs).
+- **Leader-only peering**: Each cluster elects one Foghorn instance (via Redis SET NX) to run PeerChannel connections, avoiding duplicate peer traffic.
+
+Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluster routing dynamically via `GetClusterRouting` — no hardcoded Foghorn addresses between services.
+
+**Deployment models:**
+
+| Model                | Description                                                                                                                                                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shared**           | Free rate-limited tier or premium shared tiers. All tenants share the same cluster, edges, and services.                                                                                                                   |
+| **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via [CLI](/operators/cli-reference) or [Manual Deployment](/operators/deployment-manual). |
+| **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                 |
+| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                |
 
 ---
 

@@ -7,7 +7,7 @@
  * import { StreamCrafter } from '@livepeer-frameworks/streamcrafter-react';
  * import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
  *
- * <StreamCrafter whipUrl="https://ingest.example.com/whip/stream-key" />
+ * <StreamCrafter whipUrl="https://edge-ingest.example.com/webrtc/stream-key" />
  */
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
@@ -1098,7 +1098,7 @@ const StreamCrafterInner: React.FC<StreamCrafterProps> = ({
  * import '@livepeer-frameworks/streamcrafter-react/streamcrafter.css';
  *
  * // Direct WHIP endpoint
- * <StreamCrafter whipUrl="https://ingest.example.com/whip/stream-key" />
+ * <StreamCrafter whipUrl="https://edge-ingest.example.com/webrtc/stream-key" />
  *
  * @example
  * // Via Gateway

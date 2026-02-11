@@ -6,9 +6,9 @@
   "metadata": {
     "emoji": "📡",
     "category": "streaming",
-    "api_base": "https://api.frameworks.network",
-    "graphql": "https://api.frameworks.network/graphql",
-    "mcp_discovery": "https://api.frameworks.network/.well-known/mcp.json",
+    "api_base": "https://bridge.frameworks.network",
+    "graphql": "https://bridge.frameworks.network/graphql",
+    "mcp_discovery": "https://bridge.frameworks.network/.well-known/mcp.json",
     "chains": ["base", "arbitrum"],
     "skipper": {
       "prompt": "video_consultant",
@@ -30,5 +30,17 @@
     "graphql": "POST /graphql",
     "wallet_login": "POST /auth/wallet-login"
   },
-  "keywords": ["streaming", "live", "rtmp", "x402", "mcp", "ai-agent", "wallet"]
+  "keywords": [
+    "streaming",
+    "live",
+    "rtmp",
+    "x402",
+    "mcp",
+    "ai-agent",
+    "wallet",
+    "self-hosted",
+    "edge",
+    "cluster",
+    "marketplace"
+  ]
 }

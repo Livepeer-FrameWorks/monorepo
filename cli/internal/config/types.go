@@ -39,6 +39,7 @@ type Auth struct {
 
 type Context struct {
 	Name      string    `yaml:"name"`
+	ClusterID string    `yaml:"cluster_id,omitempty"`
 	Endpoints Endpoints `yaml:"endpoints"`
 	Executor  Executor  `yaml:"executor"`
 	Auth      Auth      `yaml:"auth"`

@@ -35,7 +35,6 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	foghornControlAddr := config.GetEnv("FOGHORN_CONTROL_ADDR", "foghorn:18019")
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -61,27 +60,13 @@ func main() {
 		StreamOperations: metricsCollector.NewCounter("stream_operations_total", "Stream CRUD operations", []string{"operation", "status"}),
 	}
 
-	// Create Foghorn gRPC client for clip/DVR/viewer operations
-	//
-	// TODO: Multi-cluster support - Currently uses a single Foghorn address.
-	// In multi-cluster deployments, each tenant maps to a specific cluster with its own Foghorn.
-	// Future options:
-	//   1. Query Quartermaster to resolve tenant -> cluster -> foghorn_grpc_addr
-	//   2. Move clip/DVR/viewer resolution to Gateway instead of proxying through Commodore
-	// For now, this works for single-cluster deployments.
-	foghornClient, err := foghornclient.NewGRPCClient(foghornclient.GRPCConfig{
-		GRPCAddr:     foghornControlAddr,
+	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{
+		ServiceToken: serviceToken,
 		Timeout:      30 * time.Second,
 		Logger:       logger,
-		ServiceToken: serviceToken,
+		MaxIdleTime:  10 * time.Minute,
 	})
-	if err != nil {
-		logger.WithError(err).Warn("Failed to create Foghorn gRPC client - clip/DVR/viewer operations will be unavailable")
-		foghornClient = nil
-	} else {
-		defer func() { _ = foghornClient.Close() }()
-		logger.WithField("addr", foghornControlAddr).Info("Connected to Foghorn gRPC")
-	}
+	defer foghornPool.Close()
 
 	// Create Quartermaster gRPC client for tenant creation during registration
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
@@ -162,7 +147,7 @@ func main() {
 		grpcServer := commodoregrpc.NewGRPCServer(commodoregrpc.CommodoreServerConfig{
 			DB:                   db,
 			Logger:               logger,
-			FoghornClient:        foghornClient,
+			FoghornPool:          foghornPool,
 			QuartermasterClient:  quartermasterGRPCClient,
 			PurserClient:         purserGRPCClient,
 			ListmonkClient:       listmonkClient,

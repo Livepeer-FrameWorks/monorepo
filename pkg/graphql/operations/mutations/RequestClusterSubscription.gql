@@ -1,0 +1,25 @@
+# Request to subscribe to a cluster (with optional invite token)
+mutation RequestClusterSubscription($clusterId: ID!, $inviteToken: String) {
+  requestClusterSubscription(clusterId: $clusterId, inviteToken: $inviteToken) {
+    ... on ClusterSubscription {
+      id
+      subscriptionStatus
+      clusterName
+    }
+    ... on ValidationError {
+      message
+      code
+      field
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

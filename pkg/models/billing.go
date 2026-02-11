@@ -241,6 +241,10 @@ type BillingTier struct {
 	TierLevel    int  `json:"tier_level" db:"tier_level"`
 	IsEnterprise bool `json:"is_enterprise" db:"is_enterprise"`
 
+	// Default tier flags
+	IsDefaultPrepaid  bool `json:"is_default_prepaid" db:"is_default_prepaid"`
+	IsDefaultPostpaid bool `json:"is_default_postpaid" db:"is_default_postpaid"`
+
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

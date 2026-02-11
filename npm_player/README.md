@@ -9,7 +9,7 @@ The `Player` component resolves optimal endpoints via the FrameWorks Gateway, wh
 
 > **Looking for browser-based streaming (ingest)?** See [StreamCrafter](../npm_studio/README.md) - the companion library for WHIP publishing from camera/screen.
 
-**Docs:** `docs.frameworks.network`
+**Docs:** `logbook.frameworks.network`
 
 ## Packages
 
@@ -406,8 +406,8 @@ import React from "react";
 import { MistPlayer } from "@livepeer-frameworks/player-react";
 
 function App() {
-  const htmlUrl = "https://edge.example.com/view/your-stream-name.html";
-  const playerJsUrl = "https://edge.example.com/view/player.js";
+  const htmlUrl = "https://edge-egress.example.com/view/your-stream-name.html";
+  const playerJsUrl = "https://edge-egress.example.com/view/player.js";
 
   return (
     <div style={{ width: "100%", height: "500px" }}>
@@ -431,7 +431,7 @@ import React from "react";
 import { DirectSourcePlayer } from "@livepeer-frameworks/player-react";
 
 function App() {
-  const mp4Url = "https://edge.example.com/videos/your-clip.mp4";
+  const mp4Url = "https://edge-egress.example.com/videos/your-clip.mp4";
 
   return (
     <div style={{ width: "100%", height: "500px" }}>
@@ -455,7 +455,7 @@ function App() {
       <Player
         contentType="live"
         contentId="pk_..."
-        options={{ mistUrl: "https://edge.example.com" }}
+        options={{ mistUrl: "https://edge-egress.example.com" }}
       />
     </div>
   );
@@ -471,7 +471,7 @@ import React from "react";
 import { WHEPPlayer } from "@livepeer-frameworks/player-react";
 
 function App() {
-  const whepUrl = "https://edge.example.com/webrtc/your-stream-name";
+  const whepUrl = "https://edge-egress.example.com/webrtc/your-stream-name";
 
   return (
     <div style={{ width: "100%", height: "500px" }}>

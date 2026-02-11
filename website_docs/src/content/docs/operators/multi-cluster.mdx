@@ -1,0 +1,241 @@
+---
+title: "Multi-Cluster Operations"
+description: "Operating multiple clusters: lifecycle, federation, marketplace, and billing attribution."
+sidebar:
+  order: 6
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="note" title="Evolving Feature">
+  Multi-cluster support is production-ready for shared and dedicated tiers. The open marketplace is
+  in active development.
+</Aside>
+
+## What Is a Cluster?
+
+A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. All clusters share the same central control plane (Commodore, Quartermaster, Purser) and data plane (Decklog, Periscope, Signalman). These services are not duplicated or federated per cluster.
+
+Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances.
+
+---
+
+## Deployment Models
+
+| Model                | Description                                                                                                                                                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shared**           | Free rate-limited tier or premium shared tiers. All tenants share the same cluster, edges, and services.                                                                                                                   |
+| **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via [CLI](/operators/cli-reference) or [Manual Deployment](/operators/deployment-manual). |
+| **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                 |
+| **Open Marketplace** | Third-party operators publish clusters with pricing and access controls. Tenants subscribe to clusters via the marketplace. _(In progress)_                                                                                |
+
+---
+
+## Cluster Lifecycle
+
+### Creating a Cluster
+
+```bash
+frameworks admin clusters create \
+  --name "EU Production" \
+  --slug eu-prod \
+  --region eu-west \
+  --foghorn-count 2
+```
+
+This:
+
+1. Creates the cluster record in Quartermaster
+2. Claims N Foghorn instances from the pool (`--foghorn-count`)
+3. Sets up cluster-scoped DNS records via Navigator (if configured)
+
+### Foghorn Pool
+
+Foghorn instances are managed in a shared pool. Clusters claim instances on creation; instances can be drained and returned.
+
+```bash
+# View pool status (shows per-cluster grouping)
+frameworks admin foghorn-pool status
+
+# Add an instance to the pool
+frameworks admin foghorn-pool add --instance-id <UUID>
+
+# Drain an instance from its cluster (graceful)
+frameworks admin foghorn-pool drain --instance-id <UUID>
+```
+
+### Cluster Health
+
+```bash
+frameworks admin clusters cert-status --cluster-id <ID>
+```
+
+Shows cluster health including Foghorn HA status, edge count, and wildcard certificate readiness.
+
+---
+
+## Federation
+
+Foghorn instances discover peers via Quartermaster's `ListPeers` RPC. Federation is demand-driven — peer connections are opened when a viewer needs a stream that only exists on a remote cluster.
+
+### How It Works
+
+1. **PeerChannel**: Bidirectional gRPC streams between Foghorn peers exchange edge telemetry, stream advertisements, and replication events every 5 seconds
+2. **QueryStream**: When a viewer's cluster doesn't have the stream, Foghorn asks the origin cluster for edge candidates
+3. **Origin-Pull**: If a local edge has capacity, Foghorn arranges a DTSC pull from the remote origin. Subsequent viewers are served locally
+4. **Redirect**: If no local capacity, the viewer is redirected (307) to the remote cluster's edge
+
+### Leader-Only Peering
+
+Each cluster elects one Foghorn instance (via Redis `SET NX`, 15s TTL) to run PeerChannel connections. This prevents duplicate peer traffic in HA deployments.
+
+For architecture details, see `docs/architecture/federation.md` and `docs/architecture/stream-replication-topology.md`.
+
+---
+
+## Marketplace
+
+The marketplace allows third-party operators to publish clusters that other tenants can subscribe to.
+
+### Cluster Visibility
+
+Clusters can be configured with different visibility levels:
+
+| Visibility    | Who Can See           | Access                   |
+| ------------- | --------------------- | ------------------------ |
+| `private`     | Only the owner tenant | Direct access            |
+| `invite_only` | Invited tenants       | Via cluster invite token |
+| `public`      | All tenants           | Via subscription request |
+
+### Subscription Lifecycle
+
+```
+Tenant discovers cluster (marketplace UI or invite link)
+  → RequestClusterSubscription (GraphQL mutation)
+  → Cluster owner approves/rejects (ApproveClusterSubscription / RejectClusterSubscription)
+  → On approval: Quartermaster creates tenant_cluster_access record
+  → Purser creates cluster_subscription (billing)
+  → Tenant can now route streams through the cluster
+```
+
+### Invitation Flow
+
+Cluster operators can invite specific tenants:
+
+```bash
+# Creates an invite token with optional expiry
+frameworks admin cluster-invites create \
+  --cluster-id <ID> \
+  --tenant-id <TENANT_UUID> \
+  --ttl 7d
+```
+
+The invited tenant sees the cluster in their dashboard and can accept with one click.
+
+---
+
+## Edge Enrollment
+
+Edge nodes enroll into a specific cluster using bootstrap tokens.
+
+### Token Creation
+
+**Via Dashboard (tenant owner):**
+
+1. Go to **Infrastructure -> Network**
+2. Click **Create Private Cluster** or select an existing cluster
+3. Copy the bootstrap token
+
+**Via CLI (admin):**
+
+```bash
+frameworks admin bootstrap-tokens create \
+  --kind edge_node \
+  --tenant-id <TENANT_UUID> \
+  --cluster-id <CLUSTER_ID> \
+  --name "edge-node-1" \
+  --ttl 24h
+```
+
+### Provisioning with Token
+
+```bash
+frameworks edge provision \
+  --ssh ubuntu@edge-1.example.com \
+  --enrollment-token enroll_xxx \
+  --foghorn-addr foghorn.example.com:18019 \
+  --email ops@example.com
+```
+
+The CLI calls Foghorn's `PreRegisterEdge` RPC, which returns:
+
+- Assigned node ID and edge domain (`edge-{node_id}.{cluster_slug}.{base}`)
+- Pool domain for the cluster
+- Foghorn gRPC address for Helmsman's control stream
+- Wildcard TLS certificate for the cluster
+
+The `--foghorn-addr` flag (or CLI context) is required — the edge must know Foghorn's address to call PreRegisterEdge. Edge nodes communicate only with Foghorn over the public internet; they do not join the WireGuard mesh.
+
+---
+
+## DNS
+
+Each cluster gets its own set of DNS records under `{cluster_slug}.{base_domain}`:
+
+| Record                         | Purpose                                  |
+| ------------------------------ | ---------------------------------------- |
+| `edge-ingest.{slug}.{base}`    | RTMP/SRT/WHIP ingest                     |
+| `edge-egress.{slug}.{base}`    | Edge pool (viewer delivery)              |
+| `foghorn.{slug}.{base}`        | Viewer routing / playback resolution     |
+| `edge-{node_id}.{slug}.{base}` | Per-edge A records for direct addressing |
+
+Navigator manages these records automatically. Wildcard TLS certificates (`*.{slug}.{base}`) are issued via ACME DNS-01 and distributed to edges via ConfigSeed.
+
+See [DNS Automation](/operators/dns) for details.
+
+---
+
+## Billing Attribution
+
+Every analytics event carries `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). This enables per-cluster billing:
+
+- **Periscope Query** generates per-cluster `UsageSummary` records
+- **Purser** stores these as per-cluster usage records
+- **Settlement queries** can identify cross-cluster traffic for infrastructure cost attribution
+
+Inter-cluster DTSC bandwidth is infrastructure cost, not a tenant-facing billing item.
+
+### Cluster Pricing
+
+Each cluster has a pricing model configured in `purser.cluster_pricing`:
+
+| Pricing Model    | Description                                    |
+| ---------------- | ---------------------------------------------- |
+| `free_unmetered` | No metering (community tier)                   |
+| `metered`        | Pay-as-you-go resource billing                 |
+| `monthly`        | Fixed monthly subscription                     |
+| `tier_inherit`   | Inherit pricing from the tenant's billing tier |
+| `custom`         | Operator-defined pricing                       |
+
+See `docs/architecture/cross-cluster-billing.md` and `docs/architecture/billing-tier-provisioning.md` for the full attribution and provisioning model.
+
+---
+
+## Monitoring
+
+### Federation Health
+
+Monitor peer connectivity and replication state:
+
+- **PeerChannel status**: Each Foghorn logs peer connections and heartbeat latency
+- **Stream advertisements**: Exchanged every 5 seconds via PeerChannel; stale advertisements indicate peer issues
+- **Active replications**: In-flight cross-cluster DTSC pulls tracked in Redis (5-min TTL)
+
+### Per-Cluster Metrics
+
+ClickHouse tables partition by `cluster_id`, enabling per-cluster dashboards for:
+
+- Viewer hours and egress
+- Stream health and QoE
+- Edge node utilization
+- Cross-cluster replication events

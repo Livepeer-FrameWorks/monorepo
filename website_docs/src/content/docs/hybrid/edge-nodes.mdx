@@ -65,6 +65,15 @@ This configures:
 
 ```bash
 frameworks edge init --dir /opt/frameworks-edge \
+  --enrollment-token enroll_xxx \
+  --foghorn-addr foghorn.example.com:18019 \
+  --email ops@yourdomain.com
+```
+
+When using `--enrollment-token`, the CLI calls Foghorn's `PreRegisterEdge` RPC to get an assigned domain, node ID, cluster slug, and TLS certificate. You still need `--foghorn-addr` (or have it set in your CLI context) to reach Foghorn. If you already have a domain and don't need auto-assignment, use `--domain` instead:
+
+```bash
+frameworks edge init --dir /opt/frameworks-edge \
   --domain stream.yourdomain.com \
   --email ops@yourdomain.com
 ```
@@ -91,6 +100,8 @@ ACME_EMAIL=ops@yourdomain.com
 ```
 
 `NODE_ID` must be stable and unique per node. `EDGE_PUBLIC_URL` should include the `/view` path.
+
+When using `--enrollment-token` with `edge init`, the CLI populates `NODE_ID`, `EDGE_DOMAIN`, and `FOGHORN_CONTROL_ADDR` from the PreRegisterEdge response. It also stages the cluster's wildcard TLS certificate so Caddy starts with valid HTTPS immediately.
 
 Optional Helmsman overrides (add only if needed, in `.edge.env`):
 

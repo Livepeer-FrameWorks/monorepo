@@ -33,7 +33,9 @@ var ServicePorts = map[string]int{
 	"logbook":          18033,
 	"skipper":          18018,
 	"caddy":            18090,
+	"mistserver":       8080,
 	"privateer":        18012,
+	"redis":            6379,
 }
 
 // GetProvisioner returns a provisioner for a given service
@@ -61,6 +63,8 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 		return NewZookeeperProvisioner(pool)
 	case "clickhouse":
 		return NewClickHouseProvisioner(pool)
+	case "redis":
+		return NewRedisProvisioner(pool)
 	case "privateer":
 		return NewPrivateerProvisioner(pool), nil
 

@@ -4,23 +4,30 @@
 
 ## Docs
 
-- [MCP Integration](https://docs.frameworks.network/streamers/mcp): Resources, tools, prompts, x402 payments
+- [MCP Integration](https://logbook.frameworks.network/streamers/mcp): Resources, tools, prompts, x402 payments
 - [Skill File](https://frameworks.network/SKILL.md): Agent quick-start guide
-- [Agent Overview](https://docs.frameworks.network/agents/overview): Discovery, auth, and capabilities
-- [Skipper Video Consultant](https://docs.frameworks.network/agents/skipper): RAG-grounded streaming expertise
+- [Agent Overview](https://logbook.frameworks.network/agents/overview): Discovery, auth, and capabilities
+- [Skipper Video Consultant](https://logbook.frameworks.network/agents/skipper): RAG-grounded streaming expertise
 
 ## API
 
-- MCP Discovery: https://api.frameworks.network/.well-known/mcp.json
-- MCP Endpoint: POST https://api.frameworks.network/mcp (streamable-http)
-- GraphQL: POST https://api.frameworks.network/graphql
-- Wallet Login: POST https://api.frameworks.network/auth/wallet-login
+- MCP Discovery: https://bridge.frameworks.network/.well-known/mcp.json
+- MCP Endpoint: POST https://bridge.frameworks.network/mcp (streamable-http)
+- GraphQL: POST https://bridge.frameworks.network/graphql
+- Wallet Login: POST https://bridge.frameworks.network/auth/wallet-login
 
 ## Auth
 
 - Bearer token (JWT or API key)
 - Wallet signature (EIP-191 personal_sign)
 - x402 (gasless USDC on Base/Arbitrum)
+
+## Self-Hosted Infrastructure
+
+- Cluster marketplace: discover and subscribe to regional clusters via MCP (browse_marketplace, subscribe_to_cluster)
+- Private clusters: create_private_cluster returns enrollment token for edge provisioning
+- Edge provisioning: `frameworks edge provision --enrollment-token <token> --ssh user@host`
+- Peering: preferred ↔ official clusters always peered; other subscribed clusters peer on demand when streams trigger it
 
 ## Optional
 

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/pkg/auth"
@@ -97,7 +98,7 @@ type CommodoreServer struct {
 	pb.UnimplementedVodServiceServer
 	db                   *sql.DB
 	logger               logging.Logger
-	foghornClient        *foghornclient.GRPCClient
+	foghornPool          *foghornclient.FoghornPool
 	quartermasterClient  *qmclient.GRPCClient
 	purserClient         *purserclient.GRPCClient
 	listmonkClient       *listmonk.Client
@@ -106,14 +107,33 @@ type CommodoreServer struct {
 	metrics              *ServerMetrics
 	turnstileValidator   *turnstile.Validator
 	turnstileFailOpen    bool
-	passwordResetSecret  []byte // Secret for HMAC signing of password reset tokens
+	passwordResetSecret  []byte
+	routeCache           map[string]*clusterRoute
+	routeCacheMu         sync.RWMutex
+	routeCacheTTL        time.Duration
+}
+
+// clusterRoute caches the tenant -> cluster -> foghorn mapping.
+type clusterRoute struct {
+	clusterID   string
+	foghornAddr string
+	clusterSlug string
+	baseURL     string
+	clusterName string
+	// Official cluster (from billing tier) — provides geographic coverage
+	officialClusterID   string
+	officialClusterSlug string
+	officialBaseURL     string
+	officialClusterName string
+	clusterPeers        []*pb.TenantClusterPeer // full tenant cluster context
+	resolvedAt          time.Time
 }
 
 // CommodoreServerConfig contains all dependencies for CommodoreServer
 type CommodoreServerConfig struct {
 	DB                   *sql.DB
 	Logger               logging.Logger
-	FoghornClient        *foghornclient.GRPCClient
+	FoghornPool          *foghornclient.FoghornPool
 	QuartermasterClient  *qmclient.GRPCClient
 	PurserClient         *purserclient.GRPCClient
 	ListmonkClient       *listmonk.Client
@@ -139,7 +159,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	return &CommodoreServer{
 		db:                   cfg.DB,
 		logger:               cfg.Logger,
-		foghornClient:        cfg.FoghornClient,
+		foghornPool:          cfg.FoghornPool,
 		quartermasterClient:  cfg.QuartermasterClient,
 		purserClient:         cfg.PurserClient,
 		listmonkClient:       cfg.ListmonkClient,
@@ -149,7 +169,70 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		turnstileValidator:   tv,
 		turnstileFailOpen:    cfg.TurnstileFailOpen,
 		passwordResetSecret:  cfg.PasswordResetSecret,
+		routeCache:           make(map[string]*clusterRoute),
+		routeCacheTTL:        5 * time.Minute,
 	}
+}
+
+// resolveClusterRouteForTenant returns cached or fresh cluster routing data
+// from Quartermaster. Never dials Foghorn. Safe to call from handlers that
+// only need cluster metadata (origin_cluster_id, cluster_peers, domain slugs).
+func (s *CommodoreServer) resolveClusterRouteForTenant(ctx context.Context, tenantID string) (*clusterRoute, error) {
+	s.routeCacheMu.RLock()
+	if route, ok := s.routeCache[tenantID]; ok && time.Since(route.resolvedAt) < s.routeCacheTTL {
+		s.routeCacheMu.RUnlock()
+		return route, nil
+	}
+	s.routeCacheMu.RUnlock()
+
+	if s.quartermasterClient == nil {
+		return nil, status.Error(codes.Unavailable, "quartermaster not available for cluster routing")
+	}
+
+	resp, err := s.quartermasterClient.GetClusterRouting(ctx, &pb.GetClusterRoutingRequest{TenantId: tenantID})
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "cluster routing failed: %v", err)
+	}
+
+	route := &clusterRoute{
+		clusterID:           resp.GetClusterId(),
+		foghornAddr:         resp.GetFoghornGrpcAddr(),
+		clusterSlug:         resp.GetClusterSlug(),
+		baseURL:             resp.GetBaseUrl(),
+		clusterName:         resp.GetClusterName(),
+		officialClusterID:   resp.GetOfficialClusterId(),
+		officialClusterSlug: resp.GetOfficialClusterSlug(),
+		officialBaseURL:     resp.GetOfficialBaseUrl(),
+		officialClusterName: resp.GetOfficialClusterName(),
+		clusterPeers:        resp.GetClusterPeers(),
+		resolvedAt:          time.Now(),
+	}
+
+	s.routeCacheMu.Lock()
+	s.routeCache[tenantID] = route
+	s.routeCacheMu.Unlock()
+
+	return route, nil
+}
+
+// resolveFoghornForTenant returns a Foghorn gRPC client for the tenant's cluster.
+// Delegates to resolveClusterRouteForTenant for routing, then dials via pool.
+// Foghorn dial failure does NOT evict the route cache entry.
+func (s *CommodoreServer) resolveFoghornForTenant(ctx context.Context, tenantID string) (*foghornclient.GRPCClient, *clusterRoute, error) {
+	route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if route.foghornAddr == "" {
+		return nil, nil, status.Errorf(codes.Unavailable, "no foghorn registered for cluster %s", route.clusterID)
+	}
+
+	client, err := s.foghornPool.GetOrCreate(route.clusterID, route.foghornAddr)
+	if err != nil {
+		return nil, nil, status.Errorf(codes.Unavailable, "foghorn connection failed for cluster %s: %v", route.clusterID, err)
+	}
+	return client, route, nil
 }
 
 // ============================================================================
@@ -167,17 +250,17 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 	}
 
 	// Query stream info from commodore tables only (no cross-service DB access)
-	var streamID, userID, tenantID, internalName string
+	var streamID, userID, tenantID, internalName, playbackID string
 	var isActive, isRecordingEnabled bool
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT
 			s.id, s.user_id, s.tenant_id, s.internal_name,
-			u.is_active, s.is_recording_enabled
+			u.is_active, s.is_recording_enabled, s.playback_id
 		FROM commodore.streams s
 		JOIN commodore.users u ON s.user_id = u.id
 		WHERE s.stream_key = $1
-	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled)
+	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled, &playbackID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ValidateStreamKeyResponse{
@@ -220,7 +303,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		}
 	}
 
-	return &pb.ValidateStreamKeyResponse{
+	resp := &pb.ValidateStreamKeyResponse{
 		Valid:              true,
 		UserId:             userID,
 		TenantId:           tenantID,
@@ -230,7 +313,18 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *pb.Validat
 		BillingModel:       billingModel,
 		IsSuspended:        isSuspended,
 		IsBalanceNegative:  isBalanceNegative,
-	}, nil
+		PlaybackId:         playbackID,
+	}
+
+	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+		resp.OriginClusterId = &route.clusterID
+		if route.officialClusterID != "" {
+			resp.OfficialClusterId = &route.officialClusterID
+		}
+		resp.ClusterPeers = route.clusterPeers
+	}
+
+	return resp, nil
 }
 
 // ResolvePlaybackID resolves a playback ID to internal name for MistServer PLAY_REWRITE trigger
@@ -260,12 +354,22 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *pb.Resolve
 	// Note: Status check removed - operational state now comes from Periscope (Data Plane)
 	// Foghorn handles real-time stream state through its own state management
 
-	return &pb.ResolvePlaybackIDResponse{
+	resp := &pb.ResolvePlaybackIDResponse{
 		InternalName: internalName,
 		TenantId:     tenantID,
 		PlaybackId:   playbackID,
 		StreamId:     streamID,
-	}, nil
+	}
+
+	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+		resp.OriginClusterId = &route.clusterID
+		if route.officialClusterID != "" {
+			resp.OfficialClusterId = &route.officialClusterID
+		}
+		resp.ClusterPeers = route.clusterPeers
+	}
+
+	return resp, nil
 }
 
 // ResolveInternalName resolves an internal_name to tenant context for event enrichment
@@ -293,13 +397,18 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *pb.Resol
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	return &pb.ResolveInternalNameResponse{
+	resp := &pb.ResolveInternalNameResponse{
 		InternalName:       internalName,
 		TenantId:           tenantID,
 		UserId:             userID,
 		IsRecordingEnabled: isRecordingEnabled,
 		StreamId:           streamID,
-	}, nil
+	}
+	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+		resp.ClusterPeers = route.clusterPeers
+		resp.OriginClusterId = route.clusterID
+	}
+	return resp, nil
 }
 
 // ValidateAPIToken validates a developer API token (called by Gateway middleware)
@@ -356,12 +465,13 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *pb.Validate
 
 // StartDVR initiates DVR recording for a stream (Gateway → Commodore → Foghorn).
 func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	// Get user and tenant context from gateway metadata.
 	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +536,7 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		"user_id":       userID,
 	}).Info("Starting DVR recording via Foghorn")
 
-	resp, trailers, err := s.foghornClient.StartDVR(ctx, foghornReq)
+	resp, trailers, err := foghornClient.StartDVR(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":     tenantID,
@@ -472,11 +582,11 @@ func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClip
 		INSERT INTO commodore.clips (
 			id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
-			created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+			origin_cluster_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
 	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), req.GetStartTime(), req.GetDuration(),
-		req.GetClipMode(), req.GetRequestedParams())
+		req.GetClipMode(), req.GetRequestedParams(), req.GetOriginClusterId())
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -553,9 +663,9 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRe
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO commodore.dvr_recordings (
 			id, tenant_id, user_id, stream_id, dvr_hash, artifact_internal_name, playback_id, internal_name,
-			created_at, updated_at
-		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, NOW(), NOW())
-	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName)
+			origin_cluster_id, created_at, updated_at
+		) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, NOW(), NOW())
+	`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId())
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -600,17 +710,17 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 	var tenantID, userID, streamID, title, description, clipMode string
 	var playbackID, artifactInternalName string
 	var startTime, duration int64
-	var internalName sql.NullString
+	var internalName, originClusterID sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT c.tenant_id, c.user_id, c.stream_id, c.title, c.description,
 			   c.start_time, c.duration, c.clip_mode, s.internal_name,
-			   c.playback_id, c.artifact_internal_name
+			   c.playback_id, c.artifact_internal_name, c.origin_cluster_id
 		FROM commodore.clips c
 		LEFT JOIN commodore.streams s ON c.stream_id = s.id
 		WHERE c.clip_hash = $1
 	`, clipHash).Scan(&tenantID, &userID, &streamID, &title, &description,
-		&startTime, &duration, &clipMode, &internalName, &playbackID, &artifactInternalName)
+		&startTime, &duration, &clipMode, &internalName, &playbackID, &artifactInternalName, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveClipHashResponse{
@@ -639,6 +749,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveCl
 		ClipMode:             clipMode,
 		PlaybackId:           playbackID,
 		ArtifactInternalName: artifactInternalName,
+		OriginClusterId:      originClusterID.String,
 	}, nil
 }
 
@@ -652,13 +763,13 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 
 	var tenantID, userID, internalName string
 	var playbackID, artifactInternalName string
-	var streamID sql.NullString
+	var streamID, originClusterID sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, stream_id, internal_name, playback_id, artifact_internal_name
+		SELECT tenant_id, user_id, stream_id, internal_name, playback_id, artifact_internal_name, origin_cluster_id
 		FROM commodore.dvr_recordings
 		WHERE dvr_hash = $1
-	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName)
+	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveDVRHashResponse{
@@ -682,6 +793,7 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVR
 		InternalName:         internalName,
 		PlaybackId:           playbackID,
 		ArtifactInternalName: artifactInternalName,
+		OriginClusterId:      originClusterID.String,
 	}, nil
 }
 
@@ -717,11 +829,11 @@ func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRe
 		INSERT INTO commodore.vod_assets (
 			id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
-			retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+			origin_cluster_id, retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
 	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), filename, req.GetContentType(), req.GetSizeBytes(),
-		retentionUntil)
+		req.GetOriginClusterId(), retentionUntil)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -760,13 +872,13 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 
 	var tenantID, userID, filename string
 	var playbackID, artifactInternalName string
-	var title, description sql.NullString
+	var title, description, originClusterID sql.NullString
 
 	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, filename, title, description, playback_id, artifact_internal_name
+		SELECT tenant_id, user_id, filename, title, description, playback_id, artifact_internal_name, origin_cluster_id
 		FROM commodore.vod_assets
 		WHERE vod_hash = $1
-	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName)
+	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName, &originClusterID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &pb.ResolveVodHashResponse{
@@ -791,6 +903,7 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVod
 		Description:          description.String,
 		PlaybackId:           playbackID,
 		ArtifactInternalName: artifactInternalName,
+		OriginClusterId:      originClusterID.String,
 	}, nil
 }
 
@@ -845,12 +958,13 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		tenantID             string
 		userID               string
 		streamID             sql.NullString
+		originClusterID      sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.clips
 		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		return &pb.ResolveArtifactPlaybackIDResponse{
 			Found:                true,
@@ -860,6 +974,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			UserId:               userID,
 			StreamId:             streamID.String,
 			ContentType:          "clip",
+			OriginClusterId:      originClusterID.String,
 		}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -871,11 +986,12 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 	}
 
 	// 2. DVR
+	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.dvr_recordings
 		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		return &pb.ResolveArtifactPlaybackIDResponse{
 			Found:                true,
@@ -885,6 +1001,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			UserId:               userID,
 			StreamId:             streamID.String,
 			ContentType:          "dvr",
+			OriginClusterId:      originClusterID.String,
 		}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -897,11 +1014,12 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 
 	// 3. VOD
 	streamID = sql.NullString{}
+	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, artifact_internal_name, tenant_id, user_id
+		SELECT vod_hash, artifact_internal_name, tenant_id, user_id, origin_cluster_id
 		FROM commodore.vod_assets
 		WHERE playback_id = $1
-	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID)
+	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
 	if err == nil {
 		return &pb.ResolveArtifactPlaybackIDResponse{
 			Found:                true,
@@ -910,6 +1028,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			TenantId:             tenantID,
 			UserId:               userID,
 			ContentType:          "vod",
+			OriginClusterId:      originClusterID.String,
 		}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -937,12 +1056,13 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		tenantID             string
 		userID               string
 		streamID             sql.NullString
+		originClusterID      sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx, `
-		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		SELECT clip_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.clips
 		WHERE artifact_internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		return &pb.ResolveArtifactInternalNameResponse{
 			Found:                true,
@@ -952,6 +1072,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			UserId:               userID,
 			StreamId:             streamID.String,
 			ContentType:          "clip",
+			OriginClusterId:      originClusterID.String,
 		}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -963,11 +1084,12 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	}
 
 	// 2. DVR
+	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text
+		SELECT dvr_hash, artifact_internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id
 		FROM commodore.dvr_recordings
 		WHERE artifact_internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID)
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
 		return &pb.ResolveArtifactInternalNameResponse{
 			Found:                true,
@@ -977,6 +1099,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			UserId:               userID,
 			StreamId:             streamID.String,
 			ContentType:          "dvr",
+			OriginClusterId:      originClusterID.String,
 		}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -989,11 +1112,12 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 
 	// 3. VOD
 	streamID = sql.NullString{}
+	originClusterID = sql.NullString{}
 	err = s.db.QueryRowContext(ctx, `
-		SELECT vod_hash, artifact_internal_name, tenant_id, user_id
+		SELECT vod_hash, artifact_internal_name, tenant_id, user_id, origin_cluster_id
 		FROM commodore.vod_assets
 		WHERE artifact_internal_name = $1
-	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID)
+	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
 	if err == nil {
 		return &pb.ResolveArtifactInternalNameResponse{
 			Found:                true,
@@ -1002,6 +1126,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			TenantId:             tenantID,
 			UserId:               userID,
 			ContentType:          "vod",
+			OriginClusterId:      originClusterID.String,
 		}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -1015,9 +1140,25 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	return &pb.ResolveArtifactInternalNameResponse{Found: false}, nil
 }
 
-// ResolveIdentifier provides unified resolution across all Commodore registries
-// Lookup order: streams (internal_name), streams (playback_id), clips, DVR, VOD
+// ResolveIdentifier provides unified resolution across all Commodore registries.
+// Enriches found responses with cluster context from Quartermaster.
 func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
+	resp, err := s.resolveIdentifierLookup(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Found && resp.TenantId != "" {
+		if route, routeErr := s.resolveClusterRouteForTenant(ctx, resp.TenantId); routeErr == nil {
+			resp.ClusterPeers = route.clusterPeers
+			resp.OriginClusterId = route.clusterID
+		}
+	}
+	return resp, nil
+}
+
+// resolveIdentifierLookup checks all Commodore registries for the identifier.
+// Lookup order: streams (stream_id, internal_name, playback_id), clips, DVR, VOD
+func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
 	identifier := req.GetIdentifier()
 	if identifier == "" {
 		return nil, status.Error(codes.InvalidArgument, "identifier is required")
@@ -1709,6 +1850,13 @@ func (s *CommodoreServer) Register(ctx context.Context, req *pb.RegisterRequest)
 				s.logger.WithError(err).Warn("Failed to sync new user to Listmonk")
 			}
 		}(email, req.GetFirstName(), req.GetLastName())
+	}
+
+	// Initialize postpaid billing + cluster access for the new tenant
+	if s.purserClient != nil && role == "owner" {
+		if _, billingErr := s.purserClient.InitializePostpaidAccount(ctx, tenantID); billingErr != nil {
+			s.logger.WithError(billingErr).WithField("tenant_id", tenantID).Error("Failed to initialize postpaid account")
+		}
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -2939,14 +3087,43 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *pb.CreateStream
 	}
 	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, streamID, changedFields)
 
-	return &pb.CreateStreamResponse{
+	resp := &pb.CreateStreamResponse{
 		Id:          streamID,
 		StreamKey:   streamKey,
 		PlaybackId:  playbackID,
 		Title:       title,
 		Description: req.GetDescription(),
 		Status:      "offline",
-	}, nil
+	}
+
+	// Populate cluster-level base domains from Quartermaster routing data.
+	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil && route.clusterSlug != "" && route.baseURL != "" {
+		ingest := fmt.Sprintf("edge-ingest.%s.%s", route.clusterSlug, route.baseURL)
+		edge := fmt.Sprintf("edge-egress.%s.%s", route.clusterSlug, route.baseURL)
+		play := fmt.Sprintf("foghorn.%s.%s", route.clusterSlug, route.baseURL)
+		resp.IngestDomain = &ingest
+		resp.EdgeDomain = &edge
+		resp.PlayDomain = &play
+
+		if route.clusterName != "" {
+			resp.PreferredClusterLabel = &route.clusterName
+		}
+
+		// Official cluster domains (geographic coverage from billing tier)
+		if route.officialClusterSlug != "" && route.officialBaseURL != "" {
+			offIngest := fmt.Sprintf("edge-ingest.%s.%s", route.officialClusterSlug, route.officialBaseURL)
+			offEdge := fmt.Sprintf("edge-egress.%s.%s", route.officialClusterSlug, route.officialBaseURL)
+			offPlay := fmt.Sprintf("foghorn.%s.%s", route.officialClusterSlug, route.officialBaseURL)
+			resp.OfficialIngestDomain = &offIngest
+			resp.OfficialEdgeDomain = &offEdge
+			resp.OfficialPlayDomain = &offPlay
+			if route.officialClusterName != "" {
+				resp.OfficialClusterLabel = &route.officialClusterName
+			}
+		}
+	}
+
+	return resp, nil
 }
 
 // GetStream retrieves a specific stream
@@ -3168,7 +3345,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 	}
 
 	// Delete related clips (best-effort, don't fail stream deletion)
-	if s.foghornClient != nil {
+	if clipFoghorn, _, resolveErr := s.resolveFoghornForTenant(ctx, tenantID); resolveErr == nil {
 		rows, queryErr := s.db.QueryContext(ctx, `
 				SELECT clip_hash FROM commodore.clips
 				WHERE stream_id = $1 AND tenant_id = $2
@@ -3182,7 +3359,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 				if scanErr := rows.Scan(&clipHash); scanErr != nil {
 					continue
 				}
-				if _, _, delErr := s.foghornClient.DeleteClip(ctx, clipHash, &tenantID); delErr != nil {
+				if _, _, delErr := clipFoghorn.DeleteClip(ctx, clipHash, &tenantID); delErr != nil {
 					s.logger.WithError(delErr).WithField("clip_hash", clipHash).Warn("Failed to delete clip during stream cleanup")
 				}
 			}
@@ -4076,12 +4253,13 @@ func getDefaultPermissions(role string) []string {
 
 // CreateClip registers clip in business registry and orchestrates creation via Foghorn
 func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	// Get user and tenant context from metadata
 	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	foghornClient, clipRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -4163,11 +4341,11 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 		INSERT INTO commodore.clips (
 			id, tenant_id, user_id, stream_id, clip_hash, artifact_internal_name, playback_id,
 			title, description, start_time, duration, clip_mode, requested_params,
-			retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+			origin_cluster_id, retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
 	`, clipID, tenantID, userID, streamID, clipHash, artifactInternalName, playbackID,
 		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
-		retentionUntil)
+		clipRoute.clusterID, retentionUntil)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -4207,7 +4385,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequ
 	foghornReq.ExpiresAt = func() *int64 { t := retentionUntil.Unix(); return &t }()
 
 	// Call Foghorn for artifact lifecycle management
-	resp, trailers, err := s.foghornClient.CreateClip(ctx, foghornReq)
+	resp, trailers, err := foghornClient.CreateClip(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to create clip artifact via Foghorn")
 		// Don't rollback business registry - Foghorn can retry later
@@ -4449,11 +4627,12 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 
 // DeleteClip proxies clip deletion to Foghorn
 func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequest) (*pb.DeleteClipResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	userID, tenantID, err := extractUserContext(ctx)
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -4465,7 +4644,7 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 		WHERE clip_hash = $1 AND tenant_id = $2
 	`, req.ClipHash, tenantID).Scan(&streamID)
 
-	resp, trailers, err := s.foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
+	resp, trailers, err := foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -4493,11 +4672,12 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 
 // StopDVR proxies DVR stop to Foghorn
 func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (*pb.StopDVRResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	_, tenantID, err := extractUserContext(ctx)
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -4512,7 +4692,7 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 		streamID = &streamIDValue
 	}
 
-	resp, trailers, err := s.foghornClient.StopDVR(ctx, req.DvrHash, &tenantID, streamID)
+	resp, trailers, err := foghornClient.StopDVR(ctx, req.DvrHash, &tenantID, streamID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to stop DVR via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -4523,11 +4703,12 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 
 // DeleteDVR proxies DVR deletion to Foghorn
 func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequest) (*pb.DeleteDVRResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	userID, tenantID, err := extractUserContext(ctx)
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -4539,7 +4720,7 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRReques
 		WHERE dvr_hash = $1 AND tenant_id = $2
 	`, req.DvrHash, tenantID).Scan(&streamID)
 
-	resp, trailers, err := s.foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
+	resp, trailers, err := foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete DVR via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -4706,8 +4887,10 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 // ResolveViewerEndpoint proxies viewer endpoint resolution to Foghorn
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	tenantID := ctxkeys.GetTenantID(ctx)
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
 	}
 
 	outCtx := ctx
@@ -4726,7 +4909,7 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 		}
 	}
 
-	resp, trailers, err := s.foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp)
+	resp, trailers, err := foghornClient.ResolveViewerEndpoint(outCtx, req.ContentId, req.ViewerIp)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -4777,11 +4960,13 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 // ResolveIngestEndpoint proxies ingest endpoint resolution to Foghorn
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *pb.IngestEndpointRequest) (*pb.IngestEndpointResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	tenantID := ctxkeys.GetTenantID(ctx)
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
 	}
 
-	resp, trailers, err := s.foghornClient.ResolveIngestEndpoint(ctx, req.StreamKey, req.ViewerIp)
+	resp, trailers, err := foghornClient.ResolveIngestEndpoint(ctx, req.StreamKey, req.ViewerIp)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve ingest endpoint from Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -4988,12 +5173,13 @@ func (s *CommodoreServer) sendPasswordResetEmail(email, token string) error {
 
 // CreateVodUpload registers VOD in business registry and initiates multipart upload via Foghorn
 func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	// Get user and tenant context from metadata
 	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	foghornClient, vodRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -5027,11 +5213,11 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 		INSERT INTO commodore.vod_assets (
 			id, tenant_id, user_id, vod_hash, artifact_internal_name, playback_id,
 			title, description, filename, content_type, size_bytes,
-			retention_until, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+			origin_cluster_id, retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
 	`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
 		req.GetTitle(), req.GetDescription(), req.Filename, req.GetContentType(), req.SizeBytes,
-		retentionUntil)
+		vodRoute.clusterID, retentionUntil)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -5064,7 +5250,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 	}
 
 	// Call Foghorn for S3 multipart upload setup
-	resp, trailers, err := s.foghornClient.CreateVodUpload(ctx, foghornReq)
+	resp, trailers, err := foghornClient.CreateVodUpload(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("vod_hash", vodHash).Error("Failed to create VOD upload via Foghorn")
 		// Don't rollback business registry - can be cleaned up later
@@ -5079,12 +5265,13 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVod
 
 // CompleteVodUpload finalizes multipart upload via Foghorn
 func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	// Get tenant context from metadata (for logging/verification)
 	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -5103,7 +5290,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 		Parts:    req.Parts,
 	}
 
-	resp, trailers, err := s.foghornClient.CompleteVodUpload(ctx, foghornReq)
+	resp, trailers, err := foghornClient.CompleteVodUpload(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to complete VOD upload via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -5120,18 +5307,19 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.Complet
 
 // AbortVodUpload cancels multipart upload via Foghorn
 func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *pb.AbortVodUploadRequest) (*pb.AbortVodUploadResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	// Get tenant context from metadata
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Forward to Foghorn (it manages S3 multipart abort and lifecycle state)
-	resp, trailers, err := s.foghornClient.AbortVodUpload(ctx, tenantID, req.UploadId)
+	resp, trailers, err := foghornClient.AbortVodUpload(ctx, tenantID, req.UploadId)
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to abort VOD upload via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -5360,18 +5548,19 @@ func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAsse
 
 // DeleteVodAsset deletes a VOD asset via Foghorn
 func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	// Get tenant context from metadata
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Forward to Foghorn (it handles S3 deletion and lifecycle state)
-	resp, trailers, err := s.foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash)
+	resp, trailers, err := foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash)
 	if err != nil {
 		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to delete VOD asset via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -5412,12 +5601,13 @@ func (s *CommodoreServer) TerminateTenantStreams(ctx context.Context, req *pb.Te
 		"reason":    req.Reason,
 	}).Info("Received tenant stream termination request from Purser")
 
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "foghorn client not configured")
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, req.TenantId)
+	if err != nil {
+		return nil, err
 	}
 
 	// Forward to Foghorn
-	foghornResp, trailers, err := s.foghornClient.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
+	foghornResp, trailers, err := foghornClient.TerminateTenantStreams(ctx, req.TenantId, req.Reason)
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to terminate tenant streams via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -5447,12 +5637,13 @@ func (s *CommodoreServer) InvalidateTenantCache(ctx context.Context, req *pb.Inv
 		"reason":    req.Reason,
 	}).Info("Received tenant cache invalidation request from Purser")
 
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "foghorn client not configured")
+	foghornClient, _, err := s.resolveFoghornForTenant(ctx, req.TenantId)
+	if err != nil {
+		return nil, err
 	}
 
 	// Forward to Foghorn
-	foghornResp, trailers, err := s.foghornClient.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
+	foghornResp, trailers, err := foghornClient.InvalidateTenantCache(ctx, req.TenantId, req.Reason)
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", req.TenantId).Error("Failed to invalidate tenant cache via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)

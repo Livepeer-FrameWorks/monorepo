@@ -91,14 +91,14 @@ func (bs *BillingSummarizer) SummarizeUsageForPeriod(startTime, endTime time.Tim
 
 	// Generate usage summary for each tenant
 	for _, tenantID := range tenants {
-		summary, summaryErr := bs.generateTenantUsageSummary(tenantID, startTime, endTime)
+		tenantSummaries, summaryErr := bs.generateTenantUsageSummary(tenantID, startTime, endTime)
 		if summaryErr != nil {
 			bs.logger.WithError(summaryErr).WithField("tenant_id", tenantID).Error("Failed to generate usage summary for tenant")
 			continue
 		}
 
-		if summary != nil {
-			summaries = append(summaries, *summary)
+		for _, s := range tenantSummaries {
+			summaries = append(summaries, *s)
 		}
 	}
 
@@ -161,15 +161,17 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 	return tenants, nil
 }
 
-// generateTenantUsageSummary creates a usage summary for a specific tenant and time period
-func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTime, endTime time.Time) (*models.UsageSummary, error) {
+// generateTenantUsageSummary creates usage summaries for a specific tenant and time period.
+// Returns one UsageSummary per cluster that has viewer/egress data. Non-cluster-scoped metrics
+// (storage, processing, API) are attributed to the primary cluster.
+func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTime, endTime time.Time) ([]*models.UsageSummary, error) {
 	ctx := context.Background()
 
 	// Get tenant's primary cluster ID from Quartermaster API (not direct DB access!)
-	clusterID, err := bs.getTenantPrimaryCluster(tenantID)
+	primaryClusterID, err := bs.getTenantPrimaryCluster(tenantID)
 	if err != nil {
 		bs.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Failed to get tenant cluster info, using default")
-		clusterID = "global-primary" // Default fallback
+		primaryClusterID = "global-primary"
 	}
 
 	// Derive viewer-based metrics from stream_event_log (total_viewers from Foghorn state snapshots)
@@ -191,21 +193,54 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		return nil, fmt.Errorf("failed to query viewer metrics from ClickHouse: %w", err)
 	}
 
-	// Derive egress and viewer metrics from tenant_viewer_daily (pre-aggregated from viewer_connection_events)
-	// Note: egress_gb comes from summed bytes_transferred in viewer_connection_events, not stream_health_samples
-	var egressGB, viewerHours float64
-	var uniqueViewers int
-	err = bs.clickhouse.QueryRowContext(ctx, `
+	// Derive egress and viewer metrics from tenant_viewer_daily, grouped by cluster_id.
+	// Each cluster that served viewers gets its own UsageSummary.
+	type clusterViewerMetrics struct {
+		EgressGB      float64
+		ViewerHours   float64
+		UniqueViewers int
+	}
+	clusterMetrics := map[string]*clusterViewerMetrics{}
+	var totalEgressGB, totalViewerHours float64
+	var totalUniqueViewers int
+
+	viewerRows, err := bs.clickhouse.QueryContext(ctx, `
 		SELECT
+			cluster_id,
 			COALESCE(sum(egress_gb), 0) as egress_gb,
 			COALESCE(sum(viewer_hours), 0) as viewer_hours,
 			COALESCE(sum(unique_viewers), 0) as unique_viewers
 		FROM periscope.tenant_viewer_daily
 		WHERE tenant_id = ?
 		AND day BETWEEN toDate(?) AND toDate(?)
-	`, tenantID, startTime, endTime).Scan(&egressGB, &viewerHours, &uniqueViewers)
+		GROUP BY cluster_id
+	`, tenantID, startTime, endTime)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query egress/viewer metrics from ClickHouse: %w", err)
+	}
+	if err == nil {
+		defer func() { _ = viewerRows.Close() }()
+		for viewerRows.Next() {
+			var cid string
+			var m clusterViewerMetrics
+			if scanErr := viewerRows.Scan(&cid, &m.EgressGB, &m.ViewerHours, &m.UniqueViewers); scanErr != nil {
+				continue
+			}
+			// Legacy rows with empty cluster_id are attributed to primary cluster
+			if cid == "" {
+				cid = primaryClusterID
+			}
+			if existing, ok := clusterMetrics[cid]; ok {
+				existing.EgressGB += m.EgressGB
+				existing.ViewerHours += m.ViewerHours
+				existing.UniqueViewers += m.UniqueViewers
+			} else {
+				clusterMetrics[cid] = &m
+			}
+			totalEgressGB += m.EgressGB
+			totalViewerHours += m.ViewerHours
+			totalUniqueViewers += m.UniqueViewers
+		}
 	}
 
 	// Derive peak bandwidth from client_qoe_5m (avg_bw_out is in bytes/sec)
@@ -337,13 +372,13 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	}
 
 	hasUsage := streamHours != 0 ||
-		egressGB != 0 ||
-		viewerHours != 0 ||
+		totalEgressGB != 0 ||
+		totalViewerHours != 0 ||
 		avgStorageGB != 0 ||
 		peakBandwidth != 0 ||
 		totalStreams != 0 ||
 		maxViewers != 0 ||
-		uniqueViewers != 0 ||
+		totalUniqueViewers != 0 ||
 		uniqueUsers != 0 ||
 		livepeerH264Seconds != 0 ||
 		livepeerVP9Seconds != 0 ||
@@ -360,58 +395,69 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		apiDurationMs != 0 ||
 		apiComplexity != 0
 
-	// Skip if no usage data
 	if !hasUsage {
 		bs.logger.WithField("tenant_id", tenantID).Info("No usage data for tenant in period, skipping")
 		return nil, nil
 	}
 
-	summary := &models.UsageSummary{
-		TenantID:          tenantID,
-		ClusterID:         clusterID,
-		Period:            fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339)),
-		StreamHours:       sanitizeFloat(streamHours),
-		EgressGB:          sanitizeFloat(egressGB),
-		PeakBandwidthMbps: sanitizeFloat(peakBandwidth),
-		AverageStorageGB:  sanitizeFloat(avgStorageGB),
-		// Per-codec breakdown: Livepeer
-		LivepeerH264Seconds: sanitizeFloat(livepeerH264Seconds),
-		LivepeerVP9Seconds:  sanitizeFloat(livepeerVP9Seconds),
-		LivepeerAV1Seconds:  sanitizeFloat(livepeerAV1Seconds),
-		LivepeerHEVCSeconds: sanitizeFloat(livepeerHEVCSeconds),
-		// Per-codec breakdown: Native AV
-		NativeAvH264Seconds: sanitizeFloat(nativeAvH264Seconds),
-		NativeAvVP9Seconds:  sanitizeFloat(nativeAvVP9Seconds),
-		NativeAvAV1Seconds:  sanitizeFloat(nativeAvAV1Seconds),
-		NativeAvHEVCSeconds: sanitizeFloat(nativeAvHEVCSeconds),
-		NativeAvAACSeconds:  sanitizeFloat(nativeAvAACSeconds),
-		NativeAvOpusSeconds: sanitizeFloat(nativeAvOpusSeconds),
-		// Viewer metrics
-		TotalStreams: totalStreams,
-		TotalViewers: uniqueViewers,
-		ViewerHours:  sanitizeFloat(viewerHours),
-		MaxViewers:   maxViewers,
-		UniqueUsers:  uniqueUsers,
-		Timestamp:    time.Now(),
-		// API usage aggregates
-		APIRequests:   sanitizeFloat(apiRequests),
-		APIErrors:     sanitizeFloat(apiErrors),
-		APIDurationMs: sanitizeFloat(apiDurationMs),
-		APIComplexity: sanitizeFloat(apiComplexity),
-		APIBreakdown:  apiBreakdown,
+	// Ensure the primary cluster exists in the map (for non-cluster-scoped metrics)
+	if _, ok := clusterMetrics[primaryClusterID]; !ok {
+		clusterMetrics[primaryClusterID] = &clusterViewerMetrics{}
+	}
+
+	period := fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
+	now := time.Now()
+	var summaries []*models.UsageSummary
+
+	for cid, vm := range clusterMetrics {
+		summary := &models.UsageSummary{
+			TenantID:     tenantID,
+			ClusterID:    cid,
+			Period:       period,
+			EgressGB:     sanitizeFloat(vm.EgressGB),
+			ViewerHours:  sanitizeFloat(vm.ViewerHours),
+			TotalViewers: vm.UniqueViewers,
+			Timestamp:    now,
+		}
+
+		// Non-cluster-scoped metrics are attributed to the primary cluster
+		if cid == primaryClusterID {
+			summary.StreamHours = sanitizeFloat(streamHours)
+			summary.PeakBandwidthMbps = sanitizeFloat(peakBandwidth)
+			summary.AverageStorageGB = sanitizeFloat(avgStorageGB)
+			summary.LivepeerH264Seconds = sanitizeFloat(livepeerH264Seconds)
+			summary.LivepeerVP9Seconds = sanitizeFloat(livepeerVP9Seconds)
+			summary.LivepeerAV1Seconds = sanitizeFloat(livepeerAV1Seconds)
+			summary.LivepeerHEVCSeconds = sanitizeFloat(livepeerHEVCSeconds)
+			summary.NativeAvH264Seconds = sanitizeFloat(nativeAvH264Seconds)
+			summary.NativeAvVP9Seconds = sanitizeFloat(nativeAvVP9Seconds)
+			summary.NativeAvAV1Seconds = sanitizeFloat(nativeAvAV1Seconds)
+			summary.NativeAvHEVCSeconds = sanitizeFloat(nativeAvHEVCSeconds)
+			summary.NativeAvAACSeconds = sanitizeFloat(nativeAvAACSeconds)
+			summary.NativeAvOpusSeconds = sanitizeFloat(nativeAvOpusSeconds)
+			summary.TotalStreams = totalStreams
+			summary.MaxViewers = maxViewers
+			summary.UniqueUsers = uniqueUsers
+			summary.APIRequests = sanitizeFloat(apiRequests)
+			summary.APIErrors = sanitizeFloat(apiErrors)
+			summary.APIDurationMs = sanitizeFloat(apiDurationMs)
+			summary.APIComplexity = sanitizeFloat(apiComplexity)
+			summary.APIBreakdown = apiBreakdown
+		}
+
+		summaries = append(summaries, summary)
 	}
 
 	bs.logger.WithFields(logging.Fields{
-		"tenant_id":      tenantID,
-		"stream_hours":   streamHours,
-		"egress_gb":      egressGB,
-		"viewer_hours":   viewerHours,
-		"unique_viewers": uniqueViewers,
-		"max_viewers":    maxViewers,
-		"total_streams":  totalStreams,
-	}).Info("Generated usage summary for tenant")
+		"tenant_id":       tenantID,
+		"cluster_count":   len(summaries),
+		"stream_hours":    streamHours,
+		"total_egress_gb": totalEgressGB,
+		"viewer_hours":    totalViewerHours,
+		"total_streams":   totalStreams,
+	}).Info("Generated usage summaries for tenant")
 
-	return summary, nil
+	return summaries, nil
 }
 
 // getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster gRPC API
@@ -563,15 +609,18 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 	}
 
 	// Generate summary for the incremental period
-	summary, err := bs.generateTenantUsageSummary(tenantID, lastProcessed, targetEnd)
+	summaries, err := bs.generateTenantUsageSummary(tenantID, lastProcessed, targetEnd)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
 
-	if summary != nil {
+	if len(summaries) > 0 {
 		// Send to Purser
-		// TODO: Switch to Kafka Producer here
-		if sendErr := bs.sendUsageToPurser([]models.UsageSummary{*summary}); sendErr != nil {
+		var flat []models.UsageSummary
+		for _, s := range summaries {
+			flat = append(flat, *s)
+		}
+		if sendErr := bs.sendUsageToPurser(flat); sendErr != nil {
 			return fmt.Errorf("failed to send usage to Purser: %w", sendErr)
 		}
 

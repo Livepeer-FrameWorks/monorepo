@@ -2,7 +2,11 @@
 
 ## Status
 
-Draft
+Partially implemented. Transport TLS works on the Foghorn↔Helmsman path via FQDN
+auto-detect and Navigator-backed wildcard cert in
+`api_balancing/internal/control/server.go`. The proposed platform-wide config pattern
+(`GRPC_USE_TLS` toggle in `pkg/config` with shared helpers) was not adopted — TLS setup
+is ad-hoc per service. mTLS is not implemented. See `docs/architecture/edge-auth.md`.
 
 ## TL;DR
 

@@ -27,7 +27,7 @@ The `StreamCrafter` component is self-contained - pass a WHIP endpoint and get a
 
 ## Documentation
 
-Full docs and guides: https://docs.frameworks.network
+Full docs and guides: https://logbook.frameworks.network
 
 ## Installation
 
@@ -50,7 +50,7 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 function BroadcastPage() {
   return (
     <StreamCrafter
-      whipUrl="https://ingest.example.com/webrtc/your-stream-key"
+      whipUrl="https://edge-ingest.example.com/webrtc/your-stream-key"
       initialProfile="broadcast"
       onStateChange={(state) => console.log("State:", state)}
     />
@@ -74,7 +74,7 @@ If you want the SDK to resolve ingest endpoints for you, pass a **Gateway GraphQ
 
 ```tsx
 <StreamCrafter
-  gatewayUrl="https://api.example.com/graphql"
+  gatewayUrl="https://bridge.example.com/graphql"
   streamKey="sk_live_..."
   initialProfile="broadcast"
 />
@@ -94,7 +94,7 @@ Notes:
 </script>
 
 <StreamCrafter
-  whipUrl="https://ingest.example.com/webrtc/your-stream-key"
+  whipUrl="https://edge-ingest.example.com/webrtc/your-stream-key"
   initialProfile="broadcast"
 />
 ```
@@ -122,7 +122,7 @@ function CustomBroadcaster() {
     stopStreaming,
     setQualityProfile,
   } = useStreamCrafterV2({
-    whipUrl: "https://ingest.example.com/webrtc/stream-key",
+    whipUrl: "https://edge-ingest.example.com/webrtc/stream-key",
     profile: "broadcast",
     reconnection: { enabled: true, maxAttempts: 5 },
     audioMixing: true,
@@ -158,7 +158,7 @@ function CustomBroadcaster() {
 
   onMount(() => {
     crafter.initialize({
-      whipUrl: "https://ingest.example.com/webrtc/stream-key",
+      whipUrl: "https://edge-ingest.example.com/webrtc/stream-key",
       profile: "broadcast",
     });
   });
@@ -183,7 +183,7 @@ import { StreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-core";
 import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";
 
 const crafter = new StreamCrafterV2({
-  whipUrl: "https://ingest.example.com/webrtc/stream-key",
+  whipUrl: "https://edge-ingest.example.com/webrtc/stream-key",
   profile: "broadcast",
   debug: true,
 });

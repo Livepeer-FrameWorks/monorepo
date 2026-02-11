@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	logger := logging.NewLoggerWithService("forms")
+	logger := logging.NewLoggerWithService("steward")
 	config.LoadEnv(logger)
 
 	port := config.GetEnv("PORT", "18032")
@@ -32,15 +32,15 @@ func main() {
 	turnstileValidator := turnstile.NewValidator(turnstileKey)
 	turnstileEnabled := turnstileKey != ""
 
-	healthChecker := monitoring.NewHealthChecker("forms", version.Version)
-	metricsCollector := monitoring.NewMetricsCollector("forms", version.Version, version.GitCommit)
+	healthChecker := monitoring.NewHealthChecker("steward", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("steward", version.Version, version.GitCommit)
 
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
 		"SMTP_HOST": emailConfig.Host,
 		"TO_EMAIL":  config.GetEnv("TO_EMAIL", ""),
 	}))
 
-	app := server.SetupServiceRouter(logger, "forms", healthChecker, metricsCollector)
+	app := server.SetupServiceRouter(logger, "steward", healthChecker, metricsCollector)
 
 	formMetrics := &handlers.FormMetrics{
 		ContactRequests: metricsCollector.NewCounter(
@@ -77,7 +77,7 @@ func main() {
 	subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger, formMetrics)
 	app.POST("/api/subscribe", subHandler.Handle)
 
-	serverConfig := server.DefaultConfig("forms", port)
+	serverConfig := server.DefaultConfig("steward", port)
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.Fatal(err.Error())
 	}

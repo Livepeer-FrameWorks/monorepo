@@ -1,0 +1,26 @@
+# Reject a pending cluster subscription request
+mutation RejectClusterSubscription($subscriptionId: ID!, $reason: String) {
+  rejectClusterSubscription(subscriptionId: $subscriptionId, reason: $reason) {
+    ... on ClusterSubscription {
+      id
+      subscriptionStatus
+      tenantName
+      clusterName
+    }
+    ... on ValidationError {
+      message
+      code
+      field
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

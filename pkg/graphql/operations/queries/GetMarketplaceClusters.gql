@@ -1,5 +1,5 @@
-# Fetch available marketplace clusters with pricing and subscription status
-# Returns publicly available clusters users can subscribe to
+# Fetch available marketplace clusters with pricing, eligibility, and subscription status
+# Returns publicly available clusters users can browse and subscribe to
 query GetMarketplaceClusters($first: Int = 50, $after: String) {
   marketplaceClusters(first: $first, after: $after) {
     clusterId
@@ -11,5 +11,11 @@ query GetMarketplaceClusters($first: Int = 50, $after: String) {
     ownerName
     isSubscribed
     subscriptionStatus
+    requiresApproval
+    isEligible
+    denialReason
+    currentUtilization
+    maxConcurrentStreams
+    maxConcurrentViewers
   }
 }

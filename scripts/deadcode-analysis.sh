@@ -24,7 +24,7 @@ api_sidecar:./cmd/helmsman
 api_realtime:./cmd/signalman
 api_dns:./cmd/navigator
 api_mesh:./cmd/privateer
-api_forms:./cmd/forms
+api_forms:./cmd/steward
 api_ticketing:./cmd/deckhand
 cli:.
 pkg:./...

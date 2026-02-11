@@ -562,6 +562,37 @@ func (sm *StorageManager) freezeAsset(ctx context.Context, asset FreezeCandidate
 
 	requestID := permResp.RequestId
 
+	// Remote artifact: origin S3 has the authoritative copy — skip upload, just evict locally
+	if permResp.GetSkipUpload() {
+		sm.logger.WithFields(logging.Fields{
+			"asset_hash": asset.AssetHash,
+			"asset_type": asset.AssetType,
+		}).Info("Remote artifact skip_upload — evicting without S3 upload")
+
+		if asset.AssetType == AssetTypeClip || asset.AssetType == AssetTypeVOD {
+			if err := os.Remove(asset.FilePath); err != nil {
+				sm.logger.WithError(err).Warn("Failed to delete local copy of remote artifact")
+			} else {
+				_ = os.Remove(asset.FilePath + ".dtsh")
+				_ = os.Remove(asset.FilePath + ".gop")
+			}
+		} else {
+			if err := os.RemoveAll(asset.FilePath); err != nil {
+				sm.logger.WithError(err).Warn("Failed to delete local DVR directory of remote artifact")
+			}
+		}
+		_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
+			Action:    pb.StorageLifecycleData_ACTION_EVICTED,
+			AssetType: string(asset.AssetType),
+			AssetHash: asset.AssetHash,
+			TenantId:  &asset.TenantID,
+			StreamId:  &asset.StreamID,
+			SizeBytes: asset.SizeBytes,
+		})
+		_ = control.SendSyncComplete(requestID, asset.AssetHash, "evicted_remote", "", asset.SizeBytes, "", false)
+		return nil
+	}
+
 	// Notify sync started
 	_ = control.SendStorageLifecycle(&pb.StorageLifecycleData{
 		Action:    pb.StorageLifecycleData_ACTION_SYNC_STARTED,

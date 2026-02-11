@@ -10,10 +10,10 @@ import (
 )
 
 type TypedPubSub[T any] struct {
-	client *goredis.Client
+	client goredis.UniversalClient
 }
 
-func NewTypedPubSub[T any](client *goredis.Client) *TypedPubSub[T] {
+func NewTypedPubSub[T any](client goredis.UniversalClient) *TypedPubSub[T] {
 	return &TypedPubSub[T]{client: client}
 }
 

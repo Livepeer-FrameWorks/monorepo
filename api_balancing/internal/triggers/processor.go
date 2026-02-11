@@ -33,9 +33,23 @@ type streamContext struct {
 	Source            string
 	UpdatedAt         time.Time
 	LastError         string
-	BillingModel      string // "postpaid" or "prepaid" - affects cache TTL
-	IsSuspended       bool   // true if tenant is suspended (balance < -$10)
-	IsBalanceNegative bool   // true if prepaid balance <= 0 (should return 402)
+	BillingModel      string                  // "postpaid" or "prepaid" - affects cache TTL
+	IsSuspended       bool                    // true if tenant is suspended (balance < -$10)
+	IsBalanceNegative bool                    // true if prepaid balance <= 0 (should return 402)
+	OfficialClusterID string                  // billing-tier cluster for coverage routing (Phase 2)
+	OriginClusterID   string                  // cluster where stream was originally ingested (for federation attribution)
+	ClusterPeers      []*pb.TenantClusterPeer // tenant's full cluster context for demand-driven peering
+}
+
+// PeerNotifier is the single federation interface for the trigger processor.
+// Covers peer discovery, stream tracking, and cross-cluster ingest dedup.
+// Implemented by PeerManager which delegates reads to Redis internally.
+type PeerNotifier interface {
+	NotifyPeers(peers []*pb.TenantClusterPeer)
+	TrackStream(streamName string, clusterIDs []string)
+	UntrackStream(streamName string)
+	BroadcastStreamLifecycle(internalName, tenantID string, isLive bool)
+	IsStreamLiveOnPeer(ctx context.Context, internalName string) (clusterID string, ok bool)
 }
 
 // DVRStarter handles DVR recording orchestration.
@@ -71,6 +85,7 @@ type Processor struct {
 	streamCacheLastErr string
 
 	nodeUUIDCache *cache.Cache // Cache node_id (logical) -> UUID
+	peerNotifier  PeerNotifier // demand-driven peer discovery (nil when federation disabled)
 }
 
 // NewProcessor creates a new MistServer trigger processor
@@ -243,6 +258,38 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 	return nil // Fail-open
 }
 
+// GetClusterPeers returns the cached cluster peers for a stream, if available.
+func (p *Processor) GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer {
+	if p.streamCache == nil || internalName == "" || tenantID == "" {
+		return nil
+	}
+	cacheKey := tenantID + ":" + internalName
+	if cached, ok := p.streamCache.Peek(cacheKey); ok {
+		if info, ok := cached.(streamContext); ok {
+			return info.ClusterPeers
+		}
+	}
+	return nil
+}
+
+// GetStreamOrigin returns the tenantID and origin cluster for a stream by scanning the cache.
+// Unlike GetClusterPeers which requires both tenantID and internalName, this only needs
+// the internalName — useful when MistServer asks for source selection without tenant context.
+func (p *Processor) GetStreamOrigin(internalName string) (tenantID, originClusterID string) {
+	if p.streamCache == nil || internalName == "" {
+		return "", ""
+	}
+	suffix := ":" + internalName
+	for _, entry := range p.streamCache.Snapshot() {
+		if strings.HasSuffix(entry.Key, suffix) {
+			if info, ok := entry.Value.(streamContext); ok {
+				return info.TenantID, info.OriginClusterID
+			}
+		}
+	}
+	return "", ""
+}
+
 // InvalidateTenantCache evicts all cache entries for a specific tenant.
 // Called when tenant suspension status changes (e.g., after payment).
 // Returns the number of entries invalidated.
@@ -301,6 +348,11 @@ func (p *Processor) SetGeoIPCache(c *cache.Cache) {
 // SetDVRService configures the DVR orchestration service for auto-start recordings
 func (p *Processor) SetDVRService(svc DVRStarter) {
 	p.dvrService = svc
+}
+
+// SetPeerNotifier configures demand-driven peer discovery from stream validation.
+func (p *Processor) SetPeerNotifier(n PeerNotifier) {
+	p.peerNotifier = n
 }
 
 // SetMetrics configures optional Prometheus metrics for the trigger processor.
@@ -383,10 +435,6 @@ func (p *Processor) ensureTriggerTenantID(trigger *pb.MistTrigger) string {
 func (p *Processor) sendTriggerToDecklog(trigger *pb.MistTrigger) error {
 	if trigger == nil {
 		return fmt.Errorf("nil trigger")
-	}
-
-	if trigger.ClusterId == nil && p.clusterID != "" {
-		trigger.ClusterId = &p.clusterID
 	}
 
 	if p.ensureTriggerTenantID(trigger) == "" {
@@ -637,6 +685,17 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED, "payment required - please top up your balance")
 	}
 
+	// Cross-cluster dedup: reject if stream is already live on a peer cluster
+	if p.peerNotifier != nil {
+		if remoteCluster, ok := p.peerNotifier.IsStreamLiveOnPeer(context.Background(), streamValidation.InternalName); ok {
+			p.logger.WithFields(logging.Fields{
+				"internal_name":  streamValidation.InternalName,
+				"remote_cluster": remoteCluster,
+			}).Warn("Rejecting duplicate ingest — stream already live on peer cluster")
+			return "", true, ingesterrors.New(pb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST, "stream already live on cluster "+remoteCluster)
+		}
+	}
+
 	// Cache stream context (tenant + user + billing info)
 	if p.streamCache != nil {
 		info := streamContext{
@@ -648,6 +707,17 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 			BillingModel:      streamValidation.BillingModel,
 			IsSuspended:       streamValidation.IsSuspended,
 			IsBalanceNegative: streamValidation.IsBalanceNegative,
+			OfficialClusterID: streamValidation.GetOfficialClusterId(),
+			OriginClusterID:   streamValidation.GetOriginClusterId(),
+			ClusterPeers:      streamValidation.GetClusterPeers(),
+		}
+		if p.peerNotifier != nil && len(info.ClusterPeers) > 0 {
+			p.peerNotifier.NotifyPeers(info.ClusterPeers)
+			var cids []string
+			for _, peer := range info.ClusterPeers {
+				cids = append(cids, peer.GetClusterId())
+			}
+			p.peerNotifier.TrackStream(streamValidation.InternalName, cids)
 		}
 		// Use shorter cache TTL for prepaid tenants (1 min vs 10 min)
 		// This ensures faster enforcement of balance changes
@@ -771,6 +841,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				TenantId:     streamValidation.TenantId,
 				InternalName: streamValidation.InternalName,
 				UserId:       &userID,
+				ClusterId:    streamValidation.GetOriginClusterId(),
 			})
 			if err != nil {
 				p.logger.WithFields(logging.Fields{
@@ -787,6 +858,16 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 				}).Info("DVR recording started")
 			}
 		}()
+	}
+
+	// Set playback_id on stream state for federation advertisement
+	if streamValidation.PlaybackId != "" {
+		state.DefaultManager().SetStreamPlaybackID(streamValidation.InternalName, streamValidation.PlaybackId)
+	}
+
+	// Broadcast stream-live to federated peers for cross-cluster dedup
+	if p.peerNotifier != nil {
+		p.peerNotifier.BroadcastStreamLifecycle(streamValidation.InternalName, streamValidation.TenantId, true)
 	}
 
 	// Return wildcard stream name for MistServer routing (live+ format)
@@ -928,9 +1009,15 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 	artifactInternal := mist.ExtractInternalName(streamName)
 
 	artifactHash := ""
+	originClusterID := ""
+	contentType := ""
+	tenantID := ""
 	if control.CommodoreClient != nil && artifactInternal != "" {
 		if resp, err := control.CommodoreClient.ResolveArtifactInternalName(context.Background(), artifactInternal); err == nil && resp.Found {
 			artifactHash = resp.ArtifactHash
+			originClusterID = resp.GetOriginClusterId()
+			contentType = resp.GetContentType()
+			tenantID = resp.GetTenantId()
 		}
 	}
 	if artifactHash == "" {
@@ -981,6 +1068,43 @@ func (p *Processor) handleStreamSource(trigger *pb.MistTrigger) (string, bool, e
 
 		// Return file path with shouldAbort=false to tell Helmsman to use this source
 		return artifactInfo.GetFilePath(), false, nil
+	}
+
+	// Cross-cluster: check local foghorn.artifacts DB for adopted copy
+	if artifactHash != "" && control.GetDB() != nil {
+		var storageLocation string
+		dbErr := control.GetDB().QueryRowContext(context.Background(), `
+			SELECT COALESCE(storage_location, '')
+			FROM foghorn.artifacts
+			WHERE artifact_hash = $1 AND status != 'deleted' LIMIT 1
+		`, artifactHash).Scan(&storageLocation)
+		loc := strings.ToLower(strings.TrimSpace(storageLocation))
+		if dbErr == nil && loc == "defrosting" {
+			p.logger.WithField("artifact_hash", artifactHash).Debug("STREAM_SOURCE: artifact defrosting, MistServer will retry")
+			return "", true, nil
+		}
+	}
+
+	// Cross-cluster: if origin is remote and we don't have the artifact, trigger async defrost
+	if originClusterID != "" && artifactHash != "" && contentType != "" && tenantID != "" {
+		p.logger.WithFields(logging.Fields{
+			"artifact_hash":  artifactHash,
+			"origin_cluster": originClusterID,
+			"content_type":   contentType,
+		}).Info("STREAM_SOURCE: remote artifact — triggering async defrost")
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			nodeID, err := control.PickStorageNodeIDPublic()
+			if err != nil {
+				p.logger.WithError(err).Debug("No storage node for async remote defrost")
+				return
+			}
+			if _, err := control.StartDefrost(ctx, contentType, artifactHash, nodeID, 30*time.Second, p.logger); err != nil {
+				p.logger.WithError(err).Debug("Async remote defrost trigger failed")
+			}
+		}()
+		return "", true, nil
 	}
 
 	p.logger.WithFields(logging.Fields{
@@ -1077,6 +1201,9 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 	info := p.applyStreamContext(trigger, userNew.GetStreamName())
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		userNew.StreamId = &streamID
+	}
+	if info.OriginClusterID != "" {
+		trigger.OriginClusterId = &info.OriginClusterID
 	}
 
 	// Enrich ViewerConnect payload directly
@@ -1238,6 +1365,12 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 	// Update state offline
 	state.DefaultManager().SetOffline(internalName, nodeID)
 
+	// Broadcast stream-offline to federated peers + clean up stream-scoped peers
+	if p.peerNotifier != nil {
+		p.peerNotifier.BroadcastStreamLifecycle(internalName, trigger.GetTenantId(), false)
+		p.peerNotifier.UntrackStream(internalName)
+	}
+
 	// Stop DVR on its storage node if active
 	control.StopDVRByInternalName(internalName, p.logger)
 
@@ -1264,6 +1397,9 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 	info := p.applyStreamContext(trigger, userEnd.GetStreamName())
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		userEnd.StreamId = &streamID
+	}
+	if info.OriginClusterID != "" {
+		trigger.OriginClusterId = &info.OriginClusterID
 	}
 
 	userEnd.NodeId = func() *string { s := trigger.GetNodeId(); return &s }()
@@ -1958,11 +2094,13 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 			if v, ok := p.streamCache.Peek(cacheKey); ok {
 				if parentInfo, ok := v.(streamContext); ok && parentInfo.TenantID != "" {
 					info := streamContext{
-						TenantID:  parentInfo.TenantID,
-						UserID:    parentInfo.UserID,
-						StreamID:  parentInfo.StreamID,
-						Source:    "artifact_parent_cache",
-						UpdatedAt: time.Now(),
+						TenantID:          parentInfo.TenantID,
+						UserID:            parentInfo.UserID,
+						StreamID:          parentInfo.StreamID,
+						Source:            "artifact_parent_cache",
+						UpdatedAt:         time.Now(),
+						OfficialClusterID: parentInfo.OfficialClusterID,
+						OriginClusterID:   parentInfo.OriginClusterID,
 					}
 					p.streamCacheMetaMu.Lock()
 					p.streamCacheLastAt = info.UpdatedAt
@@ -2014,11 +2152,13 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 	// Cache the result
 	now := time.Now()
 	info := streamContext{
-		TenantID:  resp.GetTenantId(),
-		UserID:    resp.GetUserId(),
-		StreamID:  resp.GetStreamId(),
-		Source:    "resolve_" + resp.GetIdentifierType(),
-		UpdatedAt: now,
+		TenantID:        resp.GetTenantId(),
+		UserID:          resp.GetUserId(),
+		StreamID:        resp.GetStreamId(),
+		Source:          "resolve_" + resp.GetIdentifierType(),
+		UpdatedAt:       now,
+		OriginClusterID: resp.GetOriginClusterId(),
+		ClusterPeers:    resp.GetClusterPeers(),
 	}
 
 	if resp.GetIdentifierType() == "playback_id" {
@@ -2094,6 +2234,9 @@ func (p *Processor) applyStreamContext(trigger *pb.MistTrigger, streamName strin
 	}
 	if info.StreamID != "" && (trigger.StreamId == nil || *trigger.StreamId == "") {
 		trigger.StreamId = &info.StreamID
+	}
+	if info.OriginClusterID != "" && (trigger.ClusterId == nil || *trigger.ClusterId == "") {
+		trigger.ClusterId = &info.OriginClusterID
 	}
 	return info
 }

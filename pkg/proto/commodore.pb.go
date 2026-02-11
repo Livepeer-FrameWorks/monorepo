@@ -86,7 +86,11 @@ type ValidateStreamKeyResponse struct {
 	IsSuspended bool `protobuf:"varint,9,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`
 	// is_balance_negative: true if prepaid balance <= 0 (but not yet suspended)
 	// When true, Foghorn should return 402 for new ingests
-	IsBalanceNegative bool `protobuf:"varint,10,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
+	IsBalanceNegative bool                 `protobuf:"varint,10,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`
+	OriginClusterId   *string              `protobuf:"bytes,11,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`       // Cluster where this stream ingests (for cross-cluster routing)
+	OfficialClusterId *string              `protobuf:"bytes,12,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"` // Billing-tier cluster providing geographic coverage
+	ClusterPeers      []*TenantClusterPeer `protobuf:"bytes,13,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`                        // Tenant's full cluster context for demand-driven peering
+	PlaybackId        string               `protobuf:"bytes,14,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                              // Public playback key (for StreamAdvertisement reverse index)
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -191,6 +195,34 @@ func (x *ValidateStreamKeyResponse) GetIsBalanceNegative() bool {
 	return false
 }
 
+func (x *ValidateStreamKeyResponse) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *ValidateStreamKeyResponse) GetOfficialClusterId() string {
+	if x != nil && x.OfficialClusterId != nil {
+		return *x.OfficialClusterId
+	}
+	return ""
+}
+
+func (x *ValidateStreamKeyResponse) GetClusterPeers() []*TenantClusterPeer {
+	if x != nil {
+		return x.ClusterPeers
+	}
+	return nil
+}
+
+func (x *ValidateStreamKeyResponse) GetPlaybackId() string {
+	if x != nil {
+		return x.PlaybackId
+	}
+	return ""
+}
+
 type ResolvePlaybackIDRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PlaybackId    string                 `protobuf:"bytes,1,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
@@ -238,14 +270,17 @@ func (x *ResolvePlaybackIDRequest) GetPlaybackId() string {
 // Matches pkg/api/commodore/types.go:ResolvePlaybackIDResponse exactly
 type ResolvePlaybackIDResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
-	InternalName      string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                   // json:"internal_name"
-	TenantId          string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                               // json:"tenant_id"
-	Status            string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`                                                   // json:"status"
-	PlaybackId        string                 `protobuf:"bytes,4,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                         // json:"playbook_id" (note: typo in original)
-	StreamId          string                 `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                               // Public stream ID (UUID)
-	BillingModel      string                 `protobuf:"bytes,6,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"`                   // 'postpaid' or 'prepaid'
-	IsSuspended       bool                   `protobuf:"varint,7,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`                     // true if tenant suspended
-	IsBalanceNegative bool                   `protobuf:"varint,8,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"` // true if prepaid balance <= 0
+	InternalName      string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                         // json:"internal_name"
+	TenantId          string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                                     // json:"tenant_id"
+	Status            string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`                                                         // json:"status"
+	PlaybackId        string                 `protobuf:"bytes,4,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                               // json:"playbook_id" (note: typo in original)
+	StreamId          string                 `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                     // Public stream ID (UUID)
+	BillingModel      string                 `protobuf:"bytes,6,opt,name=billing_model,json=billingModel,proto3" json:"billing_model,omitempty"`                         // 'postpaid' or 'prepaid'
+	IsSuspended       bool                   `protobuf:"varint,7,opt,name=is_suspended,json=isSuspended,proto3" json:"is_suspended,omitempty"`                           // true if tenant suspended
+	IsBalanceNegative bool                   `protobuf:"varint,8,opt,name=is_balance_negative,json=isBalanceNegative,proto3" json:"is_balance_negative,omitempty"`       // true if prepaid balance <= 0
+	OriginClusterId   *string                `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`        // Cluster where this stream ingests (for cross-cluster routing)
+	OfficialClusterId *string                `protobuf:"bytes,10,opt,name=official_cluster_id,json=officialClusterId,proto3,oneof" json:"official_cluster_id,omitempty"` // Billing-tier cluster providing geographic coverage
+	ClusterPeers      []*TenantClusterPeer   `protobuf:"bytes,11,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`                        // Tenant's full cluster context for demand-driven peering
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -336,6 +371,27 @@ func (x *ResolvePlaybackIDResponse) GetIsBalanceNegative() bool {
 	return false
 }
 
+func (x *ResolvePlaybackIDResponse) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *ResolvePlaybackIDResponse) GetOfficialClusterId() string {
+	if x != nil && x.OfficialClusterId != nil {
+		return *x.OfficialClusterId
+	}
+	return ""
+}
+
+func (x *ResolvePlaybackIDResponse) GetClusterPeers() []*TenantClusterPeer {
+	if x != nil {
+		return x.ClusterPeers
+	}
+	return nil
+}
+
 type ResolveInternalNameRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InternalName  string                 `protobuf:"bytes,1,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
@@ -388,6 +444,8 @@ type ResolveInternalNameResponse struct {
 	UserId             string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                                        // json:"user_id"
 	IsRecordingEnabled bool                   `protobuf:"varint,4,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // json:"is_recording_enabled,omitempty"
 	StreamId           string                 `protobuf:"bytes,5,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID)
+	ClusterPeers       []*TenantClusterPeer   `protobuf:"bytes,6,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
+	OriginClusterId    string                 `protobuf:"bytes,7,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // cluster that owns the stream (for federation source lookup)
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -453,6 +511,20 @@ func (x *ResolveInternalNameResponse) GetIsRecordingEnabled() bool {
 func (x *ResolveInternalNameResponse) GetStreamId() string {
 	if x != nil {
 		return x.StreamId
+	}
+	return ""
+}
+
+func (x *ResolveInternalNameResponse) GetClusterPeers() []*TenantClusterPeer {
+	if x != nil {
+		return x.ClusterPeers
+	}
+	return nil
+}
+
+func (x *ResolveInternalNameResponse) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
 	}
 	return ""
 }
@@ -608,6 +680,7 @@ type RegisterClipRequest struct {
 	ClipMode        string                 `protobuf:"bytes,8,opt,name=clip_mode,json=clipMode,proto3" json:"clip_mode,omitempty"`                          // absolute, relative, duration, clip_now
 	RequestedParams string                 `protobuf:"bytes,9,opt,name=requested_params,json=requestedParams,proto3" json:"requested_params,omitempty"`     // Original request JSON for audit
 	RetentionUntil  *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"` // Artifact expiration
+	OriginClusterId string                 `protobuf:"bytes,11,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`  // Cluster where clip was created
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -712,6 +785,13 @@ func (x *RegisterClipRequest) GetRetentionUntil() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *RegisterClipRequest) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
+}
+
 type RegisterClipResponse struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	ClipHash             string                 `protobuf:"bytes,1,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`                                       // Generated hash (use as artifact_hash in Foghorn)
@@ -783,14 +863,15 @@ func (x *RegisterClipResponse) GetArtifactInternalName() string {
 // Register a new DVR recording in the business registry
 // Called by Foghorn during StartDVR flow
 type RegisterDVRRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                         // Tenant context
-	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                               // User who owns the recording
-	StreamId       string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                         // Source stream UUID (optional for legacy)
-	InternalName   string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`             // MistServer stream name
-	RetentionUntil *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"` // Recording expiration
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TenantId        string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                         // Tenant context
+	UserId          string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`                               // User who owns the recording
+	StreamId        string                 `protobuf:"bytes,3,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                         // Source stream UUID (optional for legacy)
+	InternalName    string                 `protobuf:"bytes,4,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`             // MistServer stream name
+	RetentionUntil  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=retention_until,json=retentionUntil,proto3,oneof" json:"retention_until,omitempty"` // Recording expiration
+	OriginClusterId string                 `protobuf:"bytes,6,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`  // Cluster where DVR recording started
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RegisterDVRRequest) Reset() {
@@ -856,6 +937,13 @@ func (x *RegisterDVRRequest) GetRetentionUntil() *timestamppb.Timestamp {
 		return x.RetentionUntil
 	}
 	return nil
+}
+
+func (x *RegisterDVRRequest) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
 }
 
 type RegisterDVRResponse struct {
@@ -994,6 +1082,7 @@ type ResolveClipHashResponse struct {
 	ClipMode             string                 `protobuf:"bytes,10,opt,name=clip_mode,json=clipMode,proto3" json:"clip_mode,omitempty"`                                       // How clip was created
 	PlaybackId           string                 `protobuf:"bytes,11,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
 	ArtifactInternalName string                 `protobuf:"bytes,12,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
+	OriginClusterId      string                 `protobuf:"bytes,13,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`                // Cluster that originally created this clip
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1112,6 +1201,13 @@ func (x *ResolveClipHashResponse) GetArtifactInternalName() string {
 	return ""
 }
 
+func (x *ResolveClipHashResponse) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
+}
+
 // Resolve DVR hash to tenant context
 // Used for analytics enrichment and playback authorization
 type ResolveDVRHashRequest struct {
@@ -1167,6 +1263,7 @@ type ResolveDVRHashResponse struct {
 	InternalName         string                 `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                           // MistServer stream name
 	PlaybackId           string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
 	ArtifactInternalName string                 `protobuf:"bytes,7,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
+	OriginClusterId      string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`                // Cluster that originally created this DVR
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1250,6 +1347,13 @@ func (x *ResolveDVRHashResponse) GetArtifactInternalName() string {
 	return ""
 }
 
+func (x *ResolveDVRHashResponse) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
+}
+
 // Unified identifier resolution - single call to check all Commodore registries
 // Lookup order: streams (internal_name), streams (playback_id), clips, DVR, VOD
 // Used by Foghorn for analytics enrichment when local state cache misses
@@ -1306,6 +1410,8 @@ type ResolveIdentifierResponse struct {
 	IdentifierType     string                 `protobuf:"bytes,5,opt,name=identifier_type,json=identifierType,proto3" json:"identifier_type,omitempty"`                // "stream", "playback_id", "clip", "dvr", "vod"
 	IsRecordingEnabled bool                   `protobuf:"varint,6,opt,name=is_recording_enabled,json=isRecordingEnabled,proto3" json:"is_recording_enabled,omitempty"` // For streams: whether DVR auto-record is enabled
 	StreamId           string                 `protobuf:"bytes,7,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`                                  // Public stream ID (UUID) if applicable
+	ClusterPeers       []*TenantClusterPeer   `protobuf:"bytes,8,rep,name=cluster_peers,json=clusterPeers,proto3" json:"cluster_peers,omitempty"`
+	OriginClusterId    string                 `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster where this stream ingests (for federation attribution)
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -1389,6 +1495,20 @@ func (x *ResolveIdentifierResponse) GetStreamId() string {
 	return ""
 }
 
+func (x *ResolveIdentifierResponse) GetClusterPeers() []*TenantClusterPeer {
+	if x != nil {
+		return x.ClusterPeers
+	}
+	return nil
+}
+
+func (x *ResolveIdentifierResponse) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
+}
+
 // Register a new VOD asset in the business registry
 // Called by Foghorn during CreateVodUpload flow (before storing in foghorn.artifacts)
 type RegisterVodRequest struct {
@@ -1397,12 +1517,13 @@ type RegisterVodRequest struct {
 	UserId   string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`       // User who initiated upload
 	Filename string                 `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`                 // Original filename (used for hash generation)
 	// Optional business metadata (stored in commodore.vod_assets)
-	Title         *string `protobuf:"bytes,4,opt,name=title,proto3,oneof" json:"title,omitempty"`
-	Description   *string `protobuf:"bytes,5,opt,name=description,proto3,oneof" json:"description,omitempty"`
-	ContentType   *string `protobuf:"bytes,6,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"`
-	SizeBytes     *int64  `protobuf:"varint,7,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Title           *string `protobuf:"bytes,4,opt,name=title,proto3,oneof" json:"title,omitempty"`
+	Description     *string `protobuf:"bytes,5,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	ContentType     *string `protobuf:"bytes,6,opt,name=content_type,json=contentType,proto3,oneof" json:"content_type,omitempty"`
+	SizeBytes       *int64  `protobuf:"varint,7,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
+	OriginClusterId string  `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster where VOD was uploaded
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RegisterVodRequest) Reset() {
@@ -1482,6 +1603,13 @@ func (x *RegisterVodRequest) GetSizeBytes() int64 {
 		return *x.SizeBytes
 	}
 	return 0
+}
+
+func (x *RegisterVodRequest) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
 }
 
 type RegisterVodResponse struct {
@@ -1608,6 +1736,7 @@ type ResolveVodHashResponse struct {
 	Description          string                 `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`                                                 // VOD description (if set)
 	PlaybackId           string                 `protobuf:"bytes,7,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`                                 // Public playback key
 	ArtifactInternalName string                 `protobuf:"bytes,8,opt,name=artifact_internal_name,json=artifactInternalName,proto3" json:"artifact_internal_name,omitempty"` // Artifact routing name (internal)
+	OriginClusterId      string                 `protobuf:"bytes,9,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`                // Cluster where this VOD was uploaded
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1694,6 +1823,13 @@ func (x *ResolveVodHashResponse) GetPlaybackId() string {
 func (x *ResolveVodHashResponse) GetArtifactInternalName() string {
 	if x != nil {
 		return x.ArtifactInternalName
+	}
+	return ""
+}
+
+func (x *ResolveVodHashResponse) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
 	}
 	return ""
 }
@@ -1880,7 +2016,8 @@ type ResolveArtifactPlaybackIDResponse struct {
 	TenantId             string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	UserId               string                 `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	StreamId             string                 `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	ContentType          string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // "clip" | "dvr" | "vod"
+	ContentType          string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
+	OriginClusterId      string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -1964,6 +2101,13 @@ func (x *ResolveArtifactPlaybackIDResponse) GetContentType() string {
 	return ""
 }
 
+func (x *ResolveArtifactPlaybackIDResponse) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
+	}
+	return ""
+}
+
 // Resolve artifact internal name to artifact identity
 type ResolveArtifactInternalNameRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
@@ -2017,7 +2161,8 @@ type ResolveArtifactInternalNameResponse struct {
 	TenantId             string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	UserId               string                 `protobuf:"bytes,5,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	StreamId             string                 `protobuf:"bytes,6,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	ContentType          string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // "clip" | "dvr" | "vod"
+	ContentType          string                 `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`               // "clip" | "dvr" | "vod"
+	OriginClusterId      string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"` // Cluster that originally created this artifact
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2097,6 +2242,13 @@ func (x *ResolveArtifactInternalNameResponse) GetStreamId() string {
 func (x *ResolveArtifactInternalNameResponse) GetContentType() string {
 	if x != nil {
 		return x.ContentType
+	}
+	return ""
+}
+
+func (x *ResolveArtifactInternalNameResponse) GetOriginClusterId() string {
+	if x != nil {
+		return x.OriginClusterId
 	}
 	return ""
 }
@@ -4532,15 +4684,33 @@ func (x *CreateStreamRequest) GetIsRecording() bool {
 
 // Matches pkg/api/commodore/types.go:CreateStreamResponse (lines 178-185)
 type CreateStreamResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                   // json:"id" (stream_id UUID)
-	StreamKey     string                 `protobuf:"bytes,2,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`    // json:"stream_key"
-	PlaybackId    string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"` // json:"playback_id"
-	Title         string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`                             // json:"title"
-	Description   string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`                 // json:"description"
-	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`                           // json:"status"
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                   // json:"id" (stream_id UUID)
+	StreamKey   string                 `protobuf:"bytes,2,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`    // json:"stream_key"
+	PlaybackId  string                 `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"` // json:"playback_id"
+	Title       string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`                             // json:"title"
+	Description string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`                 // json:"description"
+	Status      string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`                           // json:"status"
+	// Cluster-level base domains (populated when tenant has a cluster assignment).
+	// Protocol-specific URLs are derived client-side from these + protocol conventions.
+	//
+	//	ingest_domain: non-redirectable ingest (RTMP push, SRT push)
+	//	play_domain:   Foghorn-mediated HTTP routing (WHIP, HLS, DASH, WHEP)
+	//	edge_domain:   non-redirectable playback (SRT pull) and direct edge access
+	IngestDomain *string `protobuf:"bytes,7,opt,name=ingest_domain,json=ingestDomain,proto3,oneof" json:"ingest_domain,omitempty"`
+	EdgeDomain   *string `protobuf:"bytes,8,opt,name=edge_domain,json=edgeDomain,proto3,oneof" json:"edge_domain,omitempty"`
+	PlayDomain   *string `protobuf:"bytes,9,opt,name=play_domain,json=playDomain,proto3,oneof" json:"play_domain,omitempty"`
+	// Official cluster domains (geographic coverage from billing tier).
+	// Populated when tenant's preferred cluster differs from official cluster.
+	// Producers can choose between preferred (their cluster) or official (global CDN) ingest.
+	OfficialIngestDomain *string `protobuf:"bytes,10,opt,name=official_ingest_domain,json=officialIngestDomain,proto3,oneof" json:"official_ingest_domain,omitempty"`
+	OfficialEdgeDomain   *string `protobuf:"bytes,11,opt,name=official_edge_domain,json=officialEdgeDomain,proto3,oneof" json:"official_edge_domain,omitempty"`
+	OfficialPlayDomain   *string `protobuf:"bytes,12,opt,name=official_play_domain,json=officialPlayDomain,proto3,oneof" json:"official_play_domain,omitempty"`
+	// Human-readable labels for UX (e.g. "My EU Cluster" vs "FrameWorks US-West")
+	PreferredClusterLabel *string `protobuf:"bytes,13,opt,name=preferred_cluster_label,json=preferredClusterLabel,proto3,oneof" json:"preferred_cluster_label,omitempty"`
+	OfficialClusterLabel  *string `protobuf:"bytes,14,opt,name=official_cluster_label,json=officialClusterLabel,proto3,oneof" json:"official_cluster_label,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *CreateStreamResponse) Reset() {
@@ -4611,6 +4781,62 @@ func (x *CreateStreamResponse) GetDescription() string {
 func (x *CreateStreamResponse) GetStatus() string {
 	if x != nil {
 		return x.Status
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetIngestDomain() string {
+	if x != nil && x.IngestDomain != nil {
+		return *x.IngestDomain
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetEdgeDomain() string {
+	if x != nil && x.EdgeDomain != nil {
+		return *x.EdgeDomain
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetPlayDomain() string {
+	if x != nil && x.PlayDomain != nil {
+		return *x.PlayDomain
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetOfficialIngestDomain() string {
+	if x != nil && x.OfficialIngestDomain != nil {
+		return *x.OfficialIngestDomain
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetOfficialEdgeDomain() string {
+	if x != nil && x.OfficialEdgeDomain != nil {
+		return *x.OfficialEdgeDomain
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetOfficialPlayDomain() string {
+	if x != nil && x.OfficialPlayDomain != nil {
+		return *x.OfficialPlayDomain
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetPreferredClusterLabel() string {
+	if x != nil && x.PreferredClusterLabel != nil {
+		return *x.PreferredClusterLabel
+	}
+	return ""
+}
+
+func (x *CreateStreamResponse) GetOfficialClusterLabel() string {
+	if x != nil && x.OfficialClusterLabel != nil {
+		return *x.OfficialClusterLabel
 	}
 	return ""
 }
@@ -6179,10 +6405,10 @@ var File_commodore_proto protoreflect.FileDescriptor
 
 const file_commodore_proto_rawDesc = "" +
 	"\n" +
-	"\x0fcommodore.proto\x12\tcommodore\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\fcommon.proto\x1a\fshared.proto\x1a\rfoghorn.proto\x1a\fpurser.proto\"9\n" +
+	"\x0fcommodore.proto\x12\tcommodore\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\fcommon.proto\x1a\fshared.proto\x1a\rfoghorn.proto\x1a\fpurser.proto\x1a\x13quartermaster.proto\"9\n" +
 	"\x18ValidateStreamKeyRequest\x12\x1d\n" +
 	"\n" +
-	"stream_key\x18\x01 \x01(\tR\tstreamKey\"\xe9\x02\n" +
+	"stream_key\x18\x01 \x01(\tR\tstreamKey\"\xe5\x04\n" +
 	"\x19ValidateStreamKeyResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -6194,10 +6420,17 @@ const file_commodore_proto_rawDesc = "" +
 	"\rbilling_model\x18\b \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\t \x01(\bR\visSuspended\x12.\n" +
 	"\x13is_balance_negative\x18\n" +
-	" \x01(\bR\x11isBalanceNegative\";\n" +
+	" \x01(\bR\x11isBalanceNegative\x12/\n" +
+	"\x11origin_cluster_id\x18\v \x01(\tH\x00R\x0foriginClusterId\x88\x01\x01\x123\n" +
+	"\x13official_cluster_id\x18\f \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12E\n" +
+	"\rcluster_peers\x18\r \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12\x1f\n" +
+	"\vplayback_id\x18\x0e \x01(\tR\n" +
+	"playbackIdB\x14\n" +
+	"\x12_origin_cluster_idB\x16\n" +
+	"\x14_official_cluster_id\";\n" +
 	"\x18ResolvePlaybackIDRequest\x12\x1f\n" +
 	"\vplayback_id\x18\x01 \x01(\tR\n" +
-	"playbackId\"\xab\x02\n" +
+	"playbackId\"\x86\x04\n" +
 	"\x19ResolvePlaybackIDResponse\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
@@ -6207,15 +6440,23 @@ const file_commodore_proto_rawDesc = "" +
 	"\tstream_id\x18\x05 \x01(\tR\bstreamId\x12#\n" +
 	"\rbilling_model\x18\x06 \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\a \x01(\bR\visSuspended\x12.\n" +
-	"\x13is_balance_negative\x18\b \x01(\bR\x11isBalanceNegative\"A\n" +
+	"\x13is_balance_negative\x18\b \x01(\bR\x11isBalanceNegative\x12/\n" +
+	"\x11origin_cluster_id\x18\t \x01(\tH\x00R\x0foriginClusterId\x88\x01\x01\x123\n" +
+	"\x13official_cluster_id\x18\n" +
+	" \x01(\tH\x01R\x11officialClusterId\x88\x01\x01\x12E\n" +
+	"\rcluster_peers\x18\v \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeersB\x14\n" +
+	"\x12_origin_cluster_idB\x16\n" +
+	"\x14_official_cluster_id\"A\n" +
 	"\x1aResolveInternalNameRequest\x12#\n" +
-	"\rinternal_name\x18\x01 \x01(\tR\finternalName\"\xc7\x01\n" +
+	"\rinternal_name\x18\x01 \x01(\tR\finternalName\"\xba\x02\n" +
 	"\x1bResolveInternalNameResponse\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x03 \x01(\tR\x06userId\x120\n" +
 	"\x14is_recording_enabled\x18\x04 \x01(\bR\x12isRecordingEnabled\x12\x1b\n" +
-	"\tstream_id\x18\x05 \x01(\tR\bstreamId\"/\n" +
+	"\tstream_id\x18\x05 \x01(\tR\bstreamId\x12E\n" +
+	"\rcluster_peers\x18\x06 \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12*\n" +
+	"\x11origin_cluster_id\x18\a \x01(\tR\x0foriginClusterId\"/\n" +
 	"\x17ValidateAPITokenRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\"\xcd\x01\n" +
 	"\x18ValidateAPITokenResponse\x12\x14\n" +
@@ -6225,7 +6466,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x05email\x18\x04 \x01(\tR\x05email\x12\x12\n" +
 	"\x04role\x18\x05 \x01(\tR\x04role\x12 \n" +
 	"\vpermissions\x18\x06 \x03(\tR\vpermissions\x12\x19\n" +
-	"\btoken_id\x18\a \x01(\tR\atokenId\"\x81\x03\n" +
+	"\btoken_id\x18\a \x01(\tR\atokenId\"\xad\x03\n" +
 	"\x13RegisterClipRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
@@ -6238,20 +6479,22 @@ const file_commodore_proto_rawDesc = "" +
 	"\tclip_mode\x18\b \x01(\tR\bclipMode\x12)\n" +
 	"\x10requested_params\x18\t \x01(\tR\x0frequestedParams\x12H\n" +
 	"\x0fretention_until\x18\n" +
-	" \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01B\x12\n" +
+	" \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01\x12*\n" +
+	"\x11origin_cluster_id\x18\v \x01(\tR\x0foriginClusterIdB\x12\n" +
 	"\x10_retention_until\"\xa3\x01\n" +
 	"\x14RegisterClipResponse\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x17\n" +
 	"\aclip_id\x18\x02 \x01(\tR\x06clipId\x12\x1f\n" +
 	"\vplayback_id\x18\x03 \x01(\tR\n" +
 	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"\xea\x01\n" +
+	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"\x96\x02\n" +
 	"\x12RegisterDVRRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x03 \x01(\tR\bstreamId\x12#\n" +
 	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12H\n" +
-	"\x0fretention_until\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01B\x12\n" +
+	"\x0fretention_until\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01\x12*\n" +
+	"\x11origin_cluster_id\x18\x06 \x01(\tR\x0foriginClusterIdB\x12\n" +
 	"\x10_retention_until\"\xbb\x01\n" +
 	"\x13RegisterDVRResponse\x12\x19\n" +
 	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12\x15\n" +
@@ -6261,7 +6504,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\x12\x1b\n" +
 	"\tstream_id\x18\x05 \x01(\tR\bstreamId\"5\n" +
 	"\x16ResolveClipHashRequest\x12\x1b\n" +
-	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\"\x8e\x03\n" +
+	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\"\xba\x03\n" +
 	"\x17ResolveClipHashResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -6277,9 +6520,10 @@ const file_commodore_proto_rawDesc = "" +
 	" \x01(\tR\bclipMode\x12\x1f\n" +
 	"\vplayback_id\x18\v \x01(\tR\n" +
 	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\f \x01(\tR\x14artifactInternalName\"2\n" +
+	"\x16artifact_internal_name\x18\f \x01(\tR\x14artifactInternalName\x12*\n" +
+	"\x11origin_cluster_id\x18\r \x01(\tR\x0foriginClusterId\"2\n" +
 	"\x15ResolveDVRHashRequest\x12\x19\n" +
-	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\"\xfd\x01\n" +
+	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\"\xa9\x02\n" +
 	"\x16ResolveDVRHashResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -6288,11 +6532,12 @@ const file_commodore_proto_rawDesc = "" +
 	"\rinternal_name\x18\x05 \x01(\tR\finternalName\x12\x1f\n" +
 	"\vplayback_id\x18\x06 \x01(\tR\n" +
 	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\a \x01(\tR\x14artifactInternalName\":\n" +
+	"\x16artifact_internal_name\x18\a \x01(\tR\x14artifactInternalName\x12*\n" +
+	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\":\n" +
 	"\x18ResolveIdentifierRequest\x12\x1e\n" +
 	"\n" +
 	"identifier\x18\x01 \x01(\tR\n" +
-	"identifier\"\x84\x02\n" +
+	"identifier\"\xf7\x02\n" +
 	"\x19ResolveIdentifierResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -6300,7 +6545,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\rinternal_name\x18\x04 \x01(\tR\finternalName\x12'\n" +
 	"\x0fidentifier_type\x18\x05 \x01(\tR\x0eidentifierType\x120\n" +
 	"\x14is_recording_enabled\x18\x06 \x01(\bR\x12isRecordingEnabled\x12\x1b\n" +
-	"\tstream_id\x18\a \x01(\tR\bstreamId\"\xae\x02\n" +
+	"\tstream_id\x18\a \x01(\tR\bstreamId\x12E\n" +
+	"\rcluster_peers\x18\b \x03(\v2 .quartermaster.TenantClusterPeerR\fclusterPeers\x12*\n" +
+	"\x11origin_cluster_id\x18\t \x01(\tR\x0foriginClusterId\"\xda\x02\n" +
 	"\x12RegisterVodRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1a\n" +
@@ -6309,7 +6556,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\vdescription\x18\x05 \x01(\tH\x01R\vdescription\x88\x01\x01\x12&\n" +
 	"\fcontent_type\x18\x06 \x01(\tH\x02R\vcontentType\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"size_bytes\x18\a \x01(\x03H\x03R\tsizeBytes\x88\x01\x01B\b\n" +
+	"size_bytes\x18\a \x01(\x03H\x03R\tsizeBytes\x88\x01\x01\x12*\n" +
+	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterIdB\b\n" +
 	"\x06_titleB\x0e\n" +
 	"\f_descriptionB\x0f\n" +
 	"\r_content_typeB\r\n" +
@@ -6321,7 +6569,7 @@ const file_commodore_proto_rawDesc = "" +
 	"playbackId\x124\n" +
 	"\x16artifact_internal_name\x18\x04 \x01(\tR\x14artifactInternalName\"2\n" +
 	"\x15ResolveVodHashRequest\x12\x19\n" +
-	"\bvod_hash\x18\x01 \x01(\tR\avodHash\"\x8f\x02\n" +
+	"\bvod_hash\x18\x01 \x01(\tR\avodHash\"\xbb\x02\n" +
 	"\x16ResolveVodHashResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -6331,7 +6579,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\vdescription\x18\x06 \x01(\tR\vdescription\x12\x1f\n" +
 	"\vplayback_id\x18\a \x01(\tR\n" +
 	"playbackId\x124\n" +
-	"\x16artifact_internal_name\x18\b \x01(\tR\x14artifactInternalName\",\n" +
+	"\x16artifact_internal_name\x18\b \x01(\tR\x14artifactInternalName\x12*\n" +
+	"\x11origin_cluster_id\x18\t \x01(\tR\x0foriginClusterId\",\n" +
 	"\x13ResolveVodIDRequest\x12\x15\n" +
 	"\x06vod_id\x18\x01 \x01(\tR\x05vodId\"\xd4\x01\n" +
 	"\x14ResolveVodIDResponse\x12\x14\n" +
@@ -6344,7 +6593,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x16artifact_internal_name\x18\x06 \x01(\tR\x14artifactInternalName\"C\n" +
 	" ResolveArtifactPlaybackIDRequest\x12\x1f\n" +
 	"\vplayback_id\x18\x01 \x01(\tR\n" +
-	"playbackId\"\x8a\x02\n" +
+	"playbackId\"\xb6\x02\n" +
 	"!ResolveArtifactPlaybackIDResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x124\n" +
@@ -6352,9 +6601,10 @@ const file_commodore_proto_rawDesc = "" +
 	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x05 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x06 \x01(\tR\bstreamId\x12!\n" +
-	"\fcontent_type\x18\a \x01(\tR\vcontentType\"Z\n" +
+	"\fcontent_type\x18\a \x01(\tR\vcontentType\x12*\n" +
+	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\"Z\n" +
 	"\"ResolveArtifactInternalNameRequest\x124\n" +
-	"\x16artifact_internal_name\x18\x01 \x01(\tR\x14artifactInternalName\"\x8c\x02\n" +
+	"\x16artifact_internal_name\x18\x01 \x01(\tR\x14artifactInternalName\"\xb8\x02\n" +
 	"#ResolveArtifactInternalNameResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12#\n" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x124\n" +
@@ -6362,7 +6612,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x17\n" +
 	"\auser_id\x18\x05 \x01(\tR\x06userId\x12\x1b\n" +
 	"\tstream_id\x18\x06 \x01(\tR\bstreamId\x12!\n" +
-	"\fcontent_type\x18\a \x01(\tR\vcontentType\"\xa1\x01\n" +
+	"\fcontent_type\x18\a \x01(\tR\vcontentType\x12*\n" +
+	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\"\xa1\x01\n" +
 	"\x1cGetOrCreateWalletUserRequest\x12\x1d\n" +
 	"\n" +
 	"chain_type\x18\x01 \x01(\tR\tchainType\x12%\n" +
@@ -6546,7 +6797,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1b\n" +
 	"\tis_public\x18\x03 \x01(\bR\bisPublic\x12!\n" +
-	"\fis_recording\x18\x04 \x01(\bR\visRecording\"\xb6\x01\n" +
+	"\fis_recording\x18\x04 \x01(\bR\visRecording\"\x83\x06\n" +
 	"\x14CreateStreamResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -6555,7 +6806,26 @@ const file_commodore_proto_rawDesc = "" +
 	"playbackId\x12\x14\n" +
 	"\x05title\x18\x04 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x05 \x01(\tR\vdescription\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\tR\x06status\"/\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\x12(\n" +
+	"\ringest_domain\x18\a \x01(\tH\x00R\fingestDomain\x88\x01\x01\x12$\n" +
+	"\vedge_domain\x18\b \x01(\tH\x01R\n" +
+	"edgeDomain\x88\x01\x01\x12$\n" +
+	"\vplay_domain\x18\t \x01(\tH\x02R\n" +
+	"playDomain\x88\x01\x01\x129\n" +
+	"\x16official_ingest_domain\x18\n" +
+	" \x01(\tH\x03R\x14officialIngestDomain\x88\x01\x01\x125\n" +
+	"\x14official_edge_domain\x18\v \x01(\tH\x04R\x12officialEdgeDomain\x88\x01\x01\x125\n" +
+	"\x14official_play_domain\x18\f \x01(\tH\x05R\x12officialPlayDomain\x88\x01\x01\x12;\n" +
+	"\x17preferred_cluster_label\x18\r \x01(\tH\x06R\x15preferredClusterLabel\x88\x01\x01\x129\n" +
+	"\x16official_cluster_label\x18\x0e \x01(\tH\aR\x14officialClusterLabel\x88\x01\x01B\x10\n" +
+	"\x0e_ingest_domainB\x0e\n" +
+	"\f_edge_domainB\x0e\n" +
+	"\f_play_domainB\x19\n" +
+	"\x17_official_ingest_domainB\x17\n" +
+	"\x15_official_edge_domainB\x17\n" +
+	"\x15_official_play_domainB\x1a\n" +
+	"\x18_preferred_cluster_labelB\x19\n" +
+	"\x17_official_cluster_label\"/\n" +
 	"\x10GetStreamRequest\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\"7\n" +
 	"\x16GetStreamsBatchRequest\x12\x1d\n" +
@@ -6908,232 +7178,237 @@ var file_commodore_proto_goTypes = []any{
 	(*RevokeAPITokenResponse)(nil),              // 91: commodore.RevokeAPITokenResponse
 	(*RefreshStreamKeyRequest)(nil),             // 92: commodore.RefreshStreamKeyRequest
 	(*RefreshStreamKeyResponse)(nil),            // 93: commodore.RefreshStreamKeyResponse
-	(*timestamppb.Timestamp)(nil),               // 94: google.protobuf.Timestamp
-	(*SignupAttribution)(nil),                   // 95: common.SignupAttribution
-	(*X402PaymentPayload)(nil),                  // 96: purser.X402PaymentPayload
-	(*CursorPaginationRequest)(nil),             // 97: common.CursorPaginationRequest
-	(*CursorPaginationResponse)(nil),            // 98: common.CursorPaginationResponse
-	(*StartDVRRequest)(nil),                     // 99: shared.StartDVRRequest
-	(*TerminateTenantStreamsRequest)(nil),       // 100: foghorn.TerminateTenantStreamsRequest
-	(*InvalidateTenantCacheRequest)(nil),        // 101: foghorn.InvalidateTenantCacheRequest
-	(*CreateClipRequest)(nil),                   // 102: shared.CreateClipRequest
-	(*GetClipsRequest)(nil),                     // 103: shared.GetClipsRequest
-	(*GetClipRequest)(nil),                      // 104: shared.GetClipRequest
-	(*DeleteClipRequest)(nil),                   // 105: shared.DeleteClipRequest
-	(*StopDVRRequest)(nil),                      // 106: shared.StopDVRRequest
-	(*DeleteDVRRequest)(nil),                    // 107: shared.DeleteDVRRequest
-	(*ListDVRRecordingsRequest)(nil),            // 108: shared.ListDVRRecordingsRequest
-	(*ViewerEndpointRequest)(nil),               // 109: shared.ViewerEndpointRequest
-	(*IngestEndpointRequest)(nil),               // 110: shared.IngestEndpointRequest
-	(*CreateVodUploadRequest)(nil),              // 111: shared.CreateVodUploadRequest
-	(*CompleteVodUploadRequest)(nil),            // 112: shared.CompleteVodUploadRequest
-	(*AbortVodUploadRequest)(nil),               // 113: shared.AbortVodUploadRequest
-	(*GetVodAssetRequest)(nil),                  // 114: shared.GetVodAssetRequest
-	(*ListVodAssetsRequest)(nil),                // 115: shared.ListVodAssetsRequest
-	(*DeleteVodAssetRequest)(nil),               // 116: shared.DeleteVodAssetRequest
-	(*StartDVRResponse)(nil),                    // 117: shared.StartDVRResponse
-	(*TerminateTenantStreamsResponse)(nil),      // 118: foghorn.TerminateTenantStreamsResponse
-	(*InvalidateTenantCacheResponse)(nil),       // 119: foghorn.InvalidateTenantCacheResponse
-	(*emptypb.Empty)(nil),                       // 120: google.protobuf.Empty
-	(*CreateClipResponse)(nil),                  // 121: shared.CreateClipResponse
-	(*GetClipsResponse)(nil),                    // 122: shared.GetClipsResponse
-	(*ClipInfo)(nil),                            // 123: shared.ClipInfo
-	(*DeleteClipResponse)(nil),                  // 124: shared.DeleteClipResponse
-	(*StopDVRResponse)(nil),                     // 125: shared.StopDVRResponse
-	(*DeleteDVRResponse)(nil),                   // 126: shared.DeleteDVRResponse
-	(*ListDVRRecordingsResponse)(nil),           // 127: shared.ListDVRRecordingsResponse
-	(*ViewerEndpointResponse)(nil),              // 128: shared.ViewerEndpointResponse
-	(*IngestEndpointResponse)(nil),              // 129: shared.IngestEndpointResponse
-	(*CreateVodUploadResponse)(nil),             // 130: shared.CreateVodUploadResponse
-	(*CompleteVodUploadResponse)(nil),           // 131: shared.CompleteVodUploadResponse
-	(*AbortVodUploadResponse)(nil),              // 132: shared.AbortVodUploadResponse
-	(*VodAssetInfo)(nil),                        // 133: shared.VodAssetInfo
-	(*ListVodAssetsResponse)(nil),               // 134: shared.ListVodAssetsResponse
-	(*DeleteVodAssetResponse)(nil),              // 135: shared.DeleteVodAssetResponse
+	(*TenantClusterPeer)(nil),                   // 94: quartermaster.TenantClusterPeer
+	(*timestamppb.Timestamp)(nil),               // 95: google.protobuf.Timestamp
+	(*SignupAttribution)(nil),                   // 96: common.SignupAttribution
+	(*X402PaymentPayload)(nil),                  // 97: purser.X402PaymentPayload
+	(*CursorPaginationRequest)(nil),             // 98: common.CursorPaginationRequest
+	(*CursorPaginationResponse)(nil),            // 99: common.CursorPaginationResponse
+	(*StartDVRRequest)(nil),                     // 100: shared.StartDVRRequest
+	(*TerminateTenantStreamsRequest)(nil),       // 101: foghorn.TerminateTenantStreamsRequest
+	(*InvalidateTenantCacheRequest)(nil),        // 102: foghorn.InvalidateTenantCacheRequest
+	(*CreateClipRequest)(nil),                   // 103: shared.CreateClipRequest
+	(*GetClipsRequest)(nil),                     // 104: shared.GetClipsRequest
+	(*GetClipRequest)(nil),                      // 105: shared.GetClipRequest
+	(*DeleteClipRequest)(nil),                   // 106: shared.DeleteClipRequest
+	(*StopDVRRequest)(nil),                      // 107: shared.StopDVRRequest
+	(*DeleteDVRRequest)(nil),                    // 108: shared.DeleteDVRRequest
+	(*ListDVRRecordingsRequest)(nil),            // 109: shared.ListDVRRecordingsRequest
+	(*ViewerEndpointRequest)(nil),               // 110: shared.ViewerEndpointRequest
+	(*IngestEndpointRequest)(nil),               // 111: shared.IngestEndpointRequest
+	(*CreateVodUploadRequest)(nil),              // 112: shared.CreateVodUploadRequest
+	(*CompleteVodUploadRequest)(nil),            // 113: shared.CompleteVodUploadRequest
+	(*AbortVodUploadRequest)(nil),               // 114: shared.AbortVodUploadRequest
+	(*GetVodAssetRequest)(nil),                  // 115: shared.GetVodAssetRequest
+	(*ListVodAssetsRequest)(nil),                // 116: shared.ListVodAssetsRequest
+	(*DeleteVodAssetRequest)(nil),               // 117: shared.DeleteVodAssetRequest
+	(*StartDVRResponse)(nil),                    // 118: shared.StartDVRResponse
+	(*TerminateTenantStreamsResponse)(nil),      // 119: foghorn.TerminateTenantStreamsResponse
+	(*InvalidateTenantCacheResponse)(nil),       // 120: foghorn.InvalidateTenantCacheResponse
+	(*emptypb.Empty)(nil),                       // 121: google.protobuf.Empty
+	(*CreateClipResponse)(nil),                  // 122: shared.CreateClipResponse
+	(*GetClipsResponse)(nil),                    // 123: shared.GetClipsResponse
+	(*ClipInfo)(nil),                            // 124: shared.ClipInfo
+	(*DeleteClipResponse)(nil),                  // 125: shared.DeleteClipResponse
+	(*StopDVRResponse)(nil),                     // 126: shared.StopDVRResponse
+	(*DeleteDVRResponse)(nil),                   // 127: shared.DeleteDVRResponse
+	(*ListDVRRecordingsResponse)(nil),           // 128: shared.ListDVRRecordingsResponse
+	(*ViewerEndpointResponse)(nil),              // 129: shared.ViewerEndpointResponse
+	(*IngestEndpointResponse)(nil),              // 130: shared.IngestEndpointResponse
+	(*CreateVodUploadResponse)(nil),             // 131: shared.CreateVodUploadResponse
+	(*CompleteVodUploadResponse)(nil),           // 132: shared.CompleteVodUploadResponse
+	(*AbortVodUploadResponse)(nil),              // 133: shared.AbortVodUploadResponse
+	(*VodAssetInfo)(nil),                        // 134: shared.VodAssetInfo
+	(*ListVodAssetsResponse)(nil),               // 135: shared.ListVodAssetsResponse
+	(*DeleteVodAssetResponse)(nil),              // 136: shared.DeleteVodAssetResponse
 }
 var file_commodore_proto_depIdxs = []int32{
-	94,  // 0: commodore.RegisterClipRequest.retention_until:type_name -> google.protobuf.Timestamp
-	94,  // 1: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
-	95,  // 2: commodore.GetOrCreateWalletUserRequest.attribution:type_name -> common.SignupAttribution
-	35,  // 3: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
-	35,  // 4: commodore.RegisterRequest.behavior:type_name -> commodore.BehaviorData
-	95,  // 5: commodore.RegisterRequest.attribution:type_name -> common.SignupAttribution
-	67,  // 6: commodore.AuthResponse.user:type_name -> commodore.User
-	94,  // 7: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
-	95,  // 8: commodore.WalletLoginRequest.attribution:type_name -> common.SignupAttribution
-	96,  // 9: commodore.WalletLoginWithX402Request.payment:type_name -> purser.X402PaymentPayload
-	95,  // 10: commodore.WalletLoginWithX402Request.attribution:type_name -> common.SignupAttribution
-	37,  // 11: commodore.WalletLoginWithX402Response.auth:type_name -> commodore.AuthResponse
-	64,  // 12: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
-	94,  // 13: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
-	94,  // 14: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
-	94,  // 15: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
-	94,  // 16: commodore.User.created_at:type_name -> google.protobuf.Timestamp
-	94,  // 17: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
-	64,  // 18: commodore.User.wallets:type_name -> commodore.WalletIdentity
-	73,  // 19: commodore.GetStreamsBatchResponse.streams:type_name -> commodore.Stream
-	94,  // 20: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
-	94,  // 21: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
-	94,  // 22: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
-	94,  // 23: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
-	97,  // 24: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
-	73,  // 25: commodore.ListStreamsResponse.streams:type_name -> commodore.Stream
-	98,  // 26: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
-	94,  // 27: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
-	94,  // 28: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
-	94,  // 29: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
-	94,  // 30: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
-	80,  // 31: commodore.StreamKeyResponse.stream_key:type_name -> commodore.StreamKey
-	97,  // 32: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
-	80,  // 33: commodore.ListStreamKeysResponse.stream_keys:type_name -> commodore.StreamKey
-	98,  // 34: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
-	94,  // 35: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
-	94,  // 36: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	94,  // 37: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
-	97,  // 38: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
-	94,  // 39: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	94,  // 40: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
-	94,  // 41: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
-	88,  // 42: commodore.ListAPITokensResponse.tokens:type_name -> commodore.APITokenInfo
-	98,  // 43: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
-	94,  // 44: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
-	0,   // 45: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
-	2,   // 46: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
-	4,   // 47: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
-	6,   // 48: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
-	99,  // 49: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
-	8,   // 50: commodore.InternalService.RegisterClip:input_type -> commodore.RegisterClipRequest
-	10,  // 51: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
-	12,  // 52: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
-	14,  // 53: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
-	24,  // 54: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
-	26,  // 55: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
-	16,  // 56: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
-	18,  // 57: commodore.InternalService.RegisterVod:input_type -> commodore.RegisterVodRequest
-	20,  // 58: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
-	22,  // 59: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
-	28,  // 60: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
-	100, // 61: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
-	101, // 62: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
-	30,  // 63: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
-	32,  // 64: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
-	34,  // 65: commodore.UserService.Login:input_type -> commodore.LoginRequest
-	36,  // 66: commodore.UserService.Register:input_type -> commodore.RegisterRequest
-	40,  // 67: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
-	42,  // 68: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
-	43,  // 69: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
-	45,  // 70: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
-	47,  // 71: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
-	49,  // 72: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
-	39,  // 73: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
-	51,  // 74: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
-	52,  // 75: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
-	54,  // 76: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
-	56,  // 77: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
-	57,  // 78: commodore.UserService.WalletLoginWithX402:input_type -> commodore.WalletLoginWithX402Request
-	59,  // 79: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
-	60,  // 80: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
-	62,  // 81: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
-	65,  // 82: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
-	68,  // 83: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
-	70,  // 84: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
-	71,  // 85: commodore.StreamService.GetStreamsBatch:input_type -> commodore.GetStreamsBatchRequest
-	74,  // 86: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
-	76,  // 87: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
-	77,  // 88: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
-	92,  // 89: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
-	79,  // 90: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
-	82,  // 91: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
-	84,  // 92: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
-	85,  // 93: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
-	87,  // 94: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
-	90,  // 95: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
-	102, // 96: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
-	103, // 97: commodore.ClipService.GetClips:input_type -> shared.GetClipsRequest
-	104, // 98: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
-	105, // 99: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
-	106, // 100: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
-	107, // 101: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	108, // 102: commodore.DVRService.ListDVRRequests:input_type -> shared.ListDVRRecordingsRequest
-	109, // 103: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	110, // 104: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	111, // 105: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	112, // 106: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	113, // 107: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	114, // 108: commodore.VodService.GetVodAsset:input_type -> shared.GetVodAssetRequest
-	115, // 109: commodore.VodService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
-	116, // 110: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	1,   // 111: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
-	3,   // 112: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
-	5,   // 113: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
-	7,   // 114: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
-	117, // 115: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
-	9,   // 116: commodore.InternalService.RegisterClip:output_type -> commodore.RegisterClipResponse
-	11,  // 117: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
-	13,  // 118: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
-	15,  // 119: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
-	25,  // 120: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
-	27,  // 121: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
-	17,  // 122: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
-	19,  // 123: commodore.InternalService.RegisterVod:output_type -> commodore.RegisterVodResponse
-	21,  // 124: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
-	23,  // 125: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
-	29,  // 126: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
-	118, // 127: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
-	119, // 128: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
-	31,  // 129: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
-	33,  // 130: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
-	37,  // 131: commodore.UserService.Login:output_type -> commodore.AuthResponse
-	38,  // 132: commodore.UserService.Register:output_type -> commodore.RegisterResponse
-	41,  // 133: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
-	37,  // 134: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
-	44,  // 135: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
-	46,  // 136: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
-	48,  // 137: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
-	50,  // 138: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
-	67,  // 139: commodore.UserService.GetMe:output_type -> commodore.User
-	67,  // 140: commodore.UserService.UpdateMe:output_type -> commodore.User
-	53,  // 141: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
-	55,  // 142: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
-	37,  // 143: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
-	58,  // 144: commodore.UserService.WalletLoginWithX402:output_type -> commodore.WalletLoginWithX402Response
-	64,  // 145: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
-	61,  // 146: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
-	63,  // 147: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
-	66,  // 148: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
-	69,  // 149: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
-	73,  // 150: commodore.StreamService.GetStream:output_type -> commodore.Stream
-	72,  // 151: commodore.StreamService.GetStreamsBatch:output_type -> commodore.GetStreamsBatchResponse
-	75,  // 152: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
-	73,  // 153: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
-	78,  // 154: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
-	93,  // 155: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
-	81,  // 156: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
-	83,  // 157: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
-	120, // 158: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
-	86,  // 159: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
-	89,  // 160: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
-	91,  // 161: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
-	121, // 162: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
-	122, // 163: commodore.ClipService.GetClips:output_type -> shared.GetClipsResponse
-	123, // 164: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
-	124, // 165: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
-	125, // 166: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
-	126, // 167: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	127, // 168: commodore.DVRService.ListDVRRequests:output_type -> shared.ListDVRRecordingsResponse
-	128, // 169: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	129, // 170: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	130, // 171: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	131, // 172: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	132, // 173: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	133, // 174: commodore.VodService.GetVodAsset:output_type -> shared.VodAssetInfo
-	134, // 175: commodore.VodService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
-	135, // 176: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	111, // [111:177] is the sub-list for method output_type
-	45,  // [45:111] is the sub-list for method input_type
-	45,  // [45:45] is the sub-list for extension type_name
-	45,  // [45:45] is the sub-list for extension extendee
-	0,   // [0:45] is the sub-list for field type_name
+	94,  // 0: commodore.ValidateStreamKeyResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	94,  // 1: commodore.ResolvePlaybackIDResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	94,  // 2: commodore.ResolveInternalNameResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	95,  // 3: commodore.RegisterClipRequest.retention_until:type_name -> google.protobuf.Timestamp
+	95,  // 4: commodore.RegisterDVRRequest.retention_until:type_name -> google.protobuf.Timestamp
+	94,  // 5: commodore.ResolveIdentifierResponse.cluster_peers:type_name -> quartermaster.TenantClusterPeer
+	96,  // 6: commodore.GetOrCreateWalletUserRequest.attribution:type_name -> common.SignupAttribution
+	35,  // 7: commodore.LoginRequest.behavior:type_name -> commodore.BehaviorData
+	35,  // 8: commodore.RegisterRequest.behavior:type_name -> commodore.BehaviorData
+	96,  // 9: commodore.RegisterRequest.attribution:type_name -> common.SignupAttribution
+	67,  // 10: commodore.AuthResponse.user:type_name -> commodore.User
+	95,  // 11: commodore.AuthResponse.expires_at:type_name -> google.protobuf.Timestamp
+	96,  // 12: commodore.WalletLoginRequest.attribution:type_name -> common.SignupAttribution
+	97,  // 13: commodore.WalletLoginWithX402Request.payment:type_name -> purser.X402PaymentPayload
+	96,  // 14: commodore.WalletLoginWithX402Request.attribution:type_name -> common.SignupAttribution
+	37,  // 15: commodore.WalletLoginWithX402Response.auth:type_name -> commodore.AuthResponse
+	64,  // 16: commodore.ListWalletsResponse.wallets:type_name -> commodore.WalletIdentity
+	95,  // 17: commodore.WalletIdentity.created_at:type_name -> google.protobuf.Timestamp
+	95,  // 18: commodore.WalletIdentity.last_auth_at:type_name -> google.protobuf.Timestamp
+	95,  // 19: commodore.User.last_login_at:type_name -> google.protobuf.Timestamp
+	95,  // 20: commodore.User.created_at:type_name -> google.protobuf.Timestamp
+	95,  // 21: commodore.User.updated_at:type_name -> google.protobuf.Timestamp
+	64,  // 22: commodore.User.wallets:type_name -> commodore.WalletIdentity
+	73,  // 23: commodore.GetStreamsBatchResponse.streams:type_name -> commodore.Stream
+	95,  // 24: commodore.Stream.started_at:type_name -> google.protobuf.Timestamp
+	95,  // 25: commodore.Stream.ended_at:type_name -> google.protobuf.Timestamp
+	95,  // 26: commodore.Stream.created_at:type_name -> google.protobuf.Timestamp
+	95,  // 27: commodore.Stream.updated_at:type_name -> google.protobuf.Timestamp
+	98,  // 28: commodore.ListStreamsRequest.pagination:type_name -> common.CursorPaginationRequest
+	73,  // 29: commodore.ListStreamsResponse.streams:type_name -> commodore.Stream
+	99,  // 30: commodore.ListStreamsResponse.pagination:type_name -> common.CursorPaginationResponse
+	95,  // 31: commodore.DeleteStreamResponse.deleted_at:type_name -> google.protobuf.Timestamp
+	95,  // 32: commodore.StreamKey.last_used_at:type_name -> google.protobuf.Timestamp
+	95,  // 33: commodore.StreamKey.created_at:type_name -> google.protobuf.Timestamp
+	95,  // 34: commodore.StreamKey.updated_at:type_name -> google.protobuf.Timestamp
+	80,  // 35: commodore.StreamKeyResponse.stream_key:type_name -> commodore.StreamKey
+	98,  // 36: commodore.ListStreamKeysRequest.pagination:type_name -> common.CursorPaginationRequest
+	80,  // 37: commodore.ListStreamKeysResponse.stream_keys:type_name -> commodore.StreamKey
+	99,  // 38: commodore.ListStreamKeysResponse.pagination:type_name -> common.CursorPaginationResponse
+	95,  // 39: commodore.CreateAPITokenRequest.expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 40: commodore.CreateAPITokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 41: commodore.CreateAPITokenResponse.created_at:type_name -> google.protobuf.Timestamp
+	98,  // 42: commodore.ListAPITokensRequest.pagination:type_name -> common.CursorPaginationRequest
+	95,  // 43: commodore.APITokenInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	95,  // 44: commodore.APITokenInfo.expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 45: commodore.APITokenInfo.created_at:type_name -> google.protobuf.Timestamp
+	88,  // 46: commodore.ListAPITokensResponse.tokens:type_name -> commodore.APITokenInfo
+	99,  // 47: commodore.ListAPITokensResponse.pagination:type_name -> common.CursorPaginationResponse
+	95,  // 48: commodore.RevokeAPITokenResponse.revoked_at:type_name -> google.protobuf.Timestamp
+	0,   // 49: commodore.InternalService.ValidateStreamKey:input_type -> commodore.ValidateStreamKeyRequest
+	2,   // 50: commodore.InternalService.ResolvePlaybackID:input_type -> commodore.ResolvePlaybackIDRequest
+	4,   // 51: commodore.InternalService.ResolveInternalName:input_type -> commodore.ResolveInternalNameRequest
+	6,   // 52: commodore.InternalService.ValidateAPIToken:input_type -> commodore.ValidateAPITokenRequest
+	100, // 53: commodore.InternalService.StartDVR:input_type -> shared.StartDVRRequest
+	8,   // 54: commodore.InternalService.RegisterClip:input_type -> commodore.RegisterClipRequest
+	10,  // 55: commodore.InternalService.RegisterDVR:input_type -> commodore.RegisterDVRRequest
+	12,  // 56: commodore.InternalService.ResolveClipHash:input_type -> commodore.ResolveClipHashRequest
+	14,  // 57: commodore.InternalService.ResolveDVRHash:input_type -> commodore.ResolveDVRHashRequest
+	24,  // 58: commodore.InternalService.ResolveArtifactPlaybackID:input_type -> commodore.ResolveArtifactPlaybackIDRequest
+	26,  // 59: commodore.InternalService.ResolveArtifactInternalName:input_type -> commodore.ResolveArtifactInternalNameRequest
+	16,  // 60: commodore.InternalService.ResolveIdentifier:input_type -> commodore.ResolveIdentifierRequest
+	18,  // 61: commodore.InternalService.RegisterVod:input_type -> commodore.RegisterVodRequest
+	20,  // 62: commodore.InternalService.ResolveVodHash:input_type -> commodore.ResolveVodHashRequest
+	22,  // 63: commodore.InternalService.ResolveVodID:input_type -> commodore.ResolveVodIDRequest
+	28,  // 64: commodore.InternalService.GetOrCreateWalletUser:input_type -> commodore.GetOrCreateWalletUserRequest
+	101, // 65: commodore.InternalService.TerminateTenantStreams:input_type -> foghorn.TerminateTenantStreamsRequest
+	102, // 66: commodore.InternalService.InvalidateTenantCache:input_type -> foghorn.InvalidateTenantCacheRequest
+	30,  // 67: commodore.InternalService.GetTenantUserCount:input_type -> commodore.GetTenantUserCountRequest
+	32,  // 68: commodore.InternalService.GetTenantPrimaryUser:input_type -> commodore.GetTenantPrimaryUserRequest
+	34,  // 69: commodore.UserService.Login:input_type -> commodore.LoginRequest
+	36,  // 70: commodore.UserService.Register:input_type -> commodore.RegisterRequest
+	40,  // 71: commodore.UserService.Logout:input_type -> commodore.LogoutRequest
+	42,  // 72: commodore.UserService.RefreshToken:input_type -> commodore.RefreshTokenRequest
+	43,  // 73: commodore.UserService.VerifyEmail:input_type -> commodore.VerifyEmailRequest
+	45,  // 74: commodore.UserService.ResendVerification:input_type -> commodore.ResendVerificationRequest
+	47,  // 75: commodore.UserService.ForgotPassword:input_type -> commodore.ForgotPasswordRequest
+	49,  // 76: commodore.UserService.ResetPassword:input_type -> commodore.ResetPasswordRequest
+	39,  // 77: commodore.UserService.GetMe:input_type -> commodore.GetMeRequest
+	51,  // 78: commodore.UserService.UpdateMe:input_type -> commodore.UpdateMeRequest
+	52,  // 79: commodore.UserService.UpdateNewsletter:input_type -> commodore.UpdateNewsletterRequest
+	54,  // 80: commodore.UserService.GetNewsletterStatus:input_type -> commodore.GetNewsletterStatusRequest
+	56,  // 81: commodore.UserService.WalletLogin:input_type -> commodore.WalletLoginRequest
+	57,  // 82: commodore.UserService.WalletLoginWithX402:input_type -> commodore.WalletLoginWithX402Request
+	59,  // 83: commodore.UserService.LinkWallet:input_type -> commodore.LinkWalletRequest
+	60,  // 84: commodore.UserService.UnlinkWallet:input_type -> commodore.UnlinkWalletRequest
+	62,  // 85: commodore.UserService.ListWallets:input_type -> commodore.ListWalletsRequest
+	65,  // 86: commodore.UserService.LinkEmail:input_type -> commodore.LinkEmailRequest
+	68,  // 87: commodore.StreamService.CreateStream:input_type -> commodore.CreateStreamRequest
+	70,  // 88: commodore.StreamService.GetStream:input_type -> commodore.GetStreamRequest
+	71,  // 89: commodore.StreamService.GetStreamsBatch:input_type -> commodore.GetStreamsBatchRequest
+	74,  // 90: commodore.StreamService.ListStreams:input_type -> commodore.ListStreamsRequest
+	76,  // 91: commodore.StreamService.UpdateStream:input_type -> commodore.UpdateStreamRequest
+	77,  // 92: commodore.StreamService.DeleteStream:input_type -> commodore.DeleteStreamRequest
+	92,  // 93: commodore.StreamService.RefreshStreamKey:input_type -> commodore.RefreshStreamKeyRequest
+	79,  // 94: commodore.StreamKeyService.CreateStreamKey:input_type -> commodore.CreateStreamKeyRequest
+	82,  // 95: commodore.StreamKeyService.ListStreamKeys:input_type -> commodore.ListStreamKeysRequest
+	84,  // 96: commodore.StreamKeyService.DeactivateStreamKey:input_type -> commodore.DeactivateStreamKeyRequest
+	85,  // 97: commodore.DeveloperService.CreateAPIToken:input_type -> commodore.CreateAPITokenRequest
+	87,  // 98: commodore.DeveloperService.ListAPITokens:input_type -> commodore.ListAPITokensRequest
+	90,  // 99: commodore.DeveloperService.RevokeAPIToken:input_type -> commodore.RevokeAPITokenRequest
+	103, // 100: commodore.ClipService.CreateClip:input_type -> shared.CreateClipRequest
+	104, // 101: commodore.ClipService.GetClips:input_type -> shared.GetClipsRequest
+	105, // 102: commodore.ClipService.GetClip:input_type -> shared.GetClipRequest
+	106, // 103: commodore.ClipService.DeleteClip:input_type -> shared.DeleteClipRequest
+	107, // 104: commodore.DVRService.StopDVR:input_type -> shared.StopDVRRequest
+	108, // 105: commodore.DVRService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	109, // 106: commodore.DVRService.ListDVRRequests:input_type -> shared.ListDVRRecordingsRequest
+	110, // 107: commodore.ViewerService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	111, // 108: commodore.ViewerService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	112, // 109: commodore.VodService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	113, // 110: commodore.VodService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	114, // 111: commodore.VodService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	115, // 112: commodore.VodService.GetVodAsset:input_type -> shared.GetVodAssetRequest
+	116, // 113: commodore.VodService.ListVodAssets:input_type -> shared.ListVodAssetsRequest
+	117, // 114: commodore.VodService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	1,   // 115: commodore.InternalService.ValidateStreamKey:output_type -> commodore.ValidateStreamKeyResponse
+	3,   // 116: commodore.InternalService.ResolvePlaybackID:output_type -> commodore.ResolvePlaybackIDResponse
+	5,   // 117: commodore.InternalService.ResolveInternalName:output_type -> commodore.ResolveInternalNameResponse
+	7,   // 118: commodore.InternalService.ValidateAPIToken:output_type -> commodore.ValidateAPITokenResponse
+	118, // 119: commodore.InternalService.StartDVR:output_type -> shared.StartDVRResponse
+	9,   // 120: commodore.InternalService.RegisterClip:output_type -> commodore.RegisterClipResponse
+	11,  // 121: commodore.InternalService.RegisterDVR:output_type -> commodore.RegisterDVRResponse
+	13,  // 122: commodore.InternalService.ResolveClipHash:output_type -> commodore.ResolveClipHashResponse
+	15,  // 123: commodore.InternalService.ResolveDVRHash:output_type -> commodore.ResolveDVRHashResponse
+	25,  // 124: commodore.InternalService.ResolveArtifactPlaybackID:output_type -> commodore.ResolveArtifactPlaybackIDResponse
+	27,  // 125: commodore.InternalService.ResolveArtifactInternalName:output_type -> commodore.ResolveArtifactInternalNameResponse
+	17,  // 126: commodore.InternalService.ResolveIdentifier:output_type -> commodore.ResolveIdentifierResponse
+	19,  // 127: commodore.InternalService.RegisterVod:output_type -> commodore.RegisterVodResponse
+	21,  // 128: commodore.InternalService.ResolveVodHash:output_type -> commodore.ResolveVodHashResponse
+	23,  // 129: commodore.InternalService.ResolveVodID:output_type -> commodore.ResolveVodIDResponse
+	29,  // 130: commodore.InternalService.GetOrCreateWalletUser:output_type -> commodore.GetOrCreateWalletUserResponse
+	119, // 131: commodore.InternalService.TerminateTenantStreams:output_type -> foghorn.TerminateTenantStreamsResponse
+	120, // 132: commodore.InternalService.InvalidateTenantCache:output_type -> foghorn.InvalidateTenantCacheResponse
+	31,  // 133: commodore.InternalService.GetTenantUserCount:output_type -> commodore.GetTenantUserCountResponse
+	33,  // 134: commodore.InternalService.GetTenantPrimaryUser:output_type -> commodore.GetTenantPrimaryUserResponse
+	37,  // 135: commodore.UserService.Login:output_type -> commodore.AuthResponse
+	38,  // 136: commodore.UserService.Register:output_type -> commodore.RegisterResponse
+	41,  // 137: commodore.UserService.Logout:output_type -> commodore.LogoutResponse
+	37,  // 138: commodore.UserService.RefreshToken:output_type -> commodore.AuthResponse
+	44,  // 139: commodore.UserService.VerifyEmail:output_type -> commodore.VerifyEmailResponse
+	46,  // 140: commodore.UserService.ResendVerification:output_type -> commodore.ResendVerificationResponse
+	48,  // 141: commodore.UserService.ForgotPassword:output_type -> commodore.ForgotPasswordResponse
+	50,  // 142: commodore.UserService.ResetPassword:output_type -> commodore.ResetPasswordResponse
+	67,  // 143: commodore.UserService.GetMe:output_type -> commodore.User
+	67,  // 144: commodore.UserService.UpdateMe:output_type -> commodore.User
+	53,  // 145: commodore.UserService.UpdateNewsletter:output_type -> commodore.UpdateNewsletterResponse
+	55,  // 146: commodore.UserService.GetNewsletterStatus:output_type -> commodore.GetNewsletterStatusResponse
+	37,  // 147: commodore.UserService.WalletLogin:output_type -> commodore.AuthResponse
+	58,  // 148: commodore.UserService.WalletLoginWithX402:output_type -> commodore.WalletLoginWithX402Response
+	64,  // 149: commodore.UserService.LinkWallet:output_type -> commodore.WalletIdentity
+	61,  // 150: commodore.UserService.UnlinkWallet:output_type -> commodore.UnlinkWalletResponse
+	63,  // 151: commodore.UserService.ListWallets:output_type -> commodore.ListWalletsResponse
+	66,  // 152: commodore.UserService.LinkEmail:output_type -> commodore.LinkEmailResponse
+	69,  // 153: commodore.StreamService.CreateStream:output_type -> commodore.CreateStreamResponse
+	73,  // 154: commodore.StreamService.GetStream:output_type -> commodore.Stream
+	72,  // 155: commodore.StreamService.GetStreamsBatch:output_type -> commodore.GetStreamsBatchResponse
+	75,  // 156: commodore.StreamService.ListStreams:output_type -> commodore.ListStreamsResponse
+	73,  // 157: commodore.StreamService.UpdateStream:output_type -> commodore.Stream
+	78,  // 158: commodore.StreamService.DeleteStream:output_type -> commodore.DeleteStreamResponse
+	93,  // 159: commodore.StreamService.RefreshStreamKey:output_type -> commodore.RefreshStreamKeyResponse
+	81,  // 160: commodore.StreamKeyService.CreateStreamKey:output_type -> commodore.StreamKeyResponse
+	83,  // 161: commodore.StreamKeyService.ListStreamKeys:output_type -> commodore.ListStreamKeysResponse
+	121, // 162: commodore.StreamKeyService.DeactivateStreamKey:output_type -> google.protobuf.Empty
+	86,  // 163: commodore.DeveloperService.CreateAPIToken:output_type -> commodore.CreateAPITokenResponse
+	89,  // 164: commodore.DeveloperService.ListAPITokens:output_type -> commodore.ListAPITokensResponse
+	91,  // 165: commodore.DeveloperService.RevokeAPIToken:output_type -> commodore.RevokeAPITokenResponse
+	122, // 166: commodore.ClipService.CreateClip:output_type -> shared.CreateClipResponse
+	123, // 167: commodore.ClipService.GetClips:output_type -> shared.GetClipsResponse
+	124, // 168: commodore.ClipService.GetClip:output_type -> shared.ClipInfo
+	125, // 169: commodore.ClipService.DeleteClip:output_type -> shared.DeleteClipResponse
+	126, // 170: commodore.DVRService.StopDVR:output_type -> shared.StopDVRResponse
+	127, // 171: commodore.DVRService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	128, // 172: commodore.DVRService.ListDVRRequests:output_type -> shared.ListDVRRecordingsResponse
+	129, // 173: commodore.ViewerService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	130, // 174: commodore.ViewerService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	131, // 175: commodore.VodService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	132, // 176: commodore.VodService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	133, // 177: commodore.VodService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	134, // 178: commodore.VodService.GetVodAsset:output_type -> shared.VodAssetInfo
+	135, // 179: commodore.VodService.ListVodAssets:output_type -> shared.ListVodAssetsResponse
+	136, // 180: commodore.VodService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	115, // [115:181] is the sub-list for method output_type
+	49,  // [49:115] is the sub-list for method input_type
+	49,  // [49:49] is the sub-list for extension type_name
+	49,  // [49:49] is the sub-list for extension extendee
+	0,   // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_commodore_proto_init() }
@@ -7145,6 +7420,9 @@ func file_commodore_proto_init() {
 	file_shared_proto_init()
 	file_foghorn_proto_init()
 	file_purser_proto_init()
+	file_quartermaster_proto_init()
+	file_commodore_proto_msgTypes[1].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[3].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[8].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[10].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[18].OneofWrappers = []any{}
@@ -7152,6 +7430,7 @@ func file_commodore_proto_init() {
 	file_commodore_proto_msgTypes[57].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[64].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[67].OneofWrappers = []any{}
+	file_commodore_proto_msgTypes[69].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[73].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[76].OneofWrappers = []any{}
 	file_commodore_proto_msgTypes[80].OneofWrappers = []any{}

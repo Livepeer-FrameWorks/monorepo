@@ -64,16 +64,15 @@ func newDNSDoctorCmd() *cobra.Command {
 			// Define mapping of role -> subdomain
 			// This mirrors the logic in api_dns (Navigator)
 			serviceMap := map[string]string{
-				"edge":    "edge",
-				"ingest":  "ingest",
-				"play":    "play",
-				"bridge":  "api",
-				"gateway": "api",
-				"api":     "api",
-				"app":     "app",
-				"website": "@",
-				"docs":    "docs",
-				"forms":   "forms",
+				"edge-egress": "edge-egress",
+				"edge-ingest": "edge-ingest",
+				"foghorn":     "foghorn",
+				"bridge":      "bridge",
+				"gateway":     "bridge",
+				"chartroom":   "chartroom",
+				"website":     "@",
+				"logbook":     "logbook",
+				"steward":     "steward",
 			}
 
 			for _, node := range nodesResp.Nodes {

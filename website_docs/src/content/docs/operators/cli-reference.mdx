@@ -769,6 +769,14 @@ frameworks admin clusters create \
   --cluster-type central \
   --base-url http://10.0.1.10:18002
 
+# Create a cluster and claim Foghorn instances from the pool
+frameworks admin clusters create \
+  --cluster-id edge-eu \
+  --cluster-name "EU Edge Cluster" \
+  --cluster-type cluster \
+  --base-url eu.frameworks.network \
+  --foghorn-count 2
+
 # Update a cluster
 frameworks admin clusters update --cluster-id central-production --is-active
 ```
@@ -782,6 +790,128 @@ Clusters (2)
 ```
 
 **Note:** Cluster IDs are auto-generated during provisioning with format `{type}-{profile}`.
+
+---
+
+### frameworks admin foghorn-pool
+
+Manage the Foghorn instance pool across clusters.
+
+**Subcommands:**
+
+```bash
+# Show pool status (total, assigned, unassigned per cluster)
+frameworks admin foghorn-pool status
+
+# Release instances back to the pool
+frameworks admin foghorn-pool add --instance-id <uuid>
+frameworks admin foghorn-pool add --count 2 --from-cluster <cluster-id>
+
+# Drain a Foghorn instance from its cluster
+frameworks admin foghorn-pool drain --instance-id <uuid>
+
+# Assign Foghorn(s) to a cluster (many-to-many)
+frameworks admin foghorn-pool assign --cluster-id <id> --count 1
+frameworks admin foghorn-pool assign --cluster-id <id> --instance-id <uuid>
+
+# Remove Foghorn(s) from a cluster
+frameworks admin foghorn-pool unassign --cluster-id <id> --instance-id <uuid>
+```
+
+**Flags for `add`:**
+
+- `--instance-id` - Instance UUID(s) to release (repeatable)
+- `--count` - Number of instances to release from cluster
+- `--from-cluster` - Cluster to release instances from
+
+Requires either `--instance-id` or both `--count` and `--from-cluster`.
+
+**Flags for `assign`:**
+
+- `--cluster-id` - Cluster to assign Foghorn(s) to (required)
+- `--instance-id` - Specific Foghorn instance UUID(s) (repeatable)
+- `--count` - Pick N least-loaded Foghorn instances
+
+**Flags for `unassign`:**
+
+- `--cluster-id` - Cluster to unassign from (required)
+- `--instance-id` - Foghorn instance UUID(s) to remove (required)
+
+**Flags for `drain`:**
+
+- `--instance-id` - Instance UUID to drain (required)
+
+---
+
+### frameworks admin clusters create-edge
+
+Create an edge cluster with automatic Foghorn assignment and enrollment token.
+
+```bash
+frameworks admin clusters create-edge --cluster-name "My Edge" --tenant-id <uuid>
+```
+
+**Flags:**
+
+- `--cluster-name` - Display name for the cluster (required)
+- `--tenant-id` - Tenant ID (defaults to JWT tenant)
+- `--description` - Short description
+
+---
+
+### frameworks admin clusters enrollment-token
+
+Create an enrollment token for an existing cluster (requires active subscription).
+
+```bash
+frameworks admin clusters enrollment-token --cluster-id <id> --ttl 7d
+```
+
+**Flags:**
+
+- `--cluster-id` - Cluster ID (required)
+- `--tenant-id` - Tenant ID (defaults to JWT tenant)
+- `--name` - Token display name
+- `--ttl` - Time-to-live (e.g. `24h`, `7d`; default 30d)
+
+---
+
+### frameworks admin clusters cert-status
+
+Show cluster readiness including health, Foghorn instances, and certificate status.
+
+```bash
+frameworks admin clusters cert-status --cluster-id <cluster-id>
+```
+
+**Flags:**
+
+- `--cluster-id` - Cluster ID (required)
+
+**Output includes:** cluster name, type, base URL, health status, registered Foghorn instances with status, and certificate readiness.
+
+---
+
+### frameworks admin billing
+
+Billing tier and subscription management.
+
+**Subcommands:**
+
+- `tiers` - List billing tiers (shows default prepaid/postpaid flags)
+- `init-postpaid` - Initialize postpaid billing for a tenant (resolves default postpaid tier, provisions cluster access)
+- `promote` - Promote tenant from prepaid to postpaid billing (re-evaluates cluster subscriptions)
+
+```bash
+# List billing tiers
+frameworks admin billing tiers
+
+# Initialize postpaid account for a tenant
+frameworks admin billing init-postpaid --tenant-id <UUID>
+
+# Promote prepaid tenant to postpaid
+frameworks admin billing promote --tenant-id <UUID>
+```
 
 ---
 
@@ -882,13 +1012,20 @@ frameworks edge tune --write
 Generate edge node configuration files (`.edge.env`, `docker-compose.edge.yml`, `Caddyfile`).
 
 ```bash
+# With explicit domain
 frameworks edge init --domain edge1.example.com --email admin@example.com
+
+# With enrollment token (auto-assigns domain via PreRegisterEdge)
+frameworks edge init --enrollment-token enroll_abc123 --email admin@example.com
 ```
+
+When `--enrollment-token` is provided without `--domain`, the CLI calls `PreRegisterEdge` to get an auto-assigned domain, pool domain, and cluster configuration. The token carries tenant and cluster scope.
 
 **Flags:**
 
 - `--dir` - Target directory for templates (default: `.`)
 - `--domain` - Edge domain to configure
+- `--enrollment-token` - Enrollment token issued by FrameWorks for node bootstrap
 - `--email` - ACME email for Let's Encrypt certificate issuance
 - `--overwrite` - Overwrite existing files
 
@@ -948,13 +1085,14 @@ frameworks edge provision --manifest edges.yaml
 
 - `--ssh string` - SSH target (user@host)
 - `--ssh-key` - SSH private key path
-- `--pool-domain string` - Shared LB pool domain (e.g., edge.example.com)
+- `--pool-domain string` - Shared LB pool domain (e.g., edge-egress.example.com)
 - `--node-domain string` - Individual node domain
 - `--node-name string` - Node name for registration
 - `--cluster-id string` - Cluster ID for registration
 - `--region string` - Region identifier
 - `--email string` - ACME email for certificates
 - `--timeout` - HTTPS readiness timeout (default: `3m`)
+- `--enrollment-token string` - Enrollment token for auto-provisioning (skips explicit domain flags)
 - `--manifest string` - Path to edge manifest file
 - `--parallel int` - Number of concurrent provisions (default: 1)
 - `--tune` - Apply sysctl/limits tuning
@@ -965,15 +1103,22 @@ frameworks edge provision --manifest edges.yaml
 **Examples:**
 
 ```bash
-# Provision single node
+# Provision single node with explicit domains
 frameworks edge provision --ssh ubuntu@10.0.0.5 \
-  --pool-domain edge.example.com \
+  --pool-domain edge-egress.example.com \
   --node-domain edge-1.example.com \
   --register --fetch-cert --email admin@example.com
+
+# Provision with enrollment token (auto-assigns domain via PreRegisterEdge)
+frameworks edge provision --ssh ubuntu@10.0.0.5 \
+  --enrollment-token enroll_abc123 \
+  --email admin@example.com
 
 # Provision from manifest
 frameworks edge provision --manifest edges.yaml --parallel 4
 ```
+
+When `--enrollment-token` is provided without `--pool-domain` and `--node-domain`, the CLI calls `PreRegisterEdge` to validate the token and get auto-assigned domains, certificates, and cluster routing information.
 
 ---
 
@@ -1280,12 +1425,24 @@ frameworks context show production
 
 ---
 
+### frameworks context set-cluster
+
+Set the active cluster ID for the current context.
+
+```bash
+frameworks context set-cluster <cluster-id>
+```
+
+This determines which cluster subsequent commands operate against.
+
+---
+
 ### frameworks context set-url
 
 Update a service endpoint URL.
 
 ```bash
-frameworks context set-url bridge http://api.example.com:18000
+frameworks context set-url bridge http://bridge.example.com:18000
 frameworks context set-url quartermaster http://central.example.com:18002
 ```
 

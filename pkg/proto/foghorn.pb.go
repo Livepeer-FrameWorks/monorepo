@@ -77,9 +77,12 @@ type PreRegisterEdgeResponse struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	NodeId          string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`             // Assigned node ID
 	EdgeDomain      string                 `protobuf:"bytes,2,opt,name=edge_domain,json=edgeDomain,proto3" json:"edge_domain,omitempty"` // e.g., edge-{node_id}.{cluster_slug}.{root_domain}
-	PoolDomain      string                 `protobuf:"bytes,3,opt,name=pool_domain,json=poolDomain,proto3" json:"pool_domain,omitempty"` // e.g., edge.{cluster_slug}.{root_domain}
+	PoolDomain      string                 `protobuf:"bytes,3,opt,name=pool_domain,json=poolDomain,proto3" json:"pool_domain,omitempty"` // e.g., edge-egress.{cluster_slug}.{root_domain}
 	ClusterSlug     string                 `protobuf:"bytes,4,opt,name=cluster_slug,json=clusterSlug,proto3" json:"cluster_slug,omitempty"`
 	FoghornGrpcAddr string                 `protobuf:"bytes,5,opt,name=foghorn_grpc_addr,json=foghornGrpcAddr,proto3" json:"foghorn_grpc_addr,omitempty"` // Address for Helmsman's FOGHORN_CONTROL_ADDR
+	CertPem         string                 `protobuf:"bytes,6,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`                           // Wildcard TLS certificate (PEM) for the cluster
+	KeyPem          string                 `protobuf:"bytes,7,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`                              // Corresponding private key (PEM)
+	ClusterId       string                 `protobuf:"bytes,8,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                     // Raw cluster ID (may differ from DNS-safe cluster_slug)
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -145,6 +148,27 @@ func (x *PreRegisterEdgeResponse) GetClusterSlug() string {
 func (x *PreRegisterEdgeResponse) GetFoghornGrpcAddr() string {
 	if x != nil {
 		return x.FoghornGrpcAddr
+	}
+	return ""
+}
+
+func (x *PreRegisterEdgeResponse) GetCertPem() string {
+	if x != nil {
+		return x.CertPem
+	}
+	return ""
+}
+
+func (x *PreRegisterEdgeResponse) GetKeyPem() string {
+	if x != nil {
+		return x.KeyPem
+	}
+	return ""
+}
+
+func (x *PreRegisterEdgeResponse) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
 	}
 	return ""
 }
@@ -369,7 +393,7 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x16PreRegisterEdgeRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vexternal_ip\x18\x02 \x01(\tR\n" +
-	"externalIp\"\xc3\x01\n" +
+	"externalIp\"\x96\x02\n" +
 	"\x17PreRegisterEdgeResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1f\n" +
 	"\vedge_domain\x18\x02 \x01(\tR\n" +
@@ -377,7 +401,11 @@ const file_foghorn_proto_rawDesc = "" +
 	"\vpool_domain\x18\x03 \x01(\tR\n" +
 	"poolDomain\x12!\n" +
 	"\fcluster_slug\x18\x04 \x01(\tR\vclusterSlug\x12*\n" +
-	"\x11foghorn_grpc_addr\x18\x05 \x01(\tR\x0ffoghornGrpcAddr\"S\n" +
+	"\x11foghorn_grpc_addr\x18\x05 \x01(\tR\x0ffoghornGrpcAddr\x12\x19\n" +
+	"\bcert_pem\x18\x06 \x01(\tR\acertPem\x12\x17\n" +
+	"\akey_pem\x18\a \x01(\tR\x06keyPem\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\b \x01(\tR\tclusterId\"S\n" +
 	"\x1cInvalidateTenantCacheRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"P\n" +

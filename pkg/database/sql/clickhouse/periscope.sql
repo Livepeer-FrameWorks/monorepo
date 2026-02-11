@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS stream_event_log (
     stream_id UUID,
     internal_name String,
     node_id LowCardinality(String),
+    cluster_id LowCardinality(String) DEFAULT '',
 
     event_type LowCardinality(String),      -- canonical event type (stream_lifecycle, stream_buffer, stream_end, etc.)
     status Nullable(String),                -- stream status at time of event
@@ -342,6 +343,8 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     connection_addr String,
     connector LowCardinality(String),
     node_id LowCardinality(String),
+    cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
     request_url Nullable(String),
 
     country_code FixedString(2),
@@ -539,6 +542,8 @@ GROUP BY hour, tenant_id, stream_id, internal_name;
 CREATE TABLE IF NOT EXISTS viewer_hours_hourly (
     hour DateTime,
     tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
     stream_id UUID,
     internal_name String,
     country_code FixedString(2),
@@ -547,13 +552,15 @@ CREATE TABLE IF NOT EXISTS viewer_hours_hourly (
     total_bytes AggregateFunction(sum, UInt64)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, stream_id, country_code)
+ORDER BY (hour, tenant_id, cluster_id, origin_cluster_id, stream_id, country_code)
 TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_hours_hourly_mv TO viewer_hours_hourly AS
 SELECT
     toStartOfHour(timestamp) AS hour,
     tenant_id,
+    cluster_id,
+    origin_cluster_id,
     stream_id,
     internal_name,
     country_code,
@@ -562,30 +569,34 @@ SELECT
     sumState(bytes_transferred) AS total_bytes
 FROM viewer_connection_events
 WHERE event_type = 'disconnect'
-GROUP BY hour, tenant_id, stream_id, internal_name, country_code;
+GROUP BY hour, tenant_id, cluster_id, origin_cluster_id, stream_id, internal_name, country_code;
 
 CREATE TABLE IF NOT EXISTS tenant_viewer_daily (
     day Date,
     tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
     viewer_hours Float64,
     unique_viewers UInt32,
     total_sessions UInt32,
     egress_gb Float64
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
-ORDER BY (day, tenant_id)
+ORDER BY (day, tenant_id, cluster_id, origin_cluster_id)
 TTL day + INTERVAL 730 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_viewer_daily_mv TO tenant_viewer_daily AS
 SELECT
     toDate(hour) AS day,
     tenant_id,
+    cluster_id,
+    origin_cluster_id,
     sumMerge(total_session_seconds) / 3600.0 AS viewer_hours,
     toUInt32(uniqMerge(unique_viewers)) AS unique_viewers,
     toUInt32(count()) AS total_sessions,
     sumMerge(total_bytes) / (1024*1024*1024) AS egress_gb
 FROM viewer_hours_hourly
-GROUP BY day, tenant_id;
+GROUP BY day, tenant_id, cluster_id, origin_cluster_id;
 
 CREATE TABLE IF NOT EXISTS viewer_geo_hourly (
     hour DateTime,

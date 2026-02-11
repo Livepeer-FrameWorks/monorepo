@@ -56,7 +56,7 @@ Any MCP-compatible client can connect using the endpoint URL and authentication 
 
 ## Resources
 
-Read-only data sources. 18 URIs across 9 categories.
+Read-only data sources. 21 URIs across 10 categories.
 
 | URI                                         | Description                                       |
 | ------------------------------------------- | ------------------------------------------------- |
@@ -74,12 +74,15 @@ Read-only data sources. 18 URIs across 9 categories.
 | `analytics://geographic`                    | Geographic viewer distribution                    |
 | `nodes://list`                              | Infrastructure nodes                              |
 | `nodes://{id}`                              | Node details                                      |
+| `clusters://list`                           | Subscribed clusters                               |
+| `clusters://{id}`                           | Cluster details (capacity, pricing, status)       |
+| `clusters://marketplace`                    | Available clusters for subscription               |
 | `support://conversations`                   | Support conversation list                         |
 | `support://conversations/{conversation_id}` | Support conversation details                      |
 | `knowledge://sources`                       | Curated documentation sources for video streaming |
 | `schema://catalog`                          | Curated GraphQL catalog (schema + templates)      |
 
-Public resources (no auth required): `account://status`, `billing://pricing`.
+Public resources (no auth required): `account://status`, `billing://pricing`, `clusters://marketplace`.
 
 ### account://status
 
@@ -111,7 +114,7 @@ If `blockers` is non-empty, resolve them before billable operations.
 
 ## Tools
 
-Actions the agent can perform. 29 tools across 12 categories.
+Actions the agent can perform. 33 tools across 13 categories.
 
 | Tool                        | Description                                   | Requires          |
 | --------------------------- | --------------------------------------------- | ----------------- |
@@ -144,8 +147,12 @@ Actions the agent can perform. 29 tools across 12 categories.
 | `generate_query`            | Generate a GraphQL query from templates       | Auth              |
 | `execute_query`             | Execute a GraphQL query                       | Auth              |
 | `ask_consultant`            | Full Skipper pipeline with confidence tagging | Auth              |
+| `browse_marketplace`        | Browse available infrastructure clusters      | None              |
+| `subscribe_to_cluster`      | Subscribe to a cluster                        | Auth              |
+| `set_preferred_cluster`     | Set preferred cluster for DNS steering        | Auth              |
+| `create_private_cluster`    | Create private cluster (returns token)        | Auth              |
 
-Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`.
+Public tools (no auth required): `get_payment_options`, `submit_payment`, `resolve_playback_endpoint`, `browse_marketplace`.
 
 QoE tool responses use a consistent status enum: `healthy | warning | critical | no_data`.
 
@@ -239,6 +246,7 @@ Guided workflows for common tasks.
 | `video_consultant`          | Expert streaming consultant persona | None                                         |
 | `diagnose_quality_issue`    | Guided QoE troubleshooting workflow | `stream_id` (required), `symptom` (optional) |
 | `api_integration_assistant` | Guided API integration workflow     | `goal` (optional)                            |
+| `self_hosting`              | Self-hosted edge deployment guide   | None                                         |
 
 ## Video Consultant
 
@@ -253,7 +261,7 @@ Read `knowledge://sources` to get curated entry points for video streaming docum
 ```json
 {
   "sources": [
-    { "name": "FrameWorks Docs", "index": "https://docs.frameworks.network/", "sitemap": "..." },
+    { "name": "FrameWorks Docs", "index": "https://logbook.frameworks.network/", "sitemap": "..." },
     { "name": "MistServer Docs", "index": "https://docs.mistserver.org/", "sitemap": "..." },
     { "name": "FFmpeg Wiki", "index": "https://trac.ffmpeg.org/wiki/TitleIndex" },
     { "name": "OBS Wiki", "index": "https://obsproject.com/wiki/" }

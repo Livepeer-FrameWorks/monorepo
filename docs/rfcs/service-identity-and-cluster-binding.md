@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft
+Draft (not implemented) — Service JWT with cluster_id claims is not yet built.
+Current model uses static `SERVICE_TOKEN` for S2S and enrollment tokens for
+edge auth. See `docs/architecture/edge-auth.md` for the implemented model.
 
 ## TL;DR
 

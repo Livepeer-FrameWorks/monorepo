@@ -46,7 +46,7 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - PostgreSQL: state & aggregates
   - ClickHouse: time‑series
 - Media plane
-  - Foghorn (`api_balancing`): regional load balancer & media pipeline orchestrator
+  - Foghorn (`api_balancing`): regional load balancer & media pipeline orchestrator (HA via Redis, cross-cluster federation via FoghornFederation gRPC)
   - Helmsman (`api_sidecar`): edge sidecar, MistServer management via Foghorn
   - MistServer: ingest/processing/edge delivery
   - Livepeer Gateway (golivepeer): transcoding/AI processing
@@ -139,7 +139,8 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 | Network  | Privateer                   | 18012    | WireGuard mesh agent & Local DNS                                             |
 | Media    | Helmsman                    | 18007    | Edge API                                                                     |
 | Media    | Foghorn                     | 18008    | Balancer                                                                     |
-| Media    | Foghorn (control)           | 18019    | gRPC control API                                                             |
+| Media    | Foghorn (control)           | 18019    | gRPC control API + FoghornFederation (cross-cluster peering)                 |
+| Media    | Foghorn Redis               | 6379     | Foghorn state sync (HA). Separate from Chatwoot Redis                        |
 | Media    | MistServer (control)        | 4242     | Control API                                                                  |
 | Media    | MistServer (RTMP)           | 1935     | Ingest                                                                       |
 | Media    | MistServer (HTTP)           | 8080     | HLS/WebRTC delivery                                                          |
@@ -167,14 +168,14 @@ Single service: `make build-bin-<name>` (e.g. `make build-bin-purser`). See `Mak
 
 ## Documentation
 
-**Public docs:** [docs.frameworks.network](https://docs.frameworks.network) (source: `website_docs/`)
+**Public docs:** [logbook.frameworks.network](https://logbook.frameworks.network) (source: `website_docs/`)
 
-| Audience  | Covers                                              |
-| --------- | --------------------------------------------------- |
-| Streamers | Quick start, encoder setup, API reference, playback |
-| Operators | Architecture, deployment, DNS, CLI, WireGuard mesh  |
-| Hybrid    | Self-hosted edge nodes with managed control plane   |
-| Agents    | MCP integration, wallet auth, x402 payments         |
+| Audience   | Covers                                                       |
+| ---------- | ------------------------------------------------------------ |
+| Streamers  | Quick start, encoder setup, API reference, playback          |
+| Operators  | Architecture, deployment, DNS, CLI, multi-cluster, WireGuard |
+| Selfhosted | Self-hosted edge nodes with enrollment tokens                |
+| Agents     | MCP integration, wallet auth, x402 payments                  |
 
 **Internal docs** (in-repo, for contributors):
 

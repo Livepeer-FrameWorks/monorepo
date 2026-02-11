@@ -48,6 +48,7 @@ type AgentConfig struct {
 	Diagnostics       *diagnostics.BaselineEvaluator
 	Logger            logging.Logger
 	RequiredTierLevel int
+	InfraMonitor      *InfraMonitorConfig
 }
 
 type Agent struct {
@@ -64,6 +65,7 @@ type Agent struct {
 	logger            logging.Logger
 	requiredTierLevel int
 	thresholdTrigger  *ThresholdTrigger
+	infraMonitor      *InfraMonitor
 }
 
 type healthSnapshot struct {
@@ -121,6 +123,7 @@ func NewAgent(cfg AgentConfig) *Agent {
 		perStreamAnalyzer: perStream,
 		logger:            cfg.Logger,
 		requiredTierLevel: cfg.RequiredTierLevel,
+		infraMonitor:      NewInfraMonitor(cfg.InfraMonitor),
 	}
 	agent.thresholdTrigger = NewThresholdTrigger(agent)
 	return agent
@@ -167,6 +170,11 @@ func (a *Agent) runCycle(ctx context.Context) {
 			a.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Heartbeat processing failed")
 		}
 	}
+
+	// Infrastructure health check — runs independently of per-tenant stream
+	// health. Iterates all clusters and checks node-level metrics (CPU,
+	// memory, disk) against hard thresholds + baseline deviations.
+	a.infraMonitor.Run(ctx)
 }
 
 func (a *Agent) fetchEligibleTenants(ctx context.Context) ([]string, error) {

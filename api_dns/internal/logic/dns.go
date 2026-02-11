@@ -79,15 +79,15 @@ func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.L
 // defaultServicePorts returns the default HTTP health check port for each service type
 func defaultServicePorts() map[string]int {
 	return map[string]int{
-		"edge":    18008, // Foghorn HTTP port
-		"ingest":  18008, // Foghorn HTTP port
-		"play":    18008, // Foghorn HTTP port
-		"gateway": 18001, // Bridge HTTP port
-		"api":     18001, // Bridge HTTP port (alias)
-		"app":     3000,  // SvelteKit
-		"website": 4321,  // Astro
-		"docs":    4321,  // Astro
-		"forms":   18032, // Forms HTTP port
+		"edge-egress": 18008, // Direct to edge nodes (viewer delivery)
+		"edge-ingest": 18008, // Direct to edge nodes (stream receive)
+		"foghorn":     18008, // Foghorn viewer routing
+		"gateway":     18001, // Bridge HTTP port (alias)
+		"bridge":      18001, // Bridge HTTP port
+		"chartroom":   3000,  // SvelteKit dashboard
+		"website":     4321,  // Astro marketing (root domain)
+		"logbook":     4321,  // Astro docs
+		"steward":     18032, // Steward forms API
 	}
 }
 
@@ -95,9 +95,9 @@ func loadProxyServices() map[string]bool {
 	env := strings.TrimSpace(os.Getenv("NAVIGATOR_PROXY_SERVICES"))
 	if env == "" {
 		return map[string]bool{
-			"app":     true,
-			"website": true,
-			"docs":    true,
+			"chartroom": true,
+			"website":   true,
+			"logbook":   true,
 		}
 	}
 
@@ -193,7 +193,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 			}
 		}
 
-		if serviceType != "edge" {
+		if serviceType != "edge-egress" {
 			continue
 		}
 
@@ -239,8 +239,8 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
 	subdomain := serviceType
 	switch serviceType {
-	case "gateway", "api":
-		subdomain = "api"
+	case "gateway", "bridge":
+		subdomain = "bridge"
 	case "website":
 		return rootDomain
 	}
@@ -285,22 +285,22 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	// Map internal service types to public subdomains
 	var subdomain string
 	switch serviceType {
-	case "edge":
-		subdomain = "edge"
-	case "ingest":
-		subdomain = "ingest"
-	case "play":
-		subdomain = "play"
-	case "gateway", "api": // Handle both for robustness
-		subdomain = "api"
-	case "app":
-		subdomain = "app"
+	case "edge-egress":
+		subdomain = "edge-egress"
+	case "edge-ingest":
+		subdomain = "edge-ingest"
+	case "foghorn":
+		subdomain = "foghorn"
+	case "gateway", "bridge":
+		subdomain = "bridge"
+	case "chartroom":
+		subdomain = "chartroom"
 	case "website":
 		subdomain = "@" // Root
-	case "docs":
-		subdomain = "docs"
-	case "forms":
-		subdomain = "forms"
+	case "logbook":
+		subdomain = "logbook"
+	case "steward":
+		subdomain = "steward"
 	default:
 		return nil, fmt.Errorf("unknown service type for DNS sync: %s", serviceType)
 	}

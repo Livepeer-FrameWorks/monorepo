@@ -1790,7 +1790,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 	primaryOutputs := map[string]*pb.OutputEndpoint{
 		"WHEP": {
 			Protocol: "WHEP",
-			Url:      "https://edge.demo.frameworks.video/whep/demo_live_stream_001",
+			Url:      "https://edge-egress.demo.frameworks.video/whep/demo_live_stream_001",
 			Capabilities: &pb.OutputCapability{
 				SupportsSeek:          false,
 				SupportsQualitySwitch: true,
@@ -1801,7 +1801,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		},
 		"HLS": {
 			Protocol: "HLS",
-			Url:      "https://edge.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
+			Url:      "https://edge-egress.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
 			Capabilities: &pb.OutputCapability{
 				SupportsSeek:          true,
 				SupportsQualitySwitch: true,
@@ -1815,7 +1815,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 	fallbackOutputs := map[string]*pb.OutputEndpoint{
 		"HLS": {
 			Protocol: "HLS",
-			Url:      "https://edge.eu.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
+			Url:      "https://edge-egress.eu.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
 			Capabilities: &pb.OutputCapability{
 				SupportsSeek:          true,
 				SupportsQualitySwitch: true,
@@ -1826,7 +1826,7 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 		},
 		"HTTP": {
 			Protocol: "HTTP",
-			Url:      "https://edge.eu.demo.frameworks.video/http/demo_live_stream_001",
+			Url:      "https://edge-egress.eu.demo.frameworks.video/http/demo_live_stream_001",
 			Capabilities: &pb.OutputCapability{
 				SupportsSeek:          true,
 				SupportsQualitySwitch: false,
@@ -1839,9 +1839,9 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 
 	primary := &pb.ViewerEndpoint{
 		NodeId:      "node_demo_us_west_01",
-		BaseUrl:     "https://edge.demo.frameworks.video",
+		BaseUrl:     "https://edge-egress.demo.frameworks.video",
 		Protocol:    "webrtc",
-		Url:         "https://edge.demo.frameworks.video/webrtc/demo_live_stream_001",
+		Url:         "https://edge-egress.demo.frameworks.video/webrtc/demo_live_stream_001",
 		GeoDistance: 18.4,
 		LoadScore:   0.72,
 		Outputs:     primaryOutputs,
@@ -1849,9 +1849,9 @@ func GenerateViewerEndpointResponse(contentID string) *pb.ViewerEndpointResponse
 
 	fallback := &pb.ViewerEndpoint{
 		NodeId:      "node_demo_eu_west_01",
-		BaseUrl:     "https://edge.eu.demo.frameworks.video",
+		BaseUrl:     "https://edge-egress.eu.demo.frameworks.video",
 		Protocol:    "hls",
-		Url:         "https://edge.eu.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
+		Url:         "https://edge-egress.eu.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
 		GeoDistance: 4567.0,
 		LoadScore:   0.81,
 		Outputs:     fallbackOutputs,
@@ -1941,15 +1941,15 @@ func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse
 	description := "Demo stream for development and testing"
 
 	// Primary WHIP ingest URL
-	whipURL := "https://ingest.demo.frameworks.video/webrtc/" + streamKey
-	rtmpURL := "rtmp://ingest.demo.frameworks.video:1935/live/" + streamKey
-	srtURL := "srt://ingest.demo.frameworks.video:9000?streamid=" + streamKey
+	whipURL := "https://edge-ingest.demo.frameworks.video/webrtc/" + streamKey
+	rtmpURL := "rtmp://edge-ingest.demo.frameworks.video:1935/live/" + streamKey
+	srtURL := "srt://edge-ingest.demo.frameworks.video:9000?streamid=" + streamKey
 	region := "US West"
 	loadScore := 0.25
 
 	primary := &pb.IngestEndpoint{
 		NodeId:    "node_demo_us_west_01",
-		BaseUrl:   "https://ingest.demo.frameworks.video",
+		BaseUrl:   "https://edge-ingest.demo.frameworks.video",
 		WhipUrl:   &whipURL,
 		RtmpUrl:   &rtmpURL,
 		SrtUrl:    &srtURL,
@@ -1958,15 +1958,15 @@ func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse
 	}
 
 	// Fallback endpoint
-	fallbackWhipURL := "https://ingest.eu.demo.frameworks.video/webrtc/" + streamKey
-	fallbackRtmpURL := "rtmp://ingest.eu.demo.frameworks.video:1935/live/" + streamKey
-	fallbackSrtURL := "srt://ingest.eu.demo.frameworks.video:9000?streamid=" + streamKey
+	fallbackWhipURL := "https://edge-ingest.eu.demo.frameworks.video/webrtc/" + streamKey
+	fallbackRtmpURL := "rtmp://edge-ingest.eu.demo.frameworks.video:1935/live/" + streamKey
+	fallbackSrtURL := "srt://edge-ingest.eu.demo.frameworks.video:9000?streamid=" + streamKey
 	fallbackRegion := "EU West"
 	fallbackLoadScore := 0.42
 
 	fallback := &pb.IngestEndpoint{
 		NodeId:    "node_demo_eu_west_01",
-		BaseUrl:   "https://ingest.eu.demo.frameworks.video",
+		BaseUrl:   "https://edge-ingest.eu.demo.frameworks.video",
 		WhipUrl:   &fallbackWhipURL,
 		RtmpUrl:   &fallbackRtmpURL,
 		SrtUrl:    &fallbackSrtURL,

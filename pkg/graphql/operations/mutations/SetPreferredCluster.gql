@@ -1,0 +1,25 @@
+# Set the tenant's preferred cluster for DNS steering and primary URIs
+mutation SetPreferredCluster($clusterId: ID!) {
+  setPreferredCluster(clusterId: $clusterId) {
+    ... on Cluster {
+      id
+      clusterId
+      clusterName
+    }
+    ... on ValidationError {
+      message
+      code
+      field
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

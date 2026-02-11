@@ -12,10 +12,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/pkg/cache"
@@ -1249,6 +1251,65 @@ func handleListServers(c *gin.Context) {
 	c.String(http.StatusOK, string(jsonBytes))
 }
 
+// resolveRemoteSource attempts cross-cluster source lookup when no local node has the stream.
+// Returns a DTSC URL from the origin cluster, or empty string if unavailable.
+func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float64) string {
+	if federationClient == nil || peerManager == nil {
+		return ""
+	}
+
+	internalName := mist.ExtractInternalName(streamName)
+	if internalName == "" {
+		internalName = streamName
+	}
+
+	// Try cached stream context first (populated from PUSH_REWRITE validation)
+	var tenantID, originClusterID string
+	if triggerProcessor != nil {
+		tenantID, originClusterID = triggerProcessor.GetStreamOrigin(internalName)
+	}
+
+	// Fallback: ask Commodore for the stream's origin cluster
+	if originClusterID == "" && commodoreClient != nil {
+		if resp, err := commodoreClient.ResolveInternalName(ctx, internalName); err == nil {
+			tenantID = resp.TenantId
+			originClusterID = resp.OriginClusterId
+		}
+	}
+
+	if originClusterID == "" || originClusterID == clusterID {
+		return ""
+	}
+
+	addr := peerManager.GetPeerAddr(originClusterID)
+	if addr == "" {
+		return ""
+	}
+
+	resp, err := federationClient.QueryStream(ctx, originClusterID, addr, &pb.QueryStreamRequest{
+		StreamName:        streamName,
+		ViewerLat:         lat,
+		ViewerLon:         lon,
+		RequestingCluster: clusterID,
+		TenantId:          tenantID,
+		IsSourceSelection: true,
+	})
+	if err != nil || resp == nil || len(resp.Candidates) == 0 {
+		return ""
+	}
+
+	// Prefer origin node (has active input), otherwise best scored
+	best := resp.Candidates[0]
+	for _, c := range resp.Candidates {
+		if c.IsOrigin {
+			best = c
+			break
+		}
+	}
+
+	return best.DtscUrl
+}
+
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)
 func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	start := time.Now()
@@ -1271,22 +1332,38 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	if requireCap != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
+	if streamTenantID := getStreamTenantID(streamName); streamTenantID != "" {
+		ctx = context.WithValue(ctx, ctxkeys.KeyClusterScope, streamTenantID)
+	}
 	// Source selection (Mist pull) -> isSourceSelection=true (exclude replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
 	if err != nil {
+		// Cross-cluster source lookup: check if stream origin is on a remote peer
+		if remoteDTSC := resolveRemoteSource(ctx, streamName, lat, lon); remoteDTSC != "" {
+			durationMs := float32(time.Since(start).Milliseconds())
+			if metrics != nil {
+				metrics.RoutingDecisions.WithLabelValues("source", "remote").Inc()
+				metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
+			}
+			logger.WithFields(logging.Fields{
+				"stream":   streamName,
+				"dtsc_url": remoteDTSC,
+			}).Info("Source lookup: resolved via cross-cluster federation")
+			go postBalancingEvent(c, streamName, "remote", 0, lat, lon, "remote_source", remoteDTSC, 0, 0, "", durationMs)
+			c.String(http.StatusOK, remoteDTSC)
+			return
+		}
+
 		durationMs := float32(time.Since(start).Milliseconds())
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("source", "failed").Inc()
 		}
-		// Post failed event
 		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
 
 		fallback := query.Get("fallback")
 		if fallback == "" {
 			fallback = "dtsc://localhost:4200"
 		}
-		// Log at Info level: MistServer is asking where to pull this stream from.
-		// No node has it with active inputs, so MistServer will use push/local input instead.
 		logger.WithFields(logging.Fields{
 			"stream":   streamName,
 			"fallback": fallback,
@@ -1550,9 +1627,73 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	if requireCap != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
+	if target.TenantID != "" {
+		ctx = context.WithValue(ctx, ctxkeys.KeyClusterScope, target.TenantID)
+	}
 	// Viewer selection -> isSourceSelection=false (allow replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, internalName, lat, lon, tagAdjust, "", false)
+
+	// Remote edge scoring: check if a remote cluster has a better edge
+	if remoteEdgeCache != nil && triggerProcessor != nil {
+		rawInternal := mist.ExtractInternalName(internalName)
+		if rawInternal == "" {
+			rawInternal = internalName
+		}
+		if peers := triggerProcessor.GetClusterPeers(rawInternal, target.TenantID); len(peers) > 0 {
+			remoteEdges := collectRemoteEdges(context.Background(), peers)
+			if len(remoteEdges) > 0 {
+				remoteNodes := lb.ScoreRemoteEdges(remoteEdges, lat, lon)
+				bestRemote := findBestRemoteNode(remoteNodes)
+				if bestRemote != nil {
+					localScore := score
+					if err != nil {
+						localScore = 0
+					}
+					if bestRemote.Score > localScore && confirmRemoteStream(ctx, bestRemote.ClusterID, internalName, target.TenantID, lat, lon) {
+						durationMs := float32(time.Since(start).Milliseconds())
+						if metrics != nil {
+							metrics.RoutingDecisions.WithLabelValues("load_balancer", "remote").Inc()
+							metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
+						}
+						proto := query.Get("proto")
+						if proto != "" {
+							redirectURL := fmt.Sprintf("%s://%s/%s", proto, bestRemote.Host, streamName)
+							if vars := c.Request.URL.RawQuery; vars != "" {
+								redirectURL += "?" + vars
+							}
+							go postBalancingEvent(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", redirectURL, bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs)
+							c.Header("Location", redirectURL)
+							c.String(http.StatusTemporaryRedirect, redirectURL)
+						} else {
+							go postBalancingEvent(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", "", bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs)
+							c.String(http.StatusOK, bestRemote.Host)
+						}
+						return
+					}
+				}
+			}
+		}
+	}
+
 	if err != nil {
+		// Cross-cluster: check if an origin-pull was arranged for this stream
+		if remoteEdgeCache != nil {
+			if record, _ := remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil && record.DTSCURL != "" {
+				if u, parseErr := url.Parse(record.DTSCURL); parseErr == nil && u.Host != "" {
+					logger.WithFields(logging.Fields{
+						"stream":         streamName,
+						"dtsc_host":      u.Host,
+						"source_cluster": record.SourceCluster,
+					}).Info("Cross-cluster balance: returning remote DTSC source")
+					c.String(http.StatusOK, u.Host)
+
+					durationMs := float32(time.Since(start).Milliseconds())
+					go postBalancingEvent(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", record.DTSCURL, 0, 0, "", durationMs)
+					return
+				}
+			}
+		}
+
 		durationMs := float32(time.Since(start).Milliseconds())
 		logger.WithError(err).Error("Load balancer failed to select a node")
 		if metrics != nil {
@@ -1976,6 +2117,14 @@ func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEnd
 
 // Helper functions
 
+func getStreamTenantID(streamName string) string {
+	if triggerProcessor == nil {
+		return ""
+	}
+	tenantID, _ := triggerProcessor.GetStreamOrigin(mist.ExtractInternalName(streamName))
+	return tenantID
+}
+
 func getLatLon(c *gin.Context, query url.Values, queryKey, headerKey string) float64 {
 	// First check CloudFlare geographic headers (most accurate)
 	if queryKey == "lat" {
@@ -2062,7 +2211,7 @@ func toInt64(v interface{}) (int64, bool) {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string) (*pb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
@@ -2077,9 +2226,50 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64, 
 	}
 
 	ctx := context.Background()
+
+	// Loop prevention: if we're already pulling this stream via origin-pull, skip remote
+	// edge scoring entirely — let local scoring handle it (once DTSC pull completes, the
+	// stream appears locally and gets StreamBonus).
+	skipRemote := false
+	if remoteEdgeCache != nil {
+		if record, _ := remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
+			skipRemote = true
+		}
+	}
+
+	// Collect remote edge candidates from federation cache.
+	// Primary source: cluster peers from control-plane resolution (free with every Commodore call).
+	// Fallback: trigger processor cache (for streams ingesting locally).
+	allPeers := clusterPeers
+	if !skipRemote && remoteEdgeCache != nil && len(allPeers) > 0 {
+		deps.RemoteEdges = collectRemoteEdges(ctx, allPeers)
+	}
+	if !skipRemote && remoteEdgeCache != nil && len(deps.RemoteEdges) == 0 && triggerProcessor != nil {
+		if tpPeers := triggerProcessor.GetClusterPeers(internalName, streamTenantID); len(tpPeers) > 0 {
+			deps.RemoteEdges = collectRemoteEdges(ctx, tpPeers)
+			if len(allPeers) == 0 {
+				allPeers = tpPeers
+			}
+		}
+	}
+	// Cold start: EdgeSummary cache empty but peers exist — fan out QueryStream
+	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 {
+		deps.RemoteEdges = queryStreamFanOut(ctx, internalName, streamTenantID, lat, lon, allPeers)
+	}
+
 	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, streamTenantID)
 	if err != nil {
 		return nil, err
+	}
+
+	// If a remote cluster won the summary-level comparison, confirm with QueryStream.
+	// The remote foghorn scores its own local nodes and returns actual play-ready endpoints.
+	if response.Primary != nil && response.Primary.ClusterId != "" {
+		confirmed := confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, streamTenantID, lat, lon)
+		if confirmed != nil {
+			response = confirmed
+		}
+		// If confirmation failed, response still has the summary-level redirect — usable as fallback
 	}
 
 	// Emit routing event for analytics
@@ -2095,15 +2285,383 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64, 
 	return response, nil
 }
 
+func collectRemoteEdges(ctx context.Context, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+	var candidates []balancer.RemoteEdgeCandidate
+	for _, peer := range peers {
+		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" {
+			continue
+		}
+		record, err := remoteEdgeCache.GetEdgeSummary(ctx, peer.GetClusterId())
+		if err != nil || record == nil {
+			continue
+		}
+		for _, edge := range record.Edges {
+			candidates = append(candidates, balancer.RemoteEdgeCandidate{
+				ClusterID:   peer.GetClusterId(),
+				NodeID:      edge.NodeID,
+				BaseURL:     edge.BaseURL,
+				GeoLat:      edge.GeoLat,
+				GeoLon:      edge.GeoLon,
+				BWAvailable: edge.BWAvailableAvg,
+				CPUPercent:  edge.CPUPercentAvg,
+				RAMUsed:     edge.RAMUsed,
+				RAMMax:      edge.RAMMax,
+			})
+		}
+	}
+	return candidates
+}
+
+// findBestRemoteNode returns the highest-scored remote node, or nil if none.
+func findBestRemoteNode(nodes []balancer.NodeWithScore) *balancer.NodeWithScore {
+	if len(nodes) == 0 {
+		return nil
+	}
+	best := &nodes[0]
+	for i := 1; i < len(nodes); i++ {
+		if nodes[i].Score > best.Score {
+			best = &nodes[i]
+		}
+	}
+	return best
+}
+
+// confirmRemoteStream verifies that a remote cluster actually has the stream
+// by issuing a QueryStream RPC. Returns true only if the remote cluster responds
+// with at least one candidate. Uses a 3s timeout to avoid blocking the viewer.
+func confirmRemoteStream(ctx context.Context, remoteClusterID, internalName, tenantID string, lat, lon float64) bool {
+	if federationClient == nil || peerManager == nil {
+		return false
+	}
+	addr := peerManager.GetPeerAddr(remoteClusterID)
+	if addr == "" {
+		return false
+	}
+	qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := federationClient.QueryStream(qCtx, remoteClusterID, addr, &pb.QueryStreamRequest{
+		StreamName:        internalName,
+		ViewerLat:         lat,
+		ViewerLon:         lon,
+		RequestingCluster: clusterID,
+		TenantId:          tenantID,
+	})
+	return err == nil && resp != nil && len(resp.Candidates) > 0
+}
+
+// confirmRemoteEndpoint validates a summary-level remote win by calling QueryStream
+// on the winning cluster's foghorn. The remote foghorn scores its own local nodes
+// and returns actual play-ready endpoints. Falls back to nil (caller keeps original
+// response) if the remote cluster is unreachable or has no candidates.
+func confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) *pb.ViewerEndpointResponse {
+	if federationClient == nil || peerManager == nil {
+		return nil
+	}
+
+	// Collect unique remote clusters from response (primary + fallbacks with ClusterId)
+	type remoteHit struct {
+		clusterID string
+		score     float64
+	}
+	var remotes []remoteHit
+	seen := make(map[string]bool)
+
+	if response.Primary != nil && response.Primary.ClusterId != "" && !seen[response.Primary.ClusterId] {
+		seen[response.Primary.ClusterId] = true
+		remotes = append(remotes, remoteHit{clusterID: response.Primary.ClusterId, score: response.Primary.LoadScore})
+	}
+	for _, fb := range response.Fallbacks {
+		if fb.ClusterId != "" && !seen[fb.ClusterId] {
+			seen[fb.ClusterId] = true
+			remotes = append(remotes, remoteHit{clusterID: fb.ClusterId, score: fb.LoadScore})
+		}
+	}
+	if len(remotes) == 0 {
+		return nil
+	}
+
+	// Fan out QueryStream to all candidate remote clusters in parallel
+	type queryResult struct {
+		clusterID string
+		resp      *pb.QueryStreamResponse
+	}
+	ch := make(chan queryResult, len(remotes))
+	var wg sync.WaitGroup
+
+	for _, r := range remotes {
+		addr := peerManager.GetPeerAddr(r.clusterID)
+		if addr == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(cid, caddr string) {
+			defer wg.Done()
+			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			resp, err := federationClient.QueryStream(qCtx, cid, caddr, &pb.QueryStreamRequest{
+				StreamName:        internalName,
+				ViewerLat:         lat,
+				ViewerLon:         lon,
+				RequestingCluster: clusterID,
+				TenantId:          tenantID,
+			})
+			if err != nil || resp == nil || len(resp.Candidates) == 0 {
+				return
+			}
+			ch <- queryResult{clusterID: cid, resp: resp}
+		}(r.clusterID, addr)
+	}
+	go func() { wg.Wait(); close(ch) }()
+
+	// Pick the best candidate across all QueryStream responses
+	var bestCandidate *pb.EdgeCandidate
+	var bestCluster string
+	for qr := range ch {
+		for _, c := range qr.resp.Candidates {
+			if bestCandidate == nil || c.BwScore > bestCandidate.BwScore {
+				bestCandidate = c
+				bestCluster = qr.clusterID
+			}
+		}
+	}
+	if bestCandidate == nil {
+		return nil
+	}
+
+	// Origin-pull arrangement: if we have local edge capacity, pull stream locally via DTSC
+	// so subsequent viewers are served from our cluster without cross-cluster hops.
+	if remoteEdgeCache != nil && bestCandidate.DtscUrl != "" {
+		arranged := arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response.Metadata)
+		if arranged != nil {
+			return arranged
+		}
+	}
+
+	// No origin-pull possible — redirect viewer to the remote cluster
+	playURL := "https://" + bestCandidate.BaseUrl + "/play/" + viewKey
+	confirmed := &pb.ViewerEndpointResponse{
+		Primary: &pb.ViewerEndpoint{
+			NodeId:    bestCandidate.NodeId,
+			BaseUrl:   bestCandidate.BaseUrl,
+			Protocol:  "redirect",
+			Url:       playURL,
+			LoadScore: float64(bestCandidate.BwScore),
+			ClusterId: bestCluster,
+		},
+		Metadata: response.Metadata,
+	}
+
+	// Keep any local fallbacks from the original response
+	for _, fb := range response.Fallbacks {
+		if fb.ClusterId == "" {
+			confirmed.Fallbacks = append(confirmed.Fallbacks, fb)
+		}
+	}
+
+	logger.WithFields(logging.Fields{
+		"stream":         internalName,
+		"remote_cluster": bestCluster,
+		"remote_node":    bestCandidate.NodeId,
+		"remote_score":   bestCandidate.BwScore,
+	}).Info("Remote endpoint confirmed via QueryStream — redirecting (no local capacity)")
+
+	return confirmed
+}
+
+// arrangeOriginPull attempts to set up a local DTSC pull from a remote source.
+// If successful, returns a response pointing to the local edge; otherwise nil.
+func arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, metadata *pb.PlaybackMetadata) *pb.ViewerEndpointResponse {
+	// Already pulling this stream? Skip NotifyOriginPull and use existing record.
+	if record, _ := remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
+		endpoint := buildLocalEndpointFromReplication(record, viewKey)
+		if endpoint != nil {
+			return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
+		}
+		return nil
+	}
+
+	// Loop prevention: don't pull from a cluster that's already pulling from us
+	if replications, _ := remoteEdgeCache.GetRemoteReplications(ctx, internalName); len(replications) > 0 {
+		for _, r := range replications {
+			if r.ClusterID == remoteCluster {
+				return nil
+			}
+		}
+	}
+
+	// Find a healthy local edge with capacity (tenant-scoped on shared Foghorns)
+	lbCtx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
+	if tenantID != "" {
+		lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, tenantID)
+	}
+	localHost, _, _, _, _, err := lb.GetBestNodeWithScore(lbCtx, "", lat, lon, nil, "", false)
+	if err != nil {
+		return nil
+	}
+	localNodeID := lb.GetNodeIDByHost(localHost)
+	if localNodeID == "" {
+		return nil
+	}
+
+	// NotifyOriginPull: tell the source cluster we intend to pull
+	peerAddr := peerManager.GetPeerAddr(remoteCluster)
+	if peerAddr == "" {
+		return nil
+	}
+	ack, err := federationClient.NotifyOriginPull(ctx, remoteCluster, peerAddr, &pb.OriginPullNotification{
+		StreamName:    internalName,
+		SourceNodeId:  remote.NodeId,
+		DestClusterId: clusterID,
+		DestNodeId:    localNodeID,
+		TenantId:      tenantID,
+	})
+	if err != nil || !ack.GetAccepted() {
+		return nil
+	}
+
+	// Store the replication record so the balance endpoint can return the DTSC host
+	record := &federation.ActiveReplicationRecord{
+		StreamName:    internalName,
+		SourceNodeID:  remote.NodeId,
+		SourceCluster: remoteCluster,
+		DestCluster:   clusterID,
+		DestNodeID:    localNodeID,
+		DTSCURL:       ack.DtscUrl,
+		BaseURL:       localHost,
+		CreatedAt:     time.Now(),
+	}
+	_ = remoteEdgeCache.SetActiveReplication(ctx, record)
+
+	logger.WithFields(logging.Fields{
+		"stream":         internalName,
+		"source_cluster": remoteCluster,
+		"source_node":    remote.NodeId,
+		"dest_node":      localNodeID,
+		"dtsc_url":       ack.DtscUrl,
+	}).Info("Origin-pull arranged, serving viewer from local edge")
+
+	endpoint := buildLocalEndpointFromReplication(record, viewKey)
+	if endpoint != nil {
+		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
+	}
+	return nil
+}
+
+// buildLocalEndpointFromReplication constructs a ViewerEndpoint from a local node
+// that has an in-flight or completed origin-pull replication.
+func buildLocalEndpointFromReplication(record *federation.ActiveReplicationRecord, viewKey string) *pb.ViewerEndpoint {
+	nodeOutputs, exists := control.GetNodeOutputs(record.DestNodeID)
+	if !exists || nodeOutputs.Outputs == nil {
+		return nil
+	}
+
+	publicHost := control.ExtractPublicHostFromOutputs(nodeOutputs.Outputs)
+	var protocol, endpointURL string
+
+	if webrtcURL, ok := nodeOutputs.Outputs["WebRTC"]; ok {
+		protocol = "webrtc"
+		endpointURL = control.ResolveTemplateURL(webrtcURL, nodeOutputs.BaseURL, viewKey)
+		if strings.Contains(endpointURL, "HOST") && publicHost != "" {
+			endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
+		}
+	} else if hlsURL, ok := nodeOutputs.Outputs["HLS"]; ok {
+		protocol = "hls"
+		endpointURL = control.ResolveTemplateURL(hlsURL, nodeOutputs.BaseURL, viewKey)
+	}
+	if endpointURL == "" {
+		return nil
+	}
+
+	return &pb.ViewerEndpoint{
+		NodeId:   record.DestNodeID,
+		BaseUrl:  nodeOutputs.BaseURL,
+		Protocol: protocol,
+		Url:      endpointURL,
+		Outputs:  control.BuildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, viewKey, true),
+	}
+}
+
+// queryStreamFanOut performs cold-start QueryStream fan-out to peer clusters when
+// no EdgeSummary data is cached. Returns RemoteEdgeCandidates for scoring.
+func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+	if federationClient == nil || peerManager == nil {
+		return nil
+	}
+
+	type result struct {
+		candidates []balancer.RemoteEdgeCandidate
+	}
+	ch := make(chan result, len(peers))
+	var wg sync.WaitGroup
+
+	for _, peer := range peers {
+		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" {
+			continue
+		}
+		addr := peerManager.GetPeerAddr(peer.GetClusterId())
+		if addr == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(peerID, peerAddr string) {
+			defer wg.Done()
+			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			resp, err := federationClient.QueryStream(qCtx, peerID, peerAddr, &pb.QueryStreamRequest{
+				StreamName:        internalName,
+				ViewerLat:         lat,
+				ViewerLon:         lon,
+				RequestingCluster: clusterID,
+				TenantId:          tenantID,
+			})
+			if err != nil || resp == nil || len(resp.Candidates) == 0 {
+				ch <- result{}
+				return
+			}
+			var cands []balancer.RemoteEdgeCandidate
+			for _, c := range resp.Candidates {
+				cands = append(cands, balancer.RemoteEdgeCandidate{
+					ClusterID:   peerID,
+					NodeID:      c.NodeId,
+					BaseURL:     c.BaseUrl,
+					GeoLat:      c.GeoLat,
+					GeoLon:      c.GeoLon,
+					BWAvailable: c.BwAvailable,
+					CPUPercent:  c.CpuPercent,
+					RAMUsed:     c.RamUsed,
+					RAMMax:      c.RamMax,
+				})
+			}
+			ch <- result{candidates: cands}
+		}(peer.GetClusterId(), addr)
+	}
+	go func() { wg.Wait(); close(ch) }()
+
+	var all []balancer.RemoteEdgeCandidate
+	for r := range ch {
+		all = append(all, r.candidates...)
+	}
+	return all
+}
+
 // resolveArtifactViewerEndpoint queries database for VOD/Clip/DVR storage nodes via a single resolver.
 // It derives type from the public ID and does not depend on any caller-provided content type.
 func resolveArtifactViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB:     db,
-		LB:     lb,
-		GeoLat: lat,
-		GeoLon: lon,
+		DB:             db,
+		LB:             lb,
+		GeoLat:         lat,
+		GeoLon:         lon,
+		FedClient:      federationClient,
+		PeerResolver:   peerManager,
+		LocalClusterID: clusterID,
+		RemoteArtifacts: func() control.RemoteArtifactLookup {
+			if remoteEdgeCache == nil {
+				return nil
+			}
+			return &httpRemoteArtifactAdapter{cache: remoteEdgeCache}
+		}(),
 	}
 
 	ctx := context.Background()
@@ -2290,7 +2848,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// Resolve endpoint
 	var response *pb.ViewerEndpointResponse
 	if contentType == "live" {
-		response, err = resolveLiveViewerEndpoint(req, lat, lon, internalName, resolution.TenantId, resolution.StreamId)
+		response, err = resolveLiveViewerEndpoint(req, lat, lon, internalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
 	} else {
 		response, err = resolveArtifactViewerEndpoint(req, lat, lon)
 	}

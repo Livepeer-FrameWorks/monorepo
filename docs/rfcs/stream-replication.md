@@ -2,7 +2,11 @@
 
 ## Status
 
-Draft
+Not implemented. Federation (see `docs/architecture/federation.md`) provides cross-cluster
+stream discovery and origin-pull, but there is no replication topology. All replication is
+direct origin→edge regardless of geography. The proposed topology model (origin/hub/edge
+roles, region-aware replication policy, per-stream controls like `max_replicas` and
+`allowed_regions`, loop prevention) has not been built.
 
 ## TL;DR
 

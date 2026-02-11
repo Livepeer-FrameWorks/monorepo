@@ -28,7 +28,8 @@ type ContentResolution struct {
 	FixedNodeID  string // Storage node ID for VOD content
 	TenantId     string
 	StreamId     string
-	InternalName string // Original stream internal name (for clips/DVR: the source stream)
+	InternalName string                  // Original stream internal name (for clips/DVR: the source stream)
+	ClusterPeers []*pb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
 }
 
 // ResolveContent determines content type and resolution strategy for a public playback ID.
@@ -75,6 +76,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				TenantId:     resp.TenantId,
 				StreamId:     resp.StreamId,
 				InternalName: resp.InternalName,
+				ClusterPeers: resp.ClusterPeers,
 			}, nil
 		}
 	}
@@ -82,12 +84,44 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 	return nil, fmt.Errorf("content not found")
 }
 
+// ArtifactFederationClient is the subset of federation.FederationClient needed for cross-cluster artifact resolution.
+type ArtifactFederationClient interface {
+	PrepareArtifact(ctx context.Context, clusterID, addr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error)
+}
+
+// PeerAddressResolver resolves gRPC addresses for peer clusters.
+type PeerAddressResolver interface {
+	GetPeerAddr(clusterID string) string
+}
+
+// RemoteArtifactLookup queries the federation cache for hot artifacts on peer edges.
+type RemoteArtifactLookup interface {
+	GetRemoteArtifacts(ctx context.Context, artifactHash string) ([]*RemoteArtifactInfo, error)
+}
+
+// RemoteArtifactInfo describes a hot artifact on a peer cluster's edge node.
+type RemoteArtifactInfo struct {
+	PeerCluster  string
+	NodeID       string
+	BaseURL      string
+	SizeBytes    uint64
+	AccessCount  uint32
+	LastAccessed int64
+	GeoLat       float64
+	GeoLon       float64
+}
+
 // PlaybackDependencies contains dependencies needed for playback resolution
 type PlaybackDependencies struct {
-	DB     *sql.DB
-	LB     *balancer.LoadBalancer
-	GeoLat float64
-	GeoLon float64
+	DB              *sql.DB
+	LB              *balancer.LoadBalancer
+	GeoLat          float64
+	GeoLon          float64
+	RemoteEdges     []balancer.RemoteEdgeCandidate // optional: pre-collected remote edge candidates from federation
+	FedClient       ArtifactFederationClient       // optional: for cross-cluster artifact resolution
+	PeerResolver    PeerAddressResolver            // optional: resolves peer cluster addresses
+	LocalClusterID  string                         // this cluster's ID
+	RemoteArtifacts RemoteArtifactLookup           // optional: hot artifact locations from peering
 }
 
 // ResolveArtifactPlayback resolves playback endpoints for any artifact (clip/dvr/vod) using playback ID
@@ -113,6 +147,7 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	contentType := strings.ToLower(artifactResp.ContentType)
 	artifactType := contentType
 	tenantID := artifactResp.TenantId
+	originClusterID := artifactResp.GetOriginClusterId()
 
 	// Query foghorn.artifacts for lifecycle state
 	var internalName string
@@ -138,6 +173,9 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
+				return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID)
+			}
 			return nil, fmt.Errorf("%s not found", contentType)
 		}
 		return nil, fmt.Errorf("failed to query artifact: %w", err)
@@ -145,6 +183,25 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 
 	artifactNodes := state.DefaultManager().FindNodesByArtifactHash(artifactResp.ArtifactHash)
 	if len(artifactNodes) == 0 {
+		// Check peer clusters for hot copies before falling through to S3/defrost
+		if deps.RemoteArtifacts != nil {
+			remoteHits, _ := deps.RemoteArtifacts.GetRemoteArtifacts(ctx, artifactResp.ArtifactHash)
+			if len(remoteHits) > 0 {
+				best := pickBestRemoteArtifact(remoteHits, deps.GeoLat, deps.GeoLon)
+				if best != nil {
+					return &pb.ViewerEndpointResponse{
+						Primary: &pb.ViewerEndpoint{
+							NodeId:      best.NodeID,
+							BaseUrl:     best.BaseURL,
+							Protocol:    "https",
+							GeoDistance: CalculateGeoDistance(deps.GeoLat, deps.GeoLon, best.GeoLat, best.GeoLon),
+							ClusterId:   best.PeerCluster,
+						},
+					}, nil
+				}
+			}
+		}
+
 		// No cached nodes - trigger defrost if asset is in S3
 		location := strings.ToLower(strings.TrimSpace(storageLocation.String))
 		sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
@@ -166,6 +223,10 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 				return nil, fmt.Errorf("failed to start defrost: %w", err)
 			}
 			return nil, NewDefrostingError(10, "defrost started")
+		}
+		// Federation fallback: artifact exists locally but not on any node and not in S3
+		if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
+			return resolveRemoteArtifact(ctx, deps, artifactResp.ArtifactHash, originClusterID, contentType, tenantID)
 		}
 		return nil, fmt.Errorf("storage node unknown: no node assignment found")
 	}
@@ -384,14 +445,45 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 
 	// Use load balancer with internal name to find nodes that have the stream
 	lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
+	if tenantID != "" {
+		lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
+	}
 	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
-	if err != nil {
+	if err != nil && len(deps.RemoteEdges) == 0 {
 		return nil, fmt.Errorf("no suitable edge nodes available: %w", err)
+	}
+
+	// Score remote edges and merge with local results
+	if len(deps.RemoteEdges) > 0 {
+		remoteNodes := deps.LB.ScoreRemoteEdges(deps.RemoteEdges, deps.GeoLat, deps.GeoLon)
+		nodes = append(nodes, remoteNodes...)
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Score > nodes[j].Score })
+		if len(nodes) > 5 {
+			nodes = nodes[:5]
+		}
 	}
 
 	var endpoints []*pb.ViewerEndpoint
 
 	for _, node := range nodes {
+		// Remote edges: produce a redirect endpoint to the peer cluster's play domain
+		if node.ClusterID != "" {
+			geoDistance := 0.0
+			if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
+				geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
+			}
+			endpoints = append(endpoints, &pb.ViewerEndpoint{
+				NodeId:      node.NodeID,
+				BaseUrl:     node.Host,
+				Protocol:    "redirect",
+				Url:         "https://" + node.Host + "/play/" + viewKey,
+				GeoDistance: geoDistance,
+				LoadScore:   float64(node.Score),
+				ClusterId:   node.ClusterID,
+			})
+			continue
+		}
+
 		nodeOutputs, exists := GetNodeOutputs(node.NodeID)
 		if !exists || nodeOutputs.Outputs == nil {
 			continue
@@ -707,4 +799,80 @@ func DeriveMistHTTPBase(base string) string {
 		port = "8080"
 	}
 	return u.Scheme + "://" + hostname + ":" + port
+}
+
+// pickBestRemoteArtifact selects the best remote artifact location by geo distance
+// to the viewer. Applies a CrossClusterPenalty in the scoring so local edges
+// (if they existed) would have been preferred — this function is only called
+// when there are zero local nodes with the artifact.
+func pickBestRemoteArtifact(hits []*RemoteArtifactInfo, viewerLat, viewerLon float64) *RemoteArtifactInfo {
+	if len(hits) == 0 {
+		return nil
+	}
+	var best *RemoteArtifactInfo
+	bestDist := math.MaxFloat64
+	for _, h := range hits {
+		dist := CalculateGeoDistance(viewerLat, viewerLon, h.GeoLat, h.GeoLon)
+		if dist < bestDist {
+			bestDist = dist
+			best = h
+		}
+	}
+	return best
+}
+
+// resolveRemoteArtifact handles cross-cluster artifact resolution by calling
+// PrepareArtifact on the origin cluster's Foghorn. If the artifact is ready,
+// it creates a local adoption record and triggers defrost from the presigned URLs.
+func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, artifactHash, originClusterID, contentType, tenantID string) (*pb.ViewerEndpointResponse, error) {
+	if deps.PeerResolver == nil {
+		return nil, fmt.Errorf("peer resolver not available for cross-cluster artifact")
+	}
+	addr := deps.PeerResolver.GetPeerAddr(originClusterID)
+	if addr == "" {
+		return nil, fmt.Errorf("origin cluster %s address unknown", originClusterID)
+	}
+
+	resp, err := deps.FedClient.PrepareArtifact(ctx, originClusterID, addr, &pb.PrepareArtifactRequest{
+		ArtifactId:        artifactHash,
+		RequestingCluster: deps.LocalClusterID,
+		ArtifactType:      contentType,
+		TenantId:          tenantID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare artifact from origin cluster: %w", err)
+	}
+	if resp.GetError() != "" {
+		return nil, fmt.Errorf("origin cluster error: %s", resp.GetError())
+	}
+	if !resp.GetReady() {
+		est := resp.GetEstReadySeconds()
+		if est == 0 {
+			est = 15
+		}
+		return nil, NewDefrostingError(int(est), "remote artifact being prepared")
+	}
+
+	// Adopt the artifact locally (INSERT ON CONFLICT DO NOTHING)
+	if deps.DB != nil {
+		_, _ = deps.DB.ExecContext(ctx, `
+			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, format, status, storage_location, sync_status, origin_cluster_id)
+			VALUES ($1, $2, $3, $4, $5, 'active', 's3', 'synced', $6)
+			ON CONFLICT (artifact_hash, artifact_type, tenant_id) DO NOTHING
+		`, artifactHash, contentType, tenantID, resp.GetInternalName(), resp.GetFormat(), originClusterID)
+	}
+
+	// Trigger local defrost using the origin cluster's presigned URLs
+	nodeID, err := pickStorageNodeID()
+	if err != nil {
+		return nil, fmt.Errorf("no local storage node for remote artifact defrost: %w", err)
+	}
+	if _, err := StartRemoteDefrost(ctx, contentType, artifactHash, nodeID, 30*time.Second, controlLogger(), resp.GetUrl(), resp.GetSegmentUrls()); err != nil {
+		var defrostErr *DefrostingError
+		if errors.As(err, &defrostErr) {
+			return nil, defrostErr
+		}
+		return nil, fmt.Errorf("failed to start remote artifact defrost: %w", err)
+	}
+	return nil, NewDefrostingError(10, "remote artifact defrost started")
 }

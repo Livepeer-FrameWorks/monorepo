@@ -2,7 +2,10 @@ package foghorn
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
+	"strings"
 	"time"
 
 	"frameworks/pkg/clients"
@@ -11,21 +14,38 @@ import (
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
+// addrIsFQDN returns true if the address host part is a fully-qualified domain
+// name (contains dots and is not a bare IP). Docker service names like "foghorn"
+// return false; production addresses like "foghorn.cluster.frameworks.network"
+// return true.
+func addrIsFQDN(addr string) bool {
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	return strings.Contains(host, ".")
+}
+
 // GRPCClient is the gRPC client for Foghorn control plane services
 type GRPCClient struct {
-	conn    *grpc.ClientConn
-	clip    pb.ClipControlServiceClient
-	dvr     pb.DVRControlServiceClient
-	viewer  pb.ViewerControlServiceClient
-	vod     pb.VodControlServiceClient
-	tenant  pb.TenantControlServiceClient
-	edge    pb.EdgeProvisioningServiceClient
-	logger  logging.Logger
-	timeout time.Duration
+	conn       *grpc.ClientConn
+	clip       pb.ClipControlServiceClient
+	dvr        pb.DVRControlServiceClient
+	viewer     pb.ViewerControlServiceClient
+	vod        pb.VodControlServiceClient
+	tenant     pb.TenantControlServiceClient
+	edge       pb.EdgeProvisioningServiceClient
+	federation pb.FoghornFederationClient
+	logger     logging.Logger
+	timeout    time.Duration
 }
 
 // GRPCConfig represents the configuration for the Foghorn gRPC client
@@ -38,6 +58,8 @@ type GRPCConfig struct {
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
 	ServiceToken string
+	// UseTLS enables TLS transport. Uses system CA pool for validation.
+	UseTLS bool
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
@@ -73,20 +95,60 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	}
 }
 
+func streamAuthInterceptor(serviceToken string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		md := metadata.MD{}
+
+		if userID := ctxkeys.GetUserID(ctx); userID != "" {
+			md.Set("x-user-id", userID)
+		}
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+			md.Set("x-tenant-id", tenantID)
+		}
+
+		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
+			md.Set("authorization", "Bearer "+jwtToken)
+		} else if serviceToken != "" {
+			md.Set("authorization", "Bearer "+serviceToken)
+		}
+
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = metadata.Join(existingMD, md)
+		}
+
+		ctx = metadata.NewOutgoingContext(ctx, md)
+		return streamer(ctx, desc, cc, method, opts...)
+	}
+}
+
 // NewGRPCClient creates a new gRPC client for Foghorn
 func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
 	}
 
+	// Auto-detect TLS: explicit UseTLS flag, or FQDN address → TLS.
+	// Docker service names (no dots) → insecure. Production FQDNs → TLS.
+	useTLS := config.UseTLS || addrIsFQDN(config.GRPCAddr)
+	var creds credentials.TransportCredentials
+	if useTLS {
+		creds = credentials.NewTLS(&tls.Config{})
+	} else {
+		creds = insecure.NewCredentials()
+	}
+
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
 	conn, err := grpc.NewClient(
 		config.GRPCAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptor("foghorn", config.Logger),
+		),
+		grpc.WithChainStreamInterceptor(
+			streamAuthInterceptor(config.ServiceToken),
+			clients.FailsafeStreamInterceptor("foghorn", config.Logger),
 		),
 	)
 	if err != nil {
@@ -94,16 +156,22 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	return &GRPCClient{
-		conn:    conn,
-		clip:    pb.NewClipControlServiceClient(conn),
-		dvr:     pb.NewDVRControlServiceClient(conn),
-		viewer:  pb.NewViewerControlServiceClient(conn),
-		vod:     pb.NewVodControlServiceClient(conn),
-		tenant:  pb.NewTenantControlServiceClient(conn),
-		edge:    pb.NewEdgeProvisioningServiceClient(conn),
-		logger:  config.Logger,
-		timeout: config.Timeout,
+		conn:       conn,
+		clip:       pb.NewClipControlServiceClient(conn),
+		dvr:        pb.NewDVRControlServiceClient(conn),
+		viewer:     pb.NewViewerControlServiceClient(conn),
+		vod:        pb.NewVodControlServiceClient(conn),
+		tenant:     pb.NewTenantControlServiceClient(conn),
+		edge:       pb.NewEdgeProvisioningServiceClient(conn),
+		federation: pb.NewFoghornFederationClient(conn),
+		logger:     config.Logger,
+		timeout:    config.Timeout,
 	}, nil
+}
+
+// Federation returns the FoghornFederation client for cross-cluster RPCs.
+func (c *GRPCClient) Federation() pb.FoghornFederationClient {
+	return c.federation
 }
 
 // Close closes the gRPC connection

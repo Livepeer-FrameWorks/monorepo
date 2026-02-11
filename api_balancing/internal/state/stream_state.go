@@ -60,6 +60,7 @@ type StreamTrack struct {
 type StreamState struct {
 	StreamName       string                 `json:"stream_name"`
 	InternalName     string                 `json:"internal_name"`
+	PlaybackID       string                 `json:"playback_id,omitempty"`
 	NodeID           string                 `json:"node_id"`
 	TenantID         string                 `json:"tenant_id"`
 	Status           string                 `json:"status"`       // "live", "offline", etc.
@@ -127,7 +128,8 @@ type NodeState struct {
 	IsHealthy            bool                   `json:"is_healthy"`
 	IsStale              bool                   `json:"is_stale"` // Node hasn't reported recently
 	OperationalMode      NodeOperationalMode    `json:"operational_mode,omitempty"`
-	TenantID             string                 `json:"tenant_id,omitempty"` // Tenant owning this dedicated node
+	TenantID             string                 `json:"tenant_id,omitempty"`  // Tenant owning this dedicated node
+	ClusterID            string                 `json:"cluster_id,omitempty"` // Virtual cluster this node belongs to
 	Latitude             *float64               `json:"latitude,omitempty"`
 	Longitude            *float64               `json:"longitude,omitempty"`
 	Location             string                 `json:"location,omitempty"`
@@ -755,6 +757,18 @@ func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, tr
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
+// SetStreamPlaybackID sets the playback_id on an existing stream for federation advertisement.
+func (sm *StreamStateManager) SetStreamPlaybackID(internalName, playbackID string) {
+	if playbackID == "" {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if ss := sm.streams[internalName]; ss != nil {
+		ss.PlaybackID = playbackID
+	}
+}
+
 func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	sm.mu.Lock()
 	union := sm.streams[internalName]
@@ -1289,7 +1303,7 @@ func (sm *StreamStateManager) GetClusterSnapshot() (streams []*StreamState, node
 // SetNodeConnectionInfo updates connection-related information for a node.
 // It primarily focuses on setting the binary host IP for same-host avoidance in the balancer.
 // Node tags are updated only if explicitly provided, allowing for flexible tag management.
-func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, tenantID string, tags []string) {
+func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, tenantID string, clusterID string, tags []string) {
 	sm.mu.Lock()
 
 	n := sm.nodes[nodeID]
@@ -1300,6 +1314,9 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 
 	if tenantID != "" {
 		n.TenantID = tenantID
+	}
+	if clusterID != "" {
+		n.ClusterID = clusterID
 	}
 
 	// Update node tags only if explicitly provided (non-nil slice)
@@ -1776,6 +1793,10 @@ type EnhancedBalancerNodeSnapshot struct {
 	BWAvailable    uint64 `json:"-"`               // Available bandwidth
 	AvailBandwidth uint64 `json:"avail_bandwidth"` // Available bandwidth
 
+	// Ownership
+	TenantID  string `json:"tenant_id"`
+	ClusterID string `json:"cluster_id"`
+
 	// Capabilities and storage
 	Roles                []string `json:"roles"`
 	CapIngest            bool     `json:"cap_ingest"`
@@ -1936,6 +1957,8 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			CapProcessing:        n.CapProcessing,
 			StorageCapacityBytes: n.StorageCapacityBytes,
 			StorageUsedBytes:     n.StorageUsedBytes,
+			TenantID:             n.TenantID,
+			ClusterID:            n.ClusterID,
 
 			// GPU information
 			GPUVendor: n.GPUVendor,
@@ -2042,21 +2065,30 @@ func (sm *StreamStateManager) runStalenessChecker() {
 	}
 }
 
-// checkStaleNodes marks nodes as stale but preserves their data
+// nodeRemovalThreshold is how long a disconnected node stays in state before eviction.
+// Disconnected nodes have LastHeartbeat zeroed by MarkNodeDisconnected.
+const nodeRemovalThreshold = 5 * time.Minute
+
+// checkStaleNodes marks nodes as stale and evicts long-disconnected nodes.
 func (sm *StreamStateManager) checkStaleNodes() {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	now := time.Now()
 	staleThreshold := sm.getStaleThreshold()
 
-	for _, node := range sm.nodes {
+	var toRemove []string
+
+	for nodeID, node := range sm.nodes {
 		if node.LastHeartbeat.IsZero() {
 			if !node.IsStale {
 				node.IsStale = true
 			}
 			if node.IsHealthy {
 				node.IsHealthy = false
+			}
+			// Evict disconnected nodes after grace period
+			if !node.LastUpdate.IsZero() && now.Sub(node.LastUpdate) > nodeRemovalThreshold {
+				toRemove = append(toRemove, nodeID)
 			}
 			continue
 		}
@@ -2073,6 +2105,24 @@ func (sm *StreamStateManager) checkStaleNodes() {
 			if node.IsStale {
 				node.IsStale = false
 			}
+		}
+	}
+
+	for _, nodeID := range toRemove {
+		delete(sm.nodes, nodeID)
+	}
+	sm.mu.Unlock()
+
+	// Delete from Redis outside the lock
+	for _, nodeID := range toRemove {
+		if sm.redisStore != nil {
+			if err := sm.redisStore.DeleteNode(nodeID); err != nil && stateLogger != nil {
+				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis")
+			}
+			_ = sm.redisStore.PublishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
+		}
+		if stateLogger != nil {
+			stateLogger.WithField("node_id", nodeID).Info("Evicted disconnected node from state")
 		}
 	}
 }

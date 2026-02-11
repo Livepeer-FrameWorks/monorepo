@@ -2018,6 +2018,16 @@ func (r *mutationResolver) CreatePrivateCluster(ctx context.Context, input model
 	return r.DoCreatePrivateCluster(ctx, input)
 }
 
+// CreateEdgeCluster is the resolver for the createEdgeCluster field.
+func (r *mutationResolver) CreateEdgeCluster(ctx context.Context, input model.CreateEdgeClusterInput) (model.CreateEdgeClusterResult, error) {
+	return r.DoCreateEdgeCluster(ctx, input)
+}
+
+// CreateEnrollmentToken is the resolver for the createEnrollmentToken field.
+func (r *mutationResolver) CreateEnrollmentToken(ctx context.Context, clusterID string, name *string, ttl *string) (model.CreateEnrollmentTokenResult, error) {
+	return r.DoCreateEnrollmentToken(ctx, clusterID, name, ttl)
+}
+
 // UpdateClusterMarketplace is the resolver for the updateClusterMarketplace field.
 func (r *mutationResolver) UpdateClusterMarketplace(ctx context.Context, clusterID string, input model.UpdateClusterMarketplaceInput) (model.UpdateClusterResult, error) {
 	rawID, err := globalid.DecodeExpected(clusterID, globalid.TypeCluster)
@@ -2059,6 +2069,11 @@ func (r *mutationResolver) ApproveClusterSubscription(ctx context.Context, subsc
 // RejectClusterSubscription is the resolver for the rejectClusterSubscription field.
 func (r *mutationResolver) RejectClusterSubscription(ctx context.Context, subscriptionID string, reason *string) (model.ClusterSubscriptionResult, error) {
 	return r.DoRejectClusterSubscription(ctx, subscriptionID, reason)
+}
+
+// SetPreferredCluster is the resolver for the setPreferredCluster field.
+func (r *mutationResolver) SetPreferredCluster(ctx context.Context, clusterID string) (model.SetPreferredClusterResult, error) {
+	return r.DoSetPreferredCluster(ctx, clusterID)
 }
 
 // CreateDeveloperToken is the resolver for the createDeveloperToken field.

@@ -43,6 +43,14 @@ type CreateDeveloperTokenResult interface {
 	IsCreateDeveloperTokenResult()
 }
 
+type CreateEdgeClusterResult interface {
+	IsCreateEdgeClusterResult()
+}
+
+type CreateEnrollmentTokenResult interface {
+	IsCreateEnrollmentTokenResult()
+}
+
 type CreatePaymentResult interface {
 	IsCreatePaymentResult()
 }
@@ -123,6 +131,10 @@ type RevokeDeveloperTokenResult interface {
 
 type SendMessageResult interface {
 	IsSendMessageResult()
+}
+
+type SetPreferredClusterResult interface {
+	IsSetPreferredClusterResult()
 }
 
 type StartDVRResult interface {
@@ -274,6 +286,10 @@ func (AuthError) IsRevokeBootstrapTokenResult() {}
 
 func (AuthError) IsCreatePrivateClusterResult() {}
 
+func (AuthError) IsCreateEdgeClusterResult() {}
+
+func (AuthError) IsCreateEnrollmentTokenResult() {}
+
 func (AuthError) IsUpdateClusterResult() {}
 
 func (AuthError) IsCreateClusterInviteResult() {}
@@ -281,6 +297,8 @@ func (AuthError) IsCreateClusterInviteResult() {}
 func (AuthError) IsRevokeClusterInviteResult() {}
 
 func (AuthError) IsClusterSubscriptionResult() {}
+
+func (AuthError) IsSetPreferredClusterResult() {}
 
 func (AuthError) IsLinkWalletResult() {}
 
@@ -676,6 +694,27 @@ type CreateDeveloperTokenInput struct {
 	ExpiresIn *int `json:"expiresIn,omitempty"`
 }
 
+type CreateEdgeClusterInput struct {
+	// Human-readable cluster name.
+	ClusterName string `json:"clusterName"`
+	// Short description.
+	ShortDescription *string `json:"shortDescription,omitempty"`
+}
+
+type CreateEdgeClusterResponse struct {
+	Cluster        *proto.InfrastructureCluster `json:"cluster"`
+	BootstrapToken *proto.BootstrapToken        `json:"bootstrapToken"`
+	FoghornAddr    string                       `json:"foghornAddr"`
+}
+
+func (CreateEdgeClusterResponse) IsCreateEdgeClusterResult() {}
+
+type CreateEnrollmentTokenResponse struct {
+	BootstrapToken *proto.BootstrapToken `json:"bootstrapToken"`
+}
+
+func (CreateEnrollmentTokenResponse) IsCreateEnrollmentTokenResult() {}
+
 type CreatePaymentInput struct {
 	InvoiceID string        `json:"invoiceId"`
 	Amount    float64       `json:"amount"`
@@ -1056,6 +1095,8 @@ func (NotFoundError) IsCreateClusterInviteResult() {}
 func (NotFoundError) IsRevokeClusterInviteResult() {}
 
 func (NotFoundError) IsClusterSubscriptionResult() {}
+
+func (NotFoundError) IsSetPreferredClusterResult() {}
 
 func (NotFoundError) IsUnlinkWalletResult() {}
 
@@ -1499,11 +1540,17 @@ func (ValidationError) IsCreateBootstrapTokenResult() {}
 
 func (ValidationError) IsCreatePrivateClusterResult() {}
 
+func (ValidationError) IsCreateEdgeClusterResult() {}
+
+func (ValidationError) IsCreateEnrollmentTokenResult() {}
+
 func (ValidationError) IsUpdateClusterResult() {}
 
 func (ValidationError) IsCreateClusterInviteResult() {}
 
 func (ValidationError) IsClusterSubscriptionResult() {}
+
+func (ValidationError) IsSetPreferredClusterResult() {}
 
 func (ValidationError) IsWalletLoginResult() {}
 

@@ -21,19 +21,58 @@ type EdgeVars struct {
 	// Optional: file-based TLS certificate paths (if using Navigator-issued certs)
 	CertPath string // e.g., /etc/frameworks/certs/cert.pem
 	KeyPath  string // e.g., /etc/frameworks/certs/key.pem
+	// Deployment mode: "docker" (default) or "native" (bare metal with systemd)
+	Mode             string
+	HelmsmanUpstream string // Docker: "helmsman:18007", Native: "localhost:18007"
+	MistUpstream     string // Docker: "mistserver:8080", Native: "localhost:8080"
+	CaddyAdminAddr   string // Docker: "unix//run/caddy/admin.sock", Native: "localhost:2019"
+}
+
+// SetModeDefaults fills Mode-dependent fields if not explicitly set.
+func (v *EdgeVars) SetModeDefaults() {
+	if v.Mode == "" {
+		v.Mode = "docker"
+	}
+	if v.HelmsmanUpstream == "" {
+		if v.Mode == "native" {
+			v.HelmsmanUpstream = "localhost:18007"
+		} else {
+			v.HelmsmanUpstream = "helmsman:18007"
+		}
+	}
+	if v.MistUpstream == "" {
+		if v.Mode == "native" {
+			v.MistUpstream = "localhost:8080"
+		} else {
+			v.MistUpstream = "mistserver:8080"
+		}
+	}
+	if v.CaddyAdminAddr == "" {
+		if v.Mode == "native" {
+			v.CaddyAdminAddr = "localhost:2019"
+		} else {
+			v.CaddyAdminAddr = "unix//run/caddy/admin.sock"
+		}
+	}
 }
 
 // WriteEdgeTemplates writes edge stack templates into target directory.
 // It will not overwrite existing files unless overwrite is true.
 func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
+	vars.SetModeDefaults()
+
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return err
 	}
-	// files to render
+	// files to render — native mode skips docker-compose
 	files := []struct{ in, out string }{
-		{"edge/docker-compose.edge.yml.tmpl", "docker-compose.edge.yml"},
 		{"edge/Caddyfile.tmpl", "Caddyfile"},
 		{"edge/.edge.env.tmpl", ".edge.env"},
+	}
+	if vars.Mode != "native" {
+		files = append([]struct{ in, out string }{
+			{"edge/docker-compose.edge.yml.tmpl", "docker-compose.edge.yml"},
+		}, files...)
 	}
 	for _, f := range files {
 		b, err := edgeFS.ReadFile(f.in)
@@ -49,6 +88,10 @@ func WriteEdgeTemplates(targetDir string, vars EdgeVars, overwrite bool) error {
 		content = strings.ReplaceAll(content, "{{ENROLLMENT_TOKEN}}", vars.EnrollmentToken)
 		content = strings.ReplaceAll(content, "{{CERT_PATH}}", vars.CertPath)
 		content = strings.ReplaceAll(content, "{{KEY_PATH}}", vars.KeyPath)
+		content = strings.ReplaceAll(content, "{{HELMSMAN_UPSTREAM}}", vars.HelmsmanUpstream)
+		content = strings.ReplaceAll(content, "{{MIST_UPSTREAM}}", vars.MistUpstream)
+		content = strings.ReplaceAll(content, "{{CADDY_ADMIN_ADDR}}", vars.CaddyAdminAddr)
+		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
 		// TLS: use explicit cert paths if provided, otherwise auto-ACME (Caddy default).
 		// ConfigSeed will push wildcard certs to /etc/frameworks/certs/ at runtime;
 		// Caddy watches the files and hot-reloads when they appear.

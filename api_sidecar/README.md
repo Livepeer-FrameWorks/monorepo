@@ -6,7 +6,7 @@ Edge sidecar that turns a MistServer node into a fully managed, hands-off media 
 
 - **Your hardware, our automation**: Run MistServer on your own servers while FrameWorks handles orchestration
 - **No cloud lock-in**: Edge nodes communicate with Foghorn over gRPC—swap control planes without re-deploying nodes
-- **Hybrid deployments**: Mix self-hosted edge nodes with FrameWorks-managed infrastructure seamlessly
+- **Selfhosted deployments**: Mix self-hosted edge nodes with FrameWorks-managed infrastructure seamlessly
 
 ## What it does
 

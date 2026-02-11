@@ -17,6 +17,7 @@ type SystemdUnitData struct {
 	After       []string // Service dependencies
 	Restart     string
 	RestartSec  string
+	LimitNOFILE string // e.g., "1048576" for services needing high fd count
 }
 
 // DockerComposeData holds data for docker-compose template
@@ -74,7 +75,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier={{.ServiceName}}
 
-NoNewPrivileges=true
+{{if .LimitNOFILE}}LimitNOFILE={{.LimitNOFILE}}
+{{end}}NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=yes
@@ -212,36 +214,36 @@ func GenerateCentralCaddyfile(data CaddyfileData) (string, error) {
 
 {{if .Routes.bridge}}
 # GraphQL API Gateway & Auth
-api.{$CADDY_ROOT_DOMAIN} {
+bridge.{$CADDY_ROOT_DOMAIN} {
 	handle {
 		reverse_proxy localhost:{{.Routes.bridge}}
 	}
 }
 {{end}}
 
-{{if .Routes.webapp}}
+{{if .Routes.chartroom}}
 # Web Application (Dashboard)
-app.{$CADDY_ROOT_DOMAIN} {
+chartroom.{$CADDY_ROOT_DOMAIN} {
 	handle {
-		reverse_proxy localhost:{{.Routes.webapp}}
+		reverse_proxy localhost:{{.Routes.chartroom}}
 	}
 }
 {{end}}
 
-{{if .Routes.docs}}
+{{if .Routes.logbook}}
 # Documentation
-docs.{$CADDY_ROOT_DOMAIN} {
+logbook.{$CADDY_ROOT_DOMAIN} {
 	handle {
-		reverse_proxy localhost:{{.Routes.docs}}
+		reverse_proxy localhost:{{.Routes.logbook}}
 	}
 }
 {{end}}
 
-{{if .Routes.forms}}
+{{if .Routes.steward}}
 # Forms Service
-forms.{$CADDY_ROOT_DOMAIN} {
+steward.{$CADDY_ROOT_DOMAIN} {
 	handle {
-		reverse_proxy localhost:{{.Routes.forms}}
+		reverse_proxy localhost:{{.Routes.steward}}
 	}
 }
 {{end}}

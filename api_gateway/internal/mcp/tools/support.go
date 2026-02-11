@@ -22,7 +22,7 @@ func RegisterSupportTools(server *mcp.Server, serviceClients *clients.ServiceCli
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "search_support_history",
-			Description: "Search past support conversations by keyword. Useful for finding previous solutions to similar issues.",
+			Description: "Search past support conversations by keyword. Useful for finding previous solutions to similar issues. The ask_consultant tool also draws on support history internally — use this tool when you want raw conversation threads or a specific past ticket.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args SearchSupportHistoryInput) (*mcp.CallToolResult, any, error) {
 			return handleSearchSupportHistory(ctx, args, serviceClients, logger)

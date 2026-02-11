@@ -127,6 +127,37 @@ service ClusterService {
 
   // Batch metadata lookup for Gateway enrichment (used by Purser marketplace flow)
   rpc GetClusterMetadataBatch(GetClusterMetadataBatchRequest) returns (GetClusterMetadataBatchResponse);
+
+  // ============================================================================
+  // FEDERATION RPCS
+  // ============================================================================
+
+  // ListPeers returns clusters that share at least one tenant with the requesting cluster.
+  // Used by Foghorn federation to discover peers for cross-cluster stream routing.
+  rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+
+  // ============================================================================
+  // FOGHORN-CLUSTER ASSIGNMENT RPCS
+  // ============================================================================
+
+  // Assign Foghorn instance(s) to a cluster (many-to-many).
+  // Supports assigning specific instances or picking N from pool.
+  rpc AssignFoghornToCluster(AssignFoghornToClusterRequest) returns (google.protobuf.Empty);
+
+  // Remove Foghorn instance(s) from a cluster assignment.
+  rpc UnassignFoghornFromCluster(UnassignFoghornFromClusterRequest) returns (google.protobuf.Empty);
+
+  // ============================================================================
+  // SELF-HOSTED EDGE RPCS
+  // ============================================================================
+
+  // Enable self-hosting: creates tenant's private cluster, assigns to shared Foghorn,
+  // and returns an enrollment token for edge provisioning.
+  rpc EnableSelfHosting(EnableSelfHostingRequest) returns (EnableSelfHostingResponse);
+
+  // Create an enrollment token for a cluster the tenant is subscribed to.
+  // Tenant-facing alternative to admin-only CreateBootstrapToken.
+  rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateBootstrapTokenResponse);
 }
 
 // NodeService handles infrastructure node management
@@ -169,10 +200,16 @@ service BootstrapService {
   // Service discovery - find instances of a service type
   rpc DiscoverServices(ServiceDiscoveryRequest) returns (ServiceDiscoveryResponse);
 
-  // Create/list bootstrap tokens
+  // Foghorn pool management
+  rpc GetFoghornPoolStatus(GetFoghornPoolStatusRequest) returns (GetFoghornPoolStatusResponse);
+  rpc AddToFoghornPool(AddToFoghornPoolRequest) returns (AddToFoghornPoolResponse);
+  rpc DrainFoghornInstance(DrainFoghornInstanceRequest) returns (DrainFoghornInstanceResponse);
+
+  // Create/list/validate bootstrap tokens
   rpc CreateBootstrapToken(CreateBootstrapTokenRequest) returns (CreateBootstrapTokenResponse);
   rpc ListBootstrapTokens(ListBootstrapTokensRequest) returns (ListBootstrapTokensResponse);
   rpc RevokeBootstrapToken(RevokeBootstrapTokenRequest) returns (google.protobuf.Empty);
+  rpc ValidateBootstrapToken(ValidateBootstrapTokenRequest) returns (ValidateBootstrapTokenResponse);
 }
 
 // MeshService handles WireGuard mesh synchronization
@@ -263,6 +300,12 @@ message Tenant {
   // ===== API RATE LIMITING =====
   int32 rate_limit_per_minute = 25;     // Requests per minute limit (default: 100)
   int32 rate_limit_burst = 26;          // Burst allowance above limit (default: 20)
+
+  // ===== CLUSTER COVERAGE =====
+  // Official cluster from billing tier (Purser). Provides geographic coverage
+  // when tenant's preferred primary_cluster_id is a self-hosted or marketplace cluster
+  // with limited geographic reach. When official == primary, this field is empty.
+  optional string official_cluster_id = 27; // json:"official_cluster_id,omitempty"
 }
 
 message ListTenantsRequest {
@@ -381,6 +424,21 @@ message ClusterRoutingResponse {
   int32 max_streams = 9;
   int32 current_streams = 10;
   string health_status = 11;
+  optional string foghorn_grpc_addr = 12; // Foghorn gRPC address for this cluster (resolved from service_instances)
+  optional string cluster_slug = 13;      // DNS-safe label derived from cluster_id
+
+  // Official cluster (from billing tier). Populated when tenant's preferred
+  // primary cluster differs from their billing-tier official cluster.
+  // Used by Commodore to generate dual ingest URLs (preferred + official).
+  optional string official_cluster_id = 14;
+  optional string official_cluster_slug = 15;
+  optional string official_base_url = 16;
+  optional string official_foghorn_grpc_addr = 17;
+  optional string official_cluster_name = 18; // human-readable label for UX
+
+  // Full tenant cluster context: all clusters this tenant has access to.
+  // Foghorn uses this for demand-driven peer discovery and remote edge scoring.
+  repeated TenantClusterPeer cluster_peers = 19;
 }
 
 // ============================================================================
@@ -450,7 +508,6 @@ message InfrastructureCluster {
   int32 monthly_price_cents = 32;       // Monthly price in cents (from Purser)
   bool requires_approval = 35;          // Subscription requires owner approval
   optional string short_description = 36; // Marketplace listing description
-  // Field numbers 33, 34, 37, 38 removed (required_billing_tier, long_description, is_platform_cluster)
 }
 
 message ClusterResponse {
@@ -486,6 +543,7 @@ message CreateClusterRequest {
   // Cluster ownership for dedicated B2B clusters
   optional string owner_tenant_id = 20; // json:"owner_tenant_id,omitempty" - UUID of owning tenant
   string deployment_model = 21;         // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
+  int32 foghorn_count = 22;             // Claim N idle Foghorn instances from pool (0 = skip)
 }
 
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
@@ -1042,6 +1100,20 @@ message RevokeBootstrapTokenRequest {
   string token_id = 1;
 }
 
+message ValidateBootstrapTokenRequest {
+  string token = 1;      // the raw token value
+  string client_ip = 2;  // if set, validated against expected_ip on the token
+  bool consume = 3;       // if true, increment usage_count (for PreRegisterEdge)
+}
+
+message ValidateBootstrapTokenResponse {
+  bool valid = 1;               // json:"valid"
+  string kind = 2;              // json:"kind" — "edge_node", "service", etc.
+  string cluster_id = 3;        // json:"cluster_id,omitempty" — bound cluster if any
+  string tenant_id = 4;         // json:"tenant_id,omitempty"
+  string reason = 5;            // json:"reason,omitempty" — if invalid: "expired", "revoked", "usage_exceeded", "not_found"
+}
+
 // ============================================================================
 // MESH SYNC MESSAGES (WireGuard)
 // ============================================================================
@@ -1247,4 +1319,129 @@ message ServiceInstanceHealth {
 message ListServicesHealthResponse {
   repeated ServiceInstanceHealth instances = 1;
   common.CursorPaginationResponse pagination = 2;
+}
+
+// ============================================================================
+// FOGHORN POOL MANAGEMENT MESSAGES
+// ============================================================================
+
+message GetFoghornPoolStatusRequest {}
+
+message FoghornPoolClusterEntry {
+  string cluster_id = 1;
+  int32 instance_count = 2;
+  repeated ServiceInstance instances = 3;
+}
+
+message FoghornInstanceAssignment {
+  string foghorn_instance_id = 1;          // service_instance UUID
+  string cluster_id = 2;
+  bool is_active = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message GetFoghornPoolStatusResponse {
+  int32 total = 1;
+  int32 unassigned = 2;
+  int32 assigned = 3;
+  repeated FoghornPoolClusterEntry clusters = 4;  // includes unassigned with cluster_id=""
+  repeated FoghornInstanceAssignment assignments = 5; // Full many-to-many mapping
+}
+
+message AddToFoghornPoolRequest {
+  repeated string instance_ids = 1;  // specific instances to release to pool
+  int32 count = 2;                   // alternatively, release N oldest from a cluster
+  string from_cluster_id = 3;        // cluster to release from (used with count)
+}
+
+message AddToFoghornPoolResponse {
+  int32 released = 1;
+}
+
+message DrainFoghornInstanceRequest {
+  string instance_id = 1;  // service_instance UUID
+}
+
+message DrainFoghornInstanceResponse {
+  string previous_cluster_id = 1;
+}
+
+// ============================================================================
+// FEDERATION MESSAGES
+// ============================================================================
+
+message ListPeersRequest {
+  string cluster_id = 1; // Requesting cluster
+}
+
+// PeerCluster describes a federation peer — another cluster reachable via Foghorn gRPC.
+message PeerCluster {
+  string cluster_id = 1;
+  string foghorn_addr = 2;                // gRPC address (host:port) of the peer's Foghorn
+  repeated string shared_tenant_ids = 3;  // Tenant IDs shared between requester and this peer
+  string cluster_name = 4;               // Human-readable cluster name
+  string cluster_type = 5;               // shared-community, shared-lb, dedicated
+}
+
+message ListPeersResponse {
+  repeated PeerCluster peers = 1;
+}
+
+// Lightweight cluster metadata for tenant-scoped cluster context.
+// Foghorn derives federation address from base_url + cluster_slug convention.
+message TenantClusterPeer {
+  string cluster_id = 1;
+  string cluster_slug = 2;      // DNS-safe label
+  string base_url = 3;          // e.g., "frameworks.cloud"
+  string cluster_name = 4;      // Human label for UX
+  string role = 5;              // "preferred", "official", "subscribed"
+  string cluster_type = 6;      // "shared-community", "shared-lb", "dedicated", "self-hosted"
+  string s3_bucket = 20;        // Cluster S3 bucket (for cross-cluster artifact affinity)
+  string s3_endpoint = 21;      // S3 endpoint URL
+  string s3_region = 22;        // S3 region
+}
+
+// ============================================================================
+// FOGHORN-CLUSTER ASSIGNMENT MESSAGES
+// ============================================================================
+
+// Assign Foghorn instance(s) to a cluster. Supports assigning specific
+// instances or picking N least-loaded from the pool.
+message AssignFoghornToClusterRequest {
+  string cluster_id = 1;
+  repeated string foghorn_instance_ids = 2;  // Specific instance UUIDs to assign
+  int32 count = 3;                           // OR: pick N with fewest assignments
+}
+
+// Remove Foghorn instance(s) from a cluster assignment.
+message UnassignFoghornFromClusterRequest {
+  string cluster_id = 1;
+  repeated string foghorn_instance_ids = 2;
+}
+
+// ============================================================================
+// SELF-HOSTED EDGE MESSAGES
+// ============================================================================
+
+// Enable self-hosting: creates tenant's private cluster, assigns to
+// a shared Foghorn, and returns an enrollment token.
+message EnableSelfHostingRequest {
+  string tenant_id = 1;                   // Defaults to JWT tenant
+  string cluster_name = 2;               // Display name for the new cluster
+  optional string short_description = 3;
+}
+
+message EnableSelfHostingResponse {
+  InfrastructureCluster cluster = 1;     // The newly created private cluster
+  BootstrapToken bootstrap_token = 2;    // Enrollment token bound to cluster + tenant
+  string foghorn_addr = 3;              // Address of the assigned Foghorn
+}
+
+// Create an enrollment token for a cluster the tenant is subscribed to.
+// Tenant-facing alternative to admin-only CreateBootstrapToken.
+message CreateEnrollmentTokenRequest {
+  string cluster_id = 1;                 // Must have active subscription
+  optional string tenant_id = 2;         // Defaults to JWT tenant
+  optional string name = 3;              // Token display name
+  optional string ttl = 4;              // e.g. "720h" (default: 30 days)
 }

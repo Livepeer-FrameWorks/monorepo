@@ -142,6 +142,20 @@ If you're a business in the EU, add your VAT number in account settings. We vali
 
 All invoices are available in your account. We retain transaction records for 10 years per EU requirements.
 
+## Cluster Tiers
+
+FrameWorks supports multiple deployment models with different billing characteristics:
+
+| Tier                   | Description                                                                                                                    | Billing                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| **Shared (Community)** | Free rate-limited access to a shared cluster.                                                                                  | No metering, fair-use.                               |
+| **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                                        | Per-resource metering (delivered minutes + storage). |
+| **Dedicated**          | Isolated cluster with dedicated Foghorn and edges — operated by FrameWorks or self-hosted on-premise.                          | Custom pricing via `cluster_pricing`.                |
+| **Hybrid**             | Self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared. | Per-cluster usage attribution.                       |
+| **Marketplace**        | Third-party operators publish clusters with custom pricing. Tenants subscribe via the marketplace.                             | Operator-set pricing via `cluster_subscriptions`.    |
+
+Usage is attributed per cluster: the analytics pipeline tags every event with `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). Billing summaries are generated per cluster for settlement.
+
 ## What's Always Free
 
 - All API requests

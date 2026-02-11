@@ -1,0 +1,13 @@
+# Fetch pending subscription requests for a cluster you own
+query GetPendingSubscriptions($clusterId: ID!) {
+  pendingSubscriptions(clusterId: $clusterId) {
+    id
+    tenantId
+    tenantName
+    clusterId
+    clusterName
+    subscriptionStatus
+    requestedAt
+    accessLevel
+  }
+}

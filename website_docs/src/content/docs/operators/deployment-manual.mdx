@@ -23,14 +23,14 @@ This guide walks through deploying FrameWorks services manually on bare metal se
 
 ## Streaming URI Quick Reference
 
-| Purpose            | Domain                   | Path                                | Example                                                      |
-| ------------------ | ------------------------ | ----------------------------------- | ------------------------------------------------------------ |
-| **RTMP Ingest**    | `ingest.your-domain.com` | `/live/{streamKey}`                 | `rtmp://ingest.your-domain.com:1935/live/sk_abc123`          |
-| **WHIP Ingest**    | `ingest.your-domain.com` | `/webrtc/{streamKey}`               | `https://ingest.your-domain.com/webrtc/sk_abc123`            |
-| **HLS Playback**   | `play.your-domain.com`   | `/play/{playbackId}/hls/index.m3u8` | `https://play.your-domain.com/play/pk_xyz789/hls/index.m3u8` |
-| **WebRTC (WHEP)**  | `play.your-domain.com`   | `/play/{playbackId}/webrtc`         | `https://play.your-domain.com/play/pk_xyz789/webrtc`         |
-| **Viewer Routing** | `play.your-domain.com`   | `/play/{contentId}`                 | Returns JSON or 307 redirect                                 |
-| **GraphQL API**    | `api.your-domain.com`    | `/graphql`                          | `resolveViewerEndpoint` query                                |
+| Purpose            | Domain                        | Path                                | Example                                                         |
+| ------------------ | ----------------------------- | ----------------------------------- | --------------------------------------------------------------- |
+| **RTMP Ingest**    | `edge-ingest.your-domain.com` | `/live/{streamKey}`                 | `rtmp://edge-ingest.your-domain.com:1935/live/sk_abc123`        |
+| **WHIP Ingest**    | `edge-ingest.your-domain.com` | `/webrtc/{streamKey}`               | `https://edge-ingest.your-domain.com/webrtc/sk_abc123`          |
+| **HLS Playback**   | `foghorn.your-domain.com`     | `/play/{playbackId}/hls/index.m3u8` | `https://foghorn.your-domain.com/play/pk_xyz789/hls/index.m3u8` |
+| **WebRTC (WHEP)**  | `foghorn.your-domain.com`     | `/play/{playbackId}/webrtc`         | `https://foghorn.your-domain.com/play/pk_xyz789/webrtc`         |
+| **Viewer Routing** | `foghorn.your-domain.com`     | `/play/{contentId}`                 | Returns JSON or 307 redirect                                    |
+| **GraphQL API**    | `bridge.your-domain.com`      | `/graphql`                          | `resolveViewerEndpoint` query                                   |
 
 **Note:** `/play/*` and `/resolve/*` return JSON unless a protocol/extension is requested (then 307 redirect).
 
@@ -71,7 +71,7 @@ Do **not** add edge nodes here unless they are on the mesh.
 
 ```bash
 # FrameWorks Internal Mesh (example - adjust IPs to your mesh)
-10.x.0.1   central quartermaster commodore purser periscope-query deckhand forms navigator privateer skipper
+10.x.0.1   central quartermaster commodore purser periscope-query deckhand steward navigator privateer skipper
 10.x.2.11  yuga1 postgres
 10.x.2.12  yuga2
 10.x.2.13  yuga3
@@ -139,11 +139,24 @@ Configure your DNS provider with the following records. Exact steps vary by prov
 
 ### Streaming Records
 
-| Type    | Name   | Content                  | Notes              |
-| ------- | ------ | ------------------------ | ------------------ |
-| A/CNAME | edge   | Load balancer or edge IP | Edge node delivery |
-| CNAME   | ingest | edge.your-domain.com     | RTMP/WHIP ingest   |
-| A/CNAME | play   | `<regional-ip>`          | Foghorn routing    |
+| Type    | Name        | Content                  | Notes              |
+| ------- | ----------- | ------------------------ | ------------------ |
+| A/CNAME | edge-egress | Load balancer or edge IP | Edge node delivery |
+| A/CNAME | edge-ingest | Load balancer or edge IP | RTMP/WHIP ingest   |
+| A/CNAME | foghorn     | `<regional-ip>`          | Viewer routing     |
+
+### Multi-Cluster Streaming Records
+
+In multi-cluster deployments, each cluster gets its own set of streaming records under `{cluster_slug}.{base_domain}`. Navigator manages these automatically. For manual setups:
+
+| Type | Name                                    | Content            | Notes                      |
+| ---- | --------------------------------------- | ------------------ | -------------------------- |
+| A    | `edge-ingest.{slug}.your-domain.com`    | Edge node IP(s)    | Cluster-scoped ingest      |
+| A    | `edge-egress.{slug}.your-domain.com`    | Edge node IP(s)    | Cluster-scoped delivery    |
+| A    | `foghorn.{slug}.your-domain.com`        | Foghorn IP         | Cluster-scoped routing     |
+| A    | `edge-{node_id}.{slug}.your-domain.com` | Individual edge IP | Per-edge direct addressing |
+
+See [DNS Automation](/operators/dns) for details on per-edge A records and wildcard TLS certificates.
 
 ### Load Balancer Setup (Multi-Node)
 
@@ -252,7 +265,7 @@ kafka-topics.sh --bootstrap-server $BROKER --create \
 | Purser          | 18003 | 19003 | purser          |
 | Periscope Query | 18004 | 19004 | periscope-query |
 | Deckhand        | 18015 | 19006 | deckhand        |
-| Forms           | 18032 | -     | forms           |
+| Steward (Forms) | 18032 | -     | steward         |
 
 **Support Services (External):**
 
@@ -275,10 +288,10 @@ make build-bin-commodore
 make build-bin-purser
 make build-bin-periscope-query
 make build-bin-deckhand
-make build-bin-forms
+make build-bin-steward
 
 install -d /opt/frameworks/bin
-cp bin/quartermaster bin/commodore bin/purser bin/periscope-query bin/deckhand bin/forms /opt/frameworks/bin/
+cp bin/quartermaster bin/commodore bin/purser bin/periscope-query bin/deckhand bin/steward /opt/frameworks/bin/
 ```
 
 ### Environment Configuration
@@ -323,10 +336,13 @@ TURNSTILE_AUTH_SECRET_KEY=<your-turnstile-secret>
 # Service Dependencies (via mesh)
 QUARTERMASTER_GRPC_ADDR=127.0.0.1:19002
 PURSER_GRPC_ADDR=127.0.0.1:19003
+# Foghorn control address — In multi-cluster setups, Commodore resolves this
+# dynamically via Quartermaster GetClusterRouting. For single-cluster deployments,
+# set it directly to the regional Foghorn gRPC endpoint.
 FOGHORN_CONTROL_ADDR=<regional-ip>:18019
 
 # Public URLs (for emails)
-WEBAPP_PUBLIC_URL=https://app.your-domain.com
+WEBAPP_PUBLIC_URL=https://chartroom.your-domain.com
 
 # Optional: Listmonk newsletter
 LISTMONK_URL=
@@ -430,7 +446,7 @@ SERVICE_TOKEN=<your-service-token>
 </TabItem>
 <TabItem label="Forms">
 ```bash
-# /etc/frameworks/forms.env
+# /etc/frameworks/steward.env
 PORT=18032
 NODE_ENV=production
 FORMS_ALLOWED_ORIGINS=https://your-domain.com
@@ -485,7 +501,7 @@ Repeat for each service, adjusting `Description`, `EnvironmentFile`, and `ExecSt
 systemctl daemon-reload
 
 # Start in dependency order
-for svc in quartermaster purser commodore periscope-query deckhand forms; do
+for svc in quartermaster purser commodore periscope-query deckhand steward; do
     systemctl enable $svc
     systemctl start $svc
     sleep 2
@@ -557,7 +573,7 @@ docker compose up -d
 
 ```bash
 # Start Redis (if not already running)
-docker run -d --name chatwoot-redis -p 6379:6379 redis:7-alpine
+docker run -d --name platform-redis -p 6379:6379 redis:7-alpine
 
 # Start Chatwoot (Rails + Sidekiq)
 docker run -d --name chatwoot \
@@ -671,6 +687,13 @@ GEOIP_MMDB_PATH=/var/lib/GeoIP/GeoLite2-City.mmdb
 GEOIP_CACHE_TTL=300s
 GEOIP_CACHE_SWR=120s
 GEOIP_CACHE_MAX=50000
+
+# Redis (Foghorn HA — required for multi-instance, optional for single-instance)
+
+# Both Foghorn instances must share the same Redis and use unique FOGHORN_INSTANCE_ID values.
+
+REDIS_URL=redis://<redis-host>:6379
+FOGHORN_INSTANCE_ID=foghorn-1
 
 # Cache settings
 
@@ -871,11 +894,11 @@ upstream bridge {
 
 server {
     listen 443 ssl http2;
-    server_name api.your-domain.com;
+    server_name bridge.your-domain.com;
 
     # SSL certs (certbot)
-    ssl_certificate /etc/letsencrypt/live/api.your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.your-domain.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/bridge.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bridge.your-domain.com/privkey.pem;
 
     location /graphql {
         proxy_pass http://bridge/graphql;
@@ -1107,12 +1130,12 @@ Deploy the three frontend applications on the central server. All use Docker and
 # website_application - SvelteKit SSR
 # VITE_* variables are baked at build time
 
-VITE_AUTH_URL=https://api.your-domain.com/auth
-VITE_GRAPHQL_HTTP_URL=https://api.your-domain.com/graphql
-VITE_GRAPHQL_WS_URL=wss://api.your-domain.com/graphql/ws
-VITE_STREAMING_INGEST_URL=https://ingest.your-domain.com
-VITE_STREAMING_PLAY_URL=https://play.your-domain.com
-VITE_STREAMING_EDGE_URL=https://edge.your-domain.com
+VITE_AUTH_URL=https://bridge.your-domain.com/auth
+VITE_GRAPHQL_HTTP_URL=https://bridge.your-domain.com/graphql
+VITE_GRAPHQL_WS_URL=wss://bridge.your-domain.com/graphql/ws
+VITE_STREAMING_INGEST_URL=https://edge-ingest.your-domain.com
+VITE_STREAMING_PLAY_URL=https://foghorn.your-domain.com
+VITE_STREAMING_EDGE_URL=https://edge-egress.your-domain.com
 VITE_STREAMING_RTMP_PORT=1935
 VITE_STREAMING_SRT_PORT=8889
 VITE_STREAMING_RTMP_PATH=/live
@@ -1120,7 +1143,7 @@ VITE_STREAMING_HLS_PATH=/hls
 VITE_STREAMING_WEBRTC_PATH=/webrtc
 VITE_STREAMING_EMBED_PATH=/
 VITE_MARKETING_SITE_URL=https://your-domain.com
-VITE_DOCS_SITE_URL=https://docs.your-domain.com
+VITE_DOCS_SITE_URL=https://logbook.your-domain.com
 VITE_TURNSTILE_AUTH_SITE_KEY=<your-turnstile-site-key>
 BASE_PATH=/app
 
@@ -1131,8 +1154,8 @@ BASE_PATH=/app
 # website_marketing - React static site
 # VITE_* variables are baked at build time
 
-VITE_APP_URL=https://app.your-domain.com
-VITE_GATEWAY_URL=https://api.your-domain.com
+VITE_APP_URL=https://chartroom.your-domain.com
+VITE_GATEWAY_URL=https://bridge.your-domain.com
 VITE_GITHUB_URL=https://github.com/your-org/your-repo
 VITE_LIVEPEER_URL=https://livepeer.org
 VITE_LIVEPEER_EXPLORER_URL=https://explorer.livepeer.org
@@ -1142,7 +1165,7 @@ VITE_DISCORD_URL=https://discord.gg/your-invite
 VITE_DEMO_STREAM_NAME=live+demo
 VITE_COMPANY_NAME=YourCompany
 VITE_DOMAIN=your-domain.com
-VITE_CONTACT_API_URL=https://api.your-domain.com/forms
+VITE_CONTACT_API_URL=https://bridge.your-domain.com/forms
 VITE_TURNSTILE_FORMS_SITE_KEY=<your-turnstile-forms-key>
 ````
 
@@ -1152,12 +1175,12 @@ VITE_TURNSTILE_FORMS_SITE_KEY=<your-turnstile-forms-key>
 # website_docs - Astro Starlight
 # PUBLIC_* variables are baked at build time
 
-PUBLIC_DOCS_URL=https://docs.your-domain.com
-WEBAPP_PUBLIC_URL=https://app.your-domain.com
+PUBLIC_DOCS_URL=https://logbook.your-domain.com
+WEBAPP_PUBLIC_URL=https://chartroom.your-domain.com
 MARKETING_PUBLIC_URL=https://your-domain.com
-GATEWAY_PUBLIC_URL=https://api.your-domain.com
-STREAMING_INGEST_URL=https://ingest.your-domain.com
-STREAMING_EDGE_URL=https://edge.your-domain.com
+GATEWAY_PUBLIC_URL=https://bridge.your-domain.com
+STREAMING_INGEST_URL=https://edge-ingest.your-domain.com
+STREAMING_EDGE_URL=https://edge-egress.your-domain.com
 STREAMING_HLS_PATH=/hls
 STREAMING_WEBRTC_PATH=/webrtc
 DISCORD_URL=https://discord.gg/your-invite
@@ -1177,9 +1200,9 @@ cd /opt/frameworks/monorepo
 # Web Console
 docker build -f website_application/Dockerfile \
   --build-arg BUILD_ENV=production \
-  --build-arg VITE_AUTH_URL=https://api.your-domain.com/auth \
-  --build-arg VITE_GRAPHQL_HTTP_URL=https://api.your-domain.com/graphql \
-  --build-arg VITE_GRAPHQL_WS_URL=wss://api.your-domain.com/graphql/ws \
+  --build-arg VITE_AUTH_URL=https://bridge.your-domain.com/auth \
+  --build-arg VITE_GRAPHQL_HTTP_URL=https://bridge.your-domain.com/graphql \
+  --build-arg VITE_GRAPHQL_WS_URL=wss://bridge.your-domain.com/graphql/ws \
   # ... (all VITE_* args from reference above)
   -t frameworks-chartroom .
 
@@ -1191,7 +1214,7 @@ docker run -d --name frameworks-chartroom \
 # Foredeck (Marketing Site)
 docker build -f website_marketing/Dockerfile \
   --build-arg BUILD_ENV=production \
-  --build-arg VITE_APP_URL=https://app.your-domain.com \
+  --build-arg VITE_APP_URL=https://chartroom.your-domain.com \
   # ... (all VITE_* args)
   -t frameworks-foredeck .
 
@@ -1203,7 +1226,7 @@ docker run -d --name frameworks-foredeck \
 # Logbook (Documentation)
 docker build -f website_docs/Dockerfile \
   --build-arg BUILD_ENV=production \
-  --build-arg PUBLIC_DOCS_URL=https://docs.your-domain.com \
+  --build-arg PUBLIC_DOCS_URL=https://logbook.your-domain.com \
   # ... (all PUBLIC_* args)
   -t frameworks-logbook .
 
@@ -1223,7 +1246,7 @@ npm install -g pnpm
 
 # Build Web Console
 cd website_application
-export VITE_AUTH_URL=https://api.your-domain.com/auth
+export VITE_AUTH_URL=https://bridge.your-domain.com/auth
 # ... set all VITE_* vars
 pnpm install --frozen-lockfile
 pnpm run build
@@ -1269,9 +1292,9 @@ apt install certbot python3-certbot-nginx
 
 # Obtain certificates for each domain
 certbot certonly --nginx -d your-domain.com -d www.your-domain.com
-certbot certonly --nginx -d app.your-domain.com
-certbot certonly --nginx -d docs.your-domain.com
-certbot certonly --nginx -d api.your-domain.com
+certbot certonly --nginx -d chartroom.your-domain.com
+certbot certonly --nginx -d logbook.your-domain.com
+certbot certonly --nginx -d bridge.your-domain.com
 ```
 
 ### Nginx Configuration
@@ -1299,10 +1322,10 @@ server {
 # Web Console
 server {
     listen 443 ssl http2;
-    server_name app.your-domain.com;
+    server_name chartroom.your-domain.com;
 
-    ssl_certificate /etc/letsencrypt/live/app.your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/app.your-domain.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/chartroom.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/chartroom.your-domain.com/privkey.pem;
 
     location / {
         proxy_pass http://127.0.0.1:18030;
@@ -1319,10 +1342,10 @@ server {
 # Documentation
 server {
     listen 443 ssl http2;
-    server_name docs.your-domain.com;
+    server_name logbook.your-domain.com;
 
-    ssl_certificate /etc/letsencrypt/live/docs.your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/docs.your-domain.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/logbook.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/logbook.your-domain.com/privkey.pem;
 
     location / {
         proxy_pass http://127.0.0.1:18033;
@@ -1336,10 +1359,10 @@ server {
 # GraphQL API Gateway
 server {
     listen 443 ssl http2;
-    server_name api.your-domain.com;
+    server_name bridge.your-domain.com;
 
-    ssl_certificate /etc/letsencrypt/live/api.your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.your-domain.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/bridge.your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bridge.your-domain.com/privkey.pem;
 
     # GraphQL (with WebSocket upgrade for subscriptions)
     location /graphql {
@@ -1376,14 +1399,14 @@ server {
 # HTTP -> HTTPS redirect
 server {
     listen 80;
-    server_name your-domain.com www.your-domain.com app.your-domain.com docs.your-domain.com api.your-domain.com;
+    server_name your-domain.com www.your-domain.com chartroom.your-domain.com logbook.your-domain.com bridge.your-domain.com;
     return 301 https://$host$request_uri;
 }
 ```
 
 <Aside type="tip">
-  For streaming endpoints (`edge.your-domain.com`, `ingest.your-domain.com`), use DNS-only mode
-  without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
+  For streaming endpoints (`edge-egress.your-domain.com`, `edge-ingest.your-domain.com`), use
+  DNS-only mode without proxying to avoid interference with RTMP, SRT, and WebRTC protocols.
 </Aside>
 
 ---
@@ -1402,16 +1425,17 @@ Services must start in dependency order:
 8. **Decklog**: Per region, needs Kafka
 9. **Periscope Ingest**: Per region, needs Kafka, ClickHouse, Quartermaster
 10. **Signalman**: Per region, needs Kafka, Quartermaster
-11. **Foghorn**: Per region, needs Quartermaster, Commodore, Decklog
-12. **Bridge**: Per region, needs all central + regional services
-13. **Deckhand**: Central, needs Quartermaster, Purser, Decklog, Chatwoot
-14. **Forms**: Central, needs Listmonk, SMTP
-15. **Helmsman**: Per edge, needs Foghorn, Decklog
-16. **Navigator**: Optional, central, needs Quartermaster
-17. **Web Console**: Central, needs Bridge (GraphQL), all backend services
-18. **Marketing Site**: Central, standalone (static)
-19. **Documentation**: Central, standalone (static)
-20. **Nginx/Caddy**: After all applications
+11. **Foghorn Redis**: Per region, before Foghorn (if running Foghorn HA)
+12. **Foghorn**: Per region, needs Quartermaster, Commodore, Decklog (+ Foghorn Redis for HA)
+13. **Bridge**: Per region, needs all central + regional services
+14. **Deckhand**: Central, needs Quartermaster, Purser, Decklog, Chatwoot
+15. **Forms**: Central, needs Listmonk, SMTP
+16. **Helmsman**: Per edge, needs Foghorn, Decklog
+17. **Navigator**: Optional, central, needs Quartermaster
+18. **Web Console**: Central, needs Bridge (GraphQL), all backend services
+19. **Marketing Site**: Central, standalone (static)
+20. **Documentation**: Central, standalone (static)
+21. **Nginx/Caddy**: After all applications
 
 ---
 

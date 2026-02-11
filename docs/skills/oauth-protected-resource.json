@@ -1,13 +1,13 @@
 {
-  "resource": "https://api.frameworks.network/mcp",
-  "authorization_servers": ["https://api.frameworks.network"],
+  "resource": "https://bridge.frameworks.network/mcp",
+  "authorization_servers": ["https://bridge.frameworks.network"],
   "bearer_methods_supported": ["header"],
   "scopes_supported": [],
   "resource_documentation": "https://frameworks.network/SKILL.md",
   "x_auth_methods": {
     "wallet": {
       "type": "eip191",
-      "login_endpoint": "https://api.frameworks.network/auth/wallet-login",
+      "login_endpoint": "https://bridge.frameworks.network/auth/wallet-login",
       "auto_provision": true
     },
     "x402": {

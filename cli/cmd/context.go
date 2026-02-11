@@ -14,6 +14,7 @@ func newContextCmd() *cobra.Command {
 	ctx.AddCommand(newContextShowCmd())
 	ctx.AddCommand(newContextSetURLCmd())
 	ctx.AddCommand(newContextCheckCmd())
+	ctx.AddCommand(newContextSetClusterCmd())
 	return ctx
 }
 
@@ -88,6 +89,9 @@ func newContextShowCmd() *cobra.Command {
 			return fmt.Errorf("unknown context: %s", name)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Context: %s\n", name)
+		if c.ClusterID != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  cluster_id:          %s\n", c.ClusterID)
+		}
 		ep := c.Endpoints
 		fmt.Fprintf(cmd.OutOrStdout(), "  bridge (http):       %s\n", ep.GatewayURL)
 		fmt.Fprintf(cmd.OutOrStdout(), "  quartermaster http:  %s\n", ep.QuartermasterURL)
@@ -161,6 +165,23 @@ func newContextSetURLCmd() *cobra.Command {
 			return err
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Updated %s to %s in context %q\n", svc, url, cur.Name)
+		return nil
+	}}
+}
+
+func newContextSetClusterCmd() *cobra.Command {
+	return &cobra.Command{Use: "set-cluster <cluster-id>", Short: "Set the cluster ID for the current context", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, path, err := fwcfg.Load()
+		if err != nil {
+			return err
+		}
+		cur := fwcfg.GetCurrent(cfg)
+		cur.ClusterID = args[0]
+		cfg.Contexts[cur.Name] = cur
+		if err := fwcfg.Save(cfg, path); err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Set cluster_id to %q in context %q\n", args[0], cur.Name)
 		return nil
 	}}
 }

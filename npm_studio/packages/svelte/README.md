@@ -4,7 +4,7 @@ Svelte 5 wrapper for StreamCrafter with a ready-to-use component and stores for 
 
 ## Documentation
 
-Docs: https://docs.frameworks.network
+Docs: https://logbook.frameworks.network
 
 ## Install
 
@@ -21,7 +21,7 @@ npm install @livepeer-frameworks/streamcrafter-svelte
 </script>
 
 <StreamCrafter
-  whipUrl="https://ingest.example.com/webrtc/your-stream-key"
+  whipUrl="https://edge-ingest.example.com/webrtc/your-stream-key"
   initialProfile="broadcast"
 />
 ```
@@ -30,7 +30,7 @@ npm install @livepeer-frameworks/streamcrafter-svelte
 
 ```svelte
 <StreamCrafter
-  gatewayUrl="https://api.example.com/graphql"
+  gatewayUrl="https://bridge.example.com/graphql"
   streamKey="sk_live_..."
   initialProfile="broadcast"
 />
@@ -52,7 +52,7 @@ Notes:
 
   onMount(() => {
     crafter.initialize({
-      whipUrl: "https://ingest.example.com/webrtc/your-stream-key",
+      whipUrl: "https://edge-ingest.example.com/webrtc/your-stream-key",
       profile: "broadcast",
     });
   });

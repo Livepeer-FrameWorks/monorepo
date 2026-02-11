@@ -23,7 +23,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_rebuffering",
-			Description: "Analyze rebuffering events for a stream. Returns rebuffer count, duration patterns, and recommendations.",
+			Description: "Analyze rebuffering events for a stream. Returns rebuffer count, duration patterns, and recommendations. Use when viewers report freezing or pausing. Pass output to ask_consultant for interpretation.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DiagnoseRebufferingInput) (*mcp.CallToolResult, any, error) {
 			return handleDiagnoseRebuffering(ctx, args, serviceClients, logger)
@@ -34,7 +34,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_buffer_health",
-			Description: "Analyze buffer health and state transitions. Identifies dry buffer events and quality fluctuations.",
+			Description: "Analyze buffer health and state transitions. Identifies dry buffer events and quality fluctuations. Use when quality fluctuates or viewers see resolution drops. Pass output to ask_consultant for root-cause analysis.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DiagnoseBufferHealthInput) (*mcp.CallToolResult, any, error) {
 			return handleDiagnoseBufferHealth(ctx, args, serviceClients, logger)
@@ -45,7 +45,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_packet_loss",
-			Description: "Analyze packet loss for a stream with protocol-aware guidance. Uses client QoE packet loss rollups and stream metrics when available.",
+			Description: "Analyze packet loss for a stream with protocol-aware guidance. Uses client QoE packet loss rollups and stream metrics when available. Use when stream stutters on unreliable networks. Thresholds differ for real-time (WebRTC/SRT) vs. buffered (HLS/RTMP) protocols.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DiagnosePacketLossInput) (*mcp.CallToolResult, any, error) {
 			return handleDiagnosePacketLoss(ctx, args, serviceClients, logger)
@@ -56,7 +56,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "diagnose_routing",
-			Description: "Analyze CDN routing decisions for a stream. Shows node selection patterns and geographic distribution.",
+			Description: "Analyze CDN routing decisions for a stream. Shows node selection patterns and geographic distribution. Use when viewers in certain regions report issues or to optimize edge placement.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DiagnoseRoutingInput) (*mcp.CallToolResult, any, error) {
 			return handleDiagnoseRouting(ctx, args, serviceClients, logger)
@@ -67,7 +67,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "get_stream_health_summary",
-			Description: "Get aggregated health metrics for a stream over a time range. Includes bitrate, FPS, quality tier, and issue counts.",
+			Description: "Get aggregated health metrics for a stream over a time range. Includes bitrate, FPS, quality tier, and issue counts. Good starting point for any stream investigation — run this first, then drill into specific diagnostics.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args GetStreamHealthInput) (*mcp.CallToolResult, any, error) {
 			return handleGetStreamHealth(ctx, args, serviceClients, logger)
@@ -78,7 +78,7 @@ func RegisterQoETools(server *mcp.Server, serviceClients *clients.ServiceClients
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "get_anomaly_report",
-			Description: "Detect anomalies across stream metrics. Compares recent performance to baseline and flags deviations.",
+			Description: "Detect anomalies across stream metrics. Compares recent hour against 24h baseline and flags deviations. Use after get_stream_health_summary to detect recent degradation.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args GetAnomalyReportInput) (*mcp.CallToolResult, any, error) {
 			return handleGetAnomalyReport(ctx, args, serviceClients, logger)
@@ -796,12 +796,15 @@ func handleGetAnomalyReport(ctx context.Context, args GetAnomalyReportInput, ser
 	}
 
 	var anomalies []string
-	bitrateChange := float64(recentBitrate-baselineBitrate) / float64(baselineBitrate)
-	if bitrateChange < -threshold {
-		anomalies = append(anomalies, fmt.Sprintf("Bitrate dropped %.0f%% from baseline", -bitrateChange*100))
-	}
-	if bitrateChange > threshold*2 {
-		anomalies = append(anomalies, fmt.Sprintf("Bitrate spiked %.0f%% above baseline", bitrateChange*100))
+	var bitrateChange float64
+	if baselineBitrate > 0 {
+		bitrateChange = float64(recentBitrate-baselineBitrate) / float64(baselineBitrate)
+		if bitrateChange < -threshold {
+			anomalies = append(anomalies, fmt.Sprintf("Bitrate dropped %.0f%% from baseline", -bitrateChange*100))
+		}
+		if bitrateChange > threshold*2 {
+			anomalies = append(anomalies, fmt.Sprintf("Bitrate spiked %.0f%% above baseline", bitrateChange*100))
+		}
 	}
 
 	issueChange := recentIssueRate - baselineIssueRate

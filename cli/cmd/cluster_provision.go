@@ -35,7 +35,7 @@ func newClusterProvisionCmd() *cobra.Command {
 		Long: `Provision cluster infrastructure and services from manifest:
 
 Phase Options (--only):
-  infrastructure  - Provision Postgres, Kafka, Zookeeper, ClickHouse
+  infrastructure  - Provision Postgres, Redis, Kafka, Zookeeper, ClickHouse
   applications    - Provision FrameWorks services
   interfaces      - Provision Nginx/Caddy, Chartroom, Foredeck, Logbook
   all             - Provision everything (default)
@@ -357,11 +357,32 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					}
 				}
 			}
+		case "redis":
+			if manifest.Infrastructure.Redis != nil {
+				if manifest.Infrastructure.Redis.Mode != "" {
+					config.Mode = manifest.Infrastructure.Redis.Mode
+				}
+				if manifest.Infrastructure.Redis.Version != "" {
+					config.Version = manifest.Infrastructure.Redis.Version
+				}
+				if inst := resolveRedisInstance(task.Name, manifest); inst != nil {
+					if inst.Port != 0 {
+						config.Port = inst.Port
+					}
+					config.Metadata["instance_name"] = inst.Name
+					if inst.Password != "" {
+						config.Metadata["password"] = inst.Password
+					}
+					for k, v := range inst.Config {
+						config.Metadata["redis_"+k] = v
+					}
+				}
+			}
 		}
 	}
 
-	// Override for infrastructure
-	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "zookeeper" {
+	// Override for infrastructure (Redis uses manifest mode, not forced native)
+	if task.Phase == orchestrator.PhaseInfrastructure && task.Type != "zookeeper" && task.Type != "redis" {
 		config.Mode = "native"
 		config.Version = "latest"
 	}
@@ -422,6 +443,23 @@ func resolveZookeeperNodeConfig(taskName string, manifest *inventory.Manifest) *
 		Port:     targetNode.Port,
 		Servers:  servers,
 	}
+}
+
+func resolveRedisInstance(taskName string, manifest *inventory.Manifest) *inventory.RedisInstance {
+	if manifest.Infrastructure.Redis == nil {
+		return nil
+	}
+	const prefix = "redis-"
+	if !strings.HasPrefix(taskName, prefix) {
+		return nil
+	}
+	name := strings.TrimPrefix(taskName, prefix)
+	for i := range manifest.Infrastructure.Redis.Instances {
+		if manifest.Infrastructure.Redis.Instances[i].Name == name {
+			return &manifest.Infrastructure.Redis.Instances[i]
+		}
+	}
+	return nil
 }
 
 func findKafkaBrokerID(task *orchestrator.Task, manifest *inventory.Manifest) (int, bool) {
@@ -836,19 +874,19 @@ func runBootstrap(ctx context.Context, manifest *inventory.Manifest) (string, st
 	return resp.Token.Token, serviceToken, grpcAddr, nil
 }
 
-// publicServiceType maps public-facing services to DNS node types.
+// publicServiceType maps public-facing services to DNS subdomain names.
 func publicServiceType(serviceName string) (string, bool) {
 	switch serviceName {
 	case "bridge":
-		return "api", true
+		return "bridge", true
 	case "chartroom":
-		return "app", true
+		return "chartroom", true
 	case "foredeck":
 		return "website", true
 	case "logbook":
-		return "docs", true
+		return "logbook", true
 	case "steward":
-		return "forms", true
+		return "steward", true
 	default:
 		return "", false
 	}

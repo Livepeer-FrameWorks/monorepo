@@ -56,7 +56,7 @@ func TestDNSRecordLifecycle(t *testing.T) {
 
 	created, err := client.CreateDNSRecord(DNSRecord{
 		Type:    "A",
-		Name:    "edge.example.com",
+		Name:    "edge-egress.example.com",
 		Content: "1.1.1.1",
 		TTL:     120,
 		Proxied: true,
@@ -100,7 +100,7 @@ func TestDNSRecordRetryBehavior(t *testing.T) {
 			writeAPIResponse(w, http.StatusOK, []DNSRecord{{
 				ID:      "record-1",
 				Type:    "A",
-				Name:    "edge.example.com",
+				Name:    "edge-egress.example.com",
 				Content: "1.1.1.1",
 			}}, &ResultInfo{TotalPages: 1})
 		default:
@@ -114,7 +114,7 @@ func TestDNSRecordRetryBehavior(t *testing.T) {
 
 	_, err := client.CreateDNSRecord(DNSRecord{
 		Type:    "A",
-		Name:    "edge.example.com",
+		Name:    "edge-egress.example.com",
 		Content: "1.1.1.1",
 		TTL:     120,
 		Proxied: true,
@@ -126,7 +126,7 @@ func TestDNSRecordRetryBehavior(t *testing.T) {
 		t.Fatalf("expected 1 POST attempt, got %d", postAttempts)
 	}
 
-	records, err := client.ListDNSRecords("A", "edge.example.com")
+	records, err := client.ListDNSRecords("A", "edge-egress.example.com")
 	if err != nil {
 		t.Fatalf("list records: %v", err)
 	}
@@ -146,8 +146,8 @@ func TestListDNSRecords_IncludesQueryParamsAndPagination(t *testing.T) {
 		if query.Get("type") != "A" {
 			t.Fatalf("expected type=A, got %q", query.Get("type"))
 		}
-		if query.Get("name") != "edge.example.com" {
-			t.Fatalf("expected name=edge.example.com, got %q", query.Get("name"))
+		if query.Get("name") != "edge-egress.example.com" {
+			t.Fatalf("expected name=edge-egress.example.com, got %q", query.Get("name"))
 		}
 		if query.Get("per_page") != "100" {
 			t.Fatalf("expected per_page=100, got %q", query.Get("per_page"))
@@ -159,7 +159,7 @@ func TestListDNSRecords_IncludesQueryParamsAndPagination(t *testing.T) {
 			writeAPIResponse(w, http.StatusOK, []DNSRecord{{
 				ID:      "record-1",
 				Type:    "A",
-				Name:    "edge.example.com",
+				Name:    "edge-egress.example.com",
 				Content: "1.1.1.1",
 			}}, &ResultInfo{TotalPages: 2})
 		case "2":
@@ -167,7 +167,7 @@ func TestListDNSRecords_IncludesQueryParamsAndPagination(t *testing.T) {
 			writeAPIResponse(w, http.StatusOK, []DNSRecord{{
 				ID:      "record-2",
 				Type:    "A",
-				Name:    "edge.example.com",
+				Name:    "edge-egress.example.com",
 				Content: "2.2.2.2",
 			}}, &ResultInfo{TotalPages: 2})
 		default:
@@ -179,7 +179,7 @@ func TestListDNSRecords_IncludesQueryParamsAndPagination(t *testing.T) {
 	client := NewClient("token", "zone-1", "account-1")
 	client.baseURL = server.URL
 
-	records, err := client.ListDNSRecords("A", "edge.example.com")
+	records, err := client.ListDNSRecords("A", "edge-egress.example.com")
 	if err != nil {
 		t.Fatalf("list records: %v", err)
 	}

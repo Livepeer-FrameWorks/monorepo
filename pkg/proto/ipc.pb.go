@@ -94,6 +94,7 @@ const (
 	IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED   IngestErrorCode = 3
 	IngestErrorCode_INGEST_ERROR_INTERNAL           IngestErrorCode = 4
 	IngestErrorCode_INGEST_ERROR_TIMEOUT            IngestErrorCode = 5
+	IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST   IngestErrorCode = 6
 )
 
 // Enum value maps for IngestErrorCode.
@@ -105,6 +106,7 @@ var (
 		3: "INGEST_ERROR_PAYMENT_REQUIRED",
 		4: "INGEST_ERROR_INTERNAL",
 		5: "INGEST_ERROR_TIMEOUT",
+		6: "INGEST_ERROR_DUPLICATE_INGEST",
 	}
 	IngestErrorCode_value = map[string]int32{
 		"INGEST_ERROR_NONE":               0,
@@ -113,6 +115,7 @@ var (
 		"INGEST_ERROR_PAYMENT_REQUIRED":   3,
 		"INGEST_ERROR_INTERNAL":           4,
 		"INGEST_ERROR_TIMEOUT":            5,
+		"INGEST_ERROR_DUPLICATE_INGEST":   6,
 	}
 )
 
@@ -2253,7 +2256,7 @@ type Register struct {
 	CpuCores *int32 `protobuf:"varint,12,opt,name=cpu_cores,json=cpuCores,proto3,oneof" json:"cpu_cores,omitempty"` // Detected CPU cores (runtime.NumCPU)
 	MemoryGb *int32 `protobuf:"varint,13,opt,name=memory_gb,json=memoryGb,proto3,oneof" json:"memory_gb,omitempty"` // Total RAM in GB
 	DiskGb   *int32 `protobuf:"varint,14,opt,name=disk_gb,json=diskGb,proto3,oneof" json:"disk_gb,omitempty"`       // Total disk capacity in GB
-	// Requested operational mode (hybrid operators can request drain/maintenance on connect).
+	// Requested operational mode (selfhosters can request drain/maintenance on connect).
 	// Foghorn may honor or override based on DB-persisted state.
 	RequestedMode NodeOperationalMode `protobuf:"varint,15,opt,name=requested_mode,json=requestedMode,proto3,enum=helmsmancontrol.NodeOperationalMode" json:"requested_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2875,10 +2878,11 @@ type MistTrigger struct {
 	//	*MistTrigger_VodLifecycleData
 	//	*MistTrigger_ApiRequestBatch
 	//	*MistTrigger_MessageLifecycleData
-	TriggerPayload isMistTrigger_TriggerPayload `protobuf_oneof:"trigger_payload"`
-	ClusterId      *string                      `protobuf:"bytes,33,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"` // Emitting cluster identifier
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	TriggerPayload  isMistTrigger_TriggerPayload `protobuf_oneof:"trigger_payload"`
+	ClusterId       *string                      `protobuf:"bytes,33,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`                     // Emitting cluster identifier
+	OriginClusterId *string                      `protobuf:"bytes,37,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"` // Cluster where stream was originally ingested (for federation attribution)
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *MistTrigger) Reset() {
@@ -3193,6 +3197,13 @@ func (x *MistTrigger) GetMessageLifecycleData() *MessageLifecycleData {
 func (x *MistTrigger) GetClusterId() string {
 	if x != nil && x.ClusterId != nil {
 		return *x.ClusterId
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
 	}
 	return ""
 }
@@ -4413,6 +4424,7 @@ type FreezePermissionResponse struct {
 	Reason           string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`                                                // Reason if not approved
 	// For DVR: map of relative path -> presigned PUT URL
 	SegmentUrls   map[string]string `protobuf:"bytes,7,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	SkipUpload    bool              `protobuf:"varint,10,opt,name=skip_upload,json=skipUpload,proto3" json:"skip_upload,omitempty"` // True = evict without uploading (origin S3 has authoritative copy)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4494,6 +4506,13 @@ func (x *FreezePermissionResponse) GetSegmentUrls() map[string]string {
 		return x.SegmentUrls
 	}
 	return nil
+}
+
+func (x *FreezePermissionResponse) GetSkipUpload() bool {
+	if x != nil {
+		return x.SkipUpload
+	}
+	return false
 }
 
 // FreezeRequest tells Helmsman to upload an asset to S3 cold storage.
@@ -5404,22 +5423,24 @@ func (x *DtshSyncRequest) GetDtshUrls() map[string]string {
 // StorageLifecycleData is emitted for analytics/observability of storage sync operations
 // Dual-storage model: S3 is authoritative backup, local disk is cache
 type StorageLifecycleData struct {
-	state          protoimpl.MessageState      `protogen:"open.v1"`
-	Action         StorageLifecycleData_Action `protobuf:"varint,1,opt,name=action,proto3,enum=helmsmancontrol.StorageLifecycleData_Action" json:"action,omitempty"`
-	AssetType      string                      `protobuf:"bytes,2,opt,name=asset_type,json=assetType,proto3" json:"asset_type,omitempty"` // "clip" or "dvr"
-	AssetHash      string                      `protobuf:"bytes,3,opt,name=asset_hash,json=assetHash,proto3" json:"asset_hash,omitempty"` // clip_hash or dvr_hash
-	TenantId       *string                     `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
-	InternalName   *string                     `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"`
-	StreamId       *string                     `protobuf:"bytes,13,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Enriched by Foghorn (UUID)
-	SizeBytes      uint64                      `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	S3Url          *string                     `protobuf:"bytes,7,opt,name=s3_url,json=s3Url,proto3,oneof" json:"s3_url,omitempty"`
-	LocalPath      *string                     `protobuf:"bytes,8,opt,name=local_path,json=localPath,proto3,oneof" json:"local_path,omitempty"`
-	NodeId         *string                     `protobuf:"bytes,9,opt,name=node_id,json=nodeId,proto3,oneof" json:"node_id,omitempty"`
-	Error          *string                     `protobuf:"bytes,10,opt,name=error,proto3,oneof" json:"error,omitempty"`
-	DurationMs     *int64                      `protobuf:"varint,11,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`               // How long the operation took (sync/defrost duration)
-	WarmDurationMs *int64                      `protobuf:"varint,12,opt,name=warm_duration_ms,json=warmDurationMs,proto3,oneof" json:"warm_duration_ms,omitempty"` // For EVICTED: how long asset was cached before eviction
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state           protoimpl.MessageState      `protogen:"open.v1"`
+	Action          StorageLifecycleData_Action `protobuf:"varint,1,opt,name=action,proto3,enum=helmsmancontrol.StorageLifecycleData_Action" json:"action,omitempty"`
+	AssetType       string                      `protobuf:"bytes,2,opt,name=asset_type,json=assetType,proto3" json:"asset_type,omitempty"` // "clip" or "dvr"
+	AssetHash       string                      `protobuf:"bytes,3,opt,name=asset_hash,json=assetHash,proto3" json:"asset_hash,omitempty"` // clip_hash or dvr_hash
+	TenantId        *string                     `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
+	InternalName    *string                     `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"`
+	StreamId        *string                     `protobuf:"bytes,13,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Enriched by Foghorn (UUID)
+	SizeBytes       uint64                      `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	S3Url           *string                     `protobuf:"bytes,7,opt,name=s3_url,json=s3Url,proto3,oneof" json:"s3_url,omitempty"`
+	LocalPath       *string                     `protobuf:"bytes,8,opt,name=local_path,json=localPath,proto3,oneof" json:"local_path,omitempty"`
+	NodeId          *string                     `protobuf:"bytes,9,opt,name=node_id,json=nodeId,proto3,oneof" json:"node_id,omitempty"`
+	Error           *string                     `protobuf:"bytes,10,opt,name=error,proto3,oneof" json:"error,omitempty"`
+	DurationMs      *int64                      `protobuf:"varint,11,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`                 // How long the operation took (sync/defrost duration)
+	WarmDurationMs  *int64                      `protobuf:"varint,12,opt,name=warm_duration_ms,json=warmDurationMs,proto3,oneof" json:"warm_duration_ms,omitempty"`   // For EVICTED: how long asset was cached before eviction
+	ClusterId       *string                     `protobuf:"bytes,14,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`                     // Cluster where the storage operation happened
+	OriginClusterId *string                     `protobuf:"bytes,15,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"` // Cluster that originally created the artifact
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *StorageLifecycleData) Reset() {
@@ -5541,6 +5562,20 @@ func (x *StorageLifecycleData) GetWarmDurationMs() int64 {
 		return *x.WarmDurationMs
 	}
 	return 0
+}
+
+func (x *StorageLifecycleData) GetClusterId() string {
+	if x != nil && x.ClusterId != nil {
+		return *x.ClusterId
+	}
+	return ""
+}
+
+func (x *StorageLifecycleData) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
 }
 
 type DVRReadyRequest struct {
@@ -8321,12 +8356,14 @@ type ClipLifecycleData struct {
 	StopMs      *int64 `protobuf:"varint,17,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`
 	DurationSec *int64 `protobuf:"varint,18,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`
 	// Clip creation mode (enriched by Foghorn)
-	ClipMode      *string `protobuf:"bytes,19,opt,name=clip_mode,json=clipMode,proto3,oneof" json:"clip_mode,omitempty"`
-	ExpiresAt     *int64  `protobuf:"varint,20,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
-	StreamId      *string `protobuf:"bytes,21,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Public stream ID (UUID)
-	UserId        *string `protobuf:"bytes,22,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`       // User who initiated the clip (if known)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ClipMode         *string `protobuf:"bytes,19,opt,name=clip_mode,json=clipMode,proto3,oneof" json:"clip_mode,omitempty"`
+	ExpiresAt        *int64  `protobuf:"varint,20,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
+	StreamId         *string `protobuf:"bytes,21,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`                           // Public stream ID (UUID)
+	UserId           *string `protobuf:"bytes,22,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`                                 // User who initiated the clip (if known)
+	OriginClusterId  *string `protobuf:"bytes,23,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`    // Cluster where clip was originally created
+	ServingClusterId *string `protobuf:"bytes,24,opt,name=serving_cluster_id,json=servingClusterId,proto3,oneof" json:"serving_cluster_id,omitempty"` // Cluster serving the clip to the viewer
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ClipLifecycleData) Reset() {
@@ -8513,6 +8550,20 @@ func (x *ClipLifecycleData) GetUserId() string {
 	return ""
 }
 
+func (x *ClipLifecycleData) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetServingClusterId() string {
+	if x != nil && x.ServingClusterId != nil {
+		return *x.ServingClusterId
+	}
+	return ""
+}
+
 // DVR lifecycle specific data (separate from DVR control messages)
 //
 // FOGHORN ENRICHMENT REQUIRED:
@@ -8533,13 +8584,15 @@ type DVRLifecycleData struct {
 	Error        *string                 `protobuf:"bytes,8,opt,name=error,proto3,oneof" json:"error,omitempty"`
 	NodeId       *string                 `protobuf:"bytes,9,opt,name=node_id,json=nodeId,proto3,oneof" json:"node_id,omitempty"`
 	// Enrichment fields added by Foghorn
-	TenantId      *string `protobuf:"bytes,10,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
-	InternalName  *string `protobuf:"bytes,11,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"`
-	ExpiresAt     *int64  `protobuf:"varint,12,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
-	StreamId      *string `protobuf:"bytes,13,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Public stream ID (UUID)
-	UserId        *string `protobuf:"bytes,14,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`       // User who initiated the DVR (if known)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TenantId         *string `protobuf:"bytes,10,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
+	InternalName     *string `protobuf:"bytes,11,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"`
+	ExpiresAt        *int64  `protobuf:"varint,12,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"`
+	StreamId         *string `protobuf:"bytes,13,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`                           // Public stream ID (UUID)
+	UserId           *string `protobuf:"bytes,14,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`                                 // User who initiated the DVR (if known)
+	OriginClusterId  *string `protobuf:"bytes,15,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`    // Cluster where DVR recording started
+	ServingClusterId *string `protobuf:"bytes,16,opt,name=serving_cluster_id,json=servingClusterId,proto3,oneof" json:"serving_cluster_id,omitempty"` // Cluster serving the DVR to the viewer
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *DVRLifecycleData) Reset() {
@@ -8670,6 +8723,20 @@ func (x *DVRLifecycleData) GetUserId() string {
 	return ""
 }
 
+func (x *DVRLifecycleData) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *DVRLifecycleData) GetServingClusterId() string {
+	if x != nil && x.ServingClusterId != nil {
+		return *x.ServingClusterId
+	}
+	return ""
+}
+
 // VOD lifecycle specific data (for user-uploaded video assets)
 //
 // VOD uploads differ from clips/DVR:
@@ -8696,13 +8763,15 @@ type VodLifecycleData struct {
 	UserId    *string `protobuf:"bytes,14,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`
 	ExpiresAt *int64  `protobuf:"varint,15,opt,name=expires_at,json=expiresAt,proto3,oneof" json:"expires_at,omitempty"` // Retention expiration
 	// Media metadata (populated after processing)
-	DurationMs    *int64  `protobuf:"varint,16,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`
-	Resolution    *string `protobuf:"bytes,17,opt,name=resolution,proto3,oneof" json:"resolution,omitempty"` // "1920x1080"
-	VideoCodec    *string `protobuf:"bytes,18,opt,name=video_codec,json=videoCodec,proto3,oneof" json:"video_codec,omitempty"`
-	AudioCodec    *string `protobuf:"bytes,19,opt,name=audio_codec,json=audioCodec,proto3,oneof" json:"audio_codec,omitempty"`
-	BitrateKbps   *int32  `protobuf:"varint,20,opt,name=bitrate_kbps,json=bitrateKbps,proto3,oneof" json:"bitrate_kbps,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DurationMs       *int64  `protobuf:"varint,16,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`
+	Resolution       *string `protobuf:"bytes,17,opt,name=resolution,proto3,oneof" json:"resolution,omitempty"` // "1920x1080"
+	VideoCodec       *string `protobuf:"bytes,18,opt,name=video_codec,json=videoCodec,proto3,oneof" json:"video_codec,omitempty"`
+	AudioCodec       *string `protobuf:"bytes,19,opt,name=audio_codec,json=audioCodec,proto3,oneof" json:"audio_codec,omitempty"`
+	BitrateKbps      *int32  `protobuf:"varint,20,opt,name=bitrate_kbps,json=bitrateKbps,proto3,oneof" json:"bitrate_kbps,omitempty"`
+	OriginClusterId  *string `protobuf:"bytes,21,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`    // Cluster where VOD was uploaded
+	ServingClusterId *string `protobuf:"bytes,22,opt,name=serving_cluster_id,json=servingClusterId,proto3,oneof" json:"serving_cluster_id,omitempty"` // Cluster serving the VOD to the viewer
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *VodLifecycleData) Reset() {
@@ -8873,6 +8942,20 @@ func (x *VodLifecycleData) GetBitrateKbps() int32 {
 		return *x.BitrateKbps
 	}
 	return 0
+}
+
+func (x *VodLifecycleData) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *VodLifecycleData) GetServingClusterId() string {
+	if x != nil && x.ServingClusterId != nil {
+		return *x.ServingClusterId
+	}
+	return ""
 }
 
 // MessageLifecycleData tracks support messaging events for real-time UI updates
@@ -11292,7 +11375,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"$\n" +
 	"\tHeartbeat\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xd2\x12\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x99\x13\n" +
 	"\vMistTrigger\x12!\n" +
 	"\ftrigger_type\x18\x01 \x01(\tR\vtriggerType\x12\x17\n" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12\x1c\n" +
@@ -11331,7 +11414,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x11api_request_batch\x18\" \x01(\v2 .helmsmancontrol.APIRequestBatchH\x00R\x0fapiRequestBatch\x12]\n" +
 	"\x16message_lifecycle_data\x18# \x01(\v2%.helmsmancontrol.MessageLifecycleDataH\x00R\x14messageLifecycleData\x12\"\n" +
 	"\n" +
-	"cluster_id\x18! \x01(\tH\x04R\tclusterId\x88\x01\x01B\x11\n" +
+	"cluster_id\x18! \x01(\tH\x04R\tclusterId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18% \x01(\tH\x05R\x0foriginClusterId\x88\x01\x01B\x11\n" +
 	"\x0ftrigger_payloadB\f\n" +
 	"\n" +
 	"_tenant_idB\n" +
@@ -11339,7 +11423,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\b_user_idB\f\n" +
 	"\n" +
 	"_stream_idB\r\n" +
-	"\v_cluster_idJ\x04\b\x14\x10\x15R\x10stream_bandwidth\"\xa7\x01\n" +
+	"\v_cluster_idB\x14\n" +
+	"\x12_origin_cluster_idJ\x04\b\x14\x10\x15R\x10stream_bandwidth\"\xa7\x01\n" +
 	"\x13MistTriggerResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1a\n" +
@@ -11450,7 +11535,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\x12\x17\n" +
 	"\anode_id\x18\x06 \x01(\tR\x06nodeId\x12\x1c\n" +
-	"\tfilenames\x18\a \x03(\tR\tfilenames\"\x85\x03\n" +
+	"\tfilenames\x18\a \x03(\tR\tfilenames\"\xa6\x03\n" +
 	"\x18FreezePermissionResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -11460,7 +11545,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\x11presigned_put_url\x18\x04 \x01(\tR\x0fpresignedPutUrl\x12,\n" +
 	"\x12url_expiry_seconds\x18\x05 \x01(\x03R\x10urlExpirySeconds\x12\x16\n" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x12]\n" +
-	"\fsegment_urls\x18\a \x03(\v2:.helmsmancontrol.FreezePermissionResponse.SegmentUrlsEntryR\vsegmentUrls\x1a>\n" +
+	"\fsegment_urls\x18\a \x03(\v2:.helmsmancontrol.FreezePermissionResponse.SegmentUrlsEntryR\vsegmentUrls\x12\x1f\n" +
+	"\vskip_upload\x18\n" +
+	" \x01(\bR\n" +
+	"skipUpload\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd7\x02\n" +
@@ -11574,7 +11662,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\tdtsh_urls\x18\a \x03(\v2..helmsmancontrol.DtshSyncRequest.DtshUrlsEntryR\bdtshUrls\x1a;\n" +
 	"\rDtshUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe6\x06\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe0\a\n" +
 	"\x14StorageLifecycleData\x12D\n" +
 	"\x06action\x18\x01 \x01(\x0e2,.helmsmancontrol.StorageLifecycleData.ActionR\x06action\x12\x1d\n" +
 	"\n" +
@@ -11594,7 +11682,11 @@ const file_ipc_proto_rawDesc = "" +
 	" \x01(\tH\x06R\x05error\x88\x01\x01\x12$\n" +
 	"\vduration_ms\x18\v \x01(\x03H\aR\n" +
 	"durationMs\x88\x01\x01\x12-\n" +
-	"\x10warm_duration_ms\x18\f \x01(\x03H\bR\x0ewarmDurationMs\x88\x01\x01\"\xeb\x01\n" +
+	"\x10warm_duration_ms\x18\f \x01(\x03H\bR\x0ewarmDurationMs\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"cluster_id\x18\x0e \x01(\tH\tR\tclusterId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x0f \x01(\tH\n" +
+	"R\x0foriginClusterId\x88\x01\x01\"\xeb\x01\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ACTION_SYNC_STARTED\x10\x01\x12\x11\n" +
@@ -11617,7 +11709,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\b_node_idB\b\n" +
 	"\x06_errorB\x0e\n" +
 	"\f_duration_msB\x13\n" +
-	"\x11_warm_duration_ms\"E\n" +
+	"\x11_warm_duration_msB\r\n" +
+	"\v_cluster_idB\x14\n" +
+	"\x12_origin_cluster_id\"E\n" +
 	"\x0fDVRReadyRequest\x12\x19\n" +
 	"\bdvr_hash\x18\x01 \x01(\tR\advrHash\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\"\xae\x01\n" +
@@ -12139,7 +12233,8 @@ const file_ipc_proto_rawDesc = "" +
 	"_stream_idB\x13\n" +
 	"\x11_candidates_countB\r\n" +
 	"\v_event_typeB\t\n" +
-	"\a_source\"\xda\t\n" +
+	"\a_source\"\xeb\n" +
+	"\n" +
 	"\x11ClipLifecycleData\x12>\n" +
 	"\x05stage\x18\x01 \x01(\x0e2(.helmsmancontrol.ClipLifecycleData.StageR\x05stage\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\"\n" +
@@ -12169,7 +12264,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x14 \x01(\x03H\x11R\texpiresAt\x88\x01\x01\x12 \n" +
 	"\tstream_id\x18\x15 \x01(\tH\x12R\bstreamId\x88\x01\x01\x12\x1c\n" +
-	"\auser_id\x18\x16 \x01(\tH\x13R\x06userId\x88\x01\x01\"\x8e\x01\n" +
+	"\auser_id\x18\x16 \x01(\tH\x13R\x06userId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x17 \x01(\tH\x14R\x0foriginClusterId\x88\x01\x01\x121\n" +
+	"\x12serving_cluster_id\x18\x18 \x01(\tH\x15R\x10servingClusterId\x88\x01\x01\"\x8e\x01\n" +
 	"\x05Stage\x12\x15\n" +
 	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTAGE_REQUESTED\x10\x01\x12\x10\n" +
@@ -12206,7 +12303,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"_stream_idB\n" +
 	"\n" +
-	"\b_user_id\"\xca\x06\n" +
+	"\b_user_idB\x14\n" +
+	"\x12_origin_cluster_idB\x15\n" +
+	"\x13_serving_cluster_id\"\xdb\a\n" +
 	"\x10DVRLifecycleData\x12@\n" +
 	"\x06status\x18\x01 \x01(\x0e2(.helmsmancontrol.DVRLifecycleData.StatusR\x06status\x12\x19\n" +
 	"\bdvr_hash\x18\x02 \x01(\tR\advrHash\x12(\n" +
@@ -12226,7 +12325,9 @@ const file_ipc_proto_rawDesc = "" +
 	"expires_at\x18\f \x01(\x03H\tR\texpiresAt\x88\x01\x01\x12 \n" +
 	"\tstream_id\x18\r \x01(\tH\n" +
 	"R\bstreamId\x88\x01\x01\x12\x1c\n" +
-	"\auser_id\x18\x0e \x01(\tH\vR\x06userId\x88\x01\x01\"\x85\x01\n" +
+	"\auser_id\x18\x0e \x01(\tH\vR\x06userId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x0f \x01(\tH\fR\x0foriginClusterId\x88\x01\x01\x121\n" +
+	"\x12serving_cluster_id\x18\x10 \x01(\tH\rR\x10servingClusterId\x88\x01\x01\"\x85\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTATUS_STARTED\x10\x01\x12\x14\n" +
@@ -12249,7 +12350,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"_stream_idB\n" +
 	"\n" +
-	"\b_user_id\"\x8a\t\n" +
+	"\b_user_idB\x14\n" +
+	"\x12_origin_cluster_idB\x15\n" +
+	"\x13_serving_cluster_id\"\x9b\n" +
+	"\n" +
 	"\x10VodLifecycleData\x12@\n" +
 	"\x06status\x18\x01 \x01(\x0e2(.helmsmancontrol.VodLifecycleData.StatusR\x06status\x12\x19\n" +
 	"\bvod_hash\x18\x02 \x01(\tR\avodHash\x12 \n" +
@@ -12280,7 +12384,9 @@ const file_ipc_proto_rawDesc = "" +
 	"videoCodec\x88\x01\x01\x12$\n" +
 	"\vaudio_codec\x18\x13 \x01(\tH\x10R\n" +
 	"audioCodec\x88\x01\x01\x12&\n" +
-	"\fbitrate_kbps\x18\x14 \x01(\x05H\x11R\vbitrateKbps\x88\x01\x01\"\xa0\x01\n" +
+	"\fbitrate_kbps\x18\x14 \x01(\x05H\x11R\vbitrateKbps\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x15 \x01(\tH\x12R\x0foriginClusterId\x88\x01\x01\x121\n" +
+	"\x12serving_cluster_id\x18\x16 \x01(\tH\x13R\x10servingClusterId\x88\x01\x01\"\xa0\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10STATUS_REQUESTED\x10\x01\x12\x14\n" +
@@ -12311,7 +12417,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\v_resolutionB\x0e\n" +
 	"\f_video_codecB\x0e\n" +
 	"\f_audio_codecB\x0f\n" +
-	"\r_bitrate_kbps\"\x94\x05\n" +
+	"\r_bitrate_kbpsB\x14\n" +
+	"\x12_origin_cluster_idB\x15\n" +
+	"\x13_serving_cluster_id\"\x94\x05\n" +
 	"\x14MessageLifecycleData\x12N\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\x0e2/.helmsmancontrol.MessageLifecycleData.EventTypeR\teventType\x12'\n" +
@@ -12659,14 +12767,15 @@ const file_ipc_proto_rawDesc = "" +
 	"!CLUSTER_REJECT_REASON_ELIGIBILITY\x10\x03\x12#\n" +
 	"\x1fCLUSTER_REJECT_REASON_DUPLICATE\x10\x04\x12#\n" +
 	"\x1fCLUSTER_REJECT_REASON_WITHDRAWN\x10\x05\x12\x1f\n" +
-	"\x1bCLUSTER_REJECT_REASON_OTHER\x10c*\xc9\x01\n" +
+	"\x1bCLUSTER_REJECT_REASON_OTHER\x10c*\xec\x01\n" +
 	"\x0fIngestErrorCode\x12\x15\n" +
 	"\x11INGEST_ERROR_NONE\x10\x00\x12#\n" +
 	"\x1fINGEST_ERROR_INVALID_STREAM_KEY\x10\x01\x12\"\n" +
 	"\x1eINGEST_ERROR_ACCOUNT_SUSPENDED\x10\x02\x12!\n" +
 	"\x1dINGEST_ERROR_PAYMENT_REQUIRED\x10\x03\x12\x19\n" +
 	"\x15INGEST_ERROR_INTERNAL\x10\x04\x12\x18\n" +
-	"\x14INGEST_ERROR_TIMEOUT\x10\x05*\xa8\x01\n" +
+	"\x14INGEST_ERROR_TIMEOUT\x10\x05\x12!\n" +
+	"\x1dINGEST_ERROR_DUPLICATE_INGEST\x10\x06*\xa8\x01\n" +
 	"\x0fStorageLocation\x12 \n" +
 	"\x1cSTORAGE_LOCATION_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16STORAGE_LOCATION_LOCAL\x10\x01\x12\x17\n" +

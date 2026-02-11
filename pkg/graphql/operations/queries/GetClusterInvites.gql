@@ -1,0 +1,15 @@
+# Fetch invites for a cluster you own
+query GetClusterInvites($clusterId: ID!) {
+  clusterInvites(clusterId: $clusterId) {
+    id
+    clusterId
+    clusterName
+    invitedTenantId
+    invitedTenantName
+    inviteToken
+    accessLevel
+    status
+    createdAt
+    expiresAt
+  }
+}

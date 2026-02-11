@@ -217,7 +217,7 @@ message Register {
   optional int32 cpu_cores = 12;      // Detected CPU cores (runtime.NumCPU)
   optional int32 memory_gb = 13;      // Total RAM in GB
   optional int32 disk_gb = 14;        // Total disk capacity in GB
-  // Requested operational mode (hybrid operators can request drain/maintenance on connect).
+  // Requested operational mode (selfhosters can request drain/maintenance on connect).
   // Foghorn may honor or override based on DB-persisted state.
   NodeOperationalMode requested_mode = 15;
 }
@@ -316,6 +316,7 @@ message MistTrigger {
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier
+  optional string origin_cluster_id = 37; // Cluster where stream was originally ingested (for federation attribution)
 
   reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";
@@ -335,6 +336,7 @@ enum IngestErrorCode {
   INGEST_ERROR_PAYMENT_REQUIRED = 3;
   INGEST_ERROR_INTERNAL = 4;
   INGEST_ERROR_TIMEOUT = 5;
+  INGEST_ERROR_DUPLICATE_INGEST = 6;
 }
 
 message StorageSnapshot {
@@ -459,6 +461,7 @@ message FreezePermissionResponse {
   string reason = 6;             // Reason if not approved
   // For DVR: map of relative path -> presigned PUT URL
   map<string, string> segment_urls = 7;
+  bool skip_upload = 10;         // True = evict without uploading (origin S3 has authoritative copy)
 }
 
 // Storage location enum for cold storage tracking
@@ -611,6 +614,8 @@ message StorageLifecycleData {
   optional string error = 10;
   optional int64 duration_ms = 11;      // How long the operation took (sync/defrost duration)
   optional int64 warm_duration_ms = 12; // For EVICTED: how long asset was cached before eviction
+  optional string cluster_id = 14;          // Cluster where the storage operation happened
+  optional string origin_cluster_id = 15;   // Cluster that originally created the artifact
 }
 
 message DVRReadyRequest {
@@ -1071,6 +1076,8 @@ message ClipLifecycleData {
   optional int64 expires_at = 20;
   optional string stream_id = 21;      // Public stream ID (UUID)
   optional string user_id = 22;        // User who initiated the clip (if known)
+  optional string origin_cluster_id = 23;  // Cluster where clip was originally created
+  optional string serving_cluster_id = 24; // Cluster serving the clip to the viewer
 }
 
 // DVR lifecycle specific data (separate from DVR control messages)
@@ -1105,6 +1112,8 @@ message DVRLifecycleData {
   optional int64 expires_at = 12;
   optional string stream_id = 13;      // Public stream ID (UUID)
   optional string user_id = 14;        // User who initiated the DVR (if known)
+  optional string origin_cluster_id = 15;  // Cluster where DVR recording started
+  optional string serving_cluster_id = 16; // Cluster serving the DVR to the viewer
 }
 
 // VOD lifecycle specific data (for user-uploaded video assets)
@@ -1146,6 +1155,8 @@ message VodLifecycleData {
   optional string video_codec = 18;
   optional string audio_codec = 19;
   optional int32 bitrate_kbps = 20;
+  optional string origin_cluster_id = 21;  // Cluster where VOD was uploaded
+  optional string serving_cluster_id = 22; // Cluster serving the VOD to the viewer
 }
 
 // MessageLifecycleData tracks support messaging events for real-time UI updates

@@ -59,6 +59,7 @@ const (
 	KeyWSCookieToken        Key = "ws_cookie_token"
 	KeyHTTPRequest          Key = "http_request"
 	KeyCapability           Key = "cap"
+	KeyClusterScope         Key = "cluster_scope"
 	KeyGraphQLOperationType Key = "graphql_operation_type"
 	KeyGraphQLOperationName Key = "graphql_operation_name"
 	KeyGraphQLComplexity    Key = "graphql_complexity"
@@ -204,6 +205,14 @@ func GetXPayment(ctx context.Context) string {
 // GetCapability extracts capability requirement from context.
 func GetCapability(ctx context.Context) string {
 	if v, ok := ctx.Value(KeyCapability).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// GetClusterScope extracts the cluster scope (tenant ID) used for node isolation on shared Foghrons.
+func GetClusterScope(ctx context.Context) string {
+	if v, ok := ctx.Value(KeyClusterScope).(string); ok {
 		return v
 	}
 	return ""

@@ -301,7 +301,7 @@ Model Context Protocol integration for AI agent tool discovery, integrated into 
 | Schema          | `introspect_schema`, `generate_query`, `execute_query`                             | `schema://catalog`                                                   | Gateway       |
 | Infrastructure  | —                                                                                  | `nodes://list`, `nodes://{id}`                                       | Gateway       |
 
-Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://docs.frameworks.network/agents/mcp/).
+Code: `api_gateway/internal/mcp/` (tools, resources, prompts, preflight), `api_consultant/internal/` (mcpclient, mcpspoke, chat orchestrator). For full tool parameters, see the [public docs](https://logbook.frameworks.network/agents/mcp/).
 
 ### Preflight Checks
 

@@ -58,23 +58,22 @@ const About = () => {
       summary:
         "FrameWorks ships the first public demo environment and onboarding flow in time for IBC Amsterdam.",
       points: [
-        "IBC showcase highlights hybrid ingest + hosted GPU pipelines with real operator telemetry.",
-        "Sales engineering loop formalized to convert demo interest into structured pilots.",
+        "IBC showcase highlights CDN + hosted GPU pipelines with telemetry.",
+        "Sales-engineering loop; from demo interest into structured pilots.",
         "Partner roadmap aligned with MistServer + Livepeer field feedback captured during the conference.",
       ],
     },
     {
-      year: "2025",
+      year: "2026",
       title: "Public Beta Expansion",
-      subtitle: "Hybrid operator cohorts live",
+      subtitle: "Selfhosted operators",
       icon: SparklesIcon,
-      badges: ["Beta Access", "Hybrid Workflows"],
-      summary:
-        "Core platform is live with guarded capacity for hybrid operators, validating ingest, orchestration, and AI loops.",
+      badges: ["Alpha Access", "Hybrid Workflows"],
+      summary: "Core platform is live with limited capacity and a semi-autonomous Media plane",
       points: [
-        "Operators onboard with guided runbooks pairing hosted control planes with self-managed nodes.",
-        "Auto-discovery, compositing, and AI moderation launch under beta flags while telemetry hardening continues.",
-        "Weekly release trains focus on operator feedback, console UX polish, and documentation depth.",
+        "Operators onboard quickly through the CLI.",
+        "Advanced features start to roll out to round out platform featureset",
+        "Code hardening, unit testing, UX polish, and documentation depth.",
       ],
     },
     {
@@ -87,8 +86,8 @@ const About = () => {
         "Grow the core team, expand infrastructure regions, and deepen enterprise integrations.",
       points: [
         "Expand SRE and solutions engineering headcount to support multi-region customer rollouts.",
-        "Broaden GPU orchestration and AI automation coverage for broadcast + defense workloads.",
-        "Stand up regional control plane replicas with audit-grade tenancy boundaries.",
+        "Broaden GPU orchestration and AI automation capabilities.",
+        "Acquire ASN and expand the network across various data centers.",
       ],
     },
     {
@@ -98,9 +97,9 @@ const About = () => {
       icon: GlobeAltIcon,
       badges: ["Federated", "Tokenized Incentives"],
       summary:
-        "Deliver a federated CDN and compute marketplace so operators can exchange capacity without lock-in.",
+        "Deliver a federated CDN and marketplace so operators can exchange bandwidth & compute.",
       points: [
-        "Blend community-operated edge clusters with Livepeer incentives for pay-as-you-go streaming.",
+        "Ensure the network is open & accessible, and lessen our role as the central gatekeeper.",
         "Expose FrameWorks policy engine so operators trade bandwidth, GPU, and AI workloads securely.",
         "Maintain public-domain licensing so any team can extend, self-host, and interoperate without friction.",
       ],

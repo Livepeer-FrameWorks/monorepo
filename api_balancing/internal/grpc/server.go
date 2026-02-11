@@ -17,6 +17,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/state"
@@ -60,6 +61,7 @@ type S3ClientInterface interface {
 type CacheInvalidator interface {
 	InvalidateTenantCache(tenantID string) int
 	GetBillingStatus(ctx context.Context, internalName, tenantID string) *triggers.BillingStatus
+	GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer
 }
 
 // FoghornGRPCServer implements the Foghorn control plane gRPC services
@@ -79,6 +81,10 @@ type FoghornGRPCServer struct {
 	s3Client         S3ClientInterface
 	cacheInvalidator CacheInvalidator
 	purserClient     *purserclient.GRPCClient
+	remoteEdgeCache  *federation.RemoteEdgeCache
+	federationClient *federation.FederationClient
+	peerManager      *federation.PeerManager
+	clusterID        string
 	pendingDVRStops  map[string]time.Time
 	pendingDVRMu     sync.Mutex
 }
@@ -116,9 +122,76 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 	pb.RegisterTenantControlServiceServer(grpcServer, s)
 }
 
+// enrichClusterID returns the cluster for an operation. Prefers explicit
+// cluster_id from the caller. Falls back to stream's node state for
+// media-plane-initiated flows (e.g. DVR triggered by MistServer).
+func (s *FoghornGRPCServer) enrichClusterID(explicit, streamName string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if streamName != "" {
+		if ss := state.DefaultManager().GetStreamState(streamName); ss != nil && ss.NodeID != "" {
+			if ns := state.DefaultManager().GetNodeState(ss.NodeID); ns != nil && ns.ClusterID != "" {
+				return ns.ClusterID
+			}
+		}
+	}
+	return ""
+}
+
 // SetCacheInvalidator sets the cache invalidator for tenant cache management
 func (s *FoghornGRPCServer) SetCacheInvalidator(ci CacheInvalidator) {
 	s.cacheInvalidator = ci
+}
+
+// SetRemoteEdgeCache enables remote edge scoring for cross-cluster viewer routing.
+func (s *FoghornGRPCServer) SetRemoteEdgeCache(cache *federation.RemoteEdgeCache, clusterID string) {
+	s.remoteEdgeCache = cache
+	s.clusterID = clusterID
+}
+
+// SetFederationClient enables cross-cluster QueryStream/NotifyOriginPull RPCs.
+func (s *FoghornGRPCServer) SetFederationClient(fc *federation.FederationClient) {
+	s.federationClient = fc
+}
+
+// SetPeerManager enables peer address lookups for federation calls.
+func (s *FoghornGRPCServer) SetPeerManager(pm *federation.PeerManager) {
+	s.peerManager = pm
+}
+
+// remoteArtifactAdapter wraps RemoteEdgeCache to satisfy control.RemoteArtifactLookup.
+type remoteArtifactAdapter struct {
+	cache *federation.RemoteEdgeCache
+}
+
+// remoteArtifactLookup returns a RemoteArtifactLookup backed by the cache, or nil.
+func (s *FoghornGRPCServer) remoteArtifactLookup() control.RemoteArtifactLookup {
+	if s.remoteEdgeCache == nil {
+		return nil
+	}
+	return &remoteArtifactAdapter{cache: s.remoteEdgeCache}
+}
+
+func (a *remoteArtifactAdapter) GetRemoteArtifacts(ctx context.Context, artifactHash string) ([]*control.RemoteArtifactInfo, error) {
+	entries, err := a.cache.GetRemoteArtifacts(ctx, artifactHash)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]*control.RemoteArtifactInfo, 0, len(entries))
+	for _, e := range entries {
+		infos = append(infos, &control.RemoteArtifactInfo{
+			PeerCluster:  e.PeerCluster,
+			NodeID:       e.NodeID,
+			BaseURL:      e.BaseURL,
+			SizeBytes:    e.SizeBytes,
+			AccessCount:  e.AccessCount,
+			LastAccessed: e.LastAccessed,
+			GeoLat:       e.GeoLat,
+			GeoLon:       e.GeoLon,
+		})
+	}
+	return infos, nil
 }
 
 func (s *FoghornGRPCServer) RegisterPendingDVRStop(internalName string) {
@@ -475,8 +548,13 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	}
 
 	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
+	clipCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName)
 	if s.decklogClient != nil {
 		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, clipHash)
+		if clipCluster != "" {
+			clipData.OriginClusterId = &clipCluster
+			clipData.ServingClusterId = &clipCluster
+		}
 		go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
 	}
 
@@ -508,9 +586,9 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// retention_until defaults to 30 days (system default, not user-configured yet)
 	storagePath := clips.BuildClipStoragePath(req.InternalName, clipHash, format)
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, internal_name, artifact_internal_name, tenant_id, user_id, status, request_id, manifest_path, format, retention_until, created_at, updated_at)
-		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, clipHash, req.InternalName, req.GetArtifactInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format)
+		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, internal_name, artifact_internal_name, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
+		VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'requested', $6, $7, $8, $9, NOW() + INTERVAL '30 days', NOW(), NOW())
+	`, clipHash, req.InternalName, req.GetArtifactInternalName(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster)
 
 	if err != nil {
 		// Commodore registration succeeded (clip_hash provided) but Foghorn insert failed
@@ -714,6 +792,8 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
+	dvrCluster := s.enrichClusterID(req.GetClusterId(), req.InternalName)
+
 	// Resolve retention policy (default 30 days) for cleanup jobs.
 	retentionUntil := time.Now().Add(30 * 24 * time.Hour)
 	if req.ExpiresAt != nil && *req.ExpiresAt > 0 {
@@ -773,10 +853,11 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	var streamID string
 	if control.CommodoreClient != nil {
 		regReq := &pb.RegisterDVRRequest{
-			TenantId:     req.TenantId,
-			UserId:       req.GetUserId(),
-			StreamId:     req.GetStreamId(),
-			InternalName: req.InternalName,
+			TenantId:        req.TenantId,
+			UserId:          req.GetUserId(),
+			StreamId:        req.GetStreamId(),
+			InternalName:    req.InternalName,
+			OriginClusterId: s.enrichClusterID(req.GetClusterId(), req.InternalName),
 		}
 		// Pass retention from request if provided
 		if req.GetExpiresAt() > 0 {
@@ -807,12 +888,12 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 		INSERT INTO foghorn.artifacts (
 			artifact_hash, artifact_type, internal_name, artifact_internal_name,
 			stream_id, tenant_id, user_id,
-			status, request_id, format,
+			status, request_id, format, origin_cluster_id,
 			retention_until, created_at, updated_at
 		)
 		VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
-		        'requested', $7, 'm3u8', $8, NOW(), NOW())
-	`, dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, retentionUntil)
+		        'requested', $7, 'm3u8', $8, $9, NOW(), NOW())
+	`, dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster, retentionUntil)
 
 	if err != nil {
 		// Commodore registration succeeded but Foghorn insert failed
@@ -968,9 +1049,11 @@ func (s *FoghornGRPCServer) StartDVR(ctx context.Context, req *pb.StartDVRReques
 	// Emit DVR STATUS_STARTED event to Decklog
 	if s.decklogClient != nil {
 		dvrData := &pb.DVRLifecycleData{
-			Status:    pb.DVRLifecycleData_STATUS_STARTED,
-			DvrHash:   dvrHash,
-			StartedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+			Status:           pb.DVRLifecycleData_STATUS_STARTED,
+			DvrHash:          dvrHash,
+			OriginClusterId:  &dvrCluster,
+			ServingClusterId: &dvrCluster,
+			StartedAt:        func() *int64 { t := time.Now().Unix(); return &t }(),
 			StreamId: func() *string {
 				if req.StreamId != nil && *req.StreamId != "" {
 					return req.StreamId
@@ -1277,7 +1360,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 
 	switch resolvedType {
 	case "live":
-		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId)
+		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers)
 	case "dvr", "clip", "vod":
 		response, err = s.resolveArtifactViewerEndpoint(ctx, req, lat, lon)
 	default:
@@ -1315,7 +1398,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 	return response, nil
 }
 
-func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string) (*pb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*pb.TenantClusterPeer) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:     s.db,
@@ -1328,9 +1411,45 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
+	// Loop prevention: skip remote edges if we're already pulling this stream
+	skipRemote := false
+	if s.remoteEdgeCache != nil {
+		if record, _ := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
+			skipRemote = true
+		}
+	}
+
+	// Collect remote edge candidates from federation cache.
+	// Primary source: cluster peers from resolution (free with every Commodore call).
+	// Fallback: trigger processor cache (for streams ingesting locally).
+	allPeers := clusterPeers
+	if !skipRemote && s.remoteEdgeCache != nil && len(allPeers) > 0 {
+		deps.RemoteEdges = s.collectRemoteEdges(ctx, allPeers)
+	}
+	if !skipRemote && s.remoteEdgeCache != nil && len(deps.RemoteEdges) == 0 && s.cacheInvalidator != nil {
+		if tpPeers := s.cacheInvalidator.GetClusterPeers(internalName, tenantID); len(tpPeers) > 0 {
+			deps.RemoteEdges = s.collectRemoteEdges(ctx, tpPeers)
+			if len(allPeers) == 0 {
+				allPeers = tpPeers
+			}
+		}
+	}
+	// Cold start: EdgeSummary cache empty but peers exist — fan out QueryStream
+	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 {
+		deps.RemoteEdges = s.queryStreamFanOut(ctx, internalName, tenantID, lat, lon, allPeers)
+	}
+
 	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "%v", err)
+	}
+
+	// If a remote cluster won the summary-level comparison, confirm with QueryStream
+	if response.Primary != nil && response.Primary.ClusterId != "" {
+		confirmed := s.confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, tenantID, lat, lon)
+		if confirmed != nil {
+			response = confirmed
+		}
 	}
 
 	// Emit routing event for analytics
@@ -1346,13 +1465,332 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 	return response, nil
 }
 
+// collectRemoteEdges queries the federation cache for each peer cluster's edge summary
+// and converts the results to RemoteEdgeCandidates for the load balancer.
+func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+	var candidates []balancer.RemoteEdgeCandidate
+	for _, peer := range peers {
+		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" {
+			continue
+		}
+		record, err := s.remoteEdgeCache.GetEdgeSummary(ctx, peer.GetClusterId())
+		if err != nil || record == nil {
+			continue
+		}
+		for _, edge := range record.Edges {
+			candidates = append(candidates, balancer.RemoteEdgeCandidate{
+				ClusterID:   peer.GetClusterId(),
+				NodeID:      edge.NodeID,
+				BaseURL:     edge.BaseURL,
+				GeoLat:      edge.GeoLat,
+				GeoLon:      edge.GeoLon,
+				BWAvailable: edge.BWAvailableAvg,
+				CPUPercent:  edge.CPUPercentAvg,
+				RAMUsed:     edge.RAMUsed,
+				RAMMax:      edge.RAMMax,
+			})
+		}
+	}
+	return candidates
+}
+
+// confirmRemoteEndpoint validates a summary-level remote win by calling QueryStream
+// on the winning cluster(s). Returns nil if confirmation fails (caller keeps original).
+func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response *pb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) *pb.ViewerEndpointResponse {
+	if s.federationClient == nil || s.peerManager == nil {
+		return nil
+	}
+
+	type remoteHit struct {
+		clusterID string
+		score     float64
+	}
+	var remotes []remoteHit
+	seen := make(map[string]bool)
+
+	if response.Primary != nil && response.Primary.ClusterId != "" && !seen[response.Primary.ClusterId] {
+		seen[response.Primary.ClusterId] = true
+		remotes = append(remotes, remoteHit{clusterID: response.Primary.ClusterId, score: response.Primary.LoadScore})
+	}
+	for _, fb := range response.Fallbacks {
+		if fb.ClusterId != "" && !seen[fb.ClusterId] {
+			seen[fb.ClusterId] = true
+			remotes = append(remotes, remoteHit{clusterID: fb.ClusterId, score: fb.LoadScore})
+		}
+	}
+	if len(remotes) == 0 {
+		return nil
+	}
+
+	type queryResult struct {
+		clusterID string
+		resp      *pb.QueryStreamResponse
+	}
+	ch := make(chan queryResult, len(remotes))
+	var wg sync.WaitGroup
+
+	for _, r := range remotes {
+		addr := s.peerManager.GetPeerAddr(r.clusterID)
+		if addr == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(cid, caddr string) {
+			defer wg.Done()
+			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			resp, err := s.federationClient.QueryStream(qCtx, cid, caddr, &pb.QueryStreamRequest{
+				StreamName:        internalName,
+				ViewerLat:         lat,
+				ViewerLon:         lon,
+				RequestingCluster: s.clusterID,
+				TenantId:          tenantID,
+			})
+			if err != nil || resp == nil || len(resp.Candidates) == 0 {
+				return
+			}
+			ch <- queryResult{clusterID: cid, resp: resp}
+		}(r.clusterID, addr)
+	}
+	go func() { wg.Wait(); close(ch) }()
+
+	var bestCandidate *pb.EdgeCandidate
+	var bestCluster string
+	for qr := range ch {
+		for _, c := range qr.resp.Candidates {
+			if bestCandidate == nil || c.BwScore > bestCandidate.BwScore {
+				bestCandidate = c
+				bestCluster = qr.clusterID
+			}
+		}
+	}
+	if bestCandidate == nil {
+		return nil
+	}
+
+	// Try origin-pull: pre-arrange local replication so MistServer can pull via DTSC
+	if arranged := s.arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response); arranged != nil {
+		return arranged
+	}
+
+	// No origin-pull possible — redirect viewer to the remote cluster directly
+	playURL := "https://" + bestCandidate.BaseUrl + "/play/" + viewKey
+	confirmed := &pb.ViewerEndpointResponse{
+		Primary: &pb.ViewerEndpoint{
+			NodeId:    bestCandidate.NodeId,
+			BaseUrl:   bestCandidate.BaseUrl,
+			Protocol:  "redirect",
+			Url:       playURL,
+			LoadScore: float64(bestCandidate.BwScore),
+			ClusterId: bestCluster,
+		},
+		Metadata: response.Metadata,
+	}
+	for _, fb := range response.Fallbacks {
+		if fb.ClusterId == "" {
+			confirmed.Fallbacks = append(confirmed.Fallbacks, fb)
+		}
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"stream":         internalName,
+		"remote_cluster": bestCluster,
+		"remote_node":    bestCandidate.NodeId,
+		"remote_score":   bestCandidate.BwScore,
+	}).Info("Remote endpoint confirmed via QueryStream — redirecting (no local capacity)")
+
+	return confirmed
+}
+
+// arrangeOriginPull pre-arranges a local DTSC pull from a remote source.
+// Returns a response pointing to the local edge, or nil if arrangement fails.
+// The actual DTSC pull happens when MistServer's PLAY_REWRITE trigger fires.
+func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, original *pb.ViewerEndpointResponse) *pb.ViewerEndpointResponse {
+	if s.remoteEdgeCache == nil || remote.DtscUrl == "" {
+		return nil
+	}
+
+	// Already pulling this stream? Return the existing local endpoint.
+	if record, _ := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
+		endpoint := s.buildLocalEndpoint(record, viewKey)
+		if endpoint != nil {
+			return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
+		}
+		return nil
+	}
+
+	// Loop prevention: don't pull from a cluster already pulling from us
+	if replications, _ := s.remoteEdgeCache.GetRemoteReplications(ctx, internalName); len(replications) > 0 {
+		for _, r := range replications {
+			if r.ClusterID == remoteCluster {
+				return nil
+			}
+		}
+	}
+
+	// Find a healthy local edge with capacity (tenant-scoped on shared Foghorns)
+	lbCtx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
+	if tenantID != "" {
+		lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, tenantID)
+	}
+	localHost, _, _, _, _, err := s.lb.GetBestNodeWithScore(lbCtx, "", lat, lon, nil, "", false)
+	if err != nil {
+		return nil
+	}
+	localNodeID := s.lb.GetNodeIDByHost(localHost)
+	if localNodeID == "" {
+		return nil
+	}
+
+	// NotifyOriginPull: tell the source cluster we intend to pull
+	peerAddr := s.peerManager.GetPeerAddr(remoteCluster)
+	if peerAddr == "" {
+		return nil
+	}
+	ack, err := s.federationClient.NotifyOriginPull(ctx, remoteCluster, peerAddr, &pb.OriginPullNotification{
+		StreamName:    internalName,
+		SourceNodeId:  remote.NodeId,
+		DestClusterId: s.clusterID,
+		DestNodeId:    localNodeID,
+		TenantId:      tenantID,
+	})
+	if err != nil || !ack.GetAccepted() {
+		return nil
+	}
+
+	// Record the in-flight replication so balance/source endpoints return the DTSC URL
+	record := &federation.ActiveReplicationRecord{
+		StreamName:    internalName,
+		SourceNodeID:  remote.NodeId,
+		SourceCluster: remoteCluster,
+		DestCluster:   s.clusterID,
+		DestNodeID:    localNodeID,
+		DTSCURL:       ack.DtscUrl,
+		BaseURL:       localHost,
+		CreatedAt:     time.Now(),
+	}
+	_ = s.remoteEdgeCache.SetActiveReplication(ctx, record)
+
+	s.logger.WithFields(logging.Fields{
+		"stream":         internalName,
+		"source_cluster": remoteCluster,
+		"source_node":    remote.NodeId,
+		"dest_node":      localNodeID,
+		"dtsc_url":       ack.DtscUrl,
+	}).Info("Origin-pull arranged via gRPC, serving viewer from local edge")
+
+	endpoint := s.buildLocalEndpoint(record, viewKey)
+	if endpoint != nil {
+		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
+	}
+	return nil
+}
+
+// buildLocalEndpoint constructs a ViewerEndpoint from a local node with an active replication.
+func (s *FoghornGRPCServer) buildLocalEndpoint(record *federation.ActiveReplicationRecord, viewKey string) *pb.ViewerEndpoint {
+	outputs, exists := control.GetNodeOutputs(record.DestNodeID)
+	if !exists || outputs.Outputs == nil {
+		return nil
+	}
+	publicHost := control.ExtractPublicHostFromOutputs(outputs.Outputs)
+	var protocol, endpointURL string
+	if webrtcURL, ok := outputs.Outputs["WebRTC"]; ok {
+		protocol = "webrtc"
+		endpointURL = control.ResolveTemplateURL(webrtcURL, outputs.BaseURL, viewKey)
+		if publicHost != "" {
+			endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
+		}
+	} else if hlsURL, ok := outputs.Outputs["HLS (TS)"]; ok {
+		protocol = "hls"
+		endpointURL = control.ResolveTemplateURL(hlsURL, outputs.BaseURL, viewKey)
+		if publicHost != "" {
+			endpointURL = strings.ReplaceAll(endpointURL, "HOST", publicHost)
+		}
+	}
+	if endpointURL == "" {
+		return nil
+	}
+	return &pb.ViewerEndpoint{
+		NodeId:   record.DestNodeID,
+		BaseUrl:  record.BaseURL,
+		Protocol: protocol,
+		Url:      endpointURL,
+	}
+}
+
+// queryStreamFanOut performs cold-start QueryStream to peer clusters when EdgeSummary is empty.
+func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*pb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
+	if s.federationClient == nil || s.peerManager == nil {
+		return nil
+	}
+
+	type result struct {
+		candidates []balancer.RemoteEdgeCandidate
+	}
+	ch := make(chan result, len(peers))
+	var wg sync.WaitGroup
+
+	for _, peer := range peers {
+		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" {
+			continue
+		}
+		addr := s.peerManager.GetPeerAddr(peer.GetClusterId())
+		if addr == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(peerID, peerAddr string) {
+			defer wg.Done()
+			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			resp, err := s.federationClient.QueryStream(qCtx, peerID, peerAddr, &pb.QueryStreamRequest{
+				StreamName:        internalName,
+				ViewerLat:         lat,
+				ViewerLon:         lon,
+				RequestingCluster: s.clusterID,
+				TenantId:          tenantID,
+			})
+			if err != nil || resp == nil || len(resp.Candidates) == 0 {
+				ch <- result{}
+				return
+			}
+			var cands []balancer.RemoteEdgeCandidate
+			for _, c := range resp.Candidates {
+				cands = append(cands, balancer.RemoteEdgeCandidate{
+					ClusterID:   peerID,
+					NodeID:      c.NodeId,
+					BaseURL:     c.BaseUrl,
+					GeoLat:      c.GeoLat,
+					GeoLon:      c.GeoLon,
+					BWAvailable: c.BwAvailable,
+					CPUPercent:  c.CpuPercent,
+					RAMUsed:     c.RamUsed,
+					RAMMax:      c.RamMax,
+				})
+			}
+			ch <- result{candidates: cands}
+		}(peer.GetClusterId(), addr)
+	}
+	go func() { wg.Wait(); close(ch) }()
+
+	var all []balancer.RemoteEdgeCandidate
+	for r := range ch {
+		all = append(all, r.candidates...)
+	}
+	return all
+}
+
 func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB:     s.db,
-		LB:     s.lb,
-		GeoLat: lat,
-		GeoLon: lon,
+		DB:              s.db,
+		LB:              s.lb,
+		GeoLat:          lat,
+		GeoLon:          lon,
+		FedClient:       s.federationClient,
+		PeerResolver:    s.peerManager,
+		LocalClusterID:  s.clusterID,
+		RemoteArtifacts: s.remoteArtifactLookup(),
 	}
 
 	response, err := control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
@@ -1583,11 +2021,11 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		INSERT INTO foghorn.artifacts (
 			id, artifact_hash, artifact_type, artifact_internal_name,
 			tenant_id, user_id, status,
-			sync_status, size_bytes, s3_url, format, retention_until, created_at, updated_at
+			sync_status, size_bytes, s3_url, format, origin_cluster_id, retention_until, created_at, updated_at
 		)
 		VALUES ($1, $2, 'vod', $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, 'uploading',
-		        'in_progress', $6, $7, $8, NOW() + INTERVAL '30 days', NOW(), NOW())
-	`, artifactID, artifactHash, req.GetArtifactInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat)
+		        'in_progress', $6, $7, $8, $9, NOW() + INTERVAL '30 days', NOW(), NOW())
+	`, artifactID, artifactHash, req.GetArtifactInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId())
 
 	if err != nil {
 		// Abort S3 upload since we can't track it
@@ -1634,6 +2072,10 @@ func (s *FoghornGRPCServer) CreateVodUpload(ctx context.Context, req *pb.CreateV
 		}
 		if req.UserId != "" {
 			vodData.UserId = &req.UserId
+		}
+		if cid := req.GetClusterId(); cid != "" {
+			vodData.OriginClusterId = &cid
+			vodData.ServingClusterId = &cid
 		}
 		go func() { _ = s.decklogClient.SendVodLifecycle(vodData) }()
 	}

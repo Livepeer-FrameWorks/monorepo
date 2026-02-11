@@ -284,7 +284,13 @@ USER_END / viewer disconnect
 Notes:
 
 - Use `docs/standards/metrics.md` for unit conversions (`_bps`, `_gb`, `_bytes`, etc.).
-- “Peak bandwidth” must be derived from a rate table/rollup (e.g., `client_qoe_5m.avg_bw_out`), not cumulative byte counters.
+- "Peak bandwidth" must be derived from a rate table/rollup (e.g., `client_qoe_5m.avg_bw_out`), not cumulative byte counters.
+
+### Cross-cluster billing attribution
+
+In multi-cluster deployments, every analytics event carries `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). Periscope Query generates per-cluster `UsageSummary` records for Purser, enabling settlement of inter-cluster traffic.
+
+See `docs/architecture/cross-cluster-billing.md` for the full attribution model, ClickHouse schema additions (`cluster_id` + `origin_cluster_id` on `viewer_connection_events`, `stream_event_log`, and their MVs), and the settlement query.
 
 ## Gotchas
 

@@ -111,14 +111,14 @@ func main() {
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
 	acmeEmail := config.GetEnv("BRAND_CONTACT_EMAIL", "info@frameworks.network")
 	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, []string{
-		"edge",
-		"ingest",
-		"play",
+		"edge-egress",
+		"edge-ingest",
+		"foghorn",
 		"gateway",
-		"app",
+		"chartroom",
 		"website",
-		"docs",
-		"forms",
+		"logbook",
+		"steward",
 	})
 	go reconciler.Start(context.Background())
 

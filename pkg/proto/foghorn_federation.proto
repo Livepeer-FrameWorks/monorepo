@@ -1,0 +1,335 @@
+syntax = "proto3";
+
+package foghorn_federation;
+
+option go_package = "frameworks/pkg/proto";
+
+// FoghornFederation enables cross-cluster communication between Foghorn instances.
+// Unary RPCs (QueryStream, NotifyOriginPull, PrepareArtifact) are stateless and
+// load-balanced across all Foghorn instances via shared Redis state.
+// PeerChannel is a sticky bidirectional stream for real-time telemetry exchange.
+service FoghornFederation {
+  // QueryStream asks a peer cluster whether it has a stream and returns scored edge candidates.
+  rpc QueryStream(QueryStreamRequest) returns (QueryStreamResponse);
+
+  // NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
+  rpc NotifyOriginPull(OriginPullNotification) returns (OriginPullAck);
+
+  // PrepareArtifact requests an artifact (clip/DVR/VOD) be made available for cross-cluster access.
+  rpc PrepareArtifact(PrepareArtifactRequest) returns (PrepareArtifactResponse);
+
+  // CreateRemoteClip requests the origin cluster to create a clip on behalf of a remote cluster.
+  rpc CreateRemoteClip(RemoteClipRequest) returns (RemoteClipResponse);
+
+  // CreateRemoteDVR requests the origin cluster to start a DVR recording on behalf of a remote cluster.
+  rpc CreateRemoteDVR(RemoteDVRRequest) returns (RemoteDVRResponse);
+
+  // PeerChannel is a bidirectional stream for real-time telemetry and replication events.
+  // One PeerChannel per peer pair handles all replications between two clusters.
+  // The receiving instance writes telemetry to Redis; all instances read it for scoring.
+  rpc PeerChannel(stream PeerMessage) returns (stream PeerMessage);
+
+  // ListTenantArtifacts returns all artifact metadata for a tenant on this cluster.
+  // Used by MigrateArtifactMetadata on the destination to bulk-copy cold storage records.
+  rpc ListTenantArtifacts(ListTenantArtifactsRequest) returns (ListTenantArtifactsResponse);
+
+  // MigrateArtifactMetadata bulk-copies artifact records from a source cluster.
+  // Destination calls ListTenantArtifacts on source, then inserts locally with origin_cluster_id.
+  rpc MigrateArtifactMetadata(MigrateArtifactMetadataRequest) returns (MigrateArtifactMetadataResponse);
+}
+
+message QueryStreamRequest {
+  string stream_name = 1;        // Internal stream name to look up
+  double viewer_lat = 2;         // Viewer latitude for remote geo-scoring
+  double viewer_lon = 3;         // Viewer longitude for remote geo-scoring
+  string requesting_cluster = 4; // Cluster ID of the requester (prevents loops)
+  string tenant_id = 5;          // For shared-lb: filter edges by tenant
+  bool is_source_selection = 6;  // True = source selection (only origin nodes with active inputs)
+}
+
+message QueryStreamResponse {
+  repeated EdgeCandidate candidates = 1;
+  string origin_cluster_id = 2; // Cluster where this stream ingests
+}
+
+message EdgeCandidate {
+  string node_id = 1;
+  string base_url = 2;       // Public HTTPS URL of the edge node
+  string dtsc_url = 3;       // DTSC pull URL for origin-pull replication
+  uint64 bw_score = 4;       // Pre-computed bandwidth score
+  uint64 geo_score = 5;      // Pre-computed geo score relative to viewer
+  bool is_origin = 6;        // True if this node has the original ingest
+  string buffer_state = 7;   // FULL, DRY, RECOVER, etc.
+  double geo_lat = 8;
+  double geo_lon = 9;
+  uint32 viewer_count = 10;
+  double cpu_percent = 11;
+  uint64 bw_available = 12;  // Available bandwidth in bytes/sec
+  uint64 ram_used = 13;
+  uint64 ram_max = 14;
+}
+
+message OriginPullNotification {
+  string stream_name = 1;
+  string source_node_id = 2;  // Preferred source edge (or empty for auto-select)
+  string dest_cluster_id = 3; // Cluster that will pull the stream
+  string dest_node_id = 4;    // Edge node in dest cluster that will pull
+  uint32 est_viewers = 5;     // Estimated viewer count driving this pull
+  string tenant_id = 6;       // Stream owner tenant
+}
+
+message OriginPullAck {
+  bool accepted = 1;
+  string reason = 2;    // Rejection reason or informational message
+  string dtsc_url = 3;  // DTSC URL to pull from (set when accepted)
+}
+
+message PrepareArtifactRequest {
+  string artifact_id = 1;       // Artifact hash (clip/dvr/vod)
+  string clip_hash = 2;         // Legacy: clip hash alias
+  string requesting_cluster = 3;
+  string artifact_type = 4;     // "clip", "dvr", "vod"
+  string tenant_id = 5;
+}
+
+message PrepareArtifactResponse {
+  string url = 1;              // Presigned S3 GET URL (clip/vod single file)
+  uint64 size_bytes = 2;
+  bool ready = 3;              // True if artifact is immediately available
+  uint32 est_ready_seconds = 4; // Estimated time until ready (for async prep)
+  string error = 5;
+  map<string, string> segment_urls = 6; // DVR: segment filename -> presigned GET URL
+  string format = 7;            // Container format (mp4, m3u8, etc.)
+  string internal_name = 8;     // Stream internal name for routing
+}
+
+message RemoteClipRequest {
+  string internal_name = 1;
+  string tenant_id = 2;
+  string user_id = 3;
+  string clip_hash = 4;
+  string artifact_internal_name = 5;
+  string playback_id = 6;
+  string format = 7;
+  int64 start_unix = 8;
+  int64 stop_unix = 9;
+  int64 start_ms = 10;
+  int64 stop_ms = 11;
+  int64 duration_sec = 12;
+  string requesting_cluster = 13;
+}
+
+message RemoteClipResponse {
+  bool accepted = 1;
+  string reason = 2;
+  string clip_hash = 3;
+  string storage_node_id = 4;
+}
+
+message RemoteDVRRequest {
+  string internal_name = 1;
+  string tenant_id = 2;
+  string user_id = 3;
+  string dvr_hash = 4;
+  string artifact_internal_name = 5;
+  string playback_id = 6;
+  string requesting_cluster = 7;
+}
+
+message RemoteDVRResponse {
+  bool accepted = 1;
+  string reason = 2;
+  string dvr_hash = 3;
+}
+
+// PeerMessage wraps all bidirectional stream payloads.
+// New payload types can be added to the oneof without breaking existing peers.
+message PeerMessage {
+  string cluster_id = 1;
+  oneof payload {
+    EdgeTelemetry edge_telemetry = 2;
+    ReplicationEvent replication_event = 3;
+    ClusterEdgeSummary cluster_summary = 4;
+    StreamLifecycleEvent stream_lifecycle = 5;
+    StreamAdvertisement stream_ad = 6;
+    ArtifactAdvertisement artifact_ad = 7;
+    PeerHeartbeat peer_heartbeat = 8;
+    CapacitySummary capacity_summary = 9;
+  }
+}
+
+// StreamLifecycleEvent signals that a stream went live or offline on a cluster.
+// Broadcast via PeerChannel so peers can reject duplicate ingest within the
+// telemetry window (~5s). Receiving clusters write to Redis; any instance can
+// check during PUSH_REWRITE.
+message StreamLifecycleEvent {
+  string internal_name = 1;
+  string tenant_id = 2;
+  string cluster_id = 3;
+  bool is_live = 4;
+  int64 timestamp_unix = 5;
+}
+
+// EdgeTelemetry is pushed every 5s for edges involved in active replications.
+// The receiving cluster writes this to Redis for cross-cluster scoring.
+message EdgeTelemetry {
+  string stream_name = 1;
+  string node_id = 2;
+  string base_url = 3;
+  uint64 bw_available = 4;  // Available bandwidth in bytes/sec
+  uint32 viewer_count = 5;
+  double cpu_percent = 6;   // 0-100
+  uint64 ram_used = 7;      // bytes
+  uint64 ram_max = 8;       // bytes
+  double geo_lat = 9;
+  double geo_lon = 10;
+}
+
+// ReplicationEvent signals that a stream replication has started or stopped.
+// Used to fix redirect loops: once cluster A has a stream via origin-pull,
+// cluster B learns about it and can redirect viewers to A.
+message ReplicationEvent {
+  string stream_name = 1;
+  string node_id = 2;      // Edge node hosting the replication
+  string cluster_id = 3;   // Cluster hosting the replication
+  string base_url = 4;     // Public URL of the edge
+  string dtsc_url = 5;     // DTSC URL of the replicated stream
+  bool available = 6;      // True = replication active, false = stopped
+}
+
+// ClusterEdgeSummary provides smoothed (30s moving average) edge telemetry
+// for an entire cluster. Sent by the official coverage cluster to a tenant's
+// preferred cluster via PeerChannel every 30s. Enables the preferred Foghorn
+// to score official-cluster edges alongside local edges without per-viewer RPCs.
+message ClusterEdgeSummary {
+  repeated EdgeSnapshot edges = 1;
+  int64 timestamp = 2; // Unix timestamp of this summary
+}
+
+// EdgeSnapshot is a smoothed view of a single edge node's capacity.
+message EdgeSnapshot {
+  string node_id = 1;
+  string base_url = 2;
+  double geo_lat = 3;
+  double geo_lon = 4;
+  uint64 bw_available_avg = 5;  // 30s moving average, bytes/sec
+  double cpu_percent_avg = 6;   // 30s moving average, 0-100
+  uint64 ram_used = 7;
+  uint64 ram_max = 8;
+  uint32 total_viewers = 9;
+  repeated string roles = 10;   // e.g., "edge", "ingest", "storage"
+}
+
+// ArtifactAdvertisement carries hot artifact locations from a peer cluster.
+// Pushed via PeerChannel every 30s. The receiving cluster stores these in Redis
+// so playback resolution can route to peer edges that already have the artifact
+// warm, avoiding unnecessary S3 freeze/defrost round-trips.
+message ArtifactAdvertisement {
+  repeated ArtifactLocation artifacts = 1;
+  int64 timestamp = 2; // Unix seconds
+}
+
+// ArtifactLocation describes a single hot artifact on a specific edge node.
+message ArtifactLocation {
+  string artifact_hash = 1;
+  string artifact_type = 2;   // clip, dvr, vod
+  string node_id = 3;
+  string base_url = 4;        // Edge public URL
+  uint64 size_bytes = 5;
+  uint32 access_count = 6;    // Popularity signal for scoring
+  int64 last_accessed = 7;    // Unix seconds
+  double geo_lat = 8;
+  double geo_lon = 9;
+}
+
+// StreamAdvertisement is the autonomous routing primitive for the dCDN media plane.
+// Pushed every 5s for all live streams. Receiving peers build a local stream
+// directory (Adj-RIB-In): playback_id reverse index + per-stream edge table.
+// Replaces Commodore ResolvePlaybackID + QueryStream RPC in steady state.
+message StreamAdvertisement {
+  string internal_name = 1;
+  string tenant_id = 2;
+  string playback_id = 3;       // For local reverse-index (replaces Commodore resolve)
+  string origin_cluster_id = 4; // Cluster where stream originally ingested
+  bool is_live = 5;             // false = stream withdrawal
+  repeated PeerStreamEdge edges = 6;
+  int64 timestamp = 7;          // Unix seconds
+}
+
+// PeerStreamEdge describes a single edge node serving a specific stream.
+message PeerStreamEdge {
+  string node_id = 1;
+  string base_url = 2;       // Public HTTPS URL
+  string dtsc_url = 3;       // DTSC pull URL for origin-pull cascading
+  bool is_origin = 4;        // True if node has original ingest input
+  uint64 bw_available = 5;   // Available bandwidth (bytes/sec)
+  double cpu_percent = 6;    // 0-100
+  uint32 viewer_count = 7;
+  double geo_lat = 8;
+  double geo_lon = 9;
+  string buffer_state = 10;  // FULL, DRY, RECOVER, etc.
+}
+
+// PeerHeartbeat provides session liveness and capability exchange.
+// Sent every 10s. Missing 3 consecutive heartbeats = peer considered dead.
+message PeerHeartbeat {
+  uint32 protocol_version = 1;
+  uint32 stream_count = 2;           // Total live streams on this cluster
+  uint64 total_bw_available = 3;     // Aggregate available bandwidth (bytes/sec)
+  uint32 edge_count = 4;             // Number of online edge nodes
+  int64 uptime_seconds = 5;
+  repeated string capabilities = 6;  // Feature flags: "stream_ad", "artifact_ad", etc.
+}
+
+// CapacitySummary advertises cluster-wide aggregate capacity for dCDN
+// capacity trading and marketplace bidding. Not on the per-viewer hot path;
+// used for cluster-level routing decisions (which cluster should a tenant use?).
+message CapacitySummary {
+  uint64 total_bandwidth = 1;     // Total cluster bandwidth (bytes/sec)
+  uint64 available_bandwidth = 2; // Available bandwidth (bytes/sec)
+  uint32 total_edges = 3;
+  uint32 available_edges = 4;
+  uint64 total_storage = 5;       // bytes
+  uint64 available_storage = 6;   // bytes
+  reserved 7;                     // regions: deferred until anycast-dns lands
+  int64 timestamp = 8;            // Unix seconds
+}
+
+// ListTenantArtifactsRequest asks a cluster for all artifact metadata belonging to a tenant.
+message ListTenantArtifactsRequest {
+  string tenant_id = 1;
+  string requesting_cluster = 2;
+}
+
+// ListTenantArtifactsResponse returns artifact metadata for bulk migration.
+message ListTenantArtifactsResponse {
+  repeated ArtifactMetadata artifacts = 1;
+}
+
+// ArtifactMetadata is the cold-storage record for a single artifact.
+message ArtifactMetadata {
+  string artifact_hash = 1;
+  string artifact_type = 2;
+  string internal_name = 3;
+  string format = 4;
+  string storage_location = 5;
+  string sync_status = 6;
+  string s3_url = 7;
+  uint64 size_bytes = 8;
+  int64 created_at = 9;       // Unix seconds
+  int64 frozen_at = 10;       // Unix seconds
+}
+
+// MigrateArtifactMetadataRequest triggers a bulk copy of artifact records
+// from a source cluster to the local cluster for a given tenant.
+message MigrateArtifactMetadataRequest {
+  string tenant_id = 1;
+  string source_cluster_id = 2;
+}
+
+// MigrateArtifactMetadataResponse reports migration results.
+message MigrateArtifactMetadataResponse {
+  int32 migrated_count = 1;
+  int32 already_exists = 2;
+  string error = 3;
+}

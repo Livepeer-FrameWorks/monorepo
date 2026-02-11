@@ -145,6 +145,72 @@ The player:
 2. Selects best protocol using its own scoring (`npm_player/packages/core/src/core/scorer.ts`)
 3. Falls back to next node/protocol on failure
 
+## Cross-Cluster Routing
+
+When a viewer's local cluster doesn't have the requested stream, Foghorn checks peer clusters before returning an error. This extends the single-cluster scoring with a two-phase remote lookup.
+
+### Phase 1: EdgeSummary Check (Cheap)
+
+PeerChannel exchanges `ClusterEdgeSummary` messages every 5 seconds. These are cached in Redis (`RemoteEdgeCache`, 60s TTL). Foghorn checks this cache first to see if any peer cluster has edges serving the stream — no RPC needed.
+
+### Phase 2: QueryStream RPC (On Demand)
+
+If EdgeSummary indicates a peer has the stream, Foghorn sends `QueryStream` to that peer's FoghornFederation service. The peer scores its local nodes (using the same weight algorithm) and returns `EdgeCandidate` entries with DTSC URLs, capacity data, and `IsOrigin` flags.
+
+### Remote Edge Scoring
+
+Remote candidates are scored with `ScoreRemoteEdges` using the same weight components (CPU, RAM, BW, GEO) but with two differences:
+
+| Difference                  | Detail                                                                                                                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CrossClusterPenalty**     | 200 points subtracted from every remote score. Local edges win unless a remote edge is meaningfully better on GEO or BW. Equivalent to giving local edges a +200 `LocalPreference` bonus. |
+| **No StreamAffinity bonus** | Remote edges don't get the +50 stream bonus (they already have the stream — that's why they're candidates).                                                                               |
+
+Remote edges with a final score ≤ 200 (the penalty) are discarded entirely.
+
+```go
+const crossClusterPenalty = uint64(200)
+
+// ScoreRemoteEdges scores remote edge candidates using the same weight system as local
+// edges but applies a CrossClusterPenalty. Remote edges only win when significantly
+// better on GEO or BW than local edges.
+func (lb *LoadBalancer) ScoreRemoteEdges(candidates []RemoteEdgeCandidate, viewerLat, viewerLon float64) []NodeWithScore
+```
+
+### RemoteEdgeCandidate
+
+```go
+type RemoteEdgeCandidate struct {
+    ClusterID   string
+    NodeID      string
+    BaseURL     string
+    GeoLat      float64
+    GeoLon      float64
+    BWAvailable uint64   // absolute bytes/s, normalized against 10 Gbps reference
+    CPUPercent  float64
+    RAMUsed     uint64
+    RAMMax      uint64
+}
+```
+
+### Decision: Origin-Pull vs Redirect
+
+After scoring, Foghorn merges remote and local `NodeWithScore` entries (remote entries have `ClusterID` set) and sorts by score descending. The top result determines the action:
+
+| Top result               | Action                                                                                                                                               |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local edge with capacity | **Origin-pull**: Foghorn arranges a DTSC pull from the remote origin to a local edge via `arrangeOriginPull`. Subsequent viewers are served locally. |
+| Remote edge              | **Redirect**: Viewer is redirected (307) to the remote cluster's edge. No local replication.                                                         |
+
+See `docs/architecture/stream-replication-topology.md` for the full origin-pull lifecycle and loop prevention.
+
+### Related Source Files
+
+- Remote scoring: `api_balancing/internal/balancer/balancer.go` (`ScoreRemoteEdges`, `crossClusterPenalty`)
+- Remote edge cache: `api_balancing/internal/federation/cache.go` (`RemoteEdgeCache`, `EdgeSummaryEntry`, `RemoteEdgeEntry`)
+- Federation client: `api_balancing/internal/federation/client.go` (`QueryStream` RPC)
+- Origin-pull arrangement: `api_balancing/internal/handlers/handlers.go` (`arrangeOriginPull`)
+
 ## Routing Events (Analytics)
 
 Every routing decision emits a `load_balancing` event to Kafka:

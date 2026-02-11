@@ -53,7 +53,23 @@ This:
 3. Helmsman connects to Foghorn (gRPC) and sends the enrollment token
 4. Foghorn registers the node in Quartermaster and begins routing
 
-After enrollment, your node appears in the dashboard under **Infrastructure → Network**.
+The enrollment token carries `tenant_id` and `cluster_id`, so your node is enrolled into the correct cluster automatically. After enrollment, your node appears in the dashboard under **Infrastructure → Network**.
+
+### PreRegisterEdge (Token-Based Provisioning)
+
+If you used `--enrollment-token` during `frameworks edge init`, the CLI called Foghorn's `PreRegisterEdge` RPC before generating templates. This returned:
+
+- **Node ID** — a stable, unique identifier for your node
+- **Edge domain** — `edge-{node_id}.{cluster_slug}.{base_domain}` (Navigator creates the A record)
+- **Pool domain** — the cluster's shared edge pool domain
+- **Foghorn gRPC address** — for Helmsman's ongoing control stream
+- **Wildcard TLS certificate** — `*.{cluster_slug}.{base_domain}`, staged locally so Caddy starts with valid HTTPS
+
+The CLI needs `--foghorn-addr` (or a configured CLI context) to reach Foghorn for this call. Edge nodes only communicate with Foghorn — they do not join the internal WireGuard mesh.
+
+### Certificate Renewal (ConfigSeed)
+
+After initial provisioning, certificate renewals are pushed to edge nodes via **ConfigSeed** — Foghorn sends updated TLS bundles to Helmsman over the existing gRPC control stream. Edges do not need direct access to the ACME provider or Navigator.
 
 ## Verify Connection
 

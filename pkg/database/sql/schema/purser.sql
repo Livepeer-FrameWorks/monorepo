@@ -207,6 +207,10 @@ CREATE TABLE IF NOT EXISTS purser.billing_tiers (
     is_active BOOLEAN DEFAULT true,
     tier_level INTEGER DEFAULT 0,
     is_enterprise BOOLEAN DEFAULT false,
+
+    -- ===== DEFAULT TIER FLAGS =====
+    is_default_prepaid BOOLEAN DEFAULT false,
+    is_default_postpaid BOOLEAN DEFAULT false,
     
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -424,6 +428,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_payments_tx_unique
 
 CREATE INDEX IF NOT EXISTS idx_purser_billing_tiers_active ON purser.billing_tiers(is_active, tier_level);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_tiers_enterprise ON purser.billing_tiers(is_enterprise);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_tiers_default_prepaid ON purser.billing_tiers((1)) WHERE is_default_prepaid = true;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_purser_billing_tiers_default_postpaid ON purser.billing_tiers((1)) WHERE is_default_postpaid = true;
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_tenant ON purser.tenant_subscriptions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_tier ON purser.tenant_subscriptions(tier_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_status ON purser.tenant_subscriptions(status);
@@ -501,6 +507,10 @@ ALTER TABLE purser.tenant_subscriptions ADD COLUMN IF NOT EXISTS dunning_attempt
 ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS stripe_price_id_monthly VARCHAR(255);
 ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS stripe_price_id_yearly VARCHAR(255);
 ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS stripe_product_id VARCHAR(255);
+
+-- Default tier flags: which tier is auto-assigned per billing model
+ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS is_default_prepaid BOOLEAN DEFAULT false;
+ALTER TABLE purser.billing_tiers ADD COLUMN IF NOT EXISTS is_default_postpaid BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_stripe_customer ON purser.tenant_subscriptions(stripe_customer_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_stripe_subscription ON purser.tenant_subscriptions(stripe_subscription_id);

@@ -57,8 +57,8 @@ func TestValidateStreamKey(t *testing.T) {
 			name: "inactive_user",
 			req:  &pb.ValidateStreamKeyRequest{StreamKey: "inactive-key"},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled"}).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true)
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("inactive-key").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {
@@ -77,8 +77,8 @@ func TestValidateStreamKey(t *testing.T) {
 			name: "active_user",
 			req:  &pb.ValidateStreamKeyRequest{StreamKey: "good-key"},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled"}).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true)
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id"}).
+					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *pb.ValidateStreamKeyResponse, err error) {

@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +18,8 @@ import (
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/provisioner"
+	fwssh "frameworks/cli/pkg/ssh"
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/clients/navigator"
 	"frameworks/pkg/clients/quartermaster"
@@ -136,6 +141,7 @@ func newEdgeInitCmd() *cobra.Command {
 	var enrollmentToken string
 	var foghornAddr string
 	var overwrite bool
+	var initMode string
 	cmd := &cobra.Command{Use: "init", Short: ".edge.env + templates (compose, Caddyfile)", RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, _, err := fwcfg.Load()
 		if err != nil {
@@ -150,6 +156,7 @@ func newEdgeInitCmd() *cobra.Command {
 		// call Foghorn to get an assigned domain.
 		var preRegNodeID string
 		var preRegFoghornAddr string
+		var preRegCertPEM, preRegKeyPEM string
 		if enrollmentToken != "" && domain == "" {
 			addr := foghornAddr
 			if addr == "" {
@@ -166,6 +173,8 @@ func newEdgeInitCmd() *cobra.Command {
 			domain = resp.GetEdgeDomain()
 			preRegNodeID = resp.GetNodeId()
 			preRegFoghornAddr = resp.GetFoghornGrpcAddr()
+			preRegCertPEM = resp.GetCertPem()
+			preRegKeyPEM = resp.GetKeyPem()
 			fmt.Fprintf(cmd.OutOrStdout(), "  Assigned domain: %s\n", domain)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node ID: %s\n", preRegNodeID)
 		}
@@ -182,6 +191,27 @@ func newEdgeInitCmd() *cobra.Command {
 			FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
 			FoghornGRPCAddr: foghornGRPC,
 			EnrollmentToken: enrollmentToken,
+			Mode:            initMode,
+		}
+
+		// Stage TLS certs from PreRegisterEdge so Caddy starts with valid TLS
+		if preRegCertPEM != "" && preRegKeyPEM != "" {
+			certDir := filepath.Join(target, "certs")
+			if err := os.MkdirAll(certDir, 0o755); err != nil {
+				return fmt.Errorf("creating cert directory: %w", err)
+			}
+			certPath := filepath.Join(certDir, "cert.pem")
+			keyPath := filepath.Join(certDir, "key.pem")
+			if err := os.WriteFile(certPath, []byte(preRegCertPEM), 0o600); err != nil {
+				return fmt.Errorf("writing cert.pem: %w", err)
+			}
+			if err := os.WriteFile(keyPath, []byte(preRegKeyPEM), 0o600); err != nil {
+				return fmt.Errorf("writing key.pem: %w", err)
+			}
+			// Container path — docker-compose mounts ./certs -> /etc/frameworks/certs
+			vars.CertPath = "/etc/frameworks/certs/cert.pem"
+			vars.KeyPath = "/etc/frameworks/certs/key.pem"
+			fmt.Fprintln(cmd.OutOrStdout(), "  TLS certificate staged for Caddy")
 		}
 		if err := templates.WriteEdgeTemplates(target, vars, overwrite); err != nil {
 			return err
@@ -195,6 +225,7 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
 	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
+	cmd.Flags().StringVar(&initMode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
 	return cmd
 }
 
@@ -269,6 +300,29 @@ func newEdgeEnrollCmd() *cobra.Command {
 	return cmd
 }
 
+// detectEdgeMode reads DEPLOY_MODE from .edge.env to determine if the edge
+// stack is running in docker or native mode. Falls back to "docker" if unset.
+func detectEdgeMode(dir, envFile, sshTarget, sshKey string) string {
+	// For remote hosts, read .edge.env via SSH
+	if strings.TrimSpace(sshTarget) != "" {
+		remoteEnv := "/opt/frameworks/edge/" + envFile
+		_, out, _, err := xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", fmt.Sprintf("grep ^DEPLOY_MODE= %s 2>/dev/null", remoteEnv)}, "")
+		if err == nil {
+			val := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out), "DEPLOY_MODE="))
+			if val == "native" {
+				return "native"
+			}
+		}
+		return "docker"
+	}
+	// Local: read from file
+	val := readEnvFileKey(dir+string(os.PathSeparator)+envFile, "DEPLOY_MODE")
+	if val == "native" {
+		return "native"
+	}
+	return "docker"
+}
+
 func readEnvFileKey(path, key string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -303,6 +357,8 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var fetchCert bool
 	var manifestPath string
 	var parallel int
+	var mode string
+	var version string
 
 	cmd := &cobra.Command{
 		Use:   "provision",
@@ -318,7 +374,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 
 Single node example:
   frameworks edge provision --ssh ubuntu@edge-1.example.com \
-    --pool-domain edge.example.com \
+    --pool-domain edge-egress.example.com \
     --node-domain edge-1.example.com \
     --node-name edge-us-east-1 \
     --email ops@example.com \
@@ -336,7 +392,15 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
-				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, enrollmentToken, parallel, timeout)
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version)
+			}
+
+			// Default --cluster-id and --foghorn-addr from context
+			if clusterID == "" {
+				clusterID = cliCtx.ClusterID
+			}
+			if foghornAddr == "" {
+				foghornAddr = cliCtx.Endpoints.FoghornGRPCAddr
 			}
 
 			// Single node mode - require ssh target
@@ -348,6 +412,7 @@ Multi-node manifest example:
 			// call Foghorn to validate the token and get an assigned domain.
 			var preRegNodeID string
 			var preRegFoghornAddr string
+			var preRegCertPEM, preRegKeyPEM string
 			if enrollmentToken != "" && nodeDomain == "" && poolDomain == "" {
 				addr := foghornAddr
 				if addr == "" {
@@ -366,8 +431,13 @@ Multi-node manifest example:
 				poolDomain = preRegResp.GetPoolDomain()
 				preRegNodeID = preRegResp.GetNodeId()
 				preRegFoghornAddr = preRegResp.GetFoghornGrpcAddr()
+				preRegCertPEM = preRegResp.GetCertPem()
+				preRegKeyPEM = preRegResp.GetKeyPem()
 				if nodeName == "" {
 					nodeName = "edge-" + preRegNodeID
+				}
+				if clusterID == "" {
+					clusterID = preRegResp.GetClusterId()
 				}
 				if clusterID == "" {
 					clusterID = preRegResp.GetClusterSlug()
@@ -376,6 +446,13 @@ Multi-node manifest example:
 				fmt.Fprintf(cmd.OutOrStdout(), "  Pool domain: %s\n", poolDomain)
 				fmt.Fprintf(cmd.OutOrStdout(), "  Node ID: %s\n", preRegNodeID)
 				fmt.Fprintf(cmd.OutOrStdout(), "  Cluster: %s\n", preRegResp.GetClusterSlug())
+			}
+
+			// Generate a node ID if pre-registration didn't provide one
+			if preRegNodeID == "" {
+				b := make([]byte, 6)
+				_, _ = rand.Read(b)
+				preRegNodeID = hex.EncodeToString(b)
 			}
 
 			if poolDomain == "" && nodeDomain == "" {
@@ -403,50 +480,15 @@ Multi-node manifest example:
 				}
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Provisioning edge node: %s\n", sshTarget)
+			fmt.Fprintf(cmd.OutOrStdout(), "Provisioning edge node: %s (%s mode)\n", sshTarget, mode)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node name: %s\n", nodeName)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Pool domain: %s\n", poolDomain)
 			fmt.Fprintf(cmd.OutOrStdout(), "  Node domain: %s\n", nodeDomain)
 
-			if !skipPreflight {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[1/7] Running preflight checks...")
-				if errPreflight := runRemotePreflight(cmd, sshTarget, sshKey); errPreflight != nil {
-					return fmt.Errorf("preflight failed: %w", errPreflight)
-				}
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[1/7] Skipping preflight checks (--skip-preflight)")
-			}
-
-			if applyTuning {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[2/7] Applying sysctl/limits tuning...")
-				if errTune := runRemoteTuning(cmd, sshTarget, sshKey); errTune != nil {
-					return fmt.Errorf("tuning failed: %w", errTune)
-				}
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[2/7] Skipping sysctl tuning (use --tune to apply)")
-			}
-
-			// Registration triggers DNS sync as a side-effect
-			var externalIP string
-			if registerNode {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[3/7] Registering node in Quartermaster...")
-				externalIP, err = getRemoteExternalIP(sshTarget, sshKey)
-				if err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "  - Warning: Could not detect external IP: %v\n", err)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Detected external IP: %s\n", externalIP)
-				}
-
-				if errRegister := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); errRegister != nil {
-					return fmt.Errorf("node registration failed: %w", errRegister)
-				}
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[3/7] Skipping node registration (use --register to enable)")
-			}
-
+			// Fetch cert from Navigator if requested (before calling EdgeProvisioner)
 			var certPEM, keyPEM string
 			if fetchCert {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[4/7] Fetching TLS certificate from Navigator...")
+				fmt.Fprintln(cmd.OutOrStdout(), "\nFetching TLS certificate from Navigator...")
 				if email == "" {
 					return fmt.Errorf("--email is required when using --fetch-cert")
 				}
@@ -454,62 +496,63 @@ Multi-node manifest example:
 				if err != nil {
 					return fmt.Errorf("certificate fetch failed: %w", err)
 				}
-
-				// Upload certificate to edge node
-				if err := uploadCertificates(cmd, sshTarget, sshKey, certPEM, keyPEM); err != nil {
-					return fmt.Errorf("certificate upload failed: %w", err)
-				}
-			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "\n[4/7] Skipping certificate fetch (use --fetch-cert to enable; Caddy will auto-ACME)")
+			} else if preRegCertPEM != "" && preRegKeyPEM != "" {
+				certPEM = preRegCertPEM
+				keyPEM = preRegKeyPEM
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "\n[5/7] Generating and uploading edge templates...")
-			foghornGRPC := cliCtx.Endpoints.FoghornGRPCAddr
+			// Build EdgeProvisionConfig and delegate to EdgeProvisioner
+			foghornGRPC := foghornAddr // user flag, already defaulted from context at line 400-402
 			if preRegFoghornAddr != "" {
 				foghornGRPC = preRegFoghornAddr
 			}
-			vars := templates.EdgeVars{
-				NodeID:          preRegNodeID,
-				EdgeDomain:      primaryDomain,
-				AcmeEmail:       email,
-				FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
-				FoghornGRPCAddr: foghornGRPC,
+			host := sshTargetToHost(sshTarget, sshKey)
+			epConfig := provisioner.EdgeProvisionConfig{
+				Mode:            mode,
+				NodeName:        nodeName,
+				NodeDomain:      nodeDomain,
+				PoolDomain:      poolDomain,
+				ClusterID:       clusterID,
+				Region:          region,
+				Email:           email,
 				EnrollmentToken: enrollmentToken,
-			}
-			// If we fetched certs, configure file-based TLS
-			if fetchCert && certPEM != "" && keyPEM != "" {
-				vars.CertPath = "/etc/frameworks/certs/cert.pem"
-				vars.KeyPath = "/etc/frameworks/certs/key.pem"
-			}
-			if err := uploadEdgeTemplates(cmd, sshTarget, sshKey, vars); err != nil {
-				return fmt.Errorf("template upload failed: %w", err)
-			}
-
-			fmt.Fprintln(cmd.OutOrStdout(), "\n[6/7] Starting edge stack (docker compose up)...")
-			if err := runRemoteDockerCompose(cmd, sshTarget, sshKey); err != nil {
-				return fmt.Errorf("docker compose failed: %w", err)
+				FoghornGRPCAddr: foghornGRPC,
+				FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
+				NodeID:          preRegNodeID,
+				CertPEM:         certPEM,
+				KeyPEM:          keyPEM,
+				SkipPreflight:   skipPreflight,
+				ApplyTuning:     applyTuning,
+				RegisterNode:    registerNode,
+				Timeout:         timeout,
+				Version:         version,
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), "\n[7/7] Waiting for HTTPS readiness...")
-			if err := waitForHTTPS(cmd, primaryDomain, timeout); err != nil {
-				return fmt.Errorf("HTTPS readiness failed: %w", err)
+			pool := fwssh.NewPool(30 * time.Second)
+			ep := provisioner.NewEdgeProvisioner(pool)
+
+			// Registration handled before EdgeProvisioner (needs QM client)
+			if registerNode {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nRegistering node in Quartermaster...")
+				externalIP, _ := getRemoteExternalIP(sshTarget, sshKey)
+				if errRegister := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); errRegister != nil {
+					return fmt.Errorf("node registration failed: %w", errRegister)
+				}
+			}
+
+			if err := ep.Provision(cmd.Context(), host, epConfig); err != nil {
+				return err
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "\nEdge node provisioned successfully!\n")
 			fmt.Fprintf(cmd.OutOrStdout(), "  HTTPS: https://%s/health\n", primaryDomain)
-			if registerNode {
-				fmt.Fprintf(cmd.OutOrStdout(), "  Node registered in Quartermaster (DNS sync triggered)\n")
-			}
-			if fetchCert {
-				fmt.Fprintf(cmd.OutOrStdout(), "  TLS certificate from Navigator (DNS-01 challenge)\n")
-			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host, required)")
 	cmd.Flags().StringVar(&sshKey, "ssh-key", "", "SSH private key path")
-	cmd.Flags().StringVar(&poolDomain, "pool-domain", "", "Load balancer pool domain (e.g., edge.example.com)")
+	cmd.Flags().StringVar(&poolDomain, "pool-domain", "", "Load balancer pool domain (e.g., edge-egress.example.com)")
 	cmd.Flags().StringVar(&nodeDomain, "node-domain", "", "Individual node domain (e.g., edge-1.example.com)")
 	cmd.Flags().StringVar(&nodeName, "node-name", "", "Node name for registration (default: derived from domain/ssh)")
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "Cluster ID for node registration")
@@ -524,6 +567,8 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&fetchCert, "fetch-cert", false, "Fetch TLS certificate from Navigator (DNS-01 challenge)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to edge manifest file (edges.yaml) for multi-node provisioning")
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
+	cmd.Flags().StringVar(&mode, "mode", "docker", "Deployment mode: docker (compose) or native (systemd)")
+	cmd.Flags().StringVar(&version, "version", "", "Platform version for binary resolution (e.g., stable, v1.2.3)")
 
 	return cmd
 }
@@ -537,7 +582,7 @@ type EdgeProvisionResult struct {
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
-func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration) error {
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion string) error {
 	// Load manifest
 	manifest, err := inventory.LoadEdgeManifest(manifestPath)
 	if err != nil {
@@ -602,7 +647,15 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 			if token == "" {
 				token = manifest.EnrollmentToken
 			}
-			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout)
+			nodeMode := n.ResolvedMode(manifest.Mode)
+			if cmd.Flags().Changed("mode") {
+				nodeMode = cliMode
+			}
+			nodeVersion := manifest.Version
+			if cmd.Flags().Changed("version") {
+				nodeVersion = cliVersion
+			}
+			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, token, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout, nodeMode, nodeVersion)
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -646,24 +699,14 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 	return nil
 }
 
-// provisionSingleEdgeNode provisions a single edge node (used by both single and manifest modes)
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration) error {
+// provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken string, fetchCert, applyTuning, registerNode bool, timeout time.Duration, mode, version string) error {
 	primaryDomain := poolDomain
 	if primaryDomain == "" {
 		primaryDomain = nodeDomain
 	}
 
-	if err := runRemotePreflight(cmd, sshTarget, sshKey); err != nil {
-		return fmt.Errorf("preflight failed: %w", err)
-	}
-
-	if applyTuning {
-		if err := runRemoteTuning(cmd, sshTarget, sshKey); err != nil {
-			return fmt.Errorf("tuning failed: %w", err)
-		}
-	}
-
-	// Registration triggers DNS sync as a side-effect
+	// Registration is done before calling EdgeProvisioner (needs QM client)
 	if registerNode {
 		externalIP, _ := getRemoteExternalIP(sshTarget, sshKey)
 		if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
@@ -671,42 +714,59 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		}
 	}
 
+	// Fetch certs from Navigator if requested
 	var certPEM, keyPEM string
-	var err error
 	if fetchCert && email != "" {
+		var err error
 		certPEM, keyPEM, err = fetchCertFromNavigator(cmd, cliCtx, primaryDomain, email)
 		if err != nil {
 			return fmt.Errorf("certificate fetch failed: %w", err)
 		}
-		if err := uploadCertificates(cmd, sshTarget, sshKey, certPEM, keyPEM); err != nil {
-			return fmt.Errorf("certificate upload failed: %w", err)
-		}
 	}
 
-	vars := templates.EdgeVars{
-		EdgeDomain:      primaryDomain,
-		AcmeEmail:       email,
-		FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
-		FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+	// Parse SSH target (user@host) into inventory.Host
+	host := sshTargetToHost(sshTarget, sshKey)
+
+	// Build EdgeProvisionConfig
+	config := provisioner.EdgeProvisionConfig{
+		Mode:            mode,
+		NodeName:        nodeName,
+		NodeDomain:      nodeDomain,
+		PoolDomain:      poolDomain,
+		ClusterID:       clusterID,
+		Region:          region,
+		Email:           email,
 		EnrollmentToken: enrollmentToken,
-	}
-	if fetchCert && certPEM != "" && keyPEM != "" {
-		vars.CertPath = "/etc/frameworks/certs/cert.pem"
-		vars.KeyPath = "/etc/frameworks/certs/key.pem"
-	}
-	if err := uploadEdgeTemplates(cmd, sshTarget, sshKey, vars); err != nil {
-		return fmt.Errorf("template upload failed: %w", err)
-	}
-
-	if err := runRemoteDockerCompose(cmd, sshTarget, sshKey); err != nil {
-		return fmt.Errorf("docker compose failed: %w", err)
+		FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+		FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
+		CertPEM:         certPEM,
+		KeyPEM:          keyPEM,
+		SkipPreflight:   false, // Preflight always runs for manifest mode
+		ApplyTuning:     applyTuning,
+		RegisterNode:    registerNode,
+		Timeout:         timeout,
+		Version:         version,
 	}
 
-	if err := waitForHTTPS(cmd, primaryDomain, timeout); err != nil {
-		return fmt.Errorf("HTTPS readiness failed: %w", err)
-	}
+	pool := fwssh.NewPool(30 * time.Second)
+	ep := provisioner.NewEdgeProvisioner(pool)
+	return ep.Provision(cmd.Context(), host, config)
+}
 
-	return nil
+// sshTargetToHost converts a "user@host" string into an inventory.Host.
+func sshTargetToHost(sshTarget, sshKey string) inventory.Host {
+	parts := strings.SplitN(sshTarget, "@", 2)
+	user := "root"
+	address := sshTarget
+	if len(parts) == 2 {
+		user = parts[0]
+		address = parts[1]
+	}
+	return inventory.Host{
+		Address: address,
+		User:    user,
+		SSHKey:  sshKey,
+	}
 }
 
 // runRemotePreflight runs preflight checks on remote host via SSH
@@ -935,6 +995,7 @@ func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarge
 		GRPCAddr: foghornAddr,
 		Timeout:  15 * time.Second,
 		Logger:   logger,
+		UseTLS:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Foghorn at %s: %w", foghornAddr, err)
@@ -1126,20 +1187,37 @@ func newEdgeStatusCmd() *cobra.Command {
 		if dir == "" {
 			dir = "."
 		}
-		compose := "docker-compose.edge.yml"
 		envFile := ".edge.env"
-		// docker compose ps
+		deployMode := detectEdgeMode(dir, envFile, sshTarget, sshKey)
+
 		var out, errOut string
 		var err error
-		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+		if deployMode == "native" {
+			// Native: check systemd units
+			statusCmd := "systemctl status frameworks-caddy frameworks-helmsman frameworks-mistserver --no-pager"
+			if strings.TrimSpace(sshTarget) != "" {
+				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", statusCmd}, "")
+			} else {
+				_, out, errOut, err = xexec.Run("sh", []string{"-c", statusCmd}, "")
+			}
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "systemctl status error: %v\n%s\n%s\n", err, out, errOut)
+			} else {
+				fmt.Fprint(cmd.OutOrStdout(), out)
+			}
 		} else {
-			_, out, errOut, err = xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
-		}
-		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "docker compose ps error: %v\n%s\n%s\n", err, out, errOut)
-		} else {
-			fmt.Fprint(cmd.OutOrStdout(), out)
+			// Docker: compose ps
+			compose := "docker-compose.edge.yml"
+			if strings.TrimSpace(sshTarget) != "" {
+				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+			} else {
+				_, out, errOut, err = xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "ps"}, dir)
+			}
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "docker compose ps error: %v\n%s\n%s\n", err, out, errOut)
+			} else {
+				fmt.Fprint(cmd.OutOrStdout(), out)
+			}
 		}
 		// HTTPS health
 		if strings.TrimSpace(domain) == "" {
@@ -1184,33 +1262,50 @@ func newEdgeUpdateCmd() *cobra.Command {
 	var dir string
 	var sshTarget string
 	var sshKey string
-	cmd := &cobra.Command{Use: "update", Short: "Pull and restart edge containers (MVP)", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "update", Short: "Pull and restart edge services", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
 		}
-		compose := "docker-compose.edge.yml"
 		envFile := ".edge.env"
-		// pull
-		if strings.TrimSpace(sshTarget) != "" {
-			if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
+		deployMode := detectEdgeMode(dir, envFile, sshTarget, sshKey)
+
+		if deployMode == "native" {
+			// Native: restart systemd units
+			restartCmd := "systemctl restart frameworks-mistserver frameworks-helmsman frameworks-caddy"
+			if strings.TrimSpace(sshTarget) != "" {
+				if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "sh", []string{"-c", restartCmd}, ""); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "systemctl restart failed: %v\n%s\n%s\n", err, out, errOut)
+					return err
+				}
+			} else if _, out, errOut, err := xexec.Run("sh", []string{"-c", restartCmd}, ""); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "systemctl restart failed: %v\n%s\n%s\n", err, out, errOut)
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "Edge services restarted (native)")
+		} else {
+			compose := "docker-compose.edge.yml"
+			// pull
+			if strings.TrimSpace(sshTarget) != "" {
+				if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "compose pull failed: %v\n%s\n%s\n", err, out, errOut)
+					return err
+				}
+			} else if _, out, errOut, err := xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "compose pull failed: %v\n%s\n%s\n", err, out, errOut)
 				return err
 			}
-		} else if _, out, errOut, err := xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "pull"}, dir); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "compose pull failed: %v\n%s\n%s\n", err, out, errOut)
-			return err
-		}
-		// up -d
-		if strings.TrimSpace(sshTarget) != "" {
-			if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
+			// up -d
+			if strings.TrimSpace(sshTarget) != "" {
+				if _, out, errOut, err := xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "compose up failed: %v\n%s\n%s\n", err, out, errOut)
+					return err
+				}
+			} else if _, out, errOut, err := xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "compose up failed: %v\n%s\n%s\n", err, out, errOut)
 				return err
 			}
-		} else if _, out, errOut, err := xexec.Run("docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, dir); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "compose up failed: %v\n%s\n%s\n", err, out, errOut)
-			return err
+			fmt.Fprintln(cmd.OutOrStdout(), "Edge containers updated")
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Edge containers updated")
 		return nil
 	}}
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory with docker-compose.edge.yml and .edge.env")
@@ -1251,13 +1346,23 @@ func newEdgeCertCmd() *cobra.Command {
 			}
 		}
 		if reload {
-			// Attempt caddy reload (container edge-proxy)
+			deployMode := detectEdgeMode(dir, ".edge.env", sshTarget, sshKey)
 			var out, errOut string
 			var err error
-			if strings.TrimSpace(sshTarget) != "" {
-				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+			if deployMode == "native" {
+				// Native: reload via systemctl
+				if strings.TrimSpace(sshTarget) != "" {
+					_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "systemctl", []string{"reload", "frameworks-caddy"}, "")
+				} else {
+					_, out, errOut, err = xexec.Run("systemctl", []string{"reload", "frameworks-caddy"}, "")
+				}
 			} else {
-				_, out, errOut, err = xexec.Run("docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+				// Docker: exec into container
+				if strings.TrimSpace(sshTarget) != "" {
+					_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+				} else {
+					_, out, errOut, err = xexec.Run("docker", []string{"exec", "edge-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"}, dir)
+				}
 			}
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "caddy reload failed: %v\n%s\n%s\n", err, out, errOut)
@@ -1285,31 +1390,56 @@ func newEdgeLogsCmd() *cobra.Command {
 		if dir == "" {
 			dir = "."
 		}
-		compose := "docker-compose.edge.yml"
 		envFile := ".edge.env"
+		deployMode := detectEdgeMode(dir, envFile, sshTarget, sshKey)
 		svc := ""
 		if len(args) == 1 {
 			svc = args[0]
 		}
-		arg := []string{"compose", "-f", compose, "--env-file", envFile, "logs"}
-		if follow {
-			arg = append(arg, "-f")
-		}
-		if tail > 0 {
-			arg = append(arg, "--tail", fmt.Sprintf("%d", tail))
-		}
-		if svc != "" {
-			arg = append(arg, svc)
-		}
+
 		var out, errOut string
 		var err error
-		if strings.TrimSpace(sshTarget) != "" {
-			_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", arg, dir)
+
+		if deployMode == "native" {
+			// Native: use journalctl
+			unit := ""
+			if svc != "" {
+				unit = "frameworks-" + svc
+			} else {
+				unit = "frameworks-caddy frameworks-helmsman frameworks-mistserver"
+			}
+			jArgs := []string{"-c", fmt.Sprintf("journalctl --no-pager -n %d %s -u %s", tail, func() string {
+				if follow {
+					return "-f"
+				}
+				return ""
+			}(), unit)}
+			if strings.TrimSpace(sshTarget) != "" {
+				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "sh", jArgs, "")
+			} else {
+				_, out, errOut, err = xexec.Run("sh", jArgs, "")
+			}
 		} else {
-			_, out, errOut, err = xexec.Run("docker", arg, dir)
+			compose := "docker-compose.edge.yml"
+			arg := []string{"compose", "-f", compose, "--env-file", envFile, "logs"}
+			if follow {
+				arg = append(arg, "-f")
+			}
+			if tail > 0 {
+				arg = append(arg, "--tail", fmt.Sprintf("%d", tail))
+			}
+			if svc != "" {
+				arg = append(arg, svc)
+			}
+			if strings.TrimSpace(sshTarget) != "" {
+				_, out, errOut, err = xexec.RunSSHWithKey(sshTarget, sshKey, "docker", arg, dir)
+			} else {
+				_, out, errOut, err = xexec.Run("docker", arg, dir)
+			}
 		}
+
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "compose logs error: %v\n%s\n%s\n", err, out, errOut)
+			fmt.Fprintf(cmd.ErrOrStderr(), "logs error: %v\n%s\n%s\n", err, out, errOut)
 			return err
 		}
 		fmt.Fprint(cmd.OutOrStdout(), out)

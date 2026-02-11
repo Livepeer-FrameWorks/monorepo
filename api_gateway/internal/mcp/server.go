@@ -121,6 +121,9 @@ func (s *Server) registerResources() {
 	// Node resources
 	resources.RegisterNodeResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)
 
+	// Cluster resources (marketplace, subscriptions)
+	resources.RegisterClusterResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)
+
 	// VOD resources
 	resources.RegisterVODResources(s.mcpServer, s.serviceClients, s.resolver, s.logger)
 
@@ -159,6 +162,9 @@ func (s *Server) registerTools() {
 
 	// VOD tools (require billing + balance for upload)
 	tools.RegisterVODTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
+
+	// Infrastructure tools (marketplace, cluster lifecycle)
+	tools.RegisterInfrastructureTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
 	// QoE diagnostic tools (for video consultant)
 	tools.RegisterQoETools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
@@ -377,7 +383,7 @@ func filterSkipperTools(ctx context.Context, result mcp.Result, skipper tools.Sk
 		if tool == nil {
 			continue
 		}
-		if tool.Name == "search_knowledge" || tool.Name == "search_web" {
+		if tool.Name == "search_knowledge" || tool.Name == "search_web" || tool.Name == "ask_consultant" {
 			continue
 		}
 		filtered = append(filtered, tool)
@@ -557,8 +563,10 @@ func isPublicMCPOperation(opName string) bool {
 		"mcp:tools/call:get_payment_options",
 		"mcp:tools/call:submit_payment",
 		"mcp:tools/call:resolve_playback_endpoint",
+		"mcp:tools/call:browse_marketplace",
 		"mcp:resources/read:account://status",
-		"mcp:resources/read:billing://pricing":
+		"mcp:resources/read:billing://pricing",
+		"mcp:resources/read:clusters://marketplace":
 		return true
 	default:
 		return false

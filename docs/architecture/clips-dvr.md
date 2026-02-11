@@ -243,6 +243,57 @@ DEFROST (cold -> warm):
 - **Foghorn** emits clip/DVR/VOD lifecycle analytics events (MistTrigger) **and** an `artifact_lifecycle` ServiceEvent (via Decklog client) for audit visibility.
 - ServiceEvents are metadata-only; lifecycle analytics flow through Periscope.
 
+## Cross-Cluster Artifact Access
+
+When a viewer requests an artifact (clip/DVR/VOD) that lives on a remote cluster, Foghorn uses the `PrepareArtifact` FoghornFederation RPC to obtain time-limited presigned S3 URLs without sharing S3 credentials across clusters.
+
+### Flow
+
+```
+Viewer → Foghorn A (artifact not on local nodes, not in local S3)
+  → ArtifactAdvertisement from PeerChannel: Cluster B has the artifact
+  → PrepareArtifact RPC → Foghorn B
+      1. Lookup foghorn.artifacts by hash + tenant_id
+      2. If not yet in S3: trigger async freeze, return Ready=false + est_ready_seconds
+      3. If in S3: generate presigned GET URL(s) (15-min expiry for clips/VOD, 30-min for DVR segments)
+      4. Return PrepareArtifactResponse with URL(s), size, format
+  → Foghorn A returns presigned URL to viewer via STREAM_SOURCE trigger chain
+```
+
+### PrepareArtifact Request/Response
+
+```protobuf
+message PrepareArtifactRequest {
+  string artifact_id = 1;        // Artifact hash
+  string clip_hash = 2;          // Legacy alias
+  string requesting_cluster = 3;
+  string artifact_type = 4;      // "clip", "dvr", "vod"
+  string tenant_id = 5;
+}
+
+message PrepareArtifactResponse {
+  string url = 1;                     // Presigned S3 GET URL (clip/vod single file)
+  uint64 size_bytes = 2;
+  bool ready = 3;                     // Immediately available?
+  uint32 est_ready_seconds = 4;       // Async prep time estimate
+  string error = 5;
+  map<string, string> segment_urls = 6; // DVR: segment filename → presigned GET URL
+  string format = 7;                  // mp4, m3u8, etc.
+  string internal_name = 8;           // Stream internal name for routing
+}
+```
+
+Key design choice: artifacts must be S3-synced before cross-cluster access works. If an artifact is only on local disk (not yet frozen to S3), `PrepareArtifact` triggers an async freeze and returns `ready=false`. The requesting Foghorn can retry after `est_ready_seconds`.
+
+See `docs/architecture/federation.md` for the broader FoghornFederation protocol and `docs/architecture/stream-replication-topology.md` for how STREAM_SOURCE routes to PrepareArtifact for VOD/artifacts.
+
+### Related Source Files
+
+- Federation server handler: `api_balancing/internal/federation/server.go` (`PrepareArtifact`)
+- Proto definitions: `pkg/proto/foghorn_federation.proto`
+- STREAM_SOURCE → artifact resolution: `api_balancing/internal/triggers/processor.go` (`handleStreamSource`)
+- Artifact advertisement: `api_balancing/internal/federation/peer_manager.go` (`ArtifactAdvertisement`)
+
 ## Resilience
 
 - **Playback when Commodore is down**: No cache fallback — playback resolution returns an error.

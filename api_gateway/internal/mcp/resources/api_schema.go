@@ -327,6 +327,8 @@ func curatedCatalogSections() []CatalogSection {
 			Description: "Nodes, routing, and service health.",
 			Examples: []CatalogExample{
 				{ID: "clusters-list", Title: "Clusters", Description: "Clusters for the tenant", OperationType: "query", FieldPath: "clustersConnection", Tags: []string{"core", "infra"}},
+				{ID: "marketplace", Title: "Marketplace", Description: "Browse available clusters for subscription", OperationType: "query", FieldPath: "marketplaceClusters", Tags: []string{"infra", "marketplace"}},
+				{ID: "my-subscriptions", Title: "My Subscriptions", Description: "Clusters you are subscribed to", OperationType: "query", FieldPath: "mySubscriptions", Tags: []string{"infra", "marketplace"}},
 				{ID: "nodes-list", Title: "Nodes List", Description: "All infrastructure nodes", OperationType: "query", FieldPath: "nodesConnection", Tags: []string{"infra"}},
 				{ID: "routing-events", Title: "Routing Events", Description: "Load-balancer routing decisions", OperationType: "query", FieldPath: "analytics.infra.routingEventsConnection", Tags: []string{"infra"}},
 			},
@@ -349,6 +351,8 @@ func curatedCatalogSections() []CatalogSection {
 				{ID: "create-stream", Title: "Create Stream", Description: "Create a new live stream", OperationType: "mutation", FieldPath: "createStream", Tags: []string{"core"}},
 				{ID: "start-dvr", Title: "Start DVR", Description: "Begin DVR recording for a stream", OperationType: "mutation", FieldPath: "startDVR", Tags: []string{"core"}},
 				{ID: "create-clip", Title: "Create Clip", Description: "Create a clip from a stream", OperationType: "mutation", FieldPath: "createClip", Tags: []string{"core"}},
+				{ID: "set-preferred-cluster", Title: "Set Preferred Cluster", Description: "Route traffic to a specific cluster", OperationType: "mutation", FieldPath: "setPreferredCluster", Tags: []string{"infra", "marketplace"}},
+				{ID: "create-private-cluster", Title: "Create Private Cluster", Description: "Create a self-hosted edge cluster", OperationType: "mutation", FieldPath: "createPrivateCluster", Tags: []string{"infra", "selfhost"}},
 			},
 		},
 		{

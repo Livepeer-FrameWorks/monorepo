@@ -1286,6 +1286,89 @@ func (r *Resolver) DoCreatePrivateCluster(ctx context.Context, input model.Creat
 	return resp, nil
 }
 
+// DoCreateEdgeCluster creates an edge cluster with Foghorn assignment and enrollment token
+func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEdgeClusterInput) (model.CreateEdgeClusterResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		demoField := "demo"
+		return &model.ValidationError{
+			Message: "Cannot create clusters in demo mode",
+			Field:   &demoField,
+		}, nil
+	}
+
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+	if tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	req := &pb.EnableSelfHostingRequest{
+		TenantId:    tenantID,
+		ClusterName: input.ClusterName,
+	}
+	if input.ShortDescription != nil {
+		req.ShortDescription = input.ShortDescription
+	}
+
+	resp, err := r.Clients.Quartermaster.EnableSelfHosting(ctx, req)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to create edge cluster")
+		return &model.ValidationError{
+			Message: fmt.Sprintf("Failed to create edge cluster: %v", err),
+		}, nil
+	}
+
+	return &model.CreateEdgeClusterResponse{
+		Cluster:        resp.Cluster,
+		BootstrapToken: resp.BootstrapToken,
+		FoghornAddr:    resp.FoghornAddr,
+	}, nil
+}
+
+// DoCreateEnrollmentToken creates an enrollment token for a cluster
+func (r *Resolver) DoCreateEnrollmentToken(ctx context.Context, clusterID string, name *string, ttl *string) (model.CreateEnrollmentTokenResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		demoField := "demo"
+		return &model.ValidationError{
+			Message: "Cannot create tokens in demo mode",
+			Field:   &demoField,
+		}, nil
+	}
+
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+	if tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	req := &pb.CreateEnrollmentTokenRequest{
+		ClusterId: clusterID,
+		TenantId:  &tenantID,
+	}
+	if name != nil {
+		req.Name = name
+	}
+	if ttl != nil {
+		req.Ttl = ttl
+	}
+
+	resp, err := r.Clients.Quartermaster.CreateEnrollmentToken(ctx, req)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to create enrollment token")
+		return &model.ValidationError{
+			Message: fmt.Sprintf("Failed to create enrollment token: %v", err),
+		}, nil
+	}
+
+	return &model.CreateEnrollmentTokenResponse{
+		BootstrapToken: resp.Token,
+	}, nil
+}
+
 // DoUpdateClusterMarketplace updates cluster marketplace settings
 func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID string, input model.UpdateClusterMarketplaceInput) (model.UpdateClusterResult, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -2341,6 +2424,59 @@ func buildClusterInvitesConnectionFromSlice(items []*pb.ClusterInvite, first *in
 		PageInfo:   pageInfo,
 		TotalCount: len(items),
 	}
+}
+
+// DoSetPreferredCluster sets the tenant's preferred cluster for DNS steering.
+func (r *Resolver) DoSetPreferredCluster(ctx context.Context, clusterID string) (model.SetPreferredClusterResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		demoField := "demo"
+		return &model.ValidationError{
+			Message: "Cannot set preferred cluster in demo mode",
+			Field:   &demoField,
+		}, nil
+	}
+
+	tenantID := ""
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		tenantID = user.TenantID
+	}
+	if tenantID == "" {
+		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+
+	err := r.Clients.Quartermaster.UpdateTenantCluster(ctx, &pb.UpdateTenantClusterRequest{
+		TenantId:         tenantID,
+		PrimaryClusterId: &clusterID,
+	})
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to set preferred cluster")
+		return &model.ValidationError{
+			Message: fmt.Sprintf("Failed to set preferred cluster: %v", err),
+		}, nil
+	}
+
+	cluster, err := r.DoGetCluster(ctx, clusterID)
+	if err != nil {
+		return &model.NotFoundError{ //nolint:nilerr // error encoded in typed response
+			Message:      "Cluster updated but failed to fetch details",
+			ResourceType: "cluster",
+			ResourceID:   clusterID,
+		}, nil
+	}
+
+	r.sendServiceEvent(ctx, &pb.ServiceEvent{
+		EventType:    apiEventTenantUpdated,
+		ResourceType: "tenant",
+		ResourceId:   tenantID,
+		Payload: &pb.ServiceEvent_TenantEvent{
+			TenantEvent: &pb.TenantEvent{
+				TenantId:      tenantID,
+				ChangedFields: []string{"primary_cluster_id"},
+			},
+		},
+	})
+
+	return cluster, nil
 }
 
 // DoGetMyClusterInvitesConnection returns a Relay-style connection for the user's cluster invites.

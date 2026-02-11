@@ -86,6 +86,10 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
+-- Cross-cluster artifact storage: tracks which cluster originally created the artifact.
+-- NULL or matching local cluster = local artifact; different cluster = remote (adopted) artifact.
+ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
+
 -- ============================================================================
 -- ARTIFACT INDEXES
 -- ============================================================================

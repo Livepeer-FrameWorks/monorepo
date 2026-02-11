@@ -2,7 +2,7 @@
   "name": "frameworks",
   "title": "FrameWorks",
   "description": "Sovereign SaaS for live video",
-  "mcp_endpoint": "https://api.frameworks.network/mcp",
+  "mcp_endpoint": "https://bridge.frameworks.network/mcp",
   "transports": ["streamable-http"],
   "auth": {
     "schemes": ["bearer", "wallet", "x402"],
@@ -18,8 +18,10 @@
       "tools/call:get_payment_options",
       "tools/call:submit_payment",
       "tools/call:resolve_playback_endpoint",
+      "tools/call:browse_marketplace",
       "resources/read:account://status",
-      "resources/read:billing://pricing"
+      "resources/read:billing://pricing",
+      "resources/read:clusters://marketplace"
     ],
     "bearer": {
       "description": "JWT from login or long-lived API token from account settings",
@@ -28,7 +30,7 @@
     "wallet": {
       "description": "EIP-191 wallet signature (auto-provisions account on first use)",
       "headers": ["X-Wallet-Address", "X-Wallet-Signature", "X-Wallet-Message"],
-      "login_endpoint": "https://api.frameworks.network/auth/wallet-login"
+      "login_endpoint": "https://bridge.frameworks.network/auth/wallet-login"
     },
     "x402": {
       "description": "EIP-3009 gasless USDC (value=0 authenticates, value>0 tops up balance)",
@@ -44,9 +46,9 @@
     "prompts": true
   },
   "endpoints": {
-    "mcp": "https://api.frameworks.network/mcp",
-    "graphql": "https://api.frameworks.network/graphql",
-    "wallet_login": "https://api.frameworks.network/auth/wallet-login",
+    "mcp": "https://bridge.frameworks.network/mcp",
+    "graphql": "https://bridge.frameworks.network/graphql",
+    "wallet_login": "https://bridge.frameworks.network/auth/wallet-login",
     "skill_md": "https://frameworks.network/SKILL.md",
     "skill_json": "https://frameworks.network/skill.json"
   }

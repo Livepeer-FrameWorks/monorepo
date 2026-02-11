@@ -87,6 +87,23 @@ bin
 !**/cmd/*/*.go
 !**/cmd/*/
 
+# Go binaries from manual `go build` in service directories
+api_balancing/foghorn
+api_billing/purser
+api_consultant/skipper
+api_control/commodore
+api_dns/navigator
+api_firehose/decklog
+api_forms/steward
+api_gateway/bridge
+api_analytics_ingest/periscope
+api_analytics_query/periscope
+api_mesh/privateer
+api_realtime/signalman
+api_sidecar/helmsman
+api_tenants/quartermaster
+api_ticketing/deckhand
+
 # Security & Sensitive
 *.pem
 *.key

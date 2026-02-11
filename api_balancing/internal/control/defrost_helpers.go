@@ -13,6 +13,11 @@ func controlLogger() logging.Logger {
 	return logging.NewLoggerWithService("foghorn")
 }
 
+// PickStorageNodeIDPublic is the exported version of pickStorageNodeID for cross-package use.
+func PickStorageNodeIDPublic() (string, error) {
+	return pickStorageNodeID()
+}
+
 func pickStorageNodeID() (string, error) {
 	if loadBalancerInstance == nil {
 		return "", fmt.Errorf("load balancer not available")

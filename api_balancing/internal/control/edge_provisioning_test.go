@@ -9,14 +9,30 @@ import (
 	pb "frameworks/pkg/proto"
 )
 
+// setMockValidator sets the package-level validateBootstrapTokenFn for tests
+// and returns a cleanup function that restores it to nil.
+func setMockValidator(t *testing.T, resp *pb.ValidateBootstrapTokenResponse) {
+	t.Helper()
+	validateBootstrapTokenFn = func(_ context.Context, _ string) (*pb.ValidateBootstrapTokenResponse, error) {
+		return resp, nil
+	}
+	t.Cleanup(func() { validateBootstrapTokenFn = nil })
+}
+
 func TestPreRegisterEdge_ValidToken(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "us_west_1")
 	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
 	t.Setenv("FOGHORN_EXTERNAL_ADDR", "foghorn.example.com:18008")
 
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:     true,
+		Kind:      "edge_node",
+		ClusterId: "us_west_1",
+	})
+
 	srv := &EdgeProvisioningServer{}
 	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
-		EnrollmentToken: "tok-abc-123",
+		EnrollmentToken: "bt_validtoken",
 		ExternalIp:      "1.2.3.4",
 	})
 	if err != nil {
@@ -30,9 +46,12 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 		t.Errorf("expected 12-char hex node_id, got %q (len %d)", resp.NodeId, len(resp.NodeId))
 	}
 
-	// Cluster slug should sanitize underscores to hyphens
 	if resp.ClusterSlug != "us-west-1" {
 		t.Errorf("expected cluster_slug %q, got %q", "us-west-1", resp.ClusterSlug)
+	}
+
+	if resp.ClusterId != "us_west_1" {
+		t.Errorf("expected cluster_id %q, got %q", "us_west_1", resp.ClusterId)
 	}
 
 	expectedEdge := "edge-" + resp.NodeId + ".us-west-1.example.com"
@@ -40,8 +59,8 @@ func TestPreRegisterEdge_ValidToken(t *testing.T) {
 		t.Errorf("expected edge_domain %q, got %q", expectedEdge, resp.EdgeDomain)
 	}
 
-	if resp.PoolDomain != "edge.us-west-1.example.com" {
-		t.Errorf("expected pool_domain %q, got %q", "edge.us-west-1.example.com", resp.PoolDomain)
+	if resp.PoolDomain != "edge-egress.us-west-1.example.com" {
+		t.Errorf("expected pool_domain %q, got %q", "edge-egress.us-west-1.example.com", resp.PoolDomain)
 	}
 
 	if resp.FoghornGrpcAddr != "foghorn.example.com:18008" {
@@ -72,14 +91,72 @@ func TestPreRegisterEdge_WhitespaceOnlyToken(t *testing.T) {
 	}
 }
 
+func TestPreRegisterEdge_InvalidToken(t *testing.T) {
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:  false,
+		Reason: "not_found",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_bogus",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid token")
+	}
+	if !strings.Contains(err.Error(), "invalid enrollment token") {
+		t.Errorf("expected 'invalid enrollment token' error, got: %v", err)
+	}
+}
+
+func TestPreRegisterEdge_WrongTokenKind(t *testing.T) {
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid: true,
+		Kind:  "service",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_servicetoken",
+	})
+	if err == nil {
+		t.Fatal("expected error for wrong token kind")
+	}
+	if !strings.Contains(err.Error(), "not valid for edge enrollment") {
+		t.Errorf("expected 'not valid for edge enrollment' error, got: %v", err)
+	}
+}
+
+func TestPreRegisterEdge_NoValidatorNoQM(t *testing.T) {
+	// Both validateBootstrapTokenFn and quartermasterClient are nil
+	validateBootstrapTokenFn = nil
+	SetQuartermasterClient(nil)
+	t.Cleanup(func() { validateBootstrapTokenFn = nil })
+
+	srv := &EdgeProvisioningServer{}
+	_, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_anytoken",
+	})
+	if err == nil {
+		t.Fatal("expected error when QM client unavailable")
+	}
+	if !strings.Contains(err.Error(), "enrollment service unavailable") {
+		t.Errorf("expected 'enrollment service unavailable' error, got: %v", err)
+	}
+}
+
 func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
-	// Unset CLUSTER_ID to test fallback
 	os.Unsetenv("CLUSTER_ID")
 	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "frameworks.network")
 
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid: true,
+		Kind:  "edge_node",
+	})
+
 	srv := &EdgeProvisioningServer{}
 	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
-		EnrollmentToken: "tok-xyz",
+		EnrollmentToken: "bt_nobound",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -94,15 +171,43 @@ func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 	}
 }
 
+func TestPreRegisterEdge_TokenBoundCluster(t *testing.T) {
+	t.Setenv("CLUSTER_ID", "env-cluster")
+	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid:     true,
+		Kind:      "edge_node",
+		ClusterId: "token-bound-cluster",
+	})
+
+	srv := &EdgeProvisioningServer{}
+	resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
+		EnrollmentToken: "bt_bound",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.ClusterId != "token-bound-cluster" {
+		t.Errorf("expected cluster_id %q, got %q", "token-bound-cluster", resp.ClusterId)
+	}
+}
+
 func TestPreRegisterEdge_UniqueNodeIDs(t *testing.T) {
 	t.Setenv("CLUSTER_ID", "test")
 	t.Setenv("NAVIGATOR_ROOT_DOMAIN", "example.com")
+
+	setMockValidator(t, &pb.ValidateBootstrapTokenResponse{
+		Valid: true,
+		Kind:  "edge_node",
+	})
 
 	srv := &EdgeProvisioningServer{}
 	seen := make(map[string]bool)
 	for i := 0; i < 50; i++ {
 		resp, err := srv.PreRegisterEdge(context.Background(), &pb.PreRegisterEdgeRequest{
-			EnrollmentToken: "tok",
+			EnrollmentToken: "bt_unique",
 		})
 		if err != nil {
 			t.Fatalf("iteration %d: unexpected error: %v", i, err)

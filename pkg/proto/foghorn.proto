@@ -69,9 +69,12 @@ message PreRegisterEdgeRequest {
 message PreRegisterEdgeResponse {
   string node_id = 1;           // Assigned node ID
   string edge_domain = 2;       // e.g., edge-{node_id}.{cluster_slug}.{root_domain}
-  string pool_domain = 3;       // e.g., edge.{cluster_slug}.{root_domain}
+  string pool_domain = 3;       // e.g., edge-egress.{cluster_slug}.{root_domain}
   string cluster_slug = 4;
   string foghorn_grpc_addr = 5; // Address for Helmsman's FOGHORN_CONTROL_ADDR
+  string cert_pem = 6;          // Wildcard TLS certificate (PEM) for the cluster
+  string key_pem = 7;           // Corresponding private key (PEM)
+  string cluster_id = 8;        // Raw cluster ID (may differ from DNS-safe cluster_slug)
 }
 
 // TenantControlService handles tenant-level operations called by Purser

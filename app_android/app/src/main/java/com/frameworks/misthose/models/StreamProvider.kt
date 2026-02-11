@@ -118,7 +118,7 @@ object DefaultProviders {
         type = ProviderType.FRAMEWORKS,
         isDefault = true,
         serviceConfig = ServiceProviderConfig(
-            baseUrl = "https://api.frameworks.network",
+            baseUrl = "https://bridge.frameworks.network",
             authType = AuthType.JWT,
             endpoints = ServiceEndpoints()
         )

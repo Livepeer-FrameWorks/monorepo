@@ -51,21 +51,21 @@ func TestBuildOutputsMap(t *testing.T) {
 		"RTMP": "rtmp://HOST:1935/live/$",
 	}
 
-	outputs := BuildOutputsMap("https://edge.example.com/live", rawOutputs, "stream", false)
+	outputs := BuildOutputsMap("https://edge-egress.example.com/live", rawOutputs, "stream", false)
 
-	if outputs["MIST_HTML"].Url != "https://edge.example.com/live/stream.html" {
+	if outputs["MIST_HTML"].Url != "https://edge-egress.example.com/live/stream.html" {
 		t.Fatalf("unexpected MIST_HTML url: %q", outputs["MIST_HTML"].Url)
 	}
-	if outputs["PLAYER_JS"].Url != "https://edge.example.com/live/player.js" {
+	if outputs["PLAYER_JS"].Url != "https://edge-egress.example.com/live/player.js" {
 		t.Fatalf("unexpected PLAYER_JS url: %q", outputs["PLAYER_JS"].Url)
 	}
-	if outputs["WHEP"].Url != "https://edge.example.com/live/webrtc/stream" {
+	if outputs["WHEP"].Url != "https://edge-egress.example.com/live/webrtc/stream" {
 		t.Fatalf("unexpected WHEP url: %q", outputs["WHEP"].Url)
 	}
 	if outputs["HLS"].Url != "//public.example.com:18090/view/stream/index.m3u8" {
 		t.Fatalf("unexpected HLS url: %q", outputs["HLS"].Url)
 	}
-	if outputs["RTMP"].Url != "rtmp://edge.example.com/live:1935/live/stream" {
+	if outputs["RTMP"].Url != "rtmp://edge-egress.example.com/live:1935/live/stream" {
 		t.Fatalf("unexpected RTMP url: %q", outputs["RTMP"].Url)
 	}
 }
@@ -81,14 +81,14 @@ func TestResolveTemplateURL(t *testing.T) {
 		{
 			name:       "non_string_raw",
 			raw:        map[string]interface{}{"url": "http://example.com"},
-			baseURL:    "https://edge.example.com/live",
+			baseURL:    "https://edge-egress.example.com/live",
 			streamName: "stream",
 			expected:   "",
 		},
 		{
 			name:       "array_non_string",
 			raw:        []interface{}{123},
-			baseURL:    "https://edge.example.com/live",
+			baseURL:    "https://edge-egress.example.com/live",
 			streamName: "stream",
 			expected:   "",
 		},
@@ -102,9 +102,9 @@ func TestResolveTemplateURL(t *testing.T) {
 		{
 			name:       "host_placeholder_valid_base",
 			raw:        "rtmp://HOST:1935/live/$",
-			baseURL:    "https://edge.example.com/live",
+			baseURL:    "https://edge-egress.example.com/live",
 			streamName: "stream",
-			expected:   "rtmp://edge.example.com/live:1935/live/stream",
+			expected:   "rtmp://edge-egress.example.com/live:1935/live/stream",
 		},
 	}
 
@@ -124,7 +124,7 @@ func TestSelectPrimaryArtifactOutputFallback(t *testing.T) {
 		"DASH": "https://cdn.example.com/dash/$/index.mpd",
 	}
 
-	protocol, url := selectPrimaryArtifactOutput(outputs, "https://edge.example.com/live", "stream", "m3u8")
+	protocol, url := selectPrimaryArtifactOutput(outputs, "https://edge-egress.example.com/live", "stream", "m3u8")
 	if protocol != "dash" {
 		t.Fatalf("expected protocol %q, got %q", "dash", protocol)
 	}

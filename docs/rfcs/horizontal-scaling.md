@@ -2,7 +2,11 @@
 
 ## Status
 
-Draft
+Partially implemented. Phase 0 (failsafe wiring into all gRPC clients) and Foghorn HA
+(Redis state externalization + pub/sub sync) are done. See `docs/architecture/foghorn-ha.md`.
+
+Bridge state externalization and Signalman scaling — the other two stateful services
+identified in this RFC — have not been addressed. No HA strategy exists beyond Foghorn.
 
 ## TL;DR
 

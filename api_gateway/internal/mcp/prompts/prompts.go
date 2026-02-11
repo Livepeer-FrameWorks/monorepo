@@ -120,6 +120,22 @@ func RegisterPrompts(server *mcp.Server, clients *clients.ServiceClients, checke
 		}
 		return handleAPIIntegrationAssistantPrompt(goal)
 	})
+
+	// agent_instructions - Comprehensive MCP usage guide for autonomous agents
+	server.AddPrompt(&mcp.Prompt{
+		Name:        "agent_instructions",
+		Description: "Comprehensive guide for using FrameWorks MCP effectively: knowledge search strategy, tool composition, confidence tags, and cost-aware workflows.",
+	}, func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return handleAgentInstructionsPrompt()
+	})
+
+	// self_hosting - Guide through self-hosted edge deployment
+	server.AddPrompt(&mcp.Prompt{
+		Name:        "self_hosting",
+		Description: "Guide through setting up self-hosted edge nodes: discover clusters, subscribe, get enrollment token, and provision edges via CLI.",
+	}, func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return handleSelfHostingPrompt()
+	})
 }
 
 func handleOnboardingPrompt(ctx context.Context, clients *clients.ServiceClients, checker *preflight.Checker, logger logging.Logger) (*mcp.GetPromptResult, error) {
@@ -570,6 +586,125 @@ func handleAPIIntegrationAssistantPrompt(goal string) (*mcp.GetPromptResult, err
 	parts = append(parts, "- Global IDs look like: `Stream:abc123...` - use `stream.id` not `stream.streamId`")
 	parts = append(parts, "- Subscriptions require WebSocket connection to `/graphql/ws`")
 	parts = append(parts, "- Analytics queries return aggregated data - use appropriate time ranges")
+
+	return &mcp.GetPromptResult{
+		Messages: []*mcp.PromptMessage{{
+			Role:    "user",
+			Content: &mcp.TextContent{Text: strings.Join(parts, "\n")},
+		}},
+	}, nil
+}
+
+func handleAgentInstructionsPrompt() (*mcp.GetPromptResult, error) {
+	var parts []string
+	parts = append(parts, "# FrameWorks MCP Agent Instructions\n")
+	parts = append(parts, "Comprehensive guide for AI agents using the FrameWorks MCP surface effectively.\n")
+
+	parts = append(parts, "## 1. Knowledge Search Strategy\n")
+	parts = append(parts, "The `ask_consultant` tool proxies to the Skipper pipeline, which has indexed documentation across streaming domains (FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, WebRTC, and more).\n")
+	parts = append(parts, "**Before asking**: Read `knowledge://sources` to see what is indexed.\n")
+	parts = append(parts, "**Be specific**: Include the protocol, codec, or tool name in your question.")
+	parts = append(parts, "- Good: \"How do I configure SRT latency in MistServer for a 500ms target?\"")
+	parts = append(parts, "- Weak: \"How to reduce latency?\"\n")
+	parts = append(parts, "**Choose the right mode**:")
+	parts = append(parts, "- `mode: \"docs\"` — Restricts to indexed knowledge base. Faster, cheaper. Use for factual lookups.")
+	parts = append(parts, "- `mode: \"full\"` (default) — Adds web search and multi-step reasoning. Use when docs mode returns low confidence or the topic may not be indexed.\n")
+	parts = append(parts, "**Iterate on low confidence**: If the answer comes back as `best_guess` or `unknown`, rephrase with different terminology or ask a more specific sub-question. Chain searches: start broad, then drill into specifics based on what you learn.\n")
+	parts = append(parts, "**Platform questions**: Mention \"FrameWorks\" explicitly to prioritize platform documentation over general streaming knowledge.\n")
+
+	parts = append(parts, "## 2. Tool Composition Patterns\n")
+	parts = append(parts, "**Data then interpretation**: Run diagnostic tools to collect raw metrics, then pass the JSON output to `ask_consultant` for expert analysis.")
+	parts = append(parts, "- Example: `get_stream_health_summary` → `ask_consultant(\"Interpret this health data: {paste JSON}\")`\n")
+	parts = append(parts, "**Diagnostic workflow**: Start broad, then narrow.")
+	parts = append(parts, "1. `get_stream_health_summary` — overview of bitrate, FPS, issues")
+	parts = append(parts, "2. Symptom-specific tool (`diagnose_rebuffering`, `diagnose_buffer_health`, `diagnose_packet_loss`, or `diagnose_routing`)")
+	parts = append(parts, "3. `ask_consultant` — pass diagnostic results for recommendations\n")
+	parts = append(parts, "**Historical context**: Search `search_support_history` for similar past issues, then include relevant findings when asking the consultant.\n")
+	parts = append(parts, "**API exploration**: `introspect_schema` → `generate_query` → `execute_query`\n")
+
+	parts = append(parts, "## 3. Confidence Tag Reference\n")
+	parts = append(parts, "Every `ask_consultant` response includes a confidence tag. Use this to decide how to act:\n")
+	parts = append(parts, "| Tag | Meaning | Agent Action |")
+	parts = append(parts, "|-----|---------|--------------|")
+	parts = append(parts, "| `verified` | Grounded in indexed docs with citations | Safe for autonomous action |")
+	parts = append(parts, "| `sourced` | Found via web search with URL references | Act with verification |")
+	parts = append(parts, "| `best_guess` | Inferred from adjacent knowledge | Present to human for confirmation |")
+	parts = append(parts, "| `unknown` | No strong evidence found | Do not act autonomously — escalate or rephrase |\n")
+
+	parts = append(parts, "## 4. Cost Awareness\n")
+	parts = append(parts, "- Read `billing://balance` before starting billable operations")
+	parts = append(parts, "- Active streams incur ongoing costs: ingest minutes and viewer hours")
+	parts = append(parts, "- Storage costs for DVR, clips, and VOD are continuous")
+	parts = append(parts, "- Prefer `mode: \"docs\"` for consultant queries when web search is unnecessary")
+	parts = append(parts, "- Clean up: delete streams, clips, and VOD assets when done")
+	parts = append(parts, "- Monitor `billing://balance` drain rate; top up proactively if `estimated_hours_left` is low\n")
+
+	parts = append(parts, "## 5. Prompt Discovery\n")
+	parts = append(parts, "Load these prompts for guided workflows:\n")
+	parts = append(parts, "| Prompt | Use Case |")
+	parts = append(parts, "|--------|----------|")
+	parts = append(parts, "| `video_consultant` | Expert streaming consultant persona with full tool access |")
+	parts = append(parts, "| `diagnose_quality_issue(stream_id, symptom)` | Structured diagnostic workflow |")
+	parts = append(parts, "| `troubleshoot_stream(stream_id)` | Stream-specific issue resolution |")
+	parts = append(parts, "| `onboarding` | New account setup walkthrough |")
+	parts = append(parts, "| `optimize_costs` | Usage analysis and savings suggestions |")
+	parts = append(parts, "| `api_integration_assistant(goal)` | GraphQL API integration help |")
+	parts = append(parts, "| `create_live_stream(stream_name)` | Step-by-step stream creation |")
+	parts = append(parts, "| `self_hosting` | Self-hosted edge deployment walkthrough |")
+
+	return &mcp.GetPromptResult{
+		Messages: []*mcp.PromptMessage{{
+			Role:    "user",
+			Content: &mcp.TextContent{Text: strings.Join(parts, "\n")},
+		}},
+	}, nil
+}
+
+func handleSelfHostingPrompt() (*mcp.GetPromptResult, error) {
+	var parts []string
+	parts = append(parts, "# Self-Hosted Edge Deployment\n")
+	parts = append(parts, "This workflow guides you through deploying your own edge nodes on FrameWorks infrastructure.\n")
+
+	parts = append(parts, "## Step 1: Check Account Status")
+	parts = append(parts, "Read `account://status` to verify your account is set up and check your billing tier.")
+	parts = append(parts, "Your billing tier determines which clusters you're eligible to join.\n")
+
+	parts = append(parts, "## Step 2: Browse the Marketplace")
+	parts = append(parts, "Use `browse_marketplace` to discover available clusters.")
+	parts = append(parts, "Look for clusters with pricing you're comfortable with, low utilization, and geographic proximity to your audience.")
+	parts = append(parts, "Pricing models: FREE_UNMETERED (no cost), TIER_INHERIT (follows your tier), METERED (usage-based), MONTHLY (fixed fee).\n")
+
+	parts = append(parts, "## Step 3: Subscribe to a Cluster")
+	parts = append(parts, "Use `subscribe_to_cluster(cluster_id)` to connect.")
+	parts = append(parts, "Some clusters allow instant connection. Others require approval from the operator — you'll see PENDING_APPROVAL status until approved.")
+	parts = append(parts, "Alternatively, use `create_private_cluster(cluster_name)` to create your own cluster and get a bootstrap token directly.\n")
+
+	parts = append(parts, "## Step 4: Set Preferred Cluster")
+	parts = append(parts, "Use `set_preferred_cluster(cluster_id)` to route your traffic there.")
+	parts = append(parts, "Your preferred cluster and your official (billing-tier) cluster maintain an always-on peering connection — Foghorn keeps fresh edge data for both and scores across them seamlessly.")
+	parts = append(parts, "Other subscribed clusters peer on demand when a stream triggers it.\n")
+
+	parts = append(parts, "## Step 5: Provision Edge Nodes")
+	parts = append(parts, "Run the CLI on each server you want to add:")
+	parts = append(parts, "```")
+	parts = append(parts, "frameworks edge provision --enrollment-token <token> --ssh user@host")
+	parts = append(parts, "```")
+	parts = append(parts, "The CLI handles the full 7-step pipeline: preflight checks, OS tuning, registration (gets domain + TLS cert), Docker install, and startup.")
+	parts = append(parts, "Each edge gets an automatic domain: `edge-{node_id}.{cluster}.frameworks.network`\n")
+
+	parts = append(parts, "## Step 6: Verify")
+	parts = append(parts, "Read `nodes://list` to confirm the new edge appears in your infrastructure.")
+	parts = append(parts, "The edge should show as healthy with the correct cluster assignment.\n")
+
+	parts = append(parts, "## Step 7: Go Live")
+	parts = append(parts, "Your streams now route through your cluster's edges. Ingest URL: `edge-ingest.{cluster}.frameworks.network`.")
+	parts = append(parts, "Viewers connect to `foghorn.{cluster}.frameworks.network` and get routed to the best edge.\n")
+
+	parts = append(parts, "## Peering Model")
+	parts = append(parts, "- **Preferred ↔ official cluster**: Always-on peering. Edge data exchanged every 30s. Seamless failover.")
+	parts = append(parts, "- **Other subscribed clusters**: Demand-driven peering. PeerChannel opens when a stream needs cross-cluster delivery, closes when the last stream ends.")
+	parts = append(parts, "- **Once peered**: Remote edges are scored alongside local edges on every viewer request (with a local preference bonus).")
+	parts = append(parts, "- **Unsubscribed clusters**: Never peered, never considered.")
 
 	return &mcp.GetPromptResult{
 		Messages: []*mcp.PromptMessage{{

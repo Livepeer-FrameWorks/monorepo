@@ -1,18 +1,30 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/triggers"
 
 	"github.com/gin-gonic/gin"
 )
 
 var triggerProcessor *triggers.Processor
+var remoteEdgeCache *federation.RemoteEdgeCache
+var federationClient *federation.FederationClient
+
+// peerAddrResolver is satisfied by *federation.PeerManager.
+type peerAddrResolver interface {
+	GetPeerAddr(clusterID string) string
+}
+
+var peerManager peerAddrResolver
 
 // SetTriggerProcessor wires the running trigger processor into HTTP debug handlers.
 // This is intended for local/dev dashboard introspection.
@@ -24,6 +36,48 @@ func SetTriggerProcessor(p *triggers.Processor) {
 	if ownerTenantID != "" {
 		triggerProcessor.SetOwnerTenantID(ownerTenantID)
 	}
+}
+
+// SetRemoteEdgeCache enables remote edge scoring for cross-cluster viewer routing in HTTP handlers.
+func SetRemoteEdgeCache(cache *federation.RemoteEdgeCache) {
+	remoteEdgeCache = cache
+}
+
+// SetFederationClient wires the federation client for cross-cluster QueryStream/NotifyOriginPull RPCs.
+func SetFederationClient(c *federation.FederationClient) {
+	federationClient = c
+}
+
+// SetPeerManager wires the peer manager for peer address lookups.
+func SetPeerManager(pm *federation.PeerManager) {
+	peerManager = pm
+}
+
+// httpRemoteArtifactAdapter wraps RemoteEdgeCache to satisfy control.RemoteArtifactLookup
+// for the HTTP handler path.
+type httpRemoteArtifactAdapter struct {
+	cache *federation.RemoteEdgeCache
+}
+
+func (a *httpRemoteArtifactAdapter) GetRemoteArtifacts(ctx context.Context, artifactHash string) ([]*control.RemoteArtifactInfo, error) {
+	entries, err := a.cache.GetRemoteArtifacts(ctx, artifactHash)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]*control.RemoteArtifactInfo, 0, len(entries))
+	for _, e := range entries {
+		infos = append(infos, &control.RemoteArtifactInfo{
+			PeerCluster:  e.PeerCluster,
+			NodeID:       e.NodeID,
+			BaseURL:      e.BaseURL,
+			SizeBytes:    e.SizeBytes,
+			AccessCount:  e.AccessCount,
+			LastAccessed: e.LastAccessed,
+			GeoLat:       e.GeoLat,
+			GeoLon:       e.GeoLon,
+		})
+	}
+	return infos, nil
 }
 
 type streamContextCacheEntryView struct {

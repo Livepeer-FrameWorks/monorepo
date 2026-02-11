@@ -6,16 +6,16 @@ description: >
   with QoE diagnostics. Search streaming knowledge with RAG-grounded answers.
   Handle billing with wallet auth and x402 payments. Use when the user wants
   to stream video, manage live infrastructure, or integrate with FrameWorks.
-compatibility: Requires network access to api.frameworks.network
+compatibility: Requires network access to bridge.frameworks.network
 metadata:
   author: frameworks
   version: "1.0"
   homepage: https://frameworks.network
   emoji: "📡"
   category: streaming
-  api_base: https://api.frameworks.network
-  graphql: https://api.frameworks.network/graphql
-  mcp_discovery: https://api.frameworks.network/.well-known/mcp.json
+  api_base: https://bridge.frameworks.network
+  graphql: https://bridge.frameworks.network/graphql
+  mcp_discovery: https://bridge.frameworks.network/.well-known/mcp.json
 ---
 
 # FrameWorks
@@ -24,12 +24,12 @@ Multi-tenant live streaming platform with three access layers and crypto-native 
 
 ## Skill Files
 
-| File          | URL                                                 |
-| ------------- | --------------------------------------------------- |
-| SKILL.md      | https://frameworks.network/SKILL.md                 |
-| skill.json    | https://frameworks.network/skill.json               |
-| heartbeat.md  | https://frameworks.network/heartbeat.md             |
-| MCP discovery | https://api.frameworks.network/.well-known/mcp.json |
+| File          | URL                                                    |
+| ------------- | ------------------------------------------------------ |
+| SKILL.md      | https://frameworks.network/SKILL.md                    |
+| skill.json    | https://frameworks.network/skill.json                  |
+| heartbeat.md  | https://frameworks.network/heartbeat.md                |
+| MCP discovery | https://bridge.frameworks.network/.well-known/mcp.json |
 
 ## Platform Overview
 
@@ -82,7 +82,7 @@ Store credentials at `~/.config/frameworks/credentials.json`:
 {
   "wallet_address": "0x...",
   "jwt": "eyJ...",
-  "api_base": "https://api.frameworks.network"
+  "api_base": "https://bridge.frameworks.network"
 }
 ```
 
@@ -126,7 +126,7 @@ Transport: HTTP + SSE (streamable-http)
 {
   "mcpServers": {
     "frameworks": {
-      "url": "https://api.frameworks.network/mcp",
+      "url": "https://bridge.frameworks.network/mcp",
       "headers": {
         "X-Wallet-Address": "0x...",
         "X-Wallet-Signature": "0x...",
@@ -171,15 +171,59 @@ Authentication: same wallet headers or bearer token.
 
 ## Video Consultant (Skipper)
 
-Use the `video_consultant` prompt for expert streaming guidance backed by a curated knowledge base.
+Use `ask_consultant` to query the Skipper pipeline — knowledge retrieval, query rewriting, reranking, optional web search, and multi-step reasoning. Every answer includes confidence tagging and source citations.
 
-- **Prompt**: `video_consultant` — activates expert streaming consultant mode
-- **Tools**: `ask_consultant` — full Skipper pipeline with confidence tagging and source citations
-- **Resource**: `knowledge://sources` — lists indexed documentation domains
-- **Knowledge domains**: FrameWorks, MistServer, FFmpeg, OBS, SRT, HLS, nginx-rtmp, and ecosystem tools
-- **Confidence tagging**: Every answer tagged as `verified`, `sourced`, `best_guess`, or `unknown` with citations
+### Knowledge Domains
 
-Use `ask_consultant` for full-quality answers with confidence tagging and citations.
+| Domain     | Coverage                                                                 |
+| ---------- | ------------------------------------------------------------------------ |
+| FrameWorks | Platform docs: ingest, playback, API, cluster deployment, billing        |
+| MistServer | Configuration, protocols, triggers, push targets, container formats      |
+| FFmpeg     | Encoding: H.264, HEVC, VP9, AV1, hardware acceleration, bitrate control  |
+| OBS        | Studio setup, streaming configuration, encoder settings, troubleshooting |
+| SRT        | Protocol specification, configuration, latency tuning                    |
+| HLS        | RFC 8216, playlist formats, segment encoding, LL-HLS                     |
+| nginx-rtmp | Module configuration, directives, live streaming setup                   |
+| Ecosystem  | Livepeer, WebRTC standards, DASH specification                           |
+
+Read `knowledge://sources` for the live list of indexed URLs and sitemaps.
+
+### Effective Queries
+
+- **Be specific**: include protocol, codec, or tool name
+  - Good: "How do I configure SRT latency in MistServer for a 500ms target?"
+  - Weak: "How to reduce latency?"
+- **Platform questions**: mention "FrameWorks" explicitly to prioritize platform docs
+- **Mode**: `"docs"` for factual lookups (faster, no web), `"full"` (default) for web-augmented reasoning
+- **Iterate**: if confidence is `best_guess` or `unknown`, rephrase with different terminology
+
+### Confidence Tags
+
+| Tag          | Meaning                           | Agent Action                      |
+| ------------ | --------------------------------- | --------------------------------- |
+| `verified`   | Grounded in indexed documentation | Safe for autonomous action        |
+| `sourced`    | Found via web search with URL     | Act with verification             |
+| `best_guess` | Inferred from adjacent knowledge  | Present to human for confirmation |
+| `unknown`    | No strong evidence                | Do not act autonomously           |
+
+### Tool Composition
+
+For stream diagnostics, collect data first, then interpret:
+
+1. `get_stream_health_summary` — overview (bitrate, FPS, issues)
+2. Symptom-specific tool (`diagnose_rebuffering`, `diagnose_buffer_health`, `diagnose_packet_loss`, `diagnose_routing`)
+3. `ask_consultant` — pass diagnostic JSON for expert recommendations
+
+### Guided Workflows
+
+| Prompt                                       | Use Case                            |
+| -------------------------------------------- | ----------------------------------- |
+| `video_consultant`                           | Expert streaming consultant persona |
+| `diagnose_quality_issue(stream_id, symptom)` | Structured diagnostic workflow      |
+| `agent_instructions`                         | Comprehensive MCP usage guide       |
+| `troubleshoot_stream(stream_id)`             | Stream-specific issue resolution    |
+| `optimize_costs`                             | Usage analysis and savings          |
+| `api_integration_assistant(goal)`            | GraphQL API integration help        |
 
 ## When to Alert Your Human
 

@@ -30,8 +30,8 @@ VALUES ('central-primary', 'api_tenants', 'running', 1, '{"database_url": "postg
 ON CONFLICT (cluster_id, service_id) DO NOTHING;
 
 -- Demo tenant
-INSERT INTO quartermaster.tenants (id, name, subdomain, deployment_tier, primary_cluster_id)
-VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'central-primary')
+INSERT INTO quartermaster.tenants (id, name, subdomain, deployment_tier, primary_cluster_id, official_cluster_id)
+VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'central-primary', 'central-primary')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO quartermaster.tenant_cluster_assignments (tenant_id, cluster_id, deployment_tier, is_primary)
@@ -1026,3 +1026,34 @@ GROUP BY tenant_id, cluster_id, usage_type, DATE_TRUNC('month', period_start)
 ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
     usage_value = EXCLUDED.usage_value,
     granularity = EXCLUDED.granularity;
+
+-- ============================================================================
+-- FOGHORN SERVICE REGISTRATION (Multi-cluster routing prerequisite)
+-- ============================================================================
+-- Without this, GetClusterRouting cannot resolve foghorn_grpc_addr for the cluster.
+-- In production, BootstrapService creates these entries when Foghorn starts.
+
+INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image, type, protocol)
+VALUES ('api_balancing', 'Foghorn', 'data', 'Stream balancing and edge control service', 18019, '/health', 'frameworks/foghorn', 'foghorn', 'grpc')
+ON CONFLICT (service_id) DO NOTHING;
+
+INSERT INTO quartermaster.cluster_services (cluster_id, service_id, desired_state, desired_replicas)
+VALUES ('central-primary', 'api_balancing', 'running', 2)
+ON CONFLICT (cluster_id, service_id) DO NOTHING;
+
+-- Simulates a running Foghorn registered via BootstrapService
+INSERT INTO quartermaster.service_instances (
+    instance_id, cluster_id, service_id, protocol, advertise_host, port,
+    status, health_status, started_at, created_at, updated_at
+) VALUES (
+    'foghorn-demo-01', 'central-primary', 'api_balancing', 'grpc', 'foghorn', 18019,
+    'running', 'unknown', NOW(), NOW(), NOW()
+) ON CONFLICT (instance_id) DO UPDATE SET
+    status = 'running', updated_at = NOW();
+
+-- Foghorn cluster assignment (many-to-many via junction table)
+INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+SELECT si.id, 'central-primary'
+FROM quartermaster.service_instances si
+WHERE si.instance_id = 'foghorn-demo-01'
+ON CONFLICT (foghorn_instance_id, cluster_id) DO NOTHING;

@@ -1550,19 +1550,20 @@ var ClusterPricingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	PrepaidService_GetPrepaidBalance_FullMethodName        = "/purser.PrepaidService/GetPrepaidBalance"
-	PrepaidService_TopupBalance_FullMethodName             = "/purser.PrepaidService/TopupBalance"
-	PrepaidService_DeductBalance_FullMethodName            = "/purser.PrepaidService/DeductBalance"
-	PrepaidService_AdjustBalance_FullMethodName            = "/purser.PrepaidService/AdjustBalance"
-	PrepaidService_ListBalanceTransactions_FullMethodName  = "/purser.PrepaidService/ListBalanceTransactions"
-	PrepaidService_InitializePrepaidBalance_FullMethodName = "/purser.PrepaidService/InitializePrepaidBalance"
-	PrepaidService_InitializePrepaidAccount_FullMethodName = "/purser.PrepaidService/InitializePrepaidAccount"
-	PrepaidService_CreateCardTopup_FullMethodName          = "/purser.PrepaidService/CreateCardTopup"
-	PrepaidService_GetPendingTopup_FullMethodName          = "/purser.PrepaidService/GetPendingTopup"
-	PrepaidService_ListPendingTopups_FullMethodName        = "/purser.PrepaidService/ListPendingTopups"
-	PrepaidService_CreateCryptoTopup_FullMethodName        = "/purser.PrepaidService/CreateCryptoTopup"
-	PrepaidService_GetCryptoTopup_FullMethodName           = "/purser.PrepaidService/GetCryptoTopup"
-	PrepaidService_PromoteToPaid_FullMethodName            = "/purser.PrepaidService/PromoteToPaid"
+	PrepaidService_GetPrepaidBalance_FullMethodName         = "/purser.PrepaidService/GetPrepaidBalance"
+	PrepaidService_TopupBalance_FullMethodName              = "/purser.PrepaidService/TopupBalance"
+	PrepaidService_DeductBalance_FullMethodName             = "/purser.PrepaidService/DeductBalance"
+	PrepaidService_AdjustBalance_FullMethodName             = "/purser.PrepaidService/AdjustBalance"
+	PrepaidService_ListBalanceTransactions_FullMethodName   = "/purser.PrepaidService/ListBalanceTransactions"
+	PrepaidService_InitializePrepaidBalance_FullMethodName  = "/purser.PrepaidService/InitializePrepaidBalance"
+	PrepaidService_InitializePrepaidAccount_FullMethodName  = "/purser.PrepaidService/InitializePrepaidAccount"
+	PrepaidService_InitializePostpaidAccount_FullMethodName = "/purser.PrepaidService/InitializePostpaidAccount"
+	PrepaidService_CreateCardTopup_FullMethodName           = "/purser.PrepaidService/CreateCardTopup"
+	PrepaidService_GetPendingTopup_FullMethodName           = "/purser.PrepaidService/GetPendingTopup"
+	PrepaidService_ListPendingTopups_FullMethodName         = "/purser.PrepaidService/ListPendingTopups"
+	PrepaidService_CreateCryptoTopup_FullMethodName         = "/purser.PrepaidService/CreateCryptoTopup"
+	PrepaidService_GetCryptoTopup_FullMethodName            = "/purser.PrepaidService/GetCryptoTopup"
+	PrepaidService_PromoteToPaid_FullMethodName             = "/purser.PrepaidService/PromoteToPaid"
 )
 
 // PrepaidServiceClient is the client API for PrepaidService service.
@@ -1585,6 +1586,10 @@ type PrepaidServiceClient interface {
 	// Called by Commodore during wallet user provisioning (GetOrCreateWalletUser).
 	// Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
 	InitializePrepaidAccount(ctx context.Context, in *InitializePrepaidAccountRequest, opts ...grpc.CallOption) (*InitializePrepaidAccountResponse, error)
+	// Initialize postpaid account for email registration.
+	// Called by Commodore during Register to provision billing + cluster access.
+	// Resolves the default postpaid tier and subscribes to eligible clusters.
+	InitializePostpaidAccount(ctx context.Context, in *InitializePostpaidAccountRequest, opts ...grpc.CallOption) (*InitializePostpaidAccountResponse, error)
 	// ===== CARD TOP-UP =====
 	// Create a Stripe/Mollie checkout session for prepaid balance top-up
 	// Returns checkout URL for user to complete payment
@@ -1600,8 +1605,9 @@ type PrepaidServiceClient interface {
 	// Check status of a crypto top-up (for polling)
 	GetCryptoTopup(ctx context.Context, in *GetCryptoTopupRequest, opts ...grpc.CallOption) (*CryptoTopup, error)
 	// ===== PROMOTION FLOW =====
-	// Upgrade from prepaid to postpaid billing after email verification
-	// Existing prepaid balance is carried forward as credit
+	// Upgrade from prepaid to postpaid billing after email verification.
+	// Always resolves to the default postpaid tier; re-evaluates cluster access.
+	// Existing prepaid balance is carried forward as credit.
 	PromoteToPaid(ctx context.Context, in *PromoteToPaidRequest, opts ...grpc.CallOption) (*PromoteToPaidResponse, error)
 }
 
@@ -1677,6 +1683,16 @@ func (c *prepaidServiceClient) InitializePrepaidAccount(ctx context.Context, in 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InitializePrepaidAccountResponse)
 	err := c.cc.Invoke(ctx, PrepaidService_InitializePrepaidAccount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) InitializePostpaidAccount(ctx context.Context, in *InitializePostpaidAccountRequest, opts ...grpc.CallOption) (*InitializePostpaidAccountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InitializePostpaidAccountResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_InitializePostpaidAccount_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1763,6 +1779,10 @@ type PrepaidServiceServer interface {
 	// Called by Commodore during wallet user provisioning (GetOrCreateWalletUser).
 	// Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
 	InitializePrepaidAccount(context.Context, *InitializePrepaidAccountRequest) (*InitializePrepaidAccountResponse, error)
+	// Initialize postpaid account for email registration.
+	// Called by Commodore during Register to provision billing + cluster access.
+	// Resolves the default postpaid tier and subscribes to eligible clusters.
+	InitializePostpaidAccount(context.Context, *InitializePostpaidAccountRequest) (*InitializePostpaidAccountResponse, error)
 	// ===== CARD TOP-UP =====
 	// Create a Stripe/Mollie checkout session for prepaid balance top-up
 	// Returns checkout URL for user to complete payment
@@ -1778,8 +1798,9 @@ type PrepaidServiceServer interface {
 	// Check status of a crypto top-up (for polling)
 	GetCryptoTopup(context.Context, *GetCryptoTopupRequest) (*CryptoTopup, error)
 	// ===== PROMOTION FLOW =====
-	// Upgrade from prepaid to postpaid billing after email verification
-	// Existing prepaid balance is carried forward as credit
+	// Upgrade from prepaid to postpaid billing after email verification.
+	// Always resolves to the default postpaid tier; re-evaluates cluster access.
+	// Existing prepaid balance is carried forward as credit.
 	PromoteToPaid(context.Context, *PromoteToPaidRequest) (*PromoteToPaidResponse, error)
 	mustEmbedUnimplementedPrepaidServiceServer()
 }
@@ -1811,6 +1832,9 @@ func (UnimplementedPrepaidServiceServer) InitializePrepaidBalance(context.Contex
 }
 func (UnimplementedPrepaidServiceServer) InitializePrepaidAccount(context.Context, *InitializePrepaidAccountRequest) (*InitializePrepaidAccountResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InitializePrepaidAccount not implemented")
+}
+func (UnimplementedPrepaidServiceServer) InitializePostpaidAccount(context.Context, *InitializePostpaidAccountRequest) (*InitializePostpaidAccountResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InitializePostpaidAccount not implemented")
 }
 func (UnimplementedPrepaidServiceServer) CreateCardTopup(context.Context, *CreateCardTopupRequest) (*CreateCardTopupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateCardTopup not implemented")
@@ -1977,6 +2001,24 @@ func _PrepaidService_InitializePrepaidAccount_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_InitializePostpaidAccount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InitializePostpaidAccountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).InitializePostpaidAccount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_InitializePostpaidAccount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).InitializePostpaidAccount(ctx, req.(*InitializePostpaidAccountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PrepaidService_CreateCardTopup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateCardTopupRequest)
 	if err := dec(in); err != nil {
@@ -2119,6 +2161,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InitializePrepaidAccount",
 			Handler:    _PrepaidService_InitializePrepaidAccount_Handler,
+		},
+		{
+			MethodName: "InitializePostpaidAccount",
+			Handler:    _PrepaidService_InitializePostpaidAccount_Handler,
 		},
 		{
 			MethodName: "CreateCardTopup",

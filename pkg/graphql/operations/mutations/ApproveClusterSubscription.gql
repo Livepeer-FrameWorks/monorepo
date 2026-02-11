@@ -1,0 +1,26 @@
+# Approve a pending cluster subscription request
+mutation ApproveClusterSubscription($subscriptionId: ID!) {
+  approveClusterSubscription(subscriptionId: $subscriptionId) {
+    ... on ClusterSubscription {
+      id
+      subscriptionStatus
+      tenantName
+      clusterName
+    }
+    ... on ValidationError {
+      message
+      code
+      field
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

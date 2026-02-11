@@ -49,13 +49,13 @@ type NodeArtifactState struct {
 }
 
 type RedisStateStore struct {
-	client    *goredis.Client
+	client    goredis.UniversalClient
 	pubsub    *pkgredis.TypedPubSub[StateChange]
 	clusterID string
 	channel   string
 }
 
-func NewRedisStateStore(client *goredis.Client, clusterID string) *RedisStateStore {
+func NewRedisStateStore(client goredis.UniversalClient, clusterID string) *RedisStateStore {
 	return &RedisStateStore{
 		client:    client,
 		pubsub:    pkgredis.NewTypedPubSub[StateChange](client),

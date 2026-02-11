@@ -13,7 +13,8 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-      - /etc/frameworks/certs:/etc/frameworks/certs:ro
+      - ./certs:/etc/frameworks/certs:ro
+      - caddy_admin:/run/caddy
     restart: unless-stopped
 
   mistserver:
@@ -42,6 +43,10 @@ services:
     environment:
       - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
       - MISTSERVER_URL=http://mistserver:8080
+      - CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
+    volumes:
+      - ./certs:/etc/frameworks/certs
+      - caddy_admin:/run/caddy
     expose:
       - "18007"
     restart: unless-stopped
@@ -49,3 +54,4 @@ services:
 volumes:
   caddy_data: {}
   caddy_config: {}
+  caddy_admin: {}

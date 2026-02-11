@@ -48,13 +48,13 @@ Viewers watch at: https://customer.frameworks.network/play/{playback-id}/hls/ind
 
 ### Navigator Roadmap
 
-| Phase | Capability                                 | Status                    |
-| ----- | ------------------------------------------ | ------------------------- |
-| **1** | Cloudflare DNS API integration             | Implemented               |
-| **2** | ACME certificate issuance (Let's Encrypt)  | Implemented               |
-| **3** | Tenant subdomain provisioning/verification | Planned                   |
-| **4** | Self-hosted DNS (PowerDNS)                 | See `rfcs/dns-anycast.md` |
-| **5** | Bring-your-own-certificate support         | Planned                   |
+| Phase | Capability                                                       | Status                    |
+| ----- | ---------------------------------------------------------------- | ------------------------- |
+| **1** | Cloudflare DNS API integration                                   | Implemented               |
+| **2** | ACME certificate issuance (Let's Encrypt)                        | Implemented               |
+| **3** | Per-cluster DNS + per-edge A records + wildcard TLS (ConfigSeed) | Implemented               |
+| **4** | Self-hosted DNS (PowerDNS)                                       | See `rfcs/dns-anycast.md` |
+| **5** | Bring-your-own-certificate support                               | Planned                   |
 
 ---
 

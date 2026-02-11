@@ -24,7 +24,7 @@ Best for: general-purpose streaming with desktop encoders.
 - Adequate latency for most use cases (2-5 seconds)
 - Use RTMPS for encrypted transport
 
-FrameWorks URL: `rtmp://ingest.frameworks.network/live/{streamKey}`
+FrameWorks URL: `rtmp://edge-ingest.frameworks.network/live/{streamKey}`
 
 ### SRT (Secure Reliable Transport)
 
@@ -35,7 +35,7 @@ Best for: unreliable networks, professional contribution, long-distance feeds.
 - Built-in AES encryption without TLS overhead
 - Better than RTMP on cellular, satellite, or congested networks
 
-FrameWorks URL: `srt://ingest.frameworks.network:8889?streamid={streamKey}`
+FrameWorks URL: `srt://edge-ingest.frameworks.network:8889?streamid={streamKey}`
 
 ### WHIP (WebRTC-HTTP Ingestion Protocol)
 
@@ -47,7 +47,7 @@ Best for: browser-based ingest, lowest-latency scenarios.
 - WebRTC encoding means no B-frame issues
 - Requires HTTPS (works through all firewalls)
 
-FrameWorks URL: `https://ingest.frameworks.network/webrtc/{streamKey}`
+FrameWorks URL: `https://edge-ingest.frameworks.network/webrtc/{streamKey}`
 
 ## SRT Parameter Tuning
 

@@ -43,6 +43,7 @@ type WireGuardPeer struct {
 // InfrastructureConfig represents infrastructure services (native installs)
 type InfrastructureConfig struct {
 	Postgres   *PostgresConfig   `yaml:"postgres,omitempty"`
+	Redis      *RedisConfig      `yaml:"redis,omitempty"`
 	Zookeeper  *ZookeeperConfig  `yaml:"zookeeper,omitempty"`
 	Kafka      *KafkaConfig      `yaml:"kafka,omitempty"`
 	ClickHouse *ClickHouseConfig `yaml:"clickhouse,omitempty"`
@@ -115,6 +116,23 @@ type ClickHouseConfig struct {
 	Databases []string `yaml:"databases,omitempty"`
 }
 
+// RedisConfig represents Redis instance configuration
+type RedisConfig struct {
+	Enabled   bool            `yaml:"enabled"`
+	Mode      string          `yaml:"mode"`    // "docker" or "native"
+	Version   string          `yaml:"version"` // e.g., "7"
+	Instances []RedisInstance `yaml:"instances"`
+}
+
+// RedisInstance represents a single named Redis instance
+type RedisInstance struct {
+	Name     string            `yaml:"name"`               // e.g., "foghorn", "platform"
+	Host     string            `yaml:"host"`               // Host name from Hosts map
+	Port     int               `yaml:"port"`               // Default: 6379
+	Password string            `yaml:"password,omitempty"` // AUTH password
+	Config   map[string]string `yaml:"config,omitempty"`   // maxmemory, appendonly, etc.
+}
+
 // ServiceConfig represents a FrameWorks application or interface service
 type ServiceConfig struct {
 	Enabled   bool              `yaml:"enabled"`
@@ -138,11 +156,12 @@ type ServiceConfig struct {
 type EdgeManifest struct {
 	Version         string     `yaml:"version"`
 	RootDomain      string     `yaml:"root_domain"`
-	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge.example.com)
+	PoolDomain      string     `yaml:"pool_domain"` // Shared LB pool domain (e.g., edge-egress.example.com)
 	Email           string     `yaml:"email"`       // ACME email
 	ClusterID       string     `yaml:"cluster_id,omitempty"`
 	EnrollmentToken string     `yaml:"enrollment_token,omitempty"` // Token for node bootstrap
 	FetchCert       bool       `yaml:"fetch_cert,omitempty"`       // Fetch certs from Navigator
+	Mode            string     `yaml:"mode,omitempty"`             // "docker" (default) or "native"
 	Nodes           []EdgeNode `yaml:"nodes"`
 }
 
@@ -156,4 +175,17 @@ type EdgeNode struct {
 	Labels     map[string]string `yaml:"labels,omitempty"`      // Additional labels
 	ApplyTune  bool              `yaml:"apply_tune,omitempty"`  // Apply sysctl tuning
 	RegisterQM bool              `yaml:"register_qm,omitempty"` // Register in Quartermaster
+	Mode       string            `yaml:"mode,omitempty"`        // Per-node mode override ("docker"|"native")
+}
+
+// ResolvedMode returns the effective mode for this node, falling back to the
+// manifest default, then to "docker".
+func (n EdgeNode) ResolvedMode(manifestDefault string) string {
+	if n.Mode != "" {
+		return n.Mode
+	}
+	if manifestDefault != "" {
+		return manifestDefault
+	}
+	return "docker"
 }

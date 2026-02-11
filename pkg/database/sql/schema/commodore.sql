@@ -377,6 +377,16 @@ CREATE INDEX IF NOT EXISTS idx_commodore_vod_internal ON commodore.vod_assets(ar
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_playback ON commodore.vod_assets(playback_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_vod_created ON commodore.vod_assets(created_at);
 
+-- ============================================================================
+-- CROSS-CLUSTER ARTIFACT STORAGE
+-- origin_cluster_id tracks which cluster created the artifact.
+-- Used by Foghorn federation to resolve remote artifacts via PrepareArtifact.
+-- ============================================================================
+
+ALTER TABLE commodore.clips ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
+ALTER TABLE commodore.dvr_recordings ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
+ALTER TABLE commodore.vod_assets ADD COLUMN IF NOT EXISTS origin_cluster_id VARCHAR(100);
+
 -- Generate VOD hash (includes tenant + user + filename + timestamp for uniqueness)
 CREATE OR REPLACE FUNCTION commodore.generate_vod_hash(
     p_tenant_id UUID,

@@ -9,7 +9,7 @@ Agents can create streams and interact with the FrameWorks platform via MCP, but
 This limits:
 
 - Agents that want dedicated or geo-specific streaming infrastructure.
-- Community/hybrid deployment models where agents contribute compute.
+- Selfhosted deployment models where agents contribute compute.
 - Agent autonomy over deployment, configuration, and scaling decisions.
 
 ## Goals

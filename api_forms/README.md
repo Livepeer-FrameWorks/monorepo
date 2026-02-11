@@ -7,7 +7,7 @@ Minimal contact API for handling contact form submissions. Go service using pkg/
 ```bash
 cd api_forms
 go mod download
-go run ./cmd/forms
+go run ./cmd/steward
 ```
 
 Configure the marketing site to point `VITE_CONTACT_API_URL` to this service.
@@ -34,7 +34,7 @@ Environment variables (see `env.example`):
 
 ```bash
 cd api_forms
-CGO_ENABLED=0 go build -o forms ./cmd/forms
+CGO_ENABLED=0 go build -o steward ./cmd/steward
 ```
 
 ## Build vs Buy Considerations

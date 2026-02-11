@@ -4,7 +4,7 @@ React wrapper for StreamCrafter: drop-in UI component plus hooks for custom layo
 
 ## Documentation
 
-Docs: https://docs.frameworks.network
+Docs: https://logbook.frameworks.network
 
 ## Install
 
@@ -21,7 +21,7 @@ import "@livepeer-frameworks/streamcrafter-react/streamcrafter.css";
 export function BroadcastPage() {
   return (
     <StreamCrafter
-      whipUrl="https://ingest.example.com/webrtc/your-stream-key"
+      whipUrl="https://edge-ingest.example.com/webrtc/your-stream-key"
       initialProfile="broadcast"
     />
   );
@@ -32,7 +32,7 @@ export function BroadcastPage() {
 
 ```tsx
 <StreamCrafter
-  gatewayUrl="https://api.example.com/graphql"
+  gatewayUrl="https://bridge.example.com/graphql"
   streamKey="sk_live_..."
   initialProfile="broadcast"
 />
@@ -50,7 +50,7 @@ import { useStreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-react";
 
 export function CustomBroadcaster() {
   const { mediaStream, startCamera, startStreaming, stopStreaming } = useStreamCrafterV2({
-    whipUrl: "https://ingest.example.com/webrtc/your-stream-key",
+    whipUrl: "https://edge-ingest.example.com/webrtc/your-stream-key",
     profile: "broadcast",
   });
 

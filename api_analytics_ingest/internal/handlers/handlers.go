@@ -449,7 +449,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	// 2. Write to stream_events (historical log - MergeTree)
 	eventBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_event_log (
-			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, event_type, status,
+			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
 			buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs,
 			total_outputs, viewer_seconds, has_issues, issues_description,
 			track_count, quality_tier, primary_width, primary_height, primary_fps, event_data
@@ -469,6 +469,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		parseUUID(mt.GetStreamId()),
 		internalName,
 		mt.GetNodeId(),
+		mt.GetClusterId(),
 		"stream_lifecycle",
 		status,
 		streamLifecycle.GetBufferState(),
@@ -702,10 +703,15 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	streamName = mist.ExtractInternalName(streamName)
 
+	clusterID := mt.GetClusterId()
+	originClusterID := mt.GetOriginClusterId()
+
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO viewer_connection_events (
             event_id, timestamp, tenant_id, stream_id, internal_name,
-            session_id, connection_addr, connector, node_id, request_url,
+            session_id, connection_addr, connector, node_id,
+            cluster_id, origin_cluster_id,
+            request_url,
             country_code, city, latitude, longitude,
             client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
             event_type, session_duration, bytes_transferred
@@ -736,6 +742,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		host,
 		connector,
 		nodeID,
+		clusterID,
+		originClusterID,
 		requestURL,
 		countryCode,
 		city,
@@ -1072,7 +1080,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO stream_event_log (
-            timestamp, event_id, tenant_id, stream_id, internal_name, node_id, event_type, status,
+            timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
             stream_key, request_url, protocol,
             latitude, longitude, location, country_code, city,
             event_data
@@ -1115,6 +1123,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		parseUUID(mt.GetStreamId()),
 		internalName,
 		mt.GetNodeId(),
+		mt.GetClusterId(),
 		"stream_start",
 		"live",
 		pr.GetStreamName(), // Original stream_key for reference
@@ -1672,7 +1681,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	// Write to ClickHouse stream_events table
 	streamEventsBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_event_log (
-			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, event_type, status,
+			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
 			buffer_state, has_issues, issues_description, track_count,
 			quality_tier, primary_width, primary_height, primary_fps, event_data
 		)`)
@@ -1688,6 +1697,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		parseUUID(mt.GetStreamId()),
 		internalName,
 		mt.GetNodeId(),
+		mt.GetClusterId(),
 		"stream_buffer",
 		"live", // stream_buffer events only fire for live streams
 		streamBuffer.GetBufferState(),
@@ -1819,7 +1829,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 	// Write to ClickHouse stream_events table using ONLY end-specific fields
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_event_log (
-			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, event_type,
+			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type,
 			downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs,
 			viewer_seconds, event_data
 		)`)
@@ -1855,6 +1865,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 		parseUUID(mt.GetStreamId()),
 		internalName,
 		mt.GetNodeId(),
+		mt.GetClusterId(),
 		"stream_end",
 		downloaded,
 		uploaded,
@@ -1952,7 +1963,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	// Also write a canonical stream event for lifecycle timelines
 	eventBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_event_log (
-			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, event_type, status,
+			timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
 			event_data
 		)`)
 	if err != nil {
@@ -1967,6 +1978,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		parseUUID(mt.GetStreamId()),
 		internalName,
 		mt.GetNodeId(),
+		mt.GetClusterId(),
 		"track_list_update",
 		"live",
 		marshalTypedEventData(trackList),

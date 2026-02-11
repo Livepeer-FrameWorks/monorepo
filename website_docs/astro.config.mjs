@@ -204,7 +204,7 @@ export default defineConfig({
           autogenerate: { directory: "agents" },
         },
         {
-          label: "For Hybrid Operators",
+          label: "For Selfhosters",
           autogenerate: { directory: "hybrid" },
         },
         {

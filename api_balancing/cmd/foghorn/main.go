@@ -6,6 +6,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	foghornconfig "frameworks/api_balancing/internal/config"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/jobs"
@@ -15,6 +16,7 @@ import (
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
+	foghornpool "frameworks/pkg/clients/foghorn"
 	navclient "frameworks/pkg/clients/navigator"
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
@@ -27,6 +29,7 @@ import (
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
+	goredis "github.com/redis/go-redis/v9"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -75,6 +78,7 @@ func main() {
 	// Load environment variables
 	config.LoadEnv(logger)
 	foghornCfg := foghornconfig.Load()
+	control.SetLocalClusterID(foghornCfg.ClusterID)
 
 	// Storage base path for defrost operations when node has no StorageLocal.
 	// Must match Helmsman's HELMSMAN_STORAGE_LOCAL_PATH for path reconstruction.
@@ -101,16 +105,34 @@ func main() {
 	// Create load balancer instance
 	lb := balancer.NewLoadBalancer(logger)
 
-	if foghornCfg.RedisURL != "" {
-		redisClient, err := pkgredis.NewClientFromURL(context.Background(), foghornCfg.RedisURL)
+	instanceID := config.GetEnv("FOGHORN_INSTANCE_ID", "")
+	if instanceID == "" {
+		instanceID = fmt.Sprintf("foghorn-%d", time.Now().UnixNano())
+		if foghornCfg.Redis.Mode != "" || foghornCfg.RedisURL != "" {
+			logger.Warn("FOGHORN_INSTANCE_ID not set but Redis is configured — ephemeral ID will not persist across restarts, breaking HA state sync and leader election")
+		}
+	}
+
+	var redisClient goredis.UniversalClient
+	if foghornCfg.Redis.Mode != "" {
+		var err error
+		redisClient, err = pkgredis.NewUniversalClient(context.Background(), foghornCfg.Redis)
+		if err != nil {
+			logger.WithError(err).Warn("Failed to initialize redis (universal mode)")
+			redisClient = nil
+		}
+	} else if foghornCfg.RedisURL != "" {
+		client, err := pkgredis.NewClientFromURL(context.Background(), foghornCfg.RedisURL)
 		if err != nil {
 			logger.WithError(err).Warn("Failed to initialize redis state store")
 		} else {
-			instanceID := config.GetEnv("FOGHORN_INSTANCE_ID", fmt.Sprintf("foghorn-%d", time.Now().UnixNano()))
-			store := state.NewRedisStateStore(redisClient, foghornCfg.ClusterID)
-			if err := state.DefaultManager().EnableRedisSync(context.Background(), store, instanceID, logger); err != nil {
-				logger.WithError(err).Warn("Failed to enable redis state synchronization")
-			}
+			redisClient = client
+		}
+	}
+	if redisClient != nil {
+		store := state.NewRedisStateStore(redisClient, foghornCfg.ClusterID)
+		if err := state.DefaultManager().EnableRedisSync(context.Background(), store, instanceID, logger); err != nil {
+			logger.WithError(err).Warn("Failed to enable redis state synchronization")
 		}
 	}
 
@@ -405,6 +427,7 @@ func main() {
 	// different interface types (foghorngrpc.S3ClientInterface vs jobs.S3Client).
 	var s3ForGRPC foghorngrpc.S3ClientInterface
 	var s3ForJobs jobs.S3Client
+	var s3ForFederation *storage.S3Client
 	if s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", ""); s3Bucket != "" {
 		s3Config := storage.S3Config{
 			Bucket:    s3Bucket,
@@ -421,6 +444,7 @@ func main() {
 			// Only assign to interfaces if successfully created (avoids typed nil issue)
 			s3ForGRPC = client
 			s3ForJobs = client
+			s3ForFederation = client
 			control.SetS3Client(client)
 			control.SetDB(db)
 			logger.WithFields(logging.Fields{
@@ -440,6 +464,50 @@ func main() {
 		logger.Info("Livepeer Gateway disabled (no LIVEPEER_GATEWAY_URL configured)")
 	}
 
+	// --- Federation (cross-cluster stream routing) ---
+	federationEnabled := config.GetEnv("FEDERATION_ENABLED", "false") == "true"
+	var federationServer *federation.FederationServer
+	var peerManager *federation.PeerManager
+	var remoteEdgeCache *federation.RemoteEdgeCache
+	var fedClient *federation.FederationClient
+	if federationEnabled && redisClient != nil && qmClient != nil {
+		remoteEdgeCache = federation.NewRemoteEdgeCache(redisClient, foghornCfg.ClusterID, logger)
+
+		federationServer = federation.NewFederationServer(federation.FederationServerConfig{
+			Logger:    logger,
+			LB:        lb,
+			ClusterID: foghornCfg.ClusterID,
+			Cache:     remoteEdgeCache,
+			DB:        db,
+			S3Client:  s3ForFederation,
+		})
+
+		fedPool := foghornpool.NewPool(foghornpool.PoolConfig{
+			ServiceToken: serviceToken,
+			Logger:       logger,
+		})
+		defer fedPool.Close()
+
+		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
+			ClusterID:  foghornCfg.ClusterID,
+			InstanceID: instanceID,
+			Pool:       fedPool,
+			QM:         qmClient,
+			Cache:      remoteEdgeCache,
+			Logger:     logger,
+		})
+		defer peerManager.Close()
+
+		fedClient = federation.NewFederationClient(federation.FederationClientConfig{
+			Pool:   fedPool,
+			Logger: logger,
+		})
+
+		logger.WithField("cluster_id", foghornCfg.ClusterID).Info("Federation enabled")
+	} else if federationEnabled {
+		logger.Warn("Federation enabled but missing prerequisites (redis and/or quartermaster)")
+	}
+
 	// Initialize handlers with injected clients
 	handlers.Init(db, logger, lb, metrics, decklogClient, commodoreClient, purserClient, qmClient, geoipReader, geoipCache)
 
@@ -456,6 +524,9 @@ func main() {
 		triggerProcessor.SetGeoIPCache(geoipCache)
 	}
 	triggerProcessor.SetQuartermasterClient(qmClient)
+	if peerManager != nil {
+		triggerProcessor.SetPeerNotifier(peerManager)
+	}
 	logger.Info("Initialized trigger processor with Commodore, Decklog and Quartermaster clients")
 	handlers.SetTriggerProcessor(triggerProcessor)
 
@@ -500,13 +571,35 @@ func main() {
 	// Wire cache invalidator for instant tenant reactivation (Purser → Commodore → Foghorn)
 	foghornServer.SetCacheInvalidator(triggerProcessor)
 
+	// Wire federation remote edge cache for cross-cluster viewer routing
+	if remoteEdgeCache != nil {
+		foghornServer.SetRemoteEdgeCache(remoteEdgeCache, foghornCfg.ClusterID)
+		handlers.SetRemoteEdgeCache(remoteEdgeCache)
+	}
+	if fedClient != nil {
+		handlers.SetFederationClient(fedClient)
+		foghornServer.SetFederationClient(fedClient)
+	}
+	if peerManager != nil {
+		handlers.SetPeerManager(peerManager)
+		foghornServer.SetPeerManager(peerManager)
+	}
+	if federationServer != nil {
+		federationServer.SetClipCreator(foghornServer)
+		federationServer.SetDVRCreator(foghornServer)
+	}
+
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
 	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
+	registrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
+	if federationServer != nil {
+		registrars = append(registrars, federationServer.RegisterServices)
+	}
 	if _, err := control.StartGRPCServer(control.GRPCServerConfig{
 		Addr:         controlAddr,
 		Logger:       logger,
 		ServiceToken: serviceToken,
-		Registrars:   []control.ServiceRegistrar{foghornServer.RegisterServices},
+		Registrars:   registrars,
 	}); err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
 	}
@@ -573,7 +666,7 @@ func main() {
 	router.GET("/dashboard", handlers.HandleRootPage)
 	router.GET("/debug/cache/stream-context", handlers.HandleStreamContextCache)
 
-	// Viewer playback routes - generic player redirects via edge.* domain
+	// Viewer playback routes - generic player redirects via foghorn.* domain
 	router.GET("/play/*path", handlers.HandleGenericViewerPlayback)
 	router.GET("/resolve/*path", handlers.HandleGenericViewerPlayback)
 

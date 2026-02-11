@@ -10,6 +10,7 @@ import "common.proto";
 import "shared.proto";
 import "foghorn.proto";
 import "purser.proto";
+import "quartermaster.proto";
 
 // ============================================================================
 // COMMODORE CONTROL PLANE - INTERNAL SERVICE APIs
@@ -151,6 +152,11 @@ message ValidateStreamKeyResponse {
   // is_balance_negative: true if prepaid balance <= 0 (but not yet suspended)
   // When true, Foghorn should return 402 for new ingests
   bool is_balance_negative = 10;
+
+  optional string origin_cluster_id = 11; // Cluster where this stream ingests (for cross-cluster routing)
+  optional string official_cluster_id = 12; // Billing-tier cluster providing geographic coverage
+  repeated quartermaster.TenantClusterPeer cluster_peers = 13; // Tenant's full cluster context for demand-driven peering
+  string playback_id = 14; // Public playback key (for StreamAdvertisement reverse index)
 }
 
 // ============================================================================
@@ -172,6 +178,9 @@ message ResolvePlaybackIDResponse {
   string billing_model = 6;             // 'postpaid' or 'prepaid'
   bool is_suspended = 7;                // true if tenant suspended
   bool is_balance_negative = 8;         // true if prepaid balance <= 0
+  optional string origin_cluster_id = 9; // Cluster where this stream ingests (for cross-cluster routing)
+  optional string official_cluster_id = 10; // Billing-tier cluster providing geographic coverage
+  repeated quartermaster.TenantClusterPeer cluster_peers = 11; // Tenant's full cluster context for demand-driven peering
 }
 
 // ============================================================================
@@ -190,6 +199,8 @@ message ResolveInternalNameResponse {
   string user_id = 3;                   // json:"user_id"
   bool is_recording_enabled = 4;        // json:"is_recording_enabled,omitempty"
   string stream_id = 5;                 // Public stream ID (UUID)
+  repeated quartermaster.TenantClusterPeer cluster_peers = 6;
+  string origin_cluster_id = 7;           // cluster that owns the stream (for federation source lookup)
 }
 
 // ============================================================================
@@ -230,6 +241,7 @@ message RegisterClipRequest {
   string clip_mode = 8;                 // absolute, relative, duration, clip_now
   string requested_params = 9;          // Original request JSON for audit
   optional google.protobuf.Timestamp retention_until = 10; // Artifact expiration
+  string origin_cluster_id = 11;        // Cluster where clip was created
 }
 
 message RegisterClipResponse {
@@ -247,6 +259,7 @@ message RegisterDVRRequest {
   string stream_id = 3;                 // Source stream UUID (optional for legacy)
   string internal_name = 4;             // MistServer stream name
   optional google.protobuf.Timestamp retention_until = 5; // Recording expiration
+  string origin_cluster_id = 6;         // Cluster where DVR recording started
 }
 
 message RegisterDVRResponse {
@@ -276,6 +289,7 @@ message ResolveClipHashResponse {
   string clip_mode = 10;                // How clip was created
   string playback_id = 11;              // Public playback key
   string artifact_internal_name = 12;   // Artifact routing name (internal)
+  string origin_cluster_id = 13;        // Cluster that originally created this clip
 }
 
 // Resolve DVR hash to tenant context
@@ -292,6 +306,7 @@ message ResolveDVRHashResponse {
   string internal_name = 5;             // MistServer stream name
   string playback_id = 6;               // Public playback key
   string artifact_internal_name = 7;    // Artifact routing name (internal)
+  string origin_cluster_id = 8;         // Cluster that originally created this DVR
 }
 
 // Unified identifier resolution - single call to check all Commodore registries
@@ -309,6 +324,8 @@ message ResolveIdentifierResponse {
   string identifier_type = 5;           // "stream", "playback_id", "clip", "dvr", "vod"
   bool is_recording_enabled = 6;        // For streams: whether DVR auto-record is enabled
   string stream_id = 7;                 // Public stream ID (UUID) if applicable
+  repeated quartermaster.TenantClusterPeer cluster_peers = 8;
+  string origin_cluster_id = 9;         // Cluster where this stream ingests (for federation attribution)
 }
 
 // ============================================================================
@@ -327,6 +344,7 @@ message RegisterVodRequest {
   optional string description = 5;
   optional string content_type = 6;
   optional int64 size_bytes = 7;
+  string origin_cluster_id = 8;         // Cluster where VOD was uploaded
 }
 
 message RegisterVodResponse {
@@ -351,6 +369,7 @@ message ResolveVodHashResponse {
   string description = 6;               // VOD description (if set)
   string playback_id = 7;               // Public playback key
   string artifact_internal_name = 8;    // Artifact routing name (internal)
+  string origin_cluster_id = 9;         // Cluster where this VOD was uploaded
 }
 
 // Resolve VOD relay ID (commodore.vod_assets.id) to VOD hash + tenant context
@@ -380,6 +399,7 @@ message ResolveArtifactPlaybackIDResponse {
   string user_id = 5;
   string stream_id = 6;
   string content_type = 7;              // "clip" | "dvr" | "vod"
+  string origin_cluster_id = 8;         // Cluster that originally created this artifact
 }
 
 // Resolve artifact internal name to artifact identity
@@ -395,6 +415,7 @@ message ResolveArtifactInternalNameResponse {
   string user_id = 5;
   string stream_id = 6;
   string content_type = 7;              // "clip" | "dvr" | "vod"
+  string origin_cluster_id = 8;         // Cluster that originally created this artifact
 }
 
 // ============================================================================
@@ -730,6 +751,24 @@ message CreateStreamResponse {
   string title = 4;                     // json:"title"
   string description = 5;               // json:"description"
   string status = 6;                    // json:"status"
+  // Cluster-level base domains (populated when tenant has a cluster assignment).
+  // Protocol-specific URLs are derived client-side from these + protocol conventions.
+  //   ingest_domain: non-redirectable ingest (RTMP push, SRT push)
+  //   play_domain:   Foghorn-mediated HTTP routing (WHIP, HLS, DASH, WHEP)
+  //   edge_domain:   non-redirectable playback (SRT pull) and direct edge access
+  optional string ingest_domain = 7;
+  optional string edge_domain = 8;
+  optional string play_domain = 9;
+
+  // Official cluster domains (geographic coverage from billing tier).
+  // Populated when tenant's preferred cluster differs from official cluster.
+  // Producers can choose between preferred (their cluster) or official (global CDN) ingest.
+  optional string official_ingest_domain = 10;
+  optional string official_edge_domain = 11;
+  optional string official_play_domain = 12;
+  // Human-readable labels for UX (e.g. "My EU Cluster" vs "FrameWorks US-West")
+  optional string preferred_cluster_label = 13;
+  optional string official_cluster_label = 14;
 }
 
 message GetStreamRequest {

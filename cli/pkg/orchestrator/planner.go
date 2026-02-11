@@ -83,6 +83,21 @@ func (p *Planner) addInfrastructureTasks(graph *DependencyGraph) error {
 		})
 	}
 
+	// Add Redis
+	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
+		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
+			taskName := fmt.Sprintf("redis-%s", instance.Name)
+			graph.AddTask(&Task{
+				Name:       taskName,
+				Type:       "redis",
+				Host:       instance.Host,
+				DependsOn:  []string{},
+				Phase:      PhaseInfrastructure,
+				Idempotent: true,
+			})
+		}
+	}
+
 	// Add Zookeeper
 	if p.manifest.Infrastructure.Zookeeper != nil && p.manifest.Infrastructure.Zookeeper.Enabled {
 		for _, node := range p.manifest.Infrastructure.Zookeeper.Ensemble {
@@ -142,6 +157,12 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 
 	if p.manifest.Infrastructure.Postgres != nil && p.manifest.Infrastructure.Postgres.Enabled {
 		infraDeps = append(infraDeps, "postgres")
+	}
+
+	if p.manifest.Infrastructure.Redis != nil && p.manifest.Infrastructure.Redis.Enabled {
+		for _, instance := range p.manifest.Infrastructure.Redis.Instances {
+			infraDeps = append(infraDeps, fmt.Sprintf("redis-%s", instance.Name))
+		}
 	}
 
 	if p.manifest.Infrastructure.Kafka != nil && p.manifest.Infrastructure.Kafka.Enabled {

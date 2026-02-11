@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
     deployment_tier VARCHAR(50) DEFAULT 'global',
     deployment_model VARCHAR(50) DEFAULT 'shared',
     primary_cluster_id VARCHAR(100),
+    official_cluster_id VARCHAR(100),  -- billing-tier cluster providing geographic coverage
 
     -- ===== INFRASTRUCTURE CONNECTIVITY =====
     kafka_topic_prefix VARCHAR(100),
@@ -117,7 +118,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     -- ===== OWNERSHIP & DEPLOYMENT =====
     owner_tenant_id UUID REFERENCES quartermaster.tenants(id),
     deployment_model VARCHAR(50) DEFAULT 'shared',
-    
+
     -- ===== CONNECTIVITY =====
     base_url VARCHAR(500) NOT NULL,
     database_url TEXT,
@@ -141,6 +142,11 @@ CREATE TABLE IF NOT EXISTS quartermaster.infrastructure_clusters (
     last_seen TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
+
+    -- ===== S3 STORAGE CONFIGURATION =====
+    s3_bucket VARCHAR(255),
+    s3_endpoint VARCHAR(500),
+    s3_region VARCHAR(50),
 
     -- ===== MARKETPLACE CONFIGURATION =====
     visibility VARCHAR(20) DEFAULT 'private',
@@ -284,6 +290,25 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- ============================================================================
+-- FOGHORN-CLUSTER ASSIGNMENTS (many-to-many)
+-- ============================================================================
+
+-- Maps Foghorn instances to clusters they serve. A single Foghorn can serve
+-- multiple clusters (shared Foghorn), and a cluster can have multiple Foghorns (HA).
+-- Replaces the 1:1 service_instances.cluster_id binding for Foghorn routing.
+CREATE TABLE IF NOT EXISTS quartermaster.foghorn_cluster_assignments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    foghorn_instance_id UUID NOT NULL REFERENCES quartermaster.service_instances(id) ON DELETE CASCADE,
+    cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id) ON DELETE CASCADE,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(foghorn_instance_id, cluster_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_fca_cluster ON quartermaster.foghorn_cluster_assignments(cluster_id) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_qm_fca_foghorn ON quartermaster.foghorn_cluster_assignments(foghorn_instance_id);
 
 -- ============================================================================
 -- CORE INDEXES

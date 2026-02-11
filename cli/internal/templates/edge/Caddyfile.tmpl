@@ -1,4 +1,5 @@
 {
+  admin {{CADDY_ADMIN_ADDR}}
   email {{ACME_EMAIL}}
   servers {
     protocols h1 h2 h3
@@ -22,11 +23,11 @@
   }
 
   handle_path /webhooks/* {
-    reverse_proxy helmsman:18007
+    reverse_proxy {{HELMSMAN_UPSTREAM}}
   }
 
   handle /view/* {
-    reverse_proxy mistserver:8080 {
+    reverse_proxy {{MIST_UPSTREAM}} {
       flush_interval -1
       transport http {
         read_timeout 0
@@ -38,7 +39,7 @@
     }
   }
 
-  reverse_proxy mistserver:8080
+  reverse_proxy {{MIST_UPSTREAM}}
 
   log {
     output stdout

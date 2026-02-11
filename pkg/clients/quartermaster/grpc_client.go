@@ -320,6 +320,19 @@ func (c *GRPCClient) RejectClusterSubscription(ctx context.Context, req *pb.Reje
 	return c.cluster.RejectClusterSubscription(ctx, req)
 }
 
+// UpdateTenantCluster updates tenant cluster assignment (e.g. preferred cluster)
+func (c *GRPCClient) UpdateTenantCluster(ctx context.Context, req *pb.UpdateTenantClusterRequest) error {
+	_, err := c.tenant.UpdateTenantCluster(ctx, req)
+	return err
+}
+
+// ListPeers returns clusters that share tenants with the given cluster.
+func (c *GRPCClient) ListPeers(ctx context.Context, clusterID string) (*pb.ListPeersResponse, error) {
+	return c.cluster.ListPeers(ctx, &pb.ListPeersRequest{
+		ClusterId: clusterID,
+	})
+}
+
 // ============================================================================
 // NODE OPERATIONS
 // ============================================================================
@@ -434,6 +447,55 @@ func (c *GRPCClient) RevokeBootstrapToken(ctx context.Context, tokenID string) e
 		TokenId: tokenID,
 	})
 	return err
+}
+
+// ValidateBootstrapToken performs a read-only check on a bootstrap token.
+// Returns validity status, kind, cluster_id, and tenant_id without consuming the token.
+func (c *GRPCClient) ValidateBootstrapToken(ctx context.Context, token string) (*pb.ValidateBootstrapTokenResponse, error) {
+	return c.bootstrap.ValidateBootstrapToken(ctx, &pb.ValidateBootstrapTokenRequest{
+		Token: token,
+	})
+}
+
+// ValidateBootstrapTokenEx validates with IP binding and optional consumption.
+func (c *GRPCClient) ValidateBootstrapTokenEx(ctx context.Context, req *pb.ValidateBootstrapTokenRequest) (*pb.ValidateBootstrapTokenResponse, error) {
+	return c.bootstrap.ValidateBootstrapToken(ctx, req)
+}
+
+// ============================================================================
+// FOGHORN POOL MANAGEMENT
+// ============================================================================
+
+func (c *GRPCClient) GetFoghornPoolStatus(ctx context.Context) (*pb.GetFoghornPoolStatusResponse, error) {
+	return c.bootstrap.GetFoghornPoolStatus(ctx, &pb.GetFoghornPoolStatusRequest{})
+}
+
+func (c *GRPCClient) AddToFoghornPool(ctx context.Context, req *pb.AddToFoghornPoolRequest) (*pb.AddToFoghornPoolResponse, error) {
+	return c.bootstrap.AddToFoghornPool(ctx, req)
+}
+
+func (c *GRPCClient) DrainFoghornInstance(ctx context.Context, instanceID string) (*pb.DrainFoghornInstanceResponse, error) {
+	return c.bootstrap.DrainFoghornInstance(ctx, &pb.DrainFoghornInstanceRequest{
+		InstanceId: instanceID,
+	})
+}
+
+func (c *GRPCClient) AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) error {
+	_, err := c.cluster.AssignFoghornToCluster(ctx, req)
+	return err
+}
+
+func (c *GRPCClient) UnassignFoghornFromCluster(ctx context.Context, req *pb.UnassignFoghornFromClusterRequest) error {
+	_, err := c.cluster.UnassignFoghornFromCluster(ctx, req)
+	return err
+}
+
+func (c *GRPCClient) EnableSelfHosting(ctx context.Context, req *pb.EnableSelfHostingRequest) (*pb.EnableSelfHostingResponse, error) {
+	return c.cluster.EnableSelfHosting(ctx, req)
+}
+
+func (c *GRPCClient) CreateEnrollmentToken(ctx context.Context, req *pb.CreateEnrollmentTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+	return c.cluster.CreateEnrollmentToken(ctx, req)
 }
 
 // ============================================================================

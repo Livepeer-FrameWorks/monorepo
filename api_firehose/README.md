@@ -1,6 +1,6 @@
 # Decklog (Event Firehose)
 
-Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant headers. **High-throughput event ingestion** designed for self-hosted and hybrid deployments.
+Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant headers.
 
 ## Why Decklog?
 

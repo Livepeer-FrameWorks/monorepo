@@ -14,6 +14,8 @@ import (
 
 	fwcfg "frameworks/cli/internal/config"
 	commodore "frameworks/pkg/clients/commodore"
+	fhclient "frameworks/pkg/clients/foghorn"
+	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
@@ -170,6 +172,8 @@ func newAdminCmd() *cobra.Command {
 	adm.AddCommand(newAdminTenantsCmd())
 	adm.AddCommand(newAdminClustersCmd())
 	adm.AddCommand(newAdminNodesCmd())
+	adm.AddCommand(newAdminFoghornPoolCmd())
+	adm.AddCommand(newAdminBillingCmd())
 	return adm
 }
 
@@ -386,6 +390,56 @@ func qmGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
 		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
 	return qm, ctxCfg, nil
+}
+
+func foghornGRPCClientFromContext() (*fhclient.GRPCClient, fwcfg.Context, error) {
+	cfg, _, err := fwcfg.Load()
+	if err != nil {
+		return nil, fwcfg.Context{}, err
+	}
+	ctxCfg := fwcfg.GetCurrent(cfg)
+	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
+
+	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "foghorn_grpc_addr", ctxCfg.Endpoints.FoghornGRPCAddr, false)
+	if err != nil {
+		return nil, fwcfg.Context{}, err
+	}
+
+	fh, err := fhclient.NewGRPCClient(fhclient.GRPCConfig{
+		GRPCAddr:     grpcAddr,
+		Timeout:      30 * time.Second,
+		Logger:       logging.NewLogger(),
+		ServiceToken: ctxCfg.Auth.ServiceToken,
+	})
+	if err != nil {
+		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
+	}
+	return fh, ctxCfg, nil
+}
+
+func purserGRPCClientFromContext() (*purserclient.GRPCClient, fwcfg.Context, error) {
+	cfg, _, err := fwcfg.Load()
+	if err != nil {
+		return nil, fwcfg.Context{}, err
+	}
+	ctxCfg := fwcfg.GetCurrent(cfg)
+	ctxCfg.Auth = fwcfg.ResolveAuth(ctxCfg)
+
+	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "purser_grpc_addr", ctxCfg.Endpoints.PurserGRPCAddr, false)
+	if err != nil {
+		return nil, fwcfg.Context{}, err
+	}
+
+	p, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+		GRPCAddr:     grpcAddr,
+		Timeout:      15 * time.Second,
+		Logger:       logging.NewLogger(),
+		ServiceToken: ctxCfg.Auth.ServiceToken,
+	})
+	if err != nil {
+		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Purser gRPC: %w", err)
+	}
+	return p, ctxCfg, nil
 }
 
 func newAdminBootstrapTokensCreateCmd() *cobra.Command {
@@ -637,6 +691,10 @@ func newAdminClustersCmd() *cobra.Command {
 	cmd.AddCommand(newAdminClustersAccessCmd())
 	cmd.AddCommand(newAdminClustersInvitesCmd())
 	cmd.AddCommand(newAdminClustersSubscriptionsCmd())
+	cmd.AddCommand(newAdminClustersCertStatusCmd())
+	cmd.AddCommand(newAdminClustersMigrateArtifactsCmd())
+	cmd.AddCommand(newAdminClustersCreateEdgeCmd())
+	cmd.AddCommand(newAdminClustersEnrollmentTokenCmd())
 	return cmd
 }
 
@@ -682,6 +740,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 	var maxBandwidth int
 	var ownerTenantID string
 	var deploymentModel string
+	var foghornCount int
 	cmd := &cobra.Command{Use: "create", Short: "Create a cluster", RunE: func(cmd *cobra.Command, args []string) error {
 		if strings.TrimSpace(clusterID) == "" {
 			return fmt.Errorf("--cluster-id is required")
@@ -738,6 +797,9 @@ func newAdminClustersCreateCmd() *cobra.Command {
 		if ownerTenantID != "" {
 			req.OwnerTenantId = &ownerTenantID
 		}
+		if foghornCount > 0 {
+			req.FoghornCount = int32(foghornCount)
+		}
 
 		resp, err := qm.CreateCluster(cctx, req)
 		if err != nil {
@@ -763,6 +825,7 @@ func newAdminClustersCreateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&maxBandwidth, "max-bandwidth-mbps", 0, "max bandwidth (Mbps)")
 	cmd.Flags().StringVar(&ownerTenantID, "owner-tenant-id", "", "owner tenant id (UUID, optional)")
 	cmd.Flags().StringVar(&deploymentModel, "deployment-model", "managed", "deployment model: managed|shared")
+	cmd.Flags().IntVar(&foghornCount, "foghorn-count", 0, "claim N idle Foghorn instances from pool (0 = skip)")
 	return cmd
 }
 
@@ -1297,6 +1360,182 @@ func newAdminClustersSubscriptionsListCmd() *cobra.Command {
 	return cmd
 }
 
+// === Cluster Cert Status ===
+
+func newAdminClustersCertStatusCmd() *cobra.Command {
+	var clusterID string
+	cmd := &cobra.Command{Use: "cert-status", Short: "Show cluster readiness (health, Foghorn, cert)", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(clusterID) == "" {
+			return fmt.Errorf("--cluster-id is required")
+		}
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		cluster, err := qm.GetCluster(cctx, clusterID)
+		if err != nil {
+			return fmt.Errorf("get cluster: %w", err)
+		}
+
+		foghorns, err := qm.DiscoverServices(cctx, "foghorn", clusterID, nil)
+		if err != nil {
+			return fmt.Errorf("discover foghorns: %w", err)
+		}
+
+		c := cluster.Cluster
+		w := cmd.OutOrStdout()
+		_, _ = fmt.Fprintf(w, "Cluster: %s (%s)\n", c.ClusterName, c.ClusterId)
+		_, _ = fmt.Fprintf(w, "  type:       %s\n", c.ClusterType)
+		_, _ = fmt.Fprintf(w, "  base_url:   %s\n", c.BaseUrl)
+		_, _ = fmt.Fprintf(w, "  health:     %s\n", c.HealthStatus)
+		_, _ = fmt.Fprintf(w, "  active:     %v\n", c.IsActive)
+
+		_, _ = fmt.Fprintf(w, "  foghorns:   %d registered\n", len(foghorns.Instances))
+		for _, inst := range foghorns.Instances {
+			_, _ = fmt.Fprintf(w, "    - %s:%d  status=%s\n", inst.GetHost(), inst.GetPort(), inst.GetStatus())
+		}
+
+		// Wildcard cert: *.{cluster_slug}.{base_url}
+		// Cert readiness correlates with cluster health_status = 'active'
+		if c.HealthStatus == "active" {
+			_, _ = fmt.Fprintf(w, "  cert:       ready (cluster active)\n")
+		} else {
+			_, _ = fmt.Fprintf(w, "  cert:       pending (cluster %s)\n", c.HealthStatus)
+		}
+		return nil
+	}}
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster ID (required)")
+	return cmd
+}
+
+func newAdminClustersCreateEdgeCmd() *cobra.Command {
+	var tenantID string
+	var clusterName string
+	var shortDesc string
+	cmd := &cobra.Command{Use: "create-edge", Short: "Create an edge cluster with Foghorn assignment and enrollment token", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(clusterName) == "" {
+			return fmt.Errorf("--cluster-name is required")
+		}
+		if tenantID != "" {
+			if err := validateUUID(tenantID); err != nil {
+				return fmt.Errorf("--tenant-id: %w", err)
+			}
+		}
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		req := &pb.EnableSelfHostingRequest{
+			TenantId:    tenantID,
+			ClusterName: clusterName,
+		}
+		if shortDesc != "" {
+			req.ShortDescription = &shortDesc
+		}
+		resp, err := qm.EnableSelfHosting(cctx, req)
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		c := resp.Cluster
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Edge cluster created\n")
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Cluster:   %s (id=%s)\n", c.ClusterName, c.ClusterId)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Base URL:  %s\n", c.BaseUrl)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Foghorn:   %s\n", resp.FoghornAddr)
+		t := resp.BootstrapToken
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Token:     %s\n", t.Token)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Expires:   %s\n", t.ExpiresAt.AsTime().Format(time.RFC3339))
+		return nil
+	}}
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to JWT tenant)")
+	cmd.Flags().StringVar(&clusterName, "cluster-name", "", "display name for the cluster (required)")
+	cmd.Flags().StringVar(&shortDesc, "description", "", "short description (optional)")
+	return cmd
+}
+
+func newAdminClustersEnrollmentTokenCmd() *cobra.Command {
+	var clusterID string
+	var tenantID string
+	var name string
+	var ttl string
+	cmd := &cobra.Command{Use: "enrollment-token", Short: "Create an enrollment token for a cluster", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(clusterID) == "" {
+			return fmt.Errorf("--cluster-id is required")
+		}
+		if tenantID != "" {
+			if err := validateUUID(tenantID); err != nil {
+				return fmt.Errorf("--tenant-id: %w", err)
+			}
+		}
+		if ttl != "" {
+			if _, err := normalizeDuration(ttl); err != nil {
+				return fmt.Errorf("--ttl: %w", err)
+			}
+		}
+
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		req := &pb.CreateEnrollmentTokenRequest{
+			ClusterId: clusterID,
+		}
+		if tenantID != "" {
+			req.TenantId = &tenantID
+		}
+		if name != "" {
+			req.Name = &name
+		}
+		if ttl != "" {
+			normalized, _ := normalizeDuration(ttl)
+			req.Ttl = &normalized
+		}
+		resp, err := qm.CreateEnrollmentToken(cctx, req)
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Enrollment token: %s\n", resp.Token.Token)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Cluster:  %s\n", clusterID)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Expires:  %s\n", resp.Token.ExpiresAt.AsTime().Format(time.RFC3339))
+		return nil
+	}}
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required)")
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (defaults to JWT tenant)")
+	cmd.Flags().StringVar(&name, "name", "", "token display name")
+	cmd.Flags().StringVar(&ttl, "ttl", "", "time-to-live (e.g. 24h, 7d; default 30d)")
+	return cmd
+}
+
 // === Quartermaster Nodes ===
 
 func newAdminNodesCmd() *cobra.Command {
@@ -1488,6 +1727,213 @@ func newAdminNodesCreateCmd() *cobra.Command {
 	return cmd
 }
 
+// === Foghorn Pool ===
+
+func newAdminFoghornPoolCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "foghorn-pool", Short: "Foghorn instance pool operations"}
+	cmd.AddCommand(newAdminFoghornPoolStatusCmd())
+	cmd.AddCommand(newAdminFoghornPoolAddCmd())
+	cmd.AddCommand(newAdminFoghornPoolDrainCmd())
+	cmd.AddCommand(newAdminFoghornPoolAssignCmd())
+	cmd.AddCommand(newAdminFoghornPoolUnassignCmd())
+	return cmd
+}
+
+func newAdminFoghornPoolStatusCmd() *cobra.Command {
+	return &cobra.Command{Use: "status", Short: "Show Foghorn pool status", RunE: func(cmd *cobra.Command, args []string) error {
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		resp, err := qm.GetFoghornPoolStatus(cctx)
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Foghorn pool: %d total, %d assigned, %d unassigned\n", resp.Total, resp.Assigned, resp.Unassigned)
+		for _, c := range resp.Clusters {
+			cid := c.ClusterId
+			if cid == "" {
+				cid = "(pool)"
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n  %s (%d instances)\n", cid, c.InstanceCount)
+			for _, inst := range c.Instances {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    - %s:%d  status=%s  id=%s\n", inst.GetHost(), inst.GetPort(), inst.GetStatus(), inst.GetId())
+			}
+		}
+
+		if len(resp.Assignments) > 0 {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n  Assignments (many-to-many):\n")
+			for _, a := range resp.Assignments {
+				active := "active"
+				if !a.IsActive {
+					active = "inactive"
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "    foghorn=%s → cluster=%s  %s\n", a.FoghornInstanceId, a.ClusterId, active)
+			}
+		}
+		return nil
+	}}
+}
+
+func newAdminFoghornPoolAddCmd() *cobra.Command {
+	var count int
+	var fromCluster string
+	var instanceIDs []string
+	cmd := &cobra.Command{Use: "add", Short: "Release Foghorn instances back to pool", RunE: func(cmd *cobra.Command, args []string) error {
+		if len(instanceIDs) == 0 && (count == 0 || fromCluster == "") {
+			return fmt.Errorf("provide --instance-id or (--count + --from-cluster)")
+		}
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		resp, err := qm.AddToFoghornPool(cctx, &pb.AddToFoghornPoolRequest{
+			InstanceIds:   instanceIDs,
+			Count:         int32(count),
+			FromClusterId: fromCluster,
+		})
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Released %d instance(s) to pool\n", resp.Released)
+		return nil
+	}}
+	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "instance UUID(s) to release")
+	cmd.Flags().IntVar(&count, "count", 0, "number of instances to release from cluster")
+	cmd.Flags().StringVar(&fromCluster, "from-cluster", "", "cluster to release instances from")
+	return cmd
+}
+
+func newAdminFoghornPoolDrainCmd() *cobra.Command {
+	var instanceID string
+	cmd := &cobra.Command{Use: "drain", Short: "Drain a Foghorn instance from its cluster", RunE: func(cmd *cobra.Command, args []string) error {
+		if instanceID == "" {
+			return fmt.Errorf("--instance-id is required")
+		}
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		resp, err := qm.DrainFoghornInstance(cctx, instanceID)
+		if err != nil {
+			return err
+		}
+		prev := resp.PreviousClusterId
+		if prev == "" || prev == "pool" {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Instance %s was already in pool\n", instanceID)
+		} else {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Drained instance %s from cluster %s → pool\n", instanceID, prev)
+		}
+		return nil
+	}}
+	cmd.Flags().StringVar(&instanceID, "instance-id", "", "instance UUID to drain (required)")
+	return cmd
+}
+
+func newAdminFoghornPoolAssignCmd() *cobra.Command {
+	var clusterID string
+	var instanceIDs []string
+	var count int
+	cmd := &cobra.Command{Use: "assign", Short: "Assign Foghorn instance(s) to a cluster", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(clusterID) == "" {
+			return fmt.Errorf("--cluster-id is required")
+		}
+		if len(instanceIDs) == 0 && count == 0 {
+			return fmt.Errorf("provide --instance-id or --count")
+		}
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		if err := qm.AssignFoghornToCluster(cctx, &pb.AssignFoghornToClusterRequest{
+			ClusterId:          clusterID,
+			FoghornInstanceIds: instanceIDs,
+			Count:              int32(count),
+		}); err != nil {
+			return err
+		}
+		if len(instanceIDs) > 0 {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Assigned %d Foghorn instance(s) to cluster %s\n", len(instanceIDs), clusterID)
+		} else {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Assigned %d Foghorn instance(s) to cluster %s (least-loaded)\n", count, clusterID)
+		}
+		return nil
+	}}
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to assign Foghorn(s) to (required)")
+	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "specific Foghorn instance UUID(s)")
+	cmd.Flags().IntVar(&count, "count", 0, "pick N least-loaded Foghorn instances")
+	return cmd
+}
+
+func newAdminFoghornPoolUnassignCmd() *cobra.Command {
+	var clusterID string
+	var instanceIDs []string
+	cmd := &cobra.Command{Use: "unassign", Short: "Remove Foghorn instance(s) from a cluster", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(clusterID) == "" {
+			return fmt.Errorf("--cluster-id is required")
+		}
+		if len(instanceIDs) == 0 {
+			return fmt.Errorf("--instance-id is required")
+		}
+		qm, ctxCfg, err := qmGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = qm.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		if err := qm.UnassignFoghornFromCluster(cctx, &pb.UnassignFoghornFromClusterRequest{
+			ClusterId:          clusterID,
+			FoghornInstanceIds: instanceIDs,
+		}); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Unassigned %d Foghorn instance(s) from cluster %s\n", len(instanceIDs), clusterID)
+		return nil
+	}}
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to unassign from (required)")
+	cmd.Flags().StringSliceVar(&instanceIDs, "instance-id", nil, "Foghorn instance UUID(s) to remove (required)")
+	return cmd
+}
+
 func newAdminNodesHardwareCmd() *cobra.Command {
 	var nodeID string
 	var cpuCores int
@@ -1529,5 +1975,187 @@ func newAdminNodesHardwareCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cpuCores, "cpu-cores", 0, "CPU cores (optional)")
 	cmd.Flags().IntVar(&memoryGB, "memory-gb", 0, "memory GB (optional)")
 	cmd.Flags().IntVar(&diskGB, "disk-gb", 0, "disk GB (optional)")
+	return cmd
+}
+
+// === Billing Admin Commands ===
+
+func newAdminBillingCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "billing", Short: "Billing and subscription management"}
+	cmd.AddCommand(newAdminBillingTiersCmd())
+	cmd.AddCommand(newAdminBillingInitPostpaidCmd())
+	cmd.AddCommand(newAdminBillingPromoteCmd())
+	return cmd
+}
+
+func newAdminBillingTiersCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "tiers", Short: "List billing tiers", RunE: func(cmd *cobra.Command, args []string) error {
+		p, ctxCfg, err := purserGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = p.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+		resp, err := p.GetBillingTiers(cctx, false, nil)
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Billing Tiers (%d)\n", len(resp.Tiers))
+		for _, t := range resp.Tiers {
+			defaults := ""
+			if t.IsDefaultPrepaid {
+				defaults = " [default-prepaid]"
+			}
+			if t.IsDefaultPostpaid {
+				defaults = " [default-postpaid]"
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s (level=%d) %s - %s%.2f/mo%s\n",
+				t.TierName, t.TierLevel, t.DisplayName, t.Currency, t.BasePrice, defaults)
+		}
+		return nil
+	}}
+	return cmd
+}
+
+func newAdminBillingInitPostpaidCmd() *cobra.Command {
+	var tenantID string
+	cmd := &cobra.Command{Use: "init-postpaid", Short: "Initialize postpaid billing for a tenant", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(tenantID) == "" {
+			return fmt.Errorf("--tenant-id is required")
+		}
+		if err := validateUUID(tenantID); err != nil {
+			return fmt.Errorf("--tenant-id: %w", err)
+		}
+		p, ctxCfg, err := purserGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = p.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+		resp, err := p.InitializePostpaidAccount(cctx, tenantID)
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Initialized postpaid account\n")
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Subscription: %s\n", resp.SubscriptionId)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Tier level:   %d\n", resp.TierLevel)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Primary cluster: %s\n", resp.PrimaryClusterId)
+		if len(resp.EligibleClusterIds) > 0 {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Eligible clusters: %s\n", strings.Join(resp.EligibleClusterIds, ", "))
+		}
+		return nil
+	}}
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
+	return cmd
+}
+
+func newAdminBillingPromoteCmd() *cobra.Command {
+	var tenantID string
+	cmd := &cobra.Command{Use: "promote", Short: "Promote tenant from prepaid to postpaid billing", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(tenantID) == "" {
+			return fmt.Errorf("--tenant-id is required")
+		}
+		if err := validateUUID(tenantID); err != nil {
+			return fmt.Errorf("--tenant-id: %w", err)
+		}
+		p, ctxCfg, err := purserGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = p.Close() }()
+		cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+		resp, err := p.PromoteToPaid(cctx, tenantID, "")
+		if err != nil {
+			return err
+		}
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Promoted to postpaid billing\n")
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Subscription: %s\n", resp.SubscriptionId)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Billing model: %s\n", resp.NewBillingModel)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Credit balance: %d cents\n", resp.CreditBalanceCents)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Tier level: %d\n", resp.TierLevel)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Primary cluster: %s\n", resp.PrimaryClusterId)
+		if len(resp.EligibleClusterIds) > 0 {
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Eligible clusters: %s\n", strings.Join(resp.EligibleClusterIds, ", "))
+		}
+		return nil
+	}}
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
+	return cmd
+}
+
+func newAdminClustersMigrateArtifactsCmd() *cobra.Command {
+	var tenantID string
+	var fromCluster string
+	cmd := &cobra.Command{Use: "migrate-artifacts", Short: "Migrate artifact metadata from a source cluster", RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(tenantID) == "" {
+			return fmt.Errorf("--tenant-id is required")
+		}
+		if strings.TrimSpace(fromCluster) == "" {
+			return fmt.Errorf("--from-cluster is required")
+		}
+
+		fh, ctxCfg, err := foghornGRPCClientFromContext()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = fh.Close() }()
+
+		cctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if ctxCfg.Auth.JWT != "" {
+			cctx = context.WithValue(cctx, ctxkeys.KeyJWTToken, ctxCfg.Auth.JWT)
+		}
+
+		resp, err := fh.Federation().MigrateArtifactMetadata(cctx, &pb.MigrateArtifactMetadataRequest{
+			TenantId:        tenantID,
+			SourceClusterId: fromCluster,
+		})
+		if err != nil {
+			return fmt.Errorf("migrate artifacts: %w", err)
+		}
+
+		if resp.Error != "" {
+			return fmt.Errorf("migration error: %s", resp.Error)
+		}
+
+		if output == "json" {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(resp)
+		}
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Artifact metadata migration complete\n")
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Migrated:        %d\n", resp.MigratedCount)
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  Already existed: %d\n", resp.AlreadyExists)
+		return nil
+	}}
+	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required)")
+	cmd.Flags().StringVar(&fromCluster, "from-cluster", "", "source cluster id to migrate artifacts from (required)")
 	return cmd
 }

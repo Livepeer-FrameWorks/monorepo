@@ -351,6 +351,14 @@ func main() {
 		Diagnostics:       baselineEvaluator,
 		Logger:            logger,
 		RequiredTierLevel: cfg.RequiredTierLevel,
+		InfraMonitor: &heartbeat.InfraMonitorConfig{
+			Nodes:     periscopeClient,
+			Clusters:  qmClient,
+			Billing:   purserClient,
+			Baselines: baselineEvaluator,
+			SMTP:      notifyConfig.SMTP,
+			Logger:    logger,
+		},
 	})
 	go heartbeatAgent.Start(context.Background())
 

@@ -55,18 +55,18 @@ By default, the CLI assumes `frameworks.network` if `--domain` is not provided.
 
 ### Public Endpoints (GeoDNS)
 
-| Subdomain            | Purpose          | Service            |
-| -------------------- | ---------------- | ------------------ |
-| `example.com`        | Marketing site   | Foredeck (Website) |
-| `app.example.com`    | Web console      | Chartroom (Webapp) |
-| `api.example.com`    | GraphQL API      | Bridge             |
-| `play.example.com`   | Viewer routing   | Foghorn            |
-| `ingest.example.com` | Stream ingest    | Edge nodes         |
-| `edge.example.com`   | Edge pool domain | Edge nodes         |
-| `docs.example.com`   | Docs site        | Logbook (Docs)     |
-| `forms.example.com`  | Forms API        | Steward (Forms)    |
+| Subdomain                 | Purpose          | Service            |
+| ------------------------- | ---------------- | ------------------ |
+| `example.com`             | Marketing site   | Foredeck (Website) |
+| `chartroom.example.com`   | Web console      | Chartroom          |
+| `bridge.example.com`      | GraphQL API      | Bridge             |
+| `foghorn.example.com`     | Viewer routing   | Foghorn            |
+| `edge-ingest.example.com` | Stream ingest    | Edge nodes         |
+| `edge-egress.example.com` | Edge pool domain | Edge nodes         |
+| `logbook.example.com`     | Docs site        | Logbook            |
+| `steward.example.com`     | Forms API        | Steward            |
 
-Navigator only manages subdomains for service types that exist in Quartermaster inventory. If you want separate `ingest` or `play` domains, register nodes with those types; otherwise use the `edge` pool.
+Navigator only manages subdomains for service types that exist in Quartermaster inventory. If you want separate `edge-ingest` or `foghorn` domains, register nodes with those types; otherwise use the `edge-egress` pool.
 
 ### Internal Services (Private Network / Mesh)
 
@@ -83,13 +83,55 @@ export COMMODORE_URL=http://10.0.1.10:18001
 export PURSER_URL=http://10.0.1.11:18003
 ```
 
+### Per-Edge A Records
+
+Navigator creates individual A records for each edge node, enabling direct node addressing:
+
+```
+edge-{node_id}.{cluster_slug}.{base_domain}  →  A  →  {node_external_ip}
+```
+
+For example, with cluster slug `production` and base domain `frameworks.network`:
+
+| Record                                      | IP              |
+| ------------------------------------------- | --------------- |
+| `edge-nyc-01.production.frameworks.network` | `203.0.113.10`  |
+| `edge-ams-01.production.frameworks.network` | `198.51.100.20` |
+
+Navigator sanitizes the node ID into a DNS-safe label. Nodes without an external IP are skipped.
+
+### Cluster-Scoped DNS
+
+In multi-cluster deployments, each cluster gets its own set of service subdomains under `{cluster_slug}.{base_domain}`:
+
+| Pattern                     | Purpose                                       |
+| --------------------------- | --------------------------------------------- |
+| `edge-ingest.{slug}.{base}` | RTMP/SRT/WHIP ingest for this cluster's edges |
+| `edge-egress.{slug}.{base}` | Edge pool domain (viewer delivery)            |
+| `foghorn.{slug}.{base}`     | Viewer routing / playback resolution          |
+| `bridge.{slug}.{base}`      | GraphQL API                                   |
+
+Navigator applies smart record logic per subdomain: 0 nodes → records deleted, 1 node → A record, 2+ nodes → load balancer pool with geo-steering.
+
+### Wildcard TLS Certificates
+
+Each cluster uses a wildcard certificate for its subdomain space:
+
+```
+*.{cluster_slug}.{base_domain}
+```
+
+Certificates are issued via ACME DNS-01 challenges through Cloudflare. Navigator manages issuance and renewal.
+
+Once issued, certificates are distributed to edge nodes via **ConfigSeed** — Foghorn pushes TLS bundles to Helmsman over the existing gRPC control stream. Edges do not need direct access to the ACME provider.
+
 ### Tenant Subdomains
 
 Tenant-specific subdomains CNAME to the shared infrastructure:
 
 ```
-tenant1.example.com         → CNAME → play.example.com (or edge.example.com)
-tenant1.ingest.example.com  → CNAME → ingest.example.com
+tenant1.example.com         → CNAME → foghorn.example.com (or edge-egress.example.com)
+tenant1.edge-ingest.example.com  → CNAME → edge-ingest.example.com
 ```
 
 ---

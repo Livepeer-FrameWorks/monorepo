@@ -2,7 +2,7 @@
 
 React wrapper for the FrameWorks player. Resolves endpoints via Gateway or Mist and renders the best available player (WebCodecs, HLS, etc).
 
-**Docs:** `docs.frameworks.network`
+**Docs:** `logbook.frameworks.network`
 
 ## Install
 
@@ -37,7 +37,11 @@ Notes:
 ### Direct MistServer Node (mistUrl)
 
 ```tsx
-<Player contentType="live" contentId="pk_..." options={{ mistUrl: "https://edge.example.com" }} />
+<Player
+  contentType="live"
+  contentId="pk_..."
+  options={{ mistUrl: "https://edge-egress.example.com" }}
+/>
 ```
 
 ### Styles

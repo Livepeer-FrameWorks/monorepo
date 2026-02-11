@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X frameworks/pkg/version.Version=${VERSION:-dev} -X frameworks/pkg/version.GitCommit=${GIT_COMMIT:-unknown}" \
-    -o /forms ./cmd/forms
+    -o /steward ./cmd/steward
 
 FROM alpine:latest
 
@@ -35,7 +35,7 @@ RUN apk --no-cache add ca-certificates tzdata
 
 WORKDIR /app
 
-COPY --from=builder /forms /app/forms
+COPY --from=builder /steward /app/steward
 
 RUN addgroup -g 1000 appuser && \
     adduser -D -u 1000 -G appuser appuser && \
@@ -45,4 +45,4 @@ USER appuser
 
 EXPOSE 18032
 
-CMD ["/app/forms"]
+CMD ["/app/steward"]

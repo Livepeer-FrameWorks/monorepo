@@ -40,7 +40,8 @@ func (*DVRInfo) IsStartDVRResult() {}
 func (*CreatePrivateClusterResponse) IsCreatePrivateClusterResult() {}
 
 // InfrastructureCluster (GraphQL type: Cluster) implements union interfaces
-func (*InfrastructureCluster) IsUpdateClusterResult() {}
+func (*InfrastructureCluster) IsUpdateClusterResult()       {}
+func (*InfrastructureCluster) IsSetPreferredClusterResult() {}
 
 // ClusterInvite implements union interfaces
 func (*ClusterInvite) IsCreateClusterInviteResult() {}

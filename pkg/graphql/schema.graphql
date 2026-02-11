@@ -1256,6 +1256,35 @@ type Mutation {
   ): CreatePrivateClusterResult!
 
   """
+  Create an edge cluster with automatic Foghorn assignment and enrollment token.
+  """
+  createEdgeCluster(
+    """
+    Edge cluster configuration.
+    """
+    input: CreateEdgeClusterInput!
+  ): CreateEdgeClusterResult!
+
+  """
+  Create an enrollment token for an existing cluster.
+  Requires active subscription to the cluster.
+  """
+  createEnrollmentToken(
+    """
+    Cluster to create the token for.
+    """
+    clusterId: ID!
+    """
+    Token display name.
+    """
+    name: String
+    """
+    Time-to-live (e.g. "24h", "7d"). Defaults to 30 days.
+    """
+    ttl: String
+  ): CreateEnrollmentTokenResult!
+
+  """
   Update marketplace settings for a cluster.
   """
   updateClusterMarketplace(
@@ -1336,6 +1365,17 @@ type Mutation {
     """
     reason: String
   ): ClusterSubscriptionResult!
+
+  """
+  Set the tenant's preferred cluster. Must be a subscribed cluster.
+  Changes DNS steering and which ingest/edge URIs appear first.
+  """
+  setPreferredCluster(
+    """
+    The cluster ID to set as preferred.
+    """
+    clusterId: ID!
+  ): SetPreferredClusterResult!
 
   """
   Create a new API token for programmatic access.
@@ -1587,10 +1627,13 @@ union RevokeBootstrapTokenResult = DeleteSuccess | NotFoundError | AuthError
 
 # Cluster Marketplace Result Types
 union CreatePrivateClusterResult = CreatePrivateClusterResponse | ValidationError | AuthError
+union CreateEdgeClusterResult = CreateEdgeClusterResponse | ValidationError | AuthError
+union CreateEnrollmentTokenResult = CreateEnrollmentTokenResponse | ValidationError | AuthError
 union UpdateClusterResult = Cluster | ValidationError | NotFoundError | AuthError
 union CreateClusterInviteResult = ClusterInvite | ValidationError | NotFoundError | AuthError
 union RevokeClusterInviteResult = DeleteSuccess | NotFoundError | AuthError
 union ClusterSubscriptionResult = ClusterSubscription | ValidationError | NotFoundError | AuthError
+union SetPreferredClusterResult = Cluster | ValidationError | NotFoundError | AuthError
 
 # Wallet authentication result types
 union WalletLoginResult = WalletLoginPayload | ValidationError
@@ -2284,6 +2327,13 @@ input CreatePrivateClusterInput {
   "Geographic region for the cluster."
   region: String
   "Short description for marketplace listing."
+  shortDescription: String
+}
+
+input CreateEdgeClusterInput {
+  "Human-readable cluster name."
+  clusterName: String!
+  "Short description."
   shortDescription: String
 }
 
@@ -4613,6 +4663,16 @@ type ClusterInvite {
 # Private cluster creation response
 type CreatePrivateClusterResponse {
   cluster: Cluster!
+  bootstrapToken: BootstrapToken!
+}
+
+type CreateEdgeClusterResponse {
+  cluster: Cluster!
+  bootstrapToken: BootstrapToken!
+  foghornAddr: String!
+}
+
+type CreateEnrollmentTokenResponse {
   bootstrapToken: BootstrapToken!
 }
 

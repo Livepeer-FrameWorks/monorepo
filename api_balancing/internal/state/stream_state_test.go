@@ -279,6 +279,33 @@ func TestMarkNodeDisconnected(t *testing.T) {
 	}
 }
 
+func TestCheckStaleNodes_EvictsDisconnectedAfterThreshold(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+
+	nodeID := "evict-me"
+	sm.TouchNode(nodeID, true)
+	sm.MarkNodeDisconnected(nodeID)
+
+	// Right after disconnect the node should still exist
+	sm.checkStaleNodes()
+	if sm.GetNodeState(nodeID) == nil {
+		t.Fatal("expected node to still exist immediately after disconnect")
+	}
+
+	// Backdate LastUpdate so the node exceeds the removal threshold
+	sm.mu.Lock()
+	if n := sm.nodes[nodeID]; n != nil {
+		n.LastUpdate = time.Now().Add(-(nodeRemovalThreshold + time.Minute))
+	}
+	sm.mu.Unlock()
+
+	sm.checkStaleNodes()
+	if sm.GetNodeState(nodeID) != nil {
+		t.Fatal("expected node to be evicted after exceeding removal threshold")
+	}
+}
+
 func TestSetNodeInfoDoesNotReviveStaleNode(t *testing.T) {
 	sm := NewStreamStateManager()
 	defer sm.Shutdown()
@@ -610,5 +637,50 @@ func TestUpdateTrackListAndOfflineState(t *testing.T) {
 	}
 	if inst.BufferState != "EMPTY" {
 		t.Fatalf("expected instance buffer state EMPTY, got %s", inst.BufferState)
+	}
+}
+
+func TestCanonicalNodeID_TenantPropagation(t *testing.T) {
+	sm := NewStreamStateManager()
+
+	nodeID := "edge-abc-temp"
+	canonicalNodeID := "edge-abc"
+
+	// Simulate Connect: SetNodeInfo creates the nodeID entry (no tenant)
+	sm.SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
+
+	// Simulate Quartermaster resolution: tenant written to canonicalNodeID only
+	sm.SetNodeConnectionInfo(canonicalNodeID, "", "tenantA", "cluster-eu", nil)
+
+	// Heartbeats keep nodeID alive
+	sm.TouchNode(nodeID, true)
+
+	// Bug scenario: nodeID entry has no TenantID
+	sm.mu.RLock()
+	nActive := sm.nodes[nodeID]
+	nCanonical := sm.nodes[canonicalNodeID]
+	sm.mu.RUnlock()
+
+	if nActive == nil {
+		t.Fatal("expected nodeID entry to exist")
+	}
+	if nCanonical == nil {
+		t.Fatal("expected canonicalNodeID entry to exist")
+	}
+	if nCanonical.TenantID != "tenantA" {
+		t.Fatalf("expected canonical TenantID=tenantA, got %q", nCanonical.TenantID)
+	}
+	// Before the fix, this would be empty; after the fix both entries have the tenant.
+	// The fix stamps nodeID too, so simulate that:
+	sm.SetNodeConnectionInfo(nodeID, "", "tenantA", "cluster-eu", nil)
+
+	sm.mu.RLock()
+	nActive = sm.nodes[nodeID]
+	sm.mu.RUnlock()
+	if nActive.TenantID != "tenantA" {
+		t.Fatalf("expected active node TenantID=tenantA, got %q", nActive.TenantID)
+	}
+	if nActive.ClusterID != "cluster-eu" {
+		t.Fatalf("expected active node ClusterID=cluster-eu, got %q", nActive.ClusterID)
 	}
 }

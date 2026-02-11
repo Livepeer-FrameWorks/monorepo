@@ -24,7 +24,7 @@
 --       quartermaster.tenant_cluster_assignments, NOT here. This is BILLING only.
 -- ============================================================================
 
-INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_price, currency, bandwidth_allocation, storage_allocation, compute_allocation, features, support_level, sla_level, metering_enabled, overage_rates, tier_level, is_enterprise) VALUES
+INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_price, currency, bandwidth_allocation, storage_allocation, compute_allocation, features, support_level, sla_level, metering_enabled, overage_rates, tier_level, is_enterprise, is_default_prepaid, is_default_postpaid) VALUES
 
 -- Pay-As-You-Go Tier (prepaid, no included allocations)
 ('payg', 'Pay As You Go', 'Prepaid pay-as-you-go pricing with no included allocations.', 0.00, 'EUR',
@@ -34,7 +34,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "community"}',
 'community', 'none', true,
 '{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00049}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.01}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-0, false),
+0, false, true, false),
 
 -- Free Tier (self-hosted, no overages)
 ('free', 'Free', 'Self-hosted with Livepeer transcoding. Watermarked player, no SLA.', 0.00, 'EUR',
@@ -44,7 +44,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"recording": false, "analytics": true, "api_access": true, "support_level": "community"}',
 'community', 'none', false,
 '{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-1, false),
+1, false, false, true),
 
 -- Supporter Tier (€79/mo)
 ('supporter', 'Supporter', '150K delivered mins, 10 GPU-hrs, hosted LB, custom subdomain. ~100-300 viewers.', 79.00, 'EUR',
@@ -54,7 +54,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "basic"}',
 'basic', 'none', true,
 '{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00049}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.01}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-2, false),
+2, false, false, false),
 
 -- Developer Tier (€249/mo)
 ('developer', 'Developer', '500K delivered mins, 50 GPU-hrs (priority), team features, advanced analytics. ~500-1K viewers.', 249.00, 'EUR',
@@ -64,7 +64,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "priority"}',
 'priority', 'standard', true,
 '{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00047}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.008}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-3, false),
+3, false, false, false),
 
 -- Production Tier (€999/mo)
 ('production', 'Production', '2M delivered mins, 250 GPU-hrs, dedicated capacity, 24/7 support + SLA. ~2-5K viewers.', 999.00, 'EUR',
@@ -74,7 +74,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "enterprise"}',
 'enterprise', 'premium', true,
 '{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00045}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.005}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-4, false),
+4, false, false, false),
 
 -- Enterprise Tier (custom pricing)
 ('enterprise', 'Enterprise', 'Custom capacity, private deployments, dedicated support, custom SLAs. Contact us.', 0.00, 'EUR',
@@ -84,7 +84,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "dedicated"}',
 'dedicated', 'custom', true,
 '{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0}}}',
-5, true)
+5, true, false, false)
 
 ON CONFLICT (tier_name) DO UPDATE SET
     display_name = EXCLUDED.display_name,
@@ -99,4 +99,6 @@ ON CONFLICT (tier_name) DO UPDATE SET
     metering_enabled = EXCLUDED.metering_enabled,
     overage_rates = EXCLUDED.overage_rates,
     tier_level = EXCLUDED.tier_level,
-    is_enterprise = EXCLUDED.is_enterprise;
+    is_enterprise = EXCLUDED.is_enterprise,
+    is_default_prepaid = EXCLUDED.is_default_prepaid,
+    is_default_postpaid = EXCLUDED.is_default_postpaid;

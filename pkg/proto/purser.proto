@@ -183,6 +183,9 @@ message BillingTier {
   optional string stripe_product_id = 21;       // Stripe Product ID
   optional string stripe_price_id_monthly = 22; // Stripe Price ID for monthly billing
   optional string stripe_price_id_yearly = 23;  // Stripe Price ID for yearly billing
+
+  bool is_default_prepaid = 24;
+  bool is_default_postpaid = 25;
 }
 
 // Matches pkg/models/billing.go:BillingFeatures (lines 12-19)
@@ -874,6 +877,11 @@ service PrepaidService {
   // Creates: 1) subscription with billing_model='prepaid', 2) prepaid balance at 0.
   rpc InitializePrepaidAccount(InitializePrepaidAccountRequest) returns (InitializePrepaidAccountResponse);
 
+  // Initialize postpaid account for email registration.
+  // Called by Commodore during Register to provision billing + cluster access.
+  // Resolves the default postpaid tier and subscribes to eligible clusters.
+  rpc InitializePostpaidAccount(InitializePostpaidAccountRequest) returns (InitializePostpaidAccountResponse);
+
   // ===== CARD TOP-UP =====
   // Create a Stripe/Mollie checkout session for prepaid balance top-up
   // Returns checkout URL for user to complete payment
@@ -894,8 +902,9 @@ service PrepaidService {
   rpc GetCryptoTopup(GetCryptoTopupRequest) returns (CryptoTopup);
 
   // ===== PROMOTION FLOW =====
-  // Upgrade from prepaid to postpaid billing after email verification
-  // Existing prepaid balance is carried forward as credit
+  // Upgrade from prepaid to postpaid billing after email verification.
+  // Always resolves to the default postpaid tier; re-evaluates cluster access.
+  // Existing prepaid balance is carried forward as credit.
   rpc PromoteToPaid(PromoteToPaidRequest) returns (PromoteToPaidResponse);
 }
 
@@ -990,6 +999,22 @@ message InitializePrepaidAccountRequest {
 message InitializePrepaidAccountResponse {
   string subscription_id = 1;           // Created subscription UUID
   string balance_id = 2;                // Created prepaid_balance UUID
+  int32 tier_level = 3;
+  repeated string eligible_cluster_ids = 4;
+  string primary_cluster_id = 5;
+}
+
+// Initialize postpaid account for email registration.
+// Resolves default postpaid tier, creates subscription, provisions cluster access.
+message InitializePostpaidAccountRequest {
+  string tenant_id = 1;
+}
+
+message InitializePostpaidAccountResponse {
+  string subscription_id = 1;           // Created subscription UUID
+  int32 tier_level = 2;
+  repeated string eligible_cluster_ids = 3;
+  string primary_cluster_id = 4;
 }
 
 // ============================================================================
@@ -1117,11 +1142,11 @@ message CryptoTopup {
 // PROMOTION FLOW MESSAGES
 // ============================================================================
 
-// Request to upgrade from prepaid to postpaid billing
-// Called after user verifies email and selects a billing tier
+// Request to upgrade from prepaid to postpaid billing.
+// Server always resolves the default postpaid tier; tier_id is reserved/ignored.
 message PromoteToPaidRequest {
   string tenant_id = 1;
-  string tier_id = 2;                  // Selected billing tier UUID
+  string tier_id = 2;                  // Reserved — server resolves default postpaid tier
 }
 
 // Response confirming promotion was successful
@@ -1131,6 +1156,9 @@ message PromoteToPaidResponse {
   string new_billing_model = 3;        // "postpaid" on success
   int64 credit_balance_cents = 4;      // Prepaid balance carried forward as credit
   string subscription_id = 5;          // New subscription ID
+  int32 tier_level = 6;
+  repeated string eligible_cluster_ids = 7;
+  string primary_cluster_id = 8;
 }
 
 // ============================================================================

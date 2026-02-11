@@ -882,8 +882,8 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 	if row[4] != "demo" {
 		t.Fatalf("expected internal_name demo, got %#v", row[4])
 	}
-	if row[18] != "connect" {
-		t.Fatalf("expected event_type connect, got %#v", row[18])
+	if row[20] != "connect" {
+		t.Fatalf("expected event_type connect, got %#v", row[20])
 	}
 }
 
@@ -923,11 +923,11 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[18] != "disconnect" {
-		t.Fatalf("expected event_type disconnect, got %#v", row[18])
+	if row[20] != "disconnect" {
+		t.Fatalf("expected event_type disconnect, got %#v", row[20])
 	}
-	if row[19] != uint32(42) {
-		t.Fatalf("expected session_duration 42, got %#v", row[19])
+	if row[21] != uint32(42) {
+		t.Fatalf("expected session_duration 42, got %#v", row[21])
 	}
 }
 

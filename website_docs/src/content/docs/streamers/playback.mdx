@@ -175,7 +175,7 @@ If you want the player to resolve streams directly from a specific MistServer no
 <Player
   contentType="live"
   contentId="<YOUR_PLAYBACK_ID>"
-  options={{ mistUrl: "https://edge.example.com" }}
+  options={{ mistUrl: "https://edge-egress.example.com" }}
 />
 ```
 
@@ -233,12 +233,12 @@ You can also access DVR recordings and clips directly via URL:
 
 ```bash
 # DVR recording
-https://play.example.com/play/{playbackId}/hls/index.m3u8
-https://play.example.com/play/{playbackId}.mp4
+https://foghorn.example.com/play/{playbackId}/hls/index.m3u8
+https://foghorn.example.com/play/{playbackId}.mp4
 
 # Clip
-https://play.example.com/play/{playbackId}/hls/index.m3u8
-https://play.example.com/play/{playbackId}.mp4
+https://foghorn.example.com/play/{playbackId}/hls/index.m3u8
+https://foghorn.example.com/play/{playbackId}.mp4
 ```
 
 Find these identifiers in the FrameWorks dashboard under **Recordings** and **Clips**. Each item shows its playback ID and provides copy buttons for primary protocol URLs.
@@ -553,9 +553,20 @@ All three content types use the same unified `/play/{id}` path through Foghorn.
 
 :::tip[When to use universal URLs vs. direct URLs]
 
-- **Universal URLs** (`play.example.com/play/...`) - Best for sharing with viewers. Handles geo-routing automatically.
+- **Universal URLs** (`foghorn.example.com/play/...`) - Best for sharing with viewers. Handles geo-routing automatically.
 - **Direct URLs** (`edge-X.example.com/hls/...`) - Use when you've already resolved the optimal edge node (e.g., via the FrameWorks Player or GraphQL API).
   :::
+
+## Multi-Cluster Playback
+
+In multi-cluster deployments, each cluster has its own Foghorn and set of edge nodes. When a viewer requests a stream, Foghorn handles cross-cluster routing transparently:
+
+1. **Local cluster has the stream** — viewer is routed to the nearest local edge (normal path)
+2. **Remote cluster has the stream** — Foghorn either arranges an origin-pull (DTSC replication to a local edge for subsequent viewers) or redirects the viewer to the remote cluster's edge via HTTP 307
+
+The player SDK handles this transparently — `gatewayUrl` resolves to the correct Foghorn for the viewer's region, and any redirects are followed automatically.
+
+Cluster-scoped playback domains follow the pattern `foghorn.{cluster_slug}.{base_domain}`. The `CreateStreamResponse` from the GraphQL API includes the cluster-scoped play domain so integrators can construct direct URLs if needed.
 
 ## Access Control
 

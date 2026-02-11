@@ -35,7 +35,7 @@ const conversations = [
       {
         role: "assistant",
         badge: "verified",
-        text: `In OBS go to Settings → Stream → Custom.\n\nServer: rtmp://ingest.${domain}/live\nStream Key: sk_live_████████████\n\nHit Start Streaming and you're live.`,
+        text: `In OBS go to Settings → Stream → Custom.\n\nServer: rtmp://edge-ingest.${domain}/live\nStream Key: sk_live_████████████\n\nHit Start Streaming and you're live.`,
         code: true,
       },
       {

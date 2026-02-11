@@ -1124,31 +1124,37 @@ func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page 
 
 // DoCreateStripeCheckout creates a Stripe Checkout Session for subscription setup
 func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPeriod, successURL, cancelURL string) (model.StripeCheckoutResult, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic Stripe checkout")
-		return &model.StripeCheckoutSession{
-			SessionID:   "cs_demo_" + time.Now().Format("20060102150405"),
-			CheckoutURL: "https://checkout.stripe.com/demo",
-		}, nil
-	}
-
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return &model.AuthError{Message: "Authentication required"}, nil
-	}
-
-	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).Info("Creating Stripe checkout session")
-
-	resp, err := r.Clients.Purser.CreateStripeCheckoutSession(ctx, tenantID, tierID, billingPeriod, successURL, cancelURL)
-	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe checkout")
-		return &model.ValidationError{Message: "Failed to create checkout session: " + err.Error()}, nil
-	}
-
-	return &model.StripeCheckoutSession{
-		SessionID:   resp.SessionId,
-		CheckoutURL: resp.CheckoutUrl,
+	// Paid tier subscriptions are locked — re-enable when tiers are self-service
+	return &model.ValidationError{
+		Message: "Paid tier subscriptions are not currently available",
+		Code:    ptrStr("TIER_LOCKED"),
 	}, nil
+
+	// if middleware.IsDemoMode(ctx) {
+	// 	r.Logger.Debug("Demo mode: returning synthetic Stripe checkout")
+	// 	return &model.StripeCheckoutSession{
+	// 		SessionID:   "cs_demo_" + time.Now().Format("20060102150405"),
+	// 		CheckoutURL: "https://checkout.stripe.com/demo",
+	// 	}, nil
+	// }
+	//
+	// tenantID := ctxkeys.GetTenantID(ctx)
+	// if tenantID == "" {
+	// 	return &model.AuthError{Message: "Authentication required"}, nil
+	// }
+	//
+	// r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).Info("Creating Stripe checkout session")
+	//
+	// resp, err := r.Clients.Purser.CreateStripeCheckoutSession(ctx, tenantID, tierID, billingPeriod, successURL, cancelURL)
+	// if err != nil {
+	// 	r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe checkout")
+	// 	return &model.ValidationError{Message: "Failed to create checkout session: " + err.Error()}, nil
+	// }
+	//
+	// return &model.StripeCheckoutSession{
+	// 	SessionID:   resp.SessionId,
+	// 	CheckoutURL: resp.CheckoutUrl,
+	// }, nil
 }
 
 // DoCreateStripeBillingPortal creates a Stripe Billing Portal session
@@ -1184,107 +1190,119 @@ func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL st
 
 // DoCreateMollieFirstPayment creates a Mollie first payment to establish a mandate
 func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, method, redirectURL string) (model.MollieFirstPaymentResult, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic Mollie first payment")
-		ts := time.Now().Format("20060102150405")
-		return &model.MollieFirstPayment{
-			PaymentID:  "tr_demo" + ts[:8],
-			CustomerID: "cst_demo" + ts[:8],
-			PaymentURL: "https://www.mollie.com/demo/checkout",
-		}, nil
-	}
-
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return &model.AuthError{Message: "Authentication required"}, nil
-	}
-
-	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("method", method).Info("Creating Mollie first payment")
-
-	resp, err := r.Clients.Purser.CreateMollieFirstPayment(ctx, tenantID, tierID, method, redirectURL)
-	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie first payment")
-		return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
-	}
-
-	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
-		EventType:    apiEventPaymentCreated,
-		ResourceType: "payment",
-		ResourceId:   resp.PaymentId,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
-				TenantId:  tenantID,
-				PaymentId: resp.PaymentId,
-				Provider:  "mollie",
-			},
-		},
-		UserId: userID,
-	})
-
-	return &model.MollieFirstPayment{
-		PaymentID:  resp.PaymentId,
-		CustomerID: resp.MollieCustomerId,
-		PaymentURL: resp.PaymentUrl,
+	// Paid tier subscriptions are locked — re-enable when tiers are self-service
+	return &model.ValidationError{
+		Message: "Paid tier subscriptions are not currently available",
+		Code:    ptrStr("TIER_LOCKED"),
 	}, nil
+
+	// if middleware.IsDemoMode(ctx) {
+	// 	r.Logger.Debug("Demo mode: returning synthetic Mollie first payment")
+	// 	ts := time.Now().Format("20060102150405")
+	// 	return &model.MollieFirstPayment{
+	// 		PaymentID:  "tr_demo" + ts[:8],
+	// 		CustomerID: "cst_demo" + ts[:8],
+	// 		PaymentURL: "https://www.mollie.com/demo/checkout",
+	// 	}, nil
+	// }
+	//
+	// tenantID := ctxkeys.GetTenantID(ctx)
+	// if tenantID == "" {
+	// 	return &model.AuthError{Message: "Authentication required"}, nil
+	// }
+	//
+	// r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("method", method).Info("Creating Mollie first payment")
+	//
+	// resp, err := r.Clients.Purser.CreateMollieFirstPayment(ctx, tenantID, tierID, method, redirectURL)
+	// if err != nil {
+	// 	r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie first payment")
+	// 	return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
+	// }
+	//
+	// userID := userIDFromContext(ctx)
+	// r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	// 	EventType:    apiEventPaymentCreated,
+	// 	ResourceType: "payment",
+	// 	ResourceId:   resp.PaymentId,
+	// 	Payload: &pb.ServiceEvent_BillingEvent{
+	// 		BillingEvent: &pb.BillingEvent{
+	// 			TenantId:  tenantID,
+	// 			PaymentId: resp.PaymentId,
+	// 			Provider:  "mollie",
+	// 		},
+	// 	},
+	// 	UserId: userID,
+	// })
+	//
+	// return &model.MollieFirstPayment{
+	// 	PaymentID:  resp.PaymentId,
+	// 	CustomerID: resp.MollieCustomerId,
+	// 	PaymentURL: resp.PaymentUrl,
+	// }, nil
 }
 
 // DoCreateMollieSubscription creates a Mollie subscription after mandate is valid
 func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, mandateID string, description *string) (model.MollieSubscriptionResult, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic Mollie subscription")
-		ts := time.Now().Format("20060102150405")
-		return &model.MollieSubscription{
-			SubscriptionID:  "sub_demo" + ts[:8],
-			Status:          "active",
-			NextPaymentDate: nil,
-		}, nil
-	}
-
-	tenantID := ctxkeys.GetTenantID(ctx)
-	if tenantID == "" {
-		return &model.AuthError{Message: "Authentication required"}, nil
-	}
-
-	desc := ""
-	if description != nil {
-		desc = *description
-	}
-
-	r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("mandate_id", mandateID).Info("Creating Mollie subscription")
-
-	resp, err := r.Clients.Purser.CreateMollieSubscription(ctx, tenantID, tierID, mandateID, desc)
-	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie subscription")
-		return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
-	}
-
-	userID := userIDFromContext(ctx)
-	r.sendServiceEvent(ctx, &pb.ServiceEvent{
-		EventType:    apiEventSubscriptionCreated,
-		ResourceType: "subscription",
-		ResourceId:   resp.SubscriptionId,
-		Payload: &pb.ServiceEvent_BillingEvent{
-			BillingEvent: &pb.BillingEvent{
-				TenantId:       tenantID,
-				SubscriptionId: resp.SubscriptionId,
-				Provider:       "mollie",
-				Status:         resp.Status,
-			},
-		},
-		UserId: userID,
-	})
-
-	var nextPaymentDate *string
-	if resp.NextPaymentDate != "" {
-		nextPaymentDate = &resp.NextPaymentDate
-	}
-
-	return &model.MollieSubscription{
-		SubscriptionID:  resp.SubscriptionId,
-		Status:          resp.Status,
-		NextPaymentDate: nextPaymentDate,
+	// Paid tier subscriptions are locked — re-enable when tiers are self-service
+	return &model.ValidationError{
+		Message: "Paid tier subscriptions are not currently available",
+		Code:    ptrStr("TIER_LOCKED"),
 	}, nil
+
+	// if middleware.IsDemoMode(ctx) {
+	// 	r.Logger.Debug("Demo mode: returning synthetic Mollie subscription")
+	// 	ts := time.Now().Format("20060102150405")
+	// 	return &model.MollieSubscription{
+	// 		SubscriptionID:  "sub_demo" + ts[:8],
+	// 		Status:          "active",
+	// 		NextPaymentDate: nil,
+	// 	}, nil
+	// }
+	//
+	// tenantID := ctxkeys.GetTenantID(ctx)
+	// if tenantID == "" {
+	// 	return &model.AuthError{Message: "Authentication required"}, nil
+	// }
+	//
+	// desc := ""
+	// if description != nil {
+	// 	desc = *description
+	// }
+	//
+	// r.Logger.WithField("tenant_id", tenantID).WithField("tier_id", tierID).WithField("mandate_id", mandateID).Info("Creating Mollie subscription")
+	//
+	// resp, err := r.Clients.Purser.CreateMollieSubscription(ctx, tenantID, tierID, mandateID, desc)
+	// if err != nil {
+	// 	r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie subscription")
+	// 	return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
+	// }
+	//
+	// userID := userIDFromContext(ctx)
+	// r.sendServiceEvent(ctx, &pb.ServiceEvent{
+	// 	EventType:    apiEventSubscriptionCreated,
+	// 	ResourceType: "subscription",
+	// 	ResourceId:   resp.SubscriptionId,
+	// 	Payload: &pb.ServiceEvent_BillingEvent{
+	// 		BillingEvent: &pb.BillingEvent{
+	// 			TenantId:       tenantID,
+	// 			SubscriptionId: resp.SubscriptionId,
+	// 			Provider:       "mollie",
+	// 			Status:         resp.Status,
+	// 		},
+	// 	},
+	// 	UserId: userID,
+	// })
+	//
+	// var nextPaymentDate *string
+	// if resp.NextPaymentDate != "" {
+	// 	nextPaymentDate = &resp.NextPaymentDate
+	// }
+	//
+	// return &model.MollieSubscription{
+	// 	SubscriptionID:  resp.SubscriptionId,
+	// 	Status:          resp.Status,
+	// 	NextPaymentDate: nextPaymentDate,
+	// }, nil
 }
 
 // DoListMollieMandates lists Mollie mandates for the current tenant

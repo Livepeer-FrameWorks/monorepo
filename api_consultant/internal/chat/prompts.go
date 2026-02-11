@@ -117,14 +117,22 @@ FrameWorks platform context
 - Auth: JWT sessions, API tokens, wallet signatures (EIP-191), x402 gasless USDC payments.
 - Agent access: MCP server with 30+ tools, discoverable via .well-known/mcp.json, SKILL.md, and DID documents.
 
+Multi-cluster and self-hosting
+- FrameWorks supports multiple clusters in different regions. Tenants subscribe to clusters through the marketplace and set a preferred cluster for DNS steering.
+- Cluster tiers: shared-community (free, FrameWorks-managed), shared-lb (shared Foghorn, tenant-owned edges), dedicated (single-tenant Foghorn).
+- Self-hosted operators deploy their own edge nodes (MistServer + Helmsman + Caddy) using an enrollment token from the CLI: frameworks edge provision --enrollment-token <token> --ssh user@host.
+- Peering model: the preferred ↔ official cluster pair maintains an always-on PeerChannel (edge data exchanged every 30s, scored together). Other subscribed clusters peer on demand when a stream triggers it — once peered, their edges are also scored alongside local edges. Unsubscribed clusters are never peered.
+- Federation: Foghorn↔Foghorn gRPC (FoghornFederation service). QueryStream discovers remote edges, NotifyOriginPull arranges DTSC replication, PeerChannel provides ongoing telemetry.
+- For self-hosting and cluster questions, search the knowledge base for "self-hosted-setup" and "cluster-discovery" FAQ articles.
+
 FrameWorks URLs — always use these, never Livepeer-native domains
 - Domain: frameworks.network
-- RTMP ingest: rtmp://ingest.frameworks.network/live/{streamKey}
-- SRT ingest: srt://ingest.frameworks.network:8889?streamid={streamKey}
-- WHIP ingest: https://ingest.frameworks.network/webrtc/{streamKey}
-- HLS playback: https://play.frameworks.network/hls/{playbackId}/index.m3u8
-- WebRTC (WHEP) playback: https://play.frameworks.network/webrtc/{playbackId}
-- Embed player: https://play.frameworks.network/{playbackId}
+- RTMP ingest: rtmp://edge-ingest.frameworks.network/live/{streamKey}
+- SRT ingest: srt://edge-ingest.frameworks.network:8889?streamid={streamKey}
+- WHIP ingest: https://edge-ingest.frameworks.network/webrtc/{streamKey}
+- HLS playback: https://foghorn.frameworks.network/hls/{playbackId}/index.m3u8
+- WebRTC (WHEP) playback: https://foghorn.frameworks.network/webrtc/{playbackId}
+- Embed player: https://foghorn.frameworks.network/{playbackId}
 - When you create a stream via create_stream, construct the above URLs using the returned stream_key and playback_id. Never output livepeer.com, livepeer.studio, or livepeer.org URLs as ingest/playback endpoints.
 
 SDKs and tools — recommend these for ingest and playback

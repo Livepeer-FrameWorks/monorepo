@@ -362,7 +362,7 @@ jobs:
             }
           - { name: signalman, context: api_realtime, cmd_path: ./cmd/signalman, cgo: false }
           - { name: helmsman, context: api_sidecar, cmd_path: ./cmd/helmsman, cgo: false }
-          - { name: steward, context: api_forms, cmd_path: ./cmd/forms, cgo: false }
+          - { name: steward, context: api_forms, cmd_path: ./cmd/steward, cgo: false }
           - { name: navigator, context: api_dns, cmd_path: ./cmd/navigator, cgo: false }
           - { name: deckhand, context: api_ticketing, cmd_path: ./cmd/deckhand, cgo: false }
           - { name: privateer, context: api_mesh, cmd_path: ./cmd/privateer, cgo: false }

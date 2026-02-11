@@ -132,17 +132,10 @@ func normalizeCaddyRoutes(routes map[string]int) map[string]int {
 		normalized[key] = value
 	}
 
-	aliases := map[string]string{
-		"foredeck":  "website",
-		"chartroom": "webapp",
-		"logbook":   "docs",
-		"steward":   "forms",
-	}
-
-	for from, to := range aliases {
-		if port, ok := routes[from]; ok {
-			normalized[to] = port
-		}
+	// "foredeck" is the marketing site service name; the Caddyfile
+	// template uses .Routes.website for the root-domain block.
+	if port, ok := routes["foredeck"]; ok {
+		normalized["website"] = port
 	}
 
 	return normalized

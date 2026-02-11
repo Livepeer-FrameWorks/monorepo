@@ -6,7 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
-const ResourceMetadataURL = "https://api.frameworks.network/.well-known/oauth-protected-resource"
+const ResourceMetadataURL = "https://bridge.frameworks.network/.well-known/oauth-protected-resource"
 
 func AuthRequired() error {
 	data, _ := json.Marshal(map[string]any{

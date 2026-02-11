@@ -642,6 +642,11 @@ const (
 	ClusterService_ApproveClusterSubscription_FullMethodName = "/quartermaster.ClusterService/ApproveClusterSubscription"
 	ClusterService_RejectClusterSubscription_FullMethodName  = "/quartermaster.ClusterService/RejectClusterSubscription"
 	ClusterService_GetClusterMetadataBatch_FullMethodName    = "/quartermaster.ClusterService/GetClusterMetadataBatch"
+	ClusterService_ListPeers_FullMethodName                  = "/quartermaster.ClusterService/ListPeers"
+	ClusterService_AssignFoghornToCluster_FullMethodName     = "/quartermaster.ClusterService/AssignFoghornToCluster"
+	ClusterService_UnassignFoghornFromCluster_FullMethodName = "/quartermaster.ClusterService/UnassignFoghornFromCluster"
+	ClusterService_EnableSelfHosting_FullMethodName          = "/quartermaster.ClusterService/EnableSelfHosting"
+	ClusterService_CreateEnrollmentToken_FullMethodName      = "/quartermaster.ClusterService/CreateEnrollmentToken"
 )
 
 // ClusterServiceClient is the client API for ClusterService service.
@@ -689,6 +694,20 @@ type ClusterServiceClient interface {
 	RejectClusterSubscription(ctx context.Context, in *RejectClusterSubscriptionRequest, opts ...grpc.CallOption) (*ClusterSubscription, error)
 	// Batch metadata lookup for Gateway enrichment (used by Purser marketplace flow)
 	GetClusterMetadataBatch(ctx context.Context, in *GetClusterMetadataBatchRequest, opts ...grpc.CallOption) (*GetClusterMetadataBatchResponse, error)
+	// ListPeers returns clusters that share at least one tenant with the requesting cluster.
+	// Used by Foghorn federation to discover peers for cross-cluster stream routing.
+	ListPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (*ListPeersResponse, error)
+	// Assign Foghorn instance(s) to a cluster (many-to-many).
+	// Supports assigning specific instances or picking N from pool.
+	AssignFoghornToCluster(ctx context.Context, in *AssignFoghornToClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Remove Foghorn instance(s) from a cluster assignment.
+	UnassignFoghornFromCluster(ctx context.Context, in *UnassignFoghornFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Enable self-hosting: creates tenant's private cluster, assigns to shared Foghorn,
+	// and returns an enrollment token for edge provisioning.
+	EnableSelfHosting(ctx context.Context, in *EnableSelfHostingRequest, opts ...grpc.CallOption) (*EnableSelfHostingResponse, error)
+	// Create an enrollment token for a cluster the tenant is subscribed to.
+	// Tenant-facing alternative to admin-only CreateBootstrapToken.
+	CreateEnrollmentToken(ctx context.Context, in *CreateEnrollmentTokenRequest, opts ...grpc.CallOption) (*CreateBootstrapTokenResponse, error)
 }
 
 type clusterServiceClient struct {
@@ -939,6 +958,56 @@ func (c *clusterServiceClient) GetClusterMetadataBatch(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *clusterServiceClient) ListPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (*ListPeersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPeersResponse)
+	err := c.cc.Invoke(ctx, ClusterService_ListPeers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) AssignFoghornToCluster(ctx context.Context, in *AssignFoghornToClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ClusterService_AssignFoghornToCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) UnassignFoghornFromCluster(ctx context.Context, in *UnassignFoghornFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ClusterService_UnassignFoghornFromCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) EnableSelfHosting(ctx context.Context, in *EnableSelfHostingRequest, opts ...grpc.CallOption) (*EnableSelfHostingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnableSelfHostingResponse)
+	err := c.cc.Invoke(ctx, ClusterService_EnableSelfHosting_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) CreateEnrollmentToken(ctx context.Context, in *CreateEnrollmentTokenRequest, opts ...grpc.CallOption) (*CreateBootstrapTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateBootstrapTokenResponse)
+	err := c.cc.Invoke(ctx, ClusterService_CreateEnrollmentToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ClusterServiceServer is the server API for ClusterService service.
 // All implementations must embed UnimplementedClusterServiceServer
 // for forward compatibility.
@@ -984,6 +1053,20 @@ type ClusterServiceServer interface {
 	RejectClusterSubscription(context.Context, *RejectClusterSubscriptionRequest) (*ClusterSubscription, error)
 	// Batch metadata lookup for Gateway enrichment (used by Purser marketplace flow)
 	GetClusterMetadataBatch(context.Context, *GetClusterMetadataBatchRequest) (*GetClusterMetadataBatchResponse, error)
+	// ListPeers returns clusters that share at least one tenant with the requesting cluster.
+	// Used by Foghorn federation to discover peers for cross-cluster stream routing.
+	ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error)
+	// Assign Foghorn instance(s) to a cluster (many-to-many).
+	// Supports assigning specific instances or picking N from pool.
+	AssignFoghornToCluster(context.Context, *AssignFoghornToClusterRequest) (*emptypb.Empty, error)
+	// Remove Foghorn instance(s) from a cluster assignment.
+	UnassignFoghornFromCluster(context.Context, *UnassignFoghornFromClusterRequest) (*emptypb.Empty, error)
+	// Enable self-hosting: creates tenant's private cluster, assigns to shared Foghorn,
+	// and returns an enrollment token for edge provisioning.
+	EnableSelfHosting(context.Context, *EnableSelfHostingRequest) (*EnableSelfHostingResponse, error)
+	// Create an enrollment token for a cluster the tenant is subscribed to.
+	// Tenant-facing alternative to admin-only CreateBootstrapToken.
+	CreateEnrollmentToken(context.Context, *CreateEnrollmentTokenRequest) (*CreateBootstrapTokenResponse, error)
 	mustEmbedUnimplementedClusterServiceServer()
 }
 
@@ -1065,6 +1148,21 @@ func (UnimplementedClusterServiceServer) RejectClusterSubscription(context.Conte
 }
 func (UnimplementedClusterServiceServer) GetClusterMetadataBatch(context.Context, *GetClusterMetadataBatchRequest) (*GetClusterMetadataBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterMetadataBatch not implemented")
+}
+func (UnimplementedClusterServiceServer) ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPeers not implemented")
+}
+func (UnimplementedClusterServiceServer) AssignFoghornToCluster(context.Context, *AssignFoghornToClusterRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method AssignFoghornToCluster not implemented")
+}
+func (UnimplementedClusterServiceServer) UnassignFoghornFromCluster(context.Context, *UnassignFoghornFromClusterRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnassignFoghornFromCluster not implemented")
+}
+func (UnimplementedClusterServiceServer) EnableSelfHosting(context.Context, *EnableSelfHostingRequest) (*EnableSelfHostingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnableSelfHosting not implemented")
+}
+func (UnimplementedClusterServiceServer) CreateEnrollmentToken(context.Context, *CreateEnrollmentTokenRequest) (*CreateBootstrapTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateEnrollmentToken not implemented")
 }
 func (UnimplementedClusterServiceServer) mustEmbedUnimplementedClusterServiceServer() {}
 func (UnimplementedClusterServiceServer) testEmbeddedByValue()                        {}
@@ -1519,6 +1617,96 @@ func _ClusterService_GetClusterMetadataBatch_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClusterService_ListPeers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPeersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ListPeers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ListPeers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ListPeers(ctx, req.(*ListPeersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_AssignFoghornToCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssignFoghornToClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).AssignFoghornToCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_AssignFoghornToCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).AssignFoghornToCluster(ctx, req.(*AssignFoghornToClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_UnassignFoghornFromCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnassignFoghornFromClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).UnassignFoghornFromCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_UnassignFoghornFromCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).UnassignFoghornFromCluster(ctx, req.(*UnassignFoghornFromClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_EnableSelfHosting_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnableSelfHostingRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).EnableSelfHosting(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_EnableSelfHosting_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).EnableSelfHosting(ctx, req.(*EnableSelfHostingRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_CreateEnrollmentToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateEnrollmentTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).CreateEnrollmentToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_CreateEnrollmentToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).CreateEnrollmentToken(ctx, req.(*CreateEnrollmentTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ClusterService_ServiceDesc is the grpc.ServiceDesc for ClusterService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1621,6 +1809,26 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetClusterMetadataBatch",
 			Handler:    _ClusterService_GetClusterMetadataBatch_Handler,
+		},
+		{
+			MethodName: "ListPeers",
+			Handler:    _ClusterService_ListPeers_Handler,
+		},
+		{
+			MethodName: "AssignFoghornToCluster",
+			Handler:    _ClusterService_AssignFoghornToCluster_Handler,
+		},
+		{
+			MethodName: "UnassignFoghornFromCluster",
+			Handler:    _ClusterService_UnassignFoghornFromCluster_Handler,
+		},
+		{
+			MethodName: "EnableSelfHosting",
+			Handler:    _ClusterService_EnableSelfHosting_Handler,
+		},
+		{
+			MethodName: "CreateEnrollmentToken",
+			Handler:    _ClusterService_CreateEnrollmentToken_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -2020,9 +2228,13 @@ const (
 	BootstrapService_BootstrapInfrastructureNode_FullMethodName = "/quartermaster.BootstrapService/BootstrapInfrastructureNode"
 	BootstrapService_BootstrapService_FullMethodName            = "/quartermaster.BootstrapService/BootstrapService"
 	BootstrapService_DiscoverServices_FullMethodName            = "/quartermaster.BootstrapService/DiscoverServices"
+	BootstrapService_GetFoghornPoolStatus_FullMethodName        = "/quartermaster.BootstrapService/GetFoghornPoolStatus"
+	BootstrapService_AddToFoghornPool_FullMethodName            = "/quartermaster.BootstrapService/AddToFoghornPool"
+	BootstrapService_DrainFoghornInstance_FullMethodName        = "/quartermaster.BootstrapService/DrainFoghornInstance"
 	BootstrapService_CreateBootstrapToken_FullMethodName        = "/quartermaster.BootstrapService/CreateBootstrapToken"
 	BootstrapService_ListBootstrapTokens_FullMethodName         = "/quartermaster.BootstrapService/ListBootstrapTokens"
 	BootstrapService_RevokeBootstrapToken_FullMethodName        = "/quartermaster.BootstrapService/RevokeBootstrapToken"
+	BootstrapService_ValidateBootstrapToken_FullMethodName      = "/quartermaster.BootstrapService/ValidateBootstrapToken"
 )
 
 // BootstrapServiceClient is the client API for BootstrapService service.
@@ -2041,10 +2253,15 @@ type BootstrapServiceClient interface {
 	BootstrapService(ctx context.Context, in *BootstrapServiceRequest, opts ...grpc.CallOption) (*BootstrapServiceResponse, error)
 	// Service discovery - find instances of a service type
 	DiscoverServices(ctx context.Context, in *ServiceDiscoveryRequest, opts ...grpc.CallOption) (*ServiceDiscoveryResponse, error)
-	// Create/list bootstrap tokens
+	// Foghorn pool management
+	GetFoghornPoolStatus(ctx context.Context, in *GetFoghornPoolStatusRequest, opts ...grpc.CallOption) (*GetFoghornPoolStatusResponse, error)
+	AddToFoghornPool(ctx context.Context, in *AddToFoghornPoolRequest, opts ...grpc.CallOption) (*AddToFoghornPoolResponse, error)
+	DrainFoghornInstance(ctx context.Context, in *DrainFoghornInstanceRequest, opts ...grpc.CallOption) (*DrainFoghornInstanceResponse, error)
+	// Create/list/validate bootstrap tokens
 	CreateBootstrapToken(ctx context.Context, in *CreateBootstrapTokenRequest, opts ...grpc.CallOption) (*CreateBootstrapTokenResponse, error)
 	ListBootstrapTokens(ctx context.Context, in *ListBootstrapTokensRequest, opts ...grpc.CallOption) (*ListBootstrapTokensResponse, error)
 	RevokeBootstrapToken(ctx context.Context, in *RevokeBootstrapTokenRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ValidateBootstrapToken(ctx context.Context, in *ValidateBootstrapTokenRequest, opts ...grpc.CallOption) (*ValidateBootstrapTokenResponse, error)
 }
 
 type bootstrapServiceClient struct {
@@ -2095,6 +2312,36 @@ func (c *bootstrapServiceClient) DiscoverServices(ctx context.Context, in *Servi
 	return out, nil
 }
 
+func (c *bootstrapServiceClient) GetFoghornPoolStatus(ctx context.Context, in *GetFoghornPoolStatusRequest, opts ...grpc.CallOption) (*GetFoghornPoolStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFoghornPoolStatusResponse)
+	err := c.cc.Invoke(ctx, BootstrapService_GetFoghornPoolStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bootstrapServiceClient) AddToFoghornPool(ctx context.Context, in *AddToFoghornPoolRequest, opts ...grpc.CallOption) (*AddToFoghornPoolResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddToFoghornPoolResponse)
+	err := c.cc.Invoke(ctx, BootstrapService_AddToFoghornPool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bootstrapServiceClient) DrainFoghornInstance(ctx context.Context, in *DrainFoghornInstanceRequest, opts ...grpc.CallOption) (*DrainFoghornInstanceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DrainFoghornInstanceResponse)
+	err := c.cc.Invoke(ctx, BootstrapService_DrainFoghornInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *bootstrapServiceClient) CreateBootstrapToken(ctx context.Context, in *CreateBootstrapTokenRequest, opts ...grpc.CallOption) (*CreateBootstrapTokenResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateBootstrapTokenResponse)
@@ -2125,6 +2372,16 @@ func (c *bootstrapServiceClient) RevokeBootstrapToken(ctx context.Context, in *R
 	return out, nil
 }
 
+func (c *bootstrapServiceClient) ValidateBootstrapToken(ctx context.Context, in *ValidateBootstrapTokenRequest, opts ...grpc.CallOption) (*ValidateBootstrapTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateBootstrapTokenResponse)
+	err := c.cc.Invoke(ctx, BootstrapService_ValidateBootstrapToken_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BootstrapServiceServer is the server API for BootstrapService service.
 // All implementations must embed UnimplementedBootstrapServiceServer
 // for forward compatibility.
@@ -2141,10 +2398,15 @@ type BootstrapServiceServer interface {
 	BootstrapService(context.Context, *BootstrapServiceRequest) (*BootstrapServiceResponse, error)
 	// Service discovery - find instances of a service type
 	DiscoverServices(context.Context, *ServiceDiscoveryRequest) (*ServiceDiscoveryResponse, error)
-	// Create/list bootstrap tokens
+	// Foghorn pool management
+	GetFoghornPoolStatus(context.Context, *GetFoghornPoolStatusRequest) (*GetFoghornPoolStatusResponse, error)
+	AddToFoghornPool(context.Context, *AddToFoghornPoolRequest) (*AddToFoghornPoolResponse, error)
+	DrainFoghornInstance(context.Context, *DrainFoghornInstanceRequest) (*DrainFoghornInstanceResponse, error)
+	// Create/list/validate bootstrap tokens
 	CreateBootstrapToken(context.Context, *CreateBootstrapTokenRequest) (*CreateBootstrapTokenResponse, error)
 	ListBootstrapTokens(context.Context, *ListBootstrapTokensRequest) (*ListBootstrapTokensResponse, error)
 	RevokeBootstrapToken(context.Context, *RevokeBootstrapTokenRequest) (*emptypb.Empty, error)
+	ValidateBootstrapToken(context.Context, *ValidateBootstrapTokenRequest) (*ValidateBootstrapTokenResponse, error)
 	mustEmbedUnimplementedBootstrapServiceServer()
 }
 
@@ -2167,6 +2429,15 @@ func (UnimplementedBootstrapServiceServer) BootstrapService(context.Context, *Bo
 func (UnimplementedBootstrapServiceServer) DiscoverServices(context.Context, *ServiceDiscoveryRequest) (*ServiceDiscoveryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DiscoverServices not implemented")
 }
+func (UnimplementedBootstrapServiceServer) GetFoghornPoolStatus(context.Context, *GetFoghornPoolStatusRequest) (*GetFoghornPoolStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetFoghornPoolStatus not implemented")
+}
+func (UnimplementedBootstrapServiceServer) AddToFoghornPool(context.Context, *AddToFoghornPoolRequest) (*AddToFoghornPoolResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddToFoghornPool not implemented")
+}
+func (UnimplementedBootstrapServiceServer) DrainFoghornInstance(context.Context, *DrainFoghornInstanceRequest) (*DrainFoghornInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DrainFoghornInstance not implemented")
+}
 func (UnimplementedBootstrapServiceServer) CreateBootstrapToken(context.Context, *CreateBootstrapTokenRequest) (*CreateBootstrapTokenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateBootstrapToken not implemented")
 }
@@ -2175,6 +2446,9 @@ func (UnimplementedBootstrapServiceServer) ListBootstrapTokens(context.Context, 
 }
 func (UnimplementedBootstrapServiceServer) RevokeBootstrapToken(context.Context, *RevokeBootstrapTokenRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method RevokeBootstrapToken not implemented")
+}
+func (UnimplementedBootstrapServiceServer) ValidateBootstrapToken(context.Context, *ValidateBootstrapTokenRequest) (*ValidateBootstrapTokenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateBootstrapToken not implemented")
 }
 func (UnimplementedBootstrapServiceServer) mustEmbedUnimplementedBootstrapServiceServer() {}
 func (UnimplementedBootstrapServiceServer) testEmbeddedByValue()                          {}
@@ -2269,6 +2543,60 @@ func _BootstrapService_DiscoverServices_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BootstrapService_GetFoghornPoolStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFoghornPoolStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BootstrapServiceServer).GetFoghornPoolStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BootstrapService_GetFoghornPoolStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BootstrapServiceServer).GetFoghornPoolStatus(ctx, req.(*GetFoghornPoolStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BootstrapService_AddToFoghornPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddToFoghornPoolRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BootstrapServiceServer).AddToFoghornPool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BootstrapService_AddToFoghornPool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BootstrapServiceServer).AddToFoghornPool(ctx, req.(*AddToFoghornPoolRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BootstrapService_DrainFoghornInstance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DrainFoghornInstanceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BootstrapServiceServer).DrainFoghornInstance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BootstrapService_DrainFoghornInstance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BootstrapServiceServer).DrainFoghornInstance(ctx, req.(*DrainFoghornInstanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BootstrapService_CreateBootstrapToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateBootstrapTokenRequest)
 	if err := dec(in); err != nil {
@@ -2323,6 +2651,24 @@ func _BootstrapService_RevokeBootstrapToken_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BootstrapService_ValidateBootstrapToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateBootstrapTokenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BootstrapServiceServer).ValidateBootstrapToken(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BootstrapService_ValidateBootstrapToken_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BootstrapServiceServer).ValidateBootstrapToken(ctx, req.(*ValidateBootstrapTokenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BootstrapService_ServiceDesc is the grpc.ServiceDesc for BootstrapService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2347,6 +2693,18 @@ var BootstrapService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BootstrapService_DiscoverServices_Handler,
 		},
 		{
+			MethodName: "GetFoghornPoolStatus",
+			Handler:    _BootstrapService_GetFoghornPoolStatus_Handler,
+		},
+		{
+			MethodName: "AddToFoghornPool",
+			Handler:    _BootstrapService_AddToFoghornPool_Handler,
+		},
+		{
+			MethodName: "DrainFoghornInstance",
+			Handler:    _BootstrapService_DrainFoghornInstance_Handler,
+		},
+		{
 			MethodName: "CreateBootstrapToken",
 			Handler:    _BootstrapService_CreateBootstrapToken_Handler,
 		},
@@ -2357,6 +2715,10 @@ var BootstrapService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeBootstrapToken",
 			Handler:    _BootstrapService_RevokeBootstrapToken_Handler,
+		},
+		{
+			MethodName: "ValidateBootstrapToken",
+			Handler:    _BootstrapService_ValidateBootstrapToken_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

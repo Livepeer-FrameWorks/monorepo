@@ -18,6 +18,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	"frameworks/pkg/config"
 	"frameworks/pkg/ctxkeys"
+	"frameworks/pkg/dns"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/pagination"
@@ -158,14 +159,14 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 	}
 
 	var tenant pb.Tenant
-	var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
+	var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
-		       primary_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
+		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
 		       is_active, created_at, updated_at,
 		       rate_limit_per_minute, rate_limit_burst
 		FROM quartermaster.tenants
@@ -174,7 +175,7 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 		&tenant.Id, &tenant.Name, &subdomain, &customDomain, &logoURL,
 		&tenant.PrimaryColor, &tenant.SecondaryColor, &tenant.DeploymentTier,
 		&tenant.DeploymentModel,
-		&primaryClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
+		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
 		&tenant.IsActive, &createdAt, &updatedAt,
 		&tenant.RateLimitPerMinute, &tenant.RateLimitBurst,
 	)
@@ -204,6 +205,9 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *pb.GetTenantRe
 	if primaryClusterID.Valid {
 		tenant.PrimaryClusterId = &primaryClusterID.String
 	}
+	if officialClusterID.Valid {
+		tenant.OfficialClusterId = &officialClusterID.String
+	}
 	if kafkaTopicPrefix.Valid {
 		tenant.KafkaTopicPrefix = &kafkaTopicPrefix.String
 	}
@@ -225,13 +229,14 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	// Get tenant's primary cluster and deployment tier
+	// Get tenant's primary (preferred) cluster, official cluster, and deployment tier
 	var primaryClusterID, deploymentTier string
+	var officialClusterID sql.NullString
 	err := s.db.QueryRowContext(ctx, `
-		SELECT primary_cluster_id, deployment_tier
+		SELECT primary_cluster_id, COALESCE(official_cluster_id, ''), deployment_tier
 		FROM quartermaster.tenants
 		WHERE id = $1 AND is_active = true
-	`, tenantID).Scan(&primaryClusterID, &deploymentTier)
+	`, tenantID).Scan(&primaryClusterID, &officialClusterID, &deploymentTier)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Tenant not found")
@@ -352,6 +357,106 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 					"estimated_mbps": estimatedMbps,
 				}).Debug("Tenant has bandwidth limit configured")
 			}
+		}
+	}
+
+	// Resolve Foghorn gRPC address via foghorn_cluster_assignments (best-effort)
+	var foghornAddr sql.NullString
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT si.advertise_host || ':' || si.port
+		FROM quartermaster.foghorn_cluster_assignments fca
+		JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		WHERE fca.cluster_id = $1
+		  AND fca.is_active = true
+		  AND si.status = 'running'
+		ORDER BY si.updated_at DESC
+		LIMIT 1
+	`, primaryClusterID).Scan(&foghornAddr)
+	if foghornAddr.Valid {
+		resp.FoghornGrpcAddr = &foghornAddr.String
+	}
+
+	slug := dns.SanitizeLabel(resp.ClusterId)
+	resp.ClusterSlug = &slug
+
+	// Resolve official cluster info when it differs from primary (best-effort)
+	if officialClusterID.Valid && officialClusterID.String != "" && officialClusterID.String != primaryClusterID {
+		var offClusterName, offBaseURL sql.NullString
+		_ = s.db.QueryRowContext(ctx, `
+			SELECT cluster_name, base_url
+			FROM quartermaster.infrastructure_clusters
+			WHERE cluster_id = $1 AND is_active = true
+		`, officialClusterID.String).Scan(&offClusterName, &offBaseURL)
+
+		if offBaseURL.Valid {
+			resp.OfficialClusterId = &officialClusterID.String
+			offSlug := dns.SanitizeLabel(officialClusterID.String)
+			resp.OfficialClusterSlug = &offSlug
+			resp.OfficialBaseUrl = &offBaseURL.String
+			if offClusterName.Valid {
+				resp.OfficialClusterName = &offClusterName.String
+			}
+
+			// Resolve official cluster's Foghorn address via assignments
+			var offFoghornAddr sql.NullString
+			_ = s.db.QueryRowContext(ctx, `
+				SELECT si.advertise_host || ':' || si.port
+				FROM quartermaster.foghorn_cluster_assignments fca
+				JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+				WHERE fca.cluster_id = $1
+				  AND fca.is_active = true
+				  AND si.status = 'running'
+				ORDER BY si.updated_at DESC
+				LIMIT 1
+			`, officialClusterID.String).Scan(&offFoghornAddr)
+			if offFoghornAddr.Valid {
+				resp.OfficialFoghornGrpcAddr = &offFoghornAddr.String
+			}
+		}
+	}
+
+	// Build cluster_peers: all clusters this tenant has access to (best-effort)
+	peerRows, peerErr := s.db.QueryContext(ctx, `
+		SELECT ic.cluster_id, ic.cluster_name, ic.cluster_type, ic.base_url,
+		       COALESCE(ic.s3_bucket, ''), COALESCE(ic.s3_endpoint, ''), COALESCE(ic.s3_region, '')
+		FROM quartermaster.tenant_cluster_access tca
+		JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
+		WHERE tca.tenant_id = $1
+		  AND tca.is_active = TRUE
+		  AND tca.subscription_status = 'active'
+		  AND ic.is_active = TRUE
+	`, tenantID)
+	if peerErr == nil {
+		defer peerRows.Close()
+		officialID := ""
+		if officialClusterID.Valid {
+			officialID = officialClusterID.String
+		}
+		for peerRows.Next() {
+			var cID, cName, cType, cBaseURL, s3Bucket, s3Endpoint, s3Region string
+			if err := peerRows.Scan(&cID, &cName, &cType, &cBaseURL, &s3Bucket, &s3Endpoint, &s3Region); err != nil {
+				continue
+			}
+			var role string
+			switch cID {
+			case primaryClusterID:
+				role = "preferred"
+			case officialID:
+				role = "official"
+			default:
+				role = "subscribed"
+			}
+			resp.ClusterPeers = append(resp.ClusterPeers, &pb.TenantClusterPeer{
+				ClusterId:   cID,
+				ClusterSlug: dns.SanitizeLabel(cID),
+				BaseUrl:     cBaseURL,
+				ClusterName: cName,
+				Role:        role,
+				ClusterType: cType,
+				S3Bucket:    s3Bucket,
+				S3Endpoint:  s3Endpoint,
+				S3Region:    s3Region,
+			})
 		}
 	}
 
@@ -542,7 +647,18 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		  )
 	`, serviceID, clusterID, instanceID, advHost, proto, port)
 
-	// 7. Look up cluster owner tenant for dual-tenant attribution
+	// 7. For Foghorn services, auto-create junction table entry (home cluster assignment)
+	if serviceType == "foghorn" {
+		_, _ = s.db.ExecContext(ctx, `
+			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+			SELECT si.id, $1
+			FROM quartermaster.service_instances si
+			WHERE si.instance_id = $2
+			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
+		`, clusterID, instanceID)
+	}
+
+	// 8. Look up cluster owner tenant for dual-tenant attribution
 	var ownerTenantID sql.NullString
 	_ = s.db.QueryRowContext(ctx, `
 		SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
@@ -737,6 +853,482 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *pb.Serv
 }
 
 // ============================================================================
+// FOGHORN POOL MANAGEMENT
+// ============================================================================
+
+func (s *QuartermasterServer) GetFoghornPoolStatus(ctx context.Context, _ *pb.GetFoghornPoolStatusRequest) (*pb.GetFoghornPoolStatusResponse, error) {
+	// Query all Foghorn instances with their cluster assignments via junction table
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT si.id, si.instance_id, COALESCE(si.advertise_host, '') AS host,
+		       COALESCE(si.port, 0) AS port, si.status, si.created_at,
+		       COALESCE(fca.cluster_id, '') AS assigned_cluster
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		LEFT JOIN quartermaster.foghorn_cluster_assignments fca
+		  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
+		WHERE svc.type = 'foghorn'
+		ORDER BY assigned_cluster, si.started_at ASC
+	`)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	clusterMap := make(map[string]*pb.FoghornPoolClusterEntry)
+	seenInstances := make(map[string]bool)
+	var total, unassigned, assigned int32
+	var assignments []*pb.FoghornInstanceAssignment
+
+	for rows.Next() {
+		var id, instanceID, host, instStatus, assignedCluster string
+		var port int32
+		var createdAt time.Time
+		if err := rows.Scan(&id, &instanceID, &host, &port, &instStatus, &createdAt, &assignedCluster); err != nil {
+			continue
+		}
+
+		// Count unique instances
+		if !seenInstances[id] {
+			seenInstances[id] = true
+			total++
+			if assignedCluster == "" {
+				unassigned++
+			}
+		}
+
+		// Track assignments
+		if assignedCluster != "" {
+			if !seenInstances[id+":counted"] {
+				seenInstances[id+":counted"] = true
+				assigned++
+			}
+			assignments = append(assignments, &pb.FoghornInstanceAssignment{
+				FoghornInstanceId: id,
+				ClusterId:         assignedCluster,
+				IsActive:          true,
+				CreatedAt:         timestamppb.New(createdAt),
+			})
+		}
+
+		// Group by cluster for backward-compat clusters view
+		clusterID := assignedCluster
+		entry, ok := clusterMap[clusterID]
+		if !ok {
+			entry = &pb.FoghornPoolClusterEntry{ClusterId: clusterID}
+			clusterMap[clusterID] = entry
+		}
+		entry.InstanceCount++
+		entry.Instances = append(entry.Instances, &pb.ServiceInstance{
+			Id:         id,
+			InstanceId: instanceID,
+			ClusterId:  clusterID,
+			Host:       &host,
+			Port:       &port,
+			Status:     instStatus,
+			CreatedAt:  timestamppb.New(createdAt),
+		})
+	}
+
+	clusters := make([]*pb.FoghornPoolClusterEntry, 0, len(clusterMap))
+	for _, entry := range clusterMap {
+		clusters = append(clusters, entry)
+	}
+
+	return &pb.GetFoghornPoolStatusResponse{
+		Total:       total,
+		Unassigned:  unassigned,
+		Assigned:    assigned,
+		Clusters:    clusters,
+		Assignments: assignments,
+	}, nil
+}
+
+func (s *QuartermasterServer) AddToFoghornPool(ctx context.Context, req *pb.AddToFoghornPoolRequest) (*pb.AddToFoghornPoolResponse, error) {
+	var res sql.Result
+	var err error
+
+	if ids := req.GetInstanceIds(); len(ids) > 0 {
+		// Remove all cluster assignments for specific Foghorn instances
+		res, err = s.db.ExecContext(ctx, `
+			DELETE FROM quartermaster.foghorn_cluster_assignments
+			WHERE foghorn_instance_id IN (
+				SELECT si.id FROM quartermaster.service_instances si
+				JOIN quartermaster.services svc ON svc.service_id = si.service_id
+				WHERE si.id = ANY($1) AND svc.type = 'foghorn'
+			)
+		`, pq.Array(ids))
+	} else if req.GetCount() > 0 && req.GetFromClusterId() != "" {
+		// Remove N oldest assignments from a specific cluster
+		res, err = s.db.ExecContext(ctx, `
+			DELETE FROM quartermaster.foghorn_cluster_assignments
+			WHERE id IN (
+				SELECT fca.id
+				FROM quartermaster.foghorn_cluster_assignments fca
+				JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+				JOIN quartermaster.services svc ON svc.service_id = si.service_id
+				WHERE svc.type = 'foghorn'
+				  AND fca.cluster_id = $1
+				  AND fca.is_active = true
+				  AND si.status = 'running'
+				ORDER BY si.started_at ASC
+				LIMIT $2
+			)
+		`, req.GetFromClusterId(), req.GetCount())
+	} else {
+		return nil, status.Error(codes.InvalidArgument, "provide instance_ids or (count + from_cluster_id)")
+	}
+
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	released, _ := res.RowsAffected()
+	return &pb.AddToFoghornPoolResponse{Released: int32(released)}, nil
+}
+
+func (s *QuartermasterServer) DrainFoghornInstance(ctx context.Context, req *pb.DrainFoghornInstanceRequest) (*pb.DrainFoghornInstanceResponse, error) {
+	instanceID := req.GetInstanceId()
+	if instanceID == "" {
+		return nil, status.Error(codes.InvalidArgument, "instance_id required")
+	}
+
+	// Get one of the previous cluster assignments before removing
+	var previousClusterID sql.NullString
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT fca.cluster_id
+		FROM quartermaster.foghorn_cluster_assignments fca
+		JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		WHERE si.id = $1 AND svc.type = 'foghorn' AND fca.is_active = true
+		LIMIT 1
+	`, instanceID).Scan(&previousClusterID)
+
+	// Remove all cluster assignments for this instance
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM quartermaster.foghorn_cluster_assignments
+		WHERE foghorn_instance_id = (
+			SELECT si.id FROM quartermaster.service_instances si
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			WHERE si.id = $1 AND svc.type = 'foghorn'
+		)
+	`, instanceID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		if !previousClusterID.Valid {
+			return nil, status.Error(codes.NotFound, "instance not found or not a foghorn instance")
+		}
+	}
+
+	prev := ""
+	if previousClusterID.Valid {
+		prev = previousClusterID.String
+	}
+	return &pb.DrainFoghornInstanceResponse{PreviousClusterId: prev}, nil
+}
+
+func (s *QuartermasterServer) AssignFoghornToCluster(ctx context.Context, req *pb.AssignFoghornToClusterRequest) (*emptypb.Empty, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	// Verify cluster exists
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1 AND is_active = true)",
+		clusterID).Scan(&exists); err != nil || !exists {
+		return nil, status.Error(codes.NotFound, "cluster not found or inactive")
+	}
+
+	if ids := req.GetFoghornInstanceIds(); len(ids) > 0 {
+		// Assign specific Foghorn instances
+		for _, instID := range ids {
+			_, err := s.db.ExecContext(ctx, `
+				INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+				SELECT si.id, $1
+				FROM quartermaster.service_instances si
+				JOIN quartermaster.services svc ON svc.service_id = si.service_id
+				WHERE si.id = $2::uuid AND svc.type = 'foghorn'
+				ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
+			`, clusterID, instID)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to assign instance %s: %v", instID, err)
+			}
+		}
+	} else if count := req.GetCount(); count > 0 {
+		// Pick N Foghorns with fewest active assignments
+		_, err := s.db.ExecContext(ctx, `
+			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+			SELECT si.id, $1
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			LEFT JOIN quartermaster.foghorn_cluster_assignments fca
+			  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
+			WHERE svc.type = 'foghorn' AND si.status = 'running'
+			GROUP BY si.id
+			ORDER BY COUNT(fca.id) ASC
+			LIMIT $2
+			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
+		`, clusterID, count)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to assign foghorns: %v", err)
+		}
+	} else {
+		return nil, status.Error(codes.InvalidArgument, "provide foghorn_instance_ids or count")
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (s *QuartermasterServer) UnassignFoghornFromCluster(ctx context.Context, req *pb.UnassignFoghornFromClusterRequest) (*emptypb.Empty, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	ids := req.GetFoghornInstanceIds()
+	if len(ids) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "foghorn_instance_ids required")
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM quartermaster.foghorn_cluster_assignments
+		WHERE cluster_id = $1
+		  AND foghorn_instance_id IN (
+			SELECT si.id FROM quartermaster.service_instances si
+			WHERE si.id = ANY($2::uuid[])
+		  )
+	`, clusterID, pq.Array(ids))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to unassign: %v", err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+// EnableSelfHosting creates a tenant's private cluster, assigns it to a shared
+// Foghorn (least-loaded running instance), and returns an enrollment token.
+func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *pb.EnableSelfHostingRequest) (*pb.EnableSelfHostingResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	clusterName := req.GetClusterName()
+	if clusterName == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_name required")
+	}
+
+	userID := middleware.GetUserID(ctx)
+
+	// Check tenant's cluster ownership limit
+	var maxOwnedClusters, currentOwnedClusters int
+	var isProvider bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT max_owned_clusters, is_provider,
+		       (SELECT COUNT(*) FROM quartermaster.infrastructure_clusters WHERE owner_tenant_id = $1)
+		FROM quartermaster.tenants WHERE id = $1
+	`, tenantID).Scan(&maxOwnedClusters, &isProvider, &currentOwnedClusters)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !isProvider && currentOwnedClusters >= maxOwnedClusters {
+		return nil, status.Errorf(codes.ResourceExhausted, "tenant has reached maximum owned clusters limit (%d)", maxOwnedClusters)
+	}
+
+	// Generate cluster ID from name
+	clusterID := strings.ToLower(strings.ReplaceAll(clusterName, " ", "-"))
+	clusterID = fmt.Sprintf("%s-%s", clusterID, generateSecureToken(4))
+
+	id := uuid.New().String()
+	now := time.Now()
+
+	// Create the private cluster
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.infrastructure_clusters (
+			id, cluster_id, cluster_name, cluster_type, deployment_model,
+			owner_tenant_id, base_url,
+			max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+			visibility, pricing_model, short_description,
+			health_status, is_active, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, 'edge', 'self-hosted',
+			$4, '',
+			100, 10000, 1000,
+			'private', 'free_unmetered', $5,
+			'unknown', true, $6, $6
+		)
+	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
+	}
+
+	// Auto-subscribe the owner
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access (
+			tenant_id, cluster_id, access_level, subscription_status, is_active, created_at, updated_at
+		) VALUES ($1, $2, 'owner', 'active', true, NOW(), NOW())
+	`, tenantID, clusterID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"cluster_id": clusterID,
+		}).WithError(err).Error("Failed to auto-subscribe owner to cluster")
+	}
+
+	// Assign the least-loaded running Foghorn to this cluster
+	var foghornInstanceID string
+	var foghornAddr string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT si.id::text, si.advertise_host || ':' || si.port
+		FROM quartermaster.service_instances si
+		JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		LEFT JOIN quartermaster.foghorn_cluster_assignments fca
+		  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
+		WHERE svc.type = 'foghorn' AND si.status = 'running'
+		GROUP BY si.id, si.advertise_host, si.port
+		ORDER BY COUNT(fca.id) ASC
+		LIMIT 1
+	`).Scan(&foghornInstanceID, &foghornAddr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.Unavailable, "no running Foghorn instances available")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to find Foghorn: %v", err)
+	}
+
+	// Create junction table entry
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+		VALUES ($1::uuid, $2)
+		ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
+	`, foghornInstanceID, clusterID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to assign Foghorn to cluster: %v", err)
+	}
+
+	// Create bootstrap token
+	tokenID := uuid.New().String()
+	token := generateSecureToken(32)
+	expiresAt := now.Add(30 * 24 * time.Hour)
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.bootstrap_tokens (
+			id, token, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+		) VALUES ($1, $2, 'edge_node', $3, $4, $5, $6, $4, NOW())
+	`, tokenID, token, fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create bootstrap token: %v", err)
+	}
+
+	cluster, err := s.queryCluster(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.emitClusterEvent(ctx, eventClusterCreated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(ctx, eventTenantClusterAssigned, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+
+	return &pb.EnableSelfHostingResponse{
+		Cluster: cluster,
+		BootstrapToken: &pb.BootstrapToken{
+			Id:        tokenID,
+			Token:     token,
+			Kind:      "edge_node",
+			Name:      fmt.Sprintf("Bootstrap token for %s", clusterName),
+			TenantId:  &tenantID,
+			ClusterId: &clusterID,
+			ExpiresAt: timestamppb.New(expiresAt),
+			CreatedAt: timestamppb.New(now),
+		},
+		FoghornAddr: foghornAddr,
+	}, nil
+}
+
+// CreateEnrollmentToken creates a bootstrap token for a cluster the tenant has
+// an active subscription to. Tenant-facing alternative to admin-only CreateBootstrapToken.
+func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *pb.CreateEnrollmentTokenRequest) (*pb.CreateBootstrapTokenResponse, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	// Verify active subscription
+	var subStatus string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT subscription_status FROM quartermaster.tenant_cluster_access
+		WHERE tenant_id = $1 AND cluster_id = $2 AND is_active = true
+	`, tenantID, clusterID).Scan(&subStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.PermissionDenied, "no active subscription to this cluster")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if subStatus != "active" {
+		return nil, status.Errorf(codes.FailedPrecondition, "subscription status is %q, must be active", subStatus)
+	}
+
+	// Parse TTL (default 30 days)
+	ttl := 30 * 24 * time.Hour
+	if req.GetTtl() != "" {
+		parsed, parseErr := time.ParseDuration(req.GetTtl())
+		if parseErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid ttl: %v", parseErr)
+		}
+		ttl = parsed
+	}
+
+	tokenName := req.GetName()
+	if tokenName == "" {
+		tokenName = fmt.Sprintf("Enrollment token for %s", clusterID)
+	}
+
+	tokenID := uuid.New().String()
+	token := generateSecureToken(32)
+	now := time.Now()
+	expiresAt := now.Add(ttl)
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.bootstrap_tokens (
+			id, token, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+		) VALUES ($1, $2, 'edge_node', $3, $4, $5, $6, $4, NOW())
+	`, tokenID, token, tokenName, tenantID, clusterID, expiresAt)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create token: %v", err)
+	}
+
+	return &pb.CreateBootstrapTokenResponse{
+		Token: &pb.BootstrapToken{
+			Id:        tokenID,
+			Token:     token,
+			Kind:      "edge_node",
+			Name:      tokenName,
+			TenantId:  &tenantID,
+			ClusterId: &clusterID,
+			ExpiresAt: timestamppb.New(expiresAt),
+			CreatedAt: timestamppb.New(now),
+		},
+	}, nil
+}
+
+// ============================================================================
 // TENANT SERVICE - Additional Methods
 // ============================================================================
 
@@ -815,7 +1407,7 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *pb.ListTenan
 	query := fmt.Sprintf(`
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
-		       primary_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
+		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
 		       is_active, created_at, updated_at
 		FROM quartermaster.tenants
 		%s
@@ -992,6 +1584,11 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *pb.CreateTe
 			}).Error("Failed to auto-subscribe tenant to default cluster")
 			return nil, status.Errorf(codes.Internal, "failed to auto-subscribe tenant to default cluster: %v", err)
 		}
+
+		// 4. Set official_cluster_id to the default cluster (billing-tier coverage)
+		_, _ = tx.ExecContext(ctx, `
+			UPDATE quartermaster.tenants SET official_cluster_id = $1 WHERE id = $2
+		`, defaultClusterID.String, tenantID)
 	}
 
 	// Commit the transaction
@@ -1187,13 +1784,13 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *pb.GetT
 
 	var tenant pb.Tenant
 	var createdAt, updatedAt time.Time
-	var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
+	var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 	var kafkaBrokers []string
 
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
-		       primary_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
+		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
 		       is_active, created_at, updated_at
 		FROM quartermaster.tenants
 		WHERE id = $1 AND is_active = TRUE
@@ -1201,7 +1798,7 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *pb.GetT
 		&tenant.Id, &tenant.Name, &subdomain, &customDomain, &logoURL,
 		&tenant.PrimaryColor, &tenant.SecondaryColor,
 		&tenant.DeploymentTier, &tenant.DeploymentModel,
-		&primaryClusterID, &kafkaTopicPrefix,
+		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix,
 		pq.Array(&kafkaBrokers), &databaseURL, &tenant.IsActive, &createdAt, &updatedAt,
 	)
 
@@ -1223,6 +1820,9 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *pb.GetT
 	}
 	if primaryClusterID.Valid {
 		tenant.PrimaryClusterId = &primaryClusterID.String
+	}
+	if officialClusterID.Valid {
+		tenant.OfficialClusterId = &officialClusterID.String
 	}
 	if kafkaTopicPrefix.Valid {
 		tenant.KafkaTopicPrefix = &kafkaTopicPrefix.String
@@ -1252,6 +1852,27 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *pb.U
 	var previousClusterID sql.NullString
 	if req.PrimaryClusterId != nil {
 		_ = s.db.QueryRowContext(ctx, `SELECT primary_cluster_id FROM quartermaster.tenants WHERE id = $1`, tenantID).Scan(&previousClusterID)
+	}
+
+	if req.PrimaryClusterId != nil {
+		newClusterID := strings.TrimSpace(*req.PrimaryClusterId)
+		if newClusterID != "" {
+			var exists bool
+			err := s.db.QueryRowContext(ctx, `
+				SELECT EXISTS(
+					SELECT 1 FROM quartermaster.tenant_cluster_access
+					WHERE tenant_id = $1 AND cluster_id = $2
+					  AND is_active = TRUE
+					  AND (subscription_status = 'active' OR access_level = 'owner')
+				)
+			`, tenantID, newClusterID).Scan(&exists)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to verify cluster subscription: %v", err)
+			}
+			if !exists {
+				return nil, status.Error(codes.FailedPrecondition, "cluster is not an active subscription for this tenant")
+			}
+		}
 	}
 
 	if req.PrimaryClusterId != nil {
@@ -1310,7 +1931,7 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *pb.GetTe
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
 		       deployment_tier, deployment_model,
-		       primary_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
+		       primary_cluster_id, official_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
 		       is_active, created_at, updated_at
 		FROM quartermaster.tenants
 		WHERE id = ANY($1) AND is_active = TRUE
@@ -1375,7 +1996,7 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *pb.G
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT t.id, t.name, t.subdomain, t.custom_domain, t.logo_url, t.primary_color, t.secondary_color,
 		       t.deployment_tier, t.deployment_model,
-		       t.primary_cluster_id, t.kafka_topic_prefix, t.kafka_brokers, t.database_url,
+		       t.primary_cluster_id, t.official_cluster_id, t.kafka_topic_prefix, t.kafka_brokers, t.database_url,
 		       t.is_active, t.created_at, t.updated_at
 		FROM quartermaster.tenants t
 		LEFT JOIN quartermaster.tenant_cluster_assignments tca ON t.id = tca.tenant_id
@@ -1672,6 +2293,42 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
+	}
+
+	// Assign idle Foghorn instances to this cluster via foghorn_cluster_assignments.
+	// "Idle" = Foghorn with zero active assignments in the junction table.
+	if foghornCount := req.GetFoghornCount(); foghornCount > 0 {
+		res, claimErr := s.db.ExecContext(ctx, `
+			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+			SELECT si.id, $1
+			FROM quartermaster.service_instances si
+			JOIN quartermaster.services svc ON svc.service_id = si.service_id
+			LEFT JOIN quartermaster.foghorn_cluster_assignments fca
+			  ON fca.foghorn_instance_id = si.id AND fca.is_active = true
+			WHERE svc.type = 'foghorn'
+			  AND si.status = 'running'
+			  AND fca.id IS NULL
+			ORDER BY si.started_at ASC
+			LIMIT $2
+			ON CONFLICT DO NOTHING
+		`, clusterID, foghornCount)
+		if claimErr != nil {
+			s.logger.WithError(claimErr).Warn("Failed to assign Foghorn instances to cluster")
+			_, _ = s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET health_status = 'provisioning' WHERE cluster_id = $1`, clusterID)
+		} else if claimed, _ := res.RowsAffected(); claimed < int64(foghornCount) {
+			s.logger.WithFields(logging.Fields{
+				"cluster_id": clusterID,
+				"requested":  foghornCount,
+				"claimed":    claimed,
+			}).Warn("Assigned fewer Foghorn instances than requested")
+			_, _ = s.db.ExecContext(ctx, `UPDATE quartermaster.infrastructure_clusters SET health_status = 'provisioning' WHERE cluster_id = $1`, clusterID)
+		} else {
+			s.logger.WithFields(logging.Fields{
+				"cluster_id": clusterID,
+				"requested":  foghornCount,
+				"claimed":    claimed,
+			}).Info("Assigned Foghorn instances to cluster")
+		}
 	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
@@ -3293,6 +3950,79 @@ func (s *QuartermasterServer) RevokeBootstrapToken(ctx context.Context, req *pb.
 	return &emptypb.Empty{}, nil
 }
 
+// ValidateBootstrapToken checks a bootstrap token's validity.
+// When client_ip is set, validates against the token's expected_ip.
+// When consume is true, increments usage_count (used by PreRegisterEdge).
+func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *pb.ValidateBootstrapTokenRequest) (*pb.ValidateBootstrapTokenResponse, error) {
+	token := strings.TrimSpace(req.GetToken())
+	if token == "" {
+		return nil, status.Error(codes.InvalidArgument, "token required")
+	}
+
+	var kind string
+	var tenantID, clusterID sql.NullString
+	var expectedIP sql.NullString
+	var expiresAt time.Time
+	var usageLimit sql.NullInt32
+	var usageCount int32
+	var usedAt sql.NullTime
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT kind, tenant_id, cluster_id, expected_ip::text, expires_at, usage_limit, usage_count, used_at
+		FROM quartermaster.bootstrap_tokens
+		WHERE token = $1
+	`, token).Scan(&kind, &tenantID, &clusterID, &expectedIP, &expiresAt, &usageLimit, &usageCount, &usedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return &pb.ValidateBootstrapTokenResponse{Valid: false, Reason: "not_found"}, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Single-use tokens (usage_limit IS NULL) are consumed when used_at is set
+	if !usageLimit.Valid && usedAt.Valid {
+		return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "already_used"}, nil
+	}
+
+	// Multi-use tokens: reject when usage_count >= usage_limit
+	if usageLimit.Valid && usageLimit.Int32 > 0 && usageCount >= usageLimit.Int32 {
+		return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "usage_exceeded"}, nil
+	}
+
+	if time.Now().After(expiresAt) {
+		return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "expired"}, nil
+	}
+
+	// IP binding: if client_ip is provided and token has expected_ip, validate match
+	if clientIP := req.GetClientIp(); clientIP != "" {
+		if !validateExpectedIP(expectedIP, clientIP) {
+			return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "ip_mismatch"}, nil
+		}
+	}
+
+	// Consume: increment usage_count if requested (PreRegisterEdge uses this)
+	if req.GetConsume() {
+		_, _ = s.db.ExecContext(ctx, `
+			UPDATE quartermaster.bootstrap_tokens
+			SET usage_count = usage_count + 1, used_at = NOW()
+			WHERE token = $1
+		`, token)
+	}
+
+	resp := &pb.ValidateBootstrapTokenResponse{
+		Valid: true,
+		Kind:  kind,
+	}
+	if tenantID.Valid {
+		resp.TenantId = tenantID.String
+	}
+	if clusterID.Valid {
+		resp.ClusterId = clusterID.String
+	}
+	return resp, nil
+}
+
 // ============================================================================
 // MESH SERVICE
 // ============================================================================
@@ -3961,7 +4691,7 @@ func (s *QuartermasterServer) emitClusterEvent(ctx context.Context, eventType, t
 
 func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
 	var tenant pb.Tenant
-	var subdomain, customDomain, logoURL, primaryClusterID, kafkaTopicPrefix, databaseURL sql.NullString
+	var subdomain, customDomain, logoURL, primaryClusterID, officialClusterID, kafkaTopicPrefix, databaseURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
 
@@ -3969,7 +4699,7 @@ func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
 		&tenant.Id, &tenant.Name, &subdomain, &customDomain, &logoURL,
 		&tenant.PrimaryColor, &tenant.SecondaryColor, &tenant.DeploymentTier,
 		&tenant.DeploymentModel,
-		&primaryClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
+		&primaryClusterID, &officialClusterID, &kafkaTopicPrefix, pq.Array(&kafkaBrokers), &databaseURL,
 		&tenant.IsActive, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -3987,6 +4717,9 @@ func scanTenant(rows *sql.Rows) (*pb.Tenant, error) {
 	}
 	if primaryClusterID.Valid {
 		tenant.PrimaryClusterId = &primaryClusterID.String
+	}
+	if officialClusterID.Valid {
+		tenant.OfficialClusterId = &officialClusterID.String
 	}
 	if kafkaTopicPrefix.Valid {
 		tenant.KafkaTopicPrefix = &kafkaTopicPrefix.String
@@ -5657,6 +6390,74 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 	s.emitClusterEvent(ctx, eventClusterSubscriptionRejected, tenantID, userID, clusterID, "cluster_subscription", subscriptionID, "", subscriptionID, reason)
 
 	return sub, nil
+}
+
+// ListPeers returns clusters that share at least one tenant with the requesting cluster.
+// Used by Foghorn federation to discover peers for cross-cluster stream routing.
+func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRequest) (*pb.ListPeersResponse, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	// Find all clusters that share at least one active tenant with the requesting cluster.
+	// For each peer, aggregate the shared tenant IDs and resolve the Foghorn gRPC address
+	// from service_instances.
+	rows, err := s.db.QueryContext(ctx, `
+		WITH my_tenants AS (
+			SELECT DISTINCT tenant_id
+			FROM quartermaster.tenant_cluster_access
+			WHERE cluster_id = $1 AND is_active = TRUE AND subscription_status = 'active'
+		),
+		peer_clusters AS (
+			SELECT tca.cluster_id,
+			       array_agg(DISTINCT tca.tenant_id::text) AS shared_tenant_ids
+			FROM quartermaster.tenant_cluster_access tca
+			JOIN my_tenants mt ON tca.tenant_id = mt.tenant_id
+			WHERE tca.cluster_id != $1
+			  AND tca.is_active = TRUE
+			  AND tca.subscription_status = 'active'
+			GROUP BY tca.cluster_id
+		)
+		SELECT pc.cluster_id,
+		       pc.shared_tenant_ids,
+		       ic.cluster_name,
+		       ic.cluster_type,
+		       COALESCE(
+		           (SELECT si.advertise_host || ':' || si.port
+		            FROM quartermaster.service_instances si
+		            JOIN quartermaster.services svc ON svc.service_id = si.service_id
+		            WHERE si.cluster_id = pc.cluster_id
+		              AND svc.type = 'foghorn'
+		              AND si.status = 'running'
+		            ORDER BY si.updated_at DESC
+		            LIMIT 1),
+		           ''
+		       ) AS foghorn_addr
+		FROM peer_clusters pc
+		JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = pc.cluster_id
+		WHERE ic.is_active = TRUE
+	`, clusterID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "query peers: %v", err)
+	}
+	defer rows.Close()
+
+	var peers []*pb.PeerCluster
+	for rows.Next() {
+		var peer pb.PeerCluster
+		var sharedTenantIDs []string
+		if err := rows.Scan(&peer.ClusterId, pq.Array(&sharedTenantIDs), &peer.ClusterName, &peer.ClusterType, &peer.FoghornAddr); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan peer: %v", err)
+		}
+		peer.SharedTenantIds = sharedTenantIDs
+		peers = append(peers, &peer)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterate peers: %v", err)
+	}
+
+	return &pb.ListPeersResponse{Peers: peers}, nil
 }
 
 // getClusterSubscription is a helper to fetch a subscription by tenant and cluster

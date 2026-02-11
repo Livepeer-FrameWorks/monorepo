@@ -160,3 +160,104 @@ func TestGetBestNodeWithScore_PrefersCloserGeo(t *testing.T) {
 		t.Fatalf("expected node-close to be selected, got %s", best)
 	}
 }
+
+func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
+	sm := setupTestManager(t)
+	sm.SetWeights(0, 0, 1000, 0, 0)
+
+	// Node owned by tenantA
+	addTestNode(t, sm, "node-a", "node-a", 0, 0, true)
+	sm.SetNodeConnectionInfo("node-a", "", "tenantA", "cluster-eu", nil)
+
+	// Node owned by tenantB
+	addTestNode(t, sm, "node-b", "node-b", 0, 0, true)
+	sm.SetNodeConnectionInfo("node-b", "", "tenantB", "cluster-us", nil)
+
+	// Shared infrastructure node (no tenant)
+	addTestNode(t, sm, "node-shared", "node-shared", 0, 0, true)
+
+	// Second cluster owned by tenantA (co-located on same Foghorn)
+	addTestNode(t, sm, "node-a2", "node-a2", 0, 0, true)
+	sm.SetNodeConnectionInfo("node-a2", "", "tenantA", "cluster-ap", nil)
+
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+
+	t.Run("no scope returns all nodes", func(t *testing.T) {
+		nodes, err := lb.GetTopNodesWithScores(context.Background(), "", 0, 0, nil, "", 10, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(nodes) != 4 {
+			t.Fatalf("expected 4 nodes, got %d", len(nodes))
+		}
+	})
+
+	t.Run("tenantA scope returns tenantA + shared nodes", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyClusterScope, "tenantA")
+		nodes, err := lb.GetTopNodesWithScores(ctx, "", 0, 0, nil, "", 10, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// node-a (tenantA), node-a2 (tenantA), node-shared (no tenant)
+		if len(nodes) != 3 {
+			t.Fatalf("expected 3 nodes for tenantA scope, got %d", len(nodes))
+		}
+		ids := map[string]bool{}
+		for _, n := range nodes {
+			ids[n.NodeID] = true
+		}
+		if ids["node-b"] {
+			t.Fatal("tenantB node should be excluded from tenantA scope")
+		}
+	})
+
+	t.Run("tenantB scope returns tenantB + shared nodes", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyClusterScope, "tenantB")
+		nodes, err := lb.GetTopNodesWithScores(ctx, "", 0, 0, nil, "", 10, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// node-b (tenantB), node-shared (no tenant)
+		if len(nodes) != 2 {
+			t.Fatalf("expected 2 nodes for tenantB scope, got %d", len(nodes))
+		}
+		ids := map[string]bool{}
+		for _, n := range nodes {
+			ids[n.NodeID] = true
+		}
+		if ids["node-a"] || ids["node-a2"] {
+			t.Fatal("tenantA nodes should be excluded from tenantB scope")
+		}
+	})
+
+	t.Run("co-located clusters pool together", func(t *testing.T) {
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyClusterScope, "tenantA")
+		nodes, err := lb.GetTopNodesWithScores(ctx, "", 0, 0, nil, "", 10, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Both tenantA clusters (cluster-eu + cluster-ap) should be eligible
+		ids := map[string]bool{}
+		for _, n := range nodes {
+			ids[n.NodeID] = true
+		}
+		if !ids["node-a"] || !ids["node-a2"] {
+			t.Fatal("both tenantA clusters should be pooled together on the same Foghorn")
+		}
+	})
+
+	t.Run("origin-pull context must scope to tenant", func(t *testing.T) {
+		// Simulates the arrangeOriginPull context with tenant scope.
+		// Before the fix, KeyClusterScope was missing and all nodes were returned.
+		ctx := context.WithValue(context.Background(), ctxkeys.KeyClusterScope, "tenantB")
+		nodes, err := lb.GetTopNodesWithScores(ctx, "", 0, 0, nil, "", 10, false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, n := range nodes {
+			if n.NodeID == "node-a" || n.NodeID == "node-a2" {
+				t.Fatalf("tenantA node %q must not appear in tenantB-scoped origin-pull", n.NodeID)
+			}
+		}
+	})
+}

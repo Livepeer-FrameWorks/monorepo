@@ -2,7 +2,7 @@
 
 Core (headless) player engine used by the React/Svelte wrappers. Provides `PlayerController`, selection logic, and player implementations (WebCodecs, HLS, etc).
 
-**Docs:** `docs.frameworks.network`
+**Docs:** `logbook.frameworks.network`
 
 ## Install
 
@@ -38,7 +38,7 @@ Notes:
 const controller = new PlayerController({
   contentId: "pk_...",
   contentType: "live",
-  mistUrl: "https://edge.example.com",
+  mistUrl: "https://edge-egress.example.com",
 });
 ```
 

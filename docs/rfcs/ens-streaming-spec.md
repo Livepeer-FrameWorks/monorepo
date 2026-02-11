@@ -45,12 +45,12 @@ Streaming identity is siloed per-platform:
 
 ### Text Record Keys
 
-| Key                       | Required    | Description                       | Example Value                                                  |
-| ------------------------- | ----------- | --------------------------------- | -------------------------------------------------------------- |
-| `com.livepeer.playbackId` | Yes         | Playback identifier for API calls | `abc123def456`                                                 |
-| `com.livepeer.gateway`    | Yes         | GraphQL gateway URL               | `https://api.frameworks.network/graphql`                       |
-| `com.livepeer.stream`     | Yes         | HLS playback URL                  | `https://play.frameworks.network/play/abc123def456/index.m3u8` |
-| `com.livepeer.whep`       | Recommended | WebRTC playback URL (low-latency) | `https://play.frameworks.network/play/abc123def456.webrtc`     |
+| Key                       | Required    | Description                       | Example Value                                                     |
+| ------------------------- | ----------- | --------------------------------- | ----------------------------------------------------------------- |
+| `com.livepeer.playbackId` | Yes         | Playback identifier for API calls | `abc123def456`                                                    |
+| `com.livepeer.gateway`    | Yes         | GraphQL gateway URL               | `https://bridge.frameworks.network/graphql`                       |
+| `com.livepeer.stream`     | Yes         | HLS playback URL                  | `https://foghorn.frameworks.network/play/abc123def456/index.m3u8` |
+| `com.livepeer.whep`       | Recommended | WebRTC playback URL (low-latency) | `https://foghorn.frameworks.network/play/abc123def456.webrtc`     |
 
 ### Field Semantics
 
@@ -80,7 +80,7 @@ Streaming identity is siloed per-platform:
 
 ### URL Patterns
 
-Based on Foghorn load balancer (production: `play.frameworks.network`):
+Based on Foghorn load balancer (production: `foghorn.frameworks.network`):
 
 | Protocol             | URL Pattern                     |
 | -------------------- | ------------------------------- |

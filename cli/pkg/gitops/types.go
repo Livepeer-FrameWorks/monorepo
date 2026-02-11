@@ -81,6 +81,26 @@ type ServiceInfo struct {
 	FullImage string            // image@digest for docker
 }
 
+// GetExternalDependency looks up an external dependency by name (e.g., "mistserver", "caddy").
+func (m *Manifest) GetExternalDependency(name string) *ExternalDependency {
+	for i := range m.ExternalDependencies {
+		if m.ExternalDependencies[i].Name == name {
+			return &m.ExternalDependencies[i]
+		}
+	}
+	return nil
+}
+
+// GetBinaryURL returns the download URL for the given os-arch key (e.g., "linux-amd64").
+func (d *ExternalDependency) GetBinaryURL(arch string) string {
+	for _, b := range d.Binaries {
+		if b.Name == arch {
+			return b.URL
+		}
+	}
+	return ""
+}
+
 // FetchOptions configures manifest fetching
 type FetchOptions struct {
 	Channel        string        // stable | rc

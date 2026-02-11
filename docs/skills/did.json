@@ -16,17 +16,17 @@
     {
       "id": "did:web:frameworks.network#mcp",
       "type": "MCPServer",
-      "serviceEndpoint": "https://api.frameworks.network/mcp"
+      "serviceEndpoint": "https://bridge.frameworks.network/mcp"
     },
     {
       "id": "did:web:frameworks.network#graphql",
       "type": "GraphQLAPI",
-      "serviceEndpoint": "https://api.frameworks.network/graphql"
+      "serviceEndpoint": "https://bridge.frameworks.network/graphql"
     },
     {
       "id": "did:web:frameworks.network#wallet-login",
       "type": "WalletLogin",
-      "serviceEndpoint": "https://api.frameworks.network/auth/wallet-login"
+      "serviceEndpoint": "https://bridge.frameworks.network/auth/wallet-login"
     }
   ]
 }

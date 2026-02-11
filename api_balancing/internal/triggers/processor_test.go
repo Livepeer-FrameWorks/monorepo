@@ -806,3 +806,32 @@ func TestHandlePushRewrite_RejectsNegativeBalanceTenant(t *testing.T) {
 		t.Fatalf("expected payment required error code, got %v", ingestErr.Code)
 	}
 }
+
+func TestGetStreamOrigin_PrefixedStreamName(t *testing.T) {
+	processor := newTestProcessor(t)
+
+	// Cache stores bare internal name (as written by PUSH_REWRITE)
+	processor.streamCache.Set("tenantA:abc123-def456", streamContext{
+		TenantID:        "tenantA",
+		OriginClusterID: "cluster-eu",
+	}, time.Minute)
+
+	t.Run("bare name matches", func(t *testing.T) {
+		tenantID, clusterID := processor.GetStreamOrigin("abc123-def456")
+		if tenantID != "tenantA" {
+			t.Fatalf("expected tenantA, got %q", tenantID)
+		}
+		if clusterID != "cluster-eu" {
+			t.Fatalf("expected cluster-eu, got %q", clusterID)
+		}
+	})
+
+	t.Run("live+ prefixed name does NOT match (caller must strip)", func(t *testing.T) {
+		// GetStreamOrigin expects bare internal name; the caller (getStreamTenantID)
+		// is responsible for calling mist.ExtractInternalName before calling this.
+		tenantID, _ := processor.GetStreamOrigin("live+abc123-def456")
+		if tenantID != "" {
+			t.Fatalf("expected empty (prefix not stripped by caller), got %q", tenantID)
+		}
+	})
+}

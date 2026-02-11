@@ -4,7 +4,7 @@ Framework-agnostic core for StreamCrafter: WHIP client, WebRTC transport, WebCod
 
 ## Documentation
 
-Docs: https://docs.frameworks.network
+Docs: https://logbook.frameworks.network
 
 ## Install
 
@@ -19,7 +19,7 @@ import { StreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-core";
 import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";
 
 const crafter = new StreamCrafterV2({
-  whipUrl: "https://ingest.example.com/webrtc/your-stream-key",
+  whipUrl: "https://edge-ingest.example.com/webrtc/your-stream-key",
   profile: "broadcast",
 });
 
@@ -39,7 +39,7 @@ The vanilla `StreamCrafterV2` constructor requires a **direct WHIP URL**. If you
 import { IngestClient, StreamCrafterV2 } from "@livepeer-frameworks/streamcrafter-core";
 
 const ingest = new IngestClient({
-  gatewayUrl: "https://api.example.com/graphql",
+  gatewayUrl: "https://bridge.example.com/graphql",
   streamKey: "sk_live_...",
 });
 

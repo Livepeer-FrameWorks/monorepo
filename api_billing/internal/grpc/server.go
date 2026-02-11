@@ -297,7 +297,8 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 		       bandwidth_allocation, storage_allocation, compute_allocation, features,
 		       support_level, sla_level, metering_enabled, overage_rates,
 		       is_active, tier_level, is_enterprise,
-		       created_at, updated_at
+		       created_at, updated_at,
+		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false)
 		FROM purser.billing_tiers
 		%s
 		ORDER BY tier_level %s, id %s
@@ -324,6 +325,7 @@ func (s *PurserServer) GetBillingTiers(ctx context.Context, req *pb.GetBillingTi
 			&tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled, &overageRates,
 			&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 			&createdAt, &updatedAt,
+			&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
 		)
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to scan billing tier")
@@ -389,7 +391,8 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		       bandwidth_allocation, storage_allocation, compute_allocation, features,
 		       support_level, sla_level, metering_enabled, overage_rates,
 		       is_active, tier_level, is_enterprise,
-		       created_at, updated_at
+		       created_at, updated_at,
+		       COALESCE(is_default_prepaid, false), COALESCE(is_default_postpaid, false)
 		FROM purser.billing_tiers
 		WHERE id = $1
 	`, tierID).Scan(
@@ -399,6 +402,7 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *pb.GetBillingTie
 		&tier.SupportLevel, &tier.SlaLevel, &tier.MeteringEnabled, &overageRates,
 		&tier.IsActive, &tier.TierLevel, &tier.IsEnterprise,
 		&createdAt, &updatedAt,
+		&tier.IsDefaultPrepaid, &tier.IsDefaultPostpaid,
 	)
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3545,6 +3549,69 @@ func (s *PurserServer) InitializePrepaidBalance(ctx context.Context, req *pb.Ini
 // InitializePrepaidAccount creates subscription + prepaid balance for wallet provisioning.
 // Called by Commodore during GetOrCreateWalletUser to avoid cross-service DB inserts.
 // This is atomic - creates both subscription (billing_model=prepaid) and balance in one transaction.
+// ensureTierClusterAccess subscribes the tenant to all platform clusters
+// eligible at the given tier level and sets the best one as primary.
+func (s *PurserServer) ensureTierClusterAccess(ctx context.Context, tenantID string, tierLevel int32) (eligibleClusterIDs []string, primaryClusterID string, err error) {
+	if s.quartermasterClient == nil {
+		return nil, "", nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT cluster_id, required_tier_level
+		FROM purser.cluster_pricing
+		WHERE is_platform_official = true
+		  AND required_tier_level <= $1
+		  AND (allow_free_tier = true OR $1 > 0)
+		ORDER BY required_tier_level DESC
+	`, tierLevel)
+	if err != nil {
+		return nil, "", fmt.Errorf("query eligible clusters: %w", err)
+	}
+	defer rows.Close()
+
+	var bestLevel int32 = -1
+	for rows.Next() {
+		var clusterID string
+		var reqLevel int32
+		if err := rows.Scan(&clusterID, &reqLevel); err != nil {
+			return nil, "", fmt.Errorf("scan cluster row: %w", err)
+		}
+		eligibleClusterIDs = append(eligibleClusterIDs, clusterID)
+
+		if _, subErr := s.quartermasterClient.SubscribeToCluster(ctx, &pb.SubscribeToClusterRequest{
+			TenantId:  tenantID,
+			ClusterId: clusterID,
+		}); subErr != nil {
+			s.logger.WithError(subErr).WithFields(logging.Fields{
+				"tenant_id":  tenantID,
+				"cluster_id": clusterID,
+			}).Warn("Failed to subscribe tenant to eligible cluster")
+		}
+
+		if reqLevel > bestLevel {
+			bestLevel = reqLevel
+			primaryClusterID = clusterID
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("iterate cluster rows: %w", err)
+	}
+
+	if primaryClusterID != "" {
+		if _, err := s.quartermasterClient.UpdateTenant(ctx, &pb.UpdateTenantRequest{
+			TenantId:         tenantID,
+			PrimaryClusterId: &primaryClusterID,
+		}); err != nil {
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"tenant_id":          tenantID,
+				"primary_cluster_id": primaryClusterID,
+			}).Warn("Failed to set primary cluster")
+		}
+	}
+
+	return eligibleClusterIDs, primaryClusterID, nil
+}
+
 func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.InitializePrepaidAccountRequest) (*pb.InitializePrepaidAccountResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -3567,33 +3634,20 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	// 1. Resolve billing tier (prefer PAYG, fallback to lowest active tier)
+	// 1. Resolve default prepaid tier
 	var tierID string
+	var tierLevel int32
 	err = tx.QueryRowContext(ctx, `
-		SELECT id
+		SELECT id, tier_level
 		FROM purser.billing_tiers
-		WHERE tier_name = 'payg' AND is_active = true
-		ORDER BY created_at ASC
+		WHERE is_default_prepaid = true AND is_active = true
 		LIMIT 1
-	`).Scan(&tierID)
+	`).Scan(&tierID, &tierLevel)
 	if errors.Is(err, sql.ErrNoRows) {
-		err = tx.QueryRowContext(ctx, `
-			SELECT id
-			FROM purser.billing_tiers
-			WHERE is_active = true
-			ORDER BY tier_level ASC, base_price ASC, created_at ASC
-			LIMIT 1
-		`).Scan(&tierID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, status.Error(codes.FailedPrecondition, "no active billing tiers available")
-		}
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to resolve fallback billing tier")
-			return nil, status.Error(codes.Internal, "failed to resolve billing tier")
-		}
-		s.logger.WithField("tenant_id", tenantID).Warn("PAYG tier missing; falling back to lowest active tier")
-	} else if err != nil {
-		s.logger.WithError(err).Error("Failed to resolve PAYG tier")
+		return nil, status.Error(codes.FailedPrecondition, "no default prepaid billing tier configured")
+	}
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to resolve default prepaid tier")
 		return nil, status.Error(codes.Internal, "failed to resolve billing tier")
 	}
 
@@ -3628,15 +3682,96 @@ func (s *PurserServer) InitializePrepaidAccount(ctx context.Context, req *pb.Ini
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&actualSubID)
 	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.prepaid_balances WHERE tenant_id = $1 AND currency = $2`, tenantID, currency).Scan(&actualBalID)
 
+	eligibleClusters, primaryCluster, clusterErr := s.ensureTierClusterAccess(ctx, tenantID, tierLevel)
+	if clusterErr != nil {
+		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to provision cluster access for prepaid account")
+	}
+
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":       tenantID,
 		"subscription_id": actualSubID,
 		"balance_id":      actualBalID,
+		"tier_level":      tierLevel,
 	}).Info("Initialized prepaid account")
 
 	return &pb.InitializePrepaidAccountResponse{
-		SubscriptionId: actualSubID,
-		BalanceId:      actualBalID,
+		SubscriptionId:     actualSubID,
+		BalanceId:          actualBalID,
+		TierLevel:          tierLevel,
+		EligibleClusterIds: eligibleClusters,
+		PrimaryClusterId:   primaryCluster,
+	}, nil
+}
+
+// InitializePostpaidAccount creates a postpaid subscription for email registration.
+// Resolves the default postpaid tier and provisions cluster access.
+func (s *PurserServer) InitializePostpaidAccount(ctx context.Context, req *pb.InitializePostpaidAccountRequest) (*pb.InitializePostpaidAccountResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
+	}
+
+	subscriptionID := uuid.New().String()
+	now := time.Now()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to start transaction")
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+
+	// Resolve default postpaid tier
+	var tierID string
+	var tierLevel int32
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, tier_level
+		FROM purser.billing_tiers
+		WHERE is_default_postpaid = true AND is_active = true
+		LIMIT 1
+	`).Scan(&tierID, &tierLevel)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
+	}
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to resolve default postpaid tier")
+		return nil, status.Error(codes.Internal, "failed to resolve billing tier")
+	}
+
+	// Create subscription with billing_model='postpaid', status='active'
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO purser.tenant_subscriptions (id, tenant_id, tier_id, billing_model, status, created_at, updated_at)
+		VALUES ($1, $2, $3, 'postpaid', 'active', $4, $4)
+		ON CONFLICT (tenant_id) DO NOTHING
+	`, subscriptionID, tenantID, tierID, now)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to create postpaid subscription")
+		return nil, status.Error(codes.Internal, "failed to create subscription")
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, status.Error(codes.Internal, "failed to commit transaction")
+	}
+
+	// Get actual ID (could be existing if ON CONFLICT hit)
+	var actualSubID string
+	_ = s.db.QueryRowContext(ctx, `SELECT id FROM purser.tenant_subscriptions WHERE tenant_id = $1`, tenantID).Scan(&actualSubID)
+
+	eligibleClusters, primaryCluster, clusterErr := s.ensureTierClusterAccess(ctx, tenantID, tierLevel)
+	if clusterErr != nil {
+		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to provision cluster access for postpaid account")
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":       tenantID,
+		"subscription_id": actualSubID,
+		"tier_level":      tierLevel,
+	}).Info("Initialized postpaid account")
+
+	return &pb.InitializePostpaidAccountResponse{
+		SubscriptionId:     actualSubID,
+		TierLevel:          tierLevel,
+		EligibleClusterIds: eligibleClusters,
+		PrimaryClusterId:   primaryCluster,
 	}, nil
 }
 
@@ -4372,16 +4507,14 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *pb.GetCryptoTopu
 	return &topup, nil
 }
 
-// PromoteToPaid upgrades a prepaid account to postpaid after email verification
+// PromoteToPaid upgrades a prepaid account to postpaid on the free tier.
+// The tier_id parameter is ignored — promotion always targets the free tier
+// (same default tier that new email accounts receive).
 func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidRequest) (*pb.PromoteToPaidResponse, error) {
 	tenantID := req.GetTenantId()
-	tierID := req.GetTierId()
 
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
-	}
-	if tierID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tier_id is required")
 	}
 
 	// Check current billing model
@@ -4400,20 +4533,19 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 		return nil, status.Error(codes.FailedPrecondition, "already on postpaid billing")
 	}
 
-	// Verify the tier exists and is not enterprise
-	var tierName string
-	var isEnterprise bool
+	// Resolve the default postpaid tier
+	var tierID string
+	var tierLevel int32
 	err = s.db.QueryRowContext(ctx, `
-		SELECT name, is_enterprise FROM purser.billing_tiers WHERE id = $1
-	`, tierID).Scan(&tierName, &isEnterprise)
+		SELECT id, tier_level FROM purser.billing_tiers
+		WHERE is_default_postpaid = true AND is_active = true
+		LIMIT 1
+	`).Scan(&tierID, &tierLevel)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "billing tier not found")
+		return nil, status.Error(codes.FailedPrecondition, "no default postpaid billing tier configured")
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to get tier: %v", err)
-	}
-	if isEnterprise {
-		return nil, status.Error(codes.FailedPrecondition, "enterprise tiers require manual assignment")
+		return nil, status.Errorf(codes.Internal, "failed to resolve default postpaid tier: %v", err)
 	}
 
 	// Get current prepaid balance (to carry forward as credit)
@@ -4432,7 +4564,7 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	// Update subscription to postpaid with selected tier
+	// Update subscription to postpaid on free tier
 	var subscriptionID string
 	err = tx.QueryRowContext(ctx, `
 		UPDATE purser.tenant_subscriptions
@@ -4444,26 +4576,34 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *pb.PromoteToPaidR
 		return nil, status.Errorf(codes.Internal, "failed to update subscription: %v", err)
 	}
 
-	// Note: prepaid_balances row is kept - the system uses this as credit before invoicing
-	// If there's a positive balance, it will be deducted from usage before invoicing
+	// prepaid_balances row is kept — carried forward as credit before invoicing
 
 	if err := tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	}
 
-	s.logger.WithFields(map[string]interface{}{
+	// Re-evaluate cluster access for the new tier
+	eligibleClusters, primaryCluster, clusterErr := s.ensureTierClusterAccess(ctx, tenantID, tierLevel)
+	if clusterErr != nil {
+		s.logger.WithError(clusterErr).WithField("tenant_id", tenantID).Warn("Failed to re-evaluate cluster access after promotion")
+	}
+
+	s.logger.WithFields(logging.Fields{
 		"tenant_id":      tenantID,
 		"tier_id":        tierID,
-		"tier_name":      tierName,
+		"tier_level":     tierLevel,
 		"credit_balance": creditBalanceCents,
 	}).Info("Tenant promoted from prepaid to postpaid")
 
 	return &pb.PromoteToPaidResponse{
 		Success:            true,
-		Message:            fmt.Sprintf("Upgraded to %s tier", tierName),
+		Message:            "Switched to postpaid billing",
 		NewBillingModel:    "postpaid",
 		CreditBalanceCents: creditBalanceCents,
 		SubscriptionId:     subscriptionID,
+		TierLevel:          tierLevel,
+		EligibleClusterIds: eligibleClusters,
+		PrimaryClusterId:   primaryCluster,
 	}, nil
 }
 

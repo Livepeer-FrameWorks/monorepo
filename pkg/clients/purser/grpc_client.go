@@ -391,6 +391,14 @@ func (c *GRPCClient) InitializePrepaidAccount(ctx context.Context, tenantID, cur
 	})
 }
 
+// InitializePostpaidAccount creates a postpaid subscription for email registration.
+// Resolves the default postpaid tier and provisions cluster access.
+func (c *GRPCClient) InitializePostpaidAccount(ctx context.Context, tenantID string) (*pb.InitializePostpaidAccountResponse, error) {
+	return c.prepaid.InitializePostpaidAccount(ctx, &pb.InitializePostpaidAccountRequest{
+		TenantId: tenantID,
+	})
+}
+
 // TopupBalance adds funds to a tenant's prepaid balance
 func (c *GRPCClient) TopupBalance(ctx context.Context, tenantID string, amountCents int64, currency, description string, referenceID, referenceType *string) (*pb.BalanceTransaction, error) {
 	return c.prepaid.TopupBalance(ctx, &pb.TopupBalanceRequest{

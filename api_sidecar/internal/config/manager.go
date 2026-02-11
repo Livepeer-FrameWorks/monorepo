@@ -2,15 +2,19 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
@@ -226,6 +230,64 @@ func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) {
 		"domain":     bundle.GetDomain(),
 		"expires_at": bundle.GetExpiresAt(),
 	}).Info("Applied TLS certificate bundle from ConfigSeed")
+
+	m.reloadCaddy()
+}
+
+// reloadCaddy triggers a Caddy config reload via the admin API.
+//
+// Docker: CADDY_ADMIN_SOCKET=/run/caddy/admin.sock (Unix socket, no network exposure)
+// Bare metal: CADDY_ADMIN_URL=http://localhost:2019 (loopback only)
+func (m *Manager) reloadCaddy() {
+	socketPath := os.Getenv("CADDY_ADMIN_SOCKET")
+	adminURL := os.Getenv("CADDY_ADMIN_URL")
+
+	var client *http.Client
+	var baseURL string
+
+	switch {
+	case socketPath != "":
+		client = &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+				},
+			},
+		}
+		baseURL = "http://caddy"
+	case adminURL != "":
+		client = &http.Client{Timeout: 5 * time.Second}
+		baseURL = strings.TrimRight(adminURL, "/")
+	default:
+		return
+	}
+
+	body, err := os.ReadFile("/etc/caddy/Caddyfile")
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to read Caddyfile for reload")
+		return
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/load", bytes.NewReader(body))
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to create Caddy reload request")
+		return
+	}
+	req.Header.Set("Content-Type", "text/caddyfile")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		m.logger.WithError(err).Warn("Failed to reload Caddy configuration")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		m.logger.Info("Caddy configuration reloaded after TLS certificate update")
+	} else {
+		m.logger.WithField("status", resp.StatusCode).Warn("Caddy reload returned non-200")
+	}
 }
 
 func (m *Manager) ensureProtocols(current map[string]interface{}) error {
@@ -357,7 +419,7 @@ func hostnameFromPublicURL(edgePublicURL string) string {
 
 	// Accept forms like:
 	// - http://localhost:18090/view
-	// - https://edge.example.com/view
+	// - https://edge-egress.example.com/view
 	// - //localhost:18090/view
 	// - localhost:18090/view
 	if strings.HasPrefix(raw, "//") {

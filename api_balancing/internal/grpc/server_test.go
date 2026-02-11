@@ -26,6 +26,10 @@ func (m *mockCacheInvalidator) GetBillingStatus(ctx context.Context, internalNam
 	return nil
 }
 
+func (m *mockCacheInvalidator) GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer {
+	return nil
+}
+
 func TestInvalidateTenantCacheRequiresTenantID(t *testing.T) {
 	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 
