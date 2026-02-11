@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+//nolint:bodyclose // test responses have no body
 func TestNewHTTPRetryPolicy_NormalizesConfigToBoundRetries(t *testing.T) {
 	cfg := HTTPExecutorConfig{
 		MaxRetries: -3,
@@ -33,6 +34,7 @@ func TestNewHTTPRetryPolicy_NormalizesConfigToBoundRetries(t *testing.T) {
 	}
 }
 
+//nolint:bodyclose // test responses have no body
 func TestNewHTTPRetryPolicy_RetriesUpToConfiguredLimit(t *testing.T) {
 	cfg := HTTPExecutorConfig{
 		MaxRetries: 2,
