@@ -165,6 +165,9 @@ func TestPreRegisterEdge_DefaultCluster(t *testing.T) {
 	if resp.ClusterSlug != "default" {
 		t.Errorf("expected cluster_slug %q, got %q", "default", resp.ClusterSlug)
 	}
+	if resp.ClusterId != "default" {
+		t.Errorf("expected cluster_id %q, got %q", "default", resp.ClusterId)
+	}
 
 	if !strings.HasSuffix(resp.EdgeDomain, ".default.frameworks.network") {
 		t.Errorf("expected edge_domain to end with .default.frameworks.network, got %q", resp.EdgeDomain)

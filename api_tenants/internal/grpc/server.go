@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -3450,6 +3451,22 @@ func validateExpectedIP(expectedIP sql.NullString, clientIP string) bool {
 	return expectedAddr != nil && expectedAddr.Equal(clientAddr)
 }
 
+var edgeNodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
+
+func deriveEdgeNodeID(hostname string) string {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	if hostname == "" {
+		return ""
+	}
+	if idx := strings.Index(hostname, "."); idx > 0 {
+		hostname = hostname[:idx]
+	}
+	if !edgeNodeIDPattern.MatchString(hostname) {
+		return ""
+	}
+	return hostname
+}
+
 // ============================================================================
 // BOOTSTRAP SERVICE - Additional Methods
 // ============================================================================
@@ -3534,11 +3551,36 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		}
 	}
 
-	// Generate node ID with UUID suffix for uniqueness
-	nodeID := "edge-" + uuid.New().String()[:12]
-	hostname := req.GetHostname()
+	hostname := strings.TrimSpace(req.GetHostname())
+	nodeID := deriveEdgeNodeID(hostname)
+	if nodeID == "" {
+		nodeID = "edge-" + uuid.New().String()[:12]
+	}
 	if hostname == "" {
 		hostname = nodeID
+	}
+
+	// Idempotent: if node already exists with same cluster, return it
+	var existingClusterID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1
+	`, nodeID).Scan(&existingClusterID)
+	if err == nil {
+		if existingClusterID != resolvedClusterID {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"node %s already exists in cluster %s", nodeID, existingClusterID)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+		}
+		return &pb.BootstrapEdgeNodeResponse{
+			NodeId:    nodeID,
+			TenantId:  tenantID.String,
+			ClusterId: resolvedClusterID,
+		}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
 	// Create node
