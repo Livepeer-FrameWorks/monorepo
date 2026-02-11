@@ -35,8 +35,14 @@ func TestEncodeDLQMessageExtractsTenantIDFromPayload(t *testing.T) {
 	if payload.TenantID != "tenant-123" {
 		t.Fatalf("expected tenant_id tenant-123, got %q", payload.TenantID)
 	}
+	if payload.EventID != "evt-1" {
+		t.Fatalf("expected event_id evt-1, got %q", payload.EventID)
+	}
 	if payload.Headers["tenant_id"] != "tenant-123" {
 		t.Fatalf("expected tenant_id header tenant-123, got %q", payload.Headers["tenant_id"])
+	}
+	if payload.Headers["event_id"] != "evt-1" {
+		t.Fatalf("expected event_id header evt-1, got %q", payload.Headers["event_id"])
 	}
 	if payload.Headers["event_type"] != "viewer_connect" {
 		t.Fatalf("expected event_type header viewer_connect, got %q", payload.Headers["event_type"])
@@ -79,7 +85,9 @@ func TestEncodeDLQMessageUsesHeaderTenantID(t *testing.T) {
 		Timestamp: time.Now(),
 		Value:     []byte("not-json"),
 		Headers: map[string]string{
-			"tenant_id": "tenant-999",
+			"tenant_id":  "tenant-999",
+			"event_id":   "evt-999",
+			"event_type": "stream_lifecycle_update",
 		},
 	}
 
@@ -95,6 +103,12 @@ func TestEncodeDLQMessageUsesHeaderTenantID(t *testing.T) {
 
 	if payload.TenantID != "tenant-999" {
 		t.Fatalf("expected tenant_id tenant-999, got %q", payload.TenantID)
+	}
+	if payload.EventID != "evt-999" {
+		t.Fatalf("expected event_id evt-999, got %q", payload.EventID)
+	}
+	if payload.EventType != "stream_lifecycle_update" {
+		t.Fatalf("expected event_type stream_lifecycle_update, got %q", payload.EventType)
 	}
 	if payload.Headers["tenant_id"] != "tenant-999" {
 		t.Fatalf("expected tenant_id header tenant-999, got %q", payload.Headers["tenant_id"])
