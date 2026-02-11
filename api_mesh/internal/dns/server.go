@@ -69,7 +69,7 @@ func (s *Server) Stop() {
 func (s *Server) UpdateRecords(records map[string][]string) error {
 	nextRecords := make(map[string][]string, len(records))
 	for name, ips := range records {
-		trimmedName := strings.TrimSpace(name)
+		trimmedName := strings.ToLower(strings.TrimSpace(name))
 		if trimmedName == "" {
 			return fmt.Errorf("dns record name is empty")
 		}
@@ -115,7 +115,7 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 	switch r.Question[0].Qtype {
 	case dns.TypeA:
 		m.Authoritative = true
-		domain := r.Question[0].Name
+		domain := strings.ToLower(r.Question[0].Name)
 
 		// Look up domain in local peer list
 		s.mu.RLock()

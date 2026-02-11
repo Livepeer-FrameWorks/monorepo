@@ -4148,6 +4148,7 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id
 		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
+		  AND status = 'active'
 	`, nodeID).Scan(&currentWgIP, &externalIP, &internalIP, &clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "node not found - please register the node first")

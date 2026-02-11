@@ -371,7 +371,7 @@ func TestAgentSyncRevokedWithoutToken(t *testing.T) {
 	}
 }
 
-func TestAgentSyncNotFoundClearsDNSState(t *testing.T) {
+func TestAgentSyncNotFoundClearsMeshState(t *testing.T) {
 	client := &fakeMeshClient{
 		syncResponses: []meshSyncResult{
 			{resp: &pb.InfrastructureSyncResponse{
@@ -405,8 +405,11 @@ func TestAgentSyncNotFoundClearsDNSState(t *testing.T) {
 
 	agent.sync()
 
-	if len(wg.applied) != 1 {
-		t.Fatalf("expected no additional wireguard apply on not found, got %d", len(wg.applied))
+	if len(wg.applied) != 2 {
+		t.Fatalf("expected additional wireguard apply to clear peers on not found, got %d", len(wg.applied))
+	}
+	if len(wg.applied[1].Peers) != 0 {
+		t.Fatalf("expected second wireguard apply to have no peers, got %v", wg.applied[1].Peers)
 	}
 	if len(dns.updates) != 2 {
 		t.Fatalf("expected dns to be updated twice, got %d", len(dns.updates))
@@ -700,5 +703,72 @@ func TestAgentSyncApplyFailurePropagates(t *testing.T) {
 
 	if got := testutil.ToFloat64(metrics.SyncOperations.WithLabelValues("failed")); got != 1 {
 		t.Fatalf("expected failed sync counter to be 1, got %v", got)
+	}
+}
+
+func TestAgentSyncBootstrapRetryFailureClearsMeshState(t *testing.T) {
+	logger := logging.NewLogger()
+	nodeIDPath := filepath.Join(t.TempDir(), "node_id")
+	if err := os.WriteFile(nodeIDPath, []byte("node-retry-clear"), 0600); err != nil {
+		t.Fatalf("write node id: %v", err)
+	}
+
+	mesh := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+				Peers: []*pb.InfrastructurePeer{{
+					PublicKey:  "peer-key",
+					Endpoint:   "1.2.3.4:51820",
+					AllowedIps: []string{"10.0.0.2/32"},
+					KeepAlive:  25,
+					NodeName:   "peer-one",
+				}},
+				ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+					"metrics": {Ips: []string{"10.0.0.5"}},
+				},
+			}},
+			{err: status.Error(codes.NotFound, "missing")},
+			{err: status.Error(codes.Unavailable, "still down")},
+		},
+		bootstrapResponses: []meshBootstrapResult{
+			{resp: &pb.BootstrapInfrastructureNodeResponse{NodeId: "node-retry-clear", ClusterId: "cluster-1"}},
+		},
+	}
+
+	wg := &fakeWireguard{pubKey: "pub-self", privKey: "priv-self"}
+	dnsService := &fakeDNS{}
+
+	agent, err := New(Config{
+		EnrollmentToken:  "token-456",
+		NodeIDPath:       nodeIDPath,
+		NodeName:         "privateer-bootstrap-clear",
+		Logger:           logger,
+		MeshClient:       mesh,
+		WireGuardManager: wg,
+		DNSService:       dnsService,
+	})
+	if err != nil {
+		t.Fatalf("new agent: %v", err)
+	}
+
+	agent.sync()
+	agent.sync()
+
+	if len(wg.applied) != 2 {
+		t.Fatalf("expected wireguard apply for initial sync and clear, got %d", len(wg.applied))
+	}
+	if len(wg.applied[1].Peers) != 0 {
+		t.Fatalf("expected clear config to have no peers, got %v", wg.applied[1].Peers)
+	}
+	if len(dnsService.updates) != 2 {
+		t.Fatalf("expected DNS updated for initial records and clear, got %d", len(dnsService.updates))
+	}
+	if len(dnsService.updates[1]) != 0 {
+		t.Fatalf("expected second DNS update to clear records, got %v", dnsService.updates[1])
+	}
+	if agent.getLastAppliedConfig() != nil {
+		t.Fatal("expected last applied config to be cleared after bootstrap retry failure")
 	}
 }

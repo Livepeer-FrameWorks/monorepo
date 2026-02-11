@@ -1,12 +1,15 @@
 package grpc
 
 import (
+	"database/sql"
 	"testing"
 
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestSyncMeshUpdatesHeartbeatWithoutKeyOrPort(t *testing.T) {
@@ -18,7 +21,7 @@ func TestSyncMeshUpdatesHeartbeatWithoutKeyOrPort(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil)
 
-	mock.ExpectQuery(`SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = \$1`).
+	mock.ExpectQuery(`SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = \$1\s+AND status = 'active'`).
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "external_ip", "internal_ip", "cluster_id"}).AddRow("10.200.0.5", "1.2.3.4", "10.0.0.5", "cluster-1"))
 
@@ -46,6 +49,32 @@ func TestSyncMeshUpdatesHeartbeatWithoutKeyOrPort(t *testing.T) {
 	}
 	if len(resp.GetPeers()) != 0 {
 		t.Fatalf("expected no peers, got %d", len(resp.GetPeers()))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestSyncMeshRejectsInactiveNode(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil)
+
+	mock.ExpectQuery(`SELECT wireguard_ip::text, external_ip::text, internal_ip::text, cluster_id\s+FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = \$1\s+AND status = 'active'`).
+		WithArgs("inactive-node").
+		WillReturnError(sql.ErrNoRows)
+
+	_, err = server.SyncMesh(t.Context(), &pb.InfrastructureSyncRequest{NodeId: "inactive-node"})
+	if err == nil {
+		t.Fatal("expected error for inactive node")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", status.Code(err))
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
