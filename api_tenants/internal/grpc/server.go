@@ -4042,11 +4042,26 @@ func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *p
 
 	// Consume: increment usage_count if requested (PreRegisterEdge uses this)
 	if req.GetConsume() {
-		_, _ = s.db.ExecContext(ctx, `
+		result, updateErr := s.db.ExecContext(ctx, `
 			UPDATE quartermaster.bootstrap_tokens
 			SET usage_count = usage_count + 1, used_at = NOW()
 			WHERE token = $1
+			  AND expires_at > NOW()
+			  AND (
+				(usage_limit IS NULL AND used_at IS NULL) OR
+				(usage_limit IS NOT NULL AND usage_count < usage_limit)
+			  )
 		`, token)
+		if updateErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to consume bootstrap token: %v", updateErr)
+		}
+		rowsAffected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to verify bootstrap token consumption: %v", rowsErr)
+		}
+		if rowsAffected == 0 {
+			return &pb.ValidateBootstrapTokenResponse{Valid: false, Kind: kind, Reason: "already_used"}, nil
+		}
 	}
 
 	resp := &pb.ValidateBootstrapTokenResponse{

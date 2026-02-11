@@ -3208,7 +3208,7 @@ func (s *EdgeProvisioningServer) PreRegisterEdge(ctx context.Context, req *pb.Pr
 			return quartermasterClient.ValidateBootstrapTokenEx(c, &pb.ValidateBootstrapTokenRequest{
 				Token:    t,
 				ClientIp: clientIP,
-				Consume:  true,
+				Consume:  false,
 			})
 		}
 	}
