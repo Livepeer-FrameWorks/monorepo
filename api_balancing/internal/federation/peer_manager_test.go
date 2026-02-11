@@ -2,8 +2,11 @@ package federation
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/metadata"
 
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
@@ -310,4 +313,47 @@ func TestSyncPeerAddressesToRedis(t *testing.T) {
 	if addrs["remote-1"] != "foghorn.r1.example.com:18019" {
 		t.Fatalf("unexpected address for remote-1: %s", addrs["remote-1"])
 	}
+}
+
+type testPeerChannelStream struct {
+	messages []*pb.PeerMessage
+	idx      int
+}
+
+func (s *testPeerChannelStream) Send(*pb.PeerMessage) error { return nil }
+
+func (s *testPeerChannelStream) Recv() (*pb.PeerMessage, error) {
+	if s.idx >= len(s.messages) {
+		return nil, io.EOF
+	}
+	msg := s.messages[s.idx]
+	s.idx++
+	return msg, nil
+}
+
+func (s *testPeerChannelStream) CloseSend() error { return nil }
+
+func (s *testPeerChannelStream) Context() context.Context { return context.Background() }
+
+func (s *testPeerChannelStream) Header() (metadata.MD, error) { return metadata.MD{}, nil }
+
+func (s *testPeerChannelStream) Trailer() metadata.MD { return metadata.MD{} }
+
+func (s *testPeerChannelStream) SendMsg(any) error { return nil }
+
+func (s *testPeerChannelStream) RecvMsg(any) error { return io.EOF }
+
+func TestRecvLoop_NoCache_DropsMessagesWithoutPanic(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, false)
+	stream := &testPeerChannelStream{
+		messages: []*pb.PeerMessage{{
+			ClusterId: "remote",
+			Payload: &pb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &pb.EdgeTelemetry{
+				StreamName: "live+abc",
+				NodeId:     "node-1",
+			}},
+		}},
+	}
+
+	pm.recvLoop("remote", stream)
 }

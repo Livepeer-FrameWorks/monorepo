@@ -835,7 +835,7 @@ func TestHandleAnalyticsEventMalformedPayloadWritesIngestError(t *testing.T) {
 		Source:    "decklog",
 		TenantID:  uuid.NewString(),
 		Data: map[string]interface{}{
-			"streamName": map[string]interface{}{"nested": true},
+			"streamId": map[string]interface{}{"nested": true},
 		},
 	}
 

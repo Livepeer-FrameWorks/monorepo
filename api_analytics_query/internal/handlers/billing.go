@@ -531,6 +531,7 @@ func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenan
 			}
 			return nil, err
 		}
+		defer rows.Close()
 
 		var out []tenantViewerMetricRow
 		for rows.Next() {
@@ -540,7 +541,6 @@ func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenan
 			}
 			out = append(out, row)
 		}
-		_ = rows.Close()
 		return out, nil
 	}
 
