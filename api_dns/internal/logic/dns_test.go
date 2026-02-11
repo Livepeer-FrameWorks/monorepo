@@ -1134,6 +1134,7 @@ func TestSyncService_SubdomainMapping(t *testing.T) {
 		serviceType     string
 		expectedSubpart string
 	}{
+		{"edge", "edge.example.com"},
 		{"edge-egress", "edge-egress.example.com"},
 		{"edge-ingest", "edge-ingest.example.com"},
 		{"foghorn", "foghorn.example.com"},
@@ -1252,6 +1253,7 @@ func TestClusterServiceFQDN(t *testing.T) {
 		rootDomain  string
 		expected    string
 	}{
+		{"edge", "c1.example.com", "edge.c1.example.com"},
 		{"edge-egress", "c1.example.com", "edge-egress.c1.example.com"},
 		{"edge-ingest", "c1.example.com", "edge-ingest.c1.example.com"},
 		{"foghorn", "c1.example.com", "foghorn.c1.example.com"},

@@ -79,6 +79,7 @@ func NewDNSManager(cf cloudflareClient, qm quartermasterClient, logger logging.L
 // defaultServicePorts returns the default HTTP health check port for each service type
 func defaultServicePorts() map[string]int {
 	return map[string]int{
+		"edge":        18008, // Any edge node (nearest-node routing)
 		"edge-egress": 18008, // Direct to edge nodes (viewer delivery)
 		"edge-ingest": 18008, // Direct to edge nodes (stream receive)
 		"foghorn":     18008, // Foghorn viewer routing
@@ -286,6 +287,8 @@ func (m *DNSManager) SyncService(ctx context.Context, serviceType, rootDomain st
 	// Map internal service types to public subdomains
 	var subdomain string
 	switch serviceType {
+	case "edge":
+		subdomain = "edge"
 	case "edge-egress":
 		subdomain = "edge-egress"
 	case "edge-ingest":
