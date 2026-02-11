@@ -987,6 +987,54 @@ func TestHandleAnalyticsEventUnknownTypeSkipped(t *testing.T) {
 	}
 }
 
+func TestClipLifecyclePersistsServingAndOriginClusterAttribution(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	clusterID := "cluster-serving"
+	originClusterID := "cluster-origin"
+
+	data := mustMistTriggerData(t, &pb.MistTrigger{
+		StreamId:        &streamID,
+		ClusterId:       &clusterID,
+		OriginClusterId: &originClusterID,
+		TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
+			ClipLifecycleData: &pb.ClipLifecycleData{
+				InternalName: stringPtr("live+demo-stream"),
+				RequestId:    stringPtr("clip-request"),
+				ClipHash:     "clip-hash-1",
+				Stage:        pb.ClipLifecycleData_STAGE_DONE,
+			},
+		},
+	})
+
+	event := kafka.AnalyticsEvent{
+		EventID:   uuid.NewString(),
+		EventType: "clip_lifecycle",
+		Timestamp: time.Now(),
+		Source:    "decklog",
+		TenantID:  tenantID,
+		Data:      data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	batch := conn.batches["artifact_events"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected artifact_events row, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[4] != clusterID {
+		t.Fatalf("expected cluster_id %q, got %#v", clusterID, row[4])
+	}
+	if row[5] != originClusterID {
+		t.Fatalf("expected origin_cluster_id %q, got %#v", originClusterID, row[5])
+	}
+}
+
 func TestHandleAnalyticsEventMissingStreamIDDropped(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)

@@ -894,6 +894,8 @@ CREATE TABLE IF NOT EXISTS artifact_events (
     tenant_id UUID,
     stream_id UUID,
     internal_name String,
+    cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
     filename Nullable(String),
     request_id String,
 
