@@ -4051,19 +4051,17 @@ func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *pb.Infrastructu
 		return nil, status.Errorf(codes.Internal, "failed to get node info: %v", err)
 	}
 
-	// 2. Update public key, listen port, and heartbeat if provided
-	if publicKey != "" || req.GetListenPort() > 0 {
-		_, err = s.db.ExecContext(ctx, `
-			UPDATE quartermaster.infrastructure_nodes
-			SET wireguard_public_key = COALESCE(NULLIF($1, ''), wireguard_public_key),
-			    wireguard_listen_port = COALESCE(NULLIF($2, 0), wireguard_listen_port),
-			    last_heartbeat = NOW(),
-			    updated_at = NOW()
-			WHERE node_id = $3
-		`, publicKey, req.GetListenPort(), nodeID)
-		if err != nil {
-			s.logger.WithError(err).Warn("Failed to update node public key")
-		}
+	// 2. Update heartbeat every sync and opportunistically update key/listen port.
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_nodes
+		SET wireguard_public_key = COALESCE(NULLIF($1, ''), wireguard_public_key),
+		    wireguard_listen_port = COALESCE(NULLIF($2, 0), wireguard_listen_port),
+		    last_heartbeat = NOW(),
+		    updated_at = NOW()
+		WHERE node_id = $3
+	`, publicKey, req.GetListenPort(), nodeID)
+	if err != nil {
+		s.logger.WithError(err).Warn("Failed to update node heartbeat/public key")
 	}
 
 	// 3. Allocate WireGuard IP if missing

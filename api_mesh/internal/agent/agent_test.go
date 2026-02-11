@@ -371,6 +371,54 @@ func TestAgentSyncRevokedWithoutToken(t *testing.T) {
 	}
 }
 
+func TestAgentSyncNotFoundClearsDNSState(t *testing.T) {
+	client := &fakeMeshClient{
+		syncResponses: []meshSyncResult{
+			{resp: &pb.InfrastructureSyncResponse{
+				WireguardIp:   "10.0.0.10",
+				WireguardPort: 51820,
+				Peers: []*pb.InfrastructurePeer{{
+					PublicKey:  "peer-key",
+					Endpoint:   "1.2.3.4:51820",
+					AllowedIps: []string{"10.0.0.2/32"},
+					KeepAlive:  25,
+					NodeName:   "peer-one",
+				}},
+				ServiceEndpoints: map[string]*pb.ServiceEndpoints{
+					"metrics": {Ips: []string{"10.0.0.5"}},
+				},
+			}},
+			{err: status.Error(codes.NotFound, "revoked")},
+		},
+	}
+	wg := &fakeWireguard{pubKey: "pub", privKey: "priv"}
+	dns := &fakeDNS{}
+	agent := newTestAgent(t, client, wg, dns)
+
+	agent.sync()
+	if len(dns.updates) != 1 || len(dns.updates[0]) == 0 {
+		t.Fatalf("expected initial dns update to contain records, got %+v", dns.updates)
+	}
+	if agent.getLastAppliedConfig() == nil {
+		t.Fatal("expected initial config to be stored")
+	}
+
+	agent.sync()
+
+	if len(wg.applied) != 1 {
+		t.Fatalf("expected no additional wireguard apply on not found, got %d", len(wg.applied))
+	}
+	if len(dns.updates) != 2 {
+		t.Fatalf("expected dns to be updated twice, got %d", len(dns.updates))
+	}
+	if len(dns.updates[1]) != 0 {
+		t.Fatalf("expected second dns update to clear records, got %v", dns.updates[1])
+	}
+	if agent.getLastAppliedConfig() != nil {
+		t.Fatal("expected last applied config to be cleared after node not found")
+	}
+}
+
 func TestLoadOrGenerateNodeID(t *testing.T) {
 	logger := logging.NewLogger()
 	root := t.TempDir()
