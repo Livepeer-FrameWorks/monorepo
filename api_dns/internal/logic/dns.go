@@ -252,7 +252,8 @@ func (m *DNSManager) syncClusterService(ctx context.Context, fqdn, serviceType s
 	if len(ips) == 1 {
 		return nil, m.applySingleNodeConfig(ctx, fqdn, ips[0], m.shouldProxy(serviceType))
 	}
-	return m.applyLoadBalancerConfig(ctx, fqdn, serviceType, ips, m.shouldProxy(serviceType))
+	poolName := strings.ReplaceAll(fqdn, ".", "-")
+	return m.applyLoadBalancerConfig(ctx, fqdn, poolName, ips, m.shouldProxy(serviceType))
 }
 
 // SyncService synchronizes DNS records for a specific service type (e.g. "edge", "gateway")

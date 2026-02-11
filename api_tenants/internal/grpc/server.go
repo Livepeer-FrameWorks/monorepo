@@ -3549,7 +3549,7 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Errorf(codes.Internal, "failed to commit bootstrap: %v", err)
 	}
 
-	nodeType := "edge"
+	nodeType := "edge-egress"
 	if s.navigatorClient != nil {
 		syncReq := &pb.SyncDNSRequest{
 			ServiceType: nodeType,

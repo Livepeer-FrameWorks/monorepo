@@ -1378,3 +1378,80 @@ func TestSyncServiceByCluster_NonEdgeSkipsNodeRecords(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncServiceByCluster_UsesClusterScopedPoolNames(t *testing.T) {
+	ip1 := "10.0.0.1"
+	ip2 := "10.0.0.2"
+	ip3 := "10.0.1.1"
+	ip4 := "10.0.1.2"
+
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{
+			Clusters: []*proto.InfrastructureCluster{
+				{ClusterId: "cluster-1", ClusterName: "one", IsActive: true},
+				{ClusterId: "cluster-2", ClusterName: "two", IsActive: true},
+			},
+		},
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{
+				{NodeId: "n1", ClusterId: "cluster-1", ExternalIp: strPtr(ip1)},
+				{NodeId: "n2", ClusterId: "cluster-1", ExternalIp: strPtr(ip2)},
+				{NodeId: "n3", ClusterId: "cluster-2", ExternalIp: strPtr(ip3)},
+				{NodeId: "n4", ClusterId: "cluster-2", ExternalIp: strPtr(ip4)},
+			},
+		},
+	}
+
+	createdPools := []string{}
+	cf := &fakeCloudflareClient{
+		listMonitors: func() ([]cloudflare.Monitor, error) {
+			return nil, nil
+		},
+		createMonitor: func(monitor cloudflare.Monitor) (*cloudflare.Monitor, error) {
+			monitor.ID = "monitor"
+			return &monitor, nil
+		},
+		listPools: func() ([]cloudflare.Pool, error) {
+			return nil, nil
+		},
+		createPool: func(pool cloudflare.Pool) (*cloudflare.Pool, error) {
+			pool.ID = pool.Name
+			createdPools = append(createdPools, pool.Name)
+			return &pool, nil
+		},
+		getPool: func(poolID string) (*cloudflare.Pool, error) {
+			return &cloudflare.Pool{ID: poolID}, nil
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return nil, nil
+		},
+	}
+
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	partialErrors, err := m.SyncServiceByCluster(context.Background(), "foghorn")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(partialErrors) > 0 {
+		t.Fatalf("unexpected partial errors: %v", partialErrors)
+	}
+
+	if len(createdPools) != 2 {
+		t.Fatalf("expected 2 pools, got %d (%v)", len(createdPools), createdPools)
+	}
+
+	for _, name := range createdPools {
+		if strings.Contains(name, ".") {
+			t.Fatalf("expected sanitized cluster-scoped pool name without dots, got %q", name)
+		}
+		if !strings.Contains(name, "example-com") {
+			t.Fatalf("expected pool name to include cluster fqdn scope, got %q", name)
+		}
+	}
+
+	if createdPools[0] == createdPools[1] {
+		t.Fatalf("expected unique pool names per cluster, got %v", createdPools)
+	}
+}
