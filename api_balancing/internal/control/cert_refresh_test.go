@@ -69,38 +69,79 @@ func TestRefreshTLSBundles_UsesCanonicalID(t *testing.T) {
 	}
 }
 
-func TestLastPushedCertExpiry_DeduplicatesSameCert(t *testing.T) {
-	// Clear any previous state
-	lastPushedCertExpiry = sync.Map{}
+func TestLastPushedTLSState_DeduplicatesStateChanges(t *testing.T) {
+	lastPushedTLSState = sync.Map{}
 
-	nodeID := "test-node"
-	expiry := int64(1700000000)
+	connID := "test-node"
+	first := &pb.TLSCertBundle{
+		CertPem:   "cert-a",
+		KeyPem:    "key-a",
+		Domain:    "*.cluster.frameworks.network",
+		ExpiresAt: 1700000000,
+	}
+	state1 := tlsBundleState(first)
+	lastPushedTLSState.Store(connID, state1)
 
-	// First store
-	lastPushedCertExpiry.Store(nodeID, expiry)
-
-	// Check it's there
-	prev, ok := lastPushedCertExpiry.Load(nodeID)
+	prev, ok := lastPushedTLSState.Load(connID)
 	if !ok {
-		t.Fatal("expected entry in lastPushedCertExpiry")
+		t.Fatal("expected entry in lastPushedTLSState")
 	}
-	if prev.(int64) != expiry {
-		t.Errorf("expected expiry %d, got %d", expiry, prev.(int64))
-	}
-
-	// Same expiry should be a no-op (cert refresh skips)
-	prev2, ok2 := lastPushedCertExpiry.Load(nodeID)
-	if !ok2 || prev2.(int64) != expiry {
-		t.Error("expected same expiry on second load")
+	if prev.(string) != state1 {
+		t.Fatalf("expected state %q, got %q", state1, prev)
 	}
 
-	// Different expiry should be detected
-	newExpiry := int64(1700086400)
-	lastPushedCertExpiry.Store(nodeID, newExpiry)
-	prev3, _ := lastPushedCertExpiry.Load(nodeID)
-	if prev3.(int64) != newExpiry {
-		t.Errorf("expected updated expiry %d, got %d", newExpiry, prev3.(int64))
+	// Same expiry but different certificate material must produce a new state.
+	rotated := &pb.TLSCertBundle{
+		CertPem:   "cert-b",
+		KeyPem:    "key-a",
+		Domain:    "*.cluster.frameworks.network",
+		ExpiresAt: 1700000000,
 	}
+	state2 := tlsBundleState(rotated)
+	if state2 == state1 {
+		t.Fatal("expected changed TLS state when cert material changes")
+	}
+
+	lastPushedTLSState.Store(connID, state2)
+	updated, _ := lastPushedTLSState.Load(connID)
+	if updated.(string) != state2 {
+		t.Fatalf("expected updated state %q, got %q", state2, updated)
+	}
+
+	lastPushedTLSState.Store(connID, tlsStateNoCert)
+	cleared, _ := lastPushedTLSState.Load(connID)
+	if cleared.(string) != tlsStateNoCert {
+		t.Fatalf("expected no-cert state, got %q", cleared)
+	}
+}
+
+func TestTLSBundleState(t *testing.T) {
+	t.Run("nil bundle", func(t *testing.T) {
+		if got := tlsBundleState(nil); got != tlsStateNoCert {
+			t.Fatalf("expected %q, got %q", tlsStateNoCert, got)
+		}
+	})
+
+	t.Run("stable hash and sensitive to all fields", func(t *testing.T) {
+		base := &pb.TLSCertBundle{CertPem: "cert", KeyPem: "key", Domain: "*.a", ExpiresAt: 10}
+		again := &pb.TLSCertBundle{CertPem: "cert", KeyPem: "key", Domain: "*.a", ExpiresAt: 10}
+		if tlsBundleState(base) != tlsBundleState(again) {
+			t.Fatal("expected identical bundles to hash identically")
+		}
+
+		cases := []*pb.TLSCertBundle{
+			{CertPem: "cert2", KeyPem: "key", Domain: "*.a", ExpiresAt: 10},
+			{CertPem: "cert", KeyPem: "key2", Domain: "*.a", ExpiresAt: 10},
+			{CertPem: "cert", KeyPem: "key", Domain: "*.b", ExpiresAt: 10},
+			{CertPem: "cert", KeyPem: "key", Domain: "*.a", ExpiresAt: 11},
+		}
+		baseHash := tlsBundleState(base)
+		for i, tc := range cases {
+			if tlsBundleState(tc) == baseHash {
+				t.Fatalf("case %d unexpectedly hashed equal to base", i)
+			}
+		}
+	})
 }
 
 func TestConnCanonicalID_StoredAfterResolution(t *testing.T) {
