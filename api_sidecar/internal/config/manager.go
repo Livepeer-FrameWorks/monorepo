@@ -124,6 +124,8 @@ func (m *Manager) reconcile() {
 
 	if tls := seed.GetTls(); tls != nil {
 		m.applyTLSBundle(tls)
+	} else {
+		m.removeTLSBundle()
 	}
 	// Log processing config if present
 	if proc := seed.GetProcessing(); proc != nil {
@@ -232,6 +234,30 @@ func (m *Manager) applyTLSBundle(bundle *pb.TLSCertBundle) {
 	}).Info("Applied TLS certificate bundle from ConfigSeed")
 
 	m.reloadCaddy()
+}
+
+func (m *Manager) removeTLSBundle() {
+	certPath := "/etc/frameworks/certs/cert.pem"
+	keyPath := "/etc/frameworks/certs/key.pem"
+
+	certGone := true
+	if _, err := os.Stat(certPath); err == nil {
+		if err := os.Remove(certPath); err != nil {
+			m.logger.WithError(err).Warn("Failed to remove TLS certificate file")
+			certGone = false
+		}
+	}
+	if _, err := os.Stat(keyPath); err == nil {
+		if err := os.Remove(keyPath); err != nil {
+			m.logger.WithError(err).Warn("Failed to remove TLS key file")
+			certGone = false
+		}
+	}
+
+	if certGone {
+		m.logger.Info("Removed TLS certificate files")
+		m.reloadCaddy()
+	}
 }
 
 // reloadCaddy triggers a Caddy config reload via the admin API.

@@ -8,11 +8,20 @@ import (
 	pb "frameworks/pkg/proto"
 
 	"frameworks/pkg/logging"
+
+	navclient "frameworks/pkg/clients/navigator"
+	qmclient "frameworks/pkg/clients/quartermaster"
 )
 
 // mockStream satisfies pb.HelmsmanControl_ConnectServer for registry population.
 type mockStream struct {
 	pb.HelmsmanControl_ConnectServer
+	sent []*pb.ControlMessage
+}
+
+func (m *mockStream) Send(msg *pb.ControlMessage) error {
+	m.sent = append(m.sent, msg)
+	return nil
 }
 
 func TestRefreshTLSBundles_UsesCanonicalID(t *testing.T) {
@@ -177,5 +186,191 @@ func TestConnCanonicalID_StoredAfterResolution(t *testing.T) {
 
 	if c.canonicalID != canonicalNodeID {
 		t.Errorf("expected canonicalID %q, got %q", canonicalNodeID, c.canonicalID)
+	}
+}
+
+func TestFetchClusterTLSBundle_NilClients(t *testing.T) {
+	oldQM := quartermasterClient
+	oldNav := navigatorClient
+	defer func() {
+		quartermasterClient = oldQM
+		navigatorClient = oldNav
+	}()
+
+	t.Run("both nil", func(t *testing.T) {
+		quartermasterClient = nil
+		navigatorClient = nil
+		bundle, found, err := fetchClusterTLSBundle("any-node")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if found {
+			t.Fatal("expected found=false")
+		}
+		if bundle != nil {
+			t.Fatal("expected nil bundle")
+		}
+	})
+
+	t.Run("quartermaster nil only", func(t *testing.T) {
+		quartermasterClient = nil
+		navigatorClient = &navclient.Client{}
+		bundle, found, err := fetchClusterTLSBundle("any-node")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if found || bundle != nil {
+			t.Fatal("expected nil/false when quartermaster is nil")
+		}
+	})
+
+	t.Run("navigator nil only", func(t *testing.T) {
+		quartermasterClient = &qmclient.GRPCClient{}
+		navigatorClient = nil
+		bundle, found, err := fetchClusterTLSBundle("any-node")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+		if found || bundle != nil {
+			t.Fatal("expected nil/false when navigator is nil")
+		}
+	})
+}
+
+func TestResolveClusterTLSBundle_NilClients(t *testing.T) {
+	oldQM := quartermasterClient
+	oldNav := navigatorClient
+	defer func() {
+		quartermasterClient = oldQM
+		navigatorClient = oldNav
+	}()
+
+	quartermasterClient = nil
+	navigatorClient = nil
+
+	bundle := resolveClusterTLSBundle("any-node")
+	if bundle != nil {
+		t.Fatal("expected nil bundle when clients are nil")
+	}
+}
+
+func TestRefreshTLSBundles_EmptyRegistry(t *testing.T) {
+	oldRegistry := registry
+	oldQM := quartermasterClient
+	oldNav := navigatorClient
+	defer func() {
+		registry = oldRegistry
+		quartermasterClient = oldQM
+		navigatorClient = oldNav
+	}()
+
+	quartermasterClient = nil
+	navigatorClient = nil
+	lastPushedTLSState = sync.Map{}
+
+	registry = &Registry{
+		conns: make(map[string]*conn),
+		log:   logging.NewLogger(),
+	}
+
+	// Should return immediately with no panics
+	refreshTLSBundles(logging.NewLogger())
+}
+
+func TestRefreshTLSBundles_SkipsWhenStateUnchanged(t *testing.T) {
+	oldRegistry := registry
+	oldQM := quartermasterClient
+	oldNav := navigatorClient
+	defer func() {
+		registry = oldRegistry
+		quartermasterClient = oldQM
+		navigatorClient = oldNav
+	}()
+
+	quartermasterClient = nil
+	navigatorClient = nil
+	lastPushedTLSState = sync.Map{}
+
+	ms := &mockStream{}
+	registry = &Registry{
+		conns: make(map[string]*conn),
+		log:   logging.NewLogger(),
+	}
+	registry.conns["edge-1"] = &conn{
+		stream:      ms,
+		last:        time.Now(),
+		peerAddr:    "10.0.0.1:5000",
+		canonicalID: "edge-1",
+	}
+
+	// Pre-populate with tlsStateNoCert — same state fetchClusterTLSBundle
+	// will produce with nil clients, so refresh should skip.
+	lastPushedTLSState.Store("edge-1", tlsStateNoCert)
+
+	refreshTLSBundles(logging.NewLogger())
+
+	if len(ms.sent) != 0 {
+		t.Fatalf("expected no Send calls when state unchanged, got %d", len(ms.sent))
+	}
+
+	// State should remain unchanged
+	val, _ := lastPushedTLSState.Load("edge-1")
+	if val.(string) != tlsStateNoCert {
+		t.Fatalf("expected state to remain %q, got %q", tlsStateNoCert, val)
+	}
+}
+
+func TestRefreshTLSBundles_PushesOnStateChange(t *testing.T) {
+	oldRegistry := registry
+	oldQM := quartermasterClient
+	oldNav := navigatorClient
+	defer func() {
+		registry = oldRegistry
+		quartermasterClient = oldQM
+		navigatorClient = oldNav
+	}()
+
+	// Nil clients → fetchClusterTLSBundle returns (nil, false, nil)
+	quartermasterClient = nil
+	navigatorClient = nil
+	lastPushedTLSState = sync.Map{}
+
+	ms := &mockStream{}
+	registry = &Registry{
+		conns: make(map[string]*conn),
+		log:   logging.NewLogger(),
+	}
+	registry.conns["edge-1"] = &conn{
+		stream:      ms,
+		last:        time.Now(),
+		peerAddr:    "10.0.0.1:5000",
+		canonicalID: "edge-1",
+	}
+
+	// Simulate a previously-pushed cert state (some hash).
+	// With nil clients, next state will be tlsStateNoCert → state change detected.
+	lastPushedTLSState.Store("edge-1", "abcdef1234567890")
+
+	refreshTLSBundles(logging.NewLogger())
+
+	// Should have pushed a ConfigSeed with Tls == nil
+	if len(ms.sent) != 1 {
+		t.Fatalf("expected 1 Send call on state change, got %d", len(ms.sent))
+	}
+	seed := ms.sent[0].GetConfigSeed()
+	if seed == nil {
+		t.Fatal("expected ConfigSeed payload")
+	}
+	if seed.GetTls() != nil {
+		t.Fatal("expected Tls to be nil in pushed seed (cert removed)")
+	}
+
+	// State should now be tlsStateNoCert
+	val, ok := lastPushedTLSState.Load("edge-1")
+	if !ok {
+		t.Fatal("expected state entry after push")
+	}
+	if val.(string) != tlsStateNoCert {
+		t.Fatalf("expected state %q, got %q", tlsStateNoCert, val)
 	}
 }

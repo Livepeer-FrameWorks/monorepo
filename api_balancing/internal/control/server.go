@@ -3060,6 +3060,9 @@ func fetchClusterTLSBundle(nodeID string) (*pb.TLSCertBundle, bool, error) {
 		return nil, false, certErr
 	}
 	if certResp == nil || !certResp.GetFound() {
+		if certResp != nil && certResp.GetError() != "" {
+			return nil, false, fmt.Errorf("navigator: %s", certResp.GetError())
+		}
 		return nil, false, nil
 	}
 
