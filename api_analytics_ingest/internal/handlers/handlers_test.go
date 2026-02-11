@@ -778,6 +778,36 @@ func TestHandleAnalyticsEventMissingTenantIDWritesIngestError(t *testing.T) {
 	}
 }
 
+func TestHandleServiceEventMissingTenantIDWritesIngestError(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	event := kafka.ServiceEvent{
+		EventID:   uuid.NewString(),
+		EventType: "tenant_created",
+		Timestamp: time.Now(),
+		Source:    "api_gateway",
+		TenantID:  "",
+		Data:      map[string]interface{}{"tenant_name": "acme"},
+	}
+
+	err := handler.HandleServiceEvent(event)
+	if err != nil {
+		t.Fatalf("expected nil error for dropped service event, got %v", err)
+	}
+
+	ingestErrors := conn.batches["ingest_errors"]
+	if ingestErrors == nil || len(ingestErrors.rows) != 1 {
+		t.Fatalf("expected 1 ingest_errors row, got %#v", ingestErrors)
+	}
+	if reason, ok := ingestErrors.rows[0][6].(string); !ok || !strings.Contains(reason, "missing_or_invalid_tenant_id_service_event") {
+		t.Fatalf("expected service-event missing tenant reason, got %#v", ingestErrors.rows[0][6])
+	}
+
+	if apiEvents := conn.batches["api_events"]; apiEvents != nil && len(apiEvents.rows) > 0 {
+		t.Fatalf("expected no api_events rows for dropped service event, got %#v", apiEvents.rows)
+	}
+}
+
 func TestHandleAnalyticsEventMalformedPayloadWritesIngestError(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)

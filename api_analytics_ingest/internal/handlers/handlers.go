@@ -3219,7 +3219,23 @@ func (h *AnalyticsHandler) processTenantCreated(ctx context.Context, event kafka
 // processServiceEventAudit inserts service events into the api_events audit table.
 func (h *AnalyticsHandler) processServiceEventAudit(ctx context.Context, event kafka.ServiceEvent) error {
 	if !isValidUUIDString(event.TenantID) {
-		return nil
+		h.writeIngestError(ctx, kafka.AnalyticsEvent{
+			EventID:   event.EventID,
+			EventType: event.EventType,
+			Timestamp: event.Timestamp,
+			Source:    event.Source,
+			TenantID:  event.TenantID,
+			Data:      event.Data,
+		}, "", "missing_or_invalid_tenant_id_service_event", nil)
+		h.logger.WithFields(logging.Fields{
+			"event_type": event.EventType,
+			"event_id":   event.EventID,
+			"tenant_id":  event.TenantID,
+		}).Warn("Dropping service event audit write: missing or invalid tenant_id")
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "dropped").Inc()
+		}
+		return errDropped
 	}
 
 	data := sanitizeServiceEventData(event)

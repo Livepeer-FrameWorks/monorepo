@@ -14,6 +14,8 @@ type DLQPayload struct {
 	Offset      int64             `json:"offset"`
 	Timestamp   time.Time         `json:"timestamp"`
 	TenantID    string            `json:"tenant_id,omitempty"`
+	EventID     string            `json:"event_id,omitempty"`
+	EventType   string            `json:"event_type,omitempty"`
 	KeyBase64   string            `json:"key_base64,omitempty"`
 	ValueBase64 string            `json:"value_base64"`
 	Headers     map[string]string `json:"headers,omitempty"`
@@ -25,13 +27,29 @@ type DLQPayload struct {
 func EncodeDLQMessage(msg Message, err error, consumer string) ([]byte, error) {
 	payloadHeaders := msg.Headers
 	tenantID := ""
+	eventID := ""
+	eventType := ""
 	if payloadHeaders != nil {
 		tenantID = payloadHeaders["tenant_id"]
+		eventID = payloadHeaders["event_id"]
+		eventType = payloadHeaders["event_type"]
 	}
-	if tenantID == "" {
-		if extractedTenant, ok := extractTenantIDFromJSON(msg.Value); ok {
-			tenantID = extractedTenant
-			payloadHeaders = ensureHeader(payloadHeaders, "tenant_id", extractedTenant)
+
+	if tenantID == "" || eventID == "" || eventType == "" {
+		metadata, ok := extractMessageMetadataFromJSON(msg.Value)
+		if ok {
+			if tenantID == "" {
+				tenantID = metadata.TenantID
+				payloadHeaders = ensureHeader(payloadHeaders, "tenant_id", metadata.TenantID)
+			}
+			if eventID == "" {
+				eventID = metadata.EventID
+				payloadHeaders = ensureHeader(payloadHeaders, "event_id", metadata.EventID)
+			}
+			if eventType == "" {
+				eventType = metadata.EventType
+				payloadHeaders = ensureHeader(payloadHeaders, "event_type", metadata.EventType)
+			}
 		}
 	}
 
@@ -41,6 +59,8 @@ func EncodeDLQMessage(msg Message, err error, consumer string) ([]byte, error) {
 		Offset:      msg.Offset,
 		Timestamp:   msg.Timestamp,
 		TenantID:    tenantID,
+		EventID:     eventID,
+		EventType:   eventType,
 		ValueBase64: base64.StdEncoding.EncodeToString(msg.Value),
 		Headers:     payloadHeaders,
 		Consumer:    consumer,
@@ -80,18 +100,37 @@ func ensureHeader(headers map[string]string, key string, value string) map[strin
 	return clone
 }
 
-func extractTenantIDFromJSON(value []byte) (string, bool) {
+type messageMetadata struct {
+	TenantID  string
+	EventID   string
+	EventType string
+}
+
+func extractMessageMetadataFromJSON(value []byte) (messageMetadata, bool) {
 	if len(value) == 0 {
-		return "", false
+		return messageMetadata{}, false
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal(value, &payload); err != nil {
-		return "", false
+		return messageMetadata{}, false
 	}
+
+	meta := messageMetadata{}
 	if rawTenant, ok := payload["tenant_id"]; ok {
-		if tenantID, ok := rawTenant.(string); ok && tenantID != "" {
-			return tenantID, true
+		if tenantID, ok := rawTenant.(string); ok {
+			meta.TenantID = tenantID
 		}
 	}
-	return "", false
+	if rawEventID, ok := payload["event_id"]; ok {
+		if id, ok := rawEventID.(string); ok {
+			meta.EventID = id
+		}
+	}
+	if rawEventType, ok := payload["event_type"]; ok {
+		if eventType, ok := rawEventType.(string); ok {
+			meta.EventType = eventType
+		}
+	}
+
+	return meta, meta.TenantID != "" || meta.EventID != "" || meta.EventType != ""
 }
