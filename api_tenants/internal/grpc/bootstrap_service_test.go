@@ -37,9 +37,6 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
 		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", "uuid-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
-		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
 		WillReturnError(sql.ErrNoRows)
@@ -47,6 +44,9 @@ func TestBootstrapServiceDefersTokenConsumptionUntilSuccess(t *testing.T) {
 		WithArgs("token-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
+	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
+		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	resp, err := server.BootstrapService(context.Background(), &pb.BootstrapServiceRequest{
 		Type:           "bridge",
@@ -122,9 +122,6 @@ func TestBootstrapServiceRollbackWhenTokenAlreadyConsumed(t *testing.T) {
 	mock.ExpectExec("UPDATE quartermaster.service_instances").
 		WithArgs("10.0.0.1", sqlmock.AnyArg(), "v1.0.0", "uuid-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE quartermaster.service_instances\\s+SET status = 'stopped'").
-		WithArgs("bridge", "cluster-1", "inst-bridge-1234", "10.0.0.1", "http", int32(18000)).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery("SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters").
 		WithArgs("cluster-1").
 		WillReturnError(sql.ErrNoRows)

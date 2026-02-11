@@ -652,30 +652,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		}
 	}
 
-	// 6. Cleanup stale/duplicate instances
-	_, _ = exec.ExecContext(ctx, `
-		UPDATE quartermaster.service_instances
-		SET status = 'stopped', updated_at = NOW()
-		WHERE service_id = $1 AND cluster_id = $2 AND instance_id != $3
-		  AND (
-		    last_health_check IS NULL OR
-		    last_health_check < NOW() - INTERVAL '10 minutes' OR
-		    (COALESCE(advertise_host, '') = $4 AND COALESCE(protocol, '') = $5 AND COALESCE(port, 0) = $6)
-		  )
-	`, serviceID, clusterID, instanceID, advHost, proto, port)
-
-	// 7. For Foghorn services, auto-create junction table entry (home cluster assignment)
-	if serviceType == "foghorn" {
-		_, _ = exec.ExecContext(ctx, `
-			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
-			SELECT si.id, $1
-			FROM quartermaster.service_instances si
-			WHERE si.instance_id = $2
-			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
-		`, clusterID, instanceID)
-	}
-
-	// 8. Look up cluster owner tenant for dual-tenant attribution
+	// 6. Look up cluster owner tenant for dual-tenant attribution
 	var ownerTenantID sql.NullString
 	_ = exec.QueryRowContext(ctx, `
 		SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
@@ -701,6 +678,29 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			return nil, status.Errorf(codes.Internal, "failed to commit bootstrap transaction: %v", err)
 		}
 		tx = nil
+	}
+
+	// Best-effort cleanup — runs outside the transaction so failures
+	// don't abort the already-committed bootstrap.
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.service_instances
+		SET status = 'stopped', updated_at = NOW()
+		WHERE service_id = $1 AND cluster_id = $2 AND instance_id != $3
+		  AND (
+		    last_health_check IS NULL OR
+		    last_health_check < NOW() - INTERVAL '10 minutes' OR
+		    (COALESCE(advertise_host, '') = $4 AND COALESCE(protocol, '') = $5 AND COALESCE(port, 0) = $6)
+		  )
+	`, serviceID, clusterID, instanceID, advHost, proto, port)
+
+	if serviceType == "foghorn" {
+		_, _ = s.db.ExecContext(ctx, `
+			INSERT INTO quartermaster.foghorn_cluster_assignments (foghorn_instance_id, cluster_id)
+			SELECT si.id, $1
+			FROM quartermaster.service_instances si
+			WHERE si.instance_id = $2
+			ON CONFLICT (foghorn_instance_id, cluster_id) DO UPDATE SET is_active = true
+		`, clusterID, instanceID)
 	}
 
 	resp := &pb.BootstrapServiceResponse{
