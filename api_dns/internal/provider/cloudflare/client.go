@@ -81,7 +81,7 @@ func (c *Client) doRequest(method, path string, body interface{}) (*APIResponse,
 	}
 
 	executor := c.executor
-	if method != http.MethodGet && method != http.MethodHead && method != http.MethodDelete {
+	if method == http.MethodPost || method == http.MethodPatch {
 		cfg := clients.DefaultHTTPExecutorConfig()
 		cfg.MaxRetries = 0
 		executor = clients.NewHTTPExecutor(cfg) //nolint:bodyclose

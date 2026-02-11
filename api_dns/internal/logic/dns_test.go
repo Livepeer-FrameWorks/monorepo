@@ -398,6 +398,82 @@ func TestApplyLoadBalancerConfig_UpdateLoadBalancerError(t *testing.T) {
 	}
 }
 
+func TestSyncServiceByCluster_EdgeEgressCleanupSkipsServiceRecord(t *testing.T) {
+	edgeIP := "1.1.1.1"
+	deleted := make([]string, 0)
+
+	cf := &fakeCloudflareClient{
+		listDNSRecords: func(recordType, name string) ([]cloudflare.DNSRecord, error) {
+			if recordType == "A" && name == "" {
+				return []cloudflare.DNSRecord{
+					{ID: "svc", Name: "edge-egress.cluster-a.example.com", Content: edgeIP},
+					{ID: "stale", Name: "edge-old.cluster-a.example.com", Content: "2.2.2.2"},
+					{ID: "other", Name: "edge-old.cluster-b.example.com", Content: "3.3.3.3"},
+				}, nil
+			}
+			if recordType == "A" && name == "edge-node-1.cluster-a.example.com" {
+				return []cloudflare.DNSRecord{{ID: "node", Name: name, Content: edgeIP}}, nil
+			}
+			return nil, nil
+		},
+		deleteDNSRecord: func(recordID string) error {
+			deleted = append(deleted, recordID)
+			return nil
+		},
+		listLoadBalancers: func() ([]cloudflare.LoadBalancer, error) {
+			return nil, nil
+		},
+	}
+
+	qm := &fakeQuartermasterClient{
+		clustersResponse: &proto.ListClustersResponse{
+			Clusters: []*proto.InfrastructureCluster{{ClusterId: "cluster-a", ClusterName: "Cluster A", IsActive: true}},
+		},
+		response: &proto.ListHealthyNodesForDNSResponse{
+			Nodes: []*proto.InfrastructureNode{{NodeId: "node-1", ClusterId: "cluster-a", ExternalIp: &edgeIP}},
+		},
+	}
+
+	m := newTestManager(cf)
+	m.qmClient = qm
+
+	partialErrors, err := m.SyncServiceByCluster(context.Background(), "edge-egress")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(partialErrors) != 0 {
+		t.Fatalf("expected no partial errors, got %v", partialErrors)
+	}
+	if len(deleted) != 1 || deleted[0] != "stale" {
+		t.Fatalf("expected only stale node record to be deleted, got %v", deleted)
+	}
+}
+
+func TestIsEdgeNodeRecord(t *testing.T) {
+	root := "cluster-a.example.com"
+	suffix := "." + root
+	prefix := "edge-"
+
+	tests := []struct {
+		name   string
+		record string
+		want   bool
+	}{
+		{name: "node record", record: "edge-node-1.cluster-a.example.com", want: true},
+		{name: "service record", record: "edge-egress.cluster-a.example.com", want: false},
+		{name: "nested label", record: "edge-node-1.sub.cluster-a.example.com", want: false},
+		{name: "different cluster", record: "edge-node-1.cluster-b.example.com", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isEdgeNodeRecord(tc.record, prefix, suffix); got != tc.want {
+				t.Fatalf("expected %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
 func newTestManager(cf *fakeCloudflareClient) *DNSManager {
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)

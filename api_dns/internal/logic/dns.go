@@ -219,7 +219,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		prefix := "edge-"
 		suffix := "." + rootDomain
 		for _, rec := range aRecords {
-			if !strings.HasPrefix(rec.Name, prefix) || !strings.HasSuffix(rec.Name, suffix) {
+			if !isEdgeNodeRecord(rec.Name, prefix, suffix) {
 				continue
 			}
 			if _, keep := desiredNodeRecords[rec.Name]; keep {
@@ -235,6 +235,23 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 		return nil, nil
 	}
 	return partialErrors, nil
+}
+
+func isEdgeNodeRecord(recordName, prefix, suffix string) bool {
+	if !strings.HasPrefix(recordName, prefix) || !strings.HasSuffix(recordName, suffix) {
+		return false
+	}
+
+	label := strings.TrimSuffix(recordName, suffix)
+	if strings.Contains(label, ".") {
+		return false
+	}
+
+	if label == "edge-egress" {
+		return false
+	}
+
+	return true
 }
 
 func (m *DNSManager) clusterServiceFQDN(serviceType, rootDomain string) string {
