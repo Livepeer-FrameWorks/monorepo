@@ -160,23 +160,35 @@ func (pm *PeerManager) IsPeerConnected(clusterID string) bool {
 // All replicas register addresses (so GetPeerAddr works everywhere);
 // only the leader opens PeerChannel connections.
 func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
-	var added bool
+	var changed bool
 
 	pm.mu.Lock()
 	for _, peer := range peers {
 		if peer.GetClusterId() == pm.clusterID || peer.GetClusterId() == "" {
 			continue
 		}
-		if _, known := pm.peers[peer.GetClusterId()]; known {
-			continue
-		}
-
 		lifecycle := peerStreamScoped
 		if peer.GetRole() == "official" || peer.GetRole() == "preferred" {
 			lifecycle = peerAlwaysOn
 		}
 
 		addr := "foghorn." + peer.GetClusterSlug() + "." + peer.GetBaseUrl() + ":" + federationPort
+		if existing, known := pm.peers[peer.GetClusterId()]; known {
+			if existing.addr != addr {
+				changed = true
+			}
+			existing.addr = addr
+			existing.lifecycle = lifecycle
+			existing.lastRefresh = time.Now()
+			existing.s3Config = &ClusterS3Config{
+				ClusterID:  peer.GetClusterId(),
+				S3Bucket:   peer.GetS3Bucket(),
+				S3Endpoint: peer.GetS3Endpoint(),
+				S3Region:   peer.GetS3Region(),
+			}
+			continue
+		}
+
 		ps := &peerState{
 			addr:        addr,
 			lifecycle:   lifecycle,
@@ -189,7 +201,7 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 			},
 		}
 		pm.peers[peer.GetClusterId()] = ps
-		added = true
+		changed = true
 
 		if pm.isLeader {
 			go pm.connectPeer(peer.GetClusterId(), ps)
@@ -206,9 +218,22 @@ func (pm *PeerManager) NotifyPeers(peers []*pb.TenantClusterPeer) {
 	isLeader := pm.isLeader
 	pm.mu.Unlock()
 
-	if added && isLeader && pm.cache != nil {
+	if changed && isLeader && pm.cache != nil {
 		pm.syncPeerAddressesToRedis()
 	}
+}
+
+func (pm *PeerManager) shouldSendStreamToPeer(peerID string, ps *peerState, streamName, tenantID string) bool {
+	if len(ps.tenantIDs) > 0 && tenantID != "" && !slices.Contains(ps.tenantIDs, tenantID) {
+		return false
+	}
+	if ps.lifecycle == peerStreamScoped {
+		streams := pm.streamPeers[peerID]
+		if len(streams) == 0 || !streams[streamName] {
+			return false
+		}
+	}
+	return true
 }
 
 // TrackStream records that a stream is active and associated with specific peer clusters.
@@ -838,15 +863,17 @@ func (pm *PeerManager) pushTelemetry() {
 		}
 		pm.pool.Touch(peerID)
 		for _, msg := range messages {
-			if len(ps.tenantIDs) > 0 {
-				tel, ok := msg.GetPayload().(*pb.PeerMessage_EdgeTelemetry)
-				if !ok {
-					continue
-				}
-				ss := sm.GetStreamState(tel.EdgeTelemetry.StreamName)
-				if ss != nil && ss.TenantID != "" && !slices.Contains(ps.tenantIDs, ss.TenantID) {
-					continue
-				}
+			tel, ok := msg.GetPayload().(*pb.PeerMessage_EdgeTelemetry)
+			if !ok || tel.EdgeTelemetry == nil {
+				continue
+			}
+			ss := sm.GetStreamState(tel.EdgeTelemetry.StreamName)
+			tenantID := ""
+			if ss != nil {
+				tenantID = ss.TenantID
+			}
+			if !pm.shouldSendStreamToPeer(peerID, ps, tel.EdgeTelemetry.StreamName, tenantID) {
+				continue
 			}
 			if err := ps.stream.Send(msg); err != nil {
 				pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to send telemetry to peer")
@@ -879,6 +906,9 @@ func (pm *PeerManager) pushTelemetry() {
 		}
 		for peerID, ps := range pm.peers {
 			if !ps.connected || ps.stream == nil {
+				continue
+			}
+			if !pm.shouldSendStreamToPeer(peerID, ps, ss.InternalName, ss.TenantID) {
 				continue
 			}
 			if err := ps.stream.Send(lifecycleMsg); err != nil {
@@ -1154,7 +1184,7 @@ func (pm *PeerManager) pushStreamAds() {
 			if !ok {
 				continue
 			}
-			if len(ps.tenantIDs) > 0 && ad.StreamAd.TenantId != "" && !slices.Contains(ps.tenantIDs, ad.StreamAd.TenantId) {
+			if !pm.shouldSendStreamToPeer(peerID, ps, ad.StreamAd.InternalName, ad.StreamAd.TenantId) {
 				continue
 			}
 			if err := ps.stream.Send(msg); err != nil {
@@ -1299,9 +1329,9 @@ func (pm *PeerManager) IsStreamLiveOnPeer(ctx context.Context, internalName stri
 	return entry.ClusterID, true
 }
 
-// BroadcastStreamLifecycle notifies all connected peers that a stream went live or offline.
+// BroadcastStreamLifecycle notifies eligible peers that a stream went live or offline.
 func (pm *PeerManager) BroadcastStreamLifecycle(internalName, tenantID string, isLive bool) {
-	pm.broadcastToPeers(&pb.PeerMessage{
+	msg := &pb.PeerMessage{
 		ClusterId: pm.clusterID,
 		Payload: &pb.PeerMessage_StreamLifecycle{
 			StreamLifecycle: &pb.StreamLifecycleEvent{
@@ -1312,5 +1342,19 @@ func (pm *PeerManager) BroadcastStreamLifecycle(internalName, tenantID string, i
 				TimestampUnix: time.Now().Unix(),
 			},
 		},
-	})
+	}
+
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	for peerID, ps := range pm.peers {
+		if !ps.connected || ps.stream == nil {
+			continue
+		}
+		if !pm.shouldSendStreamToPeer(peerID, ps, internalName, tenantID) {
+			continue
+		}
+		if err := ps.stream.Send(msg); err != nil {
+			pm.logger.WithError(err).WithField("peer_cluster", peerID).Debug("Failed to broadcast lifecycle to peer")
+		}
+	}
 }

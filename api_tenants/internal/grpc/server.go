@@ -6528,10 +6528,10 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *pb.ListPeersRe
 		       ic.cluster_type,
 		       COALESCE(
 		           (SELECT si.advertise_host || ':' || si.port
-		            FROM quartermaster.service_instances si
-		            JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		            WHERE si.cluster_id = pc.cluster_id
-		              AND svc.type = 'foghorn'
+		            FROM quartermaster.foghorn_cluster_assignments fca
+		            JOIN quartermaster.service_instances si ON si.id = fca.foghorn_instance_id
+		            WHERE fca.cluster_id = pc.cluster_id
+		              AND fca.is_active = TRUE
 		              AND si.status = 'running'
 		            ORDER BY si.updated_at DESC
 		            LIMIT 1),

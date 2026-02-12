@@ -357,3 +357,141 @@ func TestRecvLoop_NoCache_DropsMessagesWithoutPanic(t *testing.T) {
 
 	pm.recvLoop("remote", stream)
 }
+
+type capturePeerChannelStream struct {
+	sent []*pb.PeerMessage
+}
+
+func (s *capturePeerChannelStream) Send(msg *pb.PeerMessage) error {
+	s.sent = append(s.sent, msg)
+	return nil
+}
+
+func (s *capturePeerChannelStream) Recv() (*pb.PeerMessage, error) { return nil, io.EOF }
+func (s *capturePeerChannelStream) CloseSend() error               { return nil }
+func (s *capturePeerChannelStream) Context() context.Context       { return context.Background() }
+func (s *capturePeerChannelStream) Header() (metadata.MD, error)   { return metadata.MD{}, nil }
+func (s *capturePeerChannelStream) Trailer() metadata.MD           { return metadata.MD{} }
+func (s *capturePeerChannelStream) SendMsg(any) error              { return nil }
+func (s *capturePeerChannelStream) RecvMsg(any) error              { return io.EOF }
+
+func TestNotifyPeers_UpdatesExistingPeerMetadata(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, false)
+
+	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+		ClusterId:   "remote-cluster",
+		ClusterSlug: "remote-old",
+		BaseUrl:     "example.com",
+		Role:        "subscribed",
+	}})
+
+	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+		ClusterId:   "remote-cluster",
+		ClusterSlug: "remote-new",
+		BaseUrl:     "example.net",
+		Role:        "official",
+		S3Bucket:    "bucket-a",
+		S3Endpoint:  "https://s3.example.net",
+		S3Region:    "us-east-1",
+	}})
+
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	ps, ok := pm.peers["remote-cluster"]
+	if !ok {
+		t.Fatal("expected peer to exist")
+	}
+	if ps.addr != "foghorn.remote-new.example.net:18019" {
+		t.Fatalf("unexpected addr: %s", ps.addr)
+	}
+	if ps.lifecycle != peerAlwaysOn {
+		t.Fatalf("expected lifecycle peerAlwaysOn, got %v", ps.lifecycle)
+	}
+	if ps.s3Config == nil || ps.s3Config.S3Bucket != "bucket-a" {
+		t.Fatalf("unexpected s3 config: %+v", ps.s3Config)
+	}
+}
+
+func TestNotifyPeers_LeaderSyncsToRedisOnAddressChange(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+
+	// Close done so connectPeer goroutines exit immediately
+	close(pm.done)
+
+	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+		ClusterId:   "remote-1",
+		ClusterSlug: "r1",
+		BaseUrl:     "old.example.com",
+		Role:        "official",
+	}})
+
+	// Update address for the same peer
+	pm.NotifyPeers([]*pb.TenantClusterPeer{{
+		ClusterId:   "remote-1",
+		ClusterSlug: "r1",
+		BaseUrl:     "new.example.com",
+		Role:        "official",
+	}})
+
+	ctx := context.Background()
+	addrs, err := cache.GetPeerAddresses(ctx)
+	if err != nil {
+		t.Fatalf("GetPeerAddresses: %v", err)
+	}
+	if addrs["remote-1"] != "foghorn.r1.new.example.com:18019" {
+		t.Fatalf("expected updated address in Redis, got %q", addrs["remote-1"])
+	}
+}
+
+func TestShouldSendStreamToPeer_StreamScopedRequiresTrackedStreamAndTenant(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, false)
+	pm.streamPeers["remote"] = map[string]bool{"live+alpha": true}
+
+	ps := &peerState{
+		lifecycle: peerStreamScoped,
+		tenantIDs: []string{"tenant-a"},
+	}
+
+	if !pm.shouldSendStreamToPeer("remote", ps, "live+alpha", "tenant-a") {
+		t.Fatal("expected tracked stream with allowed tenant to be sent")
+	}
+	if pm.shouldSendStreamToPeer("remote", ps, "live+alpha", "tenant-b") {
+		t.Fatal("expected tenant mismatch to be blocked")
+	}
+	if pm.shouldSendStreamToPeer("remote", ps, "live+beta", "tenant-a") {
+		t.Fatal("expected untracked stream to be blocked for stream-scoped peer")
+	}
+}
+
+func TestBroadcastStreamLifecycle_FiltersUnauthorizedPeers(t *testing.T) {
+	pm := newTestPeerManager(t, "local-cluster", nil, false)
+
+	allowedStream := &capturePeerChannelStream{}
+	blockedStream := &capturePeerChannelStream{}
+
+	pm.mu.Lock()
+	pm.streamPeers["allowed"] = map[string]bool{"live+alpha": true}
+	pm.peers["allowed"] = &peerState{
+		connected: true,
+		stream:    allowedStream,
+		lifecycle: peerStreamScoped,
+		tenantIDs: []string{"tenant-a"},
+	}
+	pm.peers["blocked"] = &peerState{
+		connected: true,
+		stream:    blockedStream,
+		lifecycle: peerStreamScoped,
+		tenantIDs: []string{"tenant-a"},
+	}
+	pm.mu.Unlock()
+
+	pm.BroadcastStreamLifecycle("live+alpha", "tenant-a", true)
+
+	if len(allowedStream.sent) != 1 {
+		t.Fatalf("expected allowed peer to receive 1 message, got %d", len(allowedStream.sent))
+	}
+	if len(blockedStream.sent) != 0 {
+		t.Fatalf("expected blocked peer to receive 0 messages, got %d", len(blockedStream.sent))
+	}
+}
