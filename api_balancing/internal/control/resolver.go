@@ -71,6 +71,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				target.TenantID = resp.TenantId
 				target.StreamID = resp.StreamId
 				target.ContentType = resp.ContentType
+				target.ClusterPeers = resp.ClusterPeers
 				applyArtifactPlacement(ctx, resp.ArtifactHash, target)
 			}
 		}
@@ -86,6 +87,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				TenantID:     resp.TenantId,
 				StreamID:     resp.StreamId,
 				ContentType:  resp.ContentType,
+				ClusterPeers: resp.ClusterPeers,
 			}
 			applyArtifactPlacement(ctx, resp.ArtifactHash, target)
 			return target, nil

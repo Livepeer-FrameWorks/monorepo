@@ -49,7 +49,7 @@ type PeerNotifier interface {
 	TrackStream(streamName string, clusterIDs []string)
 	UntrackStream(streamName string)
 	BroadcastStreamLifecycle(internalName, tenantID string, isLive bool)
-	IsStreamLiveOnPeer(ctx context.Context, internalName string) (clusterID string, ok bool)
+	IsStreamLiveOnPeer(ctx context.Context, internalName, tenantID string) (clusterID string, ok bool)
 }
 
 // DVRStarter handles DVR recording orchestration.
@@ -687,7 +687,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 
 	// Cross-cluster dedup: reject if stream is already live on a peer cluster
 	if p.peerNotifier != nil {
-		if remoteCluster, ok := p.peerNotifier.IsStreamLiveOnPeer(context.Background(), streamValidation.InternalName); ok {
+		if remoteCluster, ok := p.peerNotifier.IsStreamLiveOnPeer(context.Background(), streamValidation.InternalName, streamValidation.TenantId); ok {
 			p.logger.WithFields(logging.Fields{
 				"internal_name":  streamValidation.InternalName,
 				"remote_cluster": remoteCluster,

@@ -986,7 +986,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		WHERE playback_id = $1
 	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
-		return &pb.ResolveArtifactPlaybackIDResponse{
+		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:                true,
 			ArtifactHash:         artifactHash,
 			ArtifactInternalName: artifactInternalName,
@@ -995,7 +995,9 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			StreamId:             streamID.String,
 			ContentType:          "clip",
 			OriginClusterId:      originClusterID.String,
-		}, nil
+		}
+		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
@@ -1013,7 +1015,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		WHERE playback_id = $1
 	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
-		return &pb.ResolveArtifactPlaybackIDResponse{
+		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:                true,
 			ArtifactHash:         artifactHash,
 			ArtifactInternalName: artifactInternalName,
@@ -1022,7 +1024,9 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			StreamId:             streamID.String,
 			ContentType:          "dvr",
 			OriginClusterId:      originClusterID.String,
-		}, nil
+		}
+		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
@@ -1041,7 +1045,7 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 		WHERE playback_id = $1
 	`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
 	if err == nil {
-		return &pb.ResolveArtifactPlaybackIDResponse{
+		resp := &pb.ResolveArtifactPlaybackIDResponse{
 			Found:                true,
 			ArtifactHash:         artifactHash,
 			ArtifactInternalName: artifactInternalName,
@@ -1049,7 +1053,9 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 			UserId:               userID,
 			ContentType:          "vod",
 			OriginClusterId:      originClusterID.String,
-		}, nil
+		}
+		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
@@ -1060,6 +1066,15 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *pb
 	}
 
 	return &pb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
+}
+
+func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, tenantID string, peers *[]*pb.TenantClusterPeer) {
+	if tenantID == "" || peers == nil {
+		return
+	}
+	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+		*peers = route.clusterPeers
+	}
 }
 
 // ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
@@ -1084,7 +1099,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		WHERE artifact_internal_name = $1
 	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
-		return &pb.ResolveArtifactInternalNameResponse{
+		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:                true,
 			ArtifactHash:         artifactHash,
 			ArtifactInternalName: artifactInternalName,
@@ -1093,7 +1108,9 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			StreamId:             streamID.String,
 			ContentType:          "clip",
 			OriginClusterId:      originClusterID.String,
-		}, nil
+		}
+		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
@@ -1111,7 +1128,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		WHERE artifact_internal_name = $1
 	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID)
 	if err == nil {
-		return &pb.ResolveArtifactInternalNameResponse{
+		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:                true,
 			ArtifactHash:         artifactHash,
 			ArtifactInternalName: artifactInternalName,
@@ -1120,7 +1137,9 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			StreamId:             streamID.String,
 			ContentType:          "dvr",
 			OriginClusterId:      originClusterID.String,
-		}, nil
+		}
+		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
@@ -1139,7 +1158,7 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 		WHERE artifact_internal_name = $1
 	`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID)
 	if err == nil {
-		return &pb.ResolveArtifactInternalNameResponse{
+		resp := &pb.ResolveArtifactInternalNameResponse{
 			Found:                true,
 			ArtifactHash:         artifactHash,
 			ArtifactInternalName: artifactInternalName,
@@ -1147,7 +1166,9 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 			UserId:               userID,
 			ContentType:          "vod",
 			OriginClusterId:      originClusterID.String,
-		}, nil
+		}
+		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
