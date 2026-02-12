@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/pkg/ctxkeys"
+	pb "frameworks/pkg/proto"
+
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -184,5 +187,53 @@ func TestResolveFoghornForTenant_EmptyAddr_EvictsAndRetries(t *testing.T) {
 	server.routeCacheMu.RUnlock()
 	if exists {
 		t.Fatal("route cache entry should be evicted after failed resolution")
+	}
+}
+
+func TestResolveViewerEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testing.T) {
+	server := &CommodoreServer{
+		logger:        logrus.New(),
+		routeCache:    make(map[string]*clusterRoute),
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+	_, err := server.ResolveViewerEndpoint(ctx, &pb.ViewerEndpointRequest{ContentId: "stream-1"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", st.Code())
+	}
+	if st.Message() != "quartermaster not available for cluster routing" {
+		t.Fatalf("unexpected message: %q", st.Message())
+	}
+}
+
+func TestResolveIngestEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testing.T) {
+	server := &CommodoreServer{
+		logger:        logrus.New(),
+		routeCache:    make(map[string]*clusterRoute),
+		routeCacheTTL: 5 * time.Minute,
+	}
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+	_, err := server.ResolveIngestEndpoint(ctx, &pb.IngestEndpointRequest{StreamKey: "sk_test"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", st.Code())
+	}
+	if st.Message() != "quartermaster not available for cluster routing" {
+		t.Fatalf("unexpected message: %q", st.Message())
 	}
 }

@@ -913,9 +913,17 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 				"expires_at": certResp.GetExpiresAt(),
 			}).Info("gRPC server TLS: Navigator-backed")
 		} else {
+			if !allowInsecureControlGRPC() {
+				_ = lis.Close()
+				return nil, fmt.Errorf("navigator certificate unavailable and insecure control gRPC is disabled")
+			}
 			cfg.Logger.WithError(certErr).Warn("Navigator available but no cert found; gRPC server running without TLS")
 		}
 	} else {
+		if !allowInsecureControlGRPC() {
+			_ = lis.Close()
+			return nil, fmt.Errorf("no TLS certificate source configured and insecure control gRPC is disabled")
+		}
 		cfg.Logger.Info("gRPC server running without TLS (no cert source)")
 	}
 
@@ -977,6 +985,10 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 		}
 	}()
 	return srv, nil
+}
+
+func allowInsecureControlGRPC() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("FOGHORN_ALLOW_INSECURE_CONTROL_GRPC")), "true")
 }
 
 // Helpers
