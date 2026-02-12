@@ -216,6 +216,9 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 		"dest_cluster": req.DestClusterId,
 		"dest_node":    req.DestNodeId,
 	})
+	if s.cache == nil {
+		return &pb.OriginPullAck{Accepted: false, Reason: "origin-pull cache unavailable"}, nil
+	}
 
 	// Find best source node for the stream
 	sourceNodeID := req.SourceNodeId
@@ -249,10 +252,10 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 			Reason:   "stream not found locally",
 		}, nil
 	}
-	if ss.TenantID != "" && ss.TenantID != req.TenantId {
+	if req.TenantId != "" && ss.TenantID != "" && ss.TenantID != req.TenantId {
 		return &pb.OriginPullAck{
 			Accepted: false,
-			Reason:   "stream not found locally",
+			Reason:   "stream tenant mismatch",
 		}, nil
 	}
 
@@ -285,7 +288,10 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *pb.OriginP
 	}
 	if err := s.cache.SetActiveReplication(ctx, record); err != nil {
 		log.WithError(err).Error("Failed to store active replication record")
-		// Still return success — the pull can proceed even if caching fails
+		return &pb.OriginPullAck{
+			Accepted: false,
+			Reason:   "origin-pull temporarily unavailable",
+		}, nil
 	}
 
 	log.WithFields(logging.Fields{

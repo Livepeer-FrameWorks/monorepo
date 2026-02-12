@@ -64,6 +64,16 @@ type CacheInvalidator interface {
 	GetClusterPeers(internalName, tenantID string) []*pb.TenantClusterPeer
 }
 
+type federationRPC interface {
+	QueryStream(ctx context.Context, peerClusterID, peerAddr string, req *pb.QueryStreamRequest) (*pb.QueryStreamResponse, error)
+	NotifyOriginPull(ctx context.Context, peerClusterID, peerAddr string, req *pb.OriginPullNotification) (*pb.OriginPullAck, error)
+	PrepareArtifact(ctx context.Context, peerClusterID, peerAddr string, req *pb.PrepareArtifactRequest) (*pb.PrepareArtifactResponse, error)
+}
+
+type peerAddrResolver interface {
+	GetPeerAddr(clusterID string) string
+}
+
 // FoghornGRPCServer implements the Foghorn control plane gRPC services
 type FoghornGRPCServer struct {
 	pb.UnimplementedClipControlServiceServer
@@ -82,11 +92,13 @@ type FoghornGRPCServer struct {
 	cacheInvalidator CacheInvalidator
 	purserClient     *purserclient.GRPCClient
 	remoteEdgeCache  *federation.RemoteEdgeCache
-	federationClient *federation.FederationClient
-	peerManager      *federation.PeerManager
+	federationClient federationRPC
+	peerManager      peerAddrResolver
 	clusterID        string
 	pendingDVRStops  map[string]time.Time
 	pendingDVRMu     sync.Mutex
+	originPullMu     sync.Mutex
+	originPulling    map[string]struct{}
 }
 
 // NewFoghornGRPCServer creates a new Foghorn gRPC server
@@ -110,6 +122,7 @@ func NewFoghornGRPCServer(
 		s3Client:        s3Client,
 		purserClient:    purserClient,
 		pendingDVRStops: make(map[string]time.Time),
+		originPulling:   make(map[string]struct{}),
 	}
 }
 
@@ -1616,13 +1629,23 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.Ed
 		return nil
 	}
 
+	if !s.tryBeginOriginPull(internalName) {
+		if record, _ := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
+			if endpoint := s.buildLocalEndpoint(record, viewKey); endpoint != nil {
+				return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
+			}
+		}
+		return nil
+	}
+	defer s.finishOriginPull(internalName)
+
 	// Already pulling this stream? Return the existing local endpoint.
 	if record, _ := s.remoteEdgeCache.GetActiveReplication(ctx, internalName); record != nil {
 		endpoint := s.buildLocalEndpoint(record, viewKey)
 		if endpoint != nil {
 			return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
 		}
-		return nil
+		_ = s.remoteEdgeCache.DeleteActiveReplication(ctx, internalName)
 	}
 
 	// Loop prevention: don't pull from a cluster already pulling from us
@@ -1653,7 +1676,9 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.Ed
 	if peerAddr == "" {
 		return nil
 	}
-	ack, err := s.federationClient.NotifyOriginPull(ctx, remoteCluster, peerAddr, &pb.OriginPullNotification{
+	notifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ack, err := s.federationClient.NotifyOriginPull(notifyCtx, remoteCluster, peerAddr, &pb.OriginPullNotification{
 		StreamName:    internalName,
 		SourceNodeId:  remote.NodeId,
 		DestClusterId: s.clusterID,
@@ -1675,7 +1700,15 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.Ed
 		BaseURL:       localHost,
 		CreatedAt:     time.Now(),
 	}
-	_ = s.remoteEdgeCache.SetActiveReplication(ctx, record)
+	if err := s.remoteEdgeCache.SetActiveReplication(ctx, record); err != nil {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"stream":         internalName,
+			"source_cluster": remoteCluster,
+			"source_node":    remote.NodeId,
+			"dest_node":      localNodeID,
+		}).Warn("Origin-pull acked but local active replication cache write failed")
+		return nil
+	}
 
 	s.logger.WithFields(logging.Fields{
 		"stream":         internalName,
@@ -1690,6 +1723,28 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *pb.Ed
 		return &pb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}
 	}
 	return nil
+}
+
+func (s *FoghornGRPCServer) tryBeginOriginPull(streamName string) bool {
+	if streamName == "" {
+		return false
+	}
+	s.originPullMu.Lock()
+	defer s.originPullMu.Unlock()
+	if _, exists := s.originPulling[streamName]; exists {
+		return false
+	}
+	s.originPulling[streamName] = struct{}{}
+	return true
+}
+
+func (s *FoghornGRPCServer) finishOriginPull(streamName string) {
+	if streamName == "" {
+		return
+	}
+	s.originPullMu.Lock()
+	delete(s.originPulling, streamName)
+	s.originPullMu.Unlock()
 }
 
 // buildLocalEndpoint constructs a ViewerEndpoint from a local node with an active replication.
