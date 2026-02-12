@@ -3570,8 +3570,8 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"node %s already exists in cluster %s", nodeID, existingClusterID)
 		}
-		if err := tx.Commit(); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 		}
 		return &pb.BootstrapEdgeNodeResponse{
 			NodeId:    nodeID,
