@@ -5,9 +5,16 @@ import (
 	"time"
 
 	"frameworks/pkg/clients/foghorn"
+	"frameworks/pkg/ctxkeys"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
 )
+
+// federationContext strips user JWT from the context so the client interceptor
+// falls through to the service token for service-to-service federation RPCs.
+func federationContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ctxkeys.KeyJWTToken, "")
+}
 
 // FederationClient wraps FoghornPool to provide federation-specific calls.
 // Each method fetches (or lazily creates) the GRPCClient for the target
@@ -44,7 +51,7 @@ func (c *FederationClient) QueryStream(ctx context.Context, clusterID, addr stri
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
 	return client.Federation().QueryStream(ctx, req)
@@ -57,7 +64,7 @@ func (c *FederationClient) NotifyOriginPull(ctx context.Context, clusterID, addr
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
 	return client.Federation().NotifyOriginPull(ctx, req)
@@ -70,7 +77,7 @@ func (c *FederationClient) PrepareArtifact(ctx context.Context, clusterID, addr 
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
 	return client.Federation().PrepareArtifact(ctx, req)
@@ -83,7 +90,7 @@ func (c *FederationClient) CreateRemoteClip(ctx context.Context, clusterID, addr
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
 	return client.Federation().CreateRemoteClip(ctx, req)
@@ -96,7 +103,7 @@ func (c *FederationClient) CreateRemoteDVR(ctx context.Context, clusterID, addr 
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
 	return client.Federation().CreateRemoteDVR(ctx, req)
@@ -109,7 +116,7 @@ func (c *FederationClient) ListTenantArtifacts(ctx context.Context, clusterID, a
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second) // longer timeout for bulk listing
+	ctx, cancel := context.WithTimeout(federationContext(ctx), 30*time.Second) // longer timeout for bulk listing
 	defer cancel()
 
 	return client.Federation().ListTenantArtifacts(ctx, req)
@@ -123,5 +130,5 @@ func (c *FederationClient) OpenPeerChannel(ctx context.Context, clusterID, addr 
 		return nil, err
 	}
 
-	return client.Federation().PeerChannel(ctx)
+	return client.Federation().PeerChannel(federationContext(ctx))
 }
