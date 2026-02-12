@@ -63,6 +63,7 @@
 
   .skipper-preview__tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 0;
     border: 1px solid var(--fx-seam-soft);
   }
@@ -110,6 +111,9 @@
     font-size: 0.78rem;
     line-height: 1.5;
     padding: 0.55rem 0.75rem;
+    overflow: hidden;
+    overflow-wrap: break-word;
+    min-width: 0;
   }
 
   .skipper-preview__bubble--user {
@@ -141,8 +145,7 @@
     font-family: "JetBrains Mono", monospace;
     font-size: 0.72rem;
     line-height: 1.55;
-    white-space: pre;
-    overflow-x: auto;
+    white-space: pre-wrap;
     color: hsl(var(--foreground));
   }
 

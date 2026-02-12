@@ -96,7 +96,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
     >
       {/* Header / Tabs */}
       <div className="marketing-code-panel__header">
-        <div className="flex space-x-1">
+        <div className="flex flex-wrap gap-1">
           {tabs.map((tab) => (
             <button
               key={tab.id}

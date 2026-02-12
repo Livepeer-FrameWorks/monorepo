@@ -3030,7 +3030,7 @@
       hsl(var(--brand-green))
     );
     box-shadow: 0 0 12px rgba(var(--brand-cyan-rgb) / 0.45);
-    transition: width 0.2s ease;
+    transition: width 80ms linear;
   }
 
   /* FAQ grid component */
